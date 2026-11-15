@@ -12,6 +12,20 @@ aggregate test timeouts, missing Portal assets/fresh frontend dependencies and
 unexecuted qualification/browser/hosted-CI checks remain explicit; this closure
 does not convert them into passes or certify a release.
 
+Goal [0008a](archive/0008a-auditable-acceptance-workflow.md) completed its executable
+acceptance-workflow increment and is archived with its contract bytes unchanged.
+The [evidence record](../evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md)
+binds one real lightweight-worker Go task, passing frozen checks and independent
+source review to exact Subject `b14e8469…`, and records a real native-Windows/Linux
+qualification boundary as a preserved, nonaccepted escalation. Eight disposable
+copies of the accepted run produced nine observed CLI refusals for stale, missing,
+weakened, incomplete and fabricated inputs. The runner, task instructions, scoped
+skill and sanitized receipts live under
+[`docs/evaluations/model-routing/`](../evaluations/model-routing/README.md).
+Billing and price versions remain unknown, with actual model identities, usage
+and explicit partial-coordinator accounting retained; no routing policy,
+model-family independence, native capability or owner `achieve` is promoted.
+
 Goal [0006-final](archive/0006-final.md) completed its documentation-only review
 recording on 2026-11-15 and is archived with its text unchanged and its five
 relative link targets rebased for the archive directory; **full-series acceptance
@@ -228,7 +242,7 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0008a](0008a-auditable-acceptance-workflow.md) | Auditable model-independent acceptance workflow |
+| [0008a](archive/0008a-auditable-acceptance-workflow.md) | Auditable model-independent acceptance workflow |
 | [0008b](0008b-go-model-routing.md) | Evidence-based Go model routing |
 | [0008c](0008c-elixir-model-routing.md) | Evidence-based Elixir model routing |
 | [0008d](0008d-typescript-model-routing.md) | TypeScript model routing and the 0008 series release receipt |

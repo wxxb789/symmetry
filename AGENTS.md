@@ -12,7 +12,8 @@ policy; Go owns machine-local execution; the frontend owns presentation.
   documented additive migration is implemented.
 - Read the applicable directory AGENTS.md. Skills in `.agents/skills/` apply
   by task: `symmetry-durable-transition`, `symmetry-harness-adapter`,
-  `symmetry-frontend-contract`, `symmetry-simplification-review`.
+  `symmetry-frontend-contract`, `symmetry-simplification-review`,
+  `symmetry-acceptance-workflow`.
 - Historical goals under `docs/goals/archive/` are evidence, not competing
   instructions. Do not load all historical plans into every task.
 

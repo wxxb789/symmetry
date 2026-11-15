@@ -1,0 +1,561 @@
+{
+  "accounting": {
+    "accounting_complete": false,
+    "all_observed_prefix_and_complete_record_tokens": {
+      "cached": 60935815,
+      "input": 1482259,
+      "output": 710029
+    },
+    "coordinator_private_source_sha256": "sha256:2523f15d65e90f0e52795a045d62671aaab339544cfdad814c2471742e038320",
+    "coordinator_snapshot": {
+      "ended_at": "2026-11-15T16:12:17.832000+00:00",
+      "method": "actual coordinator session start to last complete private harness record at snapshot cutoff",
+      "started_at": "2026-11-15T14:27:41.230000+00:00"
+    },
+    "definition": "All visible completed child sessions charged once; shared workflow construction/coordination allocated to positive, incremental escalation to negative. Known unversioned harness estimates are not provider bills or measured savings.",
+    "estimated_total_cost": null,
+    "known_unversioned_harness_estimate_subtotal_usd": 1.006311,
+    "negative_model_sessions": 1,
+    "observed_population": {
+      "allocation": "One-time workflow setup and all shared coordination are charged once to positive; negative records incremental escalation only.",
+      "charged_unique_session_count": 8,
+      "charged_unique_session_refs": [
+        "01a1df9b-542e-7455-84d8-9ce0f270d648",
+        "01a1df9c-004a-75ee-87e2-290dfcc59fbf",
+        "01a1df9c-08ca-7568-936d-424210ff8b9d",
+        "01a1dfa1-f723-72a0-9335-801118916013",
+        "01a1dfa2-152a-74e1-9f9a-626a52fa0216",
+        "01a1dfa7-64bf-72e4-bf4b-d093426ea348",
+        "01a1dfc1-6701-7142-b389-867669e079b7",
+        "01a1dfc1-8d1c-73dd-a966-d2244d547b60"
+      ],
+      "known_limits": [
+        "Primary coordinator remains open after the declared snapshot cutoff; complete-session totals stay unknown.",
+        "Provider bills, authoritative price versions and any unreported harness-helper/transport usage remain unknown, never zero."
+      ],
+      "observed_child_delegation_tool_calls": {
+        "01a1df9c-004a-75ee-87e2-290dfcc59fbf": 0,
+        "01a1df9c-08ca-7568-936d-424210ff8b9d": 0,
+        "01a1dfa1-f723-72a0-9335-801118916013": 0,
+        "01a1dfa2-152a-74e1-9f9a-626a52fa0216": 0,
+        "01a1dfa7-64bf-72e4-bf4b-d093426ea348": 0,
+        "01a1dfc1-6701-7142-b389-867669e079b7": 0,
+        "01a1dfc1-8d1c-73dd-a966-d2244d547b60": 0
+      },
+      "observed_child_sessions": {
+        "AcceptanceWorkflowReview.jsonl": "01a1dfc1-8d1c-73dd-a966-d2244d547b60",
+        "EvaluationRunner.jsonl": "01a1dfa1-f723-72a0-9335-801118916013",
+        "LightweightGoSubject.jsonl": "01a1dfa7-64bf-72e4-bf4b-d093426ea348",
+        "RealBoundaryEscalation.jsonl": "01a1dfc1-6701-7142-b389-867669e079b7",
+        "ReviewerRoutePreflight.jsonl": "01a1df9c-08ca-7568-936d-424210ff8b9d",
+        "UsageExtractor.jsonl": "01a1dfa2-152a-74e1-9f9a-626a52fa0216",
+        "WorkerRoutePreflight.jsonl": "01a1df9c-004a-75ee-87e2-290dfcc59fbf"
+      },
+      "primary_session_ref": "01a1df9b-542e-7455-84d8-9ce0f270d648",
+      "schema": "symmetry-evaluation-session-accounting/v1",
+      "unaccounted_observed_sessions": []
+    },
+    "positive_model_sessions": 7,
+    "price_versions": [],
+    "repair_count": 13,
+    "repair_events": [
+      {
+        "description": "Remove duplicate assertions/helpers while preserving both names and11negative cases.",
+        "id": "go-test-simplification"
+      },
+      {
+        "description": "Fix initial observed parser/test failures, served identity and followup prompt provenance.",
+        "id": "usage-initial-repair"
+      },
+      {
+        "description": "Supply session_init in the missing-user-prompt fixture without changing assertions.",
+        "id": "usage-fixture-repair"
+      },
+      {
+        "description": "Add required null non_model_reason to model rows and its contract coverage.",
+        "id": "usage-row-integration"
+      },
+      {
+        "description": "Permit exact repository-root gate cwd without relaxing traversal.",
+        "id": "runner-root-cwd"
+      },
+      {
+        "description": "Refuse duplicate/omitted sessions and empty prompt hashes; explicitly record repair count and elapsed time.",
+        "id": "runner-accounting-integrity"
+      },
+      {
+        "description": "Rejected approach changed completeness meaning; pinned assertion failed and the approach was reverted.",
+        "id": "runner-rejected-completeness-fix"
+      },
+      {
+        "description": "Verifier now preserves incomplete/failed classification after gate-time source mutation.",
+        "id": "runner-subject-completeness"
+      },
+      {
+        "description": "Correct coordinator elapsed variable shadowing; keep5-second versus phase-sum assertion.",
+        "id": "runner-wall-time-shadow"
+      },
+      {
+        "description": "Fix no-model vacuous totals; bind tooling versions; reconcile skill pointer/messages and add refusal controls.",
+        "id": "independent-review-repairs"
+      },
+      {
+        "description": "Provide two required gates so partial selection is actually incomplete; retain refusal assertion.",
+        "id": "partial-attempt-fixture"
+      },
+      {
+        "description": "Reject a one-byte extraction that matched its own assistant command; capture actual nonassistant delivered output instead (2902 bytes,20 tests,exit0). This is an evidence-extraction correction, not a gate rerun.",
+        "id": "gate-log-extraction"
+      },
+      {
+        "description": "The initial archival patch was atomically rejected for an unnecessary README context hunk; reread the context, retry without that hunk, and verify5441 unchanged contract bytes.",
+        "id": "archival-context-retry"
+      }
+    ],
+    "reported_total_cost": null,
+    "review_private_source_sha256": "sha256:013673b5a46b98ed842754a1e5e08358105471481ec940d42efb2183e2dfe6dc",
+    "token_total_is_complete": false,
+    "unique_model_sessions": 8,
+    "zero_or_not_billed_established": false
+  },
+  "contract_archive": {
+    "archive_matches_original": true,
+    "bytes": 5441,
+    "canonical_local_links_checked": 5,
+    "exit_code": 0,
+    "original_active_path_absent": true,
+    "original_matches_base_contract": true,
+    "sha256": "sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0",
+    "source": "docs/goals/0008a-auditable-acceptance-workflow.md",
+    "target": "docs/goals/archive/0008a-auditable-acceptance-workflow.md"
+  },
+  "evaluated_subjects": {
+    "negative": {
+      "base": "343dea6a62484d73e7b577a0be2683ca233510f6",
+      "content_revision": "uncommitted:sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+      "head": "343dea6a62484d73e7b577a0be2683ca233510f6",
+      "manifest_digest": "sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+      "subject_hash": "sha256:b8a846985010e1585627382fa713f1f5d6daaed66eb7257a2bb810949cfce3dc"
+    },
+    "positive": {
+      "base": "343dea6a62484d73e7b577a0be2683ca233510f6",
+      "content_revision": "uncommitted:sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+      "head": "343dea6a62484d73e7b577a0be2683ca233510f6",
+      "manifest_digest": "sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+      "subject_hash": "sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81"
+    }
+  },
+  "final_positive_operations": [
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "scripts/ci/model-routing-evaluation.py",
+        "receipt",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\positive",
+        "--usage",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\positive-final-usage.json"
+      ],
+      "exit_code": 0,
+      "operation": "receipt",
+      "stdout_sha256": "sha256:123e144fccb9224196972f4585c72768e5c8e0ef9ca5b5cc6ac1f3f47a5065bf"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "scripts/ci/model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\positive"
+      ],
+      "exit_code": 0,
+      "operation": "accept",
+      "stdout_sha256": "sha256:44f97e94ee7874cb722c9e2c6f8c275e690a37183a7584459b9fb21005f1730f"
+    }
+  ],
+  "frozen_evidence": {
+    "negative": {
+      "check_attempt": {
+        "attempt_id": "attempt-0001",
+        "attempt_sha256": "sha256:c62ca8b839f67b1ed980291e3f6cde22eb4bda14c0b3e4d4869b021d4b062be9",
+        "complete": true,
+        "gates": [
+          {
+            "id": "preserved-protocol-tests",
+            "passed": true,
+            "result_sha256": "sha256:0653676e74bffd76be68c7d2fcd5e5b2d727cdfc34746519e95bd399b03c10c5",
+            "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_sha256": "sha256:47893bf2fd66337e844f7772fcab03bb494a7b6c1c1a70aa36619007c279ee0c",
+            "validator_exit_code": 0,
+            "validator_stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "validator_stdout_sha256": "sha256:17ef5047af6518657a2ef67dc45c06bdd1476067c808eb3d2393d4e9f25e0053"
+          },
+          {
+            "id": "linux-final-scan",
+            "passed": false,
+            "result_sha256": "sha256:0ba6847ed4aad7fb5b605d2578cbb25709f094069fa35ca7a75df3edef12092a",
+            "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_sha256": "sha256:bf52e127c7de7b28678ea021ec2eda0251ee7caadc277988b0c913c2366fc314",
+            "validator_exit_code": 1,
+            "validator_stderr_sha256": "sha256:496d0d7b6cad07d4f2616a77bb16d8f575b4300bc22831a13b94b0108c94d1da",
+            "validator_stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "passed": false,
+        "routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+        "subject_hash": "sha256:b8a846985010e1585627382fa713f1f5d6daaed66eb7257a2bb810949cfce3dc",
+        "task_sha256": "sha256:a797887fd0bd16a5c161611d3ed6378716fdc0a20e7e704c8f2b5806aa290a28"
+      },
+      "frozen_review_sha256": null,
+      "frozen_routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+      "frozen_task_sha256": "sha256:a797887fd0bd16a5c161611d3ed6378716fdc0a20e7e704c8f2b5806aa290a28",
+      "frozen_usage_sha256": "sha256:bf6ba6aad2f2a02d546ef834a4a50504eb921fe21ea4a834a9be9fb4cebbe40f",
+      "tooling_sources": {
+        "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+        "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+        "model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1"
+      }
+    },
+    "positive": {
+      "check_attempt": {
+        "attempt_id": "attempt-0001",
+        "attempt_sha256": "sha256:38ad6dee0ac97f52c2b8a67a7ea41be29ac4d2ee5990be0651e90c846852fb60",
+        "complete": true,
+        "gates": [
+          {
+            "id": "protocol-tests",
+            "passed": true,
+            "result_sha256": "sha256:1746af90ca64b554bf61212882bb5c213b70f1187f601cda98f01c5bf1cfc7fb",
+            "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_sha256": "sha256:58107cf6c5f6bda9b0c9b4101a8815c09a9b0a480f85961a5825d178edc41dd6",
+            "validator_exit_code": 0,
+            "validator_stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "validator_stdout_sha256": "sha256:17ef5047af6518657a2ef67dc45c06bdd1476067c808eb3d2393d4e9f25e0053"
+          },
+          {
+            "id": "protocol-vet",
+            "passed": true,
+            "result_sha256": "sha256:3cc99649f6c9f2559cbf9eb024df974fe31bbec0fbd80c170f7ded2d17924a0a",
+            "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "validator_exit_code": null,
+            "validator_stderr_sha256": null,
+            "validator_stdout_sha256": null
+          }
+        ],
+        "passed": true,
+        "routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+        "subject_hash": "sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81",
+        "task_sha256": "sha256:e9cafd283338ff091f3d865ec480b16b95fa34ac7d30a06422323f05677c6926"
+      },
+      "frozen_review_sha256": "sha256:1f38f35d4ad56a727bb9392d4d80ffe132107e1372557160d0a3c3130f77cf3f",
+      "frozen_routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+      "frozen_task_sha256": "sha256:e9cafd283338ff091f3d865ec480b16b95fa34ac7d30a06422323f05677c6926",
+      "frozen_usage_sha256": "sha256:b705c4a6b7715ed93b1bd318a94d2436c4df9cec7cb85307d89cd0854d9a2741",
+      "tooling_sources": {
+        "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+        "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+        "model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1"
+      }
+    }
+  },
+  "gate_results": {
+    "go": {
+      "counts": {
+        "all_test_events": {
+          "cont": 11,
+          "output": 8345,
+          "pass": 4071,
+          "pause": 11,
+          "run": 4126,
+          "skip": 55
+        },
+        "failures": [],
+        "packages": {
+          "pass": 21,
+          "skip": 1
+        },
+        "top_level_test_events": {
+          "cont": 11,
+          "output": 3659,
+          "pass": 1732,
+          "pause": 11,
+          "run": 1787,
+          "skip": 55
+        }
+      },
+      "go-test": {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-timeout",
+          "300s",
+          "./..."
+        ],
+        "exit_code": 0,
+        "wall_time": 220.31300000002375
+      },
+      "go-vet": {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "exit_code": 0,
+        "wall_time": 15.39000000001397
+      }
+    },
+    "live_controls": {
+      "all_expected_refusals": true,
+      "cases": 8,
+      "observed_cli_refusals": 9
+    },
+    "omp_usage_parser": {
+      "command": [
+        "python",
+        "scripts/ci/test-model-routing-omp-usage.py"
+      ],
+      "exit_code": 0,
+      "failures": 0,
+      "tests": 25
+    },
+    "reused_source_binder": {
+      "command": [
+        "python",
+        "scripts/ci/test-linux-v2-source-subject.py"
+      ],
+      "exit_code": 0,
+      "failures": 0,
+      "tests": 4
+    },
+    "runner": {
+      "command": [
+        "python",
+        "scripts/ci/test-model-routing-evaluation.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "failures": 0,
+      "output_proof": {
+        "bytes": 2902,
+        "exit_code": 0,
+        "failed": 0,
+        "normalization": "CRLF normalized to LF; extracted only delivered test-result lines, never assistant tool-call source",
+        "output_sha256": "sha256:b3975bd3a26463de5c043dfdc283d3854dd2a8d4b05e07d7c4f62e7a69d79969",
+        "passed": 19,
+        "rejected_extraction": "Initial extractor matched its own assistant command and produced one newline; that artifact was rejected, retained privately, and never used as gate evidence.",
+        "skipped": 1,
+        "source_event_id": "a46b054c",
+        "tests": 20
+      },
+      "passed": 19,
+      "skipped": 1,
+      "tests": 20
+    },
+    "unrun": [
+      "Hosted CI matrix",
+      "Linux/race qualification",
+      "Control gates",
+      "Wire gates",
+      "Browser gates"
+    ]
+  },
+  "independent_review": {
+    "control_plane_achieve_issued": false,
+    "coordinator_corrections": [
+      "The closeout prose called the positive row eight unique sessions. Actual receipt arrays are positive seven plus negative one, eight globally unique; no session is charged twice.",
+      "Repair cardinality is publicly checkable: the final positive row contains all thirteen repair_events in primary phase metadata and repair_count is13. The private ledger is additionally hash-bound.",
+      "Receiver preservation is logical all-or-error behavior of one decode call, not a Go memory-model atomicity or concurrency-safety guarantee."
+    ],
+    "dispositions": [
+      {
+        "id": "W1",
+        "refs": [
+          "task_wall_time at runner line 1250/1313",
+          "positive row wall_time 3919.831 vs phase sum 10393.6",
+          "negative row wall_time 507.776538 = ledger"
+        ],
+        "status": "resolved"
+      },
+      {
+        "id": "W2",
+        "note": "Contract-side closeout is done: positive receipt+usage+review+accept, negative row, escalation handoff, live refusal controls and the session accounting all exist and bind the exact Subject. Three documentary remainders (not waivers) are listed under remaining_blockers.",
+        "refs": [
+          "0008a-positive.json accepted=true with imported review 1f38f35d... and usage frozen at sha256:115d9095...",
+          "0008a-negative.json accepted=false",
+          "0008a-escalation.json decision=escalate with preserved_work.manifest_digest 6fc242e1...",
+          "0008a-controls.json",
+          "model-session-audit.json"
+        ],
+        "status": "resolved"
+      },
+      {
+        "id": "W12",
+        "refs": [
+          "0008a-negative.json regenerated 23:31 with wall_time 507.776538 and tooling_sources incl. 1420761..."
+        ],
+        "status": "resolved"
+      },
+      {
+        "id": "W6",
+        "refs": [
+          "test-model-routing-evaluation.py test_later_incomplete_attempt_cannot_reuse_an_earlier_pass (two-gate fixture, complete=false assertion, refusal at accept)"
+        ],
+        "status": "resolved"
+      },
+      {
+        "id": "W4",
+        "note": "Interrupted store stays preserved-but-unreadable with refusal and exportable usage; no 0008a clause requires resumable crash recovery. Optional deletion-on-abort remains optional.",
+        "refs": [
+          "README Explicit local limits lines 143-145"
+        ],
+        "status": "retained_nonblocking"
+      },
+      {
+        "id": "W7",
+        "note": "Abnormal validator termination may refuse with an unreadable record instead of a negative receipt; documented, no validator-crash qualification claimed, cost still countable in the next ledger. Widening the -4096 bound stays optional.",
+        "refs": [
+          "README line 146"
+        ],
+        "status": "retained_nonblocking"
+      },
+      {
+        "id": "W10",
+        "note": "W10a resolved; W10b (pre/post-gate binding only, worker stopped before verification) and W10c (no append-only registry; same-user deletion out of scope) remain as stated limits, not defects.",
+        "refs": [
+          "runner require_current_subject compares all recomputed subject fields incl. file_count",
+          "README lines 141-147"
+        ],
+        "status": "retained_nonblocking"
+      }
+    ],
+    "gate_weakening": false,
+    "model_ids": [
+      {
+        "api": "openai-completions",
+        "assistant_messages": 43,
+        "model": "deepseek-v4.1-flash-fast",
+        "provider": "tencent-litellm"
+      }
+    ],
+    "owner_routing_verdict_issued": false,
+    "post_review_changes": "Only evidence generation, clarified metric labels, and unchanged-goal archival/canonical pointers followed the final executable-source review and20-case suite.",
+    "reviewed_revision": {
+      "scripts/ci/model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1 (unchanged; my prior source review still binds)",
+      "scripts/ci/test-model-routing-evaluation.py": "sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0 (W6 fixture fix only; no production change)"
+    },
+    "reviewer_session_ref": "01a1dfc1-8d1c-73dd-a966-d2244d547b60",
+    "source_verdict": "pass",
+    "witness_clauses_complete": true
+  },
+  "receipt_sha256": {
+    "negative": "sha256:a9b7260635f317f2fa66b57ca4587be4b932c79cfe8eb126dd77caf268d40c52",
+    "positive": "sha256:524e3beed5ccf310169400f27b21a6c73ab166814e49e43f7c925a159abceb24"
+  },
+  "retained_nonblocking_limits": [
+    "Incomplete provider billing/prices, unreported helpers/transport usage and post-cutoff coordinator tail remain unknown, never zero.",
+    "Separate same-family reviewer invocation is not model-family diversity.",
+    "No OS sandbox, hostile same-user evidence protection, append-only history or transient in-gate edit detection is claimed.",
+    "Interrupted attempt stores and abnormal validator-process records remain fail-closed, preserved and not automatically resumable.",
+    "Executable-mode branch skipped on this host; no Linux native qualification inferred.",
+    "Go full-suite evidence is contextual regression coverage for unchanged Go sources; isolated focused gates carry the exact evaluated-Subject binding.",
+    "Skill execution was explicitly loaded; automatic discovery behavior was not measured."
+  ],
+  "schema": "symmetry-evaluation-audit/v1",
+  "source_manifest": {
+    "base_commit": "343dea6a62484d73e7b577a0be2683ca233510f6",
+    "files": [
+      {
+        "bytes": 2143,
+        "path": ".agents/skills/symmetry-acceptance-workflow/SKILL.md",
+        "sha256": "sha256:0aa869e81a9f65db4dc5a3388311e8b10c2b80945636162c626df296745e3f5d"
+      },
+      {
+        "bytes": 107098,
+        "path": ".github/workflows/ci.yml",
+        "sha256": "sha256:c0a44c5d6538d1dd2fa5ff80bca744d26891b3d086c093efc3dd6cc76e0fe9c4"
+      },
+      {
+        "bytes": 3533,
+        "path": "AGENTS.md",
+        "sha256": "sha256:735ead629b0ef9786a69a983cb777dc77695b42fcc301d86a877526fcfcc7b6c"
+      },
+      {
+        "bytes": 3443,
+        "path": "daemon/internal/protocol/goal_subject_receiver_test.go",
+        "sha256": "sha256:2e8502be11cdabac670b6da212f41b0542b8a394eb7de383187b90a9d02ae949"
+      },
+      {
+        "bytes": 11800,
+        "path": "docs/design/quality.md",
+        "sha256": "sha256:f939db62a2bd665801383a7d8485716e277df344c55ab40ffeca99d326428fcb"
+      },
+      {
+        "bytes": 11858,
+        "path": "docs/evaluations/model-routing/README.md",
+        "sha256": "sha256:0e20381cd006ce25f66034827d3a5d47a2c05f9f9aaa87a1f57d91d4857d01ee"
+      },
+      {
+        "bytes": 1717,
+        "path": "docs/evaluations/model-routing/review-instructions.md",
+        "sha256": "sha256:97dbba6ceee459ec357c4429b83b99e7c6bb962bacbfbec1e91b35e9e983af34"
+      },
+      {
+        "bytes": 2257,
+        "path": "docs/evaluations/model-routing/task-instructions.md",
+        "sha256": "sha256:eca4c9afc5107aac5eaa8161dc4d9039ef3d377b80f7ac099b457e7d2ed588ff"
+      },
+      {
+        "bytes": 1747,
+        "path": "docs/evaluations/model-routing/tasks/go-linux-final-scan.json",
+        "sha256": "sha256:a797887fd0bd16a5c161611d3ed6378716fdc0a20e7e704c8f2b5806aa290a28"
+      },
+      {
+        "bytes": 1354,
+        "path": "docs/evaluations/model-routing/tasks/go-subject-receiver.json",
+        "sha256": "sha256:e9cafd283338ff091f3d865ec480b16b95fa34ac7d30a06422323f05677c6926"
+      },
+      {
+        "bytes": 16713,
+        "path": "docs/goals/README.md",
+        "sha256": "sha256:aac4ca761087670a20d6832cf1fccc6a90ed9a406f1651f690a8793a72654d86"
+      },
+      {
+        "bytes": 5441,
+        "path": "docs/goals/archive/0008a-auditable-acceptance-workflow.md",
+        "sha256": "sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0"
+      },
+      {
+        "bytes": 12569,
+        "path": "docs/plans/2026-11-15-2232-feat-auditable-acceptance-workflow-plan.md",
+        "sha256": "sha256:2f263f8b3b394bb437252269873c4c3ba44a2bf5b5d21e6c09d9651df7adb228"
+      },
+      {
+        "bytes": 89615,
+        "path": "scripts/ci/model-routing-evaluation.py",
+        "sha256": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1"
+      },
+      {
+        "bytes": 23823,
+        "path": "scripts/ci/model-routing-omp-usage.py",
+        "sha256": "sha256:0fbed87aa43b5de312857c41adff9db78cfb98e3a980b76930713195ba5dfcf2"
+      },
+      {
+        "bytes": 42509,
+        "path": "scripts/ci/test-model-routing-evaluation.py",
+        "sha256": "sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0"
+      },
+      {
+        "bytes": 30069,
+        "path": "scripts/ci/test-model-routing-omp-usage.py",
+        "sha256": "sha256:a39184a9278820cb316cdca9bdd8da059776787d011c51d9f5fceb0f8ea317e1"
+      }
+    ],
+    "removed_active_contract_path": "docs/goals/0008a-auditable-acceptance-workflow.md",
+    "scope": "Explicit changed executable, gate, instruction, plan, index and contract paths. Generated evidence, receipts, private logs and this audit are excluded to avoid self-reference. This is not a fabricated Git tree or commit.",
+    "scoped_manifest_sha256": "sha256:bffb96cd27c4a5a986a8cbe80c84df85f27f04ed8465d523214d8a1a97a2bf00"
+  },
+  "unresolved_acceptance_blockers": []
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "0008a-go-linux-final-scan-boundary",
+  "base": "343dea6a62484d73e7b577a0be2683ca233510f6",
+  "language": "go",
+  "risk_class": "recovery-qualification",
+  "workflow": "reuse_existing",
+  "outcome": "Qualify the existing Linux clean terminal-scan invariant using its actual named Go test. Preserve the already-correct Subject regression work. No production, test or gate weakening is authorized. If the required invariant cannot be tested on this host, escalate with the failing executable evidence instead of substituting a fixture or accepting a no-test run.",
+  "explanations": [
+    "Explain why an unproven final descendant scan cannot produce a clean terminal receipt.",
+    "Identify the actual platform and whether the required named Linux test ran; preserve the positive sample when escalating."
+  ],
+  "allowed_paths": ["daemon/internal/protocol/goal_subject_receiver_test.go"],
+  "protected_paths": ["daemon/internal/platform/process_unix.go", "daemon/internal/platform/process_unix_linux_test.go"],
+  "gates": [
+    {
+      "id": "preserved-protocol-tests",
+      "cwd": "daemon",
+      "argv": ["go", "test", "-json", "-count=1", "./internal/protocol"],
+      "go_tests": ["TestSubjectUnmarshalPreservesReceiverOnFailure", "TestSubjectUnmarshalReplacesReceiverOnSuccess"],
+      "go_package": "github.com/wxxb789/symmetry/daemon/internal/protocol"
+    },
+    {
+      "id": "linux-final-scan",
+      "cwd": "daemon",
+      "argv": ["go", "test", "-json", "-count=1", "./internal/platform", "-run", "^TestCleanDescendantTerminalProofReportsUnprovenState$"],
+      "go_tests": ["TestCleanDescendantTerminalProofReportsUnprovenState"],
+      "go_package": "github.com/wxxb789/symmetry/daemon/internal/platform"
+    }
+  ]
+}

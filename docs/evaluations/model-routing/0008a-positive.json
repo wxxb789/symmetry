@@ -1,0 +1,1858 @@
+{
+  "acceptance_blockers": [],
+  "accepted": true,
+  "base": "343dea6a62484d73e7b577a0be2683ca233510f6",
+  "checks": [
+    {
+      "argv": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "./internal/protocol"
+      ],
+      "cwd": "daemon",
+      "exit_code": 0,
+      "go_package": "github.com/wxxb789/symmetry/daemon/internal/protocol",
+      "go_tests": [
+        "TestSubjectUnmarshalPreservesReceiverOnFailure",
+        "TestSubjectUnmarshalReplacesReceiverOnSuccess"
+      ],
+      "id": "protocol-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": 0
+    },
+    {
+      "argv": [
+        "go",
+        "vet",
+        "./internal/protocol"
+      ],
+      "cwd": "daemon",
+      "exit_code": 0,
+      "go_package": null,
+      "go_tests": null,
+      "id": "protocol-vet",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    }
+  ],
+  "cost": {
+    "accounting_complete": false,
+    "estimated_cost": null,
+    "incomplete_reasons": [
+      "unknown token usage in 1 model phase(s)",
+      "missing price version in 7 model phase(s)",
+      "unknown cost in 1 model phase(s)"
+    ],
+    "known_estimated_cost_subtotal": 0.9842088,
+    "known_reported_cost_subtotal": 0,
+    "price_versions": [],
+    "reported_cost": null
+  },
+  "environment": {
+    "git_version": "git version 2.56.0.windows.4",
+    "machine": "AMD64",
+    "platform": "win32",
+    "python_version": "3.12.10"
+  },
+  "evidence": {
+    "check_attempt": {
+      "attempt_id": "attempt-0001",
+      "attempt_sha256": "sha256:38ad6dee0ac97f52c2b8a67a7ea41be29ac4d2ee5990be0651e90c846852fb60",
+      "complete": true,
+      "gates": [
+        {
+          "id": "protocol-tests",
+          "passed": true,
+          "result_sha256": "sha256:1746af90ca64b554bf61212882bb5c213b70f1187f601cda98f01c5bf1cfc7fb",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:58107cf6c5f6bda9b0c9b4101a8815c09a9b0a480f85961a5825d178edc41dd6",
+          "validator_exit_code": 0,
+          "validator_stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_stdout_sha256": "sha256:17ef5047af6518657a2ef67dc45c06bdd1476067c808eb3d2393d4e9f25e0053"
+        },
+        {
+          "id": "protocol-vet",
+          "passed": true,
+          "result_sha256": "sha256:3cc99649f6c9f2559cbf9eb024df974fe31bbec0fbd80c170f7ded2d17924a0a",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        }
+      ],
+      "passed": true,
+      "routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+      "subject_hash": "sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81",
+      "task_sha256": "sha256:e9cafd283338ff091f3d865ec480b16b95fa34ac7d30a06422323f05677c6926"
+    },
+    "frozen_review_sha256": "sha256:1f38f35d4ad56a727bb9392d4d80ffe132107e1372557160d0a3c3130f77cf3f",
+    "frozen_routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+    "frozen_task_sha256": "sha256:e9cafd283338ff091f3d865ec480b16b95fa34ac7d30a06422323f05677c6926",
+    "frozen_usage_sha256": "sha256:b705c4a6b7715ed93b1bd318a94d2436c4df9cec7cb85307d89cd0854d9a2741",
+    "tooling_sources": {
+      "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+      "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+      "model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1"
+    }
+  },
+  "explanations": [
+    "Explain why assigning the decoded Subject only after validation prevents partial receiver mutation.",
+    "Explain which malformed, incomplete or unknown-field inputs were exercised, and why valid replacement proves the receiver is not merely left untouched for every input."
+  ],
+  "head": "343dea6a62484d73e7b577a0be2683ca233510f6",
+  "language": "go",
+  "later_defects": [],
+  "model_ids": [
+    {
+      "api": "openai-completions",
+      "model": "deepseek-v4.1-flash-fast",
+      "provider": "tencent-litellm"
+    },
+    {
+      "api": "openai-responses",
+      "model": "gpt-6.1-sol",
+      "provider": "ghc"
+    }
+  ],
+  "outcome": "Add real production Subject decoder regression coverage: rejected decoding preserves an existing Subject receiver byte-for-byte, and successful decoding replaces all Subject fields. Do not change production code or existing tests.",
+  "phases": [
+    {
+      "cost_provenance": "Observed coordinator-session prefix only; complete-session usage and provider billing remain unknown.",
+      "estimated_cost": null,
+      "known_subtotals": {
+        "assistant_messages": 144,
+        "assistant_messages_with_cost_total": 144,
+        "assistant_messages_with_usage": 144,
+        "cacheRead": {
+          "messages": 144,
+          "sum": 35273505
+        },
+        "cacheWrite": {
+          "messages": 144,
+          "sum": 487526
+        },
+        "cached": {
+          "messages": 144,
+          "sum": 35761031
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 144,
+            "sum": 3.5273505000000003
+          },
+          "cacheWrite": {
+            "messages": 144,
+            "sum": 1.2188150000000004
+          },
+          "input": {
+            "messages": 144,
+            "sum": 0.0008580000000000018
+          },
+          "output": {
+            "messages": 144,
+            "sum": 2.41894
+          },
+          "total": {
+            "messages": 144,
+            "sum": 7.165963500000001
+          }
+        },
+        "input": {
+          "messages": 144,
+          "sum": 429
+        },
+        "output": {
+          "messages": 144,
+          "sum": 241894
+        },
+        "reasoningTokens": {
+          "messages": 135,
+          "sum": 184519
+        },
+        "totalTokens": {
+          "messages": 144,
+          "sum": 36003354
+        }
+      },
+      "limitations": [
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed",
+        "coordinator_session_open_at_snapshot_cutoff",
+        "complete_coordinator_usage_and_cost_unknown",
+        "unreported_harness_helper_or_transport_usage_not_assumed_zero"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "allocation": "Whole increment coordination and one-time evaluator construction charged once to the positive result. No ordinary-task routing-cost or savings claim.",
+        "assistant_messages": 144,
+        "assistant_messages_with_cost_total": 144,
+        "assistant_messages_with_usage": 144,
+        "assistant_messages_without_model_identity": 0,
+        "coordinator_session_open": true,
+        "credential_route": "omp-ghc-configured",
+        "custom_messages": 24,
+        "entry_types": {
+          "custom": 232,
+          "custom_message": 24,
+          "message": 373,
+          "model_change": 1,
+          "model_usage": 1,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          }
+        ],
+        "observed_prefix_harness_estimate": 7.165963500000001,
+        "observed_prefix_tokens": {
+          "cached": 35761031,
+          "input": 429,
+          "output": 241894
+        },
+        "records": 634,
+        "repair_count_definition": "Number of explicit corrective/rework intervention batches listed in repair_events, including failed repair and evidence-extraction attempts; not mandatory phase-row count.",
+        "repair_events": [
+          {
+            "description": "Remove duplicate assertions/helpers while preserving both names and11negative cases.",
+            "id": "go-test-simplification"
+          },
+          {
+            "description": "Fix initial observed parser/test failures, served identity and followup prompt provenance.",
+            "id": "usage-initial-repair"
+          },
+          {
+            "description": "Supply session_init in the missing-user-prompt fixture without changing assertions.",
+            "id": "usage-fixture-repair"
+          },
+          {
+            "description": "Add required null non_model_reason to model rows and its contract coverage.",
+            "id": "usage-row-integration"
+          },
+          {
+            "description": "Permit exact repository-root gate cwd without relaxing traversal.",
+            "id": "runner-root-cwd"
+          },
+          {
+            "description": "Refuse duplicate/omitted sessions and empty prompt hashes; explicitly record repair count and elapsed time.",
+            "id": "runner-accounting-integrity"
+          },
+          {
+            "description": "Rejected approach changed completeness meaning; pinned assertion failed and the approach was reverted.",
+            "id": "runner-rejected-completeness-fix"
+          },
+          {
+            "description": "Verifier now preserves incomplete/failed classification after gate-time source mutation.",
+            "id": "runner-subject-completeness"
+          },
+          {
+            "description": "Correct coordinator elapsed variable shadowing; keep5-second versus phase-sum assertion.",
+            "id": "runner-wall-time-shadow"
+          },
+          {
+            "description": "Fix no-model vacuous totals; bind tooling versions; reconcile skill pointer/messages and add refusal controls.",
+            "id": "independent-review-repairs"
+          },
+          {
+            "description": "Provide two required gates so partial selection is actually incomplete; retain refusal assertion.",
+            "id": "partial-attempt-fixture"
+          },
+          {
+            "description": "Reject a one-byte extraction that matched its own assistant command; capture actual nonassistant delivered output instead (2902 bytes,20 tests,exit0). This is an evidence-extraction correction, not a gate rerun.",
+            "id": "gate-log-extraction"
+          },
+          {
+            "description": "The initial archival patch was atomically rejected for an unnecessary README context hunk; reread the context, retry without that hunk, and verify5441 unchanged contract bytes.",
+            "id": "archival-context-retry"
+          }
+        ],
+        "resolved_model_identity": null,
+        "routing_provenance": "modelRoles.default",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:2523f15d65e90f0e52795a045d62671aaab339544cfdad814c2471742e038320",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 3
+          }
+        ],
+        "timing_window": {
+          "ended_at": "2026-11-15T16:12:17.832000+00:00",
+          "method": "actual coordinator session start to last complete private harness record at snapshot cutoff",
+          "started_at": "2026-11-15T14:27:41.230000+00:00"
+        },
+        "unknown_tail_after_cutoff": true,
+        "usage_includes_all_assistant_attempts": true,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 144,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:c585c2bbd0866ecd1dfa7b541169480491e2e9d76d9a41cb249afb34126910b6"
+        },
+        {
+          "index": 0,
+          "kind": "custom_message",
+          "sha256": "sha256:80955fb9e866ad39e2c5a6102ec5dafb4edcaf1abdc474fd8992cc3439fc3dbb"
+        },
+        {
+          "index": 1,
+          "kind": "custom_message",
+          "sha256": "sha256:e3cfacaf15b63045c44d5535c6b9571def42d8445f29651e0e15ad8eb97dd293"
+        },
+        {
+          "index": 2,
+          "kind": "custom_message",
+          "sha256": "sha256:d4e500d22e802374850fcdd49301882aac36aa906ce53ff8a6de27a62768bef7"
+        },
+        {
+          "index": 3,
+          "kind": "custom_message",
+          "sha256": "sha256:767fd432d805ba6840e78104e57b9724fca4bb85e40aa9cbc5804995e7b3677f"
+        },
+        {
+          "index": 4,
+          "kind": "custom_message",
+          "sha256": "sha256:cdf08aceb430c3e2773bd0983c78b8f4783b0730fbc546b808347c47fe0a6975"
+        },
+        {
+          "index": 5,
+          "kind": "custom_message",
+          "sha256": "sha256:4e80eb08ba095cd3e21e1220d8bc951331877d595cb3faca50842090964329a3"
+        },
+        {
+          "index": 6,
+          "kind": "custom_message",
+          "sha256": "sha256:d4e500d22e802374850fcdd49301882aac36aa906ce53ff8a6de27a62768bef7"
+        },
+        {
+          "index": 7,
+          "kind": "custom_message",
+          "sha256": "sha256:a72294da96d62749a86edc934b2f0950121dfaf0b29fe861224b06210f430418"
+        },
+        {
+          "index": 8,
+          "kind": "custom_message",
+          "sha256": "sha256:c99f588970f578945f2ad29abf7d54cbe64890149de6244c944a30fd2746144c"
+        },
+        {
+          "index": 9,
+          "kind": "custom_message",
+          "sha256": "sha256:dfa256d7dd75e758cd44ae15404ca6629ada183122f8f457ff945c2c3373c4e2"
+        },
+        {
+          "index": 10,
+          "kind": "custom_message",
+          "sha256": "sha256:28d1950a7da33ce44a23035c90d8ee7715cc74d1028594c01bae142b1edd7bb8"
+        },
+        {
+          "index": 11,
+          "kind": "custom_message",
+          "sha256": "sha256:52508ac4db2bfe3d87ca3de22201ee5e5973366041c39e6c0254384cdb2ce8f6"
+        },
+        {
+          "index": 12,
+          "kind": "custom_message",
+          "sha256": "sha256:2ab5fbfc3ce7a389d8716d42ff88853c90095f40c9c7c7e2ac64eb3414a33c12"
+        },
+        {
+          "index": 13,
+          "kind": "custom_message",
+          "sha256": "sha256:566df1b186038d1a9844463b72033964372a5a4bc30d1c1c2f06c3e741da0374"
+        },
+        {
+          "index": 14,
+          "kind": "custom_message",
+          "sha256": "sha256:5274f8d5ff62b839e66acb4d3f7bd9cdd87fd0f80b68eeb040c5f348c5c30e87"
+        },
+        {
+          "index": 15,
+          "kind": "custom_message",
+          "sha256": "sha256:f9dfc96515ddef72f68bbf5df9b74a9c84becce8ba361bb73059d1517825c3eb"
+        },
+        {
+          "index": 16,
+          "kind": "custom_message",
+          "sha256": "sha256:fd0200e389e84b306056b51b722d88cffc59944d070142a23e882f2210441189"
+        },
+        {
+          "index": 17,
+          "kind": "custom_message",
+          "sha256": "sha256:eadcc329c871e77c599956874cff08d4acaf2ab826e1a555410220c904919820"
+        },
+        {
+          "index": 18,
+          "kind": "custom_message",
+          "sha256": "sha256:74a29aa89d0bcd37af312130b3ac169afbe956a54e7ef5d6a715bff67777fe39"
+        },
+        {
+          "index": 19,
+          "kind": "custom_message",
+          "sha256": "sha256:5125b3cd1a5e4dcdf0ac35ea6652976e89ed50747edeccd543d1b596a6587069"
+        },
+        {
+          "index": 20,
+          "kind": "custom_message",
+          "sha256": "sha256:118eeab0b6a373c8a8b0f844ffa954832fe7471e8b590b17a8930466565db28b"
+        },
+        {
+          "index": 21,
+          "kind": "custom_message",
+          "sha256": "sha256:dd658d6a5a65991c47f7de489ece89ad0b21f18fb6fbeb40396f0aef215346e8"
+        },
+        {
+          "index": 22,
+          "kind": "custom_message",
+          "sha256": "sha256:1f51411e1117cb2a22e023604e528a695214687902319ed1abe65d2fb32fa1a3"
+        },
+        {
+          "index": 23,
+          "kind": "custom_message",
+          "sha256": "sha256:fb98fe3e258140df6e7a4001459d5a79c4bfbae3ffedbb174f42b977a0f00dd4"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1df9b-542e-7455-84d8-9ce0f270d648",
+      "stage": "exploration",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 6276.602
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.0768087,
+      "known_subtotals": {
+        "assistant_messages": 23,
+        "assistant_messages_with_cost_total": 23,
+        "assistant_messages_with_usage": 23,
+        "cacheRead": {
+          "messages": 23,
+          "sum": 1614848
+        },
+        "cacheWrite": {
+          "messages": 23,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 23,
+          "sum": 1614848
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 23,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 23,
+            "sum": 0
+          },
+          "input": {
+            "messages": 23,
+            "sum": 0.0322047
+          },
+          "output": {
+            "messages": 23,
+            "sum": 0.044604
+          },
+          "total": {
+            "messages": 23,
+            "sum": 0.0768087
+          }
+        },
+        "input": {
+          "messages": 23,
+          "sum": 107349
+        },
+        "output": {
+          "messages": 23,
+          "sum": 37170
+        },
+        "reasoningTokens": {
+          "messages": 23,
+          "sum": 25593
+        },
+        "totalTokens": {
+          "messages": 23,
+          "sum": 1759367
+        }
+      },
+      "limitations": [
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 23,
+        "assistant_messages_with_cost_total": 23,
+        "assistant_messages_with_usage": 23,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-tencent-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 74,
+          "message": 95,
+          "model_change": 1,
+          "session": 1,
+          "session_init": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          }
+        ],
+        "records": 174,
+        "resolved_model_identity": {
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        },
+        "routing_provenance": "task.agentModelOverrides.scout",
+        "served_model_differs_from_resolved_model": false,
+        "session_init": {
+          "agent": "scout",
+          "model_role": "flash_high",
+          "read_only": true,
+          "resolved_model": "tencent-litellm/deepseek-v4.1-flash-fast:high"
+        },
+        "session_init_records": 1,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:41c78523eb8620f5a41e2192c1ad04a8be25f94888dcde361d67269e23b7898f",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": true,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 23,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "kind": "system_prompt",
+          "sha256": "sha256:9eed7f6982357721f1ea64ff8d8c326ddf29d52552b35411244c7d951949fe82"
+        },
+        {
+          "kind": "task",
+          "sha256": "sha256:fab5f420e708f4237180543e6998be784b1c172aef03e2b68b9e5dae86fd67af"
+        },
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:f8e6ac39eab37433931925561371329c33b20fa26907ce4f90d4cb81c77b2a1e"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1df9c-004a-75ee-87e2-290dfcc59fbf",
+      "stage": "exploration",
+      "tokens": {
+        "cached": 1614848,
+        "input": 107349,
+        "output": 37170
+      },
+      "wall_time": 621.609
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.0813465,
+      "known_subtotals": {
+        "assistant_messages": 12,
+        "assistant_messages_with_cost_total": 12,
+        "assistant_messages_with_usage": 12,
+        "cacheRead": {
+          "messages": 12,
+          "sum": 498368
+        },
+        "cacheWrite": {
+          "messages": 12,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 12,
+          "sum": 498368
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 12,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 12,
+            "sum": 0
+          },
+          "input": {
+            "messages": 12,
+            "sum": 0.0100941
+          },
+          "output": {
+            "messages": 12,
+            "sum": 0.0712524
+          },
+          "total": {
+            "messages": 12,
+            "sum": 0.0813465
+          }
+        },
+        "input": {
+          "messages": 12,
+          "sum": 33647
+        },
+        "output": {
+          "messages": 12,
+          "sum": 59377
+        },
+        "reasoningTokens": {
+          "messages": 12,
+          "sum": 54815
+        },
+        "totalTokens": {
+          "messages": 12,
+          "sum": 591392
+        }
+      },
+      "limitations": [
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 12,
+        "assistant_messages_with_cost_total": 12,
+        "assistant_messages_with_usage": 12,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-tencent-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 30,
+          "message": 40,
+          "model_change": 1,
+          "session": 1,
+          "session_init": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          }
+        ],
+        "records": 75,
+        "resolved_model_identity": {
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        },
+        "routing_provenance": "task.agentModelOverrides.reviewer",
+        "served_model_differs_from_resolved_model": false,
+        "session_init": {
+          "agent": "reviewer",
+          "model_role": "flash_max",
+          "read_only": false,
+          "resolved_model": "tencent-litellm/deepseek-v4.1-flash-fast:max"
+        },
+        "session_init_records": 1,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:1e3dd9c611494793c698e324ace3bd894eb0b167662b14650d92007d2e57a160",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": true,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 12,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "kind": "system_prompt",
+          "sha256": "sha256:410bd90904f0d48d4b0f427197243570415dfcd41441fc6692b74040407c551d"
+        },
+        {
+          "kind": "task",
+          "sha256": "sha256:d9edb7c0b67bc70fe79a18c91a8971f51356048bede78603df944f77e5295183"
+        },
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:deb84e7af651bc1636914f584914e3f1d0f3ffd8038027af24a6e2e78f396acd"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1df9c-08ca-7568-936d-424210ff8b9d",
+      "stage": "exploration",
+      "tokens": {
+        "cached": 498368,
+        "input": 33647,
+        "output": 59377
+      },
+      "wall_time": 646.663
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.3888627,
+      "known_subtotals": {
+        "assistant_messages": 63,
+        "assistant_messages_with_cost_total": 63,
+        "assistant_messages_with_usage": 63,
+        "cacheRead": {
+          "messages": 63,
+          "sum": 11571456
+        },
+        "cacheWrite": {
+          "messages": 63,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 63,
+          "sum": 11571456
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 63,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 63,
+            "sum": 0
+          },
+          "input": {
+            "messages": 63,
+            "sum": 0.17613629999999997
+          },
+          "output": {
+            "messages": 63,
+            "sum": 0.2127264000000001
+          },
+          "total": {
+            "messages": 63,
+            "sum": 0.3888627
+          }
+        },
+        "input": {
+          "messages": 63,
+          "sum": 587121
+        },
+        "output": {
+          "messages": 63,
+          "sum": 177272
+        },
+        "reasoningTokens": {
+          "messages": 55,
+          "sum": 127256
+        },
+        "totalTokens": {
+          "messages": 63,
+          "sum": 12335849
+        }
+      },
+      "limitations": [
+        "assistant_usage_fields_missing",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "allocation": "One-time evaluator implementation, exploration and unsuccessful attempts in this session charged once.",
+        "assistant_messages": 63,
+        "assistant_messages_with_cost_total": 63,
+        "assistant_messages_with_usage": 63,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-tencent-configured",
+        "custom_messages": 6,
+        "entry_types": {
+          "custom": 84,
+          "custom_message": 6,
+          "message": 153,
+          "model_change": 1,
+          "session": 1,
+          "session_init": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          }
+        ],
+        "records": 248,
+        "resolved_model_identity": {
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        },
+        "routing_provenance": "task.agentModelOverrides.task",
+        "served_model_differs_from_resolved_model": false,
+        "session_init": {
+          "agent": "task",
+          "model_role": "flash_max",
+          "read_only": false,
+          "resolved_model": "tencent-litellm/deepseek-v4.1-flash-fast:max"
+        },
+        "session_init_records": 1,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:d85bc1aece18cf10045d8ac705fe69db25e71ec3b1c9880a56dcd250e3e1c04a",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": true,
+        "user_messages": 9
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 63,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "kind": "system_prompt",
+          "sha256": "sha256:76c89e91ab22db05dc9af53f7736bf214b83364e685f8c82e9f7c169e297cf86"
+        },
+        {
+          "kind": "task",
+          "sha256": "sha256:7e3eafcba1fe1a4c700d188d02f80dad698496f458c1cb7bc71790879c0942ea"
+        },
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:03850dd240a7937860ef16036d123c5b96cd79c2b8d425056a62eda1c37779b1"
+        },
+        {
+          "index": 1,
+          "kind": "user_message",
+          "sha256": "sha256:173e6328a762dbb5f14cb3959b705dad1b033884ab32e82dbf5be47ab3d11d90"
+        },
+        {
+          "index": 2,
+          "kind": "user_message",
+          "sha256": "sha256:93aded277878b36a841fb6607f800a049c2eb7533bb03058a7b7961c40ebe3d0"
+        },
+        {
+          "index": 0,
+          "kind": "custom_message",
+          "sha256": "sha256:b11952f25e4eb23e032211025ab9c4cc7463d648131465116da0e32b3eaae1d9"
+        },
+        {
+          "index": 3,
+          "kind": "user_message",
+          "sha256": "sha256:bea4fa6f7535fcc7545df5bc730b07601d4007509fd1ec781117dc086edc52ba"
+        },
+        {
+          "index": 1,
+          "kind": "custom_message",
+          "sha256": "sha256:a2f91d04732bc265aa322675eccde4fd2936d873cb2f5a6addf0d9aaebdc76f4"
+        },
+        {
+          "index": 4,
+          "kind": "user_message",
+          "sha256": "sha256:ce52aa25fc29c49c0ebc0501991ed1fcdc7d8b15f47b9da5156f2ee9627262c9"
+        },
+        {
+          "index": 2,
+          "kind": "custom_message",
+          "sha256": "sha256:6f2a186dcb745fee4848016a6010925aff39fce765afbb7a24b6593f1d1cc1ed"
+        },
+        {
+          "index": 5,
+          "kind": "user_message",
+          "sha256": "sha256:2601be89f26ea73f485a41633ef0e7b4dd82fb7ee03d36e8096a8ac4e194e439"
+        },
+        {
+          "index": 3,
+          "kind": "custom_message",
+          "sha256": "sha256:bbf28af31289bf6c2edd7ecf4a8903e74d1b25c4c0e70f41a71ae44e133d9b84"
+        },
+        {
+          "index": 6,
+          "kind": "user_message",
+          "sha256": "sha256:052c2c337bdf53122eeab2bf3908a6d42e4f773760a32c5dedbeae4407b0239e"
+        },
+        {
+          "index": 7,
+          "kind": "user_message",
+          "sha256": "sha256:f2028b5015229c19da9d02ed4a3888b50e3dadcce18781959960aff07a0abbbe"
+        },
+        {
+          "index": 8,
+          "kind": "user_message",
+          "sha256": "sha256:6eda5a51c0cdecf911f199e4877603c05d8538e64f10cdd74f3feae3210596d1"
+        },
+        {
+          "index": 4,
+          "kind": "custom_message",
+          "sha256": "sha256:fb2fcb354b7ddab5727a39dd0698ccce424754bf463cb9f0a60daeba5caf50e4"
+        },
+        {
+          "index": 5,
+          "kind": "custom_message",
+          "sha256": "sha256:ac00e7eda2a71f56d4b713c5e812831354f69708b5721ba89badfb7488d85d43"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1dfa1-f723-72a0-9335-801118916013",
+      "stage": "implementation",
+      "tokens": {
+        "cached": 11571456,
+        "input": 587121,
+        "output": 177272
+      },
+      "wall_time": 2018.875
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.037671599999999986,
+      "known_subtotals": {
+        "assistant_messages": 19,
+        "assistant_messages_with_cost_total": 19,
+        "assistant_messages_with_usage": 19,
+        "cacheRead": {
+          "messages": 19,
+          "sum": 486464
+        },
+        "cacheWrite": {
+          "messages": 19,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 19,
+          "sum": 486464
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 19,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 19,
+            "sum": 0
+          },
+          "input": {
+            "messages": 19,
+            "sum": 0.007000799999999998
+          },
+          "output": {
+            "messages": 19,
+            "sum": 0.030670799999999998
+          },
+          "total": {
+            "messages": 19,
+            "sum": 0.037671599999999986
+          }
+        },
+        "input": {
+          "messages": 19,
+          "sum": 23336
+        },
+        "output": {
+          "messages": 19,
+          "sum": 25559
+        },
+        "reasoningTokens": {
+          "messages": 15,
+          "sum": 16908
+        },
+        "totalTokens": {
+          "messages": 19,
+          "sum": 535359
+        }
+      },
+      "limitations": [
+        "assistant_usage_fields_missing",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "allocation": "Real bounded Go task and its test simplification revision; counted once.",
+        "assistant_messages": 19,
+        "assistant_messages_with_cost_total": 19,
+        "assistant_messages_with_usage": 19,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-tencent-configured",
+        "custom_messages": 1,
+        "entry_types": {
+          "custom": 24,
+          "custom_message": 1,
+          "message": 41,
+          "model_change": 1,
+          "session": 1,
+          "session_init": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          }
+        ],
+        "records": 71,
+        "resolved_model_identity": {
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        },
+        "routing_provenance": "task.agentModelOverrides.sonic",
+        "served_model_differs_from_resolved_model": false,
+        "session_init": {
+          "agent": "sonic",
+          "model_role": "flash_high",
+          "read_only": false,
+          "resolved_model": "tencent-litellm/deepseek-v4.1-flash-fast:high"
+        },
+        "session_init_records": 1,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:bcf5f155ccf31f564ca871d8bdd9f968db23bd849012009609c191abb948179d",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": true,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 19,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "kind": "system_prompt",
+          "sha256": "sha256:5d11e3aebf3fe14101fa6ad69db5710b73cfee6f20a5c541821c4c88e4b32b0f"
+        },
+        {
+          "kind": "task",
+          "sha256": "sha256:cbfc4774f23e257ed138733bb1f562b00feeaee30110e973fa271730c9a47849"
+        },
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:310d075da1692f5cadbb50d6f0abf63932e9a8b75a8e11f9e7da7b911456783f"
+        },
+        {
+          "index": 0,
+          "kind": "custom_message",
+          "sha256": "sha256:beb3776b038b8062efa958daacfd9c1058e943b060dbe6bd611bbe9e48ed3d2f"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1dfa7-64bf-72e4-bf4b-d093426ea348",
+      "stage": "implementation",
+      "tokens": {
+        "cached": 486464,
+        "input": 23336,
+        "output": 25559
+      },
+      "wall_time": 590.544
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.1245981,
+      "known_subtotals": {
+        "assistant_messages": 56,
+        "assistant_messages_with_cost_total": 56,
+        "assistant_messages_with_usage": 56,
+        "cacheRead": {
+          "messages": 56,
+          "sum": 6206208
+        },
+        "cacheWrite": {
+          "messages": 56,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 56,
+          "sum": 6206208
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 56,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 56,
+            "sum": 0
+          },
+          "input": {
+            "messages": 56,
+            "sum": 0.05806530000000001
+          },
+          "output": {
+            "messages": 56,
+            "sum": 0.06653279999999999
+          },
+          "total": {
+            "messages": 56,
+            "sum": 0.1245981
+          }
+        },
+        "input": {
+          "messages": 56,
+          "sum": 193551
+        },
+        "output": {
+          "messages": 56,
+          "sum": 55444
+        },
+        "reasoningTokens": {
+          "messages": 46,
+          "sum": 31196
+        },
+        "totalTokens": {
+          "messages": 56,
+          "sum": 6455203
+        }
+      },
+      "limitations": [
+        "assistant_usage_fields_missing",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "allocation": "Whole usage-extractor implementation and all correction calls charged once in repair; no duplicate implementation-phase row.",
+        "assistant_messages": 56,
+        "assistant_messages_with_cost_total": 56,
+        "assistant_messages_with_usage": 56,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-tencent-configured",
+        "custom_messages": 3,
+        "entry_types": {
+          "custom": 66,
+          "custom_message": 3,
+          "message": 121,
+          "model_change": 1,
+          "session": 1,
+          "session_init": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          }
+        ],
+        "records": 195,
+        "resolved_model_identity": {
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        },
+        "routing_provenance": "task.agentModelOverrides.task",
+        "served_model_differs_from_resolved_model": false,
+        "session_init": {
+          "agent": "task",
+          "model_role": "flash_max",
+          "read_only": false,
+          "resolved_model": "tencent-litellm/deepseek-v4.1-flash-fast:max"
+        },
+        "session_init_records": 1,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:9452b98c51372f33494e29386fbf487dffdd1bcc32e32d2d117269be6b687e5f",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": true,
+        "user_messages": 2
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 56,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "kind": "system_prompt",
+          "sha256": "sha256:bbd6cde5984911e81274744d3cb589a21abacb0ee128cc6b133965455d0b7732"
+        },
+        {
+          "kind": "task",
+          "sha256": "sha256:1cc832b3f07c1088af3cad6481fcfe410092f0342991c4a0eceb16494033bae4"
+        },
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:0771271705f81cb1b5db674721c0c2187a1b06b2383ac72ba496a3b3d2bab795"
+        },
+        {
+          "index": 0,
+          "kind": "custom_message",
+          "sha256": "sha256:bb219d9428fb1a92c19b8f69b0ac50e0a7bfd85e0e826b49f741eb8c05855383"
+        },
+        {
+          "index": 1,
+          "kind": "user_message",
+          "sha256": "sha256:7a6acb477853b2eff5db32215754ef563fb95970dd5bf70214a8376b8e4d2743"
+        },
+        {
+          "index": 1,
+          "kind": "custom_message",
+          "sha256": "sha256:e6d785f9b40f7bee386c28ff558deb8c41dd570259fd4190a2a5407350653788"
+        },
+        {
+          "index": 2,
+          "kind": "custom_message",
+          "sha256": "sha256:d2df4dbfba485c13071e2be16a3257effad95ad59d773f6af4acbe1b0aed5250"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1dfa2-152a-74e1-9f9a-626a52fa0216",
+      "stage": "repair",
+      "tokens": {
+        "cached": 6206208,
+        "input": 193551,
+        "output": 55444
+      },
+      "wall_time": 1458.482
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.2749212,
+      "known_subtotals": {
+        "assistant_messages": 43,
+        "assistant_messages_with_cost_total": 43,
+        "assistant_messages_with_usage": 43,
+        "cacheRead": {
+          "messages": 43,
+          "sum": 4314432
+        },
+        "cacheWrite": {
+          "messages": 43,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 43,
+          "sum": 4314432
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 43,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 43,
+            "sum": 0
+          },
+          "input": {
+            "messages": 43,
+            "sum": 0.15450359999999996
+          },
+          "output": {
+            "messages": 43,
+            "sum": 0.12041759999999999
+          },
+          "total": {
+            "messages": 43,
+            "sum": 0.2749212
+          }
+        },
+        "input": {
+          "messages": 43,
+          "sum": 515012
+        },
+        "output": {
+          "messages": 43,
+          "sum": 100348
+        },
+        "reasoningTokens": {
+          "messages": 42,
+          "sum": 75047
+        },
+        "totalTokens": {
+          "messages": 43,
+          "sum": 4929792
+        }
+      },
+      "limitations": [
+        "assistant_usage_fields_missing",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "allocation": "Whole independent source-review and closeout session, including all followups, counted once.",
+        "assistant_messages": 43,
+        "assistant_messages_with_cost_total": 43,
+        "assistant_messages_with_usage": 43,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-tencent-configured",
+        "custom_messages": 5,
+        "entry_types": {
+          "custom": 71,
+          "custom_message": 5,
+          "message": 114,
+          "model_change": 1,
+          "session": 1,
+          "session_init": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          }
+        ],
+        "records": 195,
+        "resolved_model_identity": {
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        },
+        "routing_provenance": "task.agentModelOverrides.reviewer",
+        "served_model_differs_from_resolved_model": false,
+        "session_init": {
+          "agent": "reviewer",
+          "model_role": "flash_max",
+          "read_only": false,
+          "resolved_model": "tencent-litellm/deepseek-v4.1-flash-fast:max"
+        },
+        "session_init_records": 1,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:013673b5a46b98ed842754a1e5e08358105471481ec940d42efb2183e2dfe6dc",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": true,
+        "user_messages": 4
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 43,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "kind": "system_prompt",
+          "sha256": "sha256:a4d3a162e9d7ff206e0f439adcbb991d01279a891619b18a9ad8a14805afa45f"
+        },
+        {
+          "kind": "task",
+          "sha256": "sha256:21de55555e5ac37de79ad37ef97a3a9b9aa02e0dcf73ba4d14e4b16c320ae68b"
+        },
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:72827ec9ca6d079ac7d0e18f5c0cf8091926d49fee50be770c89dfd188885cab"
+        },
+        {
+          "index": 1,
+          "kind": "user_message",
+          "sha256": "sha256:c04ca830f0e4cc4edba343334fdead745b5f722b8f624f07fd2ff35c148cf953"
+        },
+        {
+          "index": 0,
+          "kind": "custom_message",
+          "sha256": "sha256:4e0977ef1c364839cf9034bedd55a6631e58734bd525483679f2f7ea3fffe99f"
+        },
+        {
+          "index": 2,
+          "kind": "user_message",
+          "sha256": "sha256:11fa63c1dedaf796d87996509ce2e012d904b449223b9da5f311d946432fa314"
+        },
+        {
+          "index": 1,
+          "kind": "custom_message",
+          "sha256": "sha256:edb725a4c82f1a449d52a24ba62dc0f90ad206fa1272cf52749a8f53c611569b"
+        },
+        {
+          "index": 3,
+          "kind": "user_message",
+          "sha256": "sha256:30fd3b60b8f1a3589af38928a88366fa45b314bed66926178859449849a228a2"
+        },
+        {
+          "index": 2,
+          "kind": "custom_message",
+          "sha256": "sha256:d0272bd37dde50cec20990bc97deaf59c22c2ecdcf865d63100c13ee3427b121"
+        },
+        {
+          "index": 3,
+          "kind": "custom_message",
+          "sha256": "sha256:333646fa7fca77b87f3baec8722ef9226e9d8426e719d2b25baf4b24f116b74b"
+        },
+        {
+          "index": 4,
+          "kind": "custom_message",
+          "sha256": "sha256:8c56896194e7d55f8fd4646e7e70e1188b38ea1316a8923a724aeaca3c82fc00"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1dfc1-8d1c-73dd-a966-d2244d547b60",
+      "stage": "review",
+      "tokens": {
+        "cached": 4314432,
+        "input": 515012,
+        "output": 100348
+      },
+      "wall_time": 2556.342
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "Actual executable gates; shown phase seconds are recorded full-Go gate durations. All other local command timings are retained in evidence; coordinator task elapsed includes the full timing window.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "verification",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 235.70300000003772
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "Failed parser/runner checks, rejected implementation revisions and the failed patch-shell invocation are charged in the coordinator/implementation/repair sessions above, not double-counted as another model call.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "failed_attempt",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0.0
+    }
+  ],
+  "prompt_hashes": [
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:118eeab0b6a373c8a8b0f844ffa954832fe7471e8b590b17a8930466565db28b"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:1f51411e1117cb2a22e023604e528a695214687902319ed1abe65d2fb32fa1a3"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:28d1950a7da33ce44a23035c90d8ee7715cc74d1028594c01bae142b1edd7bb8"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:2ab5fbfc3ce7a389d8716d42ff88853c90095f40c9c7c7e2ac64eb3414a33c12"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:333646fa7fca77b87f3baec8722ef9226e9d8426e719d2b25baf4b24f116b74b"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:4e0977ef1c364839cf9034bedd55a6631e58734bd525483679f2f7ea3fffe99f"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:4e80eb08ba095cd3e21e1220d8bc951331877d595cb3faca50842090964329a3"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:5125b3cd1a5e4dcdf0ac35ea6652976e89ed50747edeccd543d1b596a6587069"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:52508ac4db2bfe3d87ca3de22201ee5e5973366041c39e6c0254384cdb2ce8f6"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:5274f8d5ff62b839e66acb4d3f7bd9cdd87fd0f80b68eeb040c5f348c5c30e87"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:566df1b186038d1a9844463b72033964372a5a4bc30d1c1c2f06c3e741da0374"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:6f2a186dcb745fee4848016a6010925aff39fce765afbb7a24b6593f1d1cc1ed"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:74a29aa89d0bcd37af312130b3ac169afbe956a54e7ef5d6a715bff67777fe39"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:767fd432d805ba6840e78104e57b9724fca4bb85e40aa9cbc5804995e7b3677f"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:80955fb9e866ad39e2c5a6102ec5dafb4edcaf1abdc474fd8992cc3439fc3dbb"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:8c56896194e7d55f8fd4646e7e70e1188b38ea1316a8923a724aeaca3c82fc00"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:a2f91d04732bc265aa322675eccde4fd2936d873cb2f5a6addf0d9aaebdc76f4"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:a72294da96d62749a86edc934b2f0950121dfaf0b29fe861224b06210f430418"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:ac00e7eda2a71f56d4b713c5e812831354f69708b5721ba89badfb7488d85d43"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:b11952f25e4eb23e032211025ab9c4cc7463d648131465116da0e32b3eaae1d9"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:bb219d9428fb1a92c19b8f69b0ac50e0a7bfd85e0e826b49f741eb8c05855383"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:bbf28af31289bf6c2edd7ecf4a8903e74d1b25c4c0e70f41a71ae44e133d9b84"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:beb3776b038b8062efa958daacfd9c1058e943b060dbe6bd611bbe9e48ed3d2f"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:c99f588970f578945f2ad29abf7d54cbe64890149de6244c944a30fd2746144c"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:cdf08aceb430c3e2773bd0983c78b8f4783b0730fbc546b808347c47fe0a6975"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:d0272bd37dde50cec20990bc97deaf59c22c2ecdcf865d63100c13ee3427b121"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:d2df4dbfba485c13071e2be16a3257effad95ad59d773f6af4acbe1b0aed5250"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:d4e500d22e802374850fcdd49301882aac36aa906ce53ff8a6de27a62768bef7"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:dd658d6a5a65991c47f7de489ece89ad0b21f18fb6fbeb40396f0aef215346e8"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:dfa256d7dd75e758cd44ae15404ca6629ada183122f8f457ff945c2c3373c4e2"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:e3cfacaf15b63045c44d5535c6b9571def42d8445f29651e0e15ad8eb97dd293"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:e6d785f9b40f7bee386c28ff558deb8c41dd570259fd4190a2a5407350653788"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:eadcc329c871e77c599956874cff08d4acaf2ab826e1a555410220c904919820"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:edb725a4c82f1a449d52a24ba62dc0f90ad206fa1272cf52749a8f53c611569b"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:f9dfc96515ddef72f68bbf5df9b74a9c84becce8ba361bb73059d1517825c3eb"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:fb2fcb354b7ddab5727a39dd0698ccce424754bf463cb9f0a60daeba5caf50e4"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:fb98fe3e258140df6e7a4001459d5a79c4bfbae3ffedbb174f42b977a0f00dd4"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:fd0200e389e84b306056b51b722d88cffc59944d070142a23e882f2210441189"
+    },
+    {
+      "kind": "system_prompt",
+      "sha256": "sha256:410bd90904f0d48d4b0f427197243570415dfcd41441fc6692b74040407c551d"
+    },
+    {
+      "kind": "system_prompt",
+      "sha256": "sha256:5d11e3aebf3fe14101fa6ad69db5710b73cfee6f20a5c541821c4c88e4b32b0f"
+    },
+    {
+      "kind": "system_prompt",
+      "sha256": "sha256:76c89e91ab22db05dc9af53f7736bf214b83364e685f8c82e9f7c169e297cf86"
+    },
+    {
+      "kind": "system_prompt",
+      "sha256": "sha256:9eed7f6982357721f1ea64ff8d8c326ddf29d52552b35411244c7d951949fe82"
+    },
+    {
+      "kind": "system_prompt",
+      "sha256": "sha256:a4d3a162e9d7ff206e0f439adcbb991d01279a891619b18a9ad8a14805afa45f"
+    },
+    {
+      "kind": "system_prompt",
+      "sha256": "sha256:bbd6cde5984911e81274744d3cb589a21abacb0ee128cc6b133965455d0b7732"
+    },
+    {
+      "kind": "task",
+      "sha256": "sha256:1cc832b3f07c1088af3cad6481fcfe410092f0342991c4a0eceb16494033bae4"
+    },
+    {
+      "kind": "task",
+      "sha256": "sha256:21de55555e5ac37de79ad37ef97a3a9b9aa02e0dcf73ba4d14e4b16c320ae68b"
+    },
+    {
+      "kind": "task",
+      "sha256": "sha256:7e3eafcba1fe1a4c700d188d02f80dad698496f458c1cb7bc71790879c0942ea"
+    },
+    {
+      "kind": "task",
+      "sha256": "sha256:cbfc4774f23e257ed138733bb1f562b00feeaee30110e973fa271730c9a47849"
+    },
+    {
+      "kind": "task",
+      "sha256": "sha256:d9edb7c0b67bc70fe79a18c91a8971f51356048bede78603df944f77e5295183"
+    },
+    {
+      "kind": "task",
+      "sha256": "sha256:fab5f420e708f4237180543e6998be784b1c172aef03e2b68b9e5dae86fd67af"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:03850dd240a7937860ef16036d123c5b96cd79c2b8d425056a62eda1c37779b1"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:052c2c337bdf53122eeab2bf3908a6d42e4f773760a32c5dedbeae4407b0239e"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:0771271705f81cb1b5db674721c0c2187a1b06b2383ac72ba496a3b3d2bab795"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:11fa63c1dedaf796d87996509ce2e012d904b449223b9da5f311d946432fa314"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:173e6328a762dbb5f14cb3959b705dad1b033884ab32e82dbf5be47ab3d11d90"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:2601be89f26ea73f485a41633ef0e7b4dd82fb7ee03d36e8096a8ac4e194e439"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:30fd3b60b8f1a3589af38928a88366fa45b314bed66926178859449849a228a2"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:310d075da1692f5cadbb50d6f0abf63932e9a8b75a8e11f9e7da7b911456783f"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:6eda5a51c0cdecf911f199e4877603c05d8538e64f10cdd74f3feae3210596d1"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:72827ec9ca6d079ac7d0e18f5c0cf8091926d49fee50be770c89dfd188885cab"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:7a6acb477853b2eff5db32215754ef563fb95970dd5bf70214a8376b8e4d2743"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:93aded277878b36a841fb6607f800a049c2eb7533bb03058a7b7961c40ebe3d0"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:bea4fa6f7535fcc7545df5bc730b07601d4007509fd1ec781117dc086edc52ba"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:c04ca830f0e4cc4edba343334fdead745b5f722b8f624f07fd2ff35c148cf953"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:c585c2bbd0866ecd1dfa7b541169480491e2e9d76d9a41cb249afb34126910b6"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:ce52aa25fc29c49c0ebc0501991ed1fcdc7d8b15f47b9da5156f2ee9627262c9"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:deb84e7af651bc1636914f584914e3f1d0f3ffd8038027af24a6e2e78f396acd"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:f2028b5015229c19da9d02ed4a3888b50e3dadcce18781959960aff07a0abbbe"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:f8e6ac39eab37433931925561371329c33b20fa26907ce4f90d4cb81c77b2a1e"
+    }
+  ],
+  "repair_count": 13,
+  "review": {
+    "check_attempt_id": "attempt-0001",
+    "evidence_sha256": "sha256:1f38f35d4ad56a727bb9392d4d80ffe132107e1372557160d0a3c3130f77cf3f",
+    "gate_weakening": false,
+    "model_id": "deepseek-v4.1-flash-fast",
+    "routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+    "session_ref": "01a1dfc1-8d1c-73dd-a966-d2244d547b60",
+    "subject_hash": "sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81",
+    "verdict": "pass"
+  },
+  "review_time": 2556.342,
+  "reviewed_explanations": {
+    "Explain which malformed, incomplete or unknown-field inputs were exercised, and why valid replacement proves the receiver is not merely left untouched for every input.": "TestSubjectUnmarshalPreservesReceiverOnFailure drives 11 inputs through the real production decoder via json.Unmarshal into a receiver pre-populated with the shared identity testUUID/testCommit/testTreeDigest and asserts receiver == original after each rejection (whole-struct equality covers all three fields and any future field): empty input; array instead of object; truncated object (syntax error); non-string tree_digest (true); missing commit; missing tree_digest; unknown field 'unexpected'; duplicated resource_id member; invalid resource_id 'not-a-uuid'; invalid commit 'abc123'; invalid tree_digest 'sha256:zzzz'. Together they exercise each rejection family the decoder implements: non-object/trailing syntax, JSON type error, each required-field absence, unknown field, duplicate member, and each of the three semantic validators. TestSubjectUnmarshalReplacesReceiverOnSuccess supplies a fully valid document whose every value differs from the pre-existing identity (22222222-2222-4222-8222-222222222222 vs 11111111-1111-4111-8111-111111111111; fedcba98... vs 01234567...; sha256:0000... vs sha256:0123...) and asserts receiver == replacement plus explicit per-field inequality against the original. A receiver that was never written would still hold the original identity and fail that assertion, so preservation on failure is demonstrated as conditional validated-then-assigned behavior, not as an inert decoder that ignores every input. The file is a new, explicitly scoped test; daemon/internal/protocol/goal_subject.go and every baseline Go test are unmodified in this revision.",
+    "Explain why assigning the decoded Subject only after validation prevents partial receiver mutation.": "Subject.UnmarshalJSON (daemon/internal/protocol/goal_subject.go:51-62) decodes into a function-local subjectWire, converts it into a local Subject, runs value.Validate(), and only then executes the single statement *subject = value. Every failure return precedes that one assignment: decodeStrictObject rejects empty/whitespace input and non-object values, rejects duplicate members through RejectDuplicateJSONMembers, rejects a missing required field, rejects unknown fields through decoder.DisallowUnknownFields plus json type errors, and rejects trailing data through ensureDecoderEOF; value.Validate() then rejects a bad resource_id, commit or tree_digest. No code path assigns subject.ResourceID, subject.Commit or subject.TreeDigest individually, so the receiver cannot be half-updated: it changes atomically from the caller's previous bytes to a fully validated value, or it does not change at all. Decoding straight into the receiver (json.Unmarshal(data, subject)) would write field by field, and Go's encoding/json keeps assigning later members after an earlier member error, so a caller could observe a partially mutated Subject even though the call returned an error. Sealed evidence: protocol-tests stdout sha256:58107cf6... with validator stdout sha256:17ef5047... printing 'verified TestSubjectUnmarshalPreservesReceiverOnFailure: run=1 pass=1 skip=0' and the same line for TestSubjectUnmarshalReplacesReceiverOnSuccess (assert-go-test-json.py requires run=1, pass=1, skip=0, no skipped descendants), inside attempt-0001 sha256:38ad6dee..., bound to subject sha256:b14e8469...."
+  },
+  "reviewer_findings": [
+    {
+      "description": "No action required. The 11 rejection sub-cases assert only that decoding returns an error plus whole-struct receiver preservation, not which guard rejected. Two sub-cases are not uniquely attributable: 'missing commit' and 'missing tree digest' would still fail through Subject.Validate() if decodeStrictObject's required-field check were removed, because the zero value fails validateGitObjectID/validateSHA256. The frozen outcome required preservation on rejection and full replacement on success (not error identity), and the remaining sub-cases do pin their guards (removing RejectDuplicateJSONMembers, DisallowUnknownFields, the object check or ensureDecoderEOF makes the corresponding input decode successfully and the test fail).",
+      "id": "S1",
+      "severity": "info",
+      "status": "resolved"
+    }
+  ],
+  "risk_class": "bounded-regression",
+  "routes": {
+    "reviewer": {
+      "authorization_ref": "Current 0008a reuse_existing authorization; independent context, not a different model family",
+      "credential_route": "OMP existing configured tencent-litellm via openai-completions; authenticated startup ReviewerRoutePreflight; no credential value exported",
+      "model_id": "deepseek-v4.1-flash-fast",
+      "provenance": "OMP task.agentModelOverrides.reviewer -> modelRoles.flash_max; provider tencent-litellm; runtime thinking max"
+    },
+    "worker": {
+      "authorization_ref": "Current 0008a reuse_existing authorization; no per-call model override or new credential",
+      "credential_route": "OMP existing configured tencent-litellm via openai-completions; authenticated startup WorkerRoutePreflight; no credential value exported",
+      "model_id": "deepseek-v4.1-flash-fast",
+      "provenance": "OMP task.agentModelOverrides.sonic -> modelRoles.flash_high; provider tencent-litellm; runtime thinking high"
+    }
+  },
+  "schema": "symmetry-model-routing-evaluation/v1",
+  "subject": {
+    "base": "343dea6a62484d73e7b577a0be2683ca233510f6",
+    "content_revision": "uncommitted:sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+    "head": "343dea6a62484d73e7b577a0be2683ca233510f6",
+    "manifest_digest": "sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+    "subject_hash": "sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81"
+  },
+  "subject_hash": "sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81",
+  "task_id": "0008a-go-subject-receiver",
+  "tokens": {
+    "cached": null,
+    "input": null,
+    "known_cached_subtotal": 24691776,
+    "known_input_subtotal": 1460016,
+    "known_output_subtotal": 455170,
+    "output": null
+  },
+  "wall_time": 6276.602,
+  "workflow": "reuse_existing"
+}
