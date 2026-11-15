@@ -21,6 +21,24 @@ itself authority or declare the goal achieved.
 | Reviewed head | `109f6037a34ad340219fa6c07c3db4145e2377a1` (`git cat-file -t` → `commit`) | exit 0 |
 | Tree equivalence | `git rev-parse 109f6037a34ad340219fa6c07c3db4145e2377a1^{tree}` → `3a1dec551b0e2c630f6720d8a542343648270793` — **byte-identical to the Subject tree** because PR #22 was squash-merged | exit 0 |
 
+### Achieve binding — pending (not proved by this record)
+
+The commit and Git tree object id above are **provenance**, not the control-plane
+`Subject`: `parse_subject/1` (`control/lib/symmetry_control/goals.ex:9579`) accepts only
+`{"resource_id", "commit", "tree_digest"}`, where `resource_id` is a resource UUID and
+`tree_digest` must be a canonical `sha256:<64 lowercase hex>` digest, and
+`ensure_achievable!/2` then compares the hash of that Subject (`RequestHash.canonical/1`,
+canonical JSON → SHA-256) with the integration work item's accepted outcome and with every
+evidence row.
+
+Two of those three fields do not exist at recording time: the approved repository
+`resource_id` and the canonical `sha256:` tree digest are control-plane values created by
+the acceptance flow itself. The `achieve` binding is therefore **pending**, and this
+receipt does not claim it. The operator issuing `achieve` must supply `subject =
+{"resource_id": <uuid>, "commit": "8ded77150ec0ae49d52355670fdad78a348bf1d5",
+"tree_digest": "sha256:<64 hex>"}` and bind the integration work item and the evidence rows
+to the resulting subject hash.
+
 Because the trees are identical, the CI runs and the independent review executed on
 `109f6037…` are evidence for the Subject `8ded771` and are cited below rather than
 re-run, per the operator brief. Evidence produced on any other revision is context only
