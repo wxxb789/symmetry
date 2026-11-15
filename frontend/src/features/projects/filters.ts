@@ -1,0 +1,139 @@
+import type { WorkItem } from "../../services/api";
+import { ownerKey, ownerLabel } from "../work/presentation";
+
+/** View and filter state of the project work surface. The URL owns it: every value here is reloadable. */
+export type WorkView = "list" | "board";
+
+export interface WorkSearch {
+  view?: WorkView;
+  q?: string;
+  state?: string;
+  owner?: string;
+  blocked?: "1";
+}
+
+export interface WorkItemSearch extends WorkSearch {
+  projectId?: string;
+}
+
+// The router's search parser JSON-parses values that look like JSON, so a filter
+// such as `q=123` arrives as a number; both forms normalise to the same string.
+const textParam = (value: unknown): string | undefined => {
+  if (typeof value === "string") return value.trim() === "" ? undefined : value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
+};
+
+const blockedParam = (value: unknown): "1" | undefined =>
+  value === "1" || value === 1 || value === true ? "1" : undefined;
+
+export function workSearch(search: Record<string, unknown>): WorkSearch {
+  const view = search["view"];
+  const q = textParam(search["q"]);
+  const state = textParam(search["state"]);
+  const owner = textParam(search["owner"]);
+  const blocked = blockedParam(search["blocked"]);
+  return {
+    ...(view === "board" || view === "list" ? { view } : {}),
+    ...(q !== undefined ? { q } : {}),
+    ...(state !== undefined ? { state } : {}),
+    ...(owner !== undefined ? { owner } : {}),
+    ...(blocked !== undefined ? { blocked } : {}),
+  };
+}
+
+export function workItemSearch(search: Record<string, unknown>): WorkItemSearch {
+  const projectId = textParam(search["projectId"]);
+  return { ...workSearch(search), ...(projectId !== undefined ? { projectId } : {}) };
+}
+
+export const sameWorkSearch = (left: WorkSearch, right: WorkSearch): boolean =>
+  (left.view ?? "list") === (right.view ?? "list") &&
+  (left.q ?? "") === (right.q ?? "") &&
+  (left.state ?? "") === (right.state ?? "") &&
+  (left.owner ?? "") === (right.owner ?? "") &&
+  (left.blocked ?? "") === (right.blocked ?? "");
+
+export interface WorkFilters {
+  q: string;
+  state: string;
+  owner: string;
+  blocked: boolean;
+}
+
+export function filtersOf(search: WorkSearch): WorkFilters {
+  return {
+    q: (search.q ?? "").trim().toLocaleLowerCase(),
+    state: search.state ?? "",
+    owner: search.owner ?? "",
+    blocked: search.blocked === "1",
+  };
+}
+
+export function filterWorkItems(items: readonly WorkItem[], filters: WorkFilters): WorkItem[] {
+  return items.filter((item) =>
+    (filters.q === "" || [item.title, item.key, ownerLabel(item.assignee), item.description ?? ""]
+      .some((text) => text.toLocaleLowerCase().includes(filters.q))) &&
+    (filters.state === "" || item.status === filters.state) &&
+    (filters.owner === "" || ownerKey(item.assignee) === filters.owner) &&
+    (!filters.blocked || item.blocked));
+}
+
+/** Display order of board columns; unknown states follow alphabetically so served data is never dropped. */
+const workStateOrder = ["backlog", "ready", "in_progress", "review", "done"] as const;
+
+const stateRank = (state: string): number => {
+  const index = workStateOrder.indexOf(state as (typeof workStateOrder)[number]);
+  return index === -1 ? workStateOrder.length : index;
+};
+
+export interface BoardColumn {
+  state: string;
+  items: WorkItem[];
+}
+
+export function boardColumns(items: readonly WorkItem[]): BoardColumn[] {
+  const columns = new Map<string, WorkItem[]>();
+  for (const item of items) {
+    const column = columns.get(item.status);
+    if (column) column.push(item);
+    else columns.set(item.status, [item]);
+  }
+  return [...columns.entries()]
+    .map(([state, column]) => ({ state, items: column }))
+    .sort((left, right) => stateRank(left.state) - stateRank(right.state) || left.state.localeCompare(right.state));
+}
+
+export function stateOptions(items: readonly WorkItem[]): string[] {
+  return [...new Set(items.map((item) => item.status))]
+    .sort((left, right) => stateRank(left) - stateRank(right) || left.localeCompare(right));
+}
+
+export interface OwnerOption {
+  value: string;
+  label: string;
+}
+
+export function ownerOptions(items: readonly WorkItem[]): OwnerOption[] {
+  const options = new Map<string, string>();
+  for (const item of items) {
+    const value = ownerKey(item.assignee);
+    if (!options.has(value)) options.set(value, ownerLabel(item.assignee));
+  }
+  return [...options.entries()].map(([value, label]) => ({ value, label })).sort((left, right) => left.label.localeCompare(right.label));
+}
+
+export interface WorkSummary {
+  total: number;
+  blocked: number;
+}
+
+export function summarizeWork(items: readonly WorkItem[]): WorkSummary {
+  return {
+    total: items.length,
+    blocked: items.filter((item) => item.blocked).length,
+  };
+}
+
+export const workSummaryText = (total: number, blocked: number): string =>
+  `${total} work ${total === 1 ? "item" : "items"} · ${blocked} blocked`;

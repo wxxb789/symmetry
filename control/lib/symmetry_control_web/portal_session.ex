@@ -2,8 +2,18 @@ defmodule SymmetryControlWeb.PortalSession do
   @moduledoc false
 
   @default_max_age_seconds 8 * 60 * 60
-  @shell_path ~r{\A/portal(?:/(?:attention|projects(?:/[A-Za-z0-9_-]+)?))?\z}
+  @shell_path ~r{\A/portal(?:/(?:attention|projects(?:/[A-Za-z0-9_-]+)?|work/[A-Za-z0-9_-]+))?\z}
   @classic_identifier_param ~r{\A(?:project_id|run_id)=[A-Za-z0-9_-]+\z}
+  # Work-surface search state the shell itself writes into its own URLs: the
+  # view, the text filters, and the JSON-encoded blocked flag. Values stay
+  # anchored to that encoding, so an unencoded control character or an
+  # unescaped path separator is rejected instead of being passed through.
+  @work_view_param ~r{\Aview=(?:list|board)\z}
+  @work_text_param ~r{\A(?:q|state|owner)=(?:[A-Za-z0-9*.+_-]|%(?![01])[0-9A-Fa-f][0-9A-Fa-f])*\z}
+  @work_blocked_param ~r{\Ablocked=(?:1|%221%22)\z}
+  @work_project_param ~r{\AprojectId=[A-Za-z0-9_-]+\z}
+  @work_search_params [@work_view_param, @work_text_param, @work_blocked_param]
+  @work_item_search_params @work_search_params ++ [@work_project_param]
 
   def return_to(path) when is_binary(path) do
     if shell_return_to?(path) or classic_return_to?(path), do: path, else: "/portal"
@@ -15,15 +25,32 @@ defmodule SymmetryControlWeb.PortalSession do
     case URI.parse(path) do
       %URI{scheme: nil, host: nil, path: shell_path, query: query, fragment: nil}
       when is_binary(shell_path) ->
-        Regex.match?(@shell_path, shell_path) and
-          (is_nil(query) or
-             (shell_path == "/portal/attention" and
-                Regex.match?(~r{\AprojectId=[A-Za-z0-9_-]+\z}, query)) or
-             (shell_path == "/portal" and classic_query?(query)))
+        Regex.match?(@shell_path, shell_path) and shell_query?(shell_path, query)
 
       _ ->
         false
     end
+  end
+
+  defp shell_query?(_path, nil), do: true
+
+  defp shell_query?("/portal", query), do: classic_query?(query)
+
+  defp shell_query?("/portal/attention", query),
+    do: Regex.match?(~r{\AprojectId=[A-Za-z0-9_-]+\z}, query)
+
+  defp shell_query?("/portal/projects/" <> _project_id, query),
+    do: work_query?(query, @work_search_params)
+
+  defp shell_query?("/portal/work/" <> _work_item_id, query),
+    do: work_query?(query, @work_item_search_params)
+
+  defp shell_query?(_path, _query), do: false
+
+  defp work_query?(query, patterns) do
+    query
+    |> String.split("&")
+    |> Enum.all?(fn param -> Enum.any?(patterns, &Regex.match?(&1, param)) end)
   end
 
   defp classic_return_to?("/portal/classic" <> _rest = path) do

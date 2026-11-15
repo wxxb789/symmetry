@@ -5,16 +5,22 @@ import { Command, Folder, Inbox, LogOut, Menu, Search, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { errorMessage } from "../services/api";
 import { ErrorState, LoadingState } from "../components/workspace";
-import { sessionOptions, workspaceOptions, type Application } from "./application";
+import { sessionOptions, workDetailOptions, workspaceOptions, type Application } from "./application";
 
 function focusContent() {
   requestAnimationFrame(() => { document.getElementById("content-heading")?.focus({ preventScroll: true }); });
 }
 
 function useProjectScope() {
+  const { application } = useRouteContext({ from: "__root__" });
   const projectId = useMatch({ from: "/projects/$projectId", shouldThrow: false, select: (match) => match.params.projectId });
+  const workScope = useMatch({ from: "/work/$workItemId", shouldThrow: false, select: (match) => ({ workItemId: match.params.workItemId, claimedProjectId: match.search.projectId }) });
+  // The served projection owns a work item's project. This reads the same query key
+  // the work detail page uses, so it adds no request and no second authority; the
+  // URL's claim only covers the window before that projection arrives.
+  const servedWork = useQuery({ ...workDetailOptions(application.api, workScope?.workItemId ?? ""), enabled: workScope !== undefined });
   const searchProjectId = useMatch({ from: "/attention", shouldThrow: false, select: (match) => match.search.projectId });
-  return projectId ?? searchProjectId;
+  return projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId;
 }
 
 function useProjectDirectory() {

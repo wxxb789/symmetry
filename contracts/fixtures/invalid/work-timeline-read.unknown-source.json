@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "source": "audit",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "recorded_at": "2026-11-15T10:00:00.000000Z",
+      "data": {}
+    }
+  ],
+  "next_before": null
+}

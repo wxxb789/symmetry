@@ -10,6 +10,8 @@ import {
   PlanProposal,
   TaskResult,
   Usage,
+  WorkDetailRead,
+  WorkTimelineRead,
   WorkspaceRead,
   SemanticError,
   WireJsonError,
@@ -130,6 +132,39 @@ test("WorkspaceRead keeps duplicate, UTF-8, Unicode, and finite-number checks", 
     assert.ok(result.left instanceof SemanticError);
     assert.equal(result.left.code, "unpaired_surrogate");
   }
+});
+
+test("work detail and timeline reads decode presentation numbers and validate consumed shapes", async () => {
+  for (const [decoder, fixtureName] of [
+    [WorkDetailRead, "work-detail-read.fractional-metadata"],
+    [WorkTimelineRead, "work-timeline-read.fractional-metadata"],
+  ]) {
+    const bytes = await fs.readFile(
+      new URL(`../fixtures/valid/${fixtureName}.json`, import.meta.url),
+    );
+    const decoded = await Effect.runPromise(decoder.decodeJson(bytes));
+    assert.deepEqual(decoded, JSON.parse(bytes.toString("utf8")));
+    assert.throws(
+      () => parseWireJson(bytes),
+      (error) => error instanceof WireJsonError && error.code === "noncanonical_number",
+    );
+  }
+
+  const detail = await fixture("work-detail-read.active");
+  detail.work_item.execution.state = 0.5;
+  const detailResult = await Effect.runPromise(
+    Effect.either(WorkDetailRead.decodeJson(JSON.stringify(detail))),
+  );
+  assert.ok(Either.isLeft(detailResult));
+  assert.equal(detailResult.left._tag, "ParseError");
+
+  const timeline = await fixture("work-timeline-read.paginated");
+  timeline.items[0].generation = "2";
+  const timelineResult = await Effect.runPromise(
+    Effect.either(WorkTimelineRead.decodeJson(JSON.stringify(timeline))),
+  );
+  assert.ok(Either.isLeft(timelineResult));
+  assert.equal(timelineResult.left._tag, "ParseError");
 });
 
 test("raw decoding classifies malformed JSON before schema validation", async () => {

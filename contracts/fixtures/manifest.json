@@ -46,6 +46,41 @@
       "tags": ["read-projection", "missing-field"]
     },
     {
+      "id": "workspace-read.enriched-row",
+      "schema": "workspace-read",
+      "path": "valid/workspace-read.enriched-row.json",
+      "valid": true,
+      "tags": ["read-projection", "work-item-projection", "execution", "delivery", "external"]
+    },
+    {
+      "id": "workspace-read.task-scoped-command",
+      "schema": "workspace-read",
+      "path": "valid/workspace-read.task-scoped-command.json",
+      "valid": true,
+      "tags": ["read-projection", "work-item-projection", "task-scoped-command", "null-run-identity"]
+    },
+    {
+      "id": "workspace-read.invalid-priority",
+      "schema": "workspace-read",
+      "path": "invalid/workspace-read.invalid-priority.json",
+      "valid": false,
+      "tags": ["read-projection", "wrong-type"]
+    },
+    {
+      "id": "workspace-read.invalid-delivery-source",
+      "schema": "workspace-read",
+      "path": "invalid/workspace-read.invalid-delivery-source.json",
+      "valid": false,
+      "tags": ["read-projection", "unknown-enum"]
+    },
+    {
+      "id": "workspace-read.invalid-execution",
+      "schema": "workspace-read",
+      "path": "invalid/workspace-read.invalid-execution.json",
+      "valid": false,
+      "tags": ["read-projection", "wrong-type"]
+    },
+    {
       "id": "goal-revision.basic",
       "schema": "goal-revision",
       "path": "valid/goal-revision.basic.json",
@@ -1501,6 +1536,132 @@
       "tags": [
         "decision-kind-binding"
       ]
+    },
+    {
+      "id": "work-detail-read.null",
+      "schema": "work-detail-read",
+      "path": "valid/work-detail-read.null.json",
+      "valid": true,
+      "tags": ["read-projection", "work-detail-read", "nullable"]
+    },
+    {
+      "id": "work-detail-read.active",
+      "schema": "work-detail-read",
+      "path": "valid/work-detail-read.active.json",
+      "valid": true,
+      "tags": ["read-projection", "work-detail-read", "timeline", "delivery", "execution"]
+    },
+    {
+      "id": "work-detail-read.paginated",
+      "schema": "work-detail-read",
+      "path": "valid/work-detail-read.paginated.json",
+      "valid": true,
+      "tags": ["read-projection", "work-detail-read", "pagination", "waiting-decision"]
+    },
+    {
+      "id": "work-detail-read.fractional-metadata",
+      "schema": "work-detail-read",
+      "path": "valid/work-detail-read.fractional-metadata.json",
+      "valid": true,
+      "tags": ["read-projection", "work-detail-read", "fractional-metadata", "additive-fields"]
+    },
+    {
+      "id": "work-detail-read.task-scoped-command",
+      "schema": "work-detail-read",
+      "path": "valid/work-detail-read.task-scoped-command.json",
+      "valid": true,
+      "tags": ["read-projection", "work-detail-read", "task-scoped-command", "null-run-identity"]
+    },
+    {
+      "id": "work-detail-read.legacy-result",
+      "schema": "work-detail-read",
+      "path": "valid/work-detail-read.legacy-result.json",
+      "valid": true,
+      "tags": ["read-projection", "work-detail-read", "legacy-result", "verbatim-passthrough"]
+    },
+    {
+      "id": "work-detail-read.missing-outcome",
+      "schema": "work-detail-read",
+      "path": "invalid/work-detail-read.missing-outcome.json",
+      "valid": false,
+      "tags": ["read-projection", "missing-field"]
+    },
+    {
+      "id": "work-detail-read.unknown-timeline-source",
+      "schema": "work-detail-read",
+      "path": "invalid/work-detail-read.unknown-timeline-source.json",
+      "valid": false,
+      "tags": ["read-projection", "unknown-enum"]
+    },
+    {
+      "id": "work-detail-read.invalid-execution-timing",
+      "schema": "work-detail-read",
+      "path": "invalid/work-detail-read.invalid-execution-timing.json",
+      "valid": false,
+      "tags": ["read-projection", "wrong-type"]
+    },
+    {
+      "id": "work-timeline-read.empty",
+      "schema": "work-timeline-read",
+      "path": "valid/work-timeline-read.empty.json",
+      "valid": true,
+      "tags": ["read-projection", "work-timeline-read", "empty"]
+    },
+    {
+      "id": "work-timeline-read.active",
+      "schema": "work-timeline-read",
+      "path": "valid/work-timeline-read.active.json",
+      "valid": true,
+      "tags": ["read-projection", "work-timeline-read", "timeline", "nullable"]
+    },
+    {
+      "id": "work-timeline-read.paginated",
+      "schema": "work-timeline-read",
+      "path": "valid/work-timeline-read.paginated.json",
+      "valid": true,
+      "tags": ["read-projection", "work-timeline-read", "pagination"]
+    },
+    {
+      "id": "work-timeline-read.fractional-metadata",
+      "schema": "work-timeline-read",
+      "path": "valid/work-timeline-read.fractional-metadata.json",
+      "valid": true,
+      "tags": ["read-projection", "work-timeline-read", "fractional-metadata", "additive-fields"]
+    },
+    {
+      "id": "work-timeline-read.task-scoped-command",
+      "schema": "work-timeline-read",
+      "path": "valid/work-timeline-read.task-scoped-command.json",
+      "valid": true,
+      "tags": ["read-projection", "work-timeline-read", "task-scoped-command", "null-run-identity"]
+    },
+    {
+      "id": "work-timeline-read.missing-next-before",
+      "schema": "work-timeline-read",
+      "path": "invalid/work-timeline-read.missing-next-before.json",
+      "valid": false,
+      "tags": ["read-projection", "missing-field"]
+    },
+    {
+      "id": "work-timeline-read.items-not-array",
+      "schema": "work-timeline-read",
+      "path": "invalid/work-timeline-read.items-not-array.json",
+      "valid": false,
+      "tags": ["read-projection", "wrong-type"]
+    },
+    {
+      "id": "work-timeline-read.unknown-source",
+      "schema": "work-timeline-read",
+      "path": "invalid/work-timeline-read.unknown-source.json",
+      "valid": false,
+      "tags": ["read-projection", "unknown-enum"]
+    },
+    {
+      "id": "work-timeline-read.missing-command-id",
+      "schema": "work-timeline-read",
+      "path": "invalid/work-timeline-read.missing-command-id.json",
+      "valid": false,
+      "tags": ["read-projection", "missing-field"]
     }
   ]
 }

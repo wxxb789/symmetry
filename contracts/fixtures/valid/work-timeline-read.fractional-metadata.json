@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "source": "event",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "recorded_at": "2026-11-15T12:05:00.000000Z",
+      "data": {
+        "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 2,
+        "kind": "progress",
+        "payload": {"message": "sampling telemetry", "metrics": {"ratio": 0.5, "exponent": 1e-3}},
+        "occurred_at": "2026-11-15T12:04:59.000000Z"
+      }
+    }
+  ],
+  "next_before": null,
+  "metadata": {"ratio": 0.5, "scale": 2E+3}
+}

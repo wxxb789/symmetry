@@ -6,6 +6,11 @@ import * as Contracts from "../ts/index.ts";
 import { parsePresentationJson, parseWireJson, WireJsonError } from "../ts/wire-json.ts";
 
 const fixtureRoot = new URL("../fixtures/", import.meta.url);
+const presentationReadSchemas = new Set([
+  "work-detail-read",
+  "work-timeline-read",
+  "workspace-read",
+]);
 const decoders = {
   "adapter-capabilities": Contracts.AdapterCapabilities,
   admission: Contracts.Admission,
@@ -21,6 +26,8 @@ const decoders = {
   "plan-proposal": Contracts.PlanProposal,
   "task-result": Contracts.TaskResult,
   usage: Contracts.Usage,
+  "work-detail-read": Contracts.WorkDetailRead,
+  "work-timeline-read": Contracts.WorkTimelineRead,
   "workspace-read": Contracts.WorkspaceRead,
 };
 const schemas = {
@@ -38,6 +45,8 @@ const schemas = {
   "plan-proposal": Contracts.PlanProposalSchema,
   "task-result": Contracts.TaskResultSchema,
   usage: Contracts.UsageSchema,
+  "work-detail-read": Contracts.WorkDetailReadSchema,
+  "work-timeline-read": Contracts.WorkTimelineReadSchema,
   "workspace-read": Contracts.WorkspaceReadSchema,
 };
 
@@ -68,7 +77,9 @@ for (const fixture of manifest.fixtures) {
   let data;
   let structuralValid = false;
   try {
-    const parseJson = fixture.schema === "workspace-read" ? parsePresentationJson : parseWireJson;
+    const parseJson = presentationReadSchemas.has(fixture.schema)
+      ? parsePresentationJson
+      : parseWireJson;
     data = parseJson(bytes);
     structuralValid = Schema.is(schema)(data);
     structuralChecks++;

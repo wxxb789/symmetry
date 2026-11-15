@@ -56,7 +56,8 @@ defmodule SymmetryControlWeb.PortalControllerTest do
           "/portal",
           "/portal/attention",
           "/portal/projects",
-          "/portal/projects/project-123"
+          "/portal/projects/project-123",
+          "/portal/work/work-123"
         ] do
       page = api_conn() |> put_req_header("accept", "text/html") |> get(path)
       body = html_response(page, 200)
@@ -134,6 +135,8 @@ defmodule SymmetryControlWeb.PortalControllerTest do
           "/portal/assets/index.html",
           "/portal/not-a-route",
           "/portal/projects/project-123/not-a-route",
+          "/portal/work",
+          "/portal/work/work-123/not-a-route",
           "/portal/classic/not-a-route",
           "/portal/index.html"
         ] do

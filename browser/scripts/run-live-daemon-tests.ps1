@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $daemonRoot = Join-Path $repoRoot "daemon"
+$browserRoot = Join-Path $repoRoot "browser"
 $runId = [guid]::NewGuid().ToString("N")
 $fixtureSuffix = $runId.Substring(0, 8)
 $runRoot = Join-Path $env:TEMP ("symmetry-goal-02-live-" + $runId)
@@ -129,12 +130,28 @@ try {
   $env:SYMMETRY_OPERATOR_TOKEN = $OperatorToken
   $env:SYMMETRY_LIVE_DAEMON = "1"
   $env:SYMMETRY_LIVE_FIXTURE_SUFFIX = $fixtureSuffix
+  # Screenshots and observation JSON land in the run folder unless an existing
+  # environment override is already set.
+  if (-not $env:SYMMETRY_PLAYWRIGHT_OUTPUT) {
+    $env:SYMMETRY_PLAYWRIGHT_OUTPUT = Join-Path $runRoot "playwright-results"
+  }
+  $playwrightReport = if ($env:PLAYWRIGHT_HTML_OUTPUT_DIR) {
+    $env:PLAYWRIGHT_HTML_OUTPUT_DIR
+  } else {
+    Join-Path $browserRoot "playwright-report"
+  }
 
-  Push-Location (Join-Path $repoRoot "browser")
+  Push-Location $browserRoot
   try {
-    mise exec pnpm@12.17.0 -- pnpm run test:live
+    # Both Chromium projects: desktop runs the full lifecycle matrix, and the
+    # real history cursor scenario runs at desktop and narrow widths so the
+    # populated history capture exists for both. `pnpm run test:live` stays the
+    # desktop-only convenience script; this runner is the one the acceptance
+    # evidence is produced with.
+    mise exec pnpm@12.17.0 -- pnpm exec playwright test tests/portal-live-daemon.spec.mjs `
+      --project=desktop-chromium --project=mobile-chromium
     if ($LASTEXITCODE -ne 0) {
-      throw "Live daemon browser tests failed with exit code $LASTEXITCODE. Logs: $runRoot"
+      throw "Live daemon browser tests failed with exit code $LASTEXITCODE. Logs: $runRoot. Screenshots/JSON: $env:SYMMETRY_PLAYWRIGHT_OUTPUT. HTML report: $playwrightReport"
     }
   } finally {
     Pop-Location
@@ -147,4 +164,7 @@ try {
   }
 }
 
-Write-Host "Live daemon browser tests passed. Logs: $runRoot"
+Write-Host "Live daemon browser tests passed."
+Write-Host "Logs:             $runRoot"
+Write-Host "Screenshots/JSON: $env:SYMMETRY_PLAYWRIGHT_OUTPUT"
+Write-Host "HTML report:      $playwrightReport"

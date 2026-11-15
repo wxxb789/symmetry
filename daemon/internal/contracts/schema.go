@@ -38,6 +38,8 @@ const (
 	EnvelopePlanProposal                 Envelope = "plan-proposal"
 	EnvelopeTaskResult                   Envelope = "task-result"
 	EnvelopeUsage                        Envelope = "usage"
+	EnvelopeWorkDetailRead               Envelope = "work-detail-read"
+	EnvelopeWorkTimelineRead             Envelope = "work-timeline-read"
 	EnvelopeWorkspaceRead                Envelope = "workspace-read"
 )
 
@@ -53,9 +55,9 @@ var (
 
 // DecodeSchema validates raw JSON against the selected schema before
 // unmarshalling it into a generated DTO. Protocol owns all cross-field and
-// envelope semantics. Only workspace reads admit finite presentation numbers.
+// envelope semantics. Presentation reads admit finite presentation numbers.
 func DecodeSchema(envelope Envelope, data []byte, target any) error {
-	if _, err := decodeRawJSON(data, envelope == EnvelopeWorkspaceRead); err != nil {
+	if _, err := decodeRawJSON(data, presentationRead(envelope)); err != nil {
 		return fmt.Errorf("decode %s JSON: %w", envelope, err)
 	}
 	if err := ValidateSchema(envelope, data); err != nil {
@@ -75,7 +77,7 @@ func ValidateSchema(envelope Envelope, data []byte) error {
 		return err
 	}
 
-	instance, err := decodeSchemaJSON(data, envelope == EnvelopeWorkspaceRead)
+	instance, err := decodeSchemaJSON(data, presentationRead(envelope))
 	if err != nil {
 		return fmt.Errorf("decode %s JSON: %w", envelope, err)
 	}
@@ -94,6 +96,10 @@ func ValidateSchema(envelope Envelope, data []byte) error {
 		}
 	}
 	return nil
+}
+
+func presentationRead(envelope Envelope) bool {
+	return envelope == EnvelopeWorkspaceRead || envelope == EnvelopeWorkDetailRead || envelope == EnvelopeWorkTimelineRead
 }
 
 // TaskResultSchema returns a fresh copy of the canonical embedded output
@@ -151,7 +157,7 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		}
 	}
 
-	compiled := make(map[Envelope]*jsonschema.Schema, 15)
+	compiled := make(map[Envelope]*jsonschema.Schema, 17)
 	for _, envelope := range []Envelope{
 		EnvelopeAdapterCapabilities,
 		EnvelopeAdmission,
@@ -167,6 +173,8 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		EnvelopePlanProposal,
 		EnvelopeTaskResult,
 		EnvelopeUsage,
+		EnvelopeWorkDetailRead,
+		EnvelopeWorkTimelineRead,
 		EnvelopeWorkspaceRead,
 	} {
 		filename := string(envelope) + ".schema.json"

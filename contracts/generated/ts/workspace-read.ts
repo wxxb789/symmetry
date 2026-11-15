@@ -19,12 +19,162 @@ export interface WorkspaceProject {
   work_items: WorkspaceWorkItem[];
   [k: string]: unknown | undefined;
 }
+/**
+ * PortalJSON.work_item/2 as served in workspace rows and work detail reads. The definition body is identical in workspace-read.schema.json and work-detail-read.schema.json so the effect generator shares one graph for both roots; the JSON Schema to TypeScript modules and the quicktype Go output may still restate the shape per root.
+ */
 export interface WorkspaceWorkItem {
   id: UUID;
   key: string;
+  project_id?: UUID;
   title: string;
+  description?: string | null;
   status: string;
+  priority?: string;
+  position?: number;
+  assignee?: WorkItemAssignee;
+  workspace?: string | null;
   blocked: boolean;
   blocker: string | null;
+  repository_resource_id?: UUID | null;
+  repository?: string | null;
+  ci_resource_id?: UUID | null;
+  ci_resource?: string | null;
+  branch?: string | null;
+  pull_request_url?: string | null;
+  ci_status?: string | null;
+  review_status?: string | null;
+  delivery?: WorkItemDelivery;
+  external?: WorkItemExternal | null;
+  version?: number;
+  can_start?: boolean;
+  execution?: WorkItemExecution | null;
+  updated_at?: string | null;
+  [k: string]: unknown | undefined;
+}
+/**
+ * PortalJSON owner/1: assignee identity as served, with null members when unset.
+ */
+export interface WorkItemAssignee {
+  type: string | null;
+  name: string | null;
+  agent_profile: string | null;
+  [k: string]: unknown | undefined;
+}
+export interface WorkItemDelivery {
+  pull_request: WorkItemDeliveryValue;
+  ci: WorkItemDeliveryValue;
+  review: WorkItemDeliveryValue;
+  [k: string]: unknown | undefined;
+}
+/**
+ * PortalJSON effective_delivery/6: the consumed core is value, source, generation, url and status; provider, recorded_at and other evidence fields stay source-specific and additive.
+ */
+export interface WorkItemDeliveryValue {
+  value: string | null;
+  source: "none" | "manual" | "provider" | "agent";
+  generation: number | null;
+  url: string | null;
+  status: string | null;
+  provider?: string | null;
+  recorded_at?: string | null;
+  [k: string]: unknown | undefined;
+}
+/**
+ * PortalJSON.external_work_item/1 safe display and link fields; raw provider payloads (data, delivery_data) remain additive and unconsumed.
+ */
+export interface WorkItemExternal {
+  provider: string | null;
+  id: string | null;
+  url: string | null;
+  state: string | null;
+  available: boolean;
+  assignee: string | null;
+  labels: string[];
+  updated_at: string | null;
+  resource_id: UUID | null;
+  [k: string]: unknown | undefined;
+}
+/**
+ * PortalJSON.execution_summary/1 as served when the work item has an orchestration task; null otherwise.
+ */
+export interface WorkItemExecution {
+  task_id: UUID;
+  run_id: UUID | null;
+  runtime_id: UUID | null;
+  generation: number;
+  state: string;
+  waiting: WorkItemWaiting | null;
+  latest_command: WorkItemCommand | null;
+  result: {
+    [k: string]: unknown | undefined;
+  } | null;
+  failure: {
+    [k: string]: unknown | undefined;
+  } | null;
+  timing: WorkItemExecutionTiming;
+  supervisory_control: boolean;
+  can_guide: boolean;
+  can_pause: boolean;
+  can_resume: boolean;
+  can_cancel: boolean;
+  can_retry: boolean;
+  intent_locked: boolean;
+  [k: string]: unknown | undefined;
+}
+/**
+ * Protocol.waiting/1: current waiting_for_input context; the decision packet stays open because it is carried verbatim from the runtime payload.
+ */
+export interface WorkItemWaiting {
+  run_id: UUID;
+  generation: number;
+  transition_id: UUID;
+  question: string | null;
+  decision: WorkItemWaitingDecision | null;
+  payload: {
+    [k: string]: unknown | undefined;
+  };
+  recorded_at: string | null;
+  [k: string]: unknown | undefined;
+}
+/**
+ * Agent-supplied waiting_for_input decision packet; options and recommendation are advisory display data.
+ */
+export interface WorkItemWaitingDecision {
+  context?: string;
+  reason?: string;
+  options?: WorkItemWaitingDecisionOption[];
+  recommended_option_id?: string | null;
+  [k: string]: unknown | undefined;
+}
+export interface WorkItemWaitingDecisionOption {
+  id?: string;
+  label?: string;
+  consequence?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * Protocol.command/1: latest guidance command receipt for the current generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.
+ */
+export interface WorkItemCommand {
+  command_id: UUID;
+  task_id: UUID;
+  run_id: UUID | null;
+  generation: number | null;
+  kind: string;
+  payload: {
+    [k: string]: unknown | undefined;
+  };
+  state: string;
+  issued_at: string | null;
+  applied_at: string | null;
+  acknowledgement_id: UUID | null;
+  acknowledgement_outcome: string | null;
+  acknowledged_at: string | null;
+  [k: string]: unknown | undefined;
+}
+export interface WorkItemExecutionTiming {
+  state_since: string | null;
+  started_at: string | null;
+  finished_at: string | null;
   [k: string]: unknown | undefined;
 }

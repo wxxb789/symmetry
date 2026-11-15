@@ -142,5 +142,43 @@ test.describe("Goal 2 Compose restart acceptance", () => {
         .filter((entry) => entry.source === "event" && entry.generation === 2)
         .map((entry) => entry.data.kind)
     ).toEqual(expect.arrayContaining(["progress", "finding", "artifact", "test", "pull_request", "ci", "review", "summary"]));
+
+    // The post-restart read also renders on the new work detail surface; the
+    // persisted lifecycle assertions above stay unchanged.
+    await page.goto(`/portal/projects/${projectId}`);
+    await page.getByRole("link", { name: waitTitle }).click();
+    const waitedSurface = page.getByRole("dialog", { name: waitTitle });
+    await expect(waitedSurface.getByRole("heading", { level: 1, name: waitTitle })).toBeVisible();
+    await expect(
+      waitedSurface
+        .locator("section.detail-section", { has: page.getByRole("heading", { name: "Execution history" }) })
+        .locator("ol.timeline > li.timeline-entry")
+        .first()
+    ).toBeVisible();
+    // The rendered detail must carry the real reported output and delivery
+    // values already proved through the API, without labelling them accepted.
+    const servedReported = waitedDetail.outcome.summary ??
+      (waitedDetail.work_item.execution?.result?.summary ?? null);
+    expect(servedReported).toBeTruthy();
+    // Scoped to the actual Reported execution output section: the same summary
+    // text legitimately repeats as a timeline entry headline in the sibling
+    // Execution history section.
+    const reportedSection = waitedSurface.locator("section.detail-section", {
+      has: page.getByRole("heading", { name: "Reported execution output", exact: true })
+    });
+    await expect(reportedSection.getByText(servedReported, { exact: false })).toBeVisible();
+    await expect(waitedSurface.getByText("No accepted evidence available", { exact: false })).toBeVisible();
+    const waitedDelivery = waitedSurface.locator("dl.delivery-list");
+    for (const [label, entry] of [
+      ["Pull request", waitedDetail.work_item.delivery.pull_request],
+      ["CI", waitedDetail.work_item.delivery.ci],
+      ["Review", waitedDetail.work_item.delivery.review]
+    ]) {
+      const row = waitedDelivery.locator("div", { hasText: label }).first();
+      await expect(row).toContainText(`source: ${entry.source}`);
+      if (typeof entry.url === "string" && entry.url.startsWith("http")) {
+        await expect(row.getByRole("link", { name: "Open" })).toHaveAttribute("href", entry.url);
+      }
+    }
   });
 });

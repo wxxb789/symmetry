@@ -13,4 +13,6 @@ export type { SymmetryGoalRevisionV1 } from "./goal-revision.js";
 export type { SymmetryPlanProposalV1 } from "./plan-proposal.js";
 export type { SymmetryTaskResultV1 } from "./task-result.js";
 export type { SymmetryUsageV1 } from "./usage.js";
+export type { SymmetryWorkDetailReadV1 } from "./work-detail-read.js";
+export type { SymmetryWorkTimelineReadV1 } from "./work-timeline-read.js";
 export type { SymmetryWorkspaceReadV1 } from "./workspace-read.js";

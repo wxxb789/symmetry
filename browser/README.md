@@ -1,9 +1,16 @@
 # Browser acceptance tests
 
 These tests exercise the authenticated React shell and the retained classic
-workspace against a running Phoenix control plane. Classic acceptance retains
-its original controls and fixture semantics at `/portal/classic`; no behavior
-assertions are replaced by shell-only checks.
+workspace against a running Phoenix control plane. Classic acceptance keeps its
+editing, resource and control flows and fixture semantics at `/portal/classic`.
+The 0007b list, board, detail and history read checks that the new
+`/portal/projects/:projectId` and `/portal/work/:workItemId` surfaces replace -
+including the classic detail-security probe and the delayed-detail,
+older-history and delayed-workspace races - are retired from the classic suite
+and covered by `tests/portal-work-views.spec.mjs` (races replay held real
+responses; the older-history failure race uses a real daemon cursor in
+`tests/portal-live-daemon.spec.mjs`). No editing, resource or control coverage
+was removed.
 
 ```sh
 mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile
@@ -26,11 +33,12 @@ videos, and traces are written under the system temporary directory by default;
 set `SYMMETRY_PLAYWRIGHT_OUTPUT` to retain them elsewhere. The HTML report is
 written under `playwright-report/`.
 
-The focused release-shell gate is:
+The focused release-shell gate (also what CI runs against the release) is:
 
 ```sh
 SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
-mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test tests/workspace-shell.spec.mjs
+mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test \
+  tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs
 ```
 
 It renders desktop/mobile navigation, keyboard focus, loading, empty, network
@@ -52,6 +60,49 @@ minimization.
 Cookies, bootstrap response and logout are real, but this case does not claim
 native tab background/foreground event propagation.
 
+## Readable work views acceptance
+
+`tests/portal-work-views.spec.mjs` covers the 0007b read surfaces on the running
+release: the project list and board with filters, saved view and URL state, the
+work detail with outcome, evidence, blocker, next action and execution history,
+plus the empty and error states. Every state is captured full page with an
+observation JSON (URL, viewport, labels, and the largest observed workspace
+snapshot in bytes and work items) in each test's output directory.
+
+Fixtures are created only through the authenticated Portal API; the shell has no
+mutation controls. The list read keeps the existing workspace snapshot contract,
+so the snapshot size is reported as a limitation rather than paginated. Deep
+links are re-entered from fresh signed-out browser contexts and reloaded in
+separate self-contained cases, so each scenario still executes while another is
+blocked: one for the work detail URL (desktop drawer over its project board
+background, asserted again after reload) and one for the project board/filter
+URL (login return target, retained view/filter params and reload). A genuinely
+captured real response is held while another project renders and then released,
+to prove a late response never appears as another project's data or newer state.
+A work URL that claims a different project is canonicalized to the project the
+served projection confirms, and the claimed project's work item is never
+rendered anywhere in the document.
+The classic detail-security check is kept as an explicitly separate
+malicious-response injection probe: the tampered response stays schema-valid and
+must render its payload as escaped text, so the probe cannot pass through a
+decode error, and it never substitutes for real-data acceptance. The obsolete
+older-history request has a daemon-free, always-on guard: the suite injects a
+generated, schema-valid contract fixture that supplies the history cursor the
+backend cannot serve without a real run, holds the older page, selects a newer
+real detail and proves the obsolete failure never mutates it. That case is
+synthetic fault injection; it takes no capture and is never counted as real
+history evidence. Genuine cursor-paginated execution history requires real
+daemon records, so `tests/portal-live-daemon.spec.mjs` loads older pages on
+`/portal/work/:workItemId` and the Compose runners read the same surface after
+their classic mutations.
+
+The release serves `/portal/work/:workItemId` as the authenticated shell
+document, the same way it serves the project routes, and the login allowlist
+keeps the work and filtered-project URLs (view, text filters, blocked flag,
+project scope) as its return target while every other path stays rejected. Both
+are asserted by the fresh-session deep-link cases, which re-enter the work
+detail and the filtered board from a signed-out context and reload them.
+
 ## Live daemon acceptance
 
 With the control plane running at `http://127.0.0.1:4000`, run the real daemon
@@ -62,10 +113,22 @@ pwsh -NoProfile -File .\browser\scripts\run-live-daemon-tests.ps1
 ```
 
 The runner builds isolated daemon and fake-agent binaries, starts unique
-wait/cancel/retry/history runtimes, runs the desktop browser scenarios, and
-stops every fixture process. The tests verify durable input, process
-cancellation, failed-to-successful retry across generations, semantic delivery
-evidence, Activity state, and raw-history pagination through `Load older`.
+wait/cancel/retry/history runtimes, runs the browser scenarios on both Chromium
+projects, and stops every fixture process. The tests verify durable input,
+process cancellation, failed-to-successful retry across generations, semantic
+delivery evidence, Activity state, and raw-history pagination through `Load
+older`. The lifecycle matrix runs once at desktop width; the real cursor
+scenario on `/portal/work/:workItemId` runs at desktop and narrow (Pixel 7)
+widths with fresh isolated fixtures in each project, so its full-page
+`work-history-pagination` capture and observation JSON exist at both widths.
+That scenario also holds a failing older-history page to prove it stays on its
+own surface while a newer detail is selected. This runner is the only executor
+of that real-cursor race; the CI browser gate runs against a release with no
+daemon and therefore cannot produce a real history cursor.
+The runner prints the log folder, the screenshots/observation-JSON folder
+(`SYMMETRY_PLAYWRIGHT_OUTPUT`, defaulting to a per-run folder and left untouched
+when already set) and the HTML report path (`PLAYWRIGHT_HTML_OUTPUT_DIR` when
+set, otherwise `browser/playwright-report`).
 
 Use `-ControlUrl`, `-OperatorToken`, or `-EnrollmentToken` to target a different
 local control plane. The runner generates unique runtime bindings on every run

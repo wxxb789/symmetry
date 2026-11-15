@@ -1,9 +1,10 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "../services/api";
+import { readWorkDetail } from "../services/api.fixtures";
 import { createApplication, type Application } from "./application";
 import { createAppRouter } from "./router";
 
@@ -49,7 +50,9 @@ describe("workspace navigation", () => {
     renderWorkspace(`/portal/projects/${secondProjectId}`);
     expect(await screen.findByRole("heading", { level: 1, name: "Project Two" })).toBeVisible();
     expect(screen.getByText("Resolve release blocker")).toBeVisible();
-    expect(screen.getByText("Unknown status: future_state")).toBeVisible();
+    // The work-state filter also renders this label for an unknown served state,
+    // so the honest-state assertion is scoped to the rendered work list.
+    expect(within(screen.getByRole("list", { name: "Work items" })).getByText("Unknown status: future_state")).toBeVisible();
     expect(screen.getByText(/Blocking reason unknown/)).toBeVisible();
     expect(screen.getByText(/This project is archived/)).toBeVisible();
   });
@@ -308,5 +311,117 @@ describe("workspace navigation", () => {
     });
     expect(nativeSubmit).toHaveBeenCalledTimes(1);
     expect(postedToken).toBe("rotated-session-token");
+  });
+});
+
+const subjectId = "77777777-7777-4777-8777-777777777777";
+const subjectTitle = "Subject work item";
+const siblingTitle = "Subject backlog item";
+const foreignTitle = "Foreign work item";
+const workViewProjects: Project[] = [
+  { id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active", work_items: [
+    { id: subjectId, key: "ONE-9", title: subjectTitle, status: "ready", blocked: false, blocker: null },
+    { id: "88888888-8888-4888-8888-888888888888", key: "ONE-10", title: siblingTitle, status: "backlog", blocked: false, blocker: null },
+  ] },
+  { id: secondProjectId, key: "TWO", name: "Project Two", description: "Second project", status: "archived", work_items: [
+    { id: "99999999-9999-4999-8999-999999999999", key: "TWO-1", title: foreignTitle, status: "future_state", blocked: true, blocker: null },
+  ] },
+];
+
+/** Serves the project snapshot per requested scope plus one real work-detail envelope. */
+function workReadFetcher({ detail, holdDetail }: { detail: Record<string, unknown>; holdDetail?: Promise<void> }) {
+  return vi.fn<typeof fetch>().mockImplementation((input) => {
+    const requestPath = input instanceof Request ? input.url : String(input);
+    if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+    if (requestPath.includes("/portal/api/work-items/")) {
+      const respond = () => new Response(requestPath.endsWith("/timeline")
+        ? JSON.stringify({ items: [], next_before: null })
+        : JSON.stringify(detail));
+      return holdDetail === undefined ? Promise.resolve(respond()) : holdDetail.then(respond);
+    }
+    const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
+    return Promise.resolve(new Response(JSON.stringify({
+      selected_project_id: null,
+      projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
+      health: { status: "unknown" },
+    })));
+  });
+}
+
+const subjectDetail = () => readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle });
+
+describe("readable work views", () => {
+  it("mounts the desktop drawer while the detail is pending and renders no unverified project background", async () => {
+    const release = Promise.withResolvers<void>();
+    renderWorkspace(`/portal/work/${subjectId}`, workReadFetcher({ detail: subjectDetail(), holdDetail: release.promise }));
+    const pending = await screen.findByRole("dialog", { name: "Work item" });
+    expect(within(pending).getByText("Loading work item…")).toBeVisible();
+    // Radix marks the page behind the modal inert (aria-hidden) while the drawer is
+    // open, so the background is asserted as hidden DOM: it must not exist before
+    // the served projection confirms which project the item belongs to.
+    expect(screen.queryByRole("list", { name: "Work items", hidden: true })).not.toBeInTheDocument();
+    release.resolve();
+    const detail = await screen.findByRole("dialog", { name: subjectTitle });
+    expect(within(detail).getByRole("heading", { level: 1, name: subjectTitle })).toBeVisible();
+    expect(within(await screen.findByRole("list", { name: "Work items", hidden: true })).getByText(subjectTitle)).toBeVisible();
+  });
+
+  it("keeps the desktop drawer and the supplied view state for a work URL without project scope", async () => {
+    const { history } = renderWorkspace(`/portal/work/${subjectId}?view=board`, workReadFetcher({ detail: subjectDetail() }));
+    const detail = await screen.findByRole("dialog", { name: subjectTitle });
+    expect(within(detail).getByRole("heading", { level: 1, name: subjectTitle })).toBeVisible();
+    const board = await screen.findByRole("region", { name: "Work board", hidden: true });
+    expect(within(board).getByText(subjectTitle)).toBeVisible();
+    // The shell's picker follows the served identity for a scope-less work URL.
+    await waitFor(() => expect(screen.getByLabelText("Project", { exact: true })).toHaveValue(firstProjectId));
+    const url = new URL(history.location.href, "http://localhost");
+    expect(url.searchParams.get("view")).toBe("board");
+    expect(url.searchParams.has("projectId")).toBe(false);
+  });
+
+  it("canonicalizes a foreign project scope instead of showing the wrong project's work", async () => {
+    const { history } = renderWorkspace(
+      `/portal/work/${subjectId}?projectId=${secondProjectId}&q=Foreign&state=future_state`,
+      workReadFetcher({ detail: subjectDetail() }),
+    );
+    const detail = await screen.findByRole("dialog", { name: subjectTitle });
+    expect(within(detail).getByRole("heading", { level: 1, name: subjectTitle })).toBeVisible();
+    await waitFor(() => {
+      expect(new URL(history.location.href, "http://localhost").searchParams.get("projectId")).toBe(firstProjectId);
+    });
+    const url = new URL(history.location.href, "http://localhost");
+    expect(url.searchParams.has("q")).toBe(false);
+    expect(url.searchParams.has("state")).toBe(false);
+    expect(screen.getByLabelText("Project", { exact: true })).toHaveValue(firstProjectId);
+    expect(within(await screen.findByRole("list", { name: "Work items", hidden: true })).getByText(subjectTitle)).toBeVisible();
+    expect(screen.queryByText(foreignTitle)).not.toBeInTheDocument();
+  });
+
+  it("keeps a URL filter visible when the current snapshot no longer contains that state or owner", async () => {
+    renderWorkspace(`/portal/projects/${firstProjectId}?state=future_state&owner=human:Ada`, workReadFetcher({ detail: subjectDetail() }));
+    await screen.findByRole("heading", { level: 1, name: "Project One" });
+    expect(screen.getByLabelText("Work state")).toHaveValue("future_state");
+    expect(screen.getByLabelText("Work owner")).toHaveValue("human:Ada");
+    expect(screen.getByRole("option", { name: "Unknown status: future_state (not in this project)" })).toBeVisible();
+    expect(screen.getByRole("option", { name: "Ada (not in this project)" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "No matching work items" })).toBeVisible();
+  });
+
+  it("applies rapid compound filter changes on the latest search instead of a stale render", async () => {
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`, workReadFetcher({ detail: subjectDetail() }));
+    await screen.findByRole("heading", { level: 1, name: "Project One" });
+    // Both changes land in the same tick, before either navigation commits.
+    act(() => {
+      fireEvent.change(screen.getByLabelText("Filter work items"), { target: { value: "Subject" } });
+      fireEvent.change(screen.getByLabelText("Work state"), { target: { value: "ready" } });
+    });
+    await waitFor(() => {
+      const url = new URL(history.location.href, "http://localhost");
+      expect(url.searchParams.get("q")).toBe("Subject");
+      expect(url.searchParams.get("state")).toBe("ready");
+    });
+    const list = screen.getByRole("list", { name: "Work items" });
+    expect(within(list).getByText(subjectTitle)).toBeVisible();
+    expect(within(list).queryByText(siblingTitle)).not.toBeInTheDocument();
   });
 });

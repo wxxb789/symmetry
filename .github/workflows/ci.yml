@@ -239,7 +239,8 @@ jobs:
           curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4001/healthz
           cd ..
           SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
-            pnpm --filter symmetry-browser-acceptance test tests/workspace-shell.spec.mjs
+            pnpm --filter symmetry-browser-acceptance test \
+              tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

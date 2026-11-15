@@ -177,8 +177,9 @@ test.describe("Goal 2 feature acceptance", () => {
     await editDialog.locator('select[name="review_status"]').selectOption("required");
     await editDialog.getByRole("button", { name: "Save" }).click();
     await expect(page.locator("#toast")).toHaveText("Work item updated");
-    await expect(page.locator("#detail-content")).toContainText("Passed");
-    await expect(page.locator("#detail-content")).toContainText("Required");
+    // Detail/board read surfaces are asserted on /portal/work/:workItemId and
+    // /portal/projects/:projectId by portal-work-views.spec.mjs; this section
+    // keeps the classic editing controls and the persisted-snapshot checks.
     await page.getByRole("button", { name: "Close details" }).click();
     await createWorkItem(page, {
       title: secondTitle,
@@ -195,33 +196,26 @@ test.describe("Goal 2 feature acceptance", () => {
     await secondCard.getByTitle("Move up").click();
     await page.reload();
     await expect(page.locator("#project-title")).toHaveText(project.name);
-    await expect(page.locator("[data-status='ready'] .work-card h3")).toHaveText([secondTitle, firstTitle]);
-
-    await page.locator("#work-search").fill("Human workflow");
-    await expect(page.locator(".work-card", { hasText: firstTitle })).toBeVisible();
-    await expect(page.locator(".work-card", { hasText: secondTitle })).toBeHidden();
-    await page.locator("#work-search").fill("");
-    await page.getByRole("button", { name: "Attention", exact: true }).click();
-    await expect(page.locator(".work-card", { hasText: firstTitle })).toBeVisible();
-    await expect(page.locator(".work-card", { hasText: secondTitle })).toBeHidden();
-    await page.getByRole("button", { name: "All", exact: true }).click();
+    // Board ordering, search filtering and Attention filtering are read
+    // surfaces covered on the new routes; the move mutation's effect stays
+    // asserted through the persisted workspace snapshot.
+    const readyOrder = (await selectedProject(page)).work_items
+      .filter((item) => item.status === "ready")
+      .sort((left, right) => left.position - right.position)
+      .map((item) => item.title);
+    expect(readyOrder).toEqual([secondTitle, firstTitle]);
 
     await firstCard.click();
     await page.locator("#detail-status-select").selectOption("review");
     await expect(page.locator("#detail-status-select")).toHaveValue("review");
     await page.locator("#detail-status-select").selectOption("done");
     await expect(page.locator("#detail-status-select")).toHaveValue("done");
-    await expect(page.getByRole("button", { name: "Start run" })).toHaveCount(0);
     await page.getByRole("button", { name: "Close details" }).click();
 
-    await secondCard.focus();
-    await secondCard.press("Enter");
-    await expect(page.locator("#detail-title")).toHaveText(secondTitle);
+    await secondCard.click();
     await page.locator("#detail-status-select").selectOption("review");
     await expect(page.locator("#detail-status-select")).toHaveValue("review");
-    await expect(page.getByRole("button", { name: "Start run" })).toHaveCount(0);
     await page.getByRole("button", { name: "Close details" }).click();
-    await expect(secondCard).toBeFocused();
 
     const persisted = await selectedProject(page);
     expect(persisted.resources).toEqual([
@@ -299,52 +293,10 @@ test.describe("Goal 2 feature acceptance", () => {
     await expect(page.getByRole("button", { name: "New work item" })).toBeEnabled();
   });
 
-  test("detail output encodes untrusted statuses and rejects unsafe links", async ({ page }) => {
-    const project = uniqueProject("EN");
-    const title = `Encoded detail ${project.key}`;
-    await login(page);
-    await createProject(page, project);
-    await createWorkItem(page, {
-      title,
-      description: "Render untrusted detail fields safely.",
-      status: "ready",
-      priority: "medium",
-      assignee_type: "unassigned"
-    });
-
-    const item = (await selectedProject(page)).work_items.find((candidate) => candidate.title === title);
-    await page.route(`**/portal/api/work-items/${item.id}`, async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      body.work_item.external = {
-        provider: "github",
-        available: true,
-        url: "javascript:alert(1)",
-        id: "42",
-        state: "open",
-        assignee: null,
-        labels: []
-      };
-      body.work_item.pull_request_url = "javascript:alert(1)";
-      body.work_item.ci_status = '\"><img src=x onerror=alert(1)>';
-      body.work_item.review_status = "<svg/onload=alert(1)>";
-      body.outcome.phase = '\"><img src=x onerror=alert(1)>';
-      await route.fulfill({ response, json: body });
-    });
-
-    await page.locator(".work-card", { hasText: title }).click();
-    const pullRequest = page.locator(".detail-fact", { hasText: "Pull request" });
-    const externalReference = page.locator(".detail-fact", { hasText: "Reference" });
-    await expect(pullRequest).toContainText("Not created");
-    await expect(pullRequest.locator("a")).toHaveCount(0);
-    await expect(externalReference).toContainText("#42");
-    await expect(externalReference.locator("a")).toHaveCount(0);
-
-    const markup = await page.locator("#detail-content").innerHTML();
-    expect(markup).not.toContain("javascript:");
-    expect(markup).not.toContain("<img");
-    expect(markup).not.toContain("<svg/onload");
-  });
+  // The classic detail-security check ("detail output encodes untrusted
+  // statuses and rejects unsafe links") is retired here: the same
+  // malicious-response injection probe now runs against /portal/work/:workItemId
+  // in portal-work-views.spec.mjs, where the read surface moved.
 
   test("login, CSRF rejection, and logout enforce the browser session boundary", async ({ page }) => {
     allowBrowserError(page, /status of 401/);
@@ -429,20 +381,11 @@ test.describe("Goal 2 feature acceptance", () => {
     await page.locator("#project-dialog").press("Escape");
     await expect(page.locator("#project-dialog")).not.toBeVisible();
 
-    const card = page.locator(".work-card", { hasText: title });
-    await card.focus();
-    await card.press("Enter");
-    await expect(page.locator("#detail-drawer")).toHaveAttribute("aria-hidden", "false");
-    await expect(page.locator("#detail-title")).toHaveText(title);
+    // The classic work-card -> drawer keyboard walk is retired here: the list,
+    // board and detail keyboard walk with focus return now runs on
+    // /portal/projects/:projectId and /portal/work/:workItemId in
+    // portal-work-views.spec.mjs. The dialog and control paths below stay.
     const closeDetails = page.getByRole("button", { name: "Close details" });
-    await expect(closeDetails).toBeFocused();
-    await closeDetails.press("Shift+Tab");
-    expect(await page.evaluate(() => document.querySelector("#detail-drawer").contains(document.activeElement))).toBe(true);
-    await page.keyboard.press("Tab");
-    await expect(closeDetails).toBeFocused();
-    await closeDetails.press("Enter");
-    await expect(page.locator("#detail-drawer")).toHaveAttribute("aria-hidden", "true");
-    await expect(card).toBeFocused();
 
     const attention = page.locator("#attention-list [data-attention-id]");
     await attention.focus();
@@ -634,114 +577,16 @@ test.describe("Goal 2 concurrency", () => {
     }
   });
 
-  test("a delayed detail response cannot overwrite a newer drawer selection", async ({ page }) => {
-    const project = uniqueProject("RQ");
-    await login(page);
-    await createProject(page, project);
-    const firstTitle = `Slow detail ${project.key}`;
-    const secondTitle = `Current detail ${project.key}`;
+  // The classic "a delayed detail response cannot overwrite a newer drawer
+  // selection" race is retired here; portal-work-views.spec.mjs holds the real
+  // captured detail response and proves the newer selection survives release.
 
-    for (const title of [firstTitle, secondTitle]) {
-      await createWorkItem(page, {
-        title,
-        description: title,
-        status: "ready",
-        priority: "medium",
-        assignee_type: "unassigned"
-      });
-    }
-
-    const projectState = await selectedProject(page);
-    const firstId = projectState.work_items.find((item) => item.title === firstTitle).id;
-    let releaseFirst;
-    let markFirstStarted;
-    const firstStarted = new Promise((resolve) => { markFirstStarted = resolve; });
-    const firstRelease = new Promise((resolve) => { releaseFirst = resolve; });
-
-    await page.route(`**/portal/api/work-items/${firstId}`, async (route) => {
-      markFirstStarted();
-      await firstRelease;
-      await route.continue();
-    }, { times: 1 });
-
-    await page.locator(".work-card", { hasText: firstTitle }).click();
-    await firstStarted;
-    await page.getByRole("button", { name: "Close details" }).click();
-    await page.locator(".work-card", { hasText: secondTitle }).click();
-    await expect(page.locator("#detail-title")).toHaveText(secondTitle);
-    releaseFirst();
-    await page.waitForTimeout(250);
-    await expect(page.locator("#detail-title")).toHaveText(secondTitle);
-  });
-
-  test("an older history failure cannot notify or mutate a newer drawer", async ({ page }) => {
-    const project = uniqueProject("HX");
-    await login(page);
-    await createProject(page, project);
-    const firstTitle = `History owner ${project.key}`;
-    const secondTitle = `Current owner ${project.key}`;
-
-    for (const title of [firstTitle, secondTitle]) {
-      await createWorkItem(page, {
-        title,
-        description: title,
-        status: "ready",
-        priority: "medium",
-        assignee_type: "unassigned"
-      });
-    }
-
-    const projectState = await selectedProject(page);
-    const firstId = projectState.work_items.find((item) => item.title === firstTitle).id;
-    let releaseHistory;
-    let markHistoryStarted;
-    let detailIntercepted = 0;
-    const historyStarted = new Promise((resolve) => { markHistoryStarted = resolve; });
-    const historyRelease = new Promise((resolve) => { releaseHistory = resolve; });
-
-    await page.route("**/portal/api/work-items/**", async (route) => {
-      const url = new URL(route.request().url());
-      if (url.pathname === `/portal/api/work-items/${firstId}`) {
-        const response = await route.fetch();
-        const body = await response.json();
-        body.raw.next_before = "older-cursor";
-        detailIntercepted += 1;
-        await route.fulfill({ response, json: body });
-        return;
-      }
-      if (url.pathname === `/portal/api/work-items/${firstId}/timeline`) {
-        markHistoryStarted();
-        await historyRelease;
-        await route.fulfill({
-          status: 503,
-          contentType: "application/json",
-          body: JSON.stringify({ error: { code: "provider_failure", message: "Old history failed" } })
-        });
-        return;
-      }
-      await route.continue();
-    });
-
-    allowBrowserError(page, /status of 503/);
-    await page.locator(".work-card", { hasText: firstTitle }).click();
-    await expect.poll(() => detailIntercepted).toBe(1);
-    await expect(page.locator("#detail-title")).toHaveText(firstTitle);
-    await page.locator("#toast").evaluate((toast) => { toast.hidden = true; });
-    await page.locator("details.raw-details summary").click();
-    await page.getByRole("button", { name: "Load older" }).click();
-    await historyStarted;
-    await page.getByRole("button", { name: "Close details" }).click();
-    await page.locator(".work-card", { hasText: secondTitle }).click();
-    await expect(page.locator("#detail-title")).toHaveText(secondTitle);
-    const historyResponse = page.waitForResponse((response) =>
-      response.status() === 503 && new URL(response.url()).pathname === `/portal/api/work-items/${firstId}/timeline`
-    );
-    releaseHistory();
-    await historyResponse;
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    await expect(page.locator("#detail-title")).toHaveText(secondTitle);
-    await expect(page.locator("#toast")).toBeHidden();
-  });
+  // The classic "an older history failure cannot notify or mutate a newer
+  // drawer" race is retired here. It is covered twice on /portal/work/:workItemId:
+  // by the always-on daemon-free synthetic fault-injection guard in
+  // portal-work-views.spec.mjs (a generated contract fixture supplies the cursor;
+  // it makes no real-history claim) and by the separate mandatory real-cursor
+  // case in portal-live-daemon.spec.mjs.
 
   test("background refresh preserves drawer input, focus, and expanded raw history", async ({ page }) => {
     const project = uniqueProject("RF");
@@ -830,31 +675,8 @@ test.describe("Goal 2 concurrency", () => {
     await expect(page.locator("#raw-execution-data")).toContainText("older-marker");
   });
 
-  test("a delayed workspace response cannot replace the latest project", async ({ page }) => {
-    const firstProject = uniqueProject("WA");
-    const secondProject = uniqueProject("WB");
-    await login(page);
-    const firstId = await createProject(page, firstProject);
-    const secondId = await createProject(page, secondProject);
-
-    let releaseFirst;
-    let markFirstStarted;
-    const firstStarted = new Promise((resolve) => { markFirstStarted = resolve; });
-    const firstRelease = new Promise((resolve) => { releaseFirst = resolve; });
-
-    await page.route(`**/portal/api/workspace?project_id=${firstId}`, async (route) => {
-      markFirstStarted();
-      await firstRelease;
-      await route.continue();
-    }, { times: 1 });
-
-    await page.locator("#project-switcher").selectOption(firstId);
-    await firstStarted;
-    await page.locator("#project-switcher").selectOption(secondId);
-    await expect(page.locator("#project-title")).toHaveText(secondProject.name);
-    releaseFirst();
-    await page.waitForTimeout(250);
-    await expect(page.locator("#project-title")).toHaveText(secondProject.name);
-    await expect(page.locator("#project-switcher")).toHaveValue(secondId);
-  });
+  // The classic "a delayed workspace response cannot replace the latest
+  // project" race is retired here; portal-work-views.spec.mjs holds a real
+  // captured workspace snapshot for the previous project and proves the shell
+  // never renders it after the newer project has rendered.
 });

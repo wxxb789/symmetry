@@ -1,0 +1,201 @@
+{
+  "work_item": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "key": "SHELL-3",
+    "project_id": "11111111-1111-4111-8111-111111111111",
+    "title": "Waiting work item",
+    "description": "The run is waiting for an operator decision.",
+    "status": "in_review",
+    "priority": "urgent",
+    "position": 5,
+    "assignee": {"type": "agent", "name": "Borealis", "agent_profile": "validate"},
+    "workspace": "/workspaces/shell-3",
+    "blocked": false,
+    "blocker": null,
+    "repository_resource_id": "33333333-3333-4333-8333-333333333333",
+    "repository": "symmetry-core",
+    "ci_resource_id": null,
+    "ci_resource": null,
+    "branch": "symmetry/shell-3",
+    "pull_request_url": null,
+    "ci_status": "unknown",
+    "review_status": "none",
+    "delivery": {
+      "pull_request": {"value": null, "source": "none", "generation": null, "url": null, "status": null},
+      "ci": {"value": "unknown", "source": "none", "generation": null, "url": null, "status": "unknown"},
+      "review": {"value": "none", "source": "none", "generation": null, "url": null, "status": "none"}
+    },
+    "external": null,
+    "version": 4,
+    "can_start": false,
+    "execution": {
+      "task_id": "55555555-5555-4555-8555-555555555555",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "runtime_id": "77777777-7777-4777-8777-777777777777",
+      "generation": 1,
+      "state": "waiting_for_input",
+      "waiting": {
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 1,
+        "transition_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "question": "Which artifact delivery strategy should be used?",
+        "decision": {
+          "context": "Two delivery strategies are valid for this artifact.",
+          "reason": "consequential",
+          "options": [
+            {"id": "pr", "label": "Open a pull request", "consequence": "Reviewers see the diff before merge."},
+            {"id": "branch", "label": "Push the branch only", "consequence": "The branch must be merged manually."}
+          ],
+          "recommended_option_id": "pr"
+        },
+        "payload": {
+          "type": "waiting_for_input",
+          "question": "Which artifact delivery strategy should be used?",
+          "decision": {
+            "context": "Two delivery strategies are valid for this artifact.",
+            "reason": "consequential",
+            "options": [
+              {"id": "pr", "label": "Open a pull request", "consequence": "Reviewers see the diff before merge."},
+              {"id": "branch", "label": "Push the branch only", "consequence": "The branch must be merged manually."}
+            ],
+            "recommended_option_id": "pr"
+          }
+        },
+        "recorded_at": "2026-11-15T11:00:00.000000Z"
+      },
+      "latest_command": null,
+      "result": null,
+      "failure": null,
+      "timing": {
+        "state_since": "2026-11-15T11:00:00.000000Z",
+        "started_at": "2026-11-15T10:40:00.000000Z",
+        "finished_at": null
+      },
+      "supervisory_control": true,
+      "can_guide": false,
+      "can_pause": false,
+      "can_resume": false,
+      "can_cancel": true,
+      "can_retry": false,
+      "intent_locked": true
+    },
+    "updated_at": "2026-11-15T11:00:00.000000Z"
+  },
+  "outcome": {
+    "goal": "Validate the waiting work item",
+    "phase": "waiting_for_input",
+    "owner": {"type": "agent", "name": "Borealis", "agent_profile": "validate"},
+    "summary": null,
+    "findings": [],
+    "changed_artifacts": [],
+    "tests": [],
+    "blocker": "Which artifact delivery strategy should be used?",
+    "pull_request_url": null,
+    "ci_status": "unknown",
+    "review_status": "none",
+    "delivery": {
+      "pull_request": {"value": null, "source": "none", "generation": null, "url": null, "status": null},
+      "ci": {"value": "unknown", "source": "none", "generation": null, "url": null, "status": "unknown"},
+      "review": {"value": "none", "source": "none", "generation": null, "url": null, "status": "none"}
+    },
+    "result": {},
+    "failure": null
+  },
+  "timeline": [
+    {
+      "source": "event",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "recorded_at": "2026-11-15T10:59:59.000000Z",
+      "data": {
+        "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 9,
+        "kind": "waiting_for_input",
+        "payload": {"type": "waiting_for_input", "question": "Which artifact delivery strategy should be used?"},
+        "occurred_at": "2026-11-15T10:59:58.000000Z"
+      }
+    },
+    {
+      "source": "transition",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "recorded_at": "2026-11-15T11:00:00.000000Z",
+      "data": {"transition_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "state": "waiting_for_input", "payload": {"from": "running"}}
+    }
+  ],
+  "raw": {
+    "task": {
+      "task_id": "55555555-5555-4555-8555-555555555555",
+      "state": "waiting_for_input",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "work": {
+        "goal": "Validate the waiting work item",
+        "agent_profile": "validate",
+        "workspace": "/workspaces/shell-3",
+        "input": {"prompt": "validate the artifact"}
+      },
+      "result": null,
+      "failure": null,
+      "controls": {
+        "supervisory_control": true,
+        "can_guide": false,
+        "can_pause": false,
+        "can_resume": false
+      },
+      "waiting": {
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 1,
+        "transition_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "question": "Which artifact delivery strategy should be used?",
+        "decision": {
+          "context": "Two delivery strategies are valid for this artifact.",
+          "reason": "consequential",
+          "options": [
+            {"id": "pr", "label": "Open a pull request", "consequence": "Reviewers see the diff before merge."},
+            {"id": "branch", "label": "Push the branch only", "consequence": "The branch must be merged manually."}
+          ],
+          "recommended_option_id": "pr"
+        },
+        "payload": {
+          "type": "waiting_for_input",
+          "question": "Which artifact delivery strategy should be used?",
+          "decision": {
+            "context": "Two delivery strategies are valid for this artifact.",
+            "reason": "consequential",
+            "options": [
+              {"id": "pr", "label": "Open a pull request", "consequence": "Reviewers see the diff before merge."},
+              {"id": "branch", "label": "Push the branch only", "consequence": "The branch must be merged manually."}
+            ],
+            "recommended_option_id": "pr"
+          }
+        },
+        "recorded_at": "2026-11-15T11:00:00.000000Z"
+      },
+      "latest_command": null
+    },
+    "timeline": [
+      {
+        "source": "event",
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 1,
+        "recorded_at": "2026-11-15T10:59:59.000000Z",
+        "data": {
+          "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "sequence": 9,
+          "kind": "waiting_for_input",
+          "payload": {"type": "waiting_for_input", "question": "Which artifact delivery strategy should be used?"},
+          "occurred_at": "2026-11-15T10:59:58.000000Z"
+        }
+      },
+      {
+        "source": "transition",
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 1,
+        "recorded_at": "2026-11-15T11:00:00.000000Z",
+        "data": {"transition_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "state": "waiting_for_input", "payload": {"from": "running"}}
+      }
+    ],
+    "next_before": "SFMyNTY.g3QAAAACdw0KA3YBAgF0YXNrX2lkAApkZWxpdmVyeS12MQ"
+  }
+}

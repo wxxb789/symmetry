@@ -1,0 +1,74 @@
+{
+  "items": [
+    {
+      "source": "transition",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "recorded_at": "2026-11-15T10:00:30.000000Z",
+      "data": {"transition_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "state": "running", "payload": {"from": "claimed"}}
+    },
+    {
+      "source": "event",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "recorded_at": "2026-11-15T10:01:10.000000Z",
+      "data": {
+        "event_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "sequence": 3,
+        "kind": "agent_event",
+        "payload": {"type": "agent_event", "value": {"note": "not projected"}},
+        "occurred_at": "2026-11-15T10:01:09.000000Z"
+      }
+    },
+    {
+      "source": "event",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "recorded_at": "2026-11-15T10:01:20.000000Z",
+      "data": {
+        "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 4,
+        "kind": "progress",
+        "payload": {"message": "implementing the projection"},
+        "occurred_at": "2026-11-15T10:01:19.000000Z"
+      }
+    },
+    {
+      "source": "command",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "recorded_at": "2026-11-15T10:02:00.000000Z",
+      "data": {
+        "command_id": "88888888-8888-4888-8888-888888888888",
+        "task_id": "55555555-5555-4555-8555-555555555555",
+        "kind": "guidance",
+        "payload": {"message": "keep the diff small"},
+        "state": "acknowledged",
+        "issued_at": "2026-11-15T10:02:00.000000Z",
+        "applied_at": "2026-11-15T10:02:05.000000Z",
+        "acknowledgement_id": "99999999-9999-4999-8999-999999999999",
+        "acknowledgement_outcome": "applied",
+        "acknowledged_at": "2026-11-15T10:02:05.000000Z"
+      }
+    },
+    {
+      "source": "command",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "recorded_at": "2026-11-15T10:06:00.000000Z",
+      "data": {
+        "command_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "task_id": "55555555-5555-4555-8555-555555555555",
+        "kind": "cancel",
+        "payload": {},
+        "state": "acknowledged",
+        "issued_at": "2026-11-15T10:06:00.000000Z",
+        "applied_at": null,
+        "acknowledgement_id": null,
+        "acknowledgement_outcome": null,
+        "acknowledged_at": null
+      }
+    }
+  ],
+  "next_before": null
+}

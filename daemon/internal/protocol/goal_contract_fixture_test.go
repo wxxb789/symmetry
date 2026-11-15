@@ -52,10 +52,11 @@ func TestGoalTransportParsesContractFixtures(t *testing.T) {
 			}
 
 			var semanticErr error
-			if fixture.Schema == string(contractdto.EnvelopeWorkspaceRead) {
-				var workspace map[string]any
-				semanticErr = contractdto.DecodeSchema(contractdto.EnvelopeWorkspaceRead, data, &workspace)
-			} else {
+			switch contractdto.Envelope(fixture.Schema) {
+			case contractdto.EnvelopeWorkspaceRead, contractdto.EnvelopeWorkDetailRead, contractdto.EnvelopeWorkTimelineRead:
+				var presentation map[string]any
+				semanticErr = contractdto.DecodeSchema(contractdto.Envelope(fixture.Schema), data, &presentation)
+			default:
 				semanticErr = ValidateGoalEnvelope(contractdto.Envelope(fixture.Schema), data)
 			}
 			if got, want := semanticErr == nil, fixture.expectedSemanticValidity(); got != want {

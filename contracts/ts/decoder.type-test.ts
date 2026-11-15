@@ -14,6 +14,9 @@ import type {
   SymmetryPlanProposalV1,
   SymmetryTaskResultV1,
   SymmetryUsageV1,
+  SymmetryWorkDetailReadV1,
+  SymmetryWorkTimelineReadV1,
+  SymmetryWorkspaceReadV1,
 } from "../generated/ts/index.js";
 import type {
   AdapterCapabilities,
@@ -30,6 +33,9 @@ import type {
   PlanProposal,
   TaskResult,
   Usage,
+  WorkDetailRead,
+  WorkTimelineRead,
+  WorkspaceRead,
   SemanticError,
   WireJsonError,
 } from "./index.ts";
@@ -106,6 +112,24 @@ export type DecoderOutputs = [
   Assert<
     Equal<Effect.Effect.Success<ReturnType<typeof Admission.decodeJson>>, SymmetryAdmissionV1>
   >,
+  Assert<
+    Equal<
+      Effect.Effect.Success<ReturnType<typeof WorkDetailRead.decodeJson>>,
+      SymmetryWorkDetailReadV1
+    >
+  >,
+  Assert<
+    Equal<
+      Effect.Effect.Success<ReturnType<typeof WorkTimelineRead.decodeJson>>,
+      SymmetryWorkTimelineReadV1
+    >
+  >,
+  Assert<
+    Equal<
+      Effect.Effect.Success<ReturnType<typeof WorkspaceRead.decodeUnknown>>,
+      SymmetryWorkspaceReadV1
+    >
+  >,
 ];
 
 export type DecoderErrors = [
@@ -137,6 +161,24 @@ export type DecoderErrors = [
     Equal<
       Effect.Effect.Error<ReturnType<typeof TaskResult.decodeUnknown>>,
       ParseResult.ParseError | SemanticError
+    >
+  >,
+  Assert<
+    Equal<
+      Effect.Effect.Error<ReturnType<typeof WorkDetailRead.decodeJson>>,
+      ParseResult.ParseError | SemanticError | WireJsonError
+    >
+  >,
+  Assert<
+    Equal<
+      Effect.Effect.Error<ReturnType<typeof WorkTimelineRead.decodeJson>>,
+      ParseResult.ParseError | SemanticError | WireJsonError
+    >
+  >,
+  Assert<
+    Equal<
+      Effect.Effect.Error<ReturnType<typeof WorkspaceRead.decodeJson>>,
+      ParseResult.ParseError | SemanticError | WireJsonError
     >
   >,
 ];
@@ -249,3 +291,22 @@ export const typedMapAllowsResourceKeys: NonNullable<SymmetryAdmissionV1["provid
   },
   change_target: null,
 };
+
+declare const workDetailReadForAdditiveFields: SymmetryWorkDetailReadV1;
+
+export const readProjectionsKeepAdditivePresentationFields: SymmetryWorkDetailReadV1 = {
+  ...workDetailReadForAdditiveFields,
+  metadata: { ratio: 0.5 },
+  work_item: {
+    ...workDetailReadForAdditiveFields.work_item,
+    external_tracking: "SYM-7",
+  },
+};
+
+export function useWorkTimelineRead(value: SymmetryWorkTimelineReadV1) {
+  const cursor: string | null = value.next_before;
+  const entries = value.items.map(
+    (item) => [item.source, item.recorded_at, item.data.payload] as const,
+  );
+  return [cursor, entries];
+}

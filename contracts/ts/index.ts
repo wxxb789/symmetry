@@ -14,6 +14,8 @@ import {
   PlanProposalSchema,
   TaskResultSchema,
   UsageSchema,
+  WorkDetailReadSchema,
+  WorkTimelineReadSchema,
   WorkspaceReadSchema,
 } from "../generated/effect/index.ts";
 import {
@@ -46,6 +48,8 @@ export {
   PlanProposalSchema,
   TaskResultSchema,
   UsageSchema,
+  WorkDetailReadSchema,
+  WorkTimelineReadSchema,
   WorkspaceReadSchema,
 };
 export type * from "../generated/ts/index.js";
@@ -100,4 +104,6 @@ export const GoalRevision = boundary(GoalRevisionSchema, validateGoalRevisionSem
 export const PlanProposal = boundary(PlanProposalSchema, validatePlanProposalSemantics);
 export const TaskResult = boundary(TaskResultSchema, validateTaskResultSemantics);
 export const Usage = boundary(UsageSchema);
+export const WorkDetailRead = boundary(WorkDetailReadSchema, undefined, parsePresentationJson);
+export const WorkTimelineRead = boundary(WorkTimelineReadSchema, undefined, parsePresentationJson);
 export const WorkspaceRead = boundary(WorkspaceReadSchema, undefined, parsePresentationJson);

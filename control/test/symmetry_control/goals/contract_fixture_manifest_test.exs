@@ -6,6 +6,7 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
   @manifest_path Path.expand("../../../../contracts/fixtures/manifest.json", __DIR__)
   @schema_root Path.expand("../../../../contracts/v1", __DIR__)
   @fixture_root Path.expand("../../../../contracts/fixtures", __DIR__)
+  @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
 
   @validators %{
     "adapter-capabilities" => &ContractValidation.validate_adapter_capabilities/2,
@@ -37,14 +38,26 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     fixture_ids = Enum.map(fixtures, & &1["id"])
     assert length(fixture_ids) == MapSet.size(MapSet.new(fixture_ids))
 
+    bundle = @schema_bundle |> File.read!() |> Jason.decode!()
+
+    read_schemas =
+      Map.new(["work-detail-read", "work-timeline-read"], fn name ->
+        schema =
+          bundle
+          |> Map.fetch!(name <> ".schema.json")
+          |> rewrite_pcre2_pattern_escapes()
+          |> ExJsonSchema.Schema.resolve()
+
+        {name, schema}
+      end)
+
     Enum.each(fixtures, fn fixture ->
       expected = Map.get(fixture, "semantic_valid", Map.fetch!(fixture, "valid"))
-      validator = Map.fetch!(@validators, fixture["schema"])
       path = Path.join(@fixture_root, fixture["path"])
 
       case Jason.decode(File.read!(path)) do
         {:ok, data} ->
-          result = validator.(data, schema_root: @schema_root)
+          result = validate_fixture(fixture["schema"], data, read_schemas)
           actual = result == :ok
 
           assert actual == expected,
@@ -61,6 +74,33 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
       end
     end)
   end
+
+  defp validate_fixture(schema, data, read_schemas)
+       when schema in ["work-detail-read", "work-timeline-read"] do
+    ExJsonSchema.Validator.validate(Map.fetch!(read_schemas, schema), data)
+  end
+
+  defp validate_fixture(schema, data, _read_schemas) do
+    validator = Map.fetch!(@validators, schema)
+    validator.(data, schema_root: @schema_root)
+  end
+
+  # Match ContractValidation's ECMA-262-to-PCRE2 adaptation without changing
+  # either the canonical bundle or the production validator's supported reads.
+  defp rewrite_pcre2_pattern_escapes(value) when is_map(value) do
+    Map.new(value, fn
+      {"pattern", pattern} when is_binary(pattern) ->
+        {"pattern", String.replace(pattern, "\\u0000", "\\x{0}")}
+
+      {key, child} ->
+        {key, rewrite_pcre2_pattern_escapes(child)}
+    end)
+  end
+
+  defp rewrite_pcre2_pattern_escapes(value) when is_list(value),
+    do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
+
+  defp rewrite_pcre2_pattern_escapes(value), do: value
 
   defp assert_expected_semantic_error(%{"semantic_error" => expected}, result)
        when is_binary(expected),
