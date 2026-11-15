@@ -25,3 +25,19 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       Preserve the fixture calls and leave any binding cleanup to separate
       maintenance.
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
+- [ ] Investigate the intermittent Linux failure `TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`
+      in `daemon/internal/platform` (`containment_supervisor_linux_test.go:1128: decode
+      wrong-session helper witness: unexpected end of JSON input`). Observed in run
+      43724904655 job 132844651104 on a workflow-only diff, then green on rerun job
+      132846453648. Revalidate whether the helper witness can be decoded before it is fully
+      written; keep the witness assertion itself and leave the fix to separate maintenance.
+- [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
+      in `daemon/internal/platform` (`process_windows_test.go:1004`, "owned child <pid>
+      survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
+      green in run 43715830442 and on rerun job 132834151127. Revalidate the close/settle
+      window; keep the survived-child assertion.
+- [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
+      `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
+      states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
+      classifier's skip list against the jobs that actually ran before treating the trim as
+      fully accepted.
