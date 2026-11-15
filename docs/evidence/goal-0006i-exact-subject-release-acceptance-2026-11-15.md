@@ -39,6 +39,21 @@ receipt does not claim it. The operator issuing `achieve` must supply `subject =
 "tree_digest": "sha256:<64 hex>"}` and bind the integration work item and the evidence rows
 to the resulting subject hash.
 
+The protocol tree digest for this frozen Subject has since been computed with the repository's
+own binder and independently reproduced:
+
+```
+$ python3 scripts/ci/linux-v2-source-subject.py . 8ded77150ec0ae49d52355670fdad78a348bf1d5
+{"commit":"8ded77150ec0ae49d52355670fdad78a348bf1d5","tree_digest":"sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c"}
+```
+
+The remaining unknown is the approved repository `resource_id`, a control-plane value that the
+acceptance flow itself creates; the earlier review finding (a Git tree OID presented as the
+protocol `tree_digest`) is now closed by measurement — the two values differ, as shown. Once the
+`resource_id` exists, the `achieve` subject is fully determined:
+`{"resource_id": <uuid>, "commit": "8ded77150ec0ae49d52355670fdad78a348bf1d5",
+"tree_digest": "sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c"}`.
+
 Because the trees are identical, the CI runs and the independent review executed on
 `109f6037…` are evidence for the Subject `8ded771` and are cited below rather than
 re-run, per the operator brief. Evidence produced on any other revision is context only
