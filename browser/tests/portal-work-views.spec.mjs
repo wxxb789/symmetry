@@ -44,6 +44,7 @@ const ui = {
   savedViews: "Saved views",
   savedViewName: "Saved view name",
   saveView: "Save view",
+  deleteSavedView: "Delete saved view",
   workItems: "Work items",
   boardRegion: "Work board",
   noMatching: "No matching work items",
@@ -288,6 +289,10 @@ test.describe("Readable work views", () => {
     await page.getByLabel(ui.filter).fill("no such work item");
     await expect(page.getByRole("heading", { name: ui.noMatching })).toBeVisible();
     await page.getByRole("button", { name: ui.clearFilters }).click();
+    // Clearing removes the button itself under a same-pathname update: the
+    // still-present filter input must receive focus, never `body`.
+    await expect(page.getByLabel(ui.filter)).toBeFocused();
+    await expect(page.getByLabel(ui.filter)).toHaveValue("");
     await expect(list.getByRole("link", { name: titles.agent })).toBeVisible();
 
     await page.getByLabel(ui.state).selectOption({ label: "done" });
@@ -339,6 +344,10 @@ test.describe("Readable work views", () => {
     await page.getByLabel(ui.savedViews).selectOption({ label: `Saved ${key}` });
     await expect(page.getByLabel(ui.filter)).toHaveValue("Human decision");
     await expect(list.getByRole("link", { name: titles.blocked })).toBeVisible();
+    // Deleting removes the button itself: focus stays on the saved-views control.
+    await page.getByRole("button", { name: ui.deleteSavedView }).click();
+    await expect(page.getByLabel(ui.savedViews)).toBeFocused();
+    await expect(page.getByLabel(ui.savedViews).locator(`option[value="Saved ${key}"]`)).toHaveCount(0);
     await page.getByLabel(ui.filter).fill("");
     await page.getByLabel(ui.state).selectOption({ label: ui.allStates });
 

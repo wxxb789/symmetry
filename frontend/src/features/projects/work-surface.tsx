@@ -34,6 +34,15 @@ export interface ViewLinkOptions {
   search: WorkSearch;
 }
 
+/**
+ * Focus a control that stays mounted after the update. A control that removes
+ * itself on its own same-pathname update (clearing the last filter, deleting
+ * the active saved view) would otherwise leave keyboard focus on `body`.
+ */
+function focusWorkControl(id: string) {
+  document.getElementById(id)?.focus();
+}
+
 /** Saved list/board projection of one project's work, shared by the project route and the work-detail background. */
 export function ProjectWorkSurface({ project, navigation }: { project: Project; navigation: WorkSurfaceNavigation }) {
   const { search, setSearch } = navigation;
@@ -52,7 +61,7 @@ export function ProjectWorkSurface({ project, navigation }: { project: Project; 
         ? <EmptyState title="No work items">This project does not have any work items yet.</EmptyState>
         : <EmptyState title="No matching work items">
           <span className="empty-actions">No work items match the current filters.
-            <button className="button" type="button" onClick={() => setSearch(() => ({}), { replace: false })}>Clear filters</button>
+            <button className="button" type="button" onClick={() => { setSearch(() => ({}), { replace: false }); focusWorkControl("work-filter-input"); }}>Clear filters</button>
           </span>
         </EmptyState>
       : (search.view ?? "list") === "board"
@@ -88,7 +97,7 @@ function WorkToolbar({ project, navigation }: { project: Project; navigation: Wo
       <span className="muted text-small">Read-only</span>
     </div>
     <div className="toolbar-row">
-      <input className="filter-input" type="search" aria-label="Filter work items" placeholder="Search title, key or owner" value={search.q ?? ""}
+      <input id="work-filter-input" className="filter-input" type="search" aria-label="Filter work items" placeholder="Search title, key or owner" value={search.q ?? ""}
         onChange={(event) => { const value = event.currentTarget.value; setSearch((previous) => workSearch({ ...previous, q: value })); }} />
       <select aria-label="Work state" value={search.state ?? ""} onChange={(event) => { const value = event.currentTarget.value; setSearch((previous) => workSearch({ ...previous, state: value })); }}>
         <option value="">All states</option>
@@ -104,7 +113,7 @@ function WorkToolbar({ project, navigation }: { project: Project; navigation: Wo
         onChange={(event) => { const checked = event.currentTarget.checked; setSearch((previous) => workSearch({ ...previous, blocked: checked ? "1" : undefined })); }} />Blocked only</label>
     </div>
     <div className="toolbar-row">
-      <select aria-label="Saved views" value={activeView} onChange={(event) => {
+      <select id="work-saved-view-select" aria-label="Saved views" value={activeView} onChange={(event) => {
         const entry = saved.views.find((candidate) => candidate.name === event.currentTarget.value);
         if (entry) setSearch(() => entry.search, { replace: false });
       }}>
@@ -113,7 +122,7 @@ function WorkToolbar({ project, navigation }: { project: Project; navigation: Wo
       </select>
       <input type="text" aria-label="Saved view name" placeholder="View name" value={name} onChange={(event) => setName(event.currentTarget.value)} />
       <button className="button" type="button" disabled={name.trim() === ""} onClick={() => { saved.save(name, search); setName(""); }}>Save view</button>
-      {activeView !== "" && <button className="button" type="button" onClick={() => saved.remove(activeView)}>Delete saved view</button>}
+      {activeView !== "" && <button className="button" type="button" onClick={() => { saved.remove(activeView); focusWorkControl("work-saved-view-select"); }}>Delete saved view</button>}
     </div>
   </section>;
 }

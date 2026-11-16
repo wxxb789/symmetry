@@ -3,6 +3,7 @@ import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { savedViewStorageKey } from "../features/projects/saved-views";
 import type { Project } from "../services/api";
 import { readWorkDetail, readWorkItem } from "../services/api.fixtures";
 import { createApplication, type Application } from "./application";
@@ -17,7 +18,7 @@ const projects: Project[] = [
   ] },
 ];
 const applications: Application[] = [];
-afterEach(() => { for (const app of applications) app.queryClient.clear(); applications.length = 0; });
+afterEach(() => { for (const app of applications) app.queryClient.clear(); applications.length = 0; localStorage.clear(); });
 
 function renderWorkspace(path: string, fetcher: typeof fetch = vi.fn<typeof fetch>().mockImplementation((input) => {
   const requestPath = input instanceof Request ? input.url : String(input);
@@ -457,6 +458,42 @@ describe("readable work views", () => {
     const heading = await screen.findByRole("heading", { level: 1, name: subjectTitle });
     await waitFor(() => expect(heading).toHaveFocus());
     expect(new URL(history.location.href, "http://localhost").pathname).toBe(`/portal/work/${subjectId}`);
+  });
+
+  it("returns focus to the filter input after Clear filters removes its own button", async () => {
+    const user = userEvent.setup();
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}?q=nothing-matches`, workReadFetcher({ detail: subjectDetail() }));
+    await screen.findByRole("heading", { level: 1, name: "Project One" });
+    expect(screen.getByRole("heading", { name: "No matching work items" })).toBeVisible();
+    const filter = screen.getByLabelText("Filter work items");
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    // The click's own navigation keeps the pathname, so the shell does not move
+    // focus and the button is unmounted with the empty state: the still-present
+    // filter input must be focused explicitly instead of focus falling to body.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument());
+    expect(filter).toHaveFocus();
+    expect(filter).toHaveValue("");
+    expect(new URL(history.location.href, "http://localhost").searchParams.has("q")).toBe(false);
+  });
+
+  it("keeps focus on the saved-views control when Delete saved view removes its own button", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(savedViewStorageKey, JSON.stringify({
+      version: 1,
+      scope: window.location.origin,
+      projects: { [firstProjectId]: [{ name: "Blocked only", search: { blocked: "1" } }] },
+    }));
+    renderWorkspace(`/portal/projects/${firstProjectId}?blocked=1`, workReadFetcher({ detail: subjectDetail() }));
+    await screen.findByRole("heading", { level: 1, name: "Project One" });
+    const savedViews = screen.getByLabelText("Saved views");
+    expect(savedViews).toHaveValue("Blocked only");
+    // Same class as Clear filters: the delete control is removed by its own
+    // update, so focus must land on the control that stays mounted.
+    await user.click(screen.getByRole("button", { name: "Delete saved view" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete saved view" })).not.toBeInTheDocument());
+    expect(savedViews).toHaveFocus();
+    const stored = JSON.parse(localStorage.getItem(savedViewStorageKey) ?? "{}") as { projects: Record<string, unknown[]> };
+    expect(stored.projects[firstProjectId]).toEqual([]);
   });
 
   it("renders a row's object result summary as its JSON text and marks a task-less row unreported", async () => {
