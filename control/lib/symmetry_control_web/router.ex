@@ -93,6 +93,7 @@ defmodule SymmetryControlWeb.Router do
     get "/projects", PortalController, :index
     get "/projects/:project_id", PortalController, :index
     get "/work/:work_item_id", PortalController, :index
+    get "/runtimes", PortalController, :index
     get "/classic", PortalController, :classic
   end
 

@@ -3,8 +3,10 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   import Ecto.Query
 
+  alias SymmetryControl.Goals
   alias SymmetryControl.{Orchestration, Repo}
   alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Workspaces.WorkItem
   alias SymmetryControlWeb.PortalSession
 
   @now ~U[2026-09-04 11:00:00.000000Z]
@@ -156,6 +158,130 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
                "sync_status" => "unknown"
              })
              |> json_response(422)
+  end
+
+  test "workspace reads serve the runtime capability row verbatim" do
+    project = create_project("RTM")
+    key = Ecto.UUID.generate()
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(
+               %{name: "capability-host", machine_token: "token-#{key}"},
+               key,
+               enrollment_token: "enrollment-secret",
+               expected_enrollment_token: "enrollment-secret",
+               now: @now
+             )
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(
+               enrolled.machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "capability-runtime",
+                   name: "Capability runtime",
+                   capacity: 2,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   capabilities: %{"structured_input" => true, "provider_access" => true}
+                 }
+               ],
+               now: @now
+             )
+
+    assert %{"runtimes" => [row], "registered_runtimes" => [registered]} =
+             api_conn()
+             |> get("/portal/api/workspace?project_id=#{project["id"]}")
+             |> json_response(200)
+
+    assert row["runtime_id"] == runtime.id
+    assert row["machine_id"] == enrolled.machine.id
+    assert row["machine_name"] == "capability-host"
+    assert row["runtime_key"] == "capability-runtime"
+    assert row["runtime_name"] == "Capability runtime"
+    assert row["status"] == "online"
+    assert row["last_heartbeat_at"] == "2026-09-04T11:00:00.000000Z"
+    assert row["connection_epoch"] == runtime.connection_epoch
+    assert row["capacity"] == 2
+    assert row["reserved_capacity"] == 0
+    assert row["agent_profile"] == "codex"
+    assert row["workspace"] == "primary"
+    assert row["repository_resource_id"] == nil
+    assert row["capabilities"] == %{"structured_input" => true, "provider_access" => true}
+    assert row["active_runs"] == []
+    assert registered["capabilities"] == row["capabilities"]
+  end
+
+  test "Goal-managed work items serve goal_id and refuse every legacy control path" do
+    enable_goal_rollout()
+
+    project = create_project("GOV")
+
+    assert %{"resource" => %{"id" => repository_id}} =
+             api_conn()
+             |> post("/portal/api/projects/#{project["id"]}/resources", %{
+               "kind" => "repository",
+               "name" => "Goal repository",
+               "status" => "healthy"
+             })
+             |> json_response(201)
+
+    goal_managed = goal_managed_work_item!(project["id"], repository_id)
+
+    legacy =
+      create_work_item(project["id"], "Legacy work", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex"
+      })
+
+    assert %{
+             "work_item" => %{
+               "id" => work_item_id,
+               "goal_id" => served_goal_id,
+               "version" => goal_managed_version
+             }
+           } =
+             api_conn()
+             |> get("/portal/api/work-items/#{goal_managed.id}")
+             |> json_response(200)
+
+    assert work_item_id == goal_managed.id
+    assert served_goal_id == goal_managed.goal_id
+    refute is_nil(served_goal_id)
+
+    for {path, body} <- [
+          {"run", %{"action_id" => "goal-start"}},
+          {"cancel", %{"action_id" => "goal-cancel", "generation" => 1}},
+          {"retry", %{"action_id" => "goal-retry", "generation" => 1}},
+          {"move", %{"version" => goal_managed_version, "status" => "review"}}
+        ] do
+      response =
+        if path == "move" do
+          api_conn() |> patch("/portal/api/work-items/#{goal_managed.id}/move", body)
+        else
+          api_conn() |> post("/portal/api/work-items/#{goal_managed.id}/#{path}", body)
+        end
+
+      assert %{"error" => %{"code" => "goal_authority_required"}} = json_response(response, 403)
+    end
+
+    assert %{"disposition" => "created", "work_item" => launched} =
+             api_conn()
+             |> post("/portal/api/work-items/#{legacy["id"]}/run", %{
+               "action_id" => "legacy-start"
+             })
+             |> json_response(202)
+
+    assert launched["status"] == "in_progress"
+
+    assert %{"work_item" => %{"status" => "review"}} =
+             api_conn()
+             |> patch("/portal/api/work-items/#{legacy["id"]}/move", %{
+               "version" => launched["version"],
+               "status" => "review"
+             })
+             |> json_response(200)
   end
 
   test "archived projects can be restored through the routed API" do
@@ -726,6 +852,116 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
       |> json_response(201)
 
     work_item
+  end
+
+  defp goal_managed_work_item!(project_id, repository_id) do
+    assert {:ok, created, :created} =
+             Goals.create_goal(project_id, goal_create_attrs(), "operator:test", now: @now)
+
+    goal = created.goal
+
+    %WorkItem{id: Ecto.UUID.generate()}
+    |> WorkItem.changeset(%{
+      project_id: project_id,
+      repository_resource_id: repository_id,
+      title: "Goal-managed work",
+      description: "Admitted through Goal membership instead of the legacy work path.",
+      status: "backlog",
+      priority: "no_priority",
+      position: 0,
+      assignee_type: "agent",
+      assignee_name: "codex",
+      agent_profile: "codex",
+      workspace: "primary",
+      blocked: false
+    })
+    |> Ecto.Changeset.apply_changes()
+    |> WorkItem.goal_membership_changeset(%{
+      goal_id: goal.id,
+      admitted_revision: goal.current_revision,
+      required: true,
+      integration: false,
+      acceptance_contract: acceptance_contract(),
+      baseline_subject: %{
+        "resource_id" => repository_id,
+        "commit" => String.duplicate("a", 40),
+        "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+      }
+    })
+    |> Repo.insert!()
+  end
+
+  defp enable_goal_rollout do
+    goals_config = Application.fetch_env!(:symmetry_control, :goals)
+
+    Application.put_env(
+      :symmetry_control,
+      :goals,
+      goals_config
+      |> Keyword.put(:rollout_enabled, true)
+      |> Keyword.put(:validation_profiles, validation_profiles())
+    )
+
+    on_exit(fn -> Application.put_env(:symmetry_control, :goals, goals_config) end)
+  end
+
+  defp goal_create_attrs do
+    %{
+      schema_version: "symmetry.goal_create.v1",
+      title: "Goal-managed work",
+      mutation_id: Ecto.UUID.generate(),
+      initial_revision: %{
+        objective: "Keep Goal-owned work off the legacy control path.",
+        non_goals: ["No autonomous publication"],
+        acceptance_contract: acceptance_contract(),
+        authority_policy: %{
+          "operator_required_for_scope_change" => true,
+          "operator_required_for_completion" => true,
+          "publication_allowed" => false,
+          "allowed_actions" => []
+        },
+        execution_policy: %{
+          "automatic_execution" => false,
+          "max_parallel_tasks" => 1,
+          "max_task_admissions" => 1,
+          "max_run_attempts_per_task" => 2,
+          "budget_limit_microusd" => nil,
+          "per_run_cost_limit_microusd" => nil,
+          "budget_mode" => "soft",
+          "hard_cost_limit_required" => false,
+          "allowed_runtime_ids" => [],
+          "allowed_model_profiles" => [],
+          "final_acceptance" => "operator",
+          "allowed_actions" => [],
+          "allowed_resource_ids" => []
+        },
+        context_manifest: %{
+          "byte_budget" => 32_768,
+          "required_source_kinds" => ["repository"],
+          "include_advisory_recall" => false
+        },
+        reason: "Initial approved contract"
+      }
+    }
+  end
+
+  defp acceptance_contract do
+    %{
+      "schema_version" => "symmetry.acceptance.v1",
+      "description" => "An independent check must pass.",
+      "predicates" => [%{"id" => "check", "kind" => "check", "validator_profile" => "test"}]
+    }
+  end
+
+  defp validation_profiles do
+    [
+      test: [
+        kind: :check,
+        profile_digest: "sha256:" <> String.duplicate("c", 64),
+        enabled: true,
+        allowed_runtime_ids: ["00000000-0000-4000-8000-000000000001"]
+      ]
+    ]
   end
 
   defp api_conn do

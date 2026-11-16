@@ -522,7 +522,9 @@ test.describe("Readable work views", () => {
     await expect(detail.locator("dl.detail-facts div", { hasText: "Cost" })).toContainText(ui.costUnknown);
     await expect(detail.getByRole("button", { name: ui.loadOlder })).toHaveCount(0);
     await expect(detail.getByText(ui.noBlocker)).toHaveCount(0);
-    // The read-only surface never offers an execution control.
+    // The fixture is human-owned, so the server's `can_start` is false and the
+    // surface offers no start control; the execution-control surface itself is
+    // exercised in portal-execution-control.spec.mjs.
     await expect(detail.getByRole("button", { name: "Start run" })).toHaveCount(0);
     expect(requests).toContain(`/portal/api/work-items/${blocked.id}`);
     expect(requests.filter((path) => path.endsWith("/timeline"))).toEqual([]);
@@ -1103,6 +1105,73 @@ test.describe("Readable work views", () => {
     await expect(currentDetail.getByText("Earlier history could not be loaded.")).toHaveCount(0);
     await expect(currentDetail.getByText(fixtureFingerprint)).toHaveCount(0);
     await closeDetail(page, isMobile, { escape: true });
+  });
+
+  test("a disconnected read recovers and reconciles with the server's own snapshot", async ({ page }, testInfo) => {
+    await login(page);
+    const seeded = await seedProject(page, {
+      prefix: "RC",
+      items: [{
+        title: `Reconnect work ${uniqueKey("C")}`,
+        description: "Disconnect and reconnect around a background refresh.",
+        status: "ready",
+        priority: "medium",
+        assignee_type: "agent",
+        agent_profile: "reconnect-profile",
+        workspace: "reconnect-workspace"
+      }]
+    });
+    const item = [...seeded.items.values()][0];
+    const detailUrl = workUrl(item.id);
+
+    await page.goto(detailUrl);
+    const executing = await page.evaluate(async (workItemId) => {
+      const csrf = document.querySelector('meta[name="csrf-token"]')?.content || "";
+      const response = await fetch(`/portal/api/work-items/${workItemId}/run`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { Accept: "application/json", "Content-Type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ action_id: crypto.randomUUID() })
+      });
+      const body = await response.json();
+      return { status: response.status, body };
+    }, item.id);
+    expect(executing.status, JSON.stringify(executing.body)).toBe(202);
+    await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
+
+    // The read is disconnected: the surface must say so and must not invent a
+    // transition of its own.
+    // The aborted reads are the only console errors this case may produce.
+    allowBrowserError(page, /net::ERR_FAILED/);
+    const offline = (route) => route.abort("failed");
+    await page.route(`**/portal/api/work-items/${item.id}`, offline);
+    await page.route(`**/portal/api/workspace*`, offline);
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect(page.getByText("Refresh failed — showing last loaded data").first()).toBeVisible();
+    await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
+    await page.unroute(`**/portal/api/work-items/${item.id}`);
+    await page.unroute(`**/portal/api/workspace*`);
+
+    // Reconnect: the next refresh reconciles with the server snapshot the API
+    // serves, and the rendered state equals that snapshot — no more, no less.
+    const served = await page.evaluate(async (workItemId) => {
+      const response = await fetch(`/portal/api/work-items/${workItemId}`, { credentials: "same-origin" });
+      return response.json();
+    }, item.id);
+    expect(served.work_item.execution.state).toBe("queued");
+    const refresh = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === `/portal/api/work-items/${item.id}` && response.status() === 200;
+    });
+    await page.getByRole("button", { name: ui.refresh, exact: true }).click();
+    expect((await refresh).status()).toBe(200);
+    await expect(page.getByText("Refresh failed — showing last loaded data")).toHaveCount(0);
+    await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Completed", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Cancelled", { exact: true })).toHaveCount(0);
+    // The served detail still owns the deep link after reconnecting.
+    expect(page.url()).toContain(`/portal/work/${item.id}`);
+    void testInfo;
   });
 
   test.describe("concurrency", () => {

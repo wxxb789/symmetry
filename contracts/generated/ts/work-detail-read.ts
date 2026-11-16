@@ -44,6 +44,7 @@ export interface WorkspaceWorkItem {
   id: UUID;
   key: string;
   project_id?: UUID;
+  goal_id?: UUID | null;
   title: string;
   description?: string | null;
   status: string;

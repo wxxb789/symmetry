@@ -247,36 +247,14 @@ test.describe("Goal 2 feature acceptance", () => {
     await closeDetails.press("Enter");
     await expect(attention).toBeFocused();
 
-    const activityTitle = `Keyboard activity ${project.key}`;
-    await createWorkItem(page, {
-      title: activityTitle,
-      description: "Open Activity details from a durable queued run.",
-      status: "ready",
-      priority: "medium",
-      assignee_type: "agent",
-      agent_profile: "codex",
-      workspace: "acceptance"
-    });
-    await page.locator(".work-card", { hasText: activityTitle }).click();
-    await page.getByRole("button", { name: "Start run" }).click();
-    await closeDetails.click();
-    await page.getByRole("link", { name: "Activity" }).click();
-    const activity = page.locator("[data-work-item-id]", { hasText: activityTitle });
-    await expect(activity.locator("time")).toHaveAttribute("datetime", /.+/);
-    await expect(activity).toContainText(/Queued for|Elapsed|Duration/);
-    await activity.focus();
-    await activity.press("Enter");
-    await expect(closeDetails).toBeFocused();
-    await closeDetails.press("Enter");
-    await expect(activity).toBeFocused();
-
-    await activity.press("Enter");
-    await page.getByRole("button", { name: "Cancel run" }).click();
-    await expect(page.locator("#detail-content")).toContainText("Cancelled");
-    // The owner-reassignment edit that used to follow the cancel, and its
-    // no-Retry / "Execution stopped" assertions, are retired with the classic
-    // planning dialogs; the planning suite and 0007f cover those states.
-    await closeDetails.click();
+    // The classic work-detail execution control walk (queued run with a live
+    // timer, Cancel run -> Cancelled, Retry availability and retry hidden after
+    // reassignment, the Activity row's "Execution stopped") is retired here:
+    // the start/cancel/retry flow, its rendered state and its server-side
+    // gating now run on /portal/work/:workItemId in
+    // portal-execution-control.spec.mjs and, against a live daemon, in
+    // portal-live-daemon.spec.mjs. The reassignment edit path itself remains
+    // classic-owned editing coverage (goal 0007c) and is not migrated here.
 
     const dimensions = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,
@@ -300,92 +278,17 @@ test.describe("Goal 2 concurrency", () => {
   // it makes no real-history claim) and by the separate mandatory real-cursor
   // case in portal-live-daemon.spec.mjs.
 
-  test("background refresh preserves drawer input, focus, and expanded raw history", async ({ page }) => {
-    const project = uniqueProject("RF");
-    const title = `Refresh-safe detail ${project.key}`;
-    await login(page);
-    await createProject(page, project);
-    await createWorkItem(page, {
-      title,
-      description: "Keep local drawer interaction state across polling.",
-      status: "ready",
-      priority: "medium",
-      assignee_type: "unassigned"
-    });
-
-    const item = (await selectedProject(page)).work_items.find((candidate) => candidate.title === title);
-    let detailRequests = 0;
-
-    await page.route(`**/portal/api/work-items/${item.id}/timeline?before=*`, async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          items: [{
-            source: "event",
-            run_id: "00000000-0000-0000-0000-000000000201",
-            generation: 1,
-            recorded_at: "2026-09-04T08:00:00Z",
-            data: { event_id: "00000000-0000-0000-0000-000000000202", kind: "progress", payload: { message: "older-marker" } }
-          }],
-          next_before: null
-        })
-      });
-    });
-
-    await page.route(`**/portal/api/work-items/${item.id}`, async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      detailRequests += 1;
-      body.work_item.execution = {
-        task_id: "00000000-0000-0000-0000-000000000203",
-        run_id: "00000000-0000-0000-0000-000000000201",
-        runtime_id: null,
-        generation: 1,
-        state: "waiting_for_input",
-        waiting: {
-          run_id: "00000000-0000-0000-0000-000000000201",
-          generation: 1,
-          transition_id: "00000000-0000-0000-0000-000000000204",
-          question: "Choose a deployment target",
-          payload: {},
-          recorded_at: "2026-09-04T08:00:00Z"
-        },
-        latest_command: null,
-        result: null,
-        failure: null,
-        timing: { state_since: "2026-09-04T08:00:00Z", started_at: "2026-09-04T07:59:00Z", finished_at: null },
-        can_cancel: true,
-        can_retry: false,
-        intent_locked: true
-      };
-      body.raw.timeline = [{
-        source: "event",
-        run_id: "00000000-0000-0000-0000-000000000201",
-        generation: 1,
-        recorded_at: "2026-09-04T08:01:00Z",
-        data: { event_id: "00000000-0000-0000-0000-000000000205", kind: "waiting_for_input", payload: { question: "Choose a deployment target" } }
-      }];
-      body.raw.next_before = "older-cursor";
-      await route.fulfill({ response, json: body });
-    });
-
-    await page.locator(".work-card", { hasText: title }).click();
-    const answer = page.getByLabel("Response");
-    await answer.fill("staging-blue");
-    await page.locator("details.raw-details summary").click();
-    await page.getByRole("button", { name: "Load older" }).click();
-    await expect(page.locator("#raw-execution-data")).toContainText("older-marker");
-    await answer.focus();
-    await answer.evaluate((input) => input.setSelectionRange(7, 7));
-
-    await expect.poll(() => detailRequests, { timeout: 8_000 }).toBeGreaterThan(1);
-    await expect(answer).toHaveValue("staging-blue");
-    await expect(answer).toBeFocused();
-    expect(await answer.evaluate((input) => input.selectionStart)).toBe(7);
-    await expect(page.locator("details.raw-details")).toHaveAttribute("open", "");
-    await expect(page.locator("#raw-execution-data")).toContainText("older-marker");
-  });
+  // The classic "background refresh preserves drawer input, focus, and expanded
+  // raw history" case is retired here. Its migratable half — a waiting-input
+  // draft, its caret and focus surviving a background refresh — now runs on
+  // /portal/work/:workItemId in portal-execution-control.spec.mjs, against the
+  // served waiting state rather than a classic drawer mock. The classic
+  // raw-execution expander has no equivalent on the new surface: execution
+  // history pagination is covered by portal-work-views.spec.mjs (older page,
+  // error and retry) and by the real daemon cursor case in
+  // portal-live-daemon.spec.mjs, so no assertion was migrated into a new
+  // expander that the fixed design does not define. The classic editing path
+  // (owner reassignment, dialogs) stays classic-owned under goal 0007c.
 
   // The classic "a delayed workspace response cannot replace the latest
   // project" race is retired here; portal-work-views.spec.mjs holds a real

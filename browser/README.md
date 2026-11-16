@@ -6,6 +6,18 @@ resource and control flows and fixture semantics at `/portal/classic` (its
 classic resource binding, synchronization and assignment checks moved to the
 new-route resource flows in `tests/portal-connections.spec.mjs`, 0007e); project
 and work-item planning moved to the planning suite below (0007c).
+The 0007f execution-control and runtime checks that the new
+`/portal/work/:workItemId` and `/portal/runtimes` surfaces replace — the
+classic work-detail control walk (queued run with a live timer, Cancel run ->
+Cancelled, Retry availability, retry hidden after reassignment) and the classic
+drawer draft/focus refresh case — are retired from the classic suite and
+covered by `tests/portal-execution-control.spec.mjs` (real API, no daemon),
+`tests/portal-goal-managed.spec.mjs` (Goal-managed items present no legacy
+control path) and `tests/portal-live-daemon.spec.mjs` (real daemons). The
+migratable half of the classic draft/focus case moved; the classic
+raw-execution expander has no equivalent on the new surface and is recorded as
+retired, not migrated, in the goal receipt. The classic Resources view and its
+registered-runtime reference selection stay classic-owned under goal 0007e.
 The 0007b list, board, detail and history read checks that the new
 `/portal/projects/:projectId` and `/portal/work/:workItemId` surfaces replace -
 including the classic detail-security probe and the delayed-detail,
@@ -41,13 +53,21 @@ The focused release-shell gate (also what CI runs against the release) is:
 ```sh
 SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
 mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test \
-  tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs
+  tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs \
+  tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs
 ```
 
 It renders desktop/mobile navigation, keyboard focus, loading, empty, network
 error, signed-out, deep-link and refresh/history states, with screenshots and
 observation JSON in each test output directory. Loading holds a real request;
 network errors abort it. It does not substitute JSON or run a mock backend.
+On the same release it also drives the execution-control surface end to end:
+start, a live queued state, cancel, the server-gated retry control, a rejection
+answered by the real server, an in-flight request held past the rendered receipt
+(never rendered as applied) and a refused control request rendered as an unknown
+outcome with the same attempt replayed once; plus the Goal-managed detail, which
+replays a captured real detail response with the served `goal_id` folded in and
+proves no legacy run/retry/move path or control is rendered for it.
 The expiry URL must serve the same release and fixture database with
 `SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2`; without it the true-TTL expiry cases
 are explicitly skipped, not passed. The focused suite also checks Attention
@@ -57,8 +77,9 @@ plus logout after another shared-cookie tab renews its
 session. CI starts both release instances and saves the render report.
 Fixture-only project/work/resource creation uses the existing
 authenticated APIs; the React shell's own mutation surfaces are connection
-management at `/portal/connections` and project/work-item planning on the
-project and work-item surfaces (both covered below).
+management at `/portal/connections`, project/work-item planning on the project
+and work-item surfaces (both covered below), and the work-detail execution
+controls added by goal 0007f.
 The shared-cookie CSRF case sends an explicit `visibilitychange` notification:
 The 0007a host kept its Playwright documents visible even after native window
 minimization.
@@ -347,18 +368,20 @@ pwsh -NoProfile -File .\browser\scripts\run-live-daemon-tests.ps1
 ```
 
 The runner builds isolated daemon and fake-agent binaries, starts unique
-wait/cancel/retry/history runtimes, runs the browser scenarios on both Chromium
-projects, and stops every fixture process. The tests verify durable input,
-process cancellation, failed-to-successful retry across generations, semantic
-delivery evidence, Activity state, and raw-history pagination through `Load
-older`. The lifecycle matrix runs once at desktop width; the real cursor
-scenario on `/portal/work/:workItemId` runs at desktop and narrow (Pixel 7)
-widths with fresh isolated fixtures in each project, so its full-page
-`work-history-pagination` capture and observation JSON exist at both widths.
-That scenario also holds a failing older-history page to prove it stays on its
-own surface while a newer detail is selected. This runner is the only executor
-of that real-cursor race; the CI browser gate runs against a release with no
-daemon and therefore cannot produce a real history cursor.
+wait/retry/cancel/history/race runtimes plus one runtime bound to an installed
+real harness adapter, runs the browser scenarios on both Chromium projects, and
+stops every fixture process. The tests verify durable input, process
+cancellation, failed-to-successful retry across generations, semantic delivery
+evidence, a cancel/completion race, a lost response replayed with the same
+attempt identity, the runtime row compared with the daemon's own registration
+payload, and raw-history pagination through `Load older`. The waiting-input and
+retry lifecycle and the real cursor scenario run at desktop and narrow (Pixel 7)
+widths with fresh isolated fixtures in each project, so each flow and the
+full-page `work-history-pagination` capture and observation JSON exist at both
+widths; the race, lost-response and capability cases run at desktop width and
+skip narrow inside the spec. This runner is the only executor of that
+real-cursor race; the CI browser gate runs against a release with no daemon and
+therefore cannot produce a real history cursor.
 The runner prints the log folder, the screenshots/observation-JSON folder
 (`SYMMETRY_PLAYWRIGHT_OUTPUT`, defaulting to a per-run folder and left untouched
 when already set) and the HTML report path (`PLAYWRIGHT_HTML_OUTPUT_DIR` when

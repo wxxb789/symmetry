@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useMatch, useNavigate, useRouteContext, useRouterState } from "@tanstack/react-router";
-import { Cable, Command, Folder, Inbox, LogOut, Menu, Search, X } from "lucide-react";
+import { Cable, Command, Folder, Inbox, LogOut, Menu, MonitorCog, Search, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { errorMessage } from "../services/api";
 import { ErrorState, LoadingState } from "../components/workspace";
@@ -22,7 +22,8 @@ function useProjectScope() {
   const servedWork = useQuery({ ...workDetailOptions(application.api, workScope?.workItemId ?? ""), enabled: workScope !== undefined });
   const searchProjectId = useMatch({ from: "/attention", shouldThrow: false, select: (match) => match.search.projectId });
   const connectionsProjectId = useMatch({ from: "/connections", shouldThrow: false, select: (match) => match.search.projectId });
-  return projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId ?? connectionsProjectId;
+  const runtimesProjectId = useMatch({ from: "/runtimes", shouldThrow: false, select: (match) => match.search.projectId });
+  return projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId ?? connectionsProjectId ?? runtimesProjectId;
 }
 
 function useProjectDirectory() {
@@ -39,6 +40,7 @@ function NavigationLinks({ onNavigate }: { onNavigate?: () => void }) {
     <Link to="/attention" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Inbox size={18} aria-hidden="true" />Attention</Link>
     <Link to="/projects" onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Folder size={18} aria-hidden="true" />Projects</Link>
     <Link to="/connections" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Cable size={18} aria-hidden="true" />Connections</Link>
+    <Link to="/runtimes" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><MonitorCog size={18} aria-hidden="true" />Runtimes</Link>
   </nav>;
 }
 
@@ -108,8 +110,9 @@ function CommandPalette() {
           {(!filter || "attention".includes(filter)) && <Link className="command-result" to="/attention" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><Inbox size={18} aria-hidden="true" />Attention</Link>}
           {(!filter || "projects".includes(filter)) && <Link className="command-result" to="/projects" onClick={closeForNavigation}><Folder size={18} aria-hidden="true" />All projects</Link>}
           {(!filter || "connections".includes(filter)) && <Link className="command-result" to="/connections" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><Cable size={18} aria-hidden="true" />Connections</Link>}
+          {(!filter || "runtimes".includes(filter)) && <Link className="command-result" to="/runtimes" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><MonitorCog size={18} aria-hidden="true" />Runtimes</Link>}
           {projects.map((project) => <Link className="command-result" key={project.id} to="/projects/$projectId" params={{ projectId: project.id }} onClick={closeForNavigation}><Folder size={18} aria-hidden="true" /><span>{project.name}<span className="item-key"> {project.key}</span></span></Link>)}
-          {filter && projects.length === 0 && !"attention".includes(filter) && !"projects".includes(filter) && !"connections".includes(filter) && <p className="muted" role="status">No matching destinations.</p>}
+          {filter && projects.length === 0 && !"attention".includes(filter) && !"projects".includes(filter) && !"connections".includes(filter) && !"runtimes".includes(filter) && <p className="muted" role="status">No matching destinations.</p>}
           {query.isError && <p className="muted">Project search is unavailable. You can still navigate to Attention or Projects.</p>}
         </div>
       </Dialog.Content>
@@ -158,10 +161,10 @@ export function WorkspaceRoot() {
   return <>
     <a className="skip-link" href="#content-heading">Skip to content</a>
     <div className="workspace-shell">
-      <aside className="sidebar"><Link className="brand" to="/attention" search={{}}><span className="brand-mark" aria-hidden="true">S</span>Symmetry</Link><p className="sidebar-label">Workspace</p><NavigationLinks /><div className="sidebar-footer"><span className="state-dot" aria-hidden="true" />State applied by the server</div></aside>
+      <aside className="sidebar"><Link className="brand" to="/attention" search={{}}><span className="brand-mark" aria-hidden="true">S</span>Symmetry</Link><p className="sidebar-label">Workspace</p><NavigationLinks /><div className="sidebar-footer"><span className="state-dot" aria-hidden="true" />Reads and execution control; applied state comes from the server</div></aside>
       <div className="workspace-body"><header className="topbar"><div className="topbar-start"><MobileNavigation /><ProjectPicker /></div><div className="topbar-actions"><CommandPalette /><LogoutForm application={application} cachedToken={csrf ?? ""} /></div></header>
         <main id="main-content" className="workspace-content"><SessionTokenProvider token={csrf ?? ""}><Outlet /></SessionTokenProvider></main>
-        <footer className="content-footer">Reads and applied changes come from the server; a refused change shows the server's current state. <a href="/portal/classic">Classic workspace</a></footer>
+        <footer className="content-footer">Reads and applied changes come from the server; a refused change shows the server's current state. Work detail carries the execution controls this shell dispatches; guidance and pause are dispatched from Chat. <a href="/portal/classic">Classic workspace</a></footer>
       </div>
     </div>
   </>;

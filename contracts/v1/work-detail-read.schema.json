@@ -22,6 +22,7 @@
         "id": {"$ref": "common.schema.json#/definitions/UUID"},
         "key": {"type": "string"},
         "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "goal_id": {"oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]},
         "title": {"type": "string"},
         "description": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "status": {"type": "string"},

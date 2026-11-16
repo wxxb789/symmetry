@@ -3,6 +3,8 @@
 export type UUID = string;
 export type UtcTimestamp = string;
 export type Revision = number;
+export type ShortIdentifier = string;
+export type PositiveInteger = number;
 
 /**
  * Consumed fields of the existing PortalJSON.workspace read projection. Unconsumed presentation fields remain additive.
@@ -11,6 +13,7 @@ export interface SymmetryWorkspaceReadV1 {
   selected_project_id: UUID | null;
   projects: WorkspaceProject[];
   registered_runtimes?: RegisteredRuntime[];
+  runtimes?: RuntimeSnapshot[];
   [k: string]: unknown | undefined;
 }
 export interface WorkspaceProject {
@@ -67,6 +70,7 @@ export interface WorkspaceWorkItem {
   id: UUID;
   key: string;
   project_id?: UUID;
+  goal_id?: UUID | null;
   title: string;
   description?: string | null;
   status: string;
@@ -235,5 +239,67 @@ export interface RegisteredRuntime {
   runtime_name?: string;
   agent_profile?: string | null;
   workspace?: string | null;
+  [k: string]: unknown | undefined;
+}
+/**
+ * Protocol.runtime/1 as served in the workspace runtimes arrays: the runtime's own advertised record with its harness identity, repository affinity, capability map and current runs. Only the identity fields and the capability map are required, because a runtime row keeps accepting older partial projections, while a production server serves every member.
+ */
+export interface RuntimeSnapshot {
+  machine_id: UUID;
+  machine_name: string;
+  runtime_id: UUID;
+  runtime_key: string;
+  runtime_name: string;
+  status: string;
+  last_heartbeat_at?: string | null;
+  connection_epoch?: number;
+  capacity?: number;
+  reserved_capacity?: number;
+  agent_profile?: string;
+  workspace?: string;
+  repository_resource_id?: UUID | null;
+  capabilities: RuntimeCapabilities;
+  active_runs?: RuntimeActiveRun[];
+  [k: string]: unknown | undefined;
+}
+/**
+ * Protocol.runtime/1's registered capability map served verbatim. An adapter-capable registration carries the common Adapter declaration and its per-operation support entries; a legacy registration without adapter metadata serves only the boolean subset, so every member stays optional.
+ */
+export interface RuntimeCapabilities {
+  adapter?: Adapter;
+  structured_input?: boolean;
+  provider_access?: boolean;
+  interactive?: boolean;
+  supervisory_control?: boolean;
+  [k: string]: unknown | undefined;
+}
+export interface Adapter {
+  kind: ShortIdentifier;
+  native_version: ShortIdentifier;
+  implementation_version: ShortIdentifier;
+  protocol_version: PositiveInteger;
+  operations: AdapterOperations;
+}
+export interface AdapterOperations {
+  start: boolean;
+  events: boolean;
+  cancel: boolean;
+  resume: boolean;
+  handoff: boolean;
+  guidance: "native_steer" | "next_turn" | "unsupported";
+  pause: "safe_boundary" | "unsupported";
+  approval_response: boolean;
+  usage: "reported" | "estimated" | "unknown";
+  hard_cost_limit: boolean;
+}
+/**
+ * Protocol.runtime/1's active-run projection: the run identity and recorded state that currently occupy the runtime's capacity.
+ */
+export interface RuntimeActiveRun {
+  run_id: UUID;
+  task_id: UUID;
+  generation: number;
+  state: string;
+  recorded_at: string;
   [k: string]: unknown | undefined;
 }

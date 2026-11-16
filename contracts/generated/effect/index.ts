@@ -628,6 +628,7 @@ export const DefinitionWorkspaceWorkItemGraph = S.suspend(() => withObjectProper
   "description": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "execution": S.optionalWith(exactOneOf(S.Union(DefinitionWorkItemExecutionGraph, S.Null), DefinitionWorkItemExecutionGraph, S.Null), { exact: true }),
   "external": S.optionalWith(exactOneOf(S.Union(DefinitionWorkItemExternalGraph, S.Null), DefinitionWorkItemExternalGraph, S.Null), { exact: true }),
+  "goal_id": S.optionalWith(exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null), { exact: true }),
   "goal_managed": S.optionalWith(S.Boolean, { exact: true }),
   "id": DefinitionUUIDGraph,
   "key": stringConstraints(S.String, undefined, undefined, undefined),
@@ -894,6 +895,40 @@ export const DefinitionRegisteredRuntimeGraph = S.suspend(() => withObjectProper
   "runtime_id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
   "runtime_name": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
   "workspace": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
+})), undefined, undefined));
+
+export const DefinitionRuntimeSnapshotGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "active_runs": S.optionalWith(arrayConstraints(S.Array(DefinitionRuntimeActiveRunGraph), undefined, undefined, undefined), { exact: true }),
+  "agent_profile": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "capabilities": DefinitionRuntimeCapabilitiesGraph,
+  "capacity": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
+  "connection_epoch": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
+  "last_heartbeat_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), { exact: true }),
+  "machine_id": DefinitionUUIDGraph,
+  "machine_name": stringConstraints(S.String, undefined, undefined, undefined),
+  "repository_resource_id": S.optionalWith(exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null), { exact: true }),
+  "reserved_capacity": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
+  "runtime_id": DefinitionUUIDGraph,
+  "runtime_key": stringConstraints(S.String, undefined, undefined, undefined),
+  "runtime_name": stringConstraints(S.String, undefined, undefined, undefined),
+  "status": stringConstraints(S.String, undefined, undefined, undefined),
+  "workspace": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true })
+})), undefined, undefined));
+
+export const DefinitionRuntimeCapabilitiesGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "adapter": S.optionalWith(DefinitionAdapterGraph, { exact: true }),
+  "interactive": S.optionalWith(S.Boolean, { exact: true }),
+  "provider_access": S.optionalWith(S.Boolean, { exact: true }),
+  "structured_input": S.optionalWith(S.Boolean, { exact: true }),
+  "supervisory_control": S.optionalWith(S.Boolean, { exact: true })
+})), undefined, undefined));
+
+export const DefinitionRuntimeActiveRunGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "generation": numberConstraints(S.Int, undefined, undefined),
+  "recorded_at": stringConstraints(S.String, undefined, undefined, "date-time"),
+  "run_id": DefinitionUUIDGraph,
+  "state": stringConstraints(S.String, undefined, undefined, undefined),
+  "task_id": DefinitionUUIDGraph
 })), undefined, undefined));
 
 export const AdapterCapabilitiesGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
@@ -1841,6 +1876,7 @@ export const WorkTimelineReadSchema: S.Schema<SymmetryWorkTimelineReadV1, unknow
 export const WorkspaceReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "projects": arrayConstraints(S.Array(DefinitionWorkspaceProjectGraph), undefined, undefined, undefined),
   "registered_runtimes": S.optionalWith(arrayConstraints(S.Array(DefinitionRegisteredRuntimeGraph), undefined, undefined, undefined), { exact: true }),
+  "runtimes": S.optionalWith(arrayConstraints(S.Array(DefinitionRuntimeSnapshotGraph), undefined, undefined, undefined), { exact: true }),
   "selected_project_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null)
 })), undefined, undefined));
 
