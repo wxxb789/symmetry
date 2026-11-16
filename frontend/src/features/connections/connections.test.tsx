@@ -10,6 +10,10 @@ import { createAppRouter } from "../../app/router";
 const connectionId = "20000000-0000-4000-8000-000000000001";
 const projectId = "10000000-0000-4000-8000-000000000001";
 const resourceId = "30000000-0000-4000-8000-000000000001";
+const secondProjectId = "10000000-0000-4000-8000-000000000002";
+const secondConnectionId = "20000000-0000-4000-8000-000000000002";
+const alphaId = "30000000-0000-4000-8000-00000000000a";
+const betaId = "30000000-0000-4000-8000-00000000000b";
 
 const providers = [
   { id: "github", auth_type: "gh_cli", capabilities: ["repositories", "work_items", "changes", "ci"] },
@@ -54,11 +58,49 @@ function connection(overrides: Partial<Connection> = {}): Connection {
   };
 }
 
+interface ProjectFixture { id: string; key: string; name: string; description: string | null; status: string; work_items: unknown[]; resources: Record<string, unknown>[] }
+interface RuntimeFixture { runtime_id: string; runtime_name: string; agent_profile: string | null; workspace: string | null }
+
+function projectFixture(overrides: Partial<ProjectFixture> = {}): ProjectFixture {
+  return { id: projectId, key: "EXT", name: "Connected engineering", description: null, status: "active", work_items: [], resources: [], ...overrides };
+}
+
+// PortalJSON.resource/1 as served inside a project row.
+function resourceFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: alphaId,
+    project_id: projectId,
+    connection_id: connectionId,
+    kind: "repository",
+    name: "checkout service",
+    provider: "github",
+    external_ref: "acme/checkout",
+    url: "https://github.com/acme/checkout",
+    status: "healthy",
+    sync_status: "synced",
+    status_message: null,
+    metadata: {},
+    last_checked_at: "2026-11-16T08:30:00.000000Z",
+    last_synced_at: "2026-11-16T08:31:00.000000Z",
+    version: 4,
+    ...overrides,
+  };
+}
+
+const optionLabels = (select: HTMLElement) => within(select).getAllByRole("option").map((option) => option.textContent);
+
+function resourceRow(name: string) {
+  const row = screen.getByRole("heading", { level: 3, name }).closest("li");
+  if (row === null) throw new Error(`no resource row for ${name}`);
+  return within(row);
+}
+
 interface Harness {
   application: Application;
   requests: Array<{ method: string; path: string; body: unknown }>;
   history: RouterHistory;
   setConnections: (value: Connection[]) => void;
+  setProjects: (value: ProjectFixture[]) => void;
   failReads: (response: () => Response) => void;
   gateReads: (gate: Promise<void> | null) => void;
 }
@@ -72,9 +114,11 @@ afterEach(() => {
 function renderConnections(
   handler: (request: { method: string; path: string; body: unknown; url: URL }) => Response | Promise<Response>,
   path = "/portal/connections",
-  options: { deferReads?: Promise<void> } = {},
+  options: { deferReads?: Promise<void>; connections?: Connection[]; projects?: ProjectFixture[]; registeredRuntimes?: RuntimeFixture[] } = {},
 ) {
-  let current: Connection[] = [connection()];
+  let current: Connection[] = options.connections ?? [connection()];
+  let projects = options.projects ?? [];
+  const registeredRuntimes = options.registeredRuntimes ?? [];
   let readFailure: (() => Response) | null = null;
   let readGate: Promise<void> | null = options.deferReads ?? null;
   const requests: Harness["requests"] = [];
@@ -92,7 +136,14 @@ function renderConnections(
       return new Response(JSON.stringify({ providers, connections: current }));
     }
     if (method === "GET" && url.pathname === "/portal/api/workspace") {
-      return new Response(JSON.stringify({ selected_project_id: projectId, projects: [] }));
+      // The server serves the project directory plus the selected project's
+      // resources only, so a switch cannot render the previous project's rows.
+      const selected = url.searchParams.get("project_id") ?? projectId;
+      return new Response(JSON.stringify({
+        selected_project_id: selected,
+        projects: projects.map((project) => ({ ...project, resources: project.id === selected ? project.resources : [] })),
+        registered_runtimes: registeredRuntimes,
+      }));
     }
     return handler({ method, path: url.pathname + url.search, body, url });
   });
@@ -106,6 +157,7 @@ function renderConnections(
     requests,
     history,
     setConnections: (value: Connection[]) => { current = value; },
+    setProjects: (value: ProjectFixture[]) => { projects = value; },
     failReads: (response: () => Response) => { readFailure = response; },
     gateReads: (gate: Promise<void> | null) => { readGate = gate; },
   };
@@ -882,5 +934,408 @@ describe("connection management", () => {
     await user.click(screen.getByRole("button", { name: "Connect" }));
     expect(await screen.findByText(/already applied; the server returned the existing connection/)).toBeVisible();
     expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+  });
+});
+
+describe("project resources", () => {
+  it("offers only the connections that grant a kind's capability and submits the served bind payload", async () => {
+    const boards = connection({ id: secondConnectionId, provider: "azure_devops", name: "Azure Boards", account_ref: "acme", capabilities: ["work_items"] });
+    const harness = renderConnections(({ method }) => {
+      if (method !== "POST") return refusal(404, "not_found", "unexpected request");
+      return new Response(JSON.stringify({ resource: resourceFixture({ name: "checkout service", version: 1 }) }), { status: 201 });
+    }, "/portal/connections", { connections: [connection(), boards], projects: [projectFixture()] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Bind resource" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
+    const connectionSelect = dialog.getByLabelText("Provider connection");
+    expect(dialog.getByLabelText("Type")).toHaveValue("repository");
+    expect(optionLabels(connectionSelect)).toEqual(["GitHub engineering"]);
+    await user.selectOptions(dialog.getByLabelText("Type"), "work_tracking");
+    expect(optionLabels(connectionSelect)).toEqual(["GitHub engineering", "Azure Boards"]);
+    await user.selectOptions(dialog.getByLabelText("Type"), "ci");
+    expect(optionLabels(connectionSelect)).toEqual(["GitHub engineering"]);
+    await user.selectOptions(dialog.getByLabelText("Type"), "repository");
+    await user.type(dialog.getByLabelText("Name"), "checkout service");
+    await user.type(dialog.getByLabelText("Reference"), "acme/checkout");
+    await user.click(dialog.getByRole("button", { name: "Bind" }));
+    await waitFor(() => expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1));
+    expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
+    expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
+      kind: "repository", connection_id: connectionId, name: "checkout service", external_ref: "acme/checkout",
+    });
+    expect(await screen.findByText("Resource attached — checkout service.")).toBeVisible();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull());
+    // The bind's pending counts released with its settle: the surface accepts
+    // the next write instead of staying locked.
+    expect(screen.getByRole("button", { name: "Bind resource" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Synchronize project" })).toBeEnabled();
+  });
+
+  it("takes a local resource's reference from the workspace's registered runtimes", async () => {
+    const harness = renderConnections(({ method }) => method === "POST"
+      ? new Response(JSON.stringify({ resource: resourceFixture({ kind: "runtime", name: "review runner" }) }), { status: 201 })
+      : refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+      projects: [projectFixture()],
+      registeredRuntimes: [
+        { runtime_id: "runtime-1", runtime_name: "builder-a", agent_profile: "oss-default", workspace: "/work/alpha" },
+        { runtime_id: "runtime-2", runtime_name: "builder-b", agent_profile: "review", workspace: "/work/beta" },
+      ],
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Bind resource" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
+    await user.selectOptions(dialog.getByLabelText("Type"), "agent");
+    // A local kind needs no connection, and its reference is a registered profile.
+    expect(dialog.getByLabelText("Provider connection")).toBeDisabled();
+    expect(optionLabels(dialog.getByLabelText("Reference"))).toEqual([
+      "builder-a · oss-default · /work/alpha",
+      "builder-b · review · /work/beta",
+    ]);
+    expect(dialog.getByLabelText("Reference")).toHaveValue("oss-default");
+    await user.selectOptions(dialog.getByLabelText("Type"), "runtime");
+    // The runtime kind's reference is the registered runtime id.
+    expect(optionLabels(dialog.getByLabelText("Reference"))).toEqual([
+      "builder-a · oss-default · /work/alpha",
+      "builder-b · review · /work/beta",
+    ]);
+    expect(dialog.getByLabelText("Reference")).toHaveValue("runtime-1");
+    await user.selectOptions(dialog.getByLabelText("Reference"), "runtime-2");
+    expect(dialog.getByLabelText("Reference")).toHaveValue("runtime-2");
+    await user.type(dialog.getByLabelText("Name"), "review runner");
+    await user.click(dialog.getByRole("button", { name: "Bind" }));
+    await waitFor(() => expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1));
+    expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
+      kind: "runtime", connection_id: null, name: "review runner", external_ref: "runtime-2",
+    });
+  });
+
+  it("offers no connection for a kind whose capability no connection grants", async () => {
+    const boards = connection({ id: secondConnectionId, provider: "azure_devops", name: "Azure Boards", account_ref: "acme", capabilities: ["work_items"] });
+    renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", { connections: [boards], projects: [projectFixture()] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Bind resource" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
+    expect(optionLabels(dialog.getByLabelText("Type"))).toEqual(["Repository", "Work tracking", "CI", "Agent", "Runtime"]);
+    expect(optionLabels(dialog.getByLabelText("Provider connection"))).toEqual(["No connection grants the required capability"]);
+    expect(dialog.getByRole("button", { name: "Bind" })).toBeDisabled();
+    await user.selectOptions(dialog.getByLabelText("Type"), "work_tracking");
+    expect(optionLabels(dialog.getByLabelText("Provider connection"))).toEqual(["Azure Boards"]);
+    expect(dialog.getByRole("button", { name: "Bind" })).toBeEnabled();
+  });
+
+  it("renders the served resource state, including a failed sync and an unknown kind", async () => {
+    renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+      projects: [projectFixture({
+        resources: [
+          resourceFixture(),
+          resourceFixture({
+            id: betaId, kind: "work_tracking", name: "engineering issues", external_ref: "acme", url: null,
+            status: "degraded", sync_status: "failed", status_message: "Provider returned HTTP 500",
+            last_synced_at: "2026-11-15T07:00:00.000000Z", version: 5,
+          }),
+          resourceFixture({
+            id: "30000000-0000-4000-8000-00000000000c", kind: "future_kind", name: "future thing",
+            connection_id: null, provider: null, external_ref: null, url: null,
+            status: "unknown", sync_status: "unknown", status_message: null, last_synced_at: null, version: 1,
+          }),
+        ],
+      })],
+    });
+    expect(await screen.findByRole("heading", { name: "Project resources" })).toBeVisible();
+    const section = within(screen.getByRole("region", { name: "Project resources" }));
+    // The heading renders while the project read is still in flight: wait for
+    // the served project before reading its count and rows.
+    await section.findByText(/Showing Connected engineering/);
+    expect(section.getByText("3")).toBeVisible();
+
+    const synced = resourceRow("checkout service");
+    expect(synced.getByText("Repository")).toBeVisible();
+    expect(synced.getByText("GitHub engineering · acme/checkout")).toBeVisible();
+    expect(synced.getByRole("link", { name: "https://github.com/acme/checkout" })).toBeVisible();
+    expect(synced.getByText("Healthy")).toBeVisible();
+    expect(synced.getByText("Synced")).toBeVisible();
+    expect(synced.getByText("Last synced 2026-11-16T08:31:00.000000Z")).toBeVisible();
+
+    const failed = resourceRow("engineering issues");
+    expect(failed.getByText("Work tracking")).toBeVisible();
+    expect(failed.getByText("Degraded")).toBeVisible();
+    expect(failed.getByText("Failed")).toBeVisible();
+    expect(failed.getByText("Provider returned HTTP 500")).toBeVisible();
+    expect(failed.getByText("Last synced 2026-11-15T07:00:00.000000Z")).toBeVisible();
+    expect(failed.queryByText("Synced")).toBeNull();
+
+    const unknown = resourceRow("future thing");
+    expect(unknown.getByText("Unknown kind: future_kind")).toBeVisible();
+    expect(unknown.getByText("Local resource · No external reference")).toBeVisible();
+    expect(unknown.getByText("Never synced")).toBeVisible();
+    expect(unknown.getAllByText("Unknown")).toHaveLength(2);
+  });
+
+  it("renders a refused sync with the server's code and next step and never as synchronized", async () => {
+    const target = resourceFixture({
+      id: betaId, kind: "work_tracking", name: "engineering issues", connection_id: null, external_ref: "acme",
+      url: null, status: "unknown", sync_status: "unknown", last_synced_at: null, version: 5,
+    });
+    const harness = renderConnections(({ method, path }) => {
+      if (method !== "POST" || !path.endsWith("/sync")) return refusal(404, "not_found", "unexpected request");
+      harness.setProjects([projectFixture({ resources: [{ ...target, status: "degraded", sync_status: "failed", status_message: "Resource has no external connection" }] })]);
+      return refusal(409, "not_connected", "resource has no external connection");
+    }, "/portal/connections", { projects: [projectFixture({ resources: [target] })] });
+    const user = userEvent.setup();
+    const reads = harness.requests.filter((request) => request.path === "/portal/api/workspace").length;
+    await user.click(await screen.findByRole("button", { name: "Sync engineering issues" }));
+    expect(await screen.findByText(/resource has no external connection \(not_connected\)/)).toBeVisible();
+    expect(screen.getByText(/Bind the resource to a connection first\./)).toBeVisible();
+    const row = resourceRow("engineering issues");
+    expect(await row.findByText("Failed")).toBeVisible();
+    expect(row.getByText("Resource has no external connection")).toBeVisible();
+    expect(row.getByText("Never synced")).toBeVisible();
+    expect(row.queryByText("Synced")).toBeNull();
+    await waitFor(() => expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads));
+  });
+
+  it("keeps a failed provider read explicit and never renders it as synchronized", async () => {
+    const failed = resourceFixture({ status: "degraded", sync_status: "failed", status_message: "Provider returned HTTP 500", version: 5 });
+    const harness = renderConnections(({ method, path }) => {
+      if (method !== "POST" || !path.endsWith("/sync")) return refusal(404, "not_found", "unexpected request");
+      harness.setProjects([projectFixture({ resources: [failed] })]);
+      return refusal(502, "provider_failure", "external provider request failed", null, { resource: failed });
+    }, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Sync checkout service" }));
+    expect(await screen.findByText(/external provider request failed \(provider_failure\)/)).toBeVisible();
+    expect(screen.getByText(/Check provider availability/)).toBeVisible();
+    const row = resourceRow("checkout service");
+    expect(await row.findByText("Degraded")).toBeVisible();
+    expect(row.getByText("Failed")).toBeVisible();
+    expect(row.getByText("Provider returned HTTP 500")).toBeVisible();
+    // The served freshness stays whatever the server holds: the failure must
+    // not carry the previously synchronized timestamp into a synchronized look.
+    expect(row.getByText("Last synced 2026-11-16T08:31:00.000000Z")).toBeVisible();
+    expect(row.queryByText("Synced")).toBeNull();
+  });
+
+  it("reports the project sync count from the served receipt", async () => {
+    const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
+      ? new Response(JSON.stringify({ synced_resource_ids: [alphaId, betaId] }))
+      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Synchronize project" }));
+    expect(await screen.findByText("Project resources synchronized: 2 resources updated.")).toBeVisible();
+    expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/sync`);
+  });
+
+  it("renders an aggregate project sync failure with the server's code and re-reads the project", async () => {
+    const harness = renderConnections(({ method, path }) => {
+      if (method !== "POST" || !path.endsWith("/sync")) return refusal(404, "not_found", "unexpected request");
+      return refusal(502, "provider_failure", "external provider request failed", null, {
+        causes: [{ code: "provider_failure", message: "external provider request failed", count: 1 }],
+        results: [{ resource_id: alphaId, status: "failed", error: { code: "provider_failure", message: "external provider request failed" } }],
+      });
+    }, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    const user = userEvent.setup();
+    const reads = harness.requests.filter((request) => request.path === "/portal/api/workspace").length;
+    await user.click(await screen.findByRole("button", { name: "Synchronize project" }));
+    expect(await screen.findByText(/external provider request failed \(provider_failure\)/)).toBeVisible();
+    await waitFor(() => expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads));
+    expect(screen.queryByText(/Project resources synchronized/)).toBeNull();
+  });
+
+  it("submits the version the update dialog opened with and renders the stale refusal", async () => {
+    const harness = renderConnections(({ method }) => method === "PATCH"
+      ? refusal(409, "stale", "resource changed since it was loaded")
+      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Update checkout service" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Update resource" }));
+    expect(dialog.getByText("Repository")).toBeVisible();
+    expect(dialog.getByText("Healthy")).toBeVisible();
+    await user.clear(dialog.getByLabelText("Name"));
+    await user.type(dialog.getByLabelText("Name"), "checkout service (renamed)");
+    // A background refresh loads the row another operator already changed while
+    // the dialog is open; the draft and its edited-against version stay put.
+    harness.setProjects([projectFixture({ resources: [resourceFixture({ version: 7, name: "Changed elsewhere" })] })]);
+    await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
+    expect(dialog.getByLabelText("Name")).toHaveValue("checkout service (renamed)");
+    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(harness.requests.filter((request) => request.method === "PATCH")).toHaveLength(1));
+    expect(harness.requests.find((request) => request.method === "PATCH")?.body).toEqual({
+      version: 4, name: "checkout service (renamed)", connection_id: connectionId, external_ref: "acme/checkout",
+    });
+    expect(await dialog.findByRole("alert")).toHaveTextContent("resource changed since it was loaded (stale)");
+    expect(dialog.getByText(/This resource changed elsewhere; close and reopen/)).toBeVisible();
+    expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("renders a not-found update refusal with the server's reason instead of assuming success", async () => {
+    renderConnections(({ method }) => method === "PATCH"
+      ? refusal(404, "not_found", "resource was not found")
+      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Update checkout service" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Update resource" }));
+    await user.click(dialog.getByRole("button", { name: "Save" }));
+    expect(await dialog.findByRole("alert")).toHaveTextContent("resource was not found (not_found)");
+    expect(dialog.getByText(/Reload the page to see the server's current state\./)).toBeVisible();
+    expect(screen.queryByText(/Resource updated/)).toBeNull();
+  });
+
+  it("submits the version the unbind dialog opened with and renders the state conflict", async () => {
+    const harness = renderConnections(({ method }) => method === "DELETE"
+      ? refusal(409, "state_conflict", "state has already advanced")
+      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Unbind checkout service" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Unbind checkout service?" }));
+    harness.setProjects([projectFixture({ resources: [resourceFixture({ version: 9 })] })]);
+    await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
+    await user.click(dialog.getByRole("button", { name: "Unbind resource" }));
+    await waitFor(() => expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(1));
+    expect(harness.requests.find((request) => request.method === "DELETE")?.path).toBe(`/portal/api/resources/${alphaId}?version=4`);
+    expect(await dialog.findByRole("alert")).toHaveTextContent("state has already advanced (state_conflict)");
+    expect(dialog.getByText(/Reload and resolve the changed state\./)).toBeVisible();
+    expect(dialog.getByRole("button", { name: "Unbind resource" })).toBeDisabled();
+  });
+
+  it("locks every resource control while one write is pending", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
+      ? pending
+      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Sync checkout service" }));
+    expect(screen.getByRole("button", { name: "Bind resource" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Synchronize project" })).toBeDisabled();
+    const row = resourceRow("checkout service");
+    expect(row.getByRole("button", { name: "Sync checkout service" })).toBeDisabled();
+    expect(row.getByRole("button", { name: "Update checkout service" })).toBeDisabled();
+    expect(row.getByRole("button", { name: "Unbind checkout service" })).toBeDisabled();
+    // Forced clicks must not start an editor or a second request while the
+    // single-flight window is open.
+    screen.getByRole("button", { name: "Bind resource" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    row.getByRole("button", { name: "Unbind checkout service" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /Unbind/ })).toBeNull();
+    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+
+    await act(async () => {
+      release(new Response(JSON.stringify({ resource: resourceFixture({ version: 5 }) }), { status: 200 }));
+      await pending;
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Bind resource" })).toBeEnabled());
+    expect(resourceRow("checkout service").getByRole("button", { name: "Sync checkout service" })).toBeEnabled();
+    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+  });
+
+  it("never lets a late response for the previous project touch the newly selected project's rows", async () => {
+    const beta = resourceFixture({
+      id: betaId, project_id: secondProjectId, kind: "work_tracking", name: "beta issues", external_ref: "acme",
+      url: null, status: "unknown", sync_status: "unknown", last_synced_at: null, version: 2,
+    });
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
+      ? pending
+      : refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+      projects: [
+        projectFixture({ resources: [resourceFixture()] }),
+        projectFixture({ id: secondProjectId, key: "SEC", name: "Second engineering", resources: [beta] }),
+      ],
+    });
+    const user = userEvent.setup();
+    expect(await screen.findByRole("heading", { level: 3, name: "checkout service" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Synchronize project" }));
+    expect(screen.getByRole("button", { name: "Bind resource" })).toBeDisabled();
+    expect(resourceRow("checkout service").getByRole("button", { name: "Sync checkout service" })).toBeDisabled();
+
+    // The operator switches projects while the project sync is in flight.
+    await user.selectOptions(screen.getByLabelText("Project"), secondProjectId);
+    expect(await screen.findByRole("heading", { level: 3, name: "beta issues" })).toBeVisible();
+    expect(screen.queryByRole("heading", { level: 3, name: "checkout service" })).toBeNull();
+    // The write still holds the page: the new project's rows stay locked.
+    expect(await screen.findByRole("button", { name: "Bind resource" })).toBeDisabled();
+
+    await act(async () => {
+      release(new Response(JSON.stringify({ synced_resource_ids: [alphaId] }), { status: 200 }));
+      await pending;
+    });
+    // The late response belongs to the previous project: no notice, no row
+    // mutation, and the switched project keeps its served state.
+    expect(screen.queryByText(/Project resources synchronized/)).toBeNull();
+    expect(screen.queryByText(/Resource synchronized/)).toBeNull();
+    const row = resourceRow("beta issues");
+    expect(row.getByText("Never synced")).toBeVisible();
+    expect(row.queryByText("Synced")).toBeNull();
+    // The exclusion survived the section's remount: the pending write released.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Bind resource" })).toBeEnabled());
+    expect(harness.requests.filter((request) => request.path === `/portal/api/projects/${projectId}/sync`)).toHaveLength(1);
+  });
+
+  it("does not reopen an editor whose response arrives after the dialog closed", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/resources")
+      ? pending
+      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture()] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Bind resource" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
+    await user.type(dialog.getByLabelText("Name"), "checkout service");
+    await user.type(dialog.getByLabelText("Reference"), "acme/checkout");
+    await user.click(dialog.getByRole("button", { name: "Bind" }));
+    // The operator closes the dialog while its write is still in flight.
+    await user.click(dialog.getByRole("button", { name: "Close bind dialog" }));
+    expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull();
+    const reads = harness.requests.filter((request) => request.path === "/portal/api/workspace").length;
+
+    await act(async () => {
+      release(new Response(JSON.stringify({ resource: resourceFixture({ version: 1 }) }), { status: 201 }));
+      await pending;
+    });
+    expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull();
+    expect(screen.queryByText(/Resource attached/)).toBeNull();
+    // The write is real, so the project read is reconciled even for a closed editor.
+    await waitFor(() => expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads));
+  });
+
+  it("disables every mutation control for an archived project with a visible reason", async () => {
+    renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+      projects: [projectFixture({ status: "archived", resources: [resourceFixture()] })],
+    });
+    expect(await screen.findByText(/This project is archived, so binding, updating, unbinding and synchronizing its resources are disabled\./)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Bind resource" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Synchronize project" })).toBeDisabled();
+    const row = resourceRow("checkout service");
+    expect(row.getByRole("button", { name: "Sync checkout service" })).toBeDisabled();
+    expect(row.getByRole("button", { name: "Update checkout service" })).toBeDisabled();
+    expect(row.getByRole("button", { name: "Unbind checkout service" })).toBeDisabled();
+    screen.getByRole("button", { name: "Bind resource" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull();
+  });
+
+  it("returns keyboard focus to the invoking control when a resource dialog closes", async () => {
+    renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    const user = userEvent.setup();
+    const bind = await screen.findByRole("button", { name: "Bind resource" });
+    await user.click(bind);
+    expect(await screen.findByRole("dialog", { name: "Bind resource" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull());
+    expect(bind).toHaveFocus();
+
+    const unbind = screen.getByRole("button", { name: "Unbind checkout service" });
+    await user.click(unbind);
+    expect(await screen.findByRole("dialog", { name: "Unbind checkout service?" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Unbind checkout service?" })).toBeNull());
+    expect(unbind).toHaveFocus();
+  });
+
+  it("renders the project-not-found state for an unknown scope instead of another project's rows", async () => {
+    const missingId = "10000000-0000-4000-8000-0000000000ff";
+    renderConnections(() => refusal(404, "not_found", "unexpected request"), `/portal/connections?projectId=${missingId}`, {
+      projects: [projectFixture({ resources: [resourceFixture()] })],
+    });
+    expect(await screen.findByRole("heading", { name: "Project not found" })).toBeVisible();
+    expect(screen.queryByRole("heading", { level: 3, name: "checkout service" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Bind resource" })).toBeNull();
   });
 });

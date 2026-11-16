@@ -16,12 +16,18 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $controlRoot = Join-Path $repoRoot "control"
-$runRoot = Join-Path $env:TEMP ("symmetry-0007d-connections-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+$runRoot = Join-Path $env:TEMP ("symmetry-0007e-connections-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
 $fixtureLog = Join-Path $runRoot "fixture-calls.jsonl"
 $serverLog = Join-Path $runRoot "control.log"
 $specLog = Join-Path $runRoot "spec.log"
 $identityFile = Join-Path $runRoot "fixture-identity.json"
+$stateFile = Join-Path $runRoot "fixture-state.json"
+
+# The provider steering document the spec rewrites between flows: the fixture
+# re-reads it on every provider request, so an empty object here is the empty
+# state. .NET writes it without a BOM, which the fixture's JSON decode requires.
+[System.IO.File]::WriteAllText($stateFile, "{}")
 
 $target = [Uri]$PortalUrl
 if ($target.Scheme -ne "http" -or $target.Host -notin @("127.0.0.1", "localhost", "::1")) {
@@ -53,10 +59,10 @@ $operatorToken = [guid]::NewGuid().ToString("N")
 $identity = [guid]::NewGuid().ToString("N")
 
 $env:POSTGRES_HOST = "127.0.0.1"
-$env:POSTGRES_PORT = "55440"
+$env:POSTGRES_PORT = "55444"
 $env:POSTGRES_USER = "postgres"
 $env:POSTGRES_PASSWORD = "postgres"
-$env:POSTGRES_DB = "symmetry_0007d_test"
+$env:POSTGRES_DB = "symmetry_0007e_test"
 
 Push-Location $controlRoot
 try {
@@ -89,7 +95,13 @@ try {
     "set `"SYMMETRY_FIXTURE_IDENTITY=$identity`" && " +
     "set `"SYMMETRY_FIXTURE_IDENTITY_FILE=$identityFile`" && " +
     "set `"SYMMETRY_FIXTURE_TRANSPORT_LOG=$fixtureLog`" && " +
+    "set `"SYMMETRY_FIXTURE_STATE_FILE=$stateFile`" && " +
     "set `"SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS=expired-fixture`" && " +
+    # The periodic sweep stays enabled (the real syncer child is part of the
+    # topology /healthz reports), but its 5-minute cadence would re-synchronize
+    # the acceptance rows mid-run and turn a failure or unavailability a test is
+    # observing back into a success. One hour keeps it out of the run's window.
+    "set `"SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS=3600000`" && " +
     "cd /d `"$controlRoot`" && " +
     "mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix run --no-halt --no-start ../scripts/ci/portal-connection-fixture.exs"
   $server = Start-Process -FilePath "cmd.exe" -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError "$serverLog.err" `
@@ -136,6 +148,7 @@ try {
     $env:SYMMETRY_OPERATOR_TOKEN = $operatorToken
     $env:SYMMETRY_FIXTURE_IDENTITY = $identity
     $env:SYMMETRY_FIXTURE_IDENTITY_FILE = $identityFile
+    $env:SYMMETRY_FIXTURE_STATE_FILE = $stateFile
     # --offline: pnpm verifies the pinned lockfile against the public registry by
     # default, which this host cannot reach; that check then stalls for minutes.
     # Offline it fails in about a second, prints "Lockfile failed supply-chain
@@ -158,12 +171,12 @@ try {
   # The spec skips itself when the harness environment is absent (so the
   # repository-wide commands still collect it); a skipped run exits 0, so the
   # acceptance gate reads the summary instead of trusting the exit code.
-  # 10 = the file's 5 flows on the desktop and mobile projects.
+  # 20 = the file's 10 flows on the desktop and mobile projects.
   $summary = Select-String -Path $specLog -Pattern "(\d+) passed" -ErrorAction SilentlyContinue | Select-Object -Last 1
   $passed = if ($summary) { [int]$summary.Matches[0].Groups[1].Value } else { 0 }
   $skipped = [bool](Select-String -Path $specLog -Quiet -Pattern "\d+ skipped" -ErrorAction SilentlyContinue)
-  if ($passed -ne 10 -or $skipped) {
-    Write-Host "spec summary reports $passed passed (skipped=$skipped); expected 10 passed and no skips: see $specLog"
+  if ($passed -ne 20 -or $skipped) {
+    Write-Host "spec summary reports $passed passed (skipped=$skipped); expected 20 passed and no skips: see $specLog"
     $specStatus = 1
   }
 
@@ -192,6 +205,7 @@ try {
   }
 
   Write-Host "fixture transport log: $fixtureLog"
+  Write-Host "fixture state file: $stateFile"
   Write-Host "control log: $serverLog"
 } finally {
   # Stop only the process tree this harness started (cmd.exe → mise → mix → beam)

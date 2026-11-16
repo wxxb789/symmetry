@@ -2,7 +2,9 @@
 
 These tests exercise the authenticated React shell and the retained classic
 workspace against a running Phoenix control plane. Classic acceptance keeps its
-resource and control flows and fixture semantics at `/portal/classic`; project
+resource and control flows and fixture semantics at `/portal/classic` (its
+classic resource binding, synchronization and assignment checks moved to the
+new-route resource flows in `tests/portal-connections.spec.mjs`, 0007e); project
 and work-item planning moved to the planning suite below (0007c).
 The 0007b list, board, detail and history read checks that the new
 `/portal/projects/:projectId` and `/portal/work/:workItemId` surfaces replace -
@@ -111,7 +113,12 @@ detail and the filtered board from a signed-out context and reload them.
 `tests/portal-connections.spec.mjs` drives `/portal/connections` against the real
 Portal API and PostgreSQL: create, inspect, test, update, remove, repeated
 submission, stale update, concurrent removal, refused submissions and the
-capability reset of bound resource health. Provider calls go through the
+capability reset of bound resource health, plus the resource surface: binding,
+updating, unbinding and synchronizing repository, work-tracking and CI resources
+for both provider kinds (including the Azure DevOps `project/repository`,
+`project` and `project/pipeline/<definitionId>` references), injected provider
+failures, the unknown-outcome readback, project switching under a sync in flight,
+and work assignment scoped to the item's project. Provider calls go through the
 controlled fixture transport in `scripts/ci/portal-connection-fixture.exs`, which
 replaces the provider HTTP client and the local CLI session; no provider host is
 contacted and every fixture call is appended to the JSONL log below. The fixture
@@ -123,10 +130,81 @@ message and page error the page produced during the run. Response records,
 header lists and jar samples must be non-empty and readable, so a missing or
 unreadable capture fails the test instead of passing the scan.
 
+### Fixture provider documents and the steering file
+
+The fixture answers exactly the provider reads these flows make; every other path
+or method under `api.github.com` / `dev.azure.com` is refused
+(`fixture_no_route` / `fixture_unexpected_request`) instead of being answered by
+a blanket document:
+
+- GitHub (`GET`, the fixture `gh` token): `/user`,
+  `/user/memberships/orgs/{account}`, `/repos/{owner}/{repository}` (the
+  repository document), `…/issues` (the issue list), `…/actions/runs` (one
+  completed workflow run), `…/pulls` and `…/pulls/{number}` (one open pull
+  request) and `…/pulls/{number}/reviews` (one approving review). Issues default
+  to `[101, 102]` (101 open, 102 closed); the default repository document keeps
+  its `id`, `node_id`, `html_url`, `default_branch`, `visibility` and `archived`.
+- Azure DevOps (`GET` and `POST`, the fixture `az` token): `/{org}/_apis/projects`
+  (the connection check), `GET …/_apis/git/repositories/{repository}`,
+  `POST /{org}/{project}/_apis/wit/wiql`, `POST …/_apis/wit/workitemsbatch`
+  (work item `101` with `System.*` fields and a positive `rev`), `GET
+  …/_apis/build/definitions/{id}` (definition `{id}`) and `GET
+  …/_apis/build/builds` (build `42`, completed/succeeded, naming the definition
+  the read filters by).
+
+`SYMMETRY_FIXTURE_STATE_FILE` points at a JSON steering document the harness
+creates per run and passes to both the fixture process and the spec. The fixture
+re-reads it on every provider request, so the spec steers individual visits by
+rewriting the file; an absent, unreadable or invalid document is the empty state:
+
+```json
+{
+  "github": {
+    "fail": ["owner/repo"],
+    "transport_fail": ["owner/repo"],
+    "hold": ["owner/repo"],
+    "issues": {"owner/repo": [101, 102]},
+    "repository": {"owner/repo": {"archived": true, "html_url": "…", "default_branch": "main", "visibility": "private"}}
+  },
+  "azure_devops": {
+    "fail": ["org/project"],
+    "transport_fail": ["org/project"],
+    "hold": ["org/project"],
+    "work_items": {"org/project": [101]},
+    "repository": {"org/project/repo": {"webUrl": "…", "defaultBranch": "refs/heads/main"}}
+  }
+}
+```
+
+- `fail` / `transport_fail`: the provider read answers HTTP 500 with a fixed
+  fixture message, or no HTTP document at all (`{:error, {:transport, …}}`) — the
+  ambiguous outcome that must never be rendered as synchronized.
+  `transport_fail` wins when both list the reference.
+- `hold`: the read blocks server-side (re-reading the file every 100 ms, at most
+  300 polls) until the reference leaves the list; the answer then comes from the
+  state as of release, so one rewrite can release a hold into a failure. This is
+  how a browser flow keeps a sync in flight while it switches project or asserts
+  the disabled controls.
+- `issues` / `work_items`: the issue numbers / work-item ids the fixture reports
+  (defaults `[101, 102]` / `[101]`); an empty list makes a previously imported
+  item absent from the readback, which then marks it unavailable.
+- `repository`: overrides for the repository document (GitHub `archived`,
+  `html_url`, `default_branch`, `visibility`; Azure DevOps `webUrl`,
+  `defaultBranch`), so a readback can show state that contradicts a pre-failure
+  assumption.
+
+GitHub references are keyed `owner/repository` (issues, repository, actions and
+pulls share one key); Azure DevOps scopes are keyed `org/project` (one key covers
+the project's repository, work-tracking and CI reads). Every steered call is
+still recorded in the JSONL call log with its `steered` marker (`fail` → status
+500, `transport_fail` → rejected with the transport reason) and still records
+only the bearer shape, never a token value.
+
 The spec runs only against this fixture. The harness starts the control plane
-with a per-run identity, an identity file and a per-run operator token; the spec
-proves the identity file carries the run's identity for the portal port and logs
-in with the per-run token before any provider check. That fixture identity
+with a per-run identity, an identity file, a per-run operator token and the
+per-run provider steering file; the spec proves the identity file carries the
+run's identity for the portal port and logs in with the per-run token before any
+provider check. That fixture identity
 decides the collection contract: without `SYMMETRY_FIXTURE_IDENTITY` /
 `SYMMETRY_FIXTURE_IDENTITY_FILE` the spec cannot prove its target and skips at
 collection, so the default target and the `SYMMETRY_PORTAL_URL` /
@@ -147,11 +225,12 @@ handshake.
 
 ```sh
 cd control
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55440 POSTGRES_DB=symmetry_0007d_test mix ecto.create
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55440 POSTGRES_DB=symmetry_0007d_test mix ecto.migrate
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55440 POSTGRES_DB=symmetry_0007d_test \
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55444 POSTGRES_DB=symmetry_0007e_test mix ecto.create
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55444 POSTGRES_DB=symmetry_0007e_test mix ecto.migrate
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55444 POSTGRES_DB=symmetry_0007e_test \
   SYMMETRY_OPERATOR_TOKEN=<run token> SYMMETRY_FIXTURE_IDENTITY=<run identity> \
   SYMMETRY_FIXTURE_IDENTITY_FILE=/tmp/symmetry-fixture-identity.json \
+  SYMMETRY_FIXTURE_STATE_FILE=/tmp/symmetry-fixture-state.json \
   PHX_SERVER=true PORT=4021 \
   SYMMETRY_FIXTURE_TRANSPORT_LOG=/tmp/symmetry-fixture-calls.jsonl \
   SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS=expired-fixture \
@@ -169,16 +248,19 @@ frontend staged into `control/priv/static/portal`:
 SYMMETRY_PORTAL_URL=http://127.0.0.1:4021 SYMMETRY_OPERATOR_TOKEN=<run token> \
   SYMMETRY_FIXTURE_IDENTITY=<run identity> \
   SYMMETRY_FIXTURE_IDENTITY_FILE=/tmp/symmetry-fixture-identity.json \
+  SYMMETRY_FIXTURE_STATE_FILE=/tmp/symmetry-fixture-state.json \
   mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test tests/portal-connections.spec.mjs
 ```
 
 `scripts/run-connection-fixture-tests.ps1` does that whole sequence in one
-command — recreates and migrates the fixture database (other portal specs leave
-projects, work items and resources behind in it), starts the fixture control
-plane, waits for the identity file and a healthy `/healthz`, runs the spec, scans
-the control logs and the provider-call log for the fixture canaries (a missing
-scan file or an empty provider-call log fails the run), and stops its own
-server:
+command — creates the per-run steering file, recreates and migrates the fixture
+database in this worktree's own container (other portal specs leave projects,
+work items and resources behind in it), starts the fixture control plane, waits
+for the identity file and a healthy `/healthz`, runs the spec (its 20 tests must
+pass on the desktop and mobile projects; a skip or a different count fails the
+run), scans the control logs and the provider-call log for the fixture canaries
+(a missing scan file or an empty provider-call log fails the run), and stops its
+own server:
 
 ```powershell
 pwsh -NoProfile -File .\browser\scripts\run-connection-fixture-tests.ps1
@@ -186,11 +268,25 @@ pwsh -NoProfile -File .\browser\scripts\run-connection-fixture-tests.ps1
 
 The fixture is deliberately quieter than a development server — it logs at
 `warning` level so the acceptance run's output stays readable — but it does not
-change the application topology under test.
+change the application topology under test. It does pin
+`SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS=3600000`: the periodic integration sweep
+stays enabled (the real syncer child is part of the topology `/healthz` reports),
+but its five-minute cadence would otherwise re-synchronize the acceptance rows
+mid-run and turn a failure or an unavailability a flow is observing back into a
+success. Nothing else about the application is reconfigured.
 
-`tests/portal-classic-resources.spec.mjs` retains the classic workspace's
-resource binding, synchronization and assignment checks at `/portal/classic`;
-connection management itself is asserted on the new route above.
+The classic resource checks are retired in the same change:
+`tests/portal-classic-resources.spec.mjs` (four tests, eight runs across the
+desktop and mobile projects) no longer runs, and its intent moved to the
+new-route flows above — binding, update and unbind for both provider kinds
+including the version-fenced `stale` refusals, per-resource sync and the
+`Synced` row, project sync and its failure notice, single-flight across a
+project switch, the discarded late response, exact external identity with
+provider-owned fields locked and availability rendered, and assignment scoped
+to the item's project on the work detail. Assertions that only ever depended on
+synthetic browser mocks (held responses, injected failures, hand-written
+provider payloads) moved to frontend component tests with deferred response
+gates. Connection management itself is asserted on the new route above.
 
 ## Safe planning acceptance
 

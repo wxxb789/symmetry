@@ -267,6 +267,8 @@ export interface DeliveryRow {
   label: string;
   value: string;
   source: string;
+  /** The provider that authored a provider-sourced entry; null for the others. */
+  provider: string | null;
   recordedAt: string | null;
   url: string | null;
 }
@@ -281,6 +283,7 @@ export function deliveryRows(delivery: DeliveryLike | null | undefined, resource
     label: "Pull request",
     value: pullStatus ?? (pullUrl === null ? "not recorded" : "linked"),
     source: asText(pullRequest?.source) ?? "none",
+    provider: asText(pullRequest?.provider),
     recordedAt: asText(pullRequest?.recorded_at),
     url: safeUrl(pullUrl),
   });
@@ -288,6 +291,7 @@ export function deliveryRows(delivery: DeliveryLike | null | undefined, resource
     label: "CI",
     value: ciLabel(delivery, resource, now).text,
     source: asText(delivery?.ci?.source) ?? "none",
+    provider: asText(delivery?.ci?.provider),
     recordedAt: asText(delivery?.ci?.recorded_at),
     url: safeUrl(delivery?.ci?.url),
   });
@@ -295,6 +299,7 @@ export function deliveryRows(delivery: DeliveryLike | null | undefined, resource
     label: "Review",
     value: asText(review?.status) ?? "none",
     source: asText(review?.source) ?? "none",
+    provider: asText(review?.provider),
     recordedAt: asText(review?.recorded_at),
     url: safeUrl(review?.url),
   });

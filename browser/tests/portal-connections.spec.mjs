@@ -27,14 +27,33 @@
 // trying to be the fixture run: an incomplete set is a half-configured harness
 // and fails at collection instead of running against an unproven target. The
 // harness itself treats a skip as a failed acceptance run.
+//
+// Project resources, synchronization, assignment and Azure DevOps flows: the
+// flows after the five connection flows drive the same real API and database
+// with the fixture's resource and synchronization documents (GitHub
+// repository/issues/actions documents, Azure DevOps repository/work-item/build
+// documents). The fixture is steered per provider through a JSON state file
+// named by SYMMETRY_FIXTURE_STATE_FILE, which this spec writes before the
+// operations that need an injected HTTP 500, an ambiguous transport failure, a
+// held read (the deterministic in-flight window a project switch crosses), a
+// changed repository document, or a shrunken issues list. The classic resource
+// checks these flows replace are recorded in browser/README.md;
+// browser/tests/portal-classic-resources.spec.mjs is retired.
 import fs from "node:fs/promises";
-import { allowBrowserError, expect as baseExpect, test } from "./fixtures.mjs";
+import {
+  allowBrowserError,
+  assertNoBrowserErrors,
+  expect as baseExpect,
+  monitorBrowserErrors,
+  test
+} from "./fixtures.mjs";
 
 const fixtureVariables = [
   "SYMMETRY_OPERATOR_TOKEN",
   "SYMMETRY_FIXTURE_IDENTITY",
   "SYMMETRY_FIXTURE_IDENTITY_FILE",
   "SYMMETRY_PORTAL_URL",
+  "SYMMETRY_FIXTURE_STATE_FILE",
 ];
 const fixtureIdentityVariables = ["SYMMETRY_FIXTURE_IDENTITY", "SYMMETRY_FIXTURE_IDENTITY_FILE"];
 const isFixtureRun = fixtureIdentityVariables.some((name) => process.env[name]);
@@ -47,10 +66,11 @@ if (isFixtureRun && missingVariables.length > 0) {
 }
 test.skip(!isFixtureRun, "run browser/scripts/run-connection-fixture-tests.ps1 to publish the fixture identity");
 // The placeholders exist only for the skipped collection of a non-fixture run;
-// a run with the harness always carries all four values.
+// a run with the harness always carries all five values.
 const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN ?? "";
 const fixtureIdentity = process.env.SYMMETRY_FIXTURE_IDENTITY ?? "";
 const fixtureIdentityFile = process.env.SYMMETRY_FIXTURE_IDENTITY_FILE ?? "";
+const fixtureStateFile = process.env.SYMMETRY_FIXTURE_STATE_FILE ?? "";
 // Only a fixture run consumes the target; a skipped collection keeps the
 // loopback placeholder, so a custom target string is never parsed here.
 const portalUrl = new URL((isFixtureRun && process.env.SYMMETRY_PORTAL_URL) || "http://127.0.0.1:4021");
@@ -114,6 +134,111 @@ async function createProject(page) {
   return response.body.project.id;
 }
 
+// ── Fixture steering, projects, resources and work items ────────────────────
+
+// The fixture reads this document on every provider request; references are the
+// resources' external_ref strings and each provider has its own section. Every
+// write is a whole document swapped in with rename, so a read never sees half
+// of one. A hold blocks the provider read until the reference leaves `hold`
+// (bounded by the fixture), which is the only way this suite can keep a real
+// sync in flight across a project switch without intercepting the browser.
+let fixtureStateWrites = 0;
+
+async function writeFixtureState(document) {
+  const temporary = `${fixtureStateFile}.${process.pid}.${(fixtureStateWrites += 1)}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify(document));
+  // The fixture re-reads this file on every provider request (and every 100 ms
+  // while a read is held), so on Windows a rename can briefly hit an open
+  // handle. Retry the same atomic rename instead of weakening it to an
+  // in-place write, which a concurrent read could observe half-written.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(temporary, fixtureStateFile);
+      return;
+    } catch (error) {
+      if (!["EPERM", "EBUSY", "EACCES"].includes(error?.code) || attempt >= 20) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+}
+
+const resetFixtureState = () => writeFixtureState({});
+
+async function createConnectionThroughApi(page, { provider = "github", name, account, capabilities }) {
+  const response = await api(page, "/portal/api/connections", { body: { provider, name, account_ref: account, capabilities } });
+  expect(response.status, JSON.stringify(response.body)).toBe(201);
+  return response.body.connection.id;
+}
+
+async function bindResourceThroughApi(page, projectId, { kind, name, reference, connectionId }) {
+  const response = await api(page, `/portal/api/projects/${projectId}/resources`, { body: {
+    kind, name, external_ref: reference, connection_id: connectionId
+  } });
+  expect(response.status, JSON.stringify(response.body)).toBe(201);
+  return response.body.resource;
+}
+
+async function readWorkspace(page, projectId) {
+  const response = await api(page, `/portal/api/workspace?project_id=${encodeURIComponent(projectId)}`, { method: "GET" });
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  return response.body;
+}
+
+function projectFromWorkspace(workspace, projectId) {
+  const project = workspace.projects.find((candidate) => candidate.id === projectId);
+  expect(project, `the workspace read must serve project ${projectId}`).toBeTruthy();
+  return project;
+}
+
+async function readBoundResource(page, connectionId, reference) {
+  const response = await api(page, "/portal/api/connections", { method: "GET" });
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  const connection = response.body.connections.find((candidate) => candidate.id === connectionId);
+  expect(connection, `the connections read must serve connection ${connectionId}`).toBeTruthy();
+  return connection.resources.find((resource) => resource.external_ref === reference);
+}
+
+// The console renders the served projection, so every control is addressed by
+// the label that projection produces (plan §4.2). A row is addressed through
+// its own Sync button, so two rows that share a reference cannot be confused.
+const resourceControl = (page, label) => page.getByRole("button", { name: label, exact: true });
+const resourceRow = (page, name) =>
+  page.getByRole("list", { name: "Project resources" })
+    .getByRole("listitem")
+    .filter({ has: page.getByRole("button", { name: `Sync ${name}`, exact: true }) });
+
+async function bindResourceThroughConsole(page, { kind, name, reference, connectionId }) {
+  await resourceControl(page, "Bind resource").click();
+  const dialog = page.getByRole("dialog", { name: "Bind resource" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Type").selectOption(kind);
+  await dialog.getByLabel("Provider connection").selectOption(connectionId);
+  await dialog.getByLabel("Name").fill(name);
+  await dialog.getByLabel("Reference", { exact: true }).fill(reference);
+  await dialog.getByRole("button", { name: "Bind", exact: true }).click();
+  await expect(dialog).toBeHidden();
+}
+
+// The refusal is rendered either in the dialog that submitted it or on the
+// page that owns the receipt; both are the 0007d notice surface, so the alert
+// carrying the server's code is asserted without pinning which one holds it.
+const refusalAlert = (page, code) => page.getByRole("alert").filter({ hasText: `(${code})` }).first();
+
+// browser.newContext does not inherit project use options, so the second
+// operator session copies the supported BrowserContextOptions fields from the
+// running project (exact viewport and device semantics) plus the target origin.
+const deviceContextOptions = (testInfo) => {
+  const use = testInfo.project.use ?? {};
+  return {
+    ...(use.viewport ? { viewport: use.viewport } : {}),
+    ...(use.isMobile === undefined ? {} : { isMobile: use.isMobile }),
+    ...(use.hasTouch === undefined ? {} : { hasTouch: use.hasTouch }),
+    ...(use.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: use.deviceScaleFactor }),
+    ...(use.userAgent ? { userAgent: use.userAgent } : {}),
+    baseURL: portalOrigin
+  };
+};
+
 function recordApiBodies(page) {
   const responses = [];
   const requests = [];
@@ -145,6 +270,7 @@ function recordApiBodies(page) {
           status,
           headers,
           text: location ?? "",
+          request: response.request(),
           unreadable: !location && status !== 304 ? "redirect response without a Location header" : undefined
         };
       }
@@ -152,7 +278,7 @@ function recordApiBodies(page) {
         const text = await response.text();
         return { path: url.pathname, status, headers, text };
       } catch (error) {
-        return { path: url.pathname, status, headers, text: null, unreadable: String(error) };
+        return { path: url.pathname, status, headers, text: null, unreadable: String(error), request: response.request() };
       }
     })());
     // The jar is sampled while the run is in flight, not only at the end, so a
@@ -186,10 +312,17 @@ async function assertNoCredentials(page, recorded) {
   }
   expect(recorded.responses.length, "same-origin responses must be recorded for the credential scan").toBeGreaterThan(0);
   for (const entry of await Promise.all(recorded.responses)) {
-    expect(entry.unreadable, `response ${entry.path} must be readable for the credential scan`).toBeUndefined();
     expect(entry.headers.length, `response ${entry.path} must have headers for the credential scan`).toBeGreaterThan(0);
-    expect(entry.text, `response ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
     expect(entry.headers.join("\n"), `response headers for ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
+    if (entry.unreadable !== undefined) {
+      // The protocol cannot serve the body of a response whose read the page
+      // aborted or navigated away from. That is only allowed for a request that
+      // failed (nothing was delivered to the page); its headers were scanned
+      // above, and every completed response is still scanned below.
+      expect(entry.request?.failure(), `response ${entry.path} must be readable unless its request was aborted`).toBeTruthy();
+      continue;
+    }
+    expect(entry.text, `response ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
   }
   for (const recordedRequest of recorded.requests) {
     // allHeaders() includes the browser-managed headers (cookies) that
@@ -197,9 +330,17 @@ async function assertNoCredentials(page, recorded) {
     const headers = await recordedRequest.request.allHeaders();
     expect(JSON.stringify(headers), `request headers for ${recordedRequest.path} must not contain a provider credential`).not.toMatch(secretPattern);
     if (recordedRequest.path.startsWith("/portal/api/")) {
-      expect(headers.cookie, `the cookie header of ${recordedRequest.path} must be visible to the credential scan`).toBeTruthy();
-      if (!["GET", "HEAD"].includes(recordedRequest.method)) {
-        expect(headers["x-csrf-token"], `the CSRF header of ${recordedRequest.path} must be visible to the credential scan`).toBeTruthy();
+      if (recordedRequest.request.failure() !== null) {
+        // A read the page cancelled — a project switch or a navigation unmounts
+        // the observer that asked for it — never reached the server, so the
+        // browser sent no cookie for it. Reads are the only cancellable
+        // requests here; a write must still prove its cookie and CSRF header.
+        expect(["GET", "HEAD"], `an aborted same-origin request must be a read: ${recordedRequest.method} ${recordedRequest.path}`).toContain(recordedRequest.method);
+      } else {
+        expect(headers.cookie, `the cookie header of ${recordedRequest.path} must be visible to the credential scan`).toBeTruthy();
+        if (!["GET", "HEAD"].includes(recordedRequest.method)) {
+          expect(headers["x-csrf-token"], `the CSRF header of ${recordedRequest.path} must be visible to the credential scan`).toBeTruthy();
+        }
       }
     }
     expect(recordedRequest.request.postData() ?? "", `request body for ${recordedRequest.path} must not contain a provider credential`).not.toMatch(secretPattern);
@@ -490,6 +631,761 @@ test("Azure DevOps connection management runs on the new route", async ({ page }
   await expect(expiredDetail.getByText("Degraded", { exact: true })).toBeVisible();
   await expect(expiredDetail).toContainText("Provider authentication failed");
   await capture(page, testInfo, "azure", "Azure DevOps connection created, tested and refused on the new route");
+
+  await assertNoCredentials(page, recorded);
+});
+
+test("a GitHub repository resource is bound, synced, updated and unbound through the console", async ({ page }, testInfo) => {
+  allowBrowserError(page, /status of 409/);
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const projectId = await createProject(page);
+  const connectionName = `Resource fixture ${suffix}`;
+  await createThroughConsole(page, { provider: "github", name: connectionName, account: "acme-fixture", capabilities: ["Repositories"] });
+  const directory = await api(page, "/portal/api/connections", { method: "GET" });
+  const connection = directory.body.connections.find((candidate) => candidate.name === connectionName);
+  expect(connection, "the connections read must serve this test's connection").toBeTruthy();
+  const reference = `acme-fixture/repository-${suffix}`;
+  const nextReference = `acme-fixture/repository-next-${suffix}`;
+
+  // The project was created out of band, so the page re-reads before the scope
+  // is selected. Both steps stay in-app: a document navigation can strand a
+  // response body the credential scan still has to read.
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  // The refresh's own read settles before the scope changes: switching would
+  // unmount the observer of the current read and cancel it in flight.
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("Project", { exact: true }).selectOption(projectId);
+  await expect(page.getByRole("heading", { name: "Project resources" })).toBeVisible();
+
+  // Bind through the console: the row renders the served identity and the
+  // untouched state (unknown health and sync, never synchronized).
+  await bindResourceThroughConsole(page, { kind: "repository", name: "Alpha", reference, connectionId: connection.id });
+  const boundRow = resourceRow(page, "Alpha");
+  await expect(boundRow).toContainText(reference);
+  await expect(boundRow).toContainText(connectionName);
+  await expect(boundRow).toContainText(/Never synced/);
+  await expect(boundRow).toContainText(/Unknown/);
+  await capture(page, testInfo, "resource-bound", {
+    surface: "/portal/connections project resources",
+    projectId,
+    reference,
+    connection: connectionName,
+    state: "bound through the console, never synced"
+  });
+
+  // The fixture repository document is the readback: the row shows the served
+  // state and the served timestamp, not a local assumption.
+  await resourceControl(page, "Sync Alpha").click();
+  await expect(boundRow).toContainText(/Synced/);
+  await expect(boundRow).not.toContainText(/Failed/);
+  const synced = await readBoundResource(page, connection.id, reference);
+  expect(synced.status).toBe("healthy");
+  expect(synced.sync_status).toBe("synced");
+  expect(synced.url).toBe(`https://github.com/${reference}`);
+  await expect(boundRow).toContainText(synced.last_synced_at);
+  await capture(page, testInfo, "resource-synced", {
+    reference,
+    served: { status: synced.status, sync_status: synced.sync_status, url: synced.url, last_synced_at: synced.last_synced_at }
+  });
+
+  // Version fence (update): the dialog opens with the version this page holds,
+  // and another operator moves the resource before the submission.
+  await resourceControl(page, "Update Alpha").click();
+  const updateDialog = page.getByRole("dialog", { name: "Update resource" });
+  await expect(updateDialog).toBeVisible();
+  const movedElsewhere = await api(page, `/portal/api/resources/${synced.id}`, { method: "PATCH", body: { version: synced.version, name: "Beta" } });
+  expect(movedElsewhere.status, JSON.stringify(movedElsewhere.body)).toBe(200);
+  await updateDialog.getByLabel("Name").fill("Alpha renamed");
+  await updateDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(refusalAlert(page, "stale")).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "Reload to see the server's current values." }).first()).toBeVisible();
+  await capture(page, testInfo, "resource-update-refused", {
+    refusal: "stale",
+    draft: "Alpha renamed",
+    servedName: "Beta",
+    note: "the server's code and the operator's next step are rendered"
+  });
+  await page.keyboard.press("Escape");
+  await expect(updateDialog).toBeHidden();
+  // The refusal re-reads: the row is the server's current resource, not the draft.
+  await expect(resourceRow(page, "Beta")).toBeVisible();
+
+  // Version fence (unbind): the resource moves again after the page reconciled,
+  // and the unbind dialog submits the version it opened with.
+  const reconciled = await readBoundResource(page, connection.id, reference);
+  expect(reconciled.name).toBe("Beta");
+  const movedAgain = await api(page, `/portal/api/resources/${reconciled.id}`, { method: "PATCH", body: { version: reconciled.version, name: "Gamma" } });
+  expect(movedAgain.status, JSON.stringify(movedAgain.body)).toBe(200);
+  await resourceControl(page, "Unbind Beta").click();
+  const unbindDialog = page.getByRole("dialog", { name: "Unbind Beta?" });
+  await expect(unbindDialog).toBeVisible();
+  await unbindDialog.getByRole("button", { name: "Unbind resource", exact: true }).click();
+  await expect(refusalAlert(page, "stale")).toBeVisible();
+  await capture(page, testInfo, "resource-unbind-refused", {
+    refusal: "stale",
+    servedName: "Gamma",
+    note: "the version-fenced unbind is refused with the server's code"
+  });
+  await page.keyboard.press("Escape");
+  await expect(unbindDialog).toBeHidden();
+  await expect(resourceRow(page, "Gamma")).toBeVisible();
+
+  // Successful update: changing the reference is an identity change, and the
+  // console re-reads the reset the server served instead of predicting it.
+  await resourceControl(page, "Update Gamma").click();
+  const identityDialog = page.getByRole("dialog", { name: "Update resource" });
+  await expect(identityDialog).toBeVisible();
+  await identityDialog.getByLabel("Name").fill("Delta");
+  await identityDialog.getByLabel("Reference", { exact: true }).fill(nextReference);
+  await identityDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(identityDialog).toBeHidden();
+  const reset = await readBoundResource(page, connection.id, nextReference);
+  expect(reset).toMatchObject({ name: "Delta", status: "unknown", sync_status: "unknown", last_synced_at: null, url: null });
+  const resetRow = resourceRow(page, "Delta");
+  await expect(resetRow).toContainText(nextReference);
+  await expect(resetRow).toContainText(/Never synced/);
+  await capture(page, testInfo, "resource-updated", {
+    reference: nextReference,
+    served: { status: reset.status, sync_status: reset.sync_status, last_synced_at: reset.last_synced_at },
+    note: "an identity change resets the served state; the row follows the read"
+  });
+
+  // Successful unbind through the console: the row and the readback both lose it.
+  await resourceControl(page, "Unbind Delta").click();
+  const finalUnbind = page.getByRole("dialog", { name: "Unbind Delta?" });
+  await expect(finalUnbind).toBeVisible();
+  await finalUnbind.getByRole("button", { name: "Unbind resource", exact: true }).click();
+  await expect(finalUnbind).toBeHidden();
+  await expect(resetRow).toHaveCount(0);
+  expect(await readBoundResource(page, connection.id, nextReference)).toBeUndefined();
+  await capture(page, testInfo, "resource-unbound", {
+    reference: nextReference,
+    readback: "the resource is absent from the connection read"
+  });
+
+  await assertNoCredentials(page, recorded);
+});
+
+test("a provider failure and an ambiguous outcome stay explicit and the next readback writes the provider's answer", async ({ page, isMobile }, testInfo) => {
+  allowBrowserError(page, /status of 502/);
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const projectId = await createProject(page);
+  const connectionName = `Sync fixture ${suffix}`;
+  const connectionId = await createConnectionThroughApi(page, {
+    name: connectionName,
+    account: "acme-fixture",
+    capabilities: ["repositories", "work_items", "changes"]
+  });
+  const issuesReference = `acme-fixture/issues-${suffix}`;
+  const repositoryReference = `acme-fixture/repository-${suffix}`;
+  const issues = await bindResourceThroughApi(page, projectId, { kind: "work_tracking", name: "Issues", reference: issuesReference, connectionId });
+  await bindResourceThroughApi(page, projectId, { kind: "repository", name: "Repository", reference: repositoryReference, connectionId });
+  await writeFixtureState({ github: { issues: { [issuesReference]: [101, 102] } } });
+
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("Project", { exact: true }).selectOption(projectId);
+
+  // A work-tracking sync imports the fixture issues document.
+  await resourceControl(page, "Sync Issues").click();
+  const issuesRow = resourceRow(page, "Issues");
+  await expect(issuesRow).toContainText(/Synced/);
+  const issuesSynced = await readBoundResource(page, connectionId, issuesReference);
+  expect(issuesSynced.status).toBe("healthy");
+  expect(issuesSynced.sync_status).toBe("synced");
+  expect(issuesSynced.url).toBe(`https://github.com/${issuesReference}/issues`);
+  await expect(issuesRow).toContainText(issuesSynced.last_synced_at);
+  const importedWorkspace = await readWorkspace(page, projectId);
+  const importedItems = projectFromWorkspace(importedWorkspace, projectId).work_items.filter((item) => item.external?.resource_id === issues.id);
+  expect(importedItems.map((item) => item.external.id).sort()).toEqual(["101", "102"]);
+  await capture(page, testInfo, "issues-synced", {
+    reference: issuesReference,
+    served: { url: issuesSynced.url, last_synced_at: issuesSynced.last_synced_at },
+    importedExternalIds: importedItems.map((item) => item.external.id).sort()
+  });
+
+  // Definitive provider failure: the fixture answers HTTP 500, the server maps
+  // it to its fixed message, and the row never reads Synced while unresolved.
+  await writeFixtureState({ github: { issues: { [issuesReference]: [101, 102] }, fail: [issuesReference] } });
+  await resourceControl(page, "Sync Issues").click();
+  await expect(issuesRow).toContainText(/Failed/);
+  await expect(issuesRow).toContainText("Provider returned HTTP 500");
+  await expect(issuesRow.getByText("Synced", { exact: true })).toHaveCount(0);
+  const failed = await readBoundResource(page, connectionId, issuesReference);
+  expect(failed.status).toBe("degraded");
+  expect(failed.sync_status).toBe("failed");
+  expect(failed.status_message).toBe("Provider returned HTTP 500");
+  expect(failed.last_synced_at).toBe(issuesSynced.last_synced_at);
+  await capture(page, testInfo, "provider-failure", {
+    injected: "provider read answered HTTP 500",
+    served: { status: failed.status, sync_status: failed.sync_status, status_message: failed.status_message },
+    lastSyncedAtHeld: failed.last_synced_at === issuesSynced.last_synced_at
+  });
+
+  // Ambiguous outcome: the request left, the answer never arrived. The server
+  // records the explicit failure and the row shows it.
+  await writeFixtureState({ github: { transport_fail: [issuesReference] } });
+  await resourceControl(page, "Sync Issues").click();
+  await expect(issuesRow).toContainText("Provider transport failed");
+  await expect(issuesRow.getByText("Synced", { exact: true })).toHaveCount(0);
+  const ambiguous = await readBoundResource(page, connectionId, issuesReference);
+  expect(ambiguous.sync_status).toBe("failed");
+  expect(ambiguous.status_message).toBe("Provider transport failed");
+  expect(ambiguous.last_synced_at).toBe(issuesSynced.last_synced_at);
+  await capture(page, testInfo, "transport-failure", {
+    injected: "ambiguous provider transport failure",
+    served: { sync_status: ambiguous.sync_status, status_message: ambiguous.status_message },
+    lastSyncedAtHeld: ambiguous.last_synced_at === issuesSynced.last_synced_at
+  });
+
+  // Repository baseline, then the ambiguous outcome, then a readback whose
+  // document contradicts the pre-failure assumption: the sync writes exactly
+  // what the provider answered at readback time.
+  await resetFixtureState();
+  await resourceControl(page, "Sync Repository").click();
+  const repositoryRow = resourceRow(page, "Repository");
+  await expect(repositoryRow).toContainText(/Synced/);
+  const repositorySynced = await readBoundResource(page, connectionId, repositoryReference);
+  expect(repositorySynced.url).toBe(`https://github.com/${repositoryReference}`);
+  expect(repositorySynced.metadata.archived).toBe(false);
+  const baselineSyncedAt = repositorySynced.last_synced_at;
+  expect(baselineSyncedAt).toBeTruthy();
+
+  await writeFixtureState({ github: { transport_fail: [repositoryReference] } });
+  await resourceControl(page, "Sync Repository").click();
+  await expect(repositoryRow).toContainText("Provider transport failed");
+  const repositoryAmbiguous = await readBoundResource(page, connectionId, repositoryReference);
+  expect(repositoryAmbiguous.url).toBe(repositorySynced.url);
+  expect(repositoryAmbiguous.metadata.archived).toBe(false);
+  expect(repositoryAmbiguous.last_synced_at).toBe(baselineSyncedAt);
+
+  const archivedUrl = `https://github.com/${repositoryReference}-archived`;
+  await writeFixtureState({ github: { repository: { [repositoryReference]: { archived: true, html_url: archivedUrl } } } });
+  await resourceControl(page, "Sync Repository").click();
+  await expect(repositoryRow).toContainText(/Synced/);
+  await expect(repositoryRow).not.toContainText(/Failed/);
+  const resolved = await readBoundResource(page, connectionId, repositoryReference);
+  expect(resolved.status).toBe("healthy");
+  expect(resolved.sync_status).toBe("synced");
+  expect(resolved.url).toBe(archivedUrl);
+  expect(resolved.metadata.archived).toBe(true);
+  expect(Date.parse(resolved.last_synced_at)).toBeGreaterThan(Date.parse(baselineSyncedAt));
+  await expect(repositoryRow).toContainText(resolved.last_synced_at);
+  await capture(page, testInfo, "readback-resolved", {
+    reference: repositoryReference,
+    served: { url: resolved.url, archived: resolved.metadata.archived, last_synced_at: resolved.last_synced_at },
+    replacedAssumption: "archived: true and a different html_url were written from the readback"
+  });
+
+  await resetFixtureState();
+
+  // Provider-sourced delivery: a work item bound to the repository resource
+  // whose pull request URL the fixture answers as open with an approved review.
+  // The console sync reads that pull request through the real provider module,
+  // and the real work item route renders exactly the provider-owned evidence.
+  const deliveryRepository = await readBoundResource(page, connectionId, repositoryReference);
+  expect(deliveryRepository.sync_status).toBe("synced");
+  const deliveryPullRequestUrl = `https://github.com/${repositoryReference}/pull/42`;
+  const deliveryTitle = `Delivery evidence ${suffix}`;
+  const deliveryCreated = await api(page, `/portal/api/projects/${projectId}/work-items`, { body: {
+    title: deliveryTitle,
+    repository_resource_id: deliveryRepository.id,
+    pull_request_url: deliveryPullRequestUrl
+  } });
+  expect(deliveryCreated.status, JSON.stringify(deliveryCreated.body)).toBe(201);
+  const deliveryWorkItemId = deliveryCreated.body.work_item.id;
+  // Until a sync reads the provider's answer, the item serves the operator's
+  // URL as a manual delivery and the provider owns nothing.
+  expect(deliveryCreated.body.work_item.delivery).toMatchObject({
+    pull_request: { source: "manual", value: deliveryPullRequestUrl, url: deliveryPullRequestUrl, generation: null },
+    review: { source: "none", status: "none" }
+  });
+  // Only a provider read adds the recorded time; the manual projection has none.
+  expect(deliveryCreated.body.work_item.delivery.pull_request.recorded_at).toBeUndefined();
+
+  const deliverySync = page.waitForResponse((response) =>
+    response.request().method() === "POST" &&
+    new URL(response.url()).pathname === `/portal/api/resources/${deliveryRepository.id}/sync`
+  );
+  await resourceControl(page, "Sync Repository").click();
+  expect((await deliverySync).status()).toBe(200);
+  const deliveryRepositorySynced = await readBoundResource(page, connectionId, repositoryReference);
+  expect(deliveryRepositorySynced.sync_status).toBe("synced");
+  const deliveryRead = await api(page, `/portal/api/work-items/${deliveryWorkItemId}`, { method: "GET" });
+  expect(deliveryRead.status, JSON.stringify(deliveryRead.body)).toBe(200);
+  const providerDelivery = deliveryRead.body.work_item.delivery;
+  expect(providerDelivery.pull_request.source).toBe("provider");
+  expect(providerDelivery.pull_request.provider).toBe("github");
+  expect(providerDelivery.pull_request.value).toBe(deliveryPullRequestUrl);
+  expect(providerDelivery.pull_request.url).toBe(deliveryPullRequestUrl);
+  expect(providerDelivery.pull_request.status).toBe("open");
+  expect(providerDelivery.pull_request.generation).toBeNull();
+  expect(typeof providerDelivery.pull_request.recorded_at).toBe("string");
+  expect(providerDelivery.review.source).toBe("provider");
+  expect(providerDelivery.review.value).toBe("approved");
+  expect(providerDelivery.review.status).toBe("approved");
+  expect(providerDelivery.review.generation).toBeNull();
+
+  // Wait for the connections surface to finish its reads before the document
+  // navigation: a response body that is still in flight when the page navigates
+  // away cannot be read by the credential scan.
+  await page.waitForLoadState("networkidle");
+  await page.goto(`/portal/work/${deliveryWorkItemId}`);
+  const deliveryDetail = isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: deliveryTitle });
+  await expect(deliveryDetail.getByRole("heading", { level: 1, name: deliveryTitle })).toBeVisible();
+  const deliveryRows = deliveryDetail.locator(".delivery-list > div");
+  const deliveryPullRequestRow = deliveryRows.filter({ hasText: "Pull request" });
+  const deliveryReviewRow = deliveryRows.filter({ hasText: "Review" });
+  await expect(deliveryPullRequestRow.locator("dd .chip")).toHaveText("open");
+  // The rendered source is the delivery's own provenance ("provider") plus the
+  // provider that authored it; the served projection below is the same values.
+  await expect(deliveryPullRequestRow.locator("dd")).toContainText("source: provider · github");
+  await expect(deliveryPullRequestRow.getByRole("link", { name: "Open", exact: true }))
+    .toHaveAttribute("href", deliveryPullRequestUrl);
+  await expect(deliveryReviewRow.locator("dd .chip")).toHaveText("approved");
+  await expect(deliveryReviewRow.locator("dd")).toContainText("source: provider · github");
+  await capture(page, testInfo, "delivery-evidence", {
+    workItemId: deliveryWorkItemId,
+    pullRequestUrl: deliveryPullRequestUrl,
+    served: {
+      value: providerDelivery.pull_request.value,
+      status: providerDelivery.pull_request.status,
+      source: providerDelivery.pull_request.source,
+      provider: providerDelivery.pull_request.provider,
+      review: providerDelivery.review
+    }
+  });
+
+  // Negative direction: the provider module refuses a work item whose pull
+  // request URL belongs to another repository. The console renders the
+  // server's receipt, the resource takes the server's failure state, and
+  // neither work item's delivery is rewritten.
+  // Back to the connections surface: the previous document's reads settle first
+  // so no response body is stranded by the navigation.
+  await page.waitForLoadState("networkidle");
+  await page.goto(`/portal/connections?projectId=${projectId}`);
+  await expect(page.getByRole("heading", { name: "Project resources" })).toBeVisible();
+  allowBrowserError(page, /status of 400/);
+  const mismatchedPullRequestUrl = `https://github.com/acme-fixture/other-${suffix}/pull/42`;
+  const mismatchedTitle = `Mismatched delivery ${suffix}`;
+  const mismatchedCreated = await api(page, `/portal/api/projects/${projectId}/work-items`, { body: {
+    title: mismatchedTitle,
+    repository_resource_id: deliveryRepository.id,
+    pull_request_url: mismatchedPullRequestUrl
+  } });
+  expect(mismatchedCreated.status, JSON.stringify(mismatchedCreated.body)).toBe(201);
+  const mismatchedWorkItemId = mismatchedCreated.body.work_item.id;
+  const mismatchedDelivery = mismatchedCreated.body.work_item.delivery;
+  expect(mismatchedDelivery).toMatchObject({
+    pull_request: { source: "manual", value: mismatchedPullRequestUrl, url: mismatchedPullRequestUrl, generation: null },
+    review: { source: "none", status: "none" }
+  });
+
+  const refusedSync = page.waitForResponse((response) =>
+    response.request().method() === "POST" &&
+    new URL(response.url()).pathname === `/portal/api/resources/${deliveryRepository.id}/sync`
+  );
+  await resourceControl(page, "Sync Repository").click();
+  expect((await refusedSync).status()).toBe(400);
+  await expect(page.getByRole("status").filter({ hasText: "(invalid_request)" }))
+    .toContainText("request payload is invalid (invalid_request)");
+  await expect(repositoryRow).toContainText(/Failed/);
+  await expect(repositoryRow).toContainText("Pull request URL does not match the bound repository");
+  const refusedRepository = await readBoundResource(page, connectionId, repositoryReference);
+  expect(refusedRepository.status).toBe("degraded");
+  expect(refusedRepository.sync_status).toBe("failed");
+  expect(refusedRepository.status_message).toBe("Pull request URL does not match the bound repository");
+  // The refusal moved the check marker but kept the last good sync marker.
+  expect(Date.parse(refusedRepository.last_synced_at)).toBeLessThan(Date.parse(refusedRepository.last_checked_at));
+
+  const mismatchedAfter = await api(page, `/portal/api/work-items/${mismatchedWorkItemId}`, { method: "GET" });
+  expect(mismatchedAfter.body.work_item.delivery).toEqual(mismatchedDelivery);
+  const providerDeliveryAfter = await api(page, `/portal/api/work-items/${deliveryWorkItemId}`, { method: "GET" });
+  // The refusal writes nothing: the sibling item's provider-owned delivery is
+  // intact, and the console sync's own receipt is the state above.
+  expect(providerDeliveryAfter.body.work_item.delivery).toMatchObject({
+    pull_request: {
+      source: "provider",
+      provider: "github",
+      value: deliveryPullRequestUrl,
+      url: deliveryPullRequestUrl,
+      status: "open",
+      generation: null
+    },
+    review: { source: "provider", value: "approved", status: "approved", generation: null }
+  });
+  await capture(page, testInfo, "delivery-refused", {
+    workItemId: mismatchedWorkItemId,
+    refusal: "invalid_request (request payload is invalid)",
+    servedMessage: refusedRepository.status_message,
+    served: {
+      resource: { status: refusedRepository.status, sync_status: refusedRepository.sync_status },
+      delivery: mismatchedAfter.body.work_item.delivery
+    }
+  });
+
+  await assertNoCredentials(page, recorded);
+});
+
+test("project switching discards a late sync continuation and never writes into the new project", async ({ page, browser }, testInfo) => {
+  allowBrowserError(page, /status of 502/);
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const first = await createProject(page);
+  const second = await createProject(page);
+  const connectionName = `Switch fixture ${suffix}`;
+  const connectionId = await createConnectionThroughApi(page, {
+    name: connectionName,
+    account: "acme-fixture",
+    capabilities: ["repositories", "work_items"]
+  });
+  const firstRepositoryReference = `acme-fixture/first-repository-${suffix}`;
+  const firstIssuesReference = `acme-fixture/first-issues-${suffix}`;
+  const secondReference = `acme-fixture/second-repository-${suffix}`;
+  await bindResourceThroughApi(page, first, { kind: "repository", name: "First repo", reference: firstRepositoryReference, connectionId });
+  await bindResourceThroughApi(page, first, { kind: "work_tracking", name: "First issues", reference: firstIssuesReference, connectionId });
+  await bindResourceThroughApi(page, second, { kind: "repository", name: "Second repo", reference: secondReference, connectionId });
+  await resetFixtureState();
+
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("Project", { exact: true }).selectOption(first);
+  await expect(resourceRow(page, "First repo")).toBeVisible();
+  await expect(resourceRow(page, "First issues")).toBeVisible();
+
+  // A per-resource sync held open: the console mirrors the single-flight
+  // contract while the real request is pending, and the operator switches
+  // projects before it settles.
+  await writeFixtureState({ github: { hold: [firstRepositoryReference] } });
+  await resourceControl(page, "Sync First repo").click();
+  await expect(resourceControl(page, "Sync First repo")).toBeDisabled();
+  await expect(resourceControl(page, "Update First repo")).toBeDisabled();
+  await expect(resourceControl(page, "Unbind First repo")).toBeDisabled();
+  await expect(resourceControl(page, "Bind resource")).toBeDisabled();
+  await expect(resourceControl(page, "Synchronize project")).toBeDisabled();
+  await capture(page, testInfo, "held-resource-sync", {
+    reference: firstRepositoryReference,
+    pending: "the sync is in flight and every mutation control refuses a second start"
+  });
+  // `exact` keeps this on the shell's project picker: the project-resources
+  // surface labels its own region "Project resources".
+  await page.getByLabel("Project", { exact: true }).selectOption(second);
+  await expect(resourceRow(page, "Second repo")).toBeVisible();
+  await expect(page.getByText(firstRepositoryReference)).toHaveCount(0);
+  await expect(resourceControl(page, "Sync First repo")).toHaveCount(0);
+  // Releasing the hold settles the first project's sync; the second project's
+  // rows still hold only its own served state.
+  await resetFixtureState();
+  await expect.poll(async () => {
+    const resource = await readBoundResource(page, connectionId, firstRepositoryReference);
+    return resource ? resource.sync_status : "missing";
+  }, { message: "the first project's held sync must settle after the hold is released" }).toBe("synced");
+  await expect(resourceRow(page, "Second repo")).toBeVisible();
+  await expect(resourceRow(page, "Second repo")).not.toContainText(/Synced/);
+  await expect(page.getByText(firstRepositoryReference)).toHaveCount(0);
+  await expect(resourceControl(page, "Bind resource")).toBeEnabled();
+  await expect(resourceControl(page, "Synchronize project")).toBeEnabled();
+  await capture(page, testInfo, "switch-after-resource-sync", {
+    selected: second,
+    retained: "the second project's rows are its own; the settled first-project sync wrote nothing here"
+  });
+
+  // A project sync held open, then released into a failure after the switch:
+  // the late failure for the old project surfaces nothing on the new one.
+  await page.getByLabel("Project", { exact: true }).selectOption(first);
+  await expect(resourceRow(page, "First repo")).toBeVisible();
+  await writeFixtureState({ github: { hold: [firstRepositoryReference, firstIssuesReference] } });
+  await resourceControl(page, "Synchronize project").click();
+  await expect(resourceControl(page, "Synchronize project")).toBeDisabled();
+  await expect(resourceControl(page, "Bind resource")).toBeDisabled();
+  await expect(resourceControl(page, "Sync First repo")).toBeDisabled();
+  await expect(resourceControl(page, "Update First issues")).toBeDisabled();
+  await page.getByLabel("Project", { exact: true }).selectOption(second);
+  await expect(resourceRow(page, "Second repo")).toBeVisible();
+  await writeFixtureState({ github: { transport_fail: [firstRepositoryReference, firstIssuesReference] } });
+  await expect.poll(async () => {
+    const repository = await readBoundResource(page, connectionId, firstRepositoryReference);
+    const issues = await readBoundResource(page, connectionId, firstIssuesReference);
+    return [repository ? repository.sync_status : "missing", issues ? issues.sync_status : "missing"];
+  }, { message: "the released project sync must settle as an explicit failure" }).toEqual(["failed", "failed"]);
+  // Every continuation of the finished project sync was discarded.
+  await expect(page.getByText(/Provider transport failed/)).toHaveCount(0);
+  await expect(page.getByText(/\(provider_failure\)/)).toHaveCount(0);
+  await expect(resourceRow(page, "Second repo")).toBeVisible();
+  await expect(page.getByText(firstRepositoryReference)).toHaveCount(0);
+  await expect(resourceControl(page, "Bind resource")).toBeEnabled();
+  await expect(resourceControl(page, "Synchronize project")).toBeEnabled();
+  await capture(page, testInfo, "switch-after-project-sync-failure", {
+    selected: second,
+    discarded: "the late failure for the first project surfaced nothing on the second project"
+  });
+  // Going back shows the served truth the re-read reports, not a carry-over.
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("Project", { exact: true }).selectOption(first);
+  await expect(resourceRow(page, "First repo")).toContainText("Provider transport failed");
+  await expect(resourceRow(page, "First issues")).toContainText("Provider transport failed");
+  await expect(resourceRow(page, "First repo")).toContainText(/Failed/);
+  await capture(page, testInfo, "first-project-served-failure", {
+    selected: first,
+    served: "both first-project resources carry the server's failure after the re-read"
+  });
+
+  // Cross-operator: an independent session reads the same served state and
+  // settles its own project while the first page keeps the second selected.
+  await resetFixtureState();
+  const context = await browser.newContext(deviceContextOptions(testInfo));
+  const operator = await context.newPage();
+  monitorBrowserErrors(operator);
+  const operatorRecorded = recordApiBodies(operator);
+  try {
+    await login(operator);
+    // The fresh session reads the whole project directory at login, so the
+    // scope is selected in-app instead of loading a second document.
+    await operator.getByLabel("Project", { exact: true }).selectOption(first);
+    await expect(resourceRow(operator, "First repo")).toContainText("Provider transport failed");
+    await expect(resourceRow(operator, "Second repo")).toHaveCount(0);
+    await operator.getByLabel("Project", { exact: true }).selectOption(second);
+    await expect(resourceRow(operator, "Second repo")).toBeVisible();
+    await operator.getByRole("button", { name: "Sync Second repo", exact: true }).click();
+    await expect(resourceRow(operator, "Second repo")).toContainText(/Synced/);
+    await capture(operator, testInfo, "cross-operator-readback", {
+      firstProject: "provider failure served to an independent operator session",
+      secondProject: "the second project's resource synchronized by that session"
+    });
+    await assertNoCredentials(operator, operatorRecorded);
+    assertNoBrowserErrors(operator);
+  } finally {
+    await context.close();
+  }
+  await resetFixtureState();
+  await assertNoCredentials(page, recorded);
+});
+
+test("external work items keep their identity, their provider-owned lock and their availability", async ({ page, isMobile }, testInfo) => {
+  allowBrowserError(page, /status of 409/);
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const projectId = await createProject(page);
+  const otherProjectId = await createProject(page);
+  const connectionName = `Assignment fixture ${suffix}`;
+  const connectionId = await createConnectionThroughApi(page, {
+    name: connectionName,
+    account: "acme-fixture",
+    capabilities: ["repositories", "work_items", "ci"]
+  });
+  const issuesReference = `acme-fixture/issues-${suffix}`;
+  const repositoryReference = `acme-fixture/repository-${suffix}`;
+  const pipelineReference = `acme-fixture/pipeline-${suffix}`;
+  const otherReference = `acme-fixture/other-${suffix}`;
+  const issues = await bindResourceThroughApi(page, projectId, { kind: "work_tracking", name: "Issues", reference: issuesReference, connectionId });
+  const repository = await bindResourceThroughApi(page, projectId, { kind: "repository", name: "Repository", reference: repositoryReference, connectionId });
+  const pipeline = await bindResourceThroughApi(page, projectId, { kind: "ci", name: "Pipeline", reference: pipelineReference, connectionId });
+  await bindResourceThroughApi(page, otherProjectId, { kind: "repository", name: "Other repository", reference: otherReference, connectionId });
+  await writeFixtureState({ github: { issues: { [issuesReference]: [101, 102] } } });
+
+  const synchronized = await api(page, `/portal/api/resources/${issues.id}/sync`, {});
+  expect(synchronized.status, JSON.stringify(synchronized.body)).toBe(200);
+  const workspace = await readWorkspace(page, projectId);
+  const imported = projectFromWorkspace(workspace, projectId).work_items.filter((item) => item.external?.resource_id === issues.id);
+  expect(imported.map((item) => item.external.id).sort()).toEqual(["101", "102"]);
+  const subject = imported.find((item) => item.external.id === "101");
+  const closed = imported.find((item) => item.external.id === "102");
+  expect(subject.external.url).toBe(`https://github.com/${issuesReference}/issues/101`);
+  expect(subject.external.state).toBe("open");
+  expect(subject.external.available).toBe(true);
+  expect(subject.external.assignee).toBe("fixture-assignee");
+
+  const detailRead = await api(page, `/portal/api/work-items/${subject.id}`, { method: "GET" });
+  expect(detailRead.status, JSON.stringify(detailRead.body)).toBe(200);
+  expect(detailRead.body.work_item.external.id).toBe("101");
+  expect(detailRead.body.work_item.external.url).toBe(subject.external.url);
+  expect(detailRead.body.work_item.external.available).toBe(true);
+
+  await page.waitForLoadState("networkidle");
+  await page.goto(`/portal/work/${subject.id}`);
+  const detail = isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: subject.title });
+  await expect(detail.getByRole("heading", { level: 1, name: subject.title })).toBeVisible();
+  await expect(detail.getByRole("link", { name: "Open external record" })).toHaveAttribute("href", subject.external.url);
+  await capture(page, testInfo, "external-item", {
+    workItemId: subject.id,
+    external: { id: subject.external.id, url: subject.external.url, state: subject.external.state, available: subject.external.available }
+  });
+
+  // The assignment editor offers only the item's own project resources: the
+  // other project's repository is not an option, and each option carries the
+  // resource id and the exact reference.
+  await detail.getByRole("button", { name: "Edit assignment", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Assignment" });
+  await expect(dialog).toBeVisible();
+  // The option sets come from the item's project read: wait for that read to
+  // land (the narrow surface has no background project board) and pin the
+  // sets at exactly the empty option plus this project's one resource.
+  await expect(dialog.getByLabel("Repository")).toContainText(repositoryReference);
+  await expect(dialog.getByLabel("Repository").locator("option")).toHaveCount(2);
+  await expect(dialog.getByLabel("CI resource")).toContainText(pipelineReference);
+  await expect(dialog.getByLabel("CI resource").locator("option")).toHaveCount(2);
+  const repositoryOptions = await dialog.getByLabel("Repository").locator("option").evaluateAll((options) =>
+    options.map((option) => ({ value: option.value, text: option.textContent ?? "" }))
+  );
+  const pipelineOptions = await dialog.getByLabel("CI resource").locator("option").evaluateAll((options) =>
+    options.map((option) => ({ value: option.value, text: option.textContent ?? "" }))
+  );
+  expect(repositoryOptions.some((option) => option.value === repository.id), "the repository options must carry this project's repository resource id").toBe(true);
+  expect(repositoryOptions.some((option) => option.text.includes(repositoryReference)), "the repository option must carry the exact reference").toBe(true);
+  expect(repositoryOptions.some((option) => /not linked/i.test(option.text)), "the repository select must offer the unlinked option").toBe(true);
+  expect(repositoryOptions.every((option) => !option.text.includes(otherReference)), "another project's resource must not be offered").toBe(true);
+  expect(pipelineOptions.some((option) => option.value === pipeline.id), "the CI options must carry this project's CI resource id").toBe(true);
+  expect(pipelineOptions.some((option) => option.text.includes(pipelineReference)), "the CI option must carry the exact reference").toBe(true);
+  expect(pipelineOptions.some((option) => /use repository provider/i.test(option.text)), "the CI select must offer the provider-fallback option").toBe(true);
+  expect(pipelineOptions.every((option) => !option.text.includes(otherReference)), "another project's resource must not be offered as CI").toBe(true);
+  expect(repositoryOptions.some((option) => option.value === pipeline.id)).toBe(false);
+  expect(pipelineOptions.some((option) => option.value === repository.id)).toBe(false);
+
+  await dialog.getByLabel("Owner type").selectOption("agent");
+  await dialog.getByLabel("Owner", { exact: true }).fill("Codex");
+  await dialog.getByLabel("Agent profile").fill("codex");
+  await dialog.getByLabel("Workspace").fill("primary");
+  await dialog.getByLabel("Repository").selectOption(repository.id);
+  await dialog.getByLabel("CI resource").selectOption(pipeline.id);
+  await dialog.getByRole("button", { name: "Save assignment", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const assigned = await api(page, `/portal/api/work-items/${subject.id}`, { method: "GET" });
+  expect(assigned.body.work_item.repository_resource_id).toBe(repository.id);
+  expect(assigned.body.work_item.ci_resource_id).toBe(pipeline.id);
+  expect(assigned.body.work_item.assignee.type).toBe("agent");
+  expect(assigned.body.work_item.assignee.name).toBe("Codex");
+  expect(assigned.body.work_item.assignee.agent_profile).toBe("codex");
+  expect(assigned.body.work_item.workspace).toBe("primary");
+  expect(assigned.body.work_item.can_start).toBe(true);
+  await capture(page, testInfo, "assignment-saved", {
+    workItemId: subject.id,
+    served: {
+      repository_resource_id: assigned.body.work_item.repository_resource_id,
+      ci_resource_id: assigned.body.work_item.ci_resource_id,
+      assignee: assigned.body.work_item.assignee,
+      can_start: assigned.body.work_item.can_start
+    },
+    options: {
+      repository: repositoryOptions.map((option) => option.value),
+      ci: pipelineOptions.map((option) => option.value)
+    }
+  });
+
+  // Provider-owned fields stay locked on the API even though this surface
+  // renders no control for them.
+  const refusedTitle = await api(page, `/portal/api/work-items/${subject.id}`, { method: "PATCH", body: { version: assigned.body.work_item.version, title: "Provider-owned change" } });
+  expect(refusedTitle.status, JSON.stringify(refusedTitle.body)).toBe(409);
+  expect(refusedTitle.body.error.code).toBe("provider_owned");
+  expect(await detail.getByRole("textbox", { name: /title/i }).count()).toBe(0);
+
+  // A readback that omits the item marks it unavailable: the detail renders it
+  // unavailable, no run or retry control exists, and the readback refuses it.
+  await writeFixtureState({ github: { issues: { [issuesReference]: [102] } } });
+  const shrunk = await api(page, `/portal/api/resources/${issues.id}/sync`, {});
+  expect(shrunk.status, JSON.stringify(shrunk.body)).toBe(200);
+  const unavailable = await api(page, `/portal/api/work-items/${subject.id}`, { method: "GET" });
+  expect(unavailable.body.work_item.external.available).toBe(false);
+  expect(unavailable.body.work_item.can_start).toBe(false);
+  const stillAvailable = await api(page, `/portal/api/work-items/${closed.id}`, { method: "GET" });
+  expect(stillAvailable.body.work_item.external.available).toBe(true);
+  await page.reload();
+  const reloaded = isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: subject.title });
+  await expect(reloaded.getByText(/unavailable/i).first()).toBeVisible();
+  await expect(reloaded.getByRole("button", { name: /^(start run|run|retry)$/i })).toHaveCount(0);
+  await capture(page, testInfo, "external-unavailable", {
+    workItemId: subject.id,
+    served: { available: unavailable.body.work_item.external.available, can_start: unavailable.body.work_item.can_start },
+    omittedByReadback: "issue 101",
+    retained: `issue 102 stayed available: ${stillAvailable.body.work_item.external.available}`,
+    executionControl: "none rendered"
+  });
+
+  await resetFixtureState();
+  await assertNoCredentials(page, recorded);
+});
+
+test("Azure DevOps repository, board and pipeline resources bind and sync against the fixture documents", async ({ page }, testInfo) => {
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const projectId = await createProject(page);
+  const connectionName = `Azure resources ${suffix}`;
+  await createThroughConsole(page, { provider: "azure_devops", name: connectionName, account: "acme-fixture", capabilities: ["Repositories", "Work items", "CI"] });
+  const directory = await api(page, "/portal/api/connections", { method: "GET" });
+  const connection = directory.body.connections.find((candidate) => candidate.name === connectionName);
+  expect(connection, "the connections read must serve this test's connection").toBeTruthy();
+  const references = {
+    repository: "Platform/symmetry",
+    work_tracking: "Platform",
+    ci: "Platform/pipeline/7"
+  };
+
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("Project", { exact: true }).selectOption(projectId);
+  await expect(page.getByRole("heading", { name: "Project resources" })).toBeVisible();
+  // The console accepts the exact provider references: project/repository,
+  // project, and project/pipeline/<id>.
+  for (const resource of [
+    { kind: "repository", name: "Azure repo", reference: references.repository },
+    { kind: "work_tracking", name: "Azure boards", reference: references.work_tracking },
+    { kind: "ci", name: "Azure pipeline", reference: references.ci }
+  ]) {
+    await bindResourceThroughConsole(page, { ...resource, connectionId: connection.id });
+    await expect(resourceRow(page, resource.name)).toContainText(resource.reference);
+  }
+  await expect(resourceRow(page, "Azure repo")).toContainText(/Never synced/);
+  await capture(page, testInfo, "azure-resources-bound", {
+    references,
+    connection: connectionName,
+    state: "three kinds bound through the console, never synced"
+  });
+
+  await resourceControl(page, "Sync Azure repo").click();
+  await expect(resourceRow(page, "Azure repo")).toContainText(/Synced/);
+  await resourceControl(page, "Sync Azure boards").click();
+  await expect(resourceRow(page, "Azure boards")).toContainText(/Synced/);
+  await resourceControl(page, "Sync Azure pipeline").click();
+  await expect(resourceRow(page, "Azure pipeline")).toContainText(/Synced/);
+  for (const row of ["Azure repo", "Azure boards", "Azure pipeline"]) {
+    await expect(resourceRow(page, row)).not.toContainText(/Failed/);
+  }
+
+  const repositoryResource = await readBoundResource(page, connection.id, references.repository);
+  const boardResource = await readBoundResource(page, connection.id, references.work_tracking);
+  const pipelineResource = await readBoundResource(page, connection.id, references.ci);
+  expect(repositoryResource.status).toBe("healthy");
+  expect(repositoryResource.sync_status).toBe("synced");
+  expect(repositoryResource.url).toBe("https://dev.azure.com/acme-fixture/Platform/_git/symmetry");
+  expect(repositoryResource.metadata.default_branch).toBe("refs/heads/main");
+  expect(boardResource.sync_status).toBe("synced");
+  expect(boardResource.url).toBe("https://dev.azure.com/acme-fixture/Platform/_boards");
+  expect(pipelineResource.sync_status).toBe("synced");
+  await expect(resourceRow(page, "Azure repo")).toContainText(repositoryResource.last_synced_at);
+  await expect(resourceRow(page, "Azure boards")).toContainText(boardResource.last_synced_at);
+  await expect(resourceRow(page, "Azure pipeline")).toContainText(pipelineResource.last_synced_at);
+
+  // The Boards sync imported the fixture work item with its exact provider
+  // identity, and the pipeline document supplied the CI metadata.
+  const workspace = await readWorkspace(page, projectId);
+  const imported = projectFromWorkspace(workspace, projectId).work_items.filter((item) => item.external?.resource_id === boardResource.id);
+  expect(imported.map((item) => item.external.id)).toEqual(["101"]);
+  expect(imported[0].external.provider).toBe("azure_devops");
+  expect(imported[0].external.url).toBe("https://dev.azure.com/acme-fixture/Platform/_workitems/edit/101");
+  expect(imported[0].external.state).toBe("Active");
+  expect(imported[0].status).toBe("ready");
+  expect(imported[0].external.available).toBe(true);
+  expect(imported[0].external.assignee).toBe("Fixture Assignee");
+  await capture(page, testInfo, "azure-resources-synced", {
+    served: {
+      repository: { url: repositoryResource.url, last_synced_at: repositoryResource.last_synced_at },
+      work_tracking: { url: boardResource.url, last_synced_at: boardResource.last_synced_at },
+      ci: { last_synced_at: pipelineResource.last_synced_at }
+    },
+    importedExternalId: imported[0].external.id,
+    importedExternalUrl: imported[0].external.url
+  });
 
   await assertNoCredentials(page, recorded);
 });

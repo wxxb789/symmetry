@@ -124,3 +124,69 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
       and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
       before changing any budget.
+
+- [ ] Investigate the mobile-chromium classic case `project, resource, work-item, filtering,
+      ordering, and persistence` in `browser/tests/portal.spec.mjs`. After saving the work-item
+      edit dialog, `#toast` stayed hidden with the stale text "Work item created" for the whole
+      10 s expect window, while the update itself persisted: the failure snapshot's detail drawer
+      shows the new pull request URL, CI `passed` and review `required` that the test set. Observed
+      while completing 0007e in the first legacy run (`portal-work-views.spec.mjs` +
+      `portal.spec.mjs` + `workspace-shell.spec.mjs` on both widths, 43 passed / 4 failed /
+      5 skipped) and reproduced alone on the same revision with the desktop case passing (mobile
+      `x` in 17.0 s, desktop `ok` in 12.1 s); it then passed in the second run of the same suites on
+      the unchanged classic files (46 passed / 1 failed / 5 skipped), so the mobile case is
+      intermittent. The classic route is
+      unchanged by 0007e: `control/lib`, `control/priv/portal_assets`,
+      `control/lib/symmetry_control_web/portal_html` and `portal_controller.ex` have no diff
+      against the base revision. Revalidate the classic toast branch that reports an update when
+      the edit dialog was opened from the detail drawer; keep the assertion.
+
+- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
+      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
+      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
+      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
+      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
+      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
+      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
+      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
+      remaining failure is the environment-limited `CommandTest` above). The build output is
+      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
+      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
+      suite prerequisite; keep the assertions.
+
+- [ ] Revalidate the load-sensitive Go test
+      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
+      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
+      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
+      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
+      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
+      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
+      deadline rather than a longer test timeout.
+
+- [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
+      `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
+      the server answers that code, but a sync refused for an ungranted capability maps to
+      `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
+      Either the server should serve the more specific code or the client entry should be removed;
+      decide in a separate maintenance change with a test that pins the served code.
+
+- [ ] Investigate the intermittent Linux failure
+      `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` in
+      `daemon/internal/platform` (`process_unix_linux_test.go:2119`, `monitor terminal reason =
+      owner_stop, want leader_absent`). Observed in run 43898893639 job 133409923040 under
+      `go test -race ./...` on the 0007d head, green on rerun of the same job. Revalidate the
+      leader-exit/owner-stop ordering window; keep the terminal-reason assertion.
+
+- [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
+      43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
+      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.061s` on the 0008a head, where the
+      same package had taken 365 s earlier on the same pull request and every other package passed;
+      green on rerun. This is the same loaded-runner family as the Windows `internal/workspace`
+      180 s package timeout: decide whether the package needs a longer explicit budget or fewer
+      load-sensitive waits, and keep the tests themselves.
+
+- [ ] Remove or justify the unreferenced CSS rules `.chip-failed` and `.chip-pending` in
+      `frontend/src/styles.css:170-171`. A sweep of all 137 class selectors in that file against
+      `frontend/src` found these two unreferenced already at `7a92ca4` (untouched by the 0007b,
+      0007c and 0007d work), so they are pre-existing dead weight rather than a merge artifact.
+      Revalidate before deleting and leave removal to separate maintenance.

@@ -29,8 +29,11 @@ const workItemRoute = createRoute({ getParentRoute: () => rootRoute, path: "/wor
 const connectionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/connections",
-  validateSearch: (search: Record<string, unknown>): { connectionId?: string } => ({
+  // `projectId` scopes the project-resource surface on this route; the server
+  // selected project is used when the URL carries none.
+  validateSearch: (search: Record<string, unknown>): { connectionId?: string; projectId?: string } => ({
     ...(typeof search["connectionId"] === "string" && search["connectionId"] ? { connectionId: search["connectionId"] } : {}),
+    ...(typeof search["projectId"] === "string" && search["projectId"] ? { projectId: search["projectId"] } : {}),
   }),
   component: ConnectionsPage,
 });

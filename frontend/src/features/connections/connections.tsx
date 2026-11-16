@@ -3,10 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouteContext, useRouterState, useSearch } from "@tanstack/react-router";
 import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { connectionsOptions } from "../../app/application";
+import { connectionsOptions, workspaceOptions } from "../../app/application";
 import { useSessionToken } from "../../app/session";
 import {
-  errorMessage,
   ServerRefusal,
   type Api,
   type Connection,
@@ -15,64 +14,13 @@ import {
   type ConnectionResource,
 } from "../../services/api";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
+import { FieldErrors, ProjectResources, StatusBadge, formatLabel, providerLabel, refusalNotice, restoreFocus } from "./resources";
 
-const knownStatuses: Record<string, true> = { healthy: true, degraded: true, offline: true, unknown: true };
-const knownSyncStatuses: Record<string, true> = { unknown: true, syncing: true, synced: true, stale: true, failed: true };
 const authTypes: Record<string, string> = { gh_cli: "GitHub CLI · HTTPS", entra_id: "Microsoft Entra ID" };
-const providerLabels: Record<string, string> = { github: "GitHub", azure_devops: "Azure DevOps" };
 const capabilityLabels: Record<string, string> = { repositories: "Repositories", work_items: "Work items", changes: "Changes", ci: "CI" };
-// The server owns the reason; the console adds the operator's next step.
-const refusalGuidance: Record<string, string> = {
-  stale: "Reload to see the server's current values.",
-  state_conflict: "Reload and resolve the changed state.",
-  not_found: "Reload the page to see the server's current connections.",
-  forbidden: "Grant the required provider permissions, then test the connection again.",
-  not_connected: "Bind the resource to a connection first.",
-  provider_unauthorized: "Reauthenticate the provider session on this server, then test the connection again.",
-  provider_failure: "Check provider availability, then test the connection again.",
-  validation_failed: "Correct the highlighted fields and submit again.",
-};
-
-const formatLabel = (value: string) => value.replaceAll("_", " ");
-const sentenceLabel = (value: string) => formatLabel(value).replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
-const providerLabel = (value: string) => providerLabels[value] ?? `Unknown provider: ${value || "unspecified"}`;
 const authLabel = (value: string) => authTypes[value] ?? `Unknown authentication: ${value || "unspecified"}`;
 const capabilityLabel = (value: string) => capabilityLabels[value] ?? `Unknown capability: ${value}`;
 const noPendingRequests: { check: number; remove: number } = { check: 0, remove: 0 };
-
-// Radix restores focus on close only to a Dialog.Trigger, and none of these
-// dialogs has one: the invoking control is captured before Radix moves keyboard
-// focus inside, and focused again when the dialog closes. That control can be
-// disabled while its write is still pending — the dialog stays closable so the
-// operator can keep working — and focusing a disabled control never moves
-// focus, which would drop keyboard focus to the body. Those closes fall back to
-// a control the pending write cannot disable.
-function restoreFocus(event: Event, opener: HTMLElement | null, fallback: HTMLElement | null) {
-  const target = opener?.isConnected && !opener.matches(":disabled")
-    ? opener
-    : fallback?.isConnected && !fallback.matches(":disabled") ? fallback : null;
-  if (!target) return;
-  event.preventDefault();
-  target.focus();
-}
-
-function StatusBadge({ status, scope }: { status: string; scope: "connection" | "resource" | "sync" }) {
-  const known = scope === "sync" ? knownSyncStatuses[status] : knownStatuses[status];
-  const tone = status === "healthy" || status === "synced" ? "status-complete" : status === "degraded" || status === "failed" || status === "offline" ? "status-attention" : "";
-  return <span className={`status-badge ${tone}`} data-status={status}>{known ? sentenceLabel(status) : `Unknown ${scope} status: ${status || "unspecified"}`}</span>;
-}
-
-function FieldErrors({ error, field }: { error: unknown; field: string }) {
-  const messages = (error instanceof ServerRefusal && error.fields?.[field]) || [];
-  if (messages.length === 0) return null;
-  return <p className="field-error" role="alert">{messages.join(" ")}</p>;
-}
-
-function refusalNotice(error: unknown): string {
-  if (!(error instanceof ServerRefusal)) return errorMessage(error);
-  const guidance = refusalGuidance[error.code];
-  return `${error.message} (${error.code})${guidance ? ` — ${guidance}` : ""}`;
-}
 
 function ResourceRows({ resources }: { resources: readonly ConnectionResource[] }) {
   if (resources.length === 0) return <p className="muted">No project resource is bound to this connection yet.</p>;
@@ -364,6 +312,11 @@ export function ConnectionsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const query = useQuery(connectionsOptions(application.api));
+  // The project directory and the selected project's resources + registered
+  // runtimes. The shell's project picker issues exactly this key, so the page
+  // adds no request; an absent URL scope falls back to the served selection.
+  const workspace = useQuery(workspaceOptions(application.api, search.projectId ?? null));
+  const selectedProjectId = search.projectId ?? workspace.data?.selected_project_id ?? null;
   const [creating, setCreating] = useState(false);
   // The connection an open edit dialog belongs to: a background refresh that
   // removes that connection must close the dialog, and a stale subject must not
@@ -375,6 +328,10 @@ export function ConnectionsPage() {
   // survives the detail unmounting and remounting while the operator inspects
   // another connection.
   const [pendingRequests, setPendingRequests] = useState<Record<string, { check: number; remove: number }>>({});
+  // Resource writes hold per-subject counts (`resource:{id}`, `project:{id}`)
+  // on the page, so their exclusion survives a re-read or a remount of the
+  // resource section; the page-level write counter covers the rest.
+  const [pendingSubjects, setPendingSubjects] = useState<Record<string, number>>({});
   // The control the dialogs fall back to when their invoking control is
   // disabled by the pending write (see restoreFocus).
   const detailCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -390,7 +347,10 @@ export function ConnectionsPage() {
   const editorSequence = useRef(0);
   const [openEditorId, setOpenEditorId] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
-  const refresh = () => { if (!query.isFetching) void query.refetch(); };
+  const refresh = () => {
+    if (!query.isFetching) void query.refetch();
+    if (!workspace.isFetching) void workspace.refetch();
+  };
   const connections = query.data?.connections ?? [];
   const selected = connections.find((connection) => connection.id === search.connectionId);
   // The editor renders from the subject it was opened for, re-read from the
@@ -410,6 +370,11 @@ export function ConnectionsPage() {
   // navigate them back or act on the newer subject.
   const selectionRef = useRef<string | null>(search.connectionId ?? null);
   useLayoutEffect(() => { selectionRef.current = search.connectionId ?? null; }, [search.connectionId]);
+  // The live project scope, readable by continuations that outlive this render:
+  // a response that arrives after the operator switched projects is discarded
+  // instead of acting on the newly selected project.
+  const projectRef = useRef<string | null>(selectedProjectId);
+  useLayoutEffect(() => { projectRef.current = selectedProjectId; }, [selectedProjectId]);
   useEffect(() => {
     if (!query.data || !search.connectionId || selected) return;
     void navigate({ to: "/connections", search: {}, replace: true });
@@ -444,6 +409,8 @@ export function ConnectionsPage() {
       const counts = current[connectionId] ?? noPendingRequests;
       return { ...current, [connectionId]: { ...counts, [kind]: Math.max(0, counts[kind] + (pending ? 1 : -1)) } };
     });
+  const trackSubject = (subject: string, pending: boolean) =>
+    setPendingSubjects((current) => ({ ...current, [subject]: Math.max(0, (current[subject] ?? 0) + (pending ? 1 : -1)) }));
   // A continuation that settles belongs to the connection the operator is
   // looking at: the page drops it when the operator has left that connection,
   // even though the request outlives its detail instance.
@@ -524,6 +491,12 @@ export function ConnectionsPage() {
         </aside>}
       <p className="sr-only" role="status">{query.isFetching && !query.isPending ? "Refreshing connections" : ""}</p>
     </div>}
+    <ProjectResources
+      api={application.api} csrf={csrf} projectId={selectedProjectId}
+      workspace={workspace.data} workspaceError={workspace.error} workspacePending={workspace.isPending}
+      onRefreshProject={() => { if (!workspace.isFetching) void workspace.refetch(); }}
+      connections={connections} writePending={pendingWrites > 0} pendingSubjects={pendingSubjects}
+      projectRef={projectRef} onWriteStart={beginWrite} onWriteSettled={endWrite} onSubjectPending={trackSubject} />
     {creating && <ConnectionEditor connection={null} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} fallbackFocus={detailCloseRef} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
     {editSubject && <ConnectionEditor connection={editSubject} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} fallbackFocus={detailCloseRef} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
   </>;

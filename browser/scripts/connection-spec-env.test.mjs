@@ -20,6 +20,7 @@ const fixtureVariables = [
   "SYMMETRY_OPERATOR_TOKEN",
   "SYMMETRY_FIXTURE_IDENTITY",
   "SYMMETRY_FIXTURE_IDENTITY_FILE",
+  "SYMMETRY_FIXTURE_STATE_FILE",
   "SYMMETRY_PORTAL_URL",
 ];
 const fixtureIdentity = {
@@ -27,7 +28,7 @@ const fixtureIdentity = {
   SYMMETRY_FIXTURE_IDENTITY_FILE: "/tmp/symmetry-fixture-identity.json",
 };
 
-// The spec reads exactly these four variables, so a developer shell that
+// The spec reads exactly these five variables, so a developer shell that
 // already carries one of them must not change what a case measures.
 function environment(overrides = {}) {
   const env = { ...process.env };
@@ -51,13 +52,13 @@ test("the documented custom-target override collects the suite and skips the fix
     SYMMETRY_OPERATOR_TOKEN: "documented-override-token",
   });
   assert.equal(run.status, 0, run.output);
-  assert.match(run.output, /10 skipped\b/);
+  assert.match(run.output, /20 skipped\b/);
 });
 
 test("an absent fixture environment skips at collection instead of failing the suite", () => {
   const run = playwright([], {});
   assert.equal(run.status, 0, run.output);
-  assert.match(run.output, /10 skipped\b/);
+  assert.match(run.output, /20 skipped\b/);
 });
 
 test("a partial fixture identity fails at collection instead of running an unproven target", () => {
@@ -66,15 +67,16 @@ test("a partial fixture identity fails at collection instead of running an unpro
     SYMMETRY_OPERATOR_TOKEN: "documented-override-token",
   });
   assert.equal(run.status, 1, run.output);
-  assert.match(run.output, /SYMMETRY_PORTAL_URL must be set together/);
+  assert.match(run.output, /SYMMETRY_PORTAL_URL, SYMMETRY_FIXTURE_STATE_FILE must be set together/);
 });
 
-test("the complete fixture environment collects the ten fixture tests", () => {
+test("the complete fixture environment collects the twenty fixture tests", () => {
   const run = playwright(["--list"], {
     ...fixtureIdentity,
     SYMMETRY_OPERATOR_TOKEN: "test-run-operator-token",
+    SYMMETRY_FIXTURE_STATE_FILE: "/tmp/symmetry-fixture-state.json",
     SYMMETRY_PORTAL_URL: "http://127.0.0.1:4021",
   });
   assert.equal(run.status, 0, run.output);
-  assert.match(run.output, /Total: 10 tests in 1 file/);
+  assert.match(run.output, /Total: 20 tests in 1 file/);
 });

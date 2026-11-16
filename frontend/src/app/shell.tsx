@@ -21,7 +21,8 @@ function useProjectScope() {
   // URL's claim only covers the window before that projection arrives.
   const servedWork = useQuery({ ...workDetailOptions(application.api, workScope?.workItemId ?? ""), enabled: workScope !== undefined });
   const searchProjectId = useMatch({ from: "/attention", shouldThrow: false, select: (match) => match.search.projectId });
-  return projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId;
+  const connectionsProjectId = useMatch({ from: "/connections", shouldThrow: false, select: (match) => match.search.projectId });
+  return projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId ?? connectionsProjectId;
 }
 
 function useProjectDirectory() {
@@ -37,7 +38,7 @@ function NavigationLinks({ onNavigate }: { onNavigate?: () => void }) {
   return <nav aria-label="Workspace navigation" className="nav-links">
     <Link to="/attention" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Inbox size={18} aria-hidden="true" />Attention</Link>
     <Link to="/projects" onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Folder size={18} aria-hidden="true" />Projects</Link>
-    <Link to="/connections" search={{}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Cable size={18} aria-hidden="true" />Connections</Link>
+    <Link to="/connections" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Cable size={18} aria-hidden="true" />Connections</Link>
   </nav>;
 }
 
@@ -47,15 +48,17 @@ function ProjectPicker() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const projectId = useProjectScope();
   const isAttention = pathname.endsWith("/attention");
-  const selected = projectId ?? (isAttention ? query.data?.selected_project_id ?? "" : "");
+  const isConnections = pathname.endsWith("/connections");
+  const selected = projectId ?? (isAttention || isConnections ? query.data?.selected_project_id ?? "" : "");
   return <div className="project-picker"><label htmlFor="project-selection">Project</label>
     <select id="project-selection" aria-label="Project" value={selected} disabled={!query.data} onChange={(event) => {
       const projectId = event.currentTarget.value;
-      if (isAttention) void navigate({ to: "/attention", search: projectId ? { projectId } : {} });
+      if (isConnections) void navigate({ to: "/connections", search: projectId ? { projectId } : {} });
+      else if (isAttention) void navigate({ to: "/attention", search: projectId ? { projectId } : {} });
       else if (projectId) void navigate({ to: "/projects/$projectId", params: { projectId } });
       else void navigate({ to: "/projects" });
     }}>
-      <option value="">{query.isPending ? "Loading projects…" : query.isError && !query.data ? "Projects unavailable" : isAttention ? "Server-selected project" : "All projects"}</option>
+      <option value="">{query.isPending ? "Loading projects…" : query.isError && !query.data ? "Projects unavailable" : isAttention || isConnections ? "Server-selected project" : "All projects"}</option>
       {selected && !query.data?.projects.some((project) => project.id === selected) && <option value={selected}>Unavailable project</option>}
       {query.data?.projects.map((project) => <option key={project.id} value={project.id}>{project.name}{project.status === "archived" ? " (archived)" : ""}</option>)}
     </select>
@@ -104,7 +107,7 @@ function CommandPalette() {
         <div className="command-results">
           {(!filter || "attention".includes(filter)) && <Link className="command-result" to="/attention" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><Inbox size={18} aria-hidden="true" />Attention</Link>}
           {(!filter || "projects".includes(filter)) && <Link className="command-result" to="/projects" onClick={closeForNavigation}><Folder size={18} aria-hidden="true" />All projects</Link>}
-          {(!filter || "connections".includes(filter)) && <Link className="command-result" to="/connections" search={{}} onClick={closeForNavigation}><Cable size={18} aria-hidden="true" />Connections</Link>}
+          {(!filter || "connections".includes(filter)) && <Link className="command-result" to="/connections" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><Cable size={18} aria-hidden="true" />Connections</Link>}
           {projects.map((project) => <Link className="command-result" key={project.id} to="/projects/$projectId" params={{ projectId: project.id }} onClick={closeForNavigation}><Folder size={18} aria-hidden="true" /><span>{project.name}<span className="item-key"> {project.key}</span></span></Link>)}
           {filter && projects.length === 0 && !"attention".includes(filter) && !"projects".includes(filter) && !"connections".includes(filter) && <p className="muted" role="status">No matching destinations.</p>}
           {query.isError && <p className="muted">Project search is unavailable. You can still navigate to Attention or Projects.</p>}
