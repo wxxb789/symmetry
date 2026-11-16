@@ -4,21 +4,39 @@
 control envelopes and operator requests described by `docs/design/protocol.md` and
 `docs/design/contracts.md`. `common.schema.json` contains shared definitions;
 the envelope schemas reference it locally and reject unknown control fields.
-`workspace-read.schema.json` additionally describes the consumed fields of the
-existing `/portal/api/workspace` presentation response. Its read objects allow
-additive unconsumed fields; this does not relax any command envelope. The
-frontend consumes its generated `SymmetryWorkspaceReadV1` DTO and `WorkspaceRead`
-Effect boundary rather than a parallel handwritten interface.
+`workspace-read.schema.json`, `work-detail-read.schema.json` and
+`work-timeline-read.schema.json` additionally describe the consumed fields of the
+existing `/portal/api/workspace`, `/portal/api/work-items/:work_item_id` and
+`/portal/api/work-items/:work_item_id/timeline` presentation responses. Their
+read objects allow additive unconsumed fields and finite presentation numbers;
+this does not relax any command envelope. The frontend consumes the generated
+`SymmetryWorkspaceReadV1`, `SymmetryWorkDetailReadV1` and
+`SymmetryWorkTimelineReadV1` DTOs and the matching Effect boundaries
+(`WorkspaceRead`, `WorkDetailRead`, `WorkTimelineRead`) rather than parallel
+handwritten interfaces. The detail read reuses the workspace row's
+`WorkspaceWorkItem` definition and the timeline read reuses the detail read's
+`WorkItemTimelineItem` definition; the shared definition bodies stay identical
+across files so the effect generator shares one graph for both roots, while the
+JSON Schema to TypeScript modules and the quicktype Go output may still restate
+the same shape per root. Fields added to
+the consumed workspace row are optional because the row keeps accepting older
+partial projections, while a production server serves them all.
+The detail read carries `outcome.summary` and `outcome.tests` verbatim from the
+reported task result or its evidence fallback, so those two fields require
+presence without constraining their JSON value shape.
 `ContextSnapshot.content_hash` is the SHA-256 of canonical UTF-8 JSON for the
 schema-valid snapshot with its top-level `content_hash` omitted; keys sort
 recursively and arrays retain order.
 
 The fixture manifest at `fixtures/manifest.json` is the shared positive and
-negative corpus. It deliberately covers complete subjects, missing and extra
-fields, wrong identity, unknown enums, nullable values, version mismatch,
-safe-integer boundaries, and the conditional achieve integration selection
-(omitted, explicit null, noncanonical UUID) beside missing and unsupported
-`decision_id` values. Evidence receipts carry a `predicate_id`, complete
+negative corpus. It covers the presentation reads as well: workspace rows,
+work detail and timeline bodies with null, active, paginated and
+additive-metadata shapes plus consumed-field violations. It deliberately covers
+complete subjects, missing and extra fields, wrong identity, unknown enums,
+nullable values, version mismatch, safe-integer boundaries, and the conditional
+achieve integration selection (omitted, explicit null, noncanonical UUID) beside
+missing and unsupported `decision_id` values. Evidence receipts carry a
+`predicate_id`, complete
 `Subject` and `subject_hash`; `contracts:check` verifies the canonical sorted
 JSON Subject hash for TaskResults and evidence, plus kind-specific `source_ref`
 identity. A TaskResult always carries its complete result Subject; a
@@ -29,7 +47,7 @@ exact MaxInt64 boundary, and rejection of MaxInt64+1. UUIDs use the daemon's
 canonical lowercase form with version `1`-`5` and RFC 4122 variant `8|9|a|b`.
 For command and transport envelopes, the fixture checker rejects
 fractional/exponent JSON number lexemes and raw integers outside the JSON
-safe-integer range before `JSON.parse` or Ajv can round them. Workspace reads
+safe-integer range before `JSON.parse` or Ajv can round them. Presentation reads
 admit finite presentation numbers in existing additive metadata; their consumed
 fields still pass the generated schema. UTF-8, duplicate-key and Unicode checks
 remain in force for both policies.
@@ -118,6 +136,10 @@ adds strict raw JSON checks before decoding a generated DTO. Full cross-field
 envelope validation belongs to `daemon/internal/protocol` and enters through
 `protocol.ValidateGoalEnvelope`.
 
+Known limitation: the quicktype-generated Go bundle flattens the timeline item
+`oneOf` into a single all-optional struct, so the Go side does not guarantee
+branch/data consistency; it has no consumers today.
+
 Validate every schema, fixture expectation and generated-file drift with:
 
 ```text
@@ -135,7 +157,7 @@ its existing clients and schemas.
 This package is independent of the frontend application. Its source entry point
 is usable by the future Vite build and by the Node 24 contract tooling.
 
-Each of the 15 schema decoders has two entry points:
+Each schema decoder has two entry points:
 
 ```ts
 import { Effect } from "effect";
@@ -151,8 +173,9 @@ const checked = Admission.decodeUnknown(value);
 
 `decodeJson` accepts a string or UTF-8 bytes and rejects malformed UTF-8,
 duplicate keys and invalid JSON. Command and transport decoders also reject
-noncanonical numeric lexemes; `WorkspaceRead` instead permits finite
-presentation numbers. Both entry points reject invalid structure, unpaired
+noncanonical numeric lexemes; `WorkspaceRead`, `WorkDetailRead` and
+`WorkTimelineRead` instead permit finite presentation numbers. Both entry
+points reject invalid structure, unpaired
 surrogates, and inconsistent hashes or cross-field values.
 The error channel distinguishes `WireJsonError`, Effect `ParseError`, and
 `SemanticError`. A caller that already parsed a rounded number cannot recover
@@ -205,6 +228,11 @@ To consume the operator request roots, Control must add matching
 That integration must retain the existing semantic checks for state,
 authorization, proposal graph integrity, replay identity, and runtime
 capability eligibility; JSON Schema deliberately does not duplicate them.
+
+`work-detail-read.schema.json` and `work-timeline-read.schema.json` have no
+Goals adapter entry point: the fixture test resolves them straight from the
+generated `daemon/internal/contracts/schema_bundle.json`, whose members already
+inline the shared common definitions.
 
 Validation failures return `{:error, reason}`. Atom map keys are normalized to
 JSON string keys recursively, while values are left unchanged. The adapter

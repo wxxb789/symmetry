@@ -137,6 +137,15 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/attention?projectId=project-123",
           "/portal/projects",
           "/portal/projects/project-123",
+          "/portal/projects/project-123?view=board&q=keeper",
+          "/portal/projects/project-123?q=Human+decision&blocked=%221%22",
+          "/portal/projects/project-123?owner=agent%3Acodex",
+          "/portal/projects/project-123?q=%22123%22",
+          "/portal/projects/project-123?q=a%09b",
+          "/portal/work/work-123",
+          "/portal/work/work-123?view=board",
+          "/portal/work/work-123?projectId=project-123",
+          "/portal/work/work-123?view=list&q=a%09b&owner=agent%3Acodex&blocked=1&projectId=project-123",
           "/portal/classic"
         ] do
       redirect_response = conn |> get(path)
@@ -145,7 +154,8 @@ defmodule SymmetryControlWeb.PortalSessionTest do
       login_page = conn |> enforce_csrf() |> get(redirected_to(redirect_response, 302))
       login_html = html_response(login_page, 200)
       [_, csrf_token] = Regex.run(~r/name="_csrf_token" value="([^"]+)"/, login_html)
-      assert login_html =~ ~s(name="return_to" value="#{path}")
+      return_to_field = ~s(name="return_to" value="#{escaped_attribute(path)}")
+      assert login_html =~ return_to_field
       assert get_resp_header(login_page, "cache-control") == ["no-store"]
 
       invalid =
@@ -158,7 +168,7 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "return_to" => path
         })
 
-      assert html_response(invalid, 401) =~ ~s(name="return_to" value="#{path}")
+      assert html_response(invalid, 401) =~ return_to_field
       assert get_resp_header(invalid, "cache-control") == ["no-store"]
 
       authenticated =
@@ -233,6 +243,25 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/classic?chat_scope=admin",
           "/portal/classic#not-a-view",
           "/portal/classic/../login",
+          "/portal/projects/project-123?return_to=//example.com",
+          "/portal/projects/project-123?projectId=project-123",
+          "/portal/projects/project-123?q=//example.com",
+          "/portal/projects/project-123?q=a%0ab",
+          "/portal/projects/project-123?q=a%1fb",
+          "/portal/projects/project-123?q=a%00b",
+          "/portal/projects/project-123?view=board#not-a-view",
+          "/portal/work",
+          "/portal/work/work-123#not-a-view",
+          "/portal/work/work-123?view=evil",
+          "/portal/work/work-123?unknown=1",
+          "/portal/work/work-123?q=//example.com",
+          "/portal/work/work-123?q=project-123%0d%0alocation%3ahttps://example.com",
+          "/portal/work/work-123?q=a%0ab",
+          "/portal/work/work-123?q=a%1fb",
+          "/portal/work/work-123?q=a%00b",
+          "/portal/work/work-123?projectId=//example.com",
+          "/portal/work/../login",
+          "/portal/work/%2e%2e",
           "/portal#chat",
           "/portal\r\nlocation:https://example.com",
           "\"><script>alert(1)</script>"
@@ -278,4 +307,6 @@ defmodule SymmetryControlWeb.PortalSessionTest do
 
   defp enforce_csrf(conn),
     do: %{conn | private: Map.delete(conn.private, :plug_skip_csrf_protection)}
+
+  defp escaped_attribute(path), do: String.replace(path, "&", "&amp;")
 end

@@ -1,0 +1,45 @@
+{
+  "selected_project_id": null,
+  "projects": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "key": "SHELL",
+      "name": "Workspace fixture",
+      "description": null,
+      "status": "active",
+      "work_items": [
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "key": "SHELL-1",
+          "title": "Invalid execution generation",
+          "status": "ready",
+          "blocked": false,
+          "blocker": null,
+          "execution": {
+            "task_id": "55555555-5555-4555-8555-555555555555",
+            "run_id": null,
+            "runtime_id": null,
+            "generation": "2",
+            "state": "running",
+            "waiting": null,
+            "latest_command": null,
+            "result": null,
+            "failure": null,
+            "timing": {
+              "state_since": "2026-11-15T10:01:00.000000Z",
+              "started_at": null,
+              "finished_at": null
+            },
+            "supervisory_control": false,
+            "can_guide": false,
+            "can_pause": false,
+            "can_resume": false,
+            "can_cancel": true,
+            "can_retry": false,
+            "intent_locked": true
+          }
+        }
+      ]
+    }
+  ]
+}

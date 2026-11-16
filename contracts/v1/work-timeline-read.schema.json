@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/work-timeline-read.schema.json",
+  "title": "Symmetry Work Timeline Read v1",
+  "description": "Consumed fields of the existing Protocol.timeline_page/2 read served by the work item timeline endpoint. Unconsumed presentation fields remain additive.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["items", "next_before"],
+  "properties": {
+    "items": {"type": "array", "items": {"$ref": "#/definitions/WorkItemTimelineItem"}},
+    "next_before": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+  },
+  "definitions": {
+    "WorkItemTimelineItem": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Protocol.timeline_page/2 item shared by work detail raw.timeline and the timeline read; data is discriminated on source. Command items carry null run_id and generation when the command is task-scoped, while event and transition items always keep run-scoped identities.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {"const": "event"},
+            "run_id": {"$ref": "common.schema.json#/definitions/UUID"},
+            "generation": {"type": "integer"},
+            "recorded_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+            "data": {"$ref": "#/definitions/TimelineEventData"}
+          },
+          "required": ["source", "run_id", "generation", "recorded_at", "data"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {"const": "transition"},
+            "run_id": {"$ref": "common.schema.json#/definitions/UUID"},
+            "generation": {"type": "integer"},
+            "recorded_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+            "data": {"$ref": "#/definitions/TimelineTransitionData"}
+          },
+          "required": ["source", "run_id", "generation", "recorded_at", "data"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {"const": "command"},
+            "run_id": {"oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]},
+            "generation": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+            "recorded_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+            "data": {"$ref": "#/definitions/TimelineCommandData"}
+          },
+          "required": ["source", "run_id", "generation", "recorded_at", "data"]
+        }
+      ]
+    },
+    "TimelineEventData": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Timeline event payload with run identity removed by Protocol.timeline_data/2.",
+      "required": ["event_id", "sequence", "kind", "payload", "occurred_at"],
+      "properties": {
+        "event_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "sequence": {"type": "integer"},
+        "kind": {"type": "string"},
+        "payload": {"type": "object", "additionalProperties": true},
+        "occurred_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}
+      }
+    },
+    "TimelineTransitionData": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Timeline transition payload with run identity removed by Protocol.timeline_data/2.",
+      "required": ["transition_id", "state", "payload"],
+      "properties": {
+        "transition_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "state": {"type": "string"},
+        "payload": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "TimelineCommandData": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Timeline command receipt with run_id and generation removed by Protocol.timeline_data/2.",
+      "required": [
+        "command_id",
+        "task_id",
+        "kind",
+        "payload",
+        "state",
+        "issued_at",
+        "applied_at",
+        "acknowledgement_id",
+        "acknowledgement_outcome",
+        "acknowledged_at"
+      ],
+      "properties": {
+        "command_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "task_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "kind": {"type": "string"},
+        "payload": {"type": "object", "additionalProperties": true},
+        "state": {"type": "string"},
+        "issued_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "applied_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "acknowledgement_id": {
+          "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        },
+        "acknowledgement_outcome": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "acknowledged_at": {
+          "oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "work_item": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "key": "SHELL-2",
+    "title": "Unknown timeline source",
+    "status": "ready",
+    "blocked": false,
+    "blocker": null
+  },
+  "outcome": {
+    "goal": "Unknown timeline source",
+    "phase": "ready",
+    "owner": {"type": "unassigned", "name": null, "agent_profile": null},
+    "summary": null,
+    "findings": [],
+    "changed_artifacts": [],
+    "tests": [],
+    "blocker": null,
+    "pull_request_url": null,
+    "ci_status": "unknown",
+    "review_status": "none",
+    "delivery": {
+      "pull_request": {"value": null, "source": "none", "generation": null, "url": null, "status": null},
+      "ci": {"value": "unknown", "source": "none", "generation": null, "url": null, "status": "unknown"},
+      "review": {"value": "none", "source": "none", "generation": null, "url": null, "status": "none"}
+    },
+    "result": null,
+    "failure": null
+  },
+  "timeline": [
+    {
+      "source": "audit",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "recorded_at": "2026-11-15T10:00:00.000000Z",
+      "data": {
+        "event_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "sequence": 1,
+        "kind": "progress",
+        "payload": {},
+        "occurred_at": "2026-11-15T10:00:00.000000Z"
+      }
+    }
+  ],
+  "raw": {"task": null, "timeline": [], "next_before": null}
+}

@@ -1,0 +1,22 @@
+{
+  "items": [
+    {
+      "source": "command",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "recorded_at": "2026-11-15T10:00:00.000000Z",
+      "data": {
+        "task_id": "55555555-5555-4555-8555-555555555555",
+        "kind": "guidance",
+        "payload": {},
+        "state": "acknowledged",
+        "issued_at": "2026-11-15T10:00:00.000000Z",
+        "applied_at": null,
+        "acknowledgement_id": null,
+        "acknowledgement_outcome": null,
+        "acknowledged_at": null
+      }
+    }
+  ],
+  "next_before": null
+}

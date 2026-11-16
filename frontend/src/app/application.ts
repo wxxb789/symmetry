@@ -1,4 +1,4 @@
-import { QueryCache, QueryClient, queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, QueryCache, QueryClient, queryOptions } from "@tanstack/react-query";
 import { createApi, readRetry, Unauthenticated, type Api } from "../services/api";
 
 interface BrowserLocation {
@@ -18,7 +18,7 @@ export interface Application {
 export function safeReturnTo(href: string): string {
   try {
     const url = new URL(href);
-    if (/^\/portal\/(attention|projects(?:\/[^/]+)?)\/?$/.test(url.pathname)) {
+    if (/^\/portal\/(attention|projects(?:\/[^/]+)?|work\/[^/]+)\/?$/.test(url.pathname)) {
       return `${url.pathname}${url.search}`;
     }
   } catch {
@@ -76,4 +76,24 @@ export const sessionOptions = (api: Api) => queryOptions({
 export const workspaceOptions = (api: Api, projectId: string | null) => queryOptions({
   queryKey: ["workspace", { projectId }],
   queryFn: ({ signal }) => api.workspace(projectId, signal),
+});
+
+export const workDetailOptions = (api: Api, workItemId: string) => queryOptions({
+  queryKey: ["work-item", { workItemId }],
+  queryFn: ({ signal }) => api.workDetail(workItemId, signal),
+});
+
+/**
+ * Execution history. The newest page arrives with the detail read, so this query
+ * stays disabled until the reader asks for older entries through the served
+ * `before` cursor.
+ */
+export const workTimelineOptions = (api: Api, workItemId: string, cursor: string | null) => infiniteQueryOptions({
+  // The served boundary is part of the identity: a refreshed detail re-keys the
+  // disabled query, so its page param restarts from the newly served cursor.
+  queryKey: ["work-item-timeline", { workItemId, cursor }],
+  queryFn: ({ signal, pageParam }) => api.workTimeline(workItemId, pageParam, signal),
+  initialPageParam: cursor,
+  getNextPageParam: (lastPage) => lastPage.next_before,
+  enabled: false,
 });

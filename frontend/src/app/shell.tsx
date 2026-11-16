@@ -5,16 +5,22 @@ import { Command, Folder, Inbox, LogOut, Menu, Search, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { errorMessage } from "../services/api";
 import { ErrorState, LoadingState } from "../components/workspace";
-import { sessionOptions, workspaceOptions, type Application } from "./application";
+import { sessionOptions, workDetailOptions, workspaceOptions, type Application } from "./application";
 
 function focusContent() {
   requestAnimationFrame(() => { document.getElementById("content-heading")?.focus({ preventScroll: true }); });
 }
 
 function useProjectScope() {
+  const { application } = useRouteContext({ from: "__root__" });
   const projectId = useMatch({ from: "/projects/$projectId", shouldThrow: false, select: (match) => match.params.projectId });
+  const workScope = useMatch({ from: "/work/$workItemId", shouldThrow: false, select: (match) => ({ workItemId: match.params.workItemId, claimedProjectId: match.search.projectId }) });
+  // The served projection owns a work item's project. This reads the same query key
+  // the work detail page uses, so it adds no request and no second authority; the
+  // URL's claim only covers the window before that projection arrives.
+  const servedWork = useQuery({ ...workDetailOptions(application.api, workScope?.workItemId ?? ""), enabled: workScope !== undefined });
   const searchProjectId = useMatch({ from: "/attention", shouldThrow: false, select: (match) => match.search.projectId });
-  return projectId ?? searchProjectId;
+  return projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId;
 }
 
 function useProjectDirectory() {
@@ -126,16 +132,19 @@ export function WorkspaceRoot() {
   const { application } = useRouteContext({ from: "__root__" });
   const signedOut = useSyncExternalStore(application.auth.subscribe, application.auth.getSnapshot);
   const session = useQuery({ ...sessionOptions(application.api), enabled: !signedOut });
-  const href = useRouterState({ select: (state) => state.location.href });
+  // Route changes own the heading reset. Search-parameter updates (the
+  // URL-backed filters) are not route changes: keying the reset on the full
+  // href moved focus to the heading on every keystroke of a filter input.
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const navigationStatus = useRouterState({ select: (state) => state.status });
   const ready = session.isSuccess && !signedOut;
-  const focusedHref = useRef<string | null>(null);
+  const focusedPathname = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (!ready || navigationStatus !== "idle") return;
-    if (focusedHref.current === href) return;
-    focusedHref.current = href;
+    if (focusedPathname.current === pathname) return;
+    focusedPathname.current = pathname;
     document.getElementById("content-heading")?.focus({ preventScroll: true });
-  }, [href, navigationStatus, ready]);
+  }, [pathname, navigationStatus, ready]);
   if (signedOut) return <main className="session-state"><h1>Signed out</h1><p role="status">Your session has ended. Redirecting to sign in…</p><a className="button" href="/portal/login">Sign in</a></main>;
   if (session.isPending) return <main className="session-state"><h1>Symmetry workspace</h1><LoadingState label="Checking your session…" /></main>;
   if (session.isError && !session.data) return <main className="session-state"><h1>Workspace unavailable</h1><ErrorState error={session.error} retry={() => { void session.refetch(); }} /></main>;

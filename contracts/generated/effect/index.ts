@@ -19,6 +19,8 @@ import type {
   SymmetryPlanProposalV1,
   SymmetryTaskResultV1,
   SymmetryUsageV1,
+  SymmetryWorkDetailReadV1,
+  SymmetryWorkTimelineReadV1,
   SymmetryWorkspaceReadV1,
 } from "../ts/index.js";
 
@@ -571,22 +573,263 @@ export const DefinitionObservationSourceRefGraph = S.suspend(() => withObjectPro
   "subject_hash": DefinitionSha256Graph
 })), undefined, undefined));
 
+export const DefinitionWorkspaceWorkItemGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "assignee": S.optionalWith(DefinitionWorkItemAssigneeGraph, { exact: true }),
+  "blocked": S.Boolean,
+  "blocker": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "branch": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "can_start": S.optionalWith(S.Boolean, { exact: true }),
+  "ci_resource": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "ci_resource_id": S.optionalWith(exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null), { exact: true }),
+  "ci_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "delivery": S.optionalWith(DefinitionWorkItemDeliveryGraph, { exact: true }),
+  "description": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "execution": S.optionalWith(exactOneOf(S.Union(DefinitionWorkItemExecutionGraph, S.Null), DefinitionWorkItemExecutionGraph, S.Null), { exact: true }),
+  "external": S.optionalWith(exactOneOf(S.Union(DefinitionWorkItemExternalGraph, S.Null), DefinitionWorkItemExternalGraph, S.Null), { exact: true }),
+  "id": DefinitionUUIDGraph,
+  "key": stringConstraints(S.String, undefined, undefined, undefined),
+  "position": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
+  "priority": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "project_id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
+  "pull_request_url": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "repository": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "repository_resource_id": S.optionalWith(exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null), { exact: true }),
+  "review_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "status": stringConstraints(S.String, undefined, undefined, undefined),
+  "title": stringConstraints(S.String, undefined, undefined, undefined),
+  "updated_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), { exact: true }),
+  "version": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
+  "workspace": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
+})), undefined, undefined));
+
+export const DefinitionWorkItemAssigneeGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "agent_profile": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "name": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "type": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null)
+})), undefined, undefined));
+
+export const DefinitionWorkItemDeliveryGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "ci": DefinitionWorkItemDeliveryValueGraph,
+  "pull_request": DefinitionWorkItemDeliveryValueGraph,
+  "review": DefinitionWorkItemDeliveryValueGraph
+})), undefined, undefined));
+
+export const DefinitionWorkItemDeliveryValueGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "generation": exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null),
+  "provider": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "recorded_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), { exact: true }),
+  "source": S.Literal("none", "manual", "provider", "agent"),
+  "status": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "url": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "value": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null)
+})), undefined, undefined));
+
+export const DefinitionWorkItemExecutionGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "can_cancel": S.Boolean,
+  "can_guide": S.Boolean,
+  "can_pause": S.Boolean,
+  "can_resume": S.Boolean,
+  "can_retry": S.Boolean,
+  "failure": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
+  "generation": numberConstraints(S.Int, undefined, undefined),
+  "intent_locked": S.Boolean,
+  "latest_command": exactOneOf(S.Union(DefinitionWorkItemCommandGraph, S.Null), DefinitionWorkItemCommandGraph, S.Null),
+  "result": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
+  "run_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
+  "runtime_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
+  "state": stringConstraints(S.String, undefined, undefined, undefined),
+  "supervisory_control": S.Boolean,
+  "task_id": DefinitionUUIDGraph,
+  "timing": DefinitionWorkItemExecutionTimingGraph,
+  "waiting": exactOneOf(S.Union(DefinitionWorkItemWaitingGraph, S.Null), DefinitionWorkItemWaitingGraph, S.Null)
+})), undefined, undefined));
+
+export const DefinitionWorkItemExecutionTimingGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "finished_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "started_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "state_since": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null)
+})), undefined, undefined));
+
+export const DefinitionWorkItemWaitingGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "decision": exactOneOf(S.Union(DefinitionWorkItemWaitingDecisionGraph, S.Null), DefinitionWorkItemWaitingDecisionGraph, S.Null),
+  "generation": numberConstraints(S.Int, undefined, undefined),
+  "payload": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "question": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "recorded_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "run_id": DefinitionUUIDGraph,
+  "transition_id": DefinitionUUIDGraph
+})), undefined, undefined));
+
+export const DefinitionWorkItemWaitingDecisionGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "context": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "options": S.optionalWith(arrayConstraints(S.Array(DefinitionWorkItemWaitingDecisionOptionGraph), undefined, undefined, undefined), { exact: true }),
+  "reason": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "recommended_option_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
+})), undefined, undefined));
+
+export const DefinitionWorkItemWaitingDecisionOptionGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "consequence": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "id": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "label": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true })
+})), undefined, undefined));
+
+export const DefinitionWorkItemCommandGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "acknowledged_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "acknowledgement_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
+  "acknowledgement_outcome": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "applied_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "command_id": DefinitionUUIDGraph,
+  "generation": exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null),
+  "issued_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "kind": stringConstraints(S.String, undefined, undefined, undefined),
+  "payload": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "run_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
+  "state": stringConstraints(S.String, undefined, undefined, undefined),
+  "task_id": DefinitionUUIDGraph
+})), undefined, undefined));
+
+export const DefinitionWorkItemExternalGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "assignee": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "available": S.Boolean,
+  "id": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "labels": arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined),
+  "provider": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "resource_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
+  "state": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "updated_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "url": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null)
+})), undefined, undefined));
+
+export const DefinitionWorkItemOutcomeGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "blocker": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "changed_artifacts": arrayConstraints(S.Array(S.Unknown), undefined, undefined, undefined),
+  "ci_status": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "delivery": DefinitionWorkItemDeliveryGraph,
+  "failure": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
+  "findings": arrayConstraints(S.Array(S.Unknown), undefined, undefined, undefined),
+  "goal": stringConstraints(S.String, undefined, undefined, undefined),
+  "owner": DefinitionWorkItemAssigneeGraph,
+  "phase": stringConstraints(S.String, undefined, undefined, undefined),
+  "pull_request_url": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "result": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
+  "review_status": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "summary": S.Unknown,
+  "tests": S.Unknown
+})), undefined, undefined));
+
+export const DefinitionWorkItemTimelineItemGraph = S.suspend(() => allOf(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({
+  "data": DefinitionTimelineEventDataGraph,
+  "generation": numberConstraints(S.Int, undefined, undefined),
+  "recorded_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "run_id": DefinitionUUIDGraph,
+  "source": S.Literal("event")
+})), undefined, undefined), withObjectPropertyBounds(openObject(S.Struct({
+  "data": DefinitionTimelineTransitionDataGraph,
+  "generation": numberConstraints(S.Int, undefined, undefined),
+  "recorded_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "run_id": DefinitionUUIDGraph,
+  "source": S.Literal("transition")
+})), undefined, undefined), withObjectPropertyBounds(openObject(S.Struct({
+  "data": DefinitionTimelineCommandDataGraph,
+  "generation": exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null),
+  "recorded_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "run_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
+  "source": S.Literal("command")
+})), undefined, undefined)), withObjectPropertyBounds(openObject(S.Struct({
+  "data": DefinitionTimelineEventDataGraph,
+  "generation": numberConstraints(S.Int, undefined, undefined),
+  "recorded_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "run_id": DefinitionUUIDGraph,
+  "source": S.Literal("event")
+})), undefined, undefined), withObjectPropertyBounds(openObject(S.Struct({
+  "data": DefinitionTimelineTransitionDataGraph,
+  "generation": numberConstraints(S.Int, undefined, undefined),
+  "recorded_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "run_id": DefinitionUUIDGraph,
+  "source": S.Literal("transition")
+})), undefined, undefined), withObjectPropertyBounds(openObject(S.Struct({
+  "data": DefinitionTimelineCommandDataGraph,
+  "generation": exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null),
+  "recorded_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "run_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
+  "source": S.Literal("command")
+})), undefined, undefined))));
+
+export const DefinitionTimelineEventDataGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "event_id": DefinitionUUIDGraph,
+  "kind": stringConstraints(S.String, undefined, undefined, undefined),
+  "occurred_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "payload": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "sequence": numberConstraints(S.Int, undefined, undefined)
+})), undefined, undefined));
+
+export const DefinitionTimelineTransitionDataGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "payload": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "state": stringConstraints(S.String, undefined, undefined, undefined),
+  "transition_id": DefinitionUUIDGraph
+})), undefined, undefined));
+
+export const DefinitionTimelineCommandDataGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "acknowledged_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "acknowledgement_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
+  "acknowledgement_outcome": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "applied_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "command_id": DefinitionUUIDGraph,
+  "issued_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
+  "kind": stringConstraints(S.String, undefined, undefined, undefined),
+  "payload": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "state": stringConstraints(S.String, undefined, undefined, undefined),
+  "task_id": DefinitionUUIDGraph
+})), undefined, undefined));
+
+export const DefinitionWorkDetailRawGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "next_before": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "task": exactOneOf(S.Union(DefinitionTaskReadGraph, S.Null), DefinitionTaskReadGraph, S.Null),
+  "timeline": arrayConstraints(S.Array(DefinitionWorkItemTimelineItemGraph), undefined, undefined, undefined)
+})), undefined, undefined));
+
+export const DefinitionTaskReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "controls": DefinitionTaskControlsGraph,
+  "failure": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
+  "generation": numberConstraints(S.Int, undefined, undefined),
+  "latest_command": exactOneOf(S.Union(DefinitionWorkItemCommandGraph, S.Null), DefinitionWorkItemCommandGraph, S.Null),
+  "result": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
+  "run_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
+  "state": stringConstraints(S.String, undefined, undefined, undefined),
+  "task_id": DefinitionUUIDGraph,
+  "waiting": exactOneOf(S.Union(DefinitionWorkItemWaitingGraph, S.Null), DefinitionWorkItemWaitingGraph, S.Null),
+  "work": DefinitionTaskWorkGraph
+})), undefined, undefined));
+
+export const DefinitionTaskWorkGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "agent_profile": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "goal": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "input": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
+  "required_capabilities": S.optionalWith(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), { exact: true }),
+  "workspace": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null)
+})), undefined, undefined));
+
+export const DefinitionTaskControlsGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "can_guide": S.Boolean,
+  "can_pause": S.Boolean,
+  "can_resume": S.Boolean,
+  "supervisory_control": S.Boolean
+})), undefined, undefined));
+
 export const DefinitionWorkspaceProjectGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "description": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "id": DefinitionUUIDGraph,
   "key": stringConstraints(S.String, undefined, undefined, undefined),
   "name": stringConstraints(S.String, undefined, undefined, undefined),
+  "resources": S.optionalWith(arrayConstraints(S.Array(DefinitionWorkspaceResourceGraph), undefined, undefined, undefined), { exact: true }),
   "status": stringConstraints(S.String, undefined, undefined, undefined),
   "work_items": arrayConstraints(S.Array(DefinitionWorkspaceWorkItemGraph), undefined, undefined, undefined)
 })), undefined, undefined));
 
-export const DefinitionWorkspaceWorkItemGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "blocked": S.Boolean,
-  "blocker": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
-  "id": DefinitionUUIDGraph,
-  "key": stringConstraints(S.String, undefined, undefined, undefined),
-  "status": stringConstraints(S.String, undefined, undefined, undefined),
-  "title": stringConstraints(S.String, undefined, undefined, undefined)
+export const DefinitionWorkspaceResourceGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
+  "status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "sync_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
 })), undefined, undefined));
 
 export const AdapterCapabilitiesGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
@@ -1501,6 +1744,26 @@ export const UsageGraph = S.suspend(() => allOf(withObjectPropertyBounds(strictO
 const matchesUsage = S.is(UsageGraph, strictOptions);
 export const isUsage = (value: unknown): value is SymmetryUsageV1 => matchesUsage(value);
 export const UsageSchema: S.Schema<SymmetryUsageV1, unknown> = S.Unknown.pipe(S.filter(isUsage));
+
+export const WorkDetailReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "outcome": DefinitionWorkItemOutcomeGraph,
+  "raw": DefinitionWorkDetailRawGraph,
+  "timeline": arrayConstraints(S.Array(DefinitionWorkItemTimelineItemGraph), undefined, undefined, undefined),
+  "work_item": DefinitionWorkspaceWorkItemGraph
+})), undefined, undefined));
+
+const matchesWorkDetailRead = S.is(WorkDetailReadGraph, strictOptions);
+export const isWorkDetailRead = (value: unknown): value is SymmetryWorkDetailReadV1 => matchesWorkDetailRead(value);
+export const WorkDetailReadSchema: S.Schema<SymmetryWorkDetailReadV1, unknown> = S.Unknown.pipe(S.filter(isWorkDetailRead));
+
+export const WorkTimelineReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "items": arrayConstraints(S.Array(DefinitionWorkItemTimelineItemGraph), undefined, undefined, undefined),
+  "next_before": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null)
+})), undefined, undefined));
+
+const matchesWorkTimelineRead = S.is(WorkTimelineReadGraph, strictOptions);
+export const isWorkTimelineRead = (value: unknown): value is SymmetryWorkTimelineReadV1 => matchesWorkTimelineRead(value);
+export const WorkTimelineReadSchema: S.Schema<SymmetryWorkTimelineReadV1, unknown> = S.Unknown.pipe(S.filter(isWorkTimelineRead));
 
 export const WorkspaceReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "projects": arrayConstraints(S.Array(DefinitionWorkspaceProjectGraph), undefined, undefined, undefined),

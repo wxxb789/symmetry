@@ -1,0 +1,12 @@
+{
+  "work_item": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "key": "SHELL-2",
+    "title": "Missing outcome",
+    "status": "ready",
+    "blocked": false,
+    "blocker": null
+  },
+  "timeline": [],
+  "raw": {"task": null, "timeline": [], "next_before": null}
+}

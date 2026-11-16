@@ -1,4 +1,11 @@
-import { WorkspaceRead, type SymmetryWorkspaceReadV1 } from "@symmetry/contracts";
+import {
+  WorkDetailRead,
+  WorkTimelineRead,
+  WorkspaceRead,
+  type SymmetryWorkDetailReadV1,
+  type SymmetryWorkTimelineReadV1,
+  type SymmetryWorkspaceReadV1,
+} from "@symmetry/contracts";
 import { Data, Effect, Either, Layer, ManagedRuntime, Schema } from "effect";
 
 export class Unauthenticated extends Data.TaggedError("Unauthenticated")<{ message: string }> {}
@@ -17,6 +24,9 @@ export type ReadError = Unauthenticated | Forbidden | Conflict | Validation | Un
 export type Workspace = SymmetryWorkspaceReadV1;
 export type Project = Workspace["projects"][number];
 export type WorkItem = Project["work_items"][number];
+export type WorkDetail = SymmetryWorkDetailReadV1;
+export type WorkTimeline = SymmetryWorkTimelineReadV1;
+export type TimelineItem = WorkTimeline["items"][number];
 
 const Session = Schema.Struct({ csrf_token: Schema.NonEmptyString });
 export type Session = typeof Session.Type;
@@ -24,6 +34,8 @@ const runtime = ManagedRuntime.make(Layer.empty);
 
 export interface Api {
   workspace: (projectId: string | null, signal: AbortSignal) => Promise<Workspace>;
+  workDetail: (workItemId: string, signal: AbortSignal) => Promise<WorkDetail>;
+  workTimeline: (workItemId: string, before: string | null, signal: AbortSignal) => Promise<WorkTimeline>;
   session: (signal: AbortSignal) => Promise<Session>;
 }
 
@@ -96,6 +108,14 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch.bind(globalTh
     workspace(projectId: string | null, signal: AbortSignal): Promise<Workspace> {
       const query = projectId === null ? "" : `?${new URLSearchParams({ project_id: projectId })}`;
       return run(request(fetcher, `/portal/api/workspace${query}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkspaceRead.decodeJson(text)))), signal);
+    },
+    workDetail(workItemId: string, signal: AbortSignal): Promise<WorkDetail> {
+      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkDetailRead.decodeJson(text)))), signal);
+    },
+    workTimeline(workItemId: string, before: string | null, signal: AbortSignal): Promise<WorkTimeline> {
+      // The cursor is an opaque signed token: only the served `before` direction exists.
+      const query = before === null ? "" : `?${new URLSearchParams({ before })}`;
+      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}/timeline${query}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkTimelineRead.decodeJson(text)))), signal);
     },
     session(signal: AbortSignal): Promise<Session> {
       return run(request(fetcher, "/portal/api/session", (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(Session))(text)))), signal);

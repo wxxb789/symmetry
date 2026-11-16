@@ -1,7 +1,9 @@
 import { createRootRouteWithContext, createRoute, createRouter, Link, redirect } from "@tanstack/react-router";
 import type { Router, RouterHistory } from "@tanstack/react-router";
 import { AttentionPage } from "../features/attention/attention";
+import { workItemSearch, workSearch } from "../features/projects/filters";
 import { ProjectPage, ProjectsPage } from "../features/projects/projects";
+import { WorkDetailPage } from "../features/work/detail";
 import type { Application } from "./application";
 import { WorkspaceRoot } from "./shell";
 
@@ -21,8 +23,9 @@ const attentionRoute = createRoute({
   component: AttentionPage,
 });
 const projectsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/projects", component: ProjectsPage });
-const projectRoute = createRoute({ getParentRoute: () => rootRoute, path: "/projects/$projectId", component: ProjectPage });
-const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, projectsRoute, projectRoute]);
+const projectRoute = createRoute({ getParentRoute: () => rootRoute, path: "/projects/$projectId", validateSearch: workSearch, component: ProjectPage });
+const workItemRoute = createRoute({ getParentRoute: () => rootRoute, path: "/work/$workItemId", validateSearch: workItemSearch, component: WorkDetailPage });
+const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, projectsRoute, projectRoute, workItemRoute]);
 
 export type AppRouter = Router<typeof routeTree, "never", false, RouterHistory>;
 

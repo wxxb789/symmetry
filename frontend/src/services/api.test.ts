@@ -1,11 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApi, Forbidden, Network, UnexpectedResponse, Validation } from "./api";
+import { readWorkDetail } from "./api.fixtures";
 
 const workspace = {
   selected_project_id: null,
   projects: [{ id: "11111111-1111-4111-8111-111111111111", key: "DEMO", name: "Demo", description: null, status: "active", work_items: [] }],
   health: { status: "unknown" },
 };
+
+const workItemId = "44444444-4444-4444-8444-444444444444";
+const workDetail = readWorkDetail({
+  id: workItemId,
+  projectId: "11111111-1111-4111-8111-111111111111",
+  title: "Ship the read surface",
+  key: "DEMO-1",
+  timeline: [{
+    source: "transition",
+    run_id: "55555555-5555-4555-8555-555555555555",
+    generation: 1,
+    recorded_at: "2026-01-01T00:00:00Z",
+    data: { transition_id: "66666666-6666-4666-8666-666666666666", state: "running", payload: {} },
+  }],
+  nextBefore: "cursor-token",
+});
 
 describe("read boundary", () => {
   it("decodes real workspace fields and sends URL selection without another attempt", async () => {
@@ -103,5 +120,23 @@ describe("read boundary", () => {
     const session = await createApi(fetcher).session(new AbortController().signal);
     expect(session.csrf_token).toBe("fresh-token");
     expect(fetcher.mock.calls[0]?.[1]?.cache).toBe("no-store");
+  });
+
+  it("reads one work item with the served detail envelope and timeline cursor", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(workDetail)));
+    const detail = await createApi(fetcher).workDetail(workItemId, new AbortController().signal);
+    expect(detail.work_item.id).toBe(workItemId);
+    expect(detail.raw.next_before).toBe("cursor-token");
+    expect(detail.raw.timeline[0]?.source).toBe("transition");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[0]).toBe(`/portal/api/work-items/${workItemId}`);
+  });
+
+  it("keeps older history on the served before cursor with one percent-encoded attempt", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ items: [], next_before: null })));
+    const page = await createApi(fetcher).workTimeline(workItemId, "cursor/+?=&", new AbortController().signal);
+    expect(page.next_before).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[0]).toBe(`/portal/api/work-items/${workItemId}/timeline?before=cursor%2F%2B%3F%3D%26`);
   });
 });

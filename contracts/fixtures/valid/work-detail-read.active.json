@@ -1,0 +1,303 @@
+{
+  "work_item": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "key": "SHELL-1",
+    "project_id": "11111111-1111-4111-8111-111111111111",
+    "title": "Ship the work detail projection",
+    "description": "Expose execution, delivery and external display fields to the portal.",
+    "status": "in_progress",
+    "priority": "high",
+    "position": 3,
+    "assignee": {"type": "agent", "name": "Atlas", "agent_profile": "implement"},
+    "workspace": "/workspaces/shell-1",
+    "blocked": false,
+    "blocker": null,
+    "repository_resource_id": "33333333-3333-4333-8333-333333333333",
+    "repository": "symmetry-core",
+    "ci_resource_id": "44444444-4444-4444-8444-444444444444",
+    "ci_resource": "symmetry-ci",
+    "branch": "symmetry/shell-1",
+    "pull_request_url": "https://example.test/pull/42",
+    "ci_status": "passed",
+    "review_status": "approved",
+    "delivery": {
+      "pull_request": {
+        "value": "https://example.test/pull/42",
+        "source": "provider",
+        "generation": null,
+        "url": "https://example.test/pull/42",
+        "status": "open",
+        "provider": "github",
+        "recorded_at": "2026-11-15T10:05:00.000000Z"
+      },
+      "ci": {
+        "value": "passed",
+        "source": "agent",
+        "generation": 2,
+        "url": "https://example.test/ci/42",
+        "status": "passed",
+        "recorded_at": "2026-11-15T10:03:00.000000Z"
+      },
+      "review": {
+        "value": "approved",
+        "source": "manual",
+        "generation": null,
+        "url": null,
+        "status": "approved"
+      }
+    },
+    "external": {
+      "provider": "github",
+      "id": "1492",
+      "url": "https://github.test/symmetry/core/issues/1492",
+      "state": "open",
+      "available": true,
+      "assignee": "octo",
+      "labels": ["control-plane", "frontend"],
+      "updated_at": "2026-11-15T09:45:00.000000Z",
+      "resource_id": "33333333-3333-4333-8333-333333333333"
+    },
+    "version": 7,
+    "can_start": false,
+    "execution": {
+      "task_id": "55555555-5555-4555-8555-555555555555",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "runtime_id": "77777777-7777-4777-8777-777777777777",
+      "generation": 2,
+      "state": "running",
+      "waiting": null,
+      "latest_command": {
+        "command_id": "88888888-8888-4888-8888-888888888888",
+        "task_id": "55555555-5555-4555-8555-555555555555",
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 2,
+        "kind": "guidance",
+        "payload": {"message": "keep the diff small"},
+        "state": "acknowledged",
+        "issued_at": "2026-11-15T10:02:00.000000Z",
+        "applied_at": "2026-11-15T10:02:05.000000Z",
+        "acknowledgement_id": "99999999-9999-4999-8999-999999999999",
+        "acknowledgement_outcome": "applied",
+        "acknowledged_at": "2026-11-15T10:02:05.000000Z"
+      },
+      "result": {"summary": "Rendering projection fields"},
+      "failure": null,
+      "timing": {
+        "state_since": "2026-11-15T10:01:00.000000Z",
+        "started_at": "2026-11-15T10:00:30.000000Z",
+        "finished_at": null
+      },
+      "supervisory_control": true,
+      "can_guide": true,
+      "can_pause": true,
+      "can_resume": false,
+      "can_cancel": true,
+      "can_retry": false,
+      "intent_locked": true
+    },
+    "updated_at": "2026-11-15T10:02:05.000000Z"
+  },
+  "outcome": {
+    "goal": "Ship the work detail projection",
+    "phase": "running",
+    "owner": {"type": "agent", "name": "Atlas", "agent_profile": "implement"},
+    "summary": "Implemented the projection and started the rollout.",
+    "findings": [
+      {"message": "Additive metadata already reaches the portal", "severity": "info"}
+    ],
+    "changed_artifacts": [
+      {"path": "control/lib/symmetry_control_web/portal_json.ex", "kind": "file"}
+    ],
+    "tests": [{"name": "workspaces_read_model_test", "status": "passed"}],
+    "blocker": null,
+    "pull_request_url": "https://example.test/pull/42",
+    "ci_status": "passed",
+    "review_status": "approved",
+    "delivery": {
+      "pull_request": {
+        "value": "https://example.test/pull/42",
+        "source": "provider",
+        "generation": null,
+        "url": "https://example.test/pull/42",
+        "status": "open",
+        "provider": "github",
+        "recorded_at": "2026-11-15T10:05:00.000000Z"
+      },
+      "ci": {
+        "value": "passed",
+        "source": "agent",
+        "generation": 2,
+        "url": "https://example.test/ci/42",
+        "status": "passed",
+        "recorded_at": "2026-11-15T10:03:00.000000Z"
+      },
+      "review": {
+        "value": "approved",
+        "source": "manual",
+        "generation": null,
+        "url": null,
+        "status": "approved"
+      }
+    },
+    "result": {"summary": "Rendering projection fields"},
+    "failure": null
+  },
+  "timeline": [
+    {
+      "source": "transition",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "recorded_at": "2026-11-15T10:00:30.000000Z",
+      "data": {"transition_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "state": "running", "payload": {"from": "claimed"}}
+    },
+    {
+      "source": "event",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "recorded_at": "2026-11-15T10:01:20.000000Z",
+      "data": {
+        "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 4,
+        "kind": "progress",
+        "payload": {"message": "implementing the projection"},
+        "occurred_at": "2026-11-15T10:01:19.000000Z"
+      }
+    },
+    {
+      "source": "command",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "recorded_at": "2026-11-15T10:02:00.000000Z",
+      "data": {
+        "command_id": "88888888-8888-4888-8888-888888888888",
+        "task_id": "55555555-5555-4555-8555-555555555555",
+        "kind": "guidance",
+        "payload": {"message": "keep the diff small"},
+        "state": "acknowledged",
+        "issued_at": "2026-11-15T10:02:00.000000Z",
+        "applied_at": "2026-11-15T10:02:05.000000Z",
+        "acknowledgement_id": "99999999-9999-4999-8999-999999999999",
+        "acknowledgement_outcome": "applied",
+        "acknowledged_at": "2026-11-15T10:02:05.000000Z"
+      }
+    },
+    {
+      "source": "event",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "recorded_at": "2026-11-15T10:02:30.000000Z",
+      "data": {
+        "event_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "sequence": 5,
+        "kind": "summary",
+        "payload": {"summary": "Implemented the projection and started the rollout."},
+        "occurred_at": null
+      }
+    }
+  ],
+  "raw": {
+    "task": {
+      "task_id": "55555555-5555-4555-8555-555555555555",
+      "state": "running",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 2,
+      "work": {
+        "goal": "Ship the work detail projection",
+        "agent_profile": "implement",
+        "workspace": "/workspaces/shell-1",
+        "input": {"prompt": "project the served fields"},
+        "required_capabilities": {"repository": true}
+      },
+      "result": {"summary": "Rendering projection fields"},
+      "failure": null,
+      "controls": {
+        "supervisory_control": true,
+        "can_guide": true,
+        "can_pause": true,
+        "can_resume": false
+      },
+      "waiting": null,
+      "latest_command": {
+        "command_id": "88888888-8888-4888-8888-888888888888",
+        "task_id": "55555555-5555-4555-8555-555555555555",
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 2,
+        "kind": "guidance",
+        "payload": {"message": "keep the diff small"},
+        "state": "acknowledged",
+        "issued_at": "2026-11-15T10:02:00.000000Z",
+        "applied_at": "2026-11-15T10:02:05.000000Z",
+        "acknowledgement_id": "99999999-9999-4999-8999-999999999999",
+        "acknowledgement_outcome": "applied",
+        "acknowledged_at": "2026-11-15T10:02:05.000000Z"
+      }
+    },
+    "timeline": [
+      {
+        "source": "transition",
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 2,
+        "recorded_at": "2026-11-15T10:00:30.000000Z",
+        "data": {"transition_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "state": "running", "payload": {"from": "claimed"}}
+      },
+      {
+        "source": "event",
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 2,
+        "recorded_at": "2026-11-15T10:01:10.000000Z",
+        "data": {
+          "event_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          "sequence": 3,
+          "kind": "agent_event",
+          "payload": {"type": "agent_event", "value": {"note": "not projected"}},
+          "occurred_at": "2026-11-15T10:01:09.000000Z"
+        }
+      },
+      {
+        "source": "event",
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 2,
+        "recorded_at": "2026-11-15T10:01:20.000000Z",
+        "data": {
+          "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "sequence": 4,
+          "kind": "progress",
+          "payload": {"message": "implementing the projection"},
+          "occurred_at": "2026-11-15T10:01:19.000000Z"
+        }
+      },
+      {
+        "source": "command",
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 2,
+        "recorded_at": "2026-11-15T10:02:00.000000Z",
+        "data": {
+          "command_id": "88888888-8888-4888-8888-888888888888",
+          "task_id": "55555555-5555-4555-8555-555555555555",
+          "kind": "guidance",
+          "payload": {"message": "keep the diff small"},
+          "state": "acknowledged",
+          "issued_at": "2026-11-15T10:02:00.000000Z",
+          "applied_at": "2026-11-15T10:02:05.000000Z",
+          "acknowledgement_id": "99999999-9999-4999-8999-999999999999",
+          "acknowledgement_outcome": "applied",
+          "acknowledged_at": "2026-11-15T10:02:05.000000Z"
+        }
+      },
+      {
+        "source": "event",
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "generation": 2,
+        "recorded_at": "2026-11-15T10:02:30.000000Z",
+        "data": {
+          "event_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "sequence": 5,
+          "kind": "summary",
+          "payload": {"summary": "Implemented the projection and started the rollout."},
+          "occurred_at": null
+        }
+      }
+    ],
+    "next_before": null
+  }
+}

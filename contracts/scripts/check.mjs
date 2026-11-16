@@ -24,6 +24,15 @@ const ROOT_DIR = path.resolve(SCRIPT_DIR, "../..");
 const V1_DIR = path.join(ROOT_DIR, "contracts", "v1");
 const MANIFEST_PATH = path.join(ROOT_DIR, "contracts", "fixtures", "manifest.json");
 
+// Presentation reads describe existing portal projections: they permit additive
+// unconsumed fields and finite presentation numbers, while command and
+// transport envelopes remain closed and canonical.
+const presentationReadSchemas = new Set([
+  "work-detail-read",
+  "work-timeline-read",
+  "workspace-read",
+]);
+
 const relativePath = (filePath) => path.relative(ROOT_DIR, filePath);
 
 const formatReadError = (filePath, error) => {
@@ -54,7 +63,7 @@ const numberIssueFromError = (error) => {
 const readFixtureJson = async (filePath, schema) => {
   let value;
   try {
-    const parseJson = schema === "workspace-read" ? parsePresentationJson : parseWireJson;
+    const parseJson = presentationReadSchemas.has(schema) ? parsePresentationJson : parseWireJson;
     value = parseJson(await fs.readFile(filePath));
   } catch (error) {
     if (error instanceof WireJsonError && error.code === "noncanonical_number") {
@@ -105,8 +114,8 @@ const main = async () => {
     .filter((file) => file.endsWith(".schema.json") && file !== "common.schema.json")
     .sort();
 
-  if (schemaFiles.length !== 15)
-    throw new Error(`expected 15 v1 schemas, found ${schemaFiles.length}`);
+  if (schemaFiles.length !== 17)
+    throw new Error(`expected 17 v1 schemas, found ${schemaFiles.length}`);
   if (common.$schema !== "http://json-schema.org/draft-07/schema#")
     throw new Error("common schema must be Draft 7");
 
@@ -137,7 +146,7 @@ const main = async () => {
         schema.oneOf.every((branch) => branch.additionalProperties === false)) ||
       referencedDefinition?.additionalProperties === false;
     // Read projections permit additive presentation fields; command envelopes remain closed.
-    if (!strictEnvelope && file !== "workspace-read.schema.json")
+    if (!strictEnvelope && !presentationReadSchemas.has(file.slice(0, -".schema.json".length)))
       throw new Error(`${file} must reject unknown control fields`);
     ajv.addSchema(schema, schema.$id);
     schemas.set(file.slice(0, -".schema.json".length), schema);

@@ -1,10 +1,22 @@
 import { AlertCircle, CircleCheck, Inbox, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
-import { errorMessage, type WorkItem } from "../services/api";
+import { errorMessage } from "../services/api";
 
-export function PageHeading({ title, description, children }: { title: string; description: string; children?: ReactNode }) {
+export function PageHeading({ title, description, children, level = 1, id = "content-heading" }: {
+  title: string;
+  description: string;
+  children?: ReactNode;
+  /** The drawer background demotes its project heading so the open detail keeps the single page heading. */
+  level?: 1 | 2;
+  id?: string;
+}) {
   return <header className="page-heading">
-    <div><h1 id="content-heading" tabIndex={-1}>{title}</h1><p className="muted">{description}</p></div>
+    <div>
+      {level === 1
+        ? <h1 id={id} tabIndex={-1}>{title}</h1>
+        : <h2 id={id} tabIndex={-1}>{title}</h2>}
+      <p className="muted">{description}</p>
+    </div>
     {children}
   </header>;
 }
@@ -35,22 +47,13 @@ export function RefreshButton({ fetching, refresh }: { fetching: boolean; refres
 
 const knownStatuses = new Set(["active", "archived", "backlog", "ready", "in_progress", "in_review", "review", "done", "cancelled", "blocked", "todo"]);
 
-export function StatusBadge({ status }: { status: string }) {
-  const known = knownStatuses.has(status);
-  return <span className={`status-badge ${status === "done" ? "status-complete" : ""}`}>
-    {status === "done" && <CircleCheck size={12} aria-hidden="true" />}
-    {known ? status.replaceAll("_", " ") : `Unknown status${status ? `: ${status}` : ""}`}
-  </span>;
+export function statusLabel(status: string): string {
+  return knownStatuses.has(status) ? status.replaceAll("_", " ") : `Unknown status${status ? `: ${status}` : ""}`;
 }
 
-export function WorkList({ workItems }: { workItems: readonly WorkItem[] }) {
-  if (workItems.length === 0) return <EmptyState title="No work items">This project does not have any work items yet.</EmptyState>;
-  return <ul className="work-list" aria-label="Work items">
-    {workItems.map((item) => <li key={item.id} className="work-row">
-      <div className="work-main"><span className="item-key">{item.key}</span><h3>{item.title}</h3>
-        {item.blocked && <p className="blocker"><AlertCircle size={14} aria-hidden="true" />Blocked: {item.blocker?.trim() || "Blocking reason unknown"}</p>}
-      </div>
-      <StatusBadge status={item.status} />
-    </li>)}
-  </ul>;
+export function StatusBadge({ status }: { status: string }) {
+  return <span className={`status-badge ${status === "done" ? "status-complete" : ""}`}>
+    {status === "done" && <CircleCheck size={12} aria-hidden="true" />}
+    {statusLabel(status)}
+  </span>;
 }

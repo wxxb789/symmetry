@@ -1,0 +1,51 @@
+{
+  "work_item": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "key": "SHELL-2",
+    "title": "Invalid execution timing",
+    "status": "ready",
+    "blocked": false,
+    "blocker": null,
+    "execution": {
+      "task_id": "55555555-5555-4555-8555-555555555555",
+      "run_id": null,
+      "runtime_id": null,
+      "generation": 1,
+      "state": "running",
+      "waiting": null,
+      "latest_command": null,
+      "result": null,
+      "failure": null,
+      "timing": {"state_since": 1763200860, "started_at": null, "finished_at": null},
+      "supervisory_control": false,
+      "can_guide": false,
+      "can_pause": false,
+      "can_resume": false,
+      "can_cancel": true,
+      "can_retry": false,
+      "intent_locked": true
+    }
+  },
+  "outcome": {
+    "goal": "Invalid execution timing",
+    "phase": "ready",
+    "owner": {"type": "unassigned", "name": null, "agent_profile": null},
+    "summary": null,
+    "findings": [],
+    "changed_artifacts": [],
+    "tests": [],
+    "blocker": null,
+    "pull_request_url": null,
+    "ci_status": "unknown",
+    "review_status": "none",
+    "delivery": {
+      "pull_request": {"value": null, "source": "none", "generation": null, "url": null, "status": null},
+      "ci": {"value": "unknown", "source": "none", "generation": null, "url": null, "status": "unknown"},
+      "review": {"value": "none", "source": "none", "generation": null, "url": null, "status": "none"}
+    },
+    "result": null,
+    "failure": null
+  },
+  "timeline": [],
+  "raw": {"task": null, "timeline": [], "next_before": null}
+}

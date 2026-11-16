@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
 
 const liveEnabled = process.env.SYMMETRY_LIVE_DAEMON === "1";
@@ -107,9 +108,9 @@ async function selectRegisteredReference(dialog, value) {
 
 test.describe("Goal 2 live daemon acceptance", () => {
   test.skip(!liveEnabled, "Set SYMMETRY_LIVE_DAEMON=1 after starting the documented fixture runtimes.");
-  test.skip(({ isMobile }) => isMobile, "The live lifecycle is covered once; mobile behavior is covered by deterministic feature tests.");
 
-  test("waiting input and failed retry complete through the portal", async ({ page }) => {
+  test("waiting input and failed retry complete through the portal", async ({ page, isMobile }) => {
+    test.skip(isMobile, "The live lifecycle matrix runs once at desktop width; the history cursor scenario also runs at narrow width.");
     const project = uniqueProject();
     const waitTitle = `Waiting workflow ${project.key}`;
     const cancelTitle = `Cancel workflow ${project.key}`;
@@ -305,12 +306,15 @@ test.describe("Goal 2 live daemon acceptance", () => {
     await expect(page.locator(".activity-row", { hasText: retryTitle })).toContainText("Done");
   });
 
-  test("raw execution history loads older daemon records on demand", async ({ page }) => {
+  test("raw execution history loads older daemon records on demand", async ({ page, isMobile }, testInfo) => {
     const project = uniqueProject();
     const historyTitle = `History workflow ${project.key}`;
+    const secondHistoryTitle = `History follow-up ${project.key}`;
 
     await login(page);
     await createProject(page, project);
+    const projectId = new URL(page.url()).searchParams.get("project_id");
+    expect(projectId).toBeTruthy();
     await createAgentWork(page, {
       title: historyTitle,
       profile: fixtureBinding("history"),
@@ -322,18 +326,271 @@ test.describe("Goal 2 live daemon acceptance", () => {
     await expect(page.locator("#detail-content")).toContainText("Completed the requested engineering work", {
       timeout: 30_000
     });
-
-    const rawDetails = page.locator("details.raw-details");
-    await expect(rawDetails).not.toHaveAttribute("open", "");
-    await rawDetails.locator("summary").click();
-    await expect(page.locator("#load-history-button")).toBeVisible();
-    await expect(page.locator("#raw-execution-data")).not.toContainText("debug-001");
-    await page.locator("#load-history-button").click();
-    await expect(page.locator("#raw-execution-data")).toContainText("debug-001");
-    await expect(page.locator("details.raw-details")).toHaveAttribute("open", "");
-
     const history = await detailJSON(page);
     expect(history.work_item.execution.state).toBe("completed");
     expect(history.raw.next_before).not.toBeNull();
+    await page.getByRole("button", { name: "Close details" }).click();
+
+    await createAgentWork(page, {
+      title: secondHistoryTitle,
+      profile: fixtureBinding("history"),
+      workspace: fixtureBinding("history"),
+      description: "Second real execution so a failing older-history page can be proved not to mutate a newer detail."
+    });
+    await openWork(page, secondHistoryTitle);
+    await page.getByRole("button", { name: "Start run" }).click();
+    await expect(page.locator("#detail-content")).toContainText("Completed the requested engineering work", {
+      timeout: 30_000
+    });
+    const secondHistory = await detailJSON(page);
+    expect(secondHistory.work_item.execution.state).toBe("completed");
+    expect(secondHistory.raw.next_before).not.toBeNull();
+    await page.getByRole("button", { name: "Close details" }).click();
+
+    // The daemon mutations above stay classic; the raw history read now runs on
+    // /portal/work/:workItemId, where older pages load through the real cursor.
+    // Desktop renders the detail as a side panel, narrow widths as a full page.
+    const historySection = (detail) =>
+      detail.locator("section.detail-section", { has: detail.page().getByRole("heading", { name: "Execution history" }) });
+    const reportedSection = (detail) =>
+      detail.locator("section.detail-section", { has: detail.page().getByRole("heading", { name: "Reported execution output", exact: true }) });
+    const entriesOf = (section) => section.locator("ol.timeline > li.timeline-entry");
+    const workSurface = (title) =>
+      isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: title });
+    const leaveWorkSurface = async () => {
+      if (isMobile) await page.getByRole("link", { name: /^Back to projects?$/ }).click();
+      else await page.keyboard.press("Escape");
+    };
+    const detailResponseFor = (workItemId) => page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === `/portal/api/work-items/${workItemId}` && response.status() === 200;
+    });
+    const timelineRequestArm = (workItemId) => page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname === `/portal/api/work-items/${workItemId}/timeline` && url.searchParams.has("before");
+    });
+
+    // Phase 1: the first work item paginates successfully on the cursor of the
+    // detail response this navigation consumed. Cursors are signed opaque
+    // tokens minted per GET, so tokens are never compared across independent
+    // reads and never decoded or normalized.
+    await page.goto(`/portal/projects/${projectId}`);
+    const firstDetailResponse = detailResponseFor(history.work_item.id);
+    await page.getByRole("link", { name: historyTitle }).click();
+    const historyDetail = workSurface(historyTitle);
+    await expect(historyDetail.getByRole("heading", { level: 1, name: historyTitle })).toBeVisible();
+    const consumedCursor = (await (await firstDetailResponse).json()).raw.next_before;
+    expect(consumedCursor).toBeTruthy();
+    const historyPanel = historySection(historyDetail);
+    const firstPageEntries = entriesOf(historyPanel);
+    const firstCount = await firstPageEntries.count();
+    expect(firstCount).toBeGreaterThan(0);
+    const olderPageRequest = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === `/portal/api/work-items/${history.work_item.id}/timeline` &&
+        url.searchParams.has("before") && response.status() === 200;
+    });
+    const olderPageCursor = timelineRequestArm(history.work_item.id);
+    await historyPanel.getByRole("button", { name: "Load older history" }).click();
+    expect(new URL((await olderPageCursor).url()).searchParams.get("before")).toBe(consumedCursor);
+    const olderPage = await olderPageRequest;
+    expect(olderPage.status()).toBe(200);
+    await expect.poll(() => firstPageEntries.count(), { timeout: 15_000 }).toBeGreaterThan(firstCount);
+    await expect(historyPanel.getByText("No older history recorded.")).toBeVisible();
+    const firstEntriesAfterOlderPage = await firstPageEntries.count();
+    const olderRecords = await portalRequest(
+      page,
+      `/portal/api/work-items/${history.work_item.id}/timeline?before=${encodeURIComponent(consumedCursor)}`
+    );
+    expect(olderRecords.status).toBe(200);
+    expect(olderRecords.body.items.length).toBeGreaterThan(0);
+    expect(JSON.stringify(olderRecords.body.items)).toContain("debug-001");
+    await leaveWorkSurface();
+
+    // Phase 2: an in-flight older-history failure for the second item must not
+    // notify or mutate the detail the operator selects meanwhile. That
+    // navigation may cancel the obsolete request, so the settle barrier is the
+    // handler's own completion plus the visible UI state, never a timer; handler
+    // completion means the response was delivered, not that the page applied it.
+    const secondDetailResponse = detailResponseFor(secondHistory.work_item.id);
+    await page.getByRole("link", { name: secondHistoryTitle }).click();
+    const secondDetail = workSurface(secondHistoryTitle);
+    await expect(secondDetail.getByRole("heading", { level: 1, name: secondHistoryTitle })).toBeVisible();
+    const secondPanel = historySection(secondDetail);
+    const secondEntries = entriesOf(secondPanel);
+    const secondCount = await secondEntries.count();
+    expect(secondCount).toBeGreaterThan(0);
+    const secondConsumedCursor = (await (await secondDetailResponse).json()).raw.next_before;
+    expect(secondConsumedCursor).toBeTruthy();
+    allowBrowserError(page, /status of 503/);
+    const failureStarted = Promise.withResolvers();
+    const failureRelease = Promise.withResolvers();
+    const failureSettled = Promise.withResolvers();
+    const failureCursors = [];
+    const failureOutcomes = [];
+    await page.route(`**/portal/api/work-items/${secondHistory.work_item.id}/timeline?before=*`, async (route) => {
+      failureCursors.push(new URL(route.request().url()).searchParams.get("before"));
+      failureStarted.resolve();
+      await failureRelease.promise;
+      try {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "provider_failure", message: "Older history failed" } })
+        });
+        failureOutcomes.push("delivered");
+      } catch {
+        failureOutcomes.push("aborted");
+      } finally {
+        failureSettled.resolve();
+      }
+    });
+    await secondPanel.getByRole("button", { name: "Load older history" }).click();
+    await failureStarted.promise;
+    expect(failureCursors.length).toBeGreaterThan(0);
+    expect(new Set(failureCursors)).toEqual(new Set([secondConsumedCursor]));
+    await leaveWorkSurface();
+    await page.getByRole("link", { name: historyTitle }).click();
+    const newerDetail = workSurface(historyTitle);
+    await expect(newerDetail.getByRole("heading", { level: 1, name: historyTitle })).toBeVisible();
+    failureRelease.resolve();
+    await failureSettled.promise;
+    await expect(newerDetail.getByRole("heading", { level: 1, name: historyTitle })).toBeVisible();
+    await expect(newerDetail.getByText("Earlier history could not be loaded.")).toHaveCount(0);
+    // Delivery is not application: refresh the selected detail from its own
+    // real 200 response and re-assert the obsolete failure left no stale error
+    // and no stale data on this surface.
+    const newerRefresh = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === `/portal/api/work-items/${history.work_item.id}` && response.status() === 200;
+    });
+    await newerDetail.getByRole("button", { name: "Refresh", exact: true }).click();
+    expect((await newerRefresh).status()).toBe(200);
+    await expect(newerDetail.getByRole("heading", { level: 1, name: historyTitle })).toBeVisible();
+    await expect(newerDetail.getByText("Earlier history could not be loaded.")).toHaveCount(0);
+    await expect(newerDetail.getByText(secondHistoryTitle)).toHaveCount(0);
+    await leaveWorkSurface();
+    await page.unrouteAll({ behavior: "wait" });
+    // Phase 3: recovery on a freshly loaded project document, so the detail
+    // response and its cursor belong only to this navigation. The first active
+    // older-history load is faulted, then retried once against the real
+    // endpoint; an obsolete failure is never assumed to be cached.
+    await page.goto(`/portal/projects/${projectId}`);
+    const currentDetailResponse = detailResponseFor(secondHistory.work_item.id);
+    await page.getByRole("link", { name: secondHistoryTitle }).click();
+    const currentDetail = workSurface(secondHistoryTitle);
+    await expect(currentDetail.getByRole("heading", { level: 1, name: secondHistoryTitle })).toBeVisible();
+    const currentPanel = historySection(currentDetail);
+    const currentEntries = entriesOf(currentPanel);
+    const currentCount = await currentEntries.count();
+    expect(currentCount).toBeGreaterThan(0);
+    const currentCursor = (await (await currentDetailResponse).json()).raw.next_before;
+    expect(currentCursor).toBeTruthy();
+    // The real served projection renders its reported output and delivery
+    // values; expectations are derived from the same response the API serves,
+    // reported output is never presented as accepted, and the injected fault
+    // above stays isolated from this real data.
+    const servedDetail = (await portalRequest(page, `/portal/api/work-items/${secondHistory.work_item.id}`)).body;
+    const servedReported = servedDetail.outcome.summary ??
+      (servedDetail.work_item.execution?.result?.summary ?? null);
+    expect(servedReported).toBeTruthy();
+    // Scoped to the actual Reported execution output section: the same summary
+    // text legitimately repeats as a timeline entry headline.
+    await expect(reportedSection(currentDetail).getByText(servedReported, { exact: false })).toBeVisible();
+    await expect(currentDetail.getByText("No accepted evidence available", { exact: false })).toBeVisible();
+    const deliveryList = currentDetail.locator("dl.delivery-list");
+    for (const [label, entry] of [
+      ["Pull request", servedDetail.work_item.delivery.pull_request],
+      ["CI", servedDetail.work_item.delivery.ci],
+      ["Review", servedDetail.work_item.delivery.review]
+    ]) {
+      const row = deliveryList.locator("div", { hasText: label }).first();
+      await expect(row).toContainText(`source: ${entry.source}`);
+      if (typeof entry.url === "string" && entry.url.startsWith("http")) {
+        await expect(row.getByRole("link", { name: "Open" })).toHaveAttribute("href", entry.url);
+      }
+    }
+
+    const faultStarted = Promise.withResolvers();
+    const faultRelease = Promise.withResolvers();
+    const faultSettled = Promise.withResolvers();
+    const faultCursors = [];
+    const faultOutcomes = [];
+    await page.route(`**/portal/api/work-items/${secondHistory.work_item.id}/timeline?before=*`, async (route) => {
+      faultCursors.push(new URL(route.request().url()).searchParams.get("before"));
+      faultStarted.resolve();
+      await faultRelease.promise;
+      try {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "provider_failure", message: "Older history failed" } })
+        });
+        faultOutcomes.push("delivered");
+      } catch {
+        faultOutcomes.push("aborted");
+      } finally {
+        faultSettled.resolve();
+      }
+    });
+    await currentPanel.getByRole("button", { name: "Load older history" }).click();
+    await faultStarted.promise;
+    expect(new Set(faultCursors)).toEqual(new Set([currentCursor]));
+    faultRelease.resolve();
+    await faultSettled.promise;
+    // UI state barrier: the failed page is reported on its own surface.
+    await expect(currentPanel.getByText("Earlier history could not be loaded.")).toBeVisible();
+    await expect(currentPanel.getByRole("button", { name: "Retry history" })).toBeVisible();
+    await page.unrouteAll({ behavior: "wait" });
+
+    const retryRequest = timelineRequestArm(secondHistory.work_item.id);
+    const retryResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === `/portal/api/work-items/${secondHistory.work_item.id}/timeline` && response.status() === 200;
+    });
+    await currentPanel.getByRole("button", { name: "Retry history" }).click();
+    const retryCursor = new URL((await retryRequest).url()).searchParams.get("before");
+    expect(retryCursor).toBe(currentCursor);
+    expect((await retryResponse).status()).toBe(200);
+    await expect.poll(() => currentEntries.count(), { timeout: 15_000 }).toBeGreaterThan(currentCount);
+    await expect(currentPanel.getByText("No older history recorded.")).toBeVisible();
+    // The rendered older page itself carries the older daemon records, not only
+    // the separate API read.
+    await expect(currentPanel.getByText("debug-001", { exact: false }).first()).toBeVisible();
+
+    const historyCapture = testInfo.outputPath("work-history-pagination.png");
+    await page.screenshot({ path: historyCapture, fullPage: true });
+    await testInfo.attach("work-history-pagination", { path: historyCapture, contentType: "image/png" });
+    await fs.writeFile(testInfo.outputPath("work-history-pagination.json"), JSON.stringify({
+      url: page.url(),
+      viewport: page.viewportSize(),
+      width: isMobile ? "narrow (mobile Chromium project)" : "desktop",
+      surface: "/portal/work/:workItemId execution history, real daemon records",
+      currentWorkItem: secondHistory.work_item.id,
+      currentWorkItemTitle: secondHistoryTitle,
+      firstWorkItem: history.work_item.id,
+      firstWorkItemTitle: historyTitle,
+      firstNavigationCursor: consumedCursor,
+      obsoleteFailureNavigationCursor: secondConsumedCursor,
+      currentNavigationCursor: currentCursor,
+      failureAttemptCursors: failureCursors,
+      obsoleteFailureOutcomes: failureOutcomes,
+      faultAttemptCursors: faultCursors,
+      faultAttemptOutcomes: faultOutcomes,
+      retryCursorBoundTo: retryCursor,
+      firstPageEntries: firstCount,
+      firstEntriesAfterOlderPage,
+      obsoleteFailureEntries: secondCount,
+      currentEntries: currentCount,
+      currentEntriesAfterRetry: await currentEntries.count(),
+      observations: [
+        "first item: Load older history requested the cursor of the detail response that navigation consumed",
+        "cursor tokens are signed per GET; only cursors from the same UI navigation are compared",
+        "obsolete in-flight 503 settled without touching the detail selected meanwhile",
+        "delivered means the response was sent by the handler; the visible UI state and the post-release refreshes prove what was applied",
+        "fresh document navigation: the first older-history load was faulted, its current cursor asserted, and the error plus Retry rendered",
+        "Retry history requested the current navigation's consumed cursor, loaded the real older page and exhausted it"
+      ]
+    }, null, 2));
   });
 });

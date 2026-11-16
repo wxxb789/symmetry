@@ -1,0 +1,111 @@
+{
+  "work_item": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "key": "SHELL-6",
+    "project_id": "11111111-1111-4111-8111-111111111111",
+    "title": "Legacy structured result",
+    "description": null,
+    "status": "done",
+    "priority": "normal",
+    "position": 6,
+    "assignee": {"type": "agent", "name": "Echo", "agent_profile": "implement"},
+    "workspace": "/workspaces/shell-6",
+    "blocked": false,
+    "blocker": null,
+    "repository_resource_id": null,
+    "repository": null,
+    "ci_resource_id": null,
+    "ci_resource": null,
+    "branch": null,
+    "pull_request_url": null,
+    "ci_status": "unknown",
+    "review_status": "none",
+    "delivery": {
+      "pull_request": {"value": null, "source": "none", "generation": null, "url": null, "status": null},
+      "ci": {"value": "unknown", "source": "none", "generation": null, "url": null, "status": "unknown"},
+      "review": {"value": "none", "source": "none", "generation": null, "url": null, "status": "none"}
+    },
+    "external": null,
+    "version": 5,
+    "can_start": false,
+    "execution": {
+      "task_id": "55555555-5555-4555-8555-555555555555",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "runtime_id": "77777777-7777-4777-8777-777777777777",
+      "generation": 1,
+      "state": "completed",
+      "waiting": null,
+      "latest_command": null,
+      "result": {"summary": {"message": "legacy structured summary"}, "tests": "12 passed"},
+      "failure": null,
+      "timing": {
+        "state_since": "2026-11-15T14:20:00.000000Z",
+        "started_at": "2026-11-15T14:00:00.000000Z",
+        "finished_at": "2026-11-15T14:20:00.000000Z"
+      },
+      "supervisory_control": true,
+      "can_guide": false,
+      "can_pause": false,
+      "can_resume": false,
+      "can_cancel": false,
+      "can_retry": false,
+      "intent_locked": true
+    },
+    "updated_at": "2026-11-15T14:20:00.000000Z"
+  },
+  "outcome": {
+    "goal": "Legacy structured result",
+    "phase": "completed",
+    "owner": {"type": "agent", "name": "Echo", "agent_profile": "implement"},
+    "summary": {"message": "legacy structured summary"},
+    "findings": [],
+    "changed_artifacts": [],
+    "tests": "12 passed",
+    "blocker": null,
+    "pull_request_url": null,
+    "ci_status": "unknown",
+    "review_status": "none",
+    "delivery": {
+      "pull_request": {"value": null, "source": "none", "generation": null, "url": null, "status": null},
+      "ci": {"value": "unknown", "source": "none", "generation": null, "url": null, "status": "unknown"},
+      "review": {"value": "none", "source": "none", "generation": null, "url": null, "status": "none"}
+    },
+    "result": {"summary": {"message": "legacy structured summary"}, "tests": "12 passed"},
+    "failure": null
+  },
+  "timeline": [],
+  "raw": {
+    "task": {
+      "task_id": "55555555-5555-4555-8555-555555555555",
+      "state": "completed",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "work": {
+        "goal": "Legacy structured result",
+        "agent_profile": "implement",
+        "workspace": "/workspaces/shell-6",
+        "input": {
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "project_key": "SHELL",
+          "provider_resource_ids": [],
+          "repository": null,
+          "repository_resource_id": null,
+          "work_item_id": "22222222-2222-4222-8222-222222222222",
+          "work_item_key": "SHELL-6"
+        }
+      },
+      "result": {"summary": {"message": "legacy structured summary"}, "tests": "12 passed"},
+      "failure": null,
+      "controls": {
+        "supervisory_control": true,
+        "can_guide": false,
+        "can_pause": false,
+        "can_resume": false
+      },
+      "waiting": null,
+      "latest_command": null
+    },
+    "timeline": [],
+    "next_before": null
+  }
+}

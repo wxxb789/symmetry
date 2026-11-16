@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "source": "transition",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "recorded_at": "2026-11-15T11:00:00.000000Z",
+      "data": {"transition_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "state": "waiting_for_input", "payload": {"from": "running"}}
+    },
+    {
+      "source": "event",
+      "run_id": "66666666-6666-4666-8666-666666666666",
+      "generation": 1,
+      "recorded_at": "2026-11-15T10:59:59.000000Z",
+      "data": {
+        "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 9,
+        "kind": "waiting_for_input",
+        "payload": {"type": "waiting_for_input", "question": "Which artifact delivery strategy should be used?"},
+        "occurred_at": "2026-11-15T10:59:58.000000Z"
+      }
+    }
+  ],
+  "next_before": "SFMyNTY.g3QAAAACdw0KA3YBAgF0YXNrX2lkAApkZWxpdmVyeS12MQ"
+}

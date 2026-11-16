@@ -473,5 +473,44 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     expect(persistedProject.work_items.find((item) => item.title === retryTitle)).toEqual(
       expect.objectContaining({ status: "done", execution: expect.objectContaining({ state: "completed", generation: 2 }) })
     );
+
+    // Persisted execution reads moved to /portal/work/:workItemId; every
+    // mutation and lifecycle assertion above stays classic.
+    await page.goto(`/portal/projects/${projectId}`);
+    await page.getByRole("link", { name: retryTitle }).click();
+    const retryDetail = page.getByRole("dialog", { name: retryTitle });
+    await expect(retryDetail.getByRole("heading", { level: 1, name: retryTitle })).toBeVisible();
+    await expect(
+      retryDetail
+        .locator("section.detail-section", { has: page.getByRole("heading", { name: "Execution history" }) })
+        .locator("ol.timeline > li.timeline-entry")
+        .first()
+    ).toBeVisible();
+    // The rendered detail must carry the real reported output and delivery
+    // values already proved through the API, without labelling them accepted.
+    const retriedItemId = persistedProject.work_items.find((item) => item.title === retryTitle).id;
+    const servedDetail = (await portalRequest(page, `/portal/api/work-items/${retriedItemId}`)).body;
+    const servedReported = servedDetail.outcome.summary ??
+      (servedDetail.work_item.execution?.result?.summary ?? null);
+    expect(servedReported).toBeTruthy();
+    // Scoped to the actual Reported execution output section: the same summary
+    // text legitimately repeats as a timeline entry headline.
+    const reportedSection = retryDetail.locator("section.detail-section", {
+      has: page.getByRole("heading", { name: "Reported execution output", exact: true })
+    });
+    await expect(reportedSection.getByText(servedReported, { exact: false })).toBeVisible();
+    await expect(retryDetail.getByText("No accepted evidence available", { exact: false })).toBeVisible();
+    const retryDelivery = retryDetail.locator("dl.delivery-list");
+    for (const [label, entry] of [
+      ["Pull request", servedDetail.work_item.delivery.pull_request],
+      ["CI", servedDetail.work_item.delivery.ci],
+      ["Review", servedDetail.work_item.delivery.review]
+    ]) {
+      const row = retryDelivery.locator("div", { hasText: label }).first();
+      await expect(row).toContainText(`source: ${entry.source}`);
+      if (typeof entry.url === "string" && entry.url.startsWith("http")) {
+        await expect(row.getByRole("link", { name: "Open" })).toHaveAttribute("href", entry.url);
+      }
+    }
   });
 });

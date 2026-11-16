@@ -23,20 +23,262 @@
         "name": {"type": "string"},
         "description": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "status": {"type": "string"},
+        "resources": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/WorkspaceResource"}
+        },
         "work_items": {"type": "array", "items": {"$ref": "#/definitions/WorkspaceWorkItem"}}
+      }
+    },
+    "WorkspaceResource": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "PortalJSON.resource/1 as served inside workspace projects. The CI chip reads the identity and the bound-resource signals; every other served member stays additive. All members stay optional because a project row keeps accepting older partial projections, while a production server serves them all.",
+      "properties": {
+        "id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "sync_status": {"oneOf": [{"type": "string"}, {"type": "null"}]}
       }
     },
     "WorkspaceWorkItem": {
       "type": "object",
       "additionalProperties": true,
+      "description": "PortalJSON.work_item/2 as served in workspace rows and work detail reads. The definition body is identical in workspace-read.schema.json and work-detail-read.schema.json so the effect generator shares one graph for both roots; the JSON Schema to TypeScript modules and the quicktype Go output may still restate the shape per root.",
       "required": ["id", "key", "title", "status", "blocked", "blocker"],
       "properties": {
         "id": {"$ref": "common.schema.json#/definitions/UUID"},
         "key": {"type": "string"},
+        "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
         "title": {"type": "string"},
+        "description": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "status": {"type": "string"},
+        "priority": {"type": "string"},
+        "position": {"type": "integer"},
+        "assignee": {"$ref": "#/definitions/WorkItemAssignee"},
+        "workspace": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "blocked": {"type": "boolean"},
-        "blocker": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+        "blocker": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "repository_resource_id": {
+          "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        },
+        "repository": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "ci_resource_id": {
+          "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        },
+        "ci_resource": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "branch": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "pull_request_url": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "ci_status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "review_status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "delivery": {"$ref": "#/definitions/WorkItemDelivery"},
+        "external": {"oneOf": [{"$ref": "#/definitions/WorkItemExternal"}, {"type": "null"}]},
+        "version": {"type": "integer"},
+        "can_start": {"type": "boolean"},
+        "execution": {"oneOf": [{"$ref": "#/definitions/WorkItemExecution"}, {"type": "null"}]},
+        "updated_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}
+      }
+    },
+    "WorkItemAssignee": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "PortalJSON owner/1: assignee identity as served, with null members when unset.",
+      "required": ["type", "name", "agent_profile"],
+      "properties": {
+        "type": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "name": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "agent_profile": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "WorkItemDelivery": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["pull_request", "ci", "review"],
+      "properties": {
+        "pull_request": {"$ref": "#/definitions/WorkItemDeliveryValue"},
+        "ci": {"$ref": "#/definitions/WorkItemDeliveryValue"},
+        "review": {"$ref": "#/definitions/WorkItemDeliveryValue"}
+      }
+    },
+    "WorkItemDeliveryValue": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "PortalJSON effective_delivery/6: the consumed core is value, source, generation, url and status; provider, recorded_at and other evidence fields stay source-specific and additive.",
+      "required": ["value", "source", "generation", "url", "status"],
+      "properties": {
+        "value": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "source": {"enum": ["none", "manual", "provider", "agent"]},
+        "generation": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+        "url": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "provider": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "recorded_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}
+      }
+    },
+    "WorkItemExecution": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "PortalJSON.execution_summary/1 as served when the work item has an orchestration task; null otherwise.",
+      "required": [
+        "task_id",
+        "run_id",
+        "runtime_id",
+        "generation",
+        "state",
+        "waiting",
+        "latest_command",
+        "result",
+        "failure",
+        "timing",
+        "supervisory_control",
+        "can_guide",
+        "can_pause",
+        "can_resume",
+        "can_cancel",
+        "can_retry",
+        "intent_locked"
+      ],
+      "properties": {
+        "task_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "run_id": {"oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]},
+        "runtime_id": {
+          "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        },
+        "generation": {"type": "integer"},
+        "state": {"type": "string"},
+        "waiting": {"oneOf": [{"$ref": "#/definitions/WorkItemWaiting"}, {"type": "null"}]},
+        "latest_command": {
+          "oneOf": [{"$ref": "#/definitions/WorkItemCommand"}, {"type": "null"}]
+        },
+        "result": {
+          "oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]
+        },
+        "failure": {
+          "oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]
+        },
+        "timing": {"$ref": "#/definitions/WorkItemExecutionTiming"},
+        "supervisory_control": {"type": "boolean"},
+        "can_guide": {"type": "boolean"},
+        "can_pause": {"type": "boolean"},
+        "can_resume": {"type": "boolean"},
+        "can_cancel": {"type": "boolean"},
+        "can_retry": {"type": "boolean"},
+        "intent_locked": {"type": "boolean"}
+      }
+    },
+    "WorkItemExecutionTiming": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["state_since", "started_at", "finished_at"],
+      "properties": {
+        "state_since": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "started_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "finished_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}
+      }
+    },
+    "WorkItemWaiting": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Protocol.waiting/1: current waiting_for_input context; the decision packet stays open because it is carried verbatim from the runtime payload.",
+      "required": ["run_id", "generation", "transition_id", "question", "decision", "payload", "recorded_at"],
+      "properties": {
+        "run_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "generation": {"type": "integer"},
+        "transition_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "question": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "decision": {
+          "oneOf": [{"$ref": "#/definitions/WorkItemWaitingDecision"}, {"type": "null"}]
+        },
+        "payload": {"type": "object", "additionalProperties": true},
+        "recorded_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}
+      }
+    },
+    "WorkItemWaitingDecision": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Agent-supplied waiting_for_input decision packet; options and recommendation are advisory display data.",
+      "properties": {
+        "context": {"type": "string"},
+        "reason": {"type": "string"},
+        "options": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/WorkItemWaitingDecisionOption"}
+        },
+        "recommended_option_id": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "WorkItemWaitingDecisionOption": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string"},
+        "label": {"type": "string"},
+        "consequence": {"type": "string"}
+      }
+    },
+    "WorkItemCommand": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Protocol.command/1: latest guidance command receipt for the current generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.",
+      "required": [
+        "command_id",
+        "task_id",
+        "run_id",
+        "generation",
+        "kind",
+        "payload",
+        "state",
+        "issued_at",
+        "applied_at",
+        "acknowledgement_id",
+        "acknowledgement_outcome",
+        "acknowledged_at"
+      ],
+      "properties": {
+        "command_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "task_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "run_id": {"oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]},
+        "generation": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+        "kind": {"type": "string"},
+        "payload": {"type": "object", "additionalProperties": true},
+        "state": {"type": "string"},
+        "issued_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "applied_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "acknowledgement_id": {
+          "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        },
+        "acknowledgement_outcome": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "acknowledged_at": {
+          "oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]
+        }
+      }
+    },
+    "WorkItemExternal": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "PortalJSON.external_work_item/1 safe display and link fields; raw provider payloads (data, delivery_data) remain additive and unconsumed.",
+      "required": [
+        "provider",
+        "id",
+        "url",
+        "state",
+        "available",
+        "assignee",
+        "labels",
+        "updated_at",
+        "resource_id"
+      ],
+      "properties": {
+        "provider": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "url": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "state": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "available": {"type": "boolean"},
+        "assignee": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "labels": {"type": "array", "items": {"type": "string"}},
+        "updated_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "resource_id": {
+          "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        }
       }
     }
   }
