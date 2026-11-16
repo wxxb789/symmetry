@@ -20,6 +20,8 @@ Keep existing tests, types, acceptance, authority, recovery and permissions inta
 Do not edit the frozen task, runner, review instructions or evidence to make your work pass.
 Do not commit, push or mutate the canonical checkout when the packet forbids it.
 
+For an Elixir task, run `mix` from `control/` with the environment the coordinator exported (`MISE_ELIXIR_VERSION`/`MISE_ERLANG_VERSION` for the pinned toolchain, `MIX_DEPS_PATH`/`MIX_BUILD_PATH` outside the checkout, `POSTGRES_*` for the run's own database, which `mix test` creates and migrates). The checkout carries a staged frontend bundle under `control/priv/static/portal/` that the suite requires and that must not be modified. Exercise the frozen acceptance through focused files only; the full suite, the provider-broker and goal-receipt integration gates and Go builds belong to the coordinator, and heavy jobs must not run concurrently on one host.
+
 The coordinator executes the frozen gates after sealing the source and invokes the separately configured reviewer.
 Worker-written tests are not the sole acceptance evidence: retain existing contract checks, named-test execution assertions and semantic review.
 

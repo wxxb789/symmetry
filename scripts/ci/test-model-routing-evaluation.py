@@ -2,6 +2,7 @@
 """Exercise the evaluation CLI through real Git, subprocess and file surfaces."""
 
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
@@ -14,6 +15,15 @@ import unittest
 
 
 SCRIPT = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
+
+
+def load_runner_module():
+    """Import the acceptance runner so gate validation rules can be asserted directly."""
+    path = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
+    spec = importlib.util.spec_from_file_location("model_routing_evaluation", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 EMIT_OK = "print('gate ok')"
 EMIT_PASS = (
@@ -165,14 +175,60 @@ class EvaluationTests(unittest.TestCase):
             }
         return {"worker": role(worker), "reviewer": role(reviewer)}
 
-    def prepare(self, task=None, routes=None, run=None, source=None) -> subprocess.CompletedProcess:
+    def prepare(self, task=None, routes=None, run=None, source=None, environment_json=None) -> subprocess.CompletedProcess:
         inputs = self.root / "inputs"
         task_path = self.write_json(inputs / "task.json", self.task() if task is None else task)
         routes_path = self.write_json(inputs / "routes.json", self.routes() if routes is None else routes)
-        return self.cli(
+        command = [
             "prepare", "--run-dir", str(run or self.run_dir()), "--task", str(task_path),
             "--routes", str(routes_path), "--source", str(source or self.repo),
+        ]
+        if environment_json is not None:
+            command += ["--environment-json", str(environment_json)]
+        return self.cli(*command)
+
+    def install_fake_mix(self, trace_lines=(), trace_exit=0, gate_exit=0):
+        """Install an executable named `mix` that prints trace lines instead of running ExUnit.
+
+        The runner only derives the ExUnit trace command for a gate whose argv[0] is
+        named mix; the wrapper forwards to this interpreter so the fixture launches on
+        POSIX and Windows alike. Non-trace invocations print a marker and exit with
+        `gate_exit`, so a test can fail the gate command while the trace stays
+        controllable.
+        """
+        directory = self.root / "fake-mix"
+        directory.mkdir(exist_ok=True)
+        body = directory / "mix_body.py"
+        source = (
+            "import sys\n"
+            "if '--trace' in sys.argv:\n"
+            + "".join(f"    print({line!r})\n" for line in trace_lines)
+            + f"    raise SystemExit({trace_exit})\n"
+            "print('mix test gate ran')\n"
+            f"raise SystemExit({gate_exit})\n"
         )
+        self.write(body, source)
+        if os.name == "nt":
+            wrapper = directory / "mix.bat"
+            self.write(wrapper, f'@echo off\r\n"{sys.executable}" "{body}" %*\r\n')
+        else:
+            wrapper = directory / "mix"
+            self.write(wrapper, f'#!/bin/sh\nexec "{sys.executable}" "{body}" "$@"\n')
+            wrapper.chmod(0o755)
+        probe = subprocess.run([str(wrapper), "test"], capture_output=True, text=True, check=False)
+        if "mix test gate ran" not in probe.stdout:
+            self.skipTest(f"the fake mix fixture did not launch: {probe.returncode} {probe.stdout} {probe.stderr}")
+        return wrapper
+
+    def exunit_gate(self, mix, *, gate_id="exunit-gate", tests, files=("test/witness_test.exs",), cwd=".", argv=None):
+        gate = {
+            "id": gate_id,
+            "cwd": cwd,
+            "argv": [str(mix), "test"] if argv is None else argv,
+            "exunit_files": list(files),
+            "exunit_tests": list(tests),
+        }
+        return gate
 
     def run_dir(self) -> pathlib.Path:
         return self.root / "run"
@@ -337,10 +393,10 @@ class EvaluationTests(unittest.TestCase):
             non_model_row("failed_attempt", "no failed attempt occurred"),
         ]}
 
-    def accepted_run(self, run: pathlib.Path | None = None, task=None, usage=None):
+    def accepted_run(self, run: pathlib.Path | None = None, task=None, usage=None, environment_json=None):
         """Prepare, edit, seal, check, review and derive one accepted receipt."""
         run_path = run or self.run_dir()
-        self.assert_ok(self.prepare(task=task, run=run_path))
+        self.assert_ok(self.prepare(task=task, run=run_path, environment_json=environment_json))
         self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run_path)
         self.edit("app/new_test.go", "package app\n\nimport \"testing\"\n\nfunc TestWitness2(t *testing.T) {}\n", run=run_path)
         sealed = self.assert_ok(self.seal(run=run_path))
@@ -1449,6 +1505,309 @@ class EvaluationTests(unittest.TestCase):
                 os.rmdir(junction)
             except OSError:
                 pass
+
+    def test_exunit_trace_gate_requires_every_named_test_once(self) -> None:
+        first = "committed harness session receipts recover through real Go HTTP after listener restarts"
+        second = "a stale synchronization is reported as attention by the workspace read model"
+        expected = (first, second)
+        observations = (
+            "\r\x1b[32m  * test " + first + " (0.4ms) [L#7]\x1b[0m",
+            "\r  * test " + second + " (0.2ms) [L#12]",
+        )
+        summary = ("", "Finished in 0.02 seconds", "Result: 2 passed")
+
+        mix = self.install_fake_mix(observations + summary)
+        run = self.root / "run-exunit-passing"
+        task = self.task(gates=[self.exunit_gate(mix, tests=expected)])
+        self.accepted_run(task=task, run=run)
+        receipt = self.stored_receipt(run)
+        check = receipt["checks"][0]
+        self.assertEqual(check["id"], "exunit-gate")
+        self.assertEqual(check["exunit_tests"], list(expected))
+        self.assertEqual(check["exunit_files"], ["test/witness_test.exs"])
+        self.assertEqual(check["exunit_exit_code"], 0)
+        self.assertIsNone(check["exunit_error"])
+        self.assertEqual(check["env"], {})
+        self.assertTrue(receipt["accepted"], receipt["acceptance_blockers"])
+
+        variants = (
+            ("missing", (observations[0], "", "Result: 1 passed"), 0, f"missing {second}"),
+            ("duplicate", (observations[0], observations[0], observations[1], *summary), 0, f"{first} was observed 2 times"),
+            ("skipped", (observations[0], observations[1].replace("(0.2ms)", "(skipped)"), "", "Result: 1 passed, 1 skipped"), 0, f"missing {second}"),
+            ("excluded", (observations[0], observations[1].replace("(0.2ms)", "(excluded)"), "", "Result: 1 passed, 1 excluded"), 0, f"missing {second}"),
+            (
+                "describe-prefixed",
+                (observations[0], "\r  * test a describe block " + second + " (0.2ms) [L#12]", "", "Result: 2 passed"),
+                0,
+                f"missing {second}",
+            ),
+            ("exited-non-zero", observations + summary, 1, "the traced run exited with 1"),
+            ("reported-failures", (observations[0], observations[1], "", "Result: 1/2 passed", "Failed: 1 test"), 0, "the traced run reported 1 failures"),
+            ("no-summary", observations, 0, "the traced run reported no ExUnit summary"),
+        )
+        for label, lines, trace_exit, needle in variants:
+            with self.subTest(case=label):
+                mix = self.install_fake_mix(lines, trace_exit=trace_exit)
+                run = self.root / ("run-exunit-" + label)
+                task = self.task(gates=[self.exunit_gate(mix, tests=expected)])
+                self.assert_ok(self.prepare(task=task, run=run))
+                self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+                self.assert_ok(self.seal(run=run))
+                checked = self.check(run=run)
+                self.assertNotEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+                summary_block = json.loads(checked.stdout)
+                self.assertTrue(summary_block["complete"])
+                self.assertFalse(summary_block["passed"])
+                gate_dir = run / "checks" / summary_block["attempt_id"] / "exunit-gate"
+                result = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
+                self.assertEqual(
+                    result["exunit_argv"],
+                    [str(mix), "test", "--trace", "--seed", "0", "test/witness_test.exs"],
+                )
+                self.assertEqual(result["exunit_exit_code"], trace_exit)
+                self.assertFalse(result["passed"])
+                self.assertIsNone(result["error"])
+                self.assertIn(needle, result["exunit_error"])
+                self.assertIn(first, (gate_dir / "exunit.stdout.bin").read_bytes().decode("utf-8"))
+                receipt_summary = self.assert_ok(self.receipt(self.usage_rows(), run=run))
+                self.assertFalse(receipt_summary["accepted"])
+                self.assertTrue(
+                    any(result["exunit_error"] in blocker for blocker in receipt_summary["acceptance_blockers"]),
+                    receipt_summary["acceptance_blockers"],
+                )
+                self.assert_refused(self.accept(run=run), "nonaccepted row")
+
+    def test_prepare_validates_exunit_gate_and_environment_fields(self) -> None:
+        runner = load_runner_module()
+        plain = {"id": "gate", "cwd": ".", "argv": ["mix", "test"]}
+        cases = (
+            ("tests-without-files", {**plain, "exunit_tests": ["test one"]}, "exunit_tests requires exunit_files"),
+            ("files-without-tests", {**plain, "exunit_files": ["test/x_test.exs"]}, "exunit_files requires exunit_tests"),
+            (
+                "non-mix-argv",
+                {"id": "gate", "cwd": ".", "argv": [sys.executable, "-c", "pass"],
+                 "exunit_files": ["test/x_test.exs"], "exunit_tests": ["test one"]},
+                "requires a mix gate command",
+            ),
+            (
+                "too-many-tests",
+                {**plain, "exunit_files": ["test/x_test.exs"], "exunit_tests": [f"test {index}" for index in range(51)]},
+                "at most 50 tests",
+            ),
+            (
+                "too-many-files",
+                {**plain, "exunit_files": [f"test/{index}_test.exs" for index in range(21)], "exunit_tests": ["test one"]},
+                "at most 20 files",
+            ),
+            (
+                "duplicate-tests",
+                {**plain, "exunit_files": ["test/x_test.exs"], "exunit_tests": ["test one", "test one"]},
+                "must be unique",
+            ),
+            (
+                "nul-test-name",
+                {**plain, "exunit_files": ["test/x_test.exs"], "exunit_tests": ["test one\0two"]},
+                "must not contain NUL",
+            ),
+            (
+                "empty-files",
+                {**plain, "exunit_files": [], "exunit_tests": ["test one"]},
+                "at least 1 file",
+            ),
+            (
+                "glob-file",
+                {**plain, "exunit_files": ["test/*_test.exs"], "exunit_tests": ["test one"]},
+                "without glob",
+            ),
+            ("secret-env-name", {**plain, "env": {"SYMMETRY_OPERATOR_TOKEN": "x"}}, "secret"),
+            ("lowercase-env-name", {**plain, "env": {"lower_case": "x"}}, "env names must match"),
+            ("empty-env-value", {**plain, "env": {"SYMMETRY_MODE": ""}}, "non-empty string"),
+            (
+                "too-many-env-entries",
+                {**plain, "env": {f"SYMMETRY_FLAG_{index}": "1" for index in range(9)}},
+                "at most 8 entries",
+            ),
+            ("non-object-env", {**plain, "env": ["SYMMETRY_MODE"]}, "env must be a JSON object"),
+        )
+        for index, (label, gate, needle) in enumerate(cases):
+            with self.subTest(case=label):
+                with self.assertRaises(runner.Refused, msg=f"validate_gate accepted {label}") as refusal:
+                    runner.validate_gate(gate, 0)
+                self.assertIn(needle, str(refusal.exception))
+                run = self.root / f"run-gate-validation-{index}"
+                self.assert_refused(self.prepare(task=self.task(gates=[gate]), run=run), needle)
+                self.assertFalse(run.exists(), "a refused prepare must not leave a run directory")
+        # The whole-task secret scan and validate_gate are independent guards: the scan
+        # refuses SYMMETRY_OPERATOR_TOKEN even before the gate's own allowlist applies.
+        with self.assertRaises(runner.Refused) as refusal:
+            runner.validate_gate({**plain, "env": {"SYMMETRY_OPERATOR_TOKEN": "x"}}, 0)
+        self.assertIn("looks like a secret", str(refusal.exception))
+
+    def test_gate_environment_is_applied_and_recorded(self) -> None:
+        probe = "import os\nprint(os.environ.get('SYMMETRY_FIXTURE_MODE', 'missing'))\n"
+        run = self.root / "run-gate-env"
+        task = self.task(gates=[{
+            "id": "env-gate",
+            "cwd": ".",
+            "argv": [sys.executable, "-c", probe],
+            "env": {"SYMMETRY_FIXTURE_MODE": "measured-fixture"},
+        }])
+        self.accepted_run(task=task, run=run)
+        gate_dir = run / "checks" / "attempt-0001" / "env-gate"
+        self.assertEqual(
+            (gate_dir / "stdout.bin").read_bytes().decode("utf-8").splitlines(),
+            ["measured-fixture"],
+        )
+        result = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["env"], {"SYMMETRY_FIXTURE_MODE": "measured-fixture"})
+        receipt = self.stored_receipt(run)
+        self.assertEqual(receipt["checks"][0]["id"], "env-gate")
+        self.assertEqual(receipt["checks"][0]["env"], {"SYMMETRY_FIXTURE_MODE": "measured-fixture"})
+        self.assert_ok(self.accept(run=run))
+
+    def test_prepare_environment_json_records_the_measured_surface(self) -> None:
+        measured = {"cpu_count": "8", "kernel": "6.8.0-fixture", "python_build": "fixture-build"}
+        environment_path = self.write_json(self.root / "inputs" / "environment.json", measured)
+        run = self.root / "run-measured"
+        self.accepted_run(run=run, environment_json=environment_path)
+        self.assertEqual(self.run_record(run)["environment"]["measured"], measured)
+        self.assertEqual(
+            sorted(self.run_record(run)["environment"]),
+            ["git_version", "machine", "measured", "platform", "python_version"],
+        )
+        self.assertEqual(self.stored_receipt(run)["environment"]["measured"], measured)
+        self.assert_ok(self.accept(run=run))
+
+        cases = (
+            ("secret-name", {"operator_token": "x"}, "looks like a secret"),
+            ("bad-name", {"Kernel": "x"}, "names must match"),
+            ("empty-value", {"kernel": ""}, "non-empty single-line"),
+            ("multiline-value", {"kernel": "one\ntwo"}, "non-empty single-line"),
+            ("too-many-entries", {f"field_{index}": "1" for index in range(25)}, "at most 24 entries"),
+            ("not-an-object", ["kernel"], "must be a JSON object"),
+        )
+        for index, (label, value, needle) in enumerate(cases):
+            with self.subTest(case=label):
+                refused_run = self.root / f"run-measured-{index}"
+                path = self.write_json(self.root / "inputs" / f"environment-{index}.json", value)
+                self.assert_refused(self.prepare(run=refused_run, environment_json=path), needle)
+                self.assertFalse(refused_run.exists())
+
+        tampered = self.run_record(run)
+        tampered["environment"]["measured"]["operator_token"] = "x"
+        self.write_json(run / "run.json", tampered)
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "looks like a secret")
+
+    def test_exunit_gate_evidence_is_reverified_from_stored_bytes(self) -> None:
+        first = "committed harness session receipts recover through real Go HTTP after listener restarts"
+        second = "a stale synchronization is reported as attention by the workspace read model"
+        expected = (first, second)
+        mix = self.install_fake_mix((
+            "\r\x1b[32m  * test " + first + " (0.4ms) [L#7]\x1b[0m",
+            "\r  * test " + second + " (0.2ms) [L#12]",
+            "",
+            "Result: 2 passed",
+        ))
+        run = self.root / "run-exunit-verify"
+        task = self.task(gates=[self.exunit_gate(mix, tests=expected)])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        self.assert_ok(self.check(run=run))
+        gate_dir = run / "checks" / "attempt-0001" / "exunit-gate"
+        result_path = gate_dir / "result.json"
+        original_raw = result_path.read_bytes()
+        original_stdout = (gate_dir / "exunit.stdout.bin").read_bytes()
+        self.assertEqual(sorted(entry.name for entry in gate_dir.iterdir()),
+                         ["exunit.stderr.bin", "exunit.stdout.bin", "result.json", "stderr.bin", "stdout.bin"])
+
+        def mutate_exit_code(result, directory):
+            result["exunit_exit_code"] = 7
+
+        def mutate_tests(result, directory):
+            result["exunit_tests"] = ["test other"]
+
+        def mutate_argv(result, directory):
+            result["exunit_argv"] = ["mix", "test"]
+
+        def mutate_env(result, directory):
+            result["env"] = {"SYMMETRY_MODE": "1"}
+
+        def mutate_digest(result, directory):
+            result["exunit_stdout_sha256"] = "sha256:" + "0" * 64
+
+        def mutate_timed_out(result, directory):
+            result["exunit_timed_out"] = True
+
+        def drop_stdout(result, directory):
+            (directory / "exunit.stdout.bin").unlink()
+
+        def add_stray(result, directory):
+            (directory / "exunit-extra.bin").write_bytes(b"x")
+
+        cases = (
+            ("exit-code", mutate_exit_code, "claims passed"),
+            ("tests", mutate_tests, "does not match the frozen gate exunit_tests"),
+            ("argv", mutate_argv, "does not match the derived ExUnit trace command"),
+            ("env", mutate_env, "does not match the frozen gate env"),
+            ("stdout-digest", mutate_digest, "changed after it was captured"),
+            ("timed-out", mutate_timed_out, "disagrees with its exit code"),
+            ("missing-stdout", drop_stdout, "unexpected files"),
+            ("stray-evidence", add_stray, "unexpected files"),
+        )
+        for label, mutate, needle in cases:
+            with self.subTest(case=label):
+                result = json.loads(original_raw.decode("utf-8"))
+                mutate(result, gate_dir)
+                self.write_json(result_path, result)
+                refused = self.receipt(self.usage_rows(), run=run)
+                result_path.write_bytes(original_raw)
+                (gate_dir / "exunit.stdout.bin").write_bytes(original_stdout)
+                stray = gate_dir / "exunit-extra.bin"
+                if stray.exists():
+                    stray.unlink()
+                self.assert_refused(refused, needle)
+        self.assert_ok(self.receipt(self.usage_rows(), run=run))
+
+        failing = self.install_fake_mix((), gate_exit=3)
+        run = self.root / "run-exunit-gate-failure"
+        task = self.task(gates=[self.exunit_gate(failing, tests=expected)])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        checked = self.check(run=run)
+        self.assertNotEqual(checked.returncode, 0, checked.stdout)
+        gate_dir = run / "checks" / "attempt-0001" / "exunit-gate"
+        result = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["exit_code"], 3)
+        self.assertIsNone(result["exunit_error"])
+        self.assertIsNone(result["exunit_exit_code"])
+        self.assertFalse(result["exunit_timed_out"])
+        self.assertEqual(
+            result["exunit_argv"], [str(failing), "test", "--trace", "--seed", "0", "test/witness_test.exs"]
+        )
+        self.assertEqual(
+            sorted(entry.name for entry in gate_dir.iterdir()),
+            ["result.json", "stderr.bin", "stdout.bin"],
+        )
+        self.assert_ok(self.receipt(self.usage_rows(), run=run))
+
+        run = self.root / "run-plain-verify"
+        self.assert_ok(self.prepare(task=self.task(gates=[self.gate_plain()]), run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        self.assert_ok(self.check(run=run))
+        gate_dir = run / "checks" / "attempt-0001" / "plain"
+        original = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertIsNone(original["exunit_argv"])
+        self.assertIsNone(original["exunit_error"])
+        (gate_dir / "exunit.stdout.bin").write_bytes(b"x")
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "unexpected files")
+        (gate_dir / "exunit.stdout.bin").unlink()
+        self.assert_ok(self.receipt(self.usage_rows(), run=run))
+        receipt = self.stored_receipt(run)
+        self.assertIsNone(receipt["checks"][0]["exunit_exit_code"])
+        self.assertIsNone(receipt["checks"][0]["exunit_error"])
 
 
 if __name__ == "__main__":

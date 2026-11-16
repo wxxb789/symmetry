@@ -13,6 +13,7 @@ Refuse acceptance when:
 
 - a required test was removed, skipped, weakened or not executed;
 - named-test evidence is fabricated instead of executed, for example a custom `TestMain` that prints test events, exits before `m.Run()` or branches on `-test.list`; the runner's event-stream and `go test -list` cross-checks can be satisfied by such code, so this is a review duty;
+- named Elixir tests are fabricated instead of executed: the runner derives `mix test --trace --seed 0 <files>` for a gate that declares `exunit_tests`, requires every named test to be printed exactly once as a finished observation and requires that derived run to report zero failures, but a `test_helper.exs`, `ExUnit` formatter hook or module that prints those lines without running the tests still satisfies it. Read the changed test files, their `setup`/`setup_all`, `test_helper.exs` and any `ExUnit.configure`/formatter override in the diff, and refuse when the named tests do not actually exercise the production path. A gate whose `exunit_files` are missing or whose named tests were renamed is a missing gate, not a passing one;
 - a declared gate or required explanation is missing;
 - the change crosses scope or reinterprets an invariant;
 - evidence binds stale source, or a receipt claims results the coordinator did not observe;

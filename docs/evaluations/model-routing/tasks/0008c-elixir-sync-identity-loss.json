@@ -1,0 +1,110 @@
+{
+  "task_id": "0008c-elixir-sync-identity-loss",
+  "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "language": "elixir",
+  "risk_class": "established-pattern-edit",
+  "workflow": "reuse_existing",
+  "outcome": "A resource synchronization that fails with a definite provider identity loss - the provider reports the bound resource as not found, which the existing failure classification already maps from an HTTP 404 to the code :not_found with the message \"Provider resource was not found\" - must persist sync_status \"stale\" (status \"degraded\", that exact status_message, last_checked_at updated) instead of \"failed\", for both the manual Integrations.sync_resource/1 path and the periodic Integrations.sync_all_resources/0 path. Every other failure classification (transport, unauthorized, forbidden, capability, invalid response, not connected) must keep persisting \"failed\" exactly as today, and the error code returned to callers must not change. The write must still be admitted by the project_resources_sync_status_check database constraint and the existing attention-message validation, a losing concurrent writer must still fail with {:error, :stale} without clobbering a newer row, and SymmetryControl.Workspaces.ReadModel.workspace/1 must report health.synchronization == \"attention\" for the project that owns the stale resource. Do not change the failure/1 classification codes and do not weaken any existing test. The three tests must be declared at module level, outside any `describe` block, because the frozen named-test acceptance binds their printed ExUnit descriptions exactly.",
+  "explanations": [
+    "Explain why a definite provider identity loss is persisted as stale while every other failure classification keeps persisting failed, and name the code path that decides the persisted sync_status.",
+    "Explain how the written row satisfies project_resources_sync_status_check and the attention-message validation, and why a losing concurrent writer still cannot clobber the winner."
+  ],
+  "allowed_paths": [
+    "control/lib/symmetry_control/integrations.ex",
+    "control/test/symmetry_control/resource_sync_identity_loss_test.exs",
+    "control/priv/static/portal/**"
+  ],
+  "protected_paths": [
+    "control/lib/symmetry_control/workspaces/schemas.ex",
+    "control/lib/symmetry_control/workspaces/read_model.ex",
+    "control/mix.exs",
+    "control/config/**",
+    "control/priv/repo/migrations/**",
+    "control/test/support/**",
+    "control/test/symmetry_control/integrations_test.exs",
+    "control/test/symmetry_control/workspaces_read_model_test.exs",
+    "daemon/**",
+    "contracts/**"
+  ],
+  "gates": [
+    {
+      "id": "goal-receipt-e2e",
+      "cwd": "control",
+      "argv": [
+        "mix",
+        "test",
+        "test/symmetry_control_web/controllers/goal_machine_controller_test.exs",
+        "--only",
+        "goal_receipt_e2e"
+      ],
+      "env": {
+        "POSTGRES_DB": "symmetry_receipt_e2e_65da9c2739ea4d6508483a34901fa7c7",
+        "SYMMETRY_GOAL_RECEIPT_E2E": "1"
+      }
+    },
+    {
+      "id": "format",
+      "cwd": "control",
+      "argv": [
+        "mix",
+        "format",
+        "--check-formatted"
+      ]
+    },
+    {
+      "id": "compile",
+      "cwd": "control",
+      "argv": [
+        "mix",
+        "compile",
+        "--warnings-as-errors"
+      ]
+    },
+    {
+      "id": "focused-tests",
+      "cwd": "control",
+      "argv": [
+        "mix",
+        "test",
+        "test/symmetry_control/resource_sync_identity_loss_test.exs"
+      ],
+      "exunit_files": [
+        "test/symmetry_control/resource_sync_identity_loss_test.exs"
+      ],
+      "exunit_tests": [
+        "a not-found provider response persists stale synchronization with the not-found message",
+        "a transient provider failure keeps persisting failed synchronization",
+        "a stale synchronization is reported as attention by the workspace read model"
+      ]
+    },
+    {
+      "id": "provider-broker-e2e",
+      "cwd": "control",
+      "argv": [
+        "mix",
+        "test",
+        "test/symmetry_control/provider_broker_e2e_test.exs"
+      ],
+      "env": {
+        "SYMMETRY_PROVIDER_BROKER_E2E": "1"
+      },
+      "exunit_files": [
+        "test/symmetry_control/provider_broker_e2e_test.exs"
+      ],
+      "exunit_tests": [
+        "GitHub Issue reaches GitHub pull request, review, and Actions projection",
+        "Azure Boards work item reaches GitHub changes and Azure Pipelines projection",
+        "Azure Boards work item reaches Azure Repos, review, and Pipelines projection",
+        "artifact-only Goal validation uses the fixed Git object without a native session"
+      ]
+    },
+    {
+      "id": "full-suite",
+      "cwd": "control",
+      "argv": [
+        "mix",
+        "test"
+      ]
+    }
+  ]
+}
