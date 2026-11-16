@@ -54,8 +54,9 @@ resource metadata, legacy project board links through real logout and login,
 plus logout after another shared-cookie tab renews its
 session. CI starts both release instances and saves the render report.
 Fixture-only project/work/resource creation uses the existing
-authenticated APIs; the React shell's own mutation surface is connection
-management at `/portal/connections` (covered below).
+authenticated APIs; the React shell's own mutation surfaces are connection
+management at `/portal/connections` and project/work-item planning on the
+project and work-item surfaces (both covered below).
 The shared-cookie CSRF case sends an explicit `visibilitychange` notification:
 The 0007a host kept its Playwright documents visible even after native window
 minimization.

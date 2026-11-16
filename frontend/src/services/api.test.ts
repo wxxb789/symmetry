@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApi, Forbidden, Network, UnexpectedResponse, Validation } from "./api";
+import { createApi, Forbidden, Network, readRetry, UnexpectedResponse, Validation } from "./api";
 import { readWorkDetail } from "./api.fixtures";
 
 const workspace = {
@@ -97,6 +97,18 @@ describe("read boundary", () => {
     const api = createApi(fetcher);
     await expect(api.workspace(null, new AbortController().signal)).rejects.toBeInstanceOf(Network);
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a failed GET's status when its body cannot be read", async () => {
+    const body = new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 404 }));
+    const failure = await createApi(fetcher)
+      .workDetail(workItemId, new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).toMatchObject({ status: 404, transient: false });
+    expect(failure).not.toBeInstanceOf(Network);
+    expect(readRetry(0, failure)).toBe(false);
   });
 
   it("marks a server fault retryable so a command keeps its frozen intent", async () => {

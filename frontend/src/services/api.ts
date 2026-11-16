@@ -244,7 +244,10 @@ function request<A>(
           ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
           signal,
         });
-        return { response, body: new Uint8Array(await response.arrayBuffer()) };
+        // Read the body only when it is the answer (ok) or a refusal to parse
+        // (a failed command): a failed GET's unreadable body must not mask its
+        // status-derived error with a retried Network.
+        return { response, body: response.ok || init.method !== "GET" ? new Uint8Array(await response.arrayBuffer()) : new Uint8Array(0) };
       },
       catch: () => new Network({ message: "Cannot reach the server. Check your connection and try again." }),
     });
