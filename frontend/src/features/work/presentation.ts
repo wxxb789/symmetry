@@ -208,11 +208,12 @@ export interface CiLabel {
   title: string;
 }
 
-/** Bound-resource fields the CI chip reads; every other served member is additive. */
-export interface CiResourceLike {
-  readonly status?: Text;
-  readonly sync_status?: Text;
-}
+/**
+ * Bound-resource fields the CI chip reads, derived from the generated workspace
+ * read DTO (`WorkspaceProject.resources` in workspace-read.schema.json); every
+ * other served member stays additive and unconsumed.
+ */
+export type CiResourceLike = Loosen<NonNullable<SymmetryWorkspaceReadV1["projects"][number]["resources"]>[number]>;
 
 /** A CI status is only rendered as fresh green while its recorded time is known and recent. */
 const ciFreshnessWindowMs = 24 * 60 * 60 * 1000;

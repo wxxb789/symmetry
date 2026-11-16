@@ -108,7 +108,7 @@ export function ProjectWorkSurface({ project, navigation }: { project: Project; 
         ? <EmptyState title="No work items">This project does not have any work items yet.</EmptyState>
         : <EmptyState title="No matching work items">
           <span className="empty-actions">No work items match the current filters.
-            <button className="button" type="button" onClick={() => { setSearch(() => ({}), { replace: false }); focusWorkControl("work-filter-input"); }}>Clear filters</button>
+            <button className="button" type="button" onClick={() => { setSearch((previous) => workSearch({ view: previous.view }), { replace: false }); focusWorkControl("work-filter-input"); }}>Clear filters</button>
           </span>
         </EmptyState>
       : (search.view ?? "list") === "board"

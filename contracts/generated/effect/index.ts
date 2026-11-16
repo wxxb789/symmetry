@@ -821,8 +821,15 @@ export const DefinitionWorkspaceProjectGraph = S.suspend(() => withObjectPropert
   "id": DefinitionUUIDGraph,
   "key": stringConstraints(S.String, undefined, undefined, undefined),
   "name": stringConstraints(S.String, undefined, undefined, undefined),
+  "resources": S.optionalWith(arrayConstraints(S.Array(DefinitionWorkspaceResourceGraph), undefined, undefined, undefined), { exact: true }),
   "status": stringConstraints(S.String, undefined, undefined, undefined),
   "work_items": arrayConstraints(S.Array(DefinitionWorkspaceWorkItemGraph), undefined, undefined, undefined)
+})), undefined, undefined));
+
+export const DefinitionWorkspaceResourceGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
+  "status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "sync_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
 })), undefined, undefined));
 
 export const AdapterCapabilitiesGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({

@@ -19,6 +19,14 @@ describe("work URL state", () => {
     expect(workSearch({ q: "123" })).toEqual({ q: "123" });
   });
 
+  it("renders JSON-shaped query text from a foreign URL as the literal it encodes", () => {
+    expect(workSearch({ q: null })).toEqual({ q: "null" });
+    expect(workSearch({ q: { a: 1 } })).toEqual({ q: '{"a":1}' });
+    expect(workSearch({ q: [1, 2] })).toEqual({ q: "[1,2]" });
+    // Text typed by the reader stays a plain string and is never re-encoded.
+    expect(workSearch({ q: '{"a":1}' })).toEqual({ q: '{"a":1}' });
+  });
+
   it("treats an absent view as the list and compares the exact list state", () => {
     expect(sameWorkSearch({}, { view: "list" })).toBe(true);
     expect(sameWorkSearch({ q: "a" }, { q: "b" })).toBe(false);

@@ -503,6 +503,21 @@ describe("readable work views", () => {
     expect(new URL(history.location.href, "http://localhost").searchParams.has("q")).toBe(false);
   });
 
+  it("clears filters without dropping the selected view", async () => {
+    const user = userEvent.setup();
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board&q=nothing-matches`, workReadFetcher({ detail: subjectDetail() }));
+    await screen.findByRole("heading", { level: 1, name: "Project One" });
+    expect(screen.getByRole("heading", { name: "No matching work items" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    // Clearing filters is not a view change: the board the operator selected
+    // stays selected, and only the filter parameters leave the URL.
+    expect(await screen.findByRole("region", { name: "Work board" })).toBeVisible();
+    const url = new URL(history.location.href, "http://localhost");
+    expect(url.searchParams.get("view")).toBe("board");
+    expect(url.searchParams.has("q")).toBe(false);
+    expect(screen.getByLabelText("Filter work items")).toHaveValue("");
+  });
+
   it("keeps focus on the saved-views control when Delete saved view removes its own button", async () => {
     const user = userEvent.setup();
     localStorage.setItem(savedViewStorageKey, JSON.stringify({
@@ -624,6 +639,48 @@ describe("readable work views", () => {
     expect(within(detail).getByText('{"passed":12,"failed":0}')).toBeVisible();
     expect(within(detail).queryByText("No reported execution output")).not.toBeInTheDocument();
   });
+
+  it("ties each row's CI tone to the rendered chip class", async () => {
+    const boundResourceId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const offlineResourceId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const emptyDelivery = { value: null, source: "none" as const, generation: null, url: null, status: null };
+    const passedDelivery = { value: "pass", source: "provider" as const, generation: 1, url: null, status: "passed", recorded_at: new Date().toISOString() };
+    const project: Project = {
+      id: firstProjectId,
+      key: "ONE",
+      name: "Project One",
+      description: null,
+      status: "active",
+      resources: [
+        { id: boundResourceId, status: "healthy", sync_status: "synced" },
+        { id: offlineResourceId, status: "offline", sync_status: "synced" },
+      ],
+      work_items: [
+        { id: subjectId, key: "ONE-9", title: subjectTitle, status: "ready", blocked: false, blocker: null, ci_resource_id: boundResourceId,
+          delivery: { pull_request: emptyDelivery, ci: passedDelivery, review: emptyDelivery } },
+        { id: siblingId, key: "ONE-10", title: siblingTitle, status: "ready", blocked: false, blocker: null, ci_resource_id: offlineResourceId,
+          delivery: { pull_request: emptyDelivery, ci: passedDelivery, review: emptyDelivery } },
+      ],
+    };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const requestPath = input instanceof Request ? input.url : String(input);
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.includes("/portal/api/work-items/")) {
+        return Promise.resolve(new Response(requestPath.endsWith("/timeline")
+          ? JSON.stringify({ items: [], next_before: null })
+          : JSON.stringify(readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle }))));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ selected_project_id: project.id, projects: [project], health: { status: "unknown" } })));
+    });
+    renderWorkspace(`/portal/projects/${firstProjectId}`, fetcher);
+    const list = await screen.findByRole("list", { name: "Work items" });
+    // The tone, not a fixed class or a swapped stylesheet pair, decides the chip:
+    // a confirmed fresh provider CI is green and a bound offline resource is not.
+    expect(within(within(list).getByRole("link", { name: subjectTitle })).getByText("CI passed")).toHaveClass("chip-passed");
+    const staleChip = within(within(list).getByRole("link", { name: siblingTitle })).getByText("CI passed · bound resource offline");
+    expect(staleChip).toHaveClass("chip-stale");
+    expect(staleChip).not.toHaveClass("chip-passed");
+  });
 });
 
 describe("execution history boundaries", () => {
@@ -700,6 +757,50 @@ describe("execution history boundaries", () => {
     await user.click(screen.getByRole("button", { name: "Load older history" }));
     expect(await screen.findByText("older entry")).toBeVisible();
     expect(reads.timelineBefore).toEqual(["cursor-2"]);
+  });
+
+  it("keeps already expanded older history when the detail refresh re-issues the boundary", async () => {
+    const user = userEvent.setup();
+    const reads = { details: 0, timelineBefore: [] as string[] };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const requestPath = input instanceof Request ? input.url : String(input);
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.includes("/portal/api/work-items/")) {
+        const url = new URL(requestPath, "http://localhost");
+        if (url.pathname.endsWith("/timeline")) {
+          reads.timelineBefore.push(url.searchParams.get("before") ?? "");
+          return Promise.resolve(new Response(JSON.stringify({ items: [olderEntry], next_before: null })));
+        }
+        reads.details += 1;
+        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
+          id: subjectId,
+          projectId: firstProjectId,
+          title: subjectTitle,
+          nextBefore: reads.details === 1 ? "cursor-1" : "cursor-2",
+        }))));
+      }
+      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
+      return Promise.resolve(new Response(JSON.stringify({
+        selected_project_id: null,
+        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
+        health: { status: "unknown" },
+      })));
+    });
+    const { application } = renderWorkspace(`/portal/work/${subjectId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: subjectTitle });
+
+    await user.click(screen.getByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("older entry")).toBeVisible();
+    expect(await screen.findByText("No older history recorded.")).toBeVisible();
+
+    await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["work-item", { workItemId: subjectId }], exact: true }); });
+    expect(reads.details).toBe(2);
+    // The refreshed boundary re-keys the timeline query, so the exhausted state
+    // belongs to the superseded boundary and the control returns; the page loaded
+    // from that boundary still belongs to the reader and stays rendered.
+    await screen.findByRole("button", { name: "Load older history" });
+    expect(screen.getByText("older entry")).toBeVisible();
+    expect(reads.timelineBefore).toEqual(["cursor-1"]);
   });
 
   it("does not paginate a loaded older page against a superseded detail boundary", async () => {

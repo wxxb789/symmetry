@@ -23,7 +23,21 @@
         "name": {"type": "string"},
         "description": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "status": {"type": "string"},
+        "resources": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/WorkspaceResource"}
+        },
         "work_items": {"type": "array", "items": {"$ref": "#/definitions/WorkspaceWorkItem"}}
+      }
+    },
+    "WorkspaceResource": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "PortalJSON.resource/1 as served inside workspace projects. The CI chip reads the identity and the bound-resource signals; every other served member stays additive. All members stay optional because a project row keeps accepting older partial projections, while a production server serves them all.",
+      "properties": {
+        "id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "sync_status": {"oneOf": [{"type": "string"}, {"type": "null"}]}
       }
     },
     "WorkspaceWorkItem": {

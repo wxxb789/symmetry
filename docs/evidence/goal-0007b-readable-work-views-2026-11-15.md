@@ -56,7 +56,7 @@ keyboard case cover it, both red before the fix (focused Vitest `1 failed /
 passed / 1 skipped / 0 failed`, exit 0). That pass edited the working tree
 only: no commit, push, or history rewrite.
 
-Round 7 (fix pass on the round-5 Sol review, 2026-11-16, this pass) applies the
+Round 7 (fix pass on the round-5 Sol review, 2026-11-16, committed as `45c0bc3`) applies the
 two P3 findings in `.tmp/0007b-findings-sol-round5.md`. P3-1: round 6's
 pathname-keyed heading reset stops the shell from moving focus on a
 same-pathname update, but two controls are unmounted by their own such update
@@ -79,6 +79,32 @@ changed three, not two) and rests on the recomputed digests. Like the earlier
 passes this one edits the working tree only: no commit, push, or history
 rewrite.
 
+Round 8 (fix pass on the PR-bot P1, 2026-11-16, committed as `747b19b`) keeps
+keyboard focus on a board card when a workspace refresh re-parents it into
+another column: the work item id, not the node, is the identity that survives
+the regroup, so a `MutationObserver` restores focus unless another control took
+it in the same commit (`useWorkFocusRestore` in
+`frontend/src/features/projects/work-surface.tsx`). Its own numbers are in
+section "Round 8 verification".
+
+Round 9 (fix pass on the round-9 DeepSeek review, 2026-11-16, this pass) fixes
+`.tmp/0007b-findings-deepseek.md`: STD-A20/SPEC-A08 (the consumed
+`WorkspaceProject.resources[]` member was hand-written outside the generated
+contract and the receipt claimed no such copy remained), STD-A22 (a detail
+refresh silently discarded the expanded older history), SPEC-A06 (the
+populated-history clause had no evidence on the reviewed revision, and the
+"none of their surfaces changed" justification for not re-running the live
+suite was false), and the five P3s (STD-A23 reworded in round 6's class audit,
+STD-A24 JSON-shaped `q`, STD-A25 `Clear filters` dropping the view, STD-A26 the
+missing CI-tone-to-class assertion, STD-A27 the detail CI chip's unstated
+binding limitation). The contract change is additive documentation of a member
+the server already serves inside the existing read schema; no server, gate,
+permission, pagination or authority rule changed. This pass re-executed the
+frontend unit/type/lint gates, the contract/Go/Elixir gates, the focused
+release-shell browser subset and the live-daemon suite on this revision
+(numbers in section "Round 9 verification") and edits the working tree only:
+no commit, push, or history rewrite.
+
 Explicit revision binding (durable, source-subject-addressed, not
 commit-addressed): revisions here are identified by a content digest, because
 this branch may be rebased before merge and a rebase rewrites SHAs. This
@@ -89,22 +115,38 @@ cannot change the value it records. This guarantee does NOT cover documentation
 outside `docs/`: `browser/README.md`, `contracts/README.md` and
 `frontend/AGENTS.md` are in the digest scope, so editing those does change it.
 For the current revision — branch HEAD
-`49ca69521830f7413b12bbbe12939654d1fb5f6c` plus the four changed source files
-of rounds 6–7 (`frontend/src/app/shell.tsx`,
+`747b19b4c6f118b02a7ee1b2bb76446efbcf1039` plus round 9's changed source files
+(`contracts/v1/workspace-read.schema.json`,
+`contracts/generated/ts/workspace-read.ts`,
+`contracts/generated/effect/index.ts`,
+`daemon/internal/contracts/generated.go`,
+`daemon/internal/contracts/schema_bundle.json`,
+`frontend/src/features/work/presentation.ts`,
+`frontend/src/features/work/history.tsx`,
+`frontend/src/features/work/detail.tsx`,
+`frontend/src/features/projects/work-surface.tsx`,
+`frontend/src/features/projects/filters.ts`,
 `frontend/src/app/router.test.tsx`,
-`frontend/src/features/projects/work-surface.tsx` and
+`frontend/src/features/projects/filters.test.ts` and
 `browser/tests/portal-work-views.spec.mjs`; every other source byte is branch
 HEAD's) — the source subject is
 
-`sha256:851b154263961dbf3eeceae2b680ebf42e25a6f4fdee1c434a31b83eedacb259`
+`sha256:c4002c27273e3f43d6de1fa7a6444383b9e1f069ad97836252621f2069510bd5`
 (393 entries; recomputed on this host in the working tree with
 `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1`).
 
 The fixed tree's full-tree digest — the source subject plus the three explicit
 `docs/**` files the older rounds included — is
-`sha256:896ded3be3c28fc657af6e76ad02f93d35dedac1d8a5283ced2ae9b28e1769a3`
+`sha256:68692b2cbb4bdad240dde6978ba6a9c37af844c76593f55ff894a4532a63a1b0`
 (396 entries; `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1 -Scope
-full`). The pre-fix source content — branch HEAD `49ca695`, whose source
+full`). Round 8 served its own binding inside section "Round 8 verification"
+(source `sha256:d0ac0a48…`, full-tree `sha256:989330ee…`, 393/396 entries), and
+round 7's tree — branch HEAD `49ca695` plus the four changed source files of
+rounds 6–7 — keeps its historical binding (source
+`sha256:851b154263961dbf3eeceae2b680ebf42e25a6f4fdee1c434a31b83eedacb259`,
+393 entries; full-tree
+`sha256:896ded3be3c28fc657af6e76ad02f93d35dedac1d8a5283ced2ae9b28e1769a3`,
+396 entries). The pre-fix source content — branch HEAD `49ca695`, whose source
 subject is round 5's `sha256:4019477f…` (393 entries) — and its full-tree
 digest from `01eb134` (commit
 `01eb1344e4415ed2ce978e71030739cbfed4a09e` →
@@ -140,7 +182,7 @@ outside the digest set).
 
 | ID | File / surface | Change or disposition | Evidence |
 | --- | --- | --- | --- |
-| F1 | `.tmp/0007b-findings.md`; `contracts/v1/`, `contracts/ts/`, `frontend/src/` | Valid. Added descriptive work-detail and timeline schemas, generated DTOs and Effect boundaries, and consumed those boundaries in list/board/detail/history. The presentation readers derive their input shapes from the generated DTOs (`Loosen<>` views over the served projections; open-JSON members stay `unknown`), so no hand-written parallel wire DTO copies remain. Implemented project filters, saved views, truthful cost/CI/acceptance labels, desktop drawer/narrow page, and cursor-on-demand history. This was the round-1 blocker; round 2 re-runs its surfaces on the round-2 revision, and round 3's review repairs are listed below. | Contract, frontend, Go, and Elixir results in this receipt; browser evidence is separate from schema proof. |
+| F1 | `.tmp/0007b-findings.md`; `contracts/v1/`, `contracts/ts/`, `frontend/src/` | Valid. Added descriptive work-detail and timeline schemas, generated DTOs and Effect boundaries, and consumed those boundaries in list/board/detail/history. The presentation readers derive their input shapes from the generated DTOs (`Loosen<>` views over the served projections; open-JSON members stay `unknown`). Correction (round 9): one consumed wire member, the project's bound `resources[]` read by the CI chip, was hand-written outside the generated contract when this row was written; round 9 moved it into the descriptive workspace-read schema, regenerated the DTOs and Effect graphs, and derives `CiResourceLike` from the generated `WorkspaceProject.resources`, so no consumed wire member is hand-written now. Implemented project filters, saved views, truthful cost/CI/acceptance labels, desktop drawer/narrow page, and cursor-on-demand history. This was the round-1 blocker; round 2 re-runs its surfaces on the round-2 revision, and round 3's review repairs are listed below. | Contract, frontend, Go, and Elixir results in this receipt; browser evidence is separate from schema proof. |
 | F2 | Authorized resolution in `.tmp/0007b-findings.md` | Applied as a scope rule, not dismissed as an invalid finding. Regenerated `contracts/generated/**` and `daemon/internal/contracts/{generated.go,schema_bundle.json}`; added matching fixtures and passive read-schema dispatch. `control/lib/**` stayed untouched by round 1; round 2 then made only the two changes authorized below. | Generation/drift gate and cross-language fixture decoders; all production read responses keep their original wire contract. |
 
 ### Round 2 authorized blockers, fixed
@@ -189,20 +231,20 @@ below; nothing was silently dropped.
 
 ## Maintained measurements
 
-This receipt is the single source for the run's measured counts: the Round 8
+This receipt is the single source for the run's measured counts: the Round 9
 column carries the current revision's re-executed evidence, and every earlier
 column records its own revision. Older `test-ablation-*` receipts describe
 their own historical revisions and are not live consumers of this run.
 
-| Measurement | Baseline | Round 1 (`3ddb5e44…`) | Round 2 (`dae2388`) | Round 3 (`6398caa`) | Round 4 (`353b10fc…`, historical) | Round 5 (`01eb134`) | Round 6 (`49ca695`+fix6, historical) | Round 7 (`49ca695`+fix7, historical) | Round 8 (`45c0bc3`+fix8, current) | Measurement method |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| Frontend unit tests | 33 passed | 62 passed | 62 passed | 70 passed | 71 passed | 71 passed | 73 passed (re-run) | 75 passed (re-run) | 77 passed (re-run) | Baseline archive Vitest run; final `pnpm --filter @symmetry/frontend test` (rounds 3–8 ran the package's pinned `vitest run` directly in the verified workspace: 7 files). |
-| Contract runtime tests | 31 passed | 32 passed | 32 passed | 32 passed (unchanged) | not re-run in round 4 | 32 passed (re-run) | not re-run in round 6 | not re-run in round 7 | not re-run in round 8 | Baseline archive and final `node --test contracts/scripts/*.test.mjs`. |
-| Draft 7 root schemas | 15 | 17 | 17 | 17 (unchanged) | not re-run in round 4 | 17 counted, of 18 files (re-run) | not re-run in round 6 | not re-run in round 7 | not re-run in round 8 | Contract generator/checker; `common.schema.json` is the excluded shared-definitions file (`contracts/scripts/check.mjs:114`), not a root. |
-| Manifest fixtures | 190 | 213 | 213 | 213 (unchanged; two invalid fixtures corrected) | not re-run in round 4 (fixtures untouched) | 219 = 82 valid + 137 invalid (re-run) | not re-run in round 6 (contracts untouched) | not re-run in round 7 (contracts untouched) | not re-run in round 8 (contracts untouched) | Final schema/Effect gates exercise every manifest entry. |
-| Browser declarations / spec files | 41 / 8 | 47 / 9 | 47 / 9 | 47 / 9 (unchanged) | not re-run in round 4 | 47 / 9 (re-listed) | 47 / 9 (re-listed) | 47 / 9 (re-listed) | 47 / 9 (re-listed) | Baseline and final Playwright discovery; declarations counted as `^\s*test\(` in `browser/tests/*.spec.mjs`. |
-| Expanded desktop + mobile browser cases | 82 | 94 | 94 | 94 (unchanged) | 36 executed in round 4 (35 passed, 1 skipped); broad suite not re-run | 94 listed, not executed in round 5 | 36 executed in round 6 (35 passed, 1 skipped); broad suite not re-run | 36 executed in round 7 (35 passed, 1 skipped); broad suite not re-run | 36 executed in round 8 (35 passed, 1 skipped); broad suite not re-run | Executed `playwright test --list` in round 1; the round-3 broad run executed all 94 (79 passed + 15 skipped). |
-| Largest project snapshot in the completed measurement run | Not measured | 56,632 bytes / 15 work items | 74,388 bytes / 15 work items | 112,562 bytes / 15 work items | 144,421 bytes / 15 work items (focused run) | not re-measured in round 5 | 154,931 bytes / 15 work items (focused run) | 166,005 bytes / 15 work items (desktop 160,748; mobile 166,005; focused run) | 186,476 bytes / 15 work items (desktop 181,221; mobile 186,476; focused run) | `snapshotMetrics` in the final list/board cases; exact response bytes, not a string-length estimate. The value moves with the shared development database as fixtures accumulate, not with this change. |
+| Measurement | Baseline | Round 1 (`3ddb5e44…`) | Round 2 (`dae2388`) | Round 3 (`6398caa`) | Round 4 (`353b10fc…`, historical) | Round 5 (`01eb134`) | Round 6 (`49ca695`+fix6, historical) | Round 7 (`49ca695`+fix7, historical) | Round 8 (`45c0bc3`+fix8, historical) | Round 9 (`747b19b4`+fix9, current) | Measurement method |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Frontend unit tests | 33 passed | 62 passed | 62 passed | 70 passed | 71 passed | 71 passed | 73 passed (re-run) | 75 passed (re-run) | 77 passed (re-run) | 81 passed (re-run) | Baseline archive Vitest run; final `pnpm --filter @symmetry/frontend test` (rounds 3–9 ran the package's pinned `vitest run` directly in the verified workspace: 7 files). |
+| Contract runtime tests | 31 passed | 32 passed | 32 passed | 32 passed (unchanged) | not re-run in round 4 | 32 passed (re-run) | not re-run in round 6 | not re-run in round 7 | not re-run in round 8 | 32 passed (re-run) | Baseline archive and final `node --test contracts/scripts/*.test.mjs`. |
+| Draft 7 root schemas | 15 | 17 | 17 | 17 (unchanged) | not re-run in round 4 | 17 counted, of 18 files (re-run) | not re-run in round 6 | not re-run in round 7 | not re-run in round 8 | 17 counted, of 18 files (re-run) | Contract generator/checker; `common.schema.json` is the excluded shared-definitions file (`contracts/scripts/check.mjs:114`), not a root. |
+| Manifest fixtures | 190 | 213 | 213 | 213 (unchanged; two invalid fixtures corrected) | not re-run in round 4 (fixtures untouched) | 219 = 82 valid + 137 invalid (re-run) | not re-run in round 6 (contracts untouched) | not re-run in round 7 (contracts untouched) | not re-run in round 8 (contracts untouched) | 219 = 82 valid + 137 invalid (re-run; the schema gained a consumed member, no fixture added or removed) | Final schema/Effect gates exercise every manifest entry. |
+| Browser declarations / spec files | 41 / 8 | 47 / 9 | 47 / 9 | 47 / 9 (unchanged) | not re-run in round 4 | 47 / 9 (re-listed) | 47 / 9 (re-listed) | 47 / 9 (re-listed) | 47 / 9 (re-listed) | 47 / 9 (re-listed) | Baseline and final Playwright discovery; declarations counted as `^\s*test\(` in `browser/tests/*.spec.mjs`. |
+| Expanded desktop + mobile browser cases | 82 | 94 | 94 | 94 (unchanged) | 36 executed in round 4 (35 passed, 1 skipped); broad suite not re-run | 94 listed, not executed in round 5 | 36 executed in round 6 (35 passed, 1 skipped); broad suite not re-run | 36 executed in round 7 (35 passed, 1 skipped); broad suite not re-run | 36 executed in round 8 (35 passed, 1 skipped); broad suite not re-run | 36 executed in round 9 (35 passed, 1 skipped) + the live-daemon suite (3 passed, 1 skipped); broad suite not re-run | Executed `playwright test --list` in round 1; the round-3 broad run executed all 94 (79 passed + 15 skipped); the live-daemon suite is a separate 4-case spec run by its own runner. |
+| Largest project snapshot in the completed measurement run | Not measured | 56,632 bytes / 15 work items | 74,388 bytes / 15 work items | 112,562 bytes / 15 work items | 144,421 bytes / 15 work items (focused run) | not re-measured in round 5 | 154,931 bytes / 15 work items (focused run) | 166,005 bytes / 15 work items (desktop 160,748; mobile 166,005; focused run) | 186,476 bytes / 15 work items (desktop 181,221; mobile 186,476; focused run) | 196,424 bytes / 15 work items (desktop 191,169; mobile 196,424; focused run) | `snapshotMetrics` in the final list/board cases; exact response bytes, not a string-length estimate. The value moves with the shared development database as fixtures accumulate, not with this change. |
 
 Column revisions: Baseline is the archived pre-0007b workspace; Round 1 the
 round-1 pre-rebase tree (`sha256:3ddb5e44…`); Round 2 the pre-rebase revision
@@ -214,16 +256,23 @@ Round 5 the revision `01eb134` (source subject `sha256:4019477f…`,
 (source subject `sha256:5d86199e…`, `docs/**` excluded; historical, superseded
 by round 7); Round 7 the round-7 fix tree over branch HEAD `49ca695` (source
 subject `sha256:851b1542…`, `docs/**` excluded; historical, superseded by round
-8); Round 8 the current fix tree over branch HEAD `45c0bc3` (source subject
-`sha256:d0ac0a48…`, `docs/**` excluded). Full digests are listed under
+8); Round 8 the round-8 fix tree over branch HEAD `45c0bc3` (source subject
+`sha256:d0ac0a48…`, `docs/**` excluded; historical, superseded by round 9);
+Round 9 the current tree over branch HEAD `747b19b4` (source subject
+`sha256:c4002c27…`, `docs/**` excluded). Full digests are listed under
 "Measurement and evidence subject".
 
-The Round 8 column records what round 8 re-executed on the current fix tree —
-frontend unit tests (75 → 77 with the re-parent regression test and the
-focus-theft guard), the typecheck and lint gates, browser discovery and the
-focused release-shell browser subset (36 cases; the list/board case gained the
-view-switch, re-parent and arrow-continuation assertions). "Not re-run in round
-8" keeps the last executed value in its own revision's column; the Round 7
+The Round 9 column records what round 9 re-executed on this tree — frontend
+unit tests (77 → 81 with the JSON-shaped-query, Clear-filters-view,
+history-retention and CI-chip-class tests), the typecheck and lint gates, the
+contract generator/drift and Effect gates, the contract runtime tests, the Go
+contract packages, the Elixir manifest fixture gate, browser discovery, the
+focused release-shell subset (36 cases) and the live-daemon suite (4 cases,
+3 passed with the intentional mobile lifecycle skip, both widths executing the
+real-cursor history case: 100 → 121 entries). "Not re-run in round 8" keeps the
+last executed value in its own revision's column; the Round 8 column keeps what
+round 8 re-executed on its own, now historical, fix tree (75 → 77 unit tests,
+the re-parent regression test and the focus-theft guard), the Round 7
 column keeps what round 7 re-executed on its own, now historical, fix tree
 (73 → 75 unit tests, the two focus-survivor regression tests), the Round 6
 column what round 6 re-executed on its own historical tree (71 → 73 unit tests,
@@ -240,7 +289,12 @@ with the rebase onto `259ea7d` (0009 amendments: six `goal-command` achieve
 fixtures plus regenerated `goal-command` artifacts). This round (Round 5) added
 or removed no fixtures; the 0007b feature commit itself added 23 (manifest 196
 at `259ea7d`, 219 at `714e33c`). The 17-root count is unchanged since round 1 added the
-two read-schema roots (15 → 17). Contract evidence on the round-5 revision: the Node
+two read-schema roots (15 → 17). Round 9 added the consumed
+`WorkspaceProject.resources` member to `workspace-read.schema.json` — a member
+`/portal/api/workspace` already serves — regenerated the TypeScript, Effect and
+Go artifacts and the schema bundle, and added or removed no fixture (the
+existing `workspace-read.fractional-metadata` fixture already carried a
+resource entry with additive metadata). Contract evidence on the round-5 revision: the Node
 contract gates, the Go contract packages and the Elixir manifest gate were
 re-run in round 5 against the re-synced tooling copy and container (exact
 commands and exit codes under "Round 5 verification"); the focused/broad/live
@@ -252,7 +306,18 @@ live, Compose/restart, Elixir, Go and contract suites bound to their earlier
 revisions. Round 7 re-ran the frontend unit, typecheck and lint gates and the
 focused release-shell subset on its tree (36 cases: 35 passed, 1 skipped) and
 likewise left the broad, live, Compose/restart, Elixir, Go and contract suites
-bound to their earlier revisions.
+bound to their earlier revisions. Round 8 re-ran the frontend unit, typecheck
+and lint gates and the focused release-shell subset (36 cases: 35 passed, 1
+skipped) on its tree, again leaving the broad, live, Compose/restart, Elixir,
+Go and contract suites bound to earlier revisions. Round 9 re-ran the frontend
+unit, typecheck and lint gates, the Node contract generator/drift and Effect
+gates, the contract runtime tests, the Go contract packages, the Elixir
+manifest fixture gate, the focused release-shell subset (36 cases: 35 passed, 1
+skipped) and the live-daemon suite (4 cases: 3 passed, 1 intentionally
+skipped) on this revision, so both browser suites that carry this increment's
+acceptance now execute against it; the broad browser suite, the Compose/restart
+specs and the frozen dependency installation stay bound to their earlier
+revisions.
 
 The baseline browser suite was **listed, not executed**. No before-run pass
 count is claimed for Go or Elixir.
@@ -578,6 +643,13 @@ run artifacts, not checked-in screenshots or claims that a missing CI job ran.
   failed, both widths) and `.tmp/0007b-round7-before-delete-results` (delete
   assertion, reached in a scratch copy with the Clear-filters assertions probed
   out, 2 failed, both widths)
+- **R8** = `.tmp/0007b-round8-focused-results` (round-8 fix tree over `45c0bc3`
+  / source subject `sha256:d0ac0a48…`); its pre-fix re-parent red run on the
+  round-7 release is `.tmp/0007b-round8-before-results` (2 failed, both widths)
+- **R9** = `.tmp/0007b-round9-focused-results` (round-9 tree over branch HEAD
+  `747b19b4` / source subject `sha256:c4002c27…`)
+- **H9** = `.tmp/0007b-round9-live-results` (round-9 native live runner on the
+  same revision; the only executor of the real-cursor history case)
 - **D** / **N** = `desktop-chromium` / `mobile-chromium` in the exact directory
   suffixes below; N is the narrow-screen project, not a second desktop context.
 
@@ -593,24 +665,29 @@ pre-fix red run under X. Round 6 re-produced the focused list/board and
 keyboard captures on the fix tree over `49ca695` under R6 (all green); its
 pre-fix keyboard-case red run is `.tmp/0007b-round6-before-results`. Round 7
 re-produced the same captures on its own fix tree under R7 (all green; the
-list capture now covers the two focus-survivor assertions).
+list capture now covers the two focus-survivor assertions). Round 8 re-produced
+the same captures under R8 (all green; the list capture covers the re-parent
+assertions). Round 9 re-produced them under R9 on this revision (all green; the
+list capture covers the CI-chip-class assertions) and re-ran the live suite
+under H9, so the rows below point at R9/H9 for the current revision and keep the
+earlier roots as history.
 
 | Required item | Desktop and narrow evidence | Observed result / limit |
 | --- | --- | --- |
-| Real project list | `L/portal-work-views-Readable-add7e--work-with-stable-URL-state-{D,N}/work-list.png` | Both passed. Real API-created work shows owner/state/blocker, unrecorded acceptance, unknown cost, and honest CI labels. |
+| Real project list | `R9/portal-work-views-Readable-add7e--work-with-stable-URL-state-{D,N}/work-list.png` | Both passed. Real API-created work shows owner/state/blocker, unrecorded acceptance, unknown cost, and honest CI labels. |
 | Real project board | Same directory, `work-board.png` | Both passed, five columns, 15 cards, actual nonalphabetical ready-column ordering, view retained after reload. Narrow board scrolls within its own surface. |
-| Detail | `V/portal-work-views-Readable-3f6fb-on-and-history-on-real-data-{D,N}/work-detail.png` | Both passed: desktop modal drawer versus narrow full page; Outcome, Latest accepted evidence, Blocker, Next action, Execution history in order. |
-| Populated history and reported result/delivery | `H2/portal-live-daemon-Goal-2--fb491-er-daemon-records-on-demand-{D,N}/work-history-pagination.png` | Both passed in round 2 on real daemon/control records; served nonempty reported summary and delivery source/links asserted, plus rendered `debug-001`. Each item's first page has 100 entries and becomes 121 after the real older page (`firstPageEntries`, `firstEntriesAfterOlderPage`, `currentEntriesAfterRetry` in the same-basename JSON). Round 1's capture is under H. |
-| Empty project and history | `V/portal-work-views-Readable-6d00e-the-project-and-work-routes-{D,N}/work-list-empty.png`; detail directory above, `work-history-empty.png` | Both widths passed; empty states belong to real API-created projects/work with no history, not substituted DTOs. |
+| Detail | `R9/portal-work-views-Readable-3f6fb-on-and-history-on-real-data-{D,N}/work-detail.png` | Both passed: desktop modal drawer versus narrow full page; Outcome, Latest accepted evidence, Blocker, Next action, Execution history in order. |
+| Populated history and reported result/delivery | `H9/portal-live-daemon-Goal-2--fb491-er-daemon-records-on-demand-{D,N}/work-history-pagination.png` | Both passed **in round 9 on this revision** (round 2 ran the same case but its later changes to the detail rendering have their own round-9 execution): served nonempty reported summary and delivery source/links asserted, plus rendered `debug-001`. Each item's first page has 100 entries and becomes 121 after the real older page (`firstPageEntries`, `firstEntriesAfterOlderPage`, `currentEntriesAfterRetry` in the same-basename JSON, `.tmp/0007b-round9-live-results`). Round 1's capture is under H, round 2's under H2. |
+| Empty project and history | `R9/portal-work-views-Readable-6d00e-the-project-and-work-routes-{D,N}/work-list-empty.png`; detail directory above, `work-history-empty.png` | Both widths passed; empty states belong to real API-created projects/work with no history, not substituted DTOs. |
 | Project/detail errors and recovery | Same `6d00e` directory, `work-list-error.png` and `work-detail-error.png` | Both passed. Deliberately abort real requests; no fabricated successful payload. Retry must render the real response afterward. |
-| Stable filter/view state and keyboard navigation | `R6/portal-work-views-Readable-69464-focus-return-keep-URL-state-{D,N}/keyboard-walk.json` and `.png` (round 3's V captures remain the earlier revision's records) | Both widths passed sequential filter typing (focus stays in the input after every keystroke, value `Keyboard`, URL `q=Keyboard`), text/state/blocked filtering, saved-view restoration, reload, list Enter, board arrow navigation, detail open and Escape/Back focus return. Recorded desktop sequence (R6): Enter, Shift+Tab, Shift+Tab, Tab, Escape, ArrowDown, ArrowUp, ArrowRight, ArrowLeft, Enter, Escape. |
-| Fresh signed-out work URL | `R/portal-work-views-Readable-c33c8-link-over-its-project-board-{D,N}/deep-link-work-reentry.json` and `.png` | **Both widths passed in round 2:** the signed-out document load redirects to login with `/portal/work/<uuid>?view=board` as `return_to`, login returns to that URL, and the reload keeps the drawer over its project board. Round 1's failure artifacts (HTTP 404) remain under V. |
-| Fresh signed-out filtered board URL | `R/portal-work-views-Readable-77c3c--board-and-filter-deep-link-{D,N}/deep-link-project-view.json` and `.png` | **Both widths passed in round 2:** login `return_to` is the complete `/portal/projects/<uuid>?view=board&q=keeper`, the filtered board renders on return and after reload. Round 1's failure artifacts (received `/portal`) remain under V. |
-| Project switch, detail switch, refresh, late responses | `V/portal-work-views-Readable-af807-oject-s-data-or-newer-state-desktop-chromium/late-response-guard.json` and `.png` | Desktop passed with both held real workspace and detail responses recorded as delivered; after release and the newer real refresh, no held project/work/detail data replaced current state. Narrow concurrency is not claimed. |
-| Foreign claimed project in work URL | `V/portal-work-views-Readable-5094f--never-renders-foreign-work-{D,N}/work-url-canonicalization.json` and `.png` | Both passed; the actual served project owns the picker/background/navigation and foreign filters/data are cleared. |
-| Older-history failure and Retry | Real-history JSON under H2 above (`faultAttemptOutcomes`, `retryCursorBoundTo`, `obsoleteFailureOutcomes`) | Both widths passed in round 2. An obsolete delivered 503 does not affect the newly selected work; a current failed older-page load renders the error and Retry, then requests the cursor from that navigation's consumed detail response and exhausts the real older page. Signed cursors from separate GETs are not compared. |
-| Truth rules | List/board/detail captures above and `frontend/src/features/work/presentation.test.ts` | Unknown cost is not `$0`; missing acceptance is not accepted evidence; real manual passed-CI fixtures have unknown freshness and no green tone; the real stale-CI fixture row bound through `ci_resource_id` renders the stale `CI passed · bound resource stale` label. Provider timestamp-stale handling has unit proof only, not a real-provider browser capture. |
-| Unsafe read content | `V/portal-work-views-Readable-7f7fe-er-as-markup-or-unsafe-URLs-{D,N}/malicious-response-injection.json` and `.png` | Both passed with schema-valid, positively rendered malicious strings and consumed unsafe URLs. Explicitly synthetic fault-injection/security evidence, **not** real-data surface proof. |
+| Stable filter/view state and keyboard navigation | `R9/portal-work-views-Readable-69464-focus-return-keep-URL-state-{D,N}/keyboard-walk.json` and `.png` (rounds 3–6's V/R6 captures remain the earlier revisions' records) | Both widths passed sequential filter typing (focus stays in the input after every keystroke, value `Keyboard`, URL `q=Keyboard`), text/state/blocked filtering, saved-view restoration, reload, list Enter, board arrow navigation, detail open and Escape/Back focus return. The recorded desktop sequence is unchanged since round 6 (Enter, Shift+Tab, Shift+Tab, Tab, Escape, ArrowDown, ArrowUp, ArrowRight, ArrowLeft, Enter, Escape). |
+| Fresh signed-out work URL | `R9/portal-work-views-Readable-c33c8-link-over-its-project-board-{D,N}/deep-link-work-reentry.json` and `.png` | Both widths re-executed in round 9 (round 2 established the behaviour): the signed-out document load redirects to login with `/portal/work/<uuid>?view=board` as `return_to`, login returns to that URL, and the reload keeps the drawer over its project board. Round 1's failure artifacts (HTTP 404) remain under V. |
+| Fresh signed-out filtered board URL | `R9/portal-work-views-Readable-77c3c--board-and-filter-deep-link-{D,N}/deep-link-project-view.json` and `.png` | Both widths re-executed in round 9 (round 2 established the behaviour): login `return_to` is the complete `/portal/projects/<uuid>?view=board&q=keeper`, the filtered board renders on return and after reload. Round 1's failure artifacts (received `/portal`) remain under V. |
+| Project switch, detail switch, refresh, late responses | `R9/portal-work-views-Readable-af807-oject-s-data-or-newer-state-desktop-chromium/late-response-guard.json` and `.png` | Desktop passed in round 9 with both held real workspace and detail responses recorded as delivered; after release and the newer real refresh, no held project/work/detail data replaced current state. Narrow concurrency is not claimed (that case is skipped by design). |
+| Foreign claimed project in work URL | `R9/portal-work-views-Readable-5094f--never-renders-foreign-work-{D,N}/work-url-canonicalization.json` and `.png` | Both passed; the actual served project owns the picker/background/navigation and foreign filters/data are cleared. |
+| Older-history failure and Retry | Real-history JSON under H9 above (`faultAttemptOutcomes`, `retryCursorBoundTo`, `obsoleteFailureOutcomes`) | Both widths passed in round 9. An obsolete delivered 503 does not affect the newly selected work; a current failed older-page load renders the error and Retry, then requests the cursor from that navigation's consumed detail response and exhausts the real older page. Signed cursors from separate GETs are not compared. |
+| Truth rules | List/board/detail captures above and `frontend/src/features/work/presentation.test.ts` | Unknown cost is not `$0`; missing acceptance is not accepted evidence; real manual passed-CI fixtures have unknown freshness and no green tone; the real stale-CI fixture row bound through `ci_resource_id` renders the stale `CI passed · bound resource stale` label. Round 9 additionally asserts the rendered `chip-*` class on those real rows (stale → `chip-stale`, manual/unknown → `chip-unknown`) and pins `chip-passed` for a confirmed fresh provider row in the unit suite, so a fixed green class cannot pass. Provider timestamp-stale handling has unit proof only, not a real-provider browser capture. |
+| Unsafe read content | `R9/portal-work-views-Readable-7f7fe-er-as-markup-or-unsafe-URLs-{D,N}/malicious-response-injection.json` and `.png` | Both passed with schema-valid, positively rendered malicious strings and consumed unsafe URLs. Explicitly synthetic fault-injection/security evidence, **not** real-data surface proof. |
 | Classic parity and retirement | Migration map below; broad-run report and the final scoped runs | Executed retained classic cases pass; replaced read assertions moved to new routes, not dropped. Compose/restart additions remain unexecuted. |
 
 The coordinator also opened the actual release in a browser and inspected the
@@ -852,9 +929,11 @@ now part of the branch history (commit `01eb134`).
 
 Not re-run for this tree: the broad browser suite, the live-daemon suite, the
 Compose/restart specs, and the Elixir, Go and contract gates. The change is a
-frontend presentation fallback plus a trailing newline and has no contract,
-permission, pagination or daemon effect; those round-3 results stay bound to
-the round-3 tree (`sha256:193ddbb2…`). Round 5 re-ran the contract and
+frontend presentation fallback plus a trailing newline, but it does change
+detail rendering that the live suite asserts, so this tree carries no
+live-suite evidence of its own: the round-3 results stay bound to the round-3
+tree (`sha256:193ddbb2…`), and round 9 later re-executed the live suite on the
+round-9 tree. Round 5 re-ran the contract and
 frontend gates on revision `01eb134` (next section).
 
 ### Round 5 verification (revision `01eb134`, documentation-only pass)
@@ -898,9 +977,10 @@ their own revisions above.
 Scope: the PR-bot P2 finding in `.tmp/0007b-findings-codex.md` — a
 search-parameter-only navigation stole focus from the control being typed in.
 `WorkspaceRoot`'s heading reset now keys on `state.location.pathname` instead
-of `state.location.href`. Class audit: that effect was the only consumer of the
-full navigation href (`grep` for `location.href` and `useRouterState` under
-`frontend/src` returns `WorkspaceRoot` alone), and every search-parameter-driven
+of `state.location.href`. Class audit: that effect is the only consumer of
+`state.location.href` (the full navigation href; `location.href` itself also
+appears in `application.ts` and in the router tests, and `useRouterState` also
+in `shell.tsx`, but none of them reads the router's `state.location.href`), and every search-parameter-driven
 control in the increment — filter input, state and owner selects, blocked
 checkbox, saved-views select, list/board view links, Attention project picker
 and the work-detail background filters — resolves to a same-pathname
@@ -928,8 +1008,10 @@ at all three paths).
 
 Not re-run in round 6: the broad browser suite, the live-daemon suite, the
 Compose/restart specs, the Elixir, Go and contract gates, and the frozen
-dependency installation — none of their surfaces changed; their last executed
-results remain bound to their own revisions above.
+dependency installation. The live suite asserts the detail surface this round's
+shell change interacts with, so the round-6 tree carries no live-suite evidence;
+their last executed results remain bound to their own revisions above, and
+round 9 re-executed the live suite on the round-9 tree.
 
 ### Round 7 verification (fix tree over `49ca695`, focus-survivor repair)
 
@@ -971,8 +1053,10 @@ clean; `playwright test --list` `94 tests in 9 files`, all exit 0).
 
 Not re-run in round 7: the broad browser suite, the live-daemon suite, the
 Compose/restart specs, the Elixir, Go and contract gates, and the frozen
-dependency installation — none of their surfaces changed; their last executed
-results remain bound to their own revisions above.
+dependency installation. The live suite asserts the work surface this round
+changed, so the round-7 tree carries no live-suite evidence; their last executed
+results remain bound to their own revisions above, and round 9 re-executed the
+live suite on the round-9 tree.
 
 ### Round 8 verification (fix tree over `45c0bc3`, re-parenting focus repair)
 
@@ -1053,8 +1137,118 @@ every document-level focus state as "deliberate" — would miss the reported cas
 
 Not re-run in round 8: the broad browser suite, the live-daemon suite, the
 Compose/restart specs, the Elixir, Go and contract gates, and the frozen
-dependency installation — none of their surfaces changed; their last executed
-results remain bound to their own revisions above.
+dependency installation. The live suite asserts the work surface and detail this
+round changed, so the round-8 tree carries no live-suite evidence; their last
+executed results remain bound to their own revisions above, and round 9
+re-executed the live suite on the round-9 tree.
+
+### Round 9 verification (branch HEAD `747b19b4`, review repair)
+
+Scope: the round-9 findings in `.tmp/0007b-findings-deepseek.md` — STD-A20 /
+SPEC-A08 (a consumed wire member outside the generated contract, and a false
+"no hand-written parallel wire DTO" claim), STD-A22 (a detail refresh silently
+discarded the expanded older history), SPEC-A06 (the populated-history clause
+had no evidence on the reviewed revision because the receipt's "none of their
+surfaces changed" justification was false), and the five P3s STD-A23–A27.
+
+Changes:
+
+- `contracts/v1/workspace-read.schema.json` now documents the consumed
+  `WorkspaceProject.resources` member the CI chip reads (`WorkspaceResource`:
+  optional `id`, `status`, `sync_status`; every other served member additive,
+  and every consumed member optional, following this file's rule that a served
+  read keeps accepting older partial projections). The member is a member
+  `/portal/api/workspace` already serves (`PortalJSON.resource/1`); the server,
+  the gates, the permissions and the pagination rules did not change, and the
+  fixture corpus is unchanged at 219. `contracts/generated/ts/workspace-read.ts`,
+  `contracts/generated/effect/index.ts`,
+  `daemon/internal/contracts/generated.go` and
+  `daemon/internal/contracts/schema_bundle.json` were regenerated by
+  `contracts:generate` and are drift-clean.
+- `frontend/src/features/work/presentation.ts` derives `CiResourceLike` from the
+  generated `SymmetryWorkspaceReadV1` DTO instead of declaring the wire members
+  by hand.
+- `frontend/src/features/work/history.tsx` keeps the older pages the reader
+  expanded: each page fetched by the reader's own action (`Load older history`,
+  `Retry history`) is merged into a retained list, so a detail refresh that
+  re-issues the served cursor no longer collapses the history to the newest
+  page. The continuation still starts from the refreshed boundary (the existing
+  "superseded detail boundary" case stays green), duplicates keep the newest
+  served copy, and an entry re-served by the refreshed first page is not
+  rendered twice.
+- `frontend/src/features/projects/work-surface.tsx`: `Clear filters` keeps the
+  selected `view` and clears only `q`/`state`/`owner`/`blocked`.
+- `frontend/src/features/projects/filters.ts`: JSON-shaped query text in a
+  foreign URL (`?q=null`, `?q={"a":1}`) renders as the literal it encodes
+  instead of being dropped while the URL keeps claiming the filter.
+- `frontend/src/features/work/detail.tsx`: the detail CI chip's title states the
+  limit that the bound resources are served by the project read, not the detail
+  read (the findings allowed threading the resource map or stating the
+  limitation in the label/title; this states it, so the detail surface does not
+  fetch a project snapshot only for a chip).
+- `browser/tests/portal-work-views.spec.mjs`: the CI chip's rendered class is
+  asserted on the real stale-bound-resource and manual rows.
+- Receipt corrections: the F1 row's wire-DTO claim, round 6's class-audit grep
+  parenthetical (now "the only consumer of `state.location.href`"), and the
+  false "none of their surfaces changed" justifications in rounds 4/6/7/8.
+
+Disposition of every round-9 finding:
+
+| ID | Surface | Change or why the finding is invalid | Evidence |
+| --- | --- | --- | --- |
+| STD-A20 / SPEC-A08 | `contracts/v1/workspace-read.schema.json`, generated TS/Effect/Go artifacts, `frontend/src/features/work/presentation.ts` | Fixed: the consumed `resources[]` member is inside the descriptive read contract, the artifacts are regenerated and drift-clean, and `CiResourceLike` is derived from the generated DTO. The false "no hand-written parallel wire DTO" claim in the F1 row is corrected in place. | `check.mjs` (drift + 219 fixtures), `check-effect.mjs`, Go contract packages and the Elixir manifest gate, all exit 0 on this revision. |
+| STD-A22 | `frontend/src/features/work/history.tsx`, `router.test.tsx` | Fixed: the expanded older pages survive a detail refresh; the continuation re-anchors at the refreshed boundary and duplicates keep the newest served copy. | Red before (1 failed: `older entry` gone after the refresh), green after (81 unit tests). |
+| SPEC-A06 | `browser/scripts/run-live-daemon-tests.ps1` evidence, receipt | Fixed by re-executing the live suite on this revision, and the false "none of their surfaces changed" justifications in rounds 4/6/7/8 are corrected. | Live run exit 0: 3 passed, 1 intentionally skipped; both widths 100 → 121; `.tmp/0007b-round9-live-results`. |
+| STD-A23 | receipt, round-6 class audit | Fixed by rewording: "the only consumer of `state.location.href`", with the other `location.href`/`useRouterState` occurrences (`application.ts`, router tests, `shell.tsx`) named and distinguished. | Source grep over `frontend/src`. |
+| STD-A24 | `frontend/src/features/projects/filters.ts`, `filters.test.ts` | Fixed: a JSON-shaped `q` renders as the literal text it encodes; the typed path already round-trips and stays a plain string. | New unit case red before (`{}` for `{q: null}`), green after. |
+| STD-A25 | `frontend/src/features/projects/work-surface.tsx`, `router.test.tsx` | Fixed: `Clear filters` clears only `q`/`state`/`owner`/`blocked` and keeps `view`. | New router case red before (list rendered after clearing a board's filters), green after. |
+| STD-A26 | `browser/tests/portal-work-views.spec.mjs`, `router.test.tsx` | Fixed: the rendered class is asserted on real rows (stale bound resource → `chip-stale`, manual/unknown → `chip-unknown`, and not `chip-passed`), plus a unit case that pins `chip-passed` for a confirmed fresh provider row. | Focused release-shell run (both widths) + unit case. |
+| STD-A27 | `frontend/src/features/work/detail.tsx` | Fixed by the finding's second option: the chip's title states that the bound resources are served by the project read, not the detail read, instead of fetching the project snapshot for a chip. The list/detail labels still differ by that stated limit. | Detail chip title; no new request in the detail path. |
+
+Red-before evidence for every behavioural change:
+
+| Exact command / working directory | Exit | Observed result |
+| --- | ---: | --- |
+| `./node_modules/.bin/vitest run src/app/router.test.tsx src/features/projects/filters.test.ts` in `.tmp/0007b-tooling/frontend`, the four new cases against the unfixed sources | 1 | **3 failed, 37 passed (40)** — exactly the three behavioural cases: `workSearch({q: null})` returned `{}`; after `Clear filters` the board was gone and the list rendered; after the detail refresh the expanded `older entry` was gone. The CI-chip-class case passed on the unfixed tree (it guards existing behaviour). |
+| `git show HEAD:frontend/src/features/projects/work-surface.tsx` restored in the tooling copy, the clear-filters case alone | 1 | **1 failed** at `findByRole("region", { name: "Work board" })` after the click — the view was dropped with the filters. |
+| `git show HEAD:frontend/src/features/work/history.tsx` restored in the tooling copy, the history case alone | 1 | **1 failed** at `Unable to find an element with the text: older entry` — the refreshed boundary collapsed the expanded page. |
+
+| Exact command / working directory | Exit | Observed result |
+| --- | ---: | --- |
+| `./node_modules/.bin/vitest run` in `.tmp/0007b-tooling/frontend`, fixed tree | 0 | 7 files, **81 passed** (round 8: 77; the four new cases). jsdom still reports its unimplemented `Window.scrollTo`. |
+| `./node_modules/.bin/tsc --noEmit` in `.tmp/0007b-tooling/frontend` | 0 | Clean. |
+| `./node_modules/.bin/eslint . --max-warnings 0` in `.tmp/0007b-tooling/frontend` | 0 | Clean (the first version of the history merge used `setState` in an effect and failed this gate with one error; the final version merges inside the reader's own fetch continuation instead). |
+| `node contracts/scripts/check.mjs` in `.tmp/0007b-tooling` | 0 | `Generated contract DTOs are up to date.`; `Validated 17 Draft 7 schemas and 219 fixtures.` |
+| `node contracts/scripts/check-effect.mjs` in `.tmp/0007b-tooling` | 0 | `Effect decoded all 219 raw fixtures; 215 parsed documents reached Schema validation`. |
+| `./node_modules/.bin/tsc --project contracts/tsconfig.json` in `.tmp/0007b-tooling` | 0 | Contract typecheck clean. |
+| `node --test contracts/scripts/*.test.mjs` in `.tmp/0007b-tooling` | 0 | 32 tests, 32 pass, 0 fail. |
+| `go test -count=1 ./internal/contracts ./internal/protocol` in `daemon/` (host, repo tree) | 0 | Both packages `ok` (3.025 s / 3.543 s) on the 219-fixture corpus. |
+| `docker cp` of `contracts/v1/workspace-read.schema.json` and `daemon/internal/contracts/schema_bundle.json` into `symmetry-0007b-control` (sha256 equality verified on both sides: `8c5a2b15…` / `a68ad09d…`), then `docker exec -e MIX_ENV=test -e POSTGRES_DB=symmetry_control_test symmetry-0007b-control sh -lc 'cd /app/control && mix test test/symmetry_control/goals/contract_fixture_manifest_test.exs'` | 0 | **1 passed** (all 219 manifest fixtures). |
+| `./node_modules/.bin/vite build && node scripts/stage-assets.mjs` in the container `/isolated/frontend` | 0 | `index-Q36qYlaT.js` 660,108 B / gzip 200.02 kB (`sha256:9f1e164a593ae5c0a9e43d754940301d2d6b6bb7c3d77db8259a8bdfd99e2e26`); `index-Eweh798Z.css` 20,949 B (`sha256:bc50fa6a80aa7caf15877f0d4f6a11a6c4ad110090c793e6c02955466cc92810`); staged into `/isolated/control/priv/static/portal/`. |
+| Rebuild after normalising the two files my earlier scripted edit had left with CRLF endings (`frontend/src/features/work/history.tsx`, `contracts/v1/workspace-read.schema.json`; content byte-identical modulo `\r`), same command | 0 | The rebuild emits the **same** asset pair (`sha256:9f1e164a…` / `sha256:bc50fa6a…`), so the release under test is exactly what this tree builds. |
+| `docker cp` of the staged pair into `symmetry-0007b-control` + `mix release --overwrite` in `/app/control` (`MIX_ENV=prod`) | 0 | Release rebuilt; the release's `index.html` references `index-Q36qYlaT.js`, and the served `GET /portal/assets/index-Q36qYlaT.js` / `index-Eweh798Z.css` answer with the identical sha256 `9f1e164a…` / `bc50fa6a…`. |
+| `sh /repo-src/.tmp/0007b-restart-release.sh` in the control container | 1 (script) | Same known limitation as rounds 3–8: exits 1 at its `wget` readiness probe (`wget: not found`); host `curl` answers 4000=200 and 4001=200. |
+| Focused release-shell run on the rebuilt release (`SYMMETRY_PORTAL_URL=http://127.0.0.1:4000`, `SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001`, `.tmp/0007b-round9-focused-results`) | 0 | **36 cases: 35 passed, 1 skipped, 0 failed** (2.9 min); `.last-run.json` is `{"status":"passed","failedTests":[]}`. The new chip-class assertions pass on both widths; the measured snapshot is **196,424 bytes / 15 work items** (desktop 191,169; mobile 196,424), recorded in the measurements table. |
+| `./node_modules/.bin/playwright test --list` in `.tmp/0007b-tooling/browser` | 0 | **94 tests in 9 files**; 47 declarations as `^\s*test\(` — unchanged (assertions were added inside existing cases). |
+| `pwsh -NoProfile -File .tmp/0007b-tooling/browser/scripts/run-live-daemon-tests.ps1` (`.tmp/0007b-round9-live-results`) | 0 | **3 passed, 1 intentionally skipped** (the mobile lifecycle case), 1.5 min; both widths executed the real-cursor history case: `firstPageEntries` 100 → `firstEntriesAfterOlderPage` 121, `currentEntriesAfterRetry` 121, three delivered fault attempts, `retryCursorBoundTo` is the consumed detail response's cursor. Logs: `C:\Users\lhan\AppData\Local\Temp\symmetry-goal-02-live-4ceae2cd4f1c424c9f4c28cb892c5406`. |
+| `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` (`-Scope source`, then `-Scope full`) in the repository working tree | 0 | Source subject `sha256:c4002c27273e3f43d6de1fa7a6444383b9e1f069ad97836252621f2069510bd5` (393 entries, `docs/**` excluded); full-tree `sha256:68692b2cbb4bdad240dde6978ba6a9c37af844c76593f55ff894a4532a63a1b0` (396 entries). |
+
+Tooling-copy parity before the gates: `diff -rq` exit 0 for `frontend/src`,
+`browser/tests`, `browser/scripts`, `contracts` (excluding `node_modules`) and
+`daemon/internal/contracts`; the full `daemon/` tree was re-synced to this
+revision before the live runner built the daemon binaries, because the retained
+copy still held an older `internal/workspace` implementation (four files
+differed). The live runner therefore built the daemon from this revision's
+source. This revision's binding is the digest pair above; the round-7 and
+round-8 digests named earlier are historical evidence for their own trees.
+
+Not re-run in round 9: the broad browser suite (its last execution is the
+round-3 broad run), the Compose/restart specs (skipped locally; no CI job
+executes them), the Elixir full suite and the Go full tree (their changed
+surfaces — the schema bundle and the two contract packages — were re-run
+above), the frozen dependency installation (never available), and native
+credentialed-provider qualification. Those stay bound to their own revisions
+and are not claimed for this tree.
 
 ## Review disposition and remaining limitations
 
@@ -1069,6 +1263,15 @@ results remain bound to their own revisions above.
   sentinel, and added no parallel cache or retry authority. Last test-only
   repairs strengthen reload, section, and rendered-order predicates rather
   than pinning serialization or selecting an arbitrary duplicate match.
+- Round 9 closed three defects the bounded second-model review found on the
+  reviewed revision: the consumed `resources[]` wire member left the generated
+  contract, the detail refresh dropping the reader's expanded older history,
+  and the live-suite justification that was simply untrue (the suite now
+  executes on this revision, under H9). Two items stay deliberate trades, not
+  waivers: the detail CI chip does not fetch the project snapshot to confirm a
+  binding (its title states that the bound resources are served by the project
+  read), and the `state`/`owner` selects still drop JSON-shaped foreign values
+  while `q` renders them as the literal the URL carries.
 - Two nonblocking review observations remain explicit: the pre-existing picker
   fallback may briefly label an available project unavailable while its query
   is pending; a scopeless narrow work navigation can fetch one additional
@@ -1101,7 +1304,17 @@ results remain bound to their own revisions above.
   assertion red on the previous release first (2 failed, one per width,
   `Received: inactive`) and green here; the focused captures are re-pointed to
   R8, and the broad, live and Compose suites remain bound to their earlier
-  revisions.
+  revisions. Round 9 re-executed the frontend unit, typecheck and lint gates,
+  the Node contract generator/drift and Effect gates, the contract runtime
+  tests, the Go contract packages, the Elixir manifest fixture gate, the
+  focused release-shell subset and the live-daemon suite on this revision
+  (source subject `sha256:c4002c27…`): 81 unit tests; 36 browser cases with 35
+  passed and 1 skipped; and the 4-case live suite with 3 passed and 1
+  intentional skip, both widths executing the real-cursor history case
+  (`firstPageEntries` 100 → `firstEntriesAfterOlderPage` 121,
+  `currentEntriesAfterRetry` 121), so the populated-history clause of the
+  Done-when list now carries executed evidence on the revision under test; the
+  focused captures are re-pointed to R9 and the live capture to H9.
 - Still-unavailable evidence, recorded as limits rather than waived: the
   original frozen dependency installation; the Compose/restart browser specs
   (skipped locally, and **no CI job executes them** — the CI `compose` job runs

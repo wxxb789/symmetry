@@ -24,12 +24,28 @@ const textParam = (value: unknown): string | undefined => {
   return undefined;
 };
 
+/**
+ * The free-text query is whatever text the URL carries. A foreign or older URL
+ * can hold JSON-shaped text (`?q=null`, `?q=%7B%22a%22%3A1%7D`) that the
+ * parser turns into null or an object; that is still the text the reader asked
+ * for, so it is rendered as the literal it encodes instead of being dropped
+ * while the URL keeps claiming the filter. Typing cannot produce those values:
+ * the router quotes JSON-shaped strings on the way out.
+ */
+const queryParam = (value: unknown): string | undefined => {
+  const text = textParam(value);
+  if (text !== undefined) return text;
+  if (value === null) return "null";
+  if (typeof value === "object") return JSON.stringify(value);
+  return undefined;
+};
+
 const blockedParam = (value: unknown): "1" | undefined =>
   value === "1" || value === 1 || value === true ? "1" : undefined;
 
 export function workSearch(search: Record<string, unknown>): WorkSearch {
   const view = search["view"];
-  const q = textParam(search["q"]);
+  const q = queryParam(search["q"]);
   const state = textParam(search["state"]);
   const owner = textParam(search["owner"]);
   const blocked = blockedParam(search["blocked"]);

@@ -158,7 +158,11 @@ function WorkDetailSections({ detail }: { detail: WorkDetail }) {
   const execution = item.execution;
   const reported = reportedResult(execution);
   const executionState = executionStateLabel(execution?.state);
+  // The detail read serves no bound-resource snapshot, so this chip cannot
+  // confirm the binding a project row confirms; the title states that limit
+  // instead of implying the resource itself is unconfirmed or broken.
   const ci = ciLabel(item.delivery);
+  const ciTitle = `${ci.title} · the bound resources are served by the project read, not this detail read`;
   const decision = decisionView(execution?.waiting, asText(outcome.blocker));
   const nextAction = nextActionLabel(execution?.result);
   const summary = reportedText(outcome.summary) ?? reported.text;
@@ -180,7 +184,7 @@ function WorkDetailSections({ detail }: { detail: WorkDetail }) {
     <p className="detail-chips">
       <StatusBadge status={item.status} />
       {executionState !== null && <span className="chip">{executionState}</span>}
-      <span className={`chip chip-${ci.tone}`} title={ci.title}>{ci.text}</span>
+      <span className={`chip chip-${ci.tone}`} title={ciTitle}>{ci.text}</span>
       {reviewStatus !== null && <span className="chip">review {reviewStatus}</span>}
       <span className="chip chip-unknown" title={costHint}>{costLabel}</span>
     </p>

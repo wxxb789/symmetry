@@ -16,7 +16,17 @@ export interface WorkspaceProject {
   name: string;
   description: string | null;
   status: string;
+  resources?: WorkspaceResource[];
   work_items: WorkspaceWorkItem[];
+  [k: string]: unknown | undefined;
+}
+/**
+ * PortalJSON.resource/1 as served inside workspace projects. The CI chip reads the identity and the bound-resource signals; every other served member stays additive. All members stay optional because a project row keeps accepting older partial projections, while a production server serves them all.
+ */
+export interface WorkspaceResource {
+  id?: UUID;
+  status?: string | null;
+  sync_status?: string | null;
   [k: string]: unknown | undefined;
 }
 /**

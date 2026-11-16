@@ -275,6 +275,15 @@ test.describe("Readable work views", () => {
     // Bound-resource staleness is exercised by a real API fixture: this row is
     // bound through ci_resource_id to a resource whose sync_status is "stale".
     await expect(list.getByRole("link", { name: titles.staleCi })).toContainText("CI passed · bound resource stale");
+    // The tone, not a fixed class or a swapped chip pair, decides the rendered
+    // class: the stale bound resource and the unverified manual source carry
+    // their own class on the real row instead of any variant of green.
+    const staleChip = list.getByRole("link", { name: titles.staleCi })
+      .locator("span.chip", { hasText: "CI passed · bound resource stale" });
+    await expect(staleChip).toHaveClass(/chip-stale/);
+    await expect(staleChip).not.toHaveClass(/chip-passed/);
+    await expect(list.getByRole("link", { name: titles.manualCi }).locator("span.chip", { hasText: "CI passed · freshness unknown" }))
+      .toHaveClass(/chip-unknown/);
     await expect(page.locator("#main-content")).not.toContainText("$0");
 
     await page.getByLabel(ui.filter).fill("Human decision");

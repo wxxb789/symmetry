@@ -1086,12 +1086,23 @@ type SymmetryWorkspaceReadV1 struct {
 }
 
 type WorkspaceProject struct {
-	Description *string           `json:"description"`
-	ID          string            `json:"id"`
-	Key         string            `json:"key"`
-	Name        string            `json:"name"`
-	Status      string            `json:"status"`
-	WorkItems   []WorkItemElement `json:"work_items"`
+	Description *string             `json:"description"`
+	ID          string              `json:"id"`
+	Key         string              `json:"key"`
+	Name        string              `json:"name"`
+	Resources   []WorkspaceResource `json:"resources,omitempty"`
+	Status      string              `json:"status"`
+	WorkItems   []WorkItemElement   `json:"work_items"`
+}
+
+// PortalJSON.resource/1 as served inside workspace projects. The CI chip reads the identity
+// and the bound-resource signals; every other served member stays additive. All members
+// stay optional because a project row keeps accepting older partial projections, while a
+// production server serves them all.
+type WorkspaceResource struct {
+	ID         *string `json:"id,omitempty"`
+	Status     *string `json:"status"`
+	SyncStatus *string `json:"sync_status"`
 }
 
 // PortalJSON.work_item/2 as served in workspace rows and work detail reads. The definition
