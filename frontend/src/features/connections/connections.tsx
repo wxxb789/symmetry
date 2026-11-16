@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouteContext, useSearch } from "@tanstack/react-router";
 import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { connectionsOptions } from "../../app/application";
 import { useSessionToken } from "../../app/session";
 import {
@@ -38,6 +38,23 @@ const sentenceLabel = (value: string) => formatLabel(value).replace(/(^|\s)\S/g,
 const providerLabel = (value: string) => providerLabels[value] ?? `Unknown provider: ${value || "unspecified"}`;
 const authLabel = (value: string) => authTypes[value] ?? `Unknown authentication: ${value || "unspecified"}`;
 const capabilityLabel = (value: string) => capabilityLabels[value] ?? `Unknown capability: ${value}`;
+const noPendingRequests: { check: number; remove: number } = { check: 0, remove: 0 };
+
+// Radix restores focus on close only to a Dialog.Trigger, and none of these
+// dialogs has one: the invoking control is captured before Radix moves keyboard
+// focus inside, and focused again when the dialog closes. That control can be
+// disabled while its write is still pending — the dialog stays closable so the
+// operator can keep working — and focusing a disabled control never moves
+// focus, which would drop keyboard focus to the body. Those closes fall back to
+// a control the pending write cannot disable.
+function restoreFocus(event: Event, opener: HTMLElement | null, fallback: HTMLElement | null) {
+  const target = opener?.isConnected && !opener.matches(":disabled")
+    ? opener
+    : fallback?.isConnected && !fallback.matches(":disabled") ? fallback : null;
+  if (!target) return;
+  event.preventDefault();
+  target.focus();
+}
 
 function StatusBadge({ status, scope }: { status: string; scope: "connection" | "resource" | "sync" }) {
   const known = scope === "sync" ? knownSyncStatuses[status] : knownStatuses[status];
@@ -102,13 +119,14 @@ interface EditorProps {
   api: Api;
   csrf: string;
   editorId: number;
+  fallbackFocus: RefObject<HTMLElement | null>;
   onSaved: (disposition: string, connectionId: string, editorId: number) => void;
   onWriteStart: () => void;
   onWriteSettled: () => void;
   onClose: () => void;
 }
 
-function ConnectionEditor({ connection, providers, api, csrf, editorId, onSaved, onWriteStart, onWriteSettled, onClose }: EditorProps) {
+function ConnectionEditor({ connection, providers, api, csrf, editorId, fallbackFocus, onSaved, onWriteStart, onWriteSettled, onClose }: EditorProps) {
   const queryClient = useQueryClient();
   const first = providers[0];
   // Radix restores focus on close only to a Dialog.Trigger, and this dialog has
@@ -160,7 +178,7 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, onSaved,
         onCloseAutoFocus={(event) => {
           const target = opener.current;
           opener.current = null;
-          if (target?.isConnected) { event.preventDefault(); target.focus(); }
+          restoreFocus(event, target, fallbackFocus.current);
         }}>
         <div className="dialog-heading">
           <Dialog.Title>{connection ? "Connection settings" : "New connection"}</Dialog.Title>
@@ -221,11 +239,15 @@ interface DetailProps {
   api: Api;
   csrf: string;
   writePending: boolean;
+  requests: { check: number; remove: number };
+  closeButtonRef: RefObject<HTMLButtonElement | null>;
+  onRequest: (connectionId: string, kind: "check" | "remove", pending: boolean) => void;
   onEdit: () => void;
   onNotice: (notice: string) => void;
+  onRemoved: () => void;
 }
 
-function ConnectionDetail({ connection, api, csrf, writePending, onEdit, onNotice }: DetailProps) {
+function ConnectionDetail({ connection, api, csrf, writePending, requests, closeButtonRef, onRequest, onEdit, onNotice, onRemoved }: DetailProps) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -234,46 +256,46 @@ function ConnectionDetail({ connection, api, csrf, writePending, onEdit, onNotic
   // confirmed intent into a delete of a revision the operator never saw.
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; version: number } | null>(null);
   const deleteOpener = useRef<HTMLElement | null>(null);
-  // This detail instance belongs to exactly one connection (the list keys it by
-  // connection id). A mutation callback that fires after the operator selected
-  // another connection must not act on that connection's UI: the instance is
-  // unmounted at that point, and every side effect re-confirms it is still the
-  // one the operator is looking at.
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => { alive.current = false; };
-  }, []);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["connections"] });
+  // This detail belongs to exactly one connection (the list keys it by
+  // connection id), and its requests belong to that connection, not to the
+  // instance: the page holds the pending state by connection id so a remount
+  // while the operator inspects another connection cannot forget a running
+  // check or removal, and it drops a continuation whose connection the
+  // operator is no longer showing instead of letting it act on newer state.
   const check = useMutation({
     mutationFn: () => api.checkConnection(connection.id, csrf, new AbortController().signal),
+    onMutate: () => onRequest(connection.id, "check", true),
+    onSettled: () => onRequest(connection.id, "check", false),
     onSuccess: async (receipt) => {
-      if (alive.current && receipt.disposition === "replayed") onNotice("This provider check was already applied; the server returned the existing connection.");
+      if (receipt.disposition === "replayed") onNotice("This provider check was already applied; the server returned the existing connection.");
       await refresh();
     },
     onError: async (error) => {
-      if (alive.current) onNotice(refusalNotice(error));
+      onNotice(refusalNotice(error));
       await refresh();
     },
   });
   const remove = useMutation({
     mutationFn: (target: { id: string; version: number }) => api.deleteConnection(target.id, target.version, csrf, new AbortController().signal),
+    onMutate: () => onRequest(connection.id, "remove", true),
+    onSettled: () => onRequest(connection.id, "remove", false),
     onSuccess: async () => {
       setConfirmingDelete(false);
       await refresh();
-      if (alive.current) void navigate({ to: "/connections", search: {} });
+      onRemoved();
     },
     onError: async (error) => {
       setConfirmingDelete(false);
-      if (alive.current) onNotice(`${refusalNotice(error)} The server's current state is shown instead.`);
+      onNotice(`${refusalNotice(error)} The server's current state is shown instead.`);
       await refresh();
     },
   });
-  const busy = check.isPending || remove.isPending || writePending;
+  const busy = check.isPending || remove.isPending || requests.check > 0 || requests.remove > 0 || writePending;
   return <aside className="connection-detail" aria-label="Connection detail">
     <div className="section-heading">
       <h2>{connection.name}</h2>
-      <button className="icon-button" type="button" aria-label="Close connection detail" onClick={() => void navigate({ to: "/connections", search: {} })}><X size={18} aria-hidden="true" /></button>
+      <button ref={closeButtonRef} className="icon-button" type="button" aria-label="Close connection detail" onClick={() => void navigate({ to: "/connections", search: {} })}><X size={18} aria-hidden="true" /></button>
     </div>
     <dl className="connection-facts">
       <div><dt>Provider</dt><dd>{providerLabel(connection.provider)}</dd></div>
@@ -286,7 +308,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, onEdit, onNotic
     <p className="muted text-small">Capabilities: {connection.capabilities.map(capabilityLabel).join(", ") || "none"}</p>
     {connection.status_message && <p className="notice notice-error" role="alert"><AlertCircle size={18} aria-hidden="true" />{connection.status_message}</p>}
     <div className="connection-actions">
-      <button className="button" type="button" disabled={busy} onClick={() => check.mutate()}>{check.isPending ? "Checking…" : "Test connection"}</button>
+      <button className="button" type="button" disabled={busy} onClick={() => check.mutate()}>{check.isPending || requests.check > 0 ? "Checking…" : "Test connection"}</button>
       <button className="button" type="button" disabled={busy} onClick={onEdit}>Edit capabilities</button>
       <button className="button" type="button" disabled={busy} onClick={(event) => {
         deleteOpener.current = event.currentTarget;
@@ -304,7 +326,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, onEdit, onNotic
           onCloseAutoFocus={(event) => {
             const target = deleteOpener.current;
             deleteOpener.current = null;
-            if (target?.isConnected) { event.preventDefault(); target.focus(); }
+            restoreFocus(event, target, closeButtonRef.current);
           }}>
           <div className="dialog-heading"><Dialog.Title>Remove {connection.name}?</Dialog.Title>
             <Dialog.Close asChild><button className="icon-button" type="button" aria-label="Close removal dialog"><X size={20} aria-hidden="true" /></button></Dialog.Close></div>
@@ -312,7 +334,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, onEdit, onNotic
             A connection that still has bound resources cannot be removed. An already removed or changed connection is refused with the server's own reason.
           </Dialog.Description>
           <div className="dialog-actions">
-            <button className="button" type="button" disabled={remove.isPending} onClick={() => { if (deleteTarget) remove.mutate(deleteTarget); }}>{remove.isPending ? "Removing…" : "Remove connection"}</button>
+            <button className="button" type="button" disabled={remove.isPending || requests.remove > 0} onClick={() => { if (deleteTarget) remove.mutate(deleteTarget); }}>{remove.isPending || requests.remove > 0 ? "Removing…" : "Remove connection"}</button>
             <button className="button" type="button" onClick={() => setConfirmingDelete(false)} disabled={remove.isPending}>Cancel</button>
           </div>
           {remove.error && <p className="notice notice-error" role="alert">{refusalNotice(remove.error)}</p>}
@@ -332,6 +354,14 @@ export function ConnectionsPage() {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(false);
   const [pendingWrites, setPendingWrites] = useState(0);
+  // A check or a removal is a request against one connection, not against one
+  // detail instance: the counts are kept by connection id so the exclusion
+  // survives the detail unmounting and remounting while the operator inspects
+  // another connection.
+  const [pendingRequests, setPendingRequests] = useState<Record<string, { check: number; remove: number }>>({});
+  // The control the dialogs fall back to when their invoking control is
+  // disabled by the pending write (see restoreFocus).
+  const detailCloseRef = useRef<HTMLButtonElement | null>(null);
   // Every editor open gets its own identity: a mutation response only closes
   // and navigates for the editor the operator still has open.
   const editorSequence = useRef(0);
@@ -368,6 +398,20 @@ export function ConnectionsPage() {
   // none of the others can start.
   const beginWrite = () => setPendingWrites((count) => count + 1);
   const endWrite = () => setPendingWrites((count) => Math.max(0, count - 1));
+  const trackRequest = (connectionId: string, kind: "check" | "remove", pending: boolean) =>
+    setPendingRequests((current) => {
+      const counts = current[connectionId] ?? noPendingRequests;
+      return { ...current, [connectionId]: { ...counts, [kind]: Math.max(0, counts[kind] + (pending ? 1 : -1)) } };
+    });
+  // A continuation that settles belongs to the connection the operator is
+  // looking at: the page drops it when the operator has left that connection,
+  // even though the request outlives its detail instance.
+  const noticeFor = (connectionId: string, notice: string) => {
+    if (mounted.current && selectionRef.current === connectionId) setNotice(notice);
+  };
+  const clearSelectionFor = (connectionId: string) => {
+    if (mounted.current && selectionRef.current === connectionId) void navigate({ to: "/connections", search: {} });
+  };
   const saved = (disposition: string, connectionId: string, editor: number) => {
     if (editor !== editorSequence.current) {
       // A late response for an editor that has since closed: the write is real,
@@ -376,16 +420,21 @@ export function ConnectionsPage() {
       return;
     }
     closeEditor();
+    // Closing bumped the generation: the re-read below settles against the
+    // generation it started in, so another editor opening while it is in flight
+    // keeps the operator's attention instead of being hijacked by a selection
+    // move.
+    const generation = editorSequence.current;
     setNotice(disposition === "replayed"
       ? "This connection submission was already applied; the server returned the existing connection."
       : disposition === "created" ? "Connection created." : "Connection capabilities updated. Bound resource health and sync state was reset where the change affects it.");
     // Re-read the authoritative list before selecting the changed connection,
-    // and only move the operator if the selection did not change while the
-    // re-read was in flight.
+    // and only move the operator if neither the selection nor the editor
+    // generation changed while the re-read was in flight.
     const selection = selectionRef.current;
     void queryClient.invalidateQueries({ queryKey: ["connections"] })
       .then(() => {
-        if (!mounted.current || selectionRef.current !== selection) return;
+        if (!mounted.current || editorSequence.current !== generation || selectionRef.current !== selection) return;
         void navigate({ to: "/connections", search: { connectionId } });
       });
   };
@@ -411,7 +460,9 @@ export function ConnectionsPage() {
             onSelect={() => { setNotice(null); void navigate({ to: "/connections", search: { connectionId: connection.id } }); }} />)}</ul>}
       </section>
       {selected
-        ? <ConnectionDetail key={selected.id} connection={selected} api={application.api} csrf={csrf} writePending={pendingWrites > 0} onEdit={() => openEditor("edit")} onNotice={setNotice} />
+        ? <ConnectionDetail key={selected.id} connection={selected} api={application.api} csrf={csrf} writePending={pendingWrites > 0}
+            requests={pendingRequests[selected.id] ?? noPendingRequests} closeButtonRef={detailCloseRef} onRequest={trackRequest}
+            onEdit={() => openEditor("edit")} onNotice={(notice) => noticeFor(selected.id, notice)} onRemoved={() => clearSelectionFor(selected.id)} />
         : <aside className="connection-detail" aria-label="Connection detail">
           <Cable size={28} aria-hidden="true" />
           <h2>Select a connection</h2>
@@ -419,7 +470,7 @@ export function ConnectionsPage() {
         </aside>}
       <p className="sr-only" role="status">{query.isFetching && !query.isPending ? "Refreshing connections" : ""}</p>
     </div>}
-    {creating && <ConnectionEditor connection={null} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
-    {editing && selected && <ConnectionEditor connection={selected} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
+    {creating && <ConnectionEditor connection={null} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} fallbackFocus={detailCloseRef} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
+    {editing && selected && <ConnectionEditor connection={selected} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} fallbackFocus={detailCloseRef} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
   </>;
 }

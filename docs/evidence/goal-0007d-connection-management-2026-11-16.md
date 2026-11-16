@@ -7,12 +7,13 @@ plus this boundary statement against the fixed design's connection page and trut
 is explicitly after this run and not part of the goal's Done when, so this receipt states the result
 as produced and does not rate its own rendering or sign for the owner.
 
-Binding for this round (fixing the round-2 review): base `259ea7de7c2c040dd60507f511c03f26ed6452ef`;
+Binding for this round (fixing the round-3 review): base `259ea7de7c2c040dd60507f511c03f26ed6452ef`;
 the increment is committed as `86b368a` (feature) with the first fix round
-`bbc9b6fe876e145b5a434ebcad8ad783428d81a7` on top; this round's changes are the working tree on top
-of `bbc9b6f` — 6 modified paths (`git status --porcelain -uall`, counting this receipt; no untracked
+`bbc9b6fe876e145b5a434ebcad8ad783428d81a7` and the second fix round
+`e67a925b030c470c1fa832b2553bef296136e56e` on top; this round's changes are the working tree on top
+of `e67a925` — 3 modified paths (`git status --porcelain -uall`, counting this receipt; no untracked
 files). **Source subject for this round**:
-`sha256 6976f472a4b3e61d707d19d25866ee01c5c392bd051ceb2fd7773e2f0e4c4e61`, computed over the 1009
+`sha256 4022d057a0e48a178ae70d78f6c732f824daec6f7a5faf3a78983fd684aaa909`, computed over the 1009
 tracked and untracked non-ignored repository paths with `docs/**` excluded, so a receipt edit cannot
 invalidate its own binding:
 
@@ -24,7 +25,11 @@ git ls-files --cached --others --exclude-standard -z | grep -zv '^docs/' | sort 
 `pnpm-lock.yaml` and `package.json` are byte-identical between `259ea7d` and `bbc9b6f`
 (`pnpm-lock.yaml` sha256 `2a0c9ef07d94f250…`). The original run's binding was base `4e60b9d…` /
 increment `709570f…`; that commit was rebased onto `259ea7d` as `86b368a`, and numbers below that
-were not re-measured keep the revision they were measured on, named with the number.
+were not re-measured keep the revision they were measured on, named with the number. The previous
+round's source subject `6976f472a4b3e61d707d19d25866ee01c5c392bd051ceb2fd7773e2f0e4c4e61` named the
+same 1009 paths on the round-3 tree: it, like this round's digest, covers only the bytes of its own
+round, so an observation made earlier keeps the revision it was measured on instead of being
+re-bound by this round's bytes.
 `control/priv/static/portal/` is gitignored build output; the browser runs need it staged
 (`pnpm --filter @symmetry/frontend build` does that, and the build was run before the browser runs).
 
@@ -49,9 +54,9 @@ finding taken during implementation).
 | create, inspect, update, test and remove for both providers, real API and browser flows, boundary stated per flow | `portal-connections.spec.mjs` test 1 drives create → row/detail inspect → provider check → capability update → removal for GitHub and asserts the removal against `GET /portal/api/connections`; test 5 drives the same five operations for Azure DevOps. Both run in the harness with the real Phoenix endpoint, the real PostgreSQL database and the canned provider transport; the provider boundary is this receipt's §4. |
 | idempotent submission, stale updates and concurrent deletion, including what the UI shows when the server refuses a stale write | test 2: the same normalized submission answers `200` with `disposition: "replayed"` and a conflicting payload keeps `422` with `fields.provider = "already has a connection with this name"`, and the console renders the server's field error and `(validation_failed)`. test 3: an external `PATCH` makes the console's Save answer `(stale)`, the dialog pins the name field disabled and requires closing, and an external `DELETE` makes the console's confirm answer `(not_found)` plus "The server's current state is shown instead." with the row gone. The editor generation races are covered by `connections.test.tsx`: a late response for a closed editor never closes or navigates the open one, and a draft submits against the version it was edited from, so a background refresh still answers `(stale)` (both failed before the fix and pass after, `.tmp/evidence/red-frontend-editor-races.txt`). |
 | a failed or expired authentication, and a test that fails, produce actionable redacted reasons | test 2 and test 5 check a connection whose account is marked unauthorized: the detail shows `Degraded` and "Provider authentication failed"; test 2 additionally asserts the receipt text `(provider_unauthorized)` with "Reauthenticate the provider session on this server…", test 5 asserts the detail projection only. The spec then asserts no fixture canary appears in any same-origin response body or response header (an unreadable body, an empty header list or an absent response record fails the test; redirects are scanned through their `Location` header; each `Set-Cookie` is scanned), recorded request headers through `allHeaders()` with explicit cookie/CSRF presence checks, request bodies, the DOM, `localStorage`/`sessionStorage`, `document.cookie`, the cookie jar sampled at every same-origin response and at the end (HttpOnly state is only visible in the jar and in the `Set-Cookie` headers), and the console and page errors; the harness additionally scans the control log, its error log and the recorded provider-call log and fails on a missing scan file or an empty provider-call log (§4). The canary-proof runs behind these claims are in §4. |
-| a capability update visibly resets dependent resource health/sync state, observed through the real API and the database | browser test 4 (UI: receipt "Bound resource health and sync state was reset", the detail shows `Synced` gone and three `Unknown`) plus the direct API+database observation in §5, where the same transaction leaves the resource `unknown/unknown` with `last_synced_at` NULL and `lock_version` 2 → 3. |
+| a capability update visibly resets dependent resource health/sync state, observed through the real API and the database | browser test 4 (UI: receipt "Bound resource health and sync state was reset", the detail shows `Synced` gone and three `Unknown`) plus the direct API+database observation in §5 — measured on the original run's subject `709570f` and not re-run since, so this round's digest does not re-bind it — where the same transaction left the resource `unknown/unknown` with `last_synced_at` NULL and `lock_version` 2 → 3. |
 | whatever the boundary leaves unverified is reported as unverified | §7 lists the unverified items (live provider credentials and authorization, provider-side mutation, hosted qualification). |
-| pre-existing browser acceptance continues to pass on the new route, classic checks retired in the same PR | harness run `10 passed` (1.7 m, both Playwright projects) for the new route; `portal-classic-resources.spec.mjs` `8 passed` (41.4 s, both projects) for the retained resource coverage; the legacy shell specs `31 passed / 2 failed / 7 skipped` (6.2 m) where both failures are `portal.spec.mjs` desktop timeouts that pass alone on the same revision when the host is quiet (recorded as load-sensitive in `docs/TODO.md`); removed coverage in §6. |
+| pre-existing browser acceptance continues to pass on the new route, classic checks retired in the same PR | harness run `10 passed` (51.2 s this round, §3; 1.7 m on the round-3 tree, both Playwright projects) for the new route; `portal-classic-resources.spec.mjs` `8 passed` (41.4 s, both projects) for the retained resource coverage; the legacy shell specs `31 passed / 2 failed / 7 skipped` (6.2 m) where both failures are `portal.spec.mjs` desktop timeouts that pass alone on the same revision when the host is quiet (recorded as load-sensitive in `docs/TODO.md`); removed coverage in §6. |
 
 ## 3. Executed checks
 
@@ -60,9 +65,9 @@ round* were not re-measured and keep the revision named in the row. Earlier numb
 
 | Exact command (working directory) | Exit | Observed |
 | --- | ---: | --- |
-| `mix format --check-formatted` (`control/`) | 0 | *This round*: clean on the current tree. |
-| `mix compile --force --warnings-as-errors` (`control/`) | 0 | *This round*: full recompile (61 files), zero warnings. |
-| `mix test` (`control/`, `POSTGRES_DB=symmetry_control_test`, dedicated database) | 2 | *This round*: `844/845 passed, 21 skipped`, `Failed: 1` — the pre-recorded environment-limited `CommandTest` "provider token commands can keep stderr diagnostics out of stdout" (`test/symmetry_control/integrations/command_test.exs:25`, `{:error, {:command_unavailable, "pwsh"}}`, `2/3 passed` alone); unrelated to the 0007d diff. The original receipt's `830/831` was the pre-rebase `709570f` subject. |
+| `mix format --check-formatted` (`control/`) | 0 | *Not re-run this round* (no control path changed; last at `e67a925`): clean on that tree. |
+| `mix compile --force --warnings-as-errors` (`control/`) | 0 | *Not re-run this round* (no control path changed; last at `e67a925`): full recompile (61 files), zero warnings. |
+| `mix test` (`control/`, `POSTGRES_DB=symmetry_control_test`, dedicated database) | 2 | *Not re-run this round* (no control path changed; last at `e67a925`): `844/845 passed, 21 skipped`, `Failed: 1` — the pre-recorded environment-limited `CommandTest` "provider token commands can keep stderr diagnostics out of stdout" (`test/symmetry_control/integrations/command_test.exs:25`, `{:error, {:command_unavailable, "pwsh"}}`, `2/3 passed` alone); unrelated to the 0007d diff. The original receipt's `830/831` was the pre-rebase `709570f` subject. |
 | `mix test test/symmetry_control_web/controllers/portal_integrations_test.exs` (`control/`, same database) | 0 | *Not re-run this round* (no control path changed; last at `bbc9b6f`): `14 passed`; the concurrent-create test repeated under seeds 0–3 (`14 passed` each). |
 | `mix test` (`control/`, `POSTGRES_DB=symmetry_0007d_test`, the harness database) | not re-run | The harness recreates and migrates that database itself; the recorded pollution limitation is unchanged (not re-measured this round either). |
 | `node --test contracts/scripts/*.test.mjs` (root) | 0 | *This round*: `tests 32, pass 32, fail 0, skipped 0`. |
@@ -71,10 +76,10 @@ round* were not re-measured and keep the revision named in the row. Earlier numb
 | `pnpm --offline contracts:typecheck` (root) | 0 | *This round*: `tsc --project contracts/tsconfig.json`, clean. |
 | `pnpm --offline --filter @symmetry/frontend typecheck` | 0 | *This round*: `tsc --noEmit`, clean. |
 | `pnpm --offline --filter @symmetry/frontend lint` | 0 | *This round*: `eslint . --max-warnings 0`, clean (the first fix round had removed a ref-read-during-render error in the first editor-identity cut). |
-| `pnpm --offline --filter @symmetry/frontend test` | 0 | *This round*: `Test Files 5 passed (5)`, `Tests 55 passed (55)` — was 48. The seven direction tests added or strengthened this round failed on the pre-fix `connections.tsx` (`7 failed / 48 passed`, `.tmp/evidence/red-round3-component-tests.txt`) and pass here (`.tmp/evidence/green-round3-component-tests.txt`): the removal version fence, the exclusion direction that changed, the four late-callback/late-navigation ownership cases (including leaving the page mid-save) and both dialog focus restorations. The eighth added test (the delete-pending exclusion direction) also passes on the pre-fix source because `remove.isPending` already held that direction, and now guards it. |
+| `pnpm --offline --filter @symmetry/frontend test` | 0 | *This round*: `Test Files 5 passed (5)`, `Tests 61 passed (61)` — was 55 at `e67a925` (which was 48 before its own round). The six direction tests added this round failed on the pre-fix `connections.tsx` (`6 failed / 55 passed`, `.tmp/evidence/red-round3-fix-component-tests.txt`) and pass here (`.tmp/evidence/green-round3-fix-component-tests.txt`): both pending-request exclusion directions across a detail remount, the same-subject check-refusal continuation, the post-save editor-generation gate, and both pending-close focus fallbacks. |
 | `pnpm --offline --filter @symmetry/frontend build` | 0 | *This round*: `vite build` + `scripts/stage-assets.mjs` into `control/priv/static/portal`; run before this round's browser runs. |
 | `go vet ./...` / `go test ./...` (`daemon/`) | not re-run | No daemon path is touched by this diff; the earlier green run stands for the unchanged packages. *Not re-run this round either.* |
-| `pwsh -NoProfile -File browser/scripts/run-connection-fixture-tests.ps1` | 0 | *This round*: `10 passed (1.7 m)` = 5 tests × desktop-chromium + mobile-chromium on the new route with the real topology and the identity handshake; canary scan clean; its own process tree stopped and port 4021 free afterwards (the first fix round's run also measured 1.7 m; this round's five runs reported 58.1 s – 1.7 min of Playwright time under varying host load). Negative cases from the first fix round, each failing closed, not re-run this round: the spec without the harness environment fails at collection (exit 1); a fabricated identity file plus a live foreign target refuses the login before any provider check (exit 1); a `-PortalUrl`/`-Port` mismatch refuses immediately (exit 1); an occupied Docker-forwarded port refuses immediately (exit 1). The three canary-proof runs for the new response-header and transient-HttpOnly-cookie scans are in §4. |
+| `pwsh -NoProfile -File browser/scripts/run-connection-fixture-tests.ps1` | 0 | *This round*: `10 passed (51.2 s)` = 5 tests × desktop-chromium + mobile-chromium on the new route with the real topology and the identity handshake; canary scan clean; its own process tree stopped and port 4021 free afterwards. Log `.tmp/evidence/harness-run-round3-fix.txt`, provider-call log copy `.tmp/evidence/harness-run-round3-fix/fixture-calls.jsonl` (the round-3 tree's runs reported 58.1 s – 1.7 min of Playwright time under varying host load; the first fix round measured 1.7 m). Negative cases from the first fix round, each failing closed, not re-run this round: the spec without the harness environment fails at collection (exit 1); a fabricated identity file plus a live foreign target refuses the login before any provider check (exit 1); a `-PortalUrl`/`-Port` mismatch refuses immediately (exit 1); an occupied Docker-forwarded port refuses immediately (exit 1). The three canary-proof runs for the new response-header and transient-HttpOnly-cookie scans are in §4. |
 | `pnpm --offline --filter symmetry-browser-acceptance test tests/portal-classic-resources.spec.mjs` with `SYMMETRY_PORTAL_URL=http://127.0.0.1:4022` | 0 | *Not re-run this round*: `8 passed (41.4 s)` (4 tests × 2 projects) at `bbc9b6f` against a fixture server started from that revision. |
 | `… test tests/portal.spec.mjs tests/workspace-shell.spec.mjs` with `SYMMETRY_PORTAL_URL=http://127.0.0.1:4022 SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4023` | 1 | *Not re-run this round* (first fix round's run at `bbc9b6f`, no legacy path touched): `31 passed / 2 failed / 7 skipped` (6.2 m) against two fixture servers sharing the fixture database (the expiry URL makes the true-TTL cases run instead of skip). Both failures are `portal.spec.mjs` desktop timeouts: "detail output encodes untrusted statuses and rejects unsafe links" (its project-create toast never appeared within 10 s) and "two browser contexts reject a stale project update" (test timeout of 60 s). Neither surface is touched by the 0007d diff, and both pass alone on the same revision when the host is quiet (the stale-update case `ok` in 5.0 s under a longer budget; the detail case `ok` in its isolated retry), so they are recorded as load-sensitive in `docs/TODO.md`. |
 | `… test --list` | 0 | *This round*: `Total: 90 tests in 9 files` (with the harness environment present; without it the connection spec fails at collection by design). |
@@ -121,16 +126,16 @@ before any provider check; the harness with a mismatched `-PortalUrl`/`-Port` re
 the harness pointed at an occupied port (a Docker-forwarded port this shell cannot enumerate as a
 listener) refuses immediately before it starts anything, so the foreign server is never contacted.
 
-Canary-proof runs from this round (each through the same harness, real API and fixture transport):
+Canary-proof runs from the round-3 fix (each through the same harness, real API and fixture transport):
 
 - the pre-fix spec (`bbc9b6f`) with **both** injected canaries — an `x-canary-proof` response header
   on the session response and a transient HttpOnly `canary_probe` cookie set and cleared by two
   responses whose requests were already sent — reported `10 passed (58.1 s)`, exit 0
   (`.tmp/evidence/pre-fix-canary-injections-pass.txt`): the pre-fix scan missed both surfaces;
-- this round's spec with the response-header canary: `2 failed / 8 passed`, exit 1, failing exactly
+- the round-3 spec with the response-header canary: `2 failed / 8 passed`, exit 1, failing exactly
   at `response headers for /portal/api/session must not contain a provider credential`
   (`.tmp/evidence/red-canary-response-header.txt`);
-- this round's spec with the transient HttpOnly cookie: `2 failed / 8 passed`, exit 1, failing at
+- the round-3 spec with the transient HttpOnly cookie: `2 failed / 8 passed`, exit 1, failing at
   `cookie canary_probe from a jar sample must not contain a provider credential`
   (`.tmp/evidence/red-canary-transient-cookie.txt`);
 - the clean spec: `10 passed (1.7 m)`, exit 0 (`.tmp/evidence/harness-run-round3.txt`), the run
@@ -148,8 +153,9 @@ flows.
 The fixture only replaces the transport, so it logs at `warning` level to keep the record readable;
 the boot-time SQL debug lines stop once the fixture configures the level.
 
-With the real topology the harness run takes about 1.0–1.7 min of Playwright time for the 10
-connection tests (this round's runs: 58.1 s to 1.7 min under varying host load; the first fix round measured 1.7 m; the original
+With the real topology the harness run takes about 50 s to 1.7 min of Playwright time for the 10
+connection tests (this round's re-run: 51.2 s; the round-3 tree's runs: 58.1 s – 1.7 min under
+varying host load; the first fix round measured 1.7 m; the original
 receipt's 42 s was measured with the scheduler and reconciler stopped), and every flow still passes
 inside the configured assertion budget: the earlier "multi-second reads under contention"
 observation was not reproduced under this round's conditions.
@@ -158,7 +164,7 @@ The harness stops only the process tree it started plus the listener PID it reco
 identity handshake; it never kills an unowned process on the port. After the final run port 4021 was
 free.
 
-In this round's final harness run the recorded provider-call log
+In the round-3 run the recorded provider-call log
 (`.tmp/evidence/harness-run-round3/fixture-calls.jsonl`, copied from the run's `%TEMP%` directory;
 the first fix round's copy is `.tmp/evidence/harness-run-final/`) contains **30 calls**: 10 to
 `api.github.com`, 4 to `dev.azure.com`, 12 `gh` and 4 `az` CLI invocations; every entry records the
@@ -176,14 +182,24 @@ fails the test), console messages and page errors, and the scan fails closed whe
 are absent. A missing scan file or an empty provider-call log fails the harness run instead of
 passing the scan blind.
 
+This round re-ran the same harness (unchanged spec, this round's frontend build): `10 passed
+(51.2 s)`, exit 0 (`.tmp/evidence/harness-run-round3-fix.txt`; provider-call log copy
+`.tmp/evidence/harness-run-round3-fix/fixture-calls.jsonl`), with the same call shape — **30 calls**:
+10 `api.github.com`, 4 `dev.azure.com`, 12 `gh`, 4 `az` — a 37-line control log, a 0-byte error log
+and a clean canary scan.
+
 ## 5. Capability reset observed through the real API and the database
 
 Command: `.tmp/evidence-capability-reset.sh` against the running fixture control plane; raw output in
-`.tmp/evidence/capability-reset-observation.txt`. The connection was created with the capabilities
-`["repositories","ci"]`, a repository resource `acme-fixture/symmetry` was bound and synced, then
+`.tmp/evidence/capability-reset-observation.txt`. **Historical observation, not re-run**: the table
+below was measured on the original run's pre-rebase subject `709570f` (the run whose sync timestamp
+is `2026-11-15T17:26:32.737Z`), so it keeps that revision and neither this round's digest nor the
+round-3 one re-binds it to a later tree; the same clause's readings on the current tree are §2's
+browser test 4 assertions. The connection was created with the capabilities `["repositories","ci"]`,
+a repository resource `acme-fixture/symmetry` was bound and synced, then
 `PATCH /portal/api/connections/:id` changed the capabilities to `["repositories"]`.
 
-| Observation | Before | After |
+| Observation (measured on `709570f`, not re-run) | Before | After |
 | --- | --- | --- |
 | `GET /portal/api/connections` (resource entry) | `status: healthy`, `sync_status: synced`, `last_synced_at: 2026-11-15T17:26:32.737000Z` | `status: unknown`, `sync_status: unknown`, `last_synced_at: null` |
 | `select … from project_resources …` | `healthy / synced / last_synced_at 17:26:32.737 / lock_version 2` | `unknown / unknown / NULL / lock_version 3` |
@@ -201,10 +217,10 @@ replacement:
 | Retired classic assertion | New-route coverage |
 | --- | --- |
 | pending form generation ("form generations and connection deletion remain single-flight": a second editor opened while the first create is pending) | `frontend/src/features/connections/connections.test.tsx` "a late create response never closes or hijacks a newer editor" plus the existing "submits a new connection once while pending and reconciles to the server list" |
-| connection check/update/delete mutual exclusion while one is pending | `connections.test.tsx` "keeps provider check, update and removal mutually exclusive while one is pending" (check pending blocks edit and remove), "keeps check and removal blocked while an editor save is pending" (the update holds the surface after its dialog closes) and "keeps check and editing blocked while a removal is pending" (the delete direction; it also passed on the pre-fix source, where `remove.isPending` already held it) |
+| connection check/update/delete mutual exclusion while one is pending | `connections.test.tsx` "keeps provider check, update and removal mutually exclusive while one is pending" (check pending blocks edit and remove), "keeps check and removal blocked while an editor save is pending" (the update holds the surface after its dialog closes), "keeps check and editing blocked while a removal is pending" (the delete direction; it also passed on the pre-fix source, where `remove.isPending` already held it), and the remount directions "keeps a pending provider check blocked after the detail remounts" / "keeps a pending removal blocked after the detail remounts" (both failed while the remount forgot the pending request) |
 | editor/removal conflict during refresh (a background refresh while the dialog is open) | `connections.test.tsx` "submits a draft against the version it was edited from after a background refresh" and "confirms a removal against the version the dialog opened with, even after a background refresh" (both answer with server truth instead of overwriting or deleting the newer revision) |
-| late mutation callbacks act only on the subject the operator is looking at, on this page or after leaving it (the classic `ownsMutation` guard) | `connections.test.tsx` "drops a provider check receipt that arrives after the operator selected another connection", "does not clear the newly selected connection when a removal settles late", "does not navigate back when the operator selects another connection during the save's re-read" and "does not pull the operator back after they left the page while a save was pending" (all four failed before the fix and pass after) |
-| connection focus retention across a refresh, extended to the new dialogs | `connections.test.tsx` "keeps keyboard focus on the connection row across a background refresh" and "returns keyboard focus to the invoking control when either dialog closes" (Escape returns focus to "New connection" and to "Remove") |
+| late mutation callbacks act only on the subject the operator is looking at, on this page or after leaving it (the classic `ownsMutation` guard) | `connections.test.tsx` "drops a provider check receipt that arrives after the operator selected another connection", "does not clear the newly selected connection when a removal settles late", "does not navigate back when the operator selects another connection during the save's re-read" and "does not pull the operator back after they left the page while a save was pending" (all four failed before the fix and pass after), plus the same-subject direction "surfaces a check refusal that settles after the operator returned to the same connection" (failed before the fix, where the receipt died with the remounted detail) |
+| connection focus retention across a refresh, extended to the new dialogs | `connections.test.tsx` "keeps keyboard focus on the connection row across a background refresh", "returns keyboard focus to the invoking control when either dialog closes" (Escape returns focus to "New connection" and to "Remove"), and the pending-close directions "keeps focus in the detail when the editor closes while its save is pending" / "keeps focus in the detail when the removal dialog closes while its removal is pending" (the invoking control is disabled by the pending write, so focus falls back to the detail's close control instead of the body; both failed before the fix) |
 | refresh failure after a successful write | `connections.test.tsx` "keeps the success notice and surfaces the failure when the refresh after a write fails" |
 | capability coupling (changes requires repositories) | `connections.test.tsx` "keeps the server's repositories-for-changes coupling observable in the editor" plus the existing server-side validation test in `portal_integrations_test.exs` |
 | classic Azure DevOps Entra ID connection assertions incl. the `checkFailure` 502 case | `browser/tests/portal-connections.spec.mjs` test 5 (create/check/update/remove on the new route) and `connections.test.tsx` "keeps a failed provider check actionable, redacted and truthful" (a 502 `provider_unauthorized` check is rendered with the server's reason) |
@@ -229,17 +245,17 @@ that surface and the measurement showed the table does re-render behind a backgr
   provider.
 - **Hosted qualification**: no CI run, deployment or hosted environment was exercised; all evidence is
   local to this workstation (Windows, containerized PostgreSQL on `127.0.0.1:55440`).
-- **Suite state**: the original receipt's `mix test` reported `830/831 passed` at `709570f`; this
-  round measures `844/845 passed` with the same one environment-limited failure (needs a working
-  `pwsh`); the harness-database pollution limitation from the original run was not re-measured (the
-  harness recreates that database itself). Both are recorded in `docs/TODO.md`.
-- **Gates not re-run in this round**: the daemon `go vet`/`go test` gates and the classic/legacy
-  browser specs were not re-measured because no daemon or legacy path changed (the round-3 diff is
-  `connections.tsx`, `connections.test.tsx`, `portal-connections.spec.mjs` and docs). Their numbers
-  stay bound to `bbc9b6f` as named in §3; the control gates and the browser harness ran the real
-  application end to end in this round.
+- **Suite state**: the original receipt's `mix test` reported `830/831 passed` at `709570f`; the
+  round-3 tree measured `844/845 passed` with the same one environment-limited failure (needs a
+  working `pwsh`); the harness-database pollution limitation from the original run was not
+  re-measured (the harness recreates that database itself). Both are recorded in `docs/TODO.md`.
+- **Gates not re-run in this round**: the control gates, the daemon `go vet`/`go test` gates and the
+  classic/legacy browser specs were not re-measured because no control, daemon or legacy path
+  changed (this round's diff is `connections.tsx`, `connections.test.tsx` and this receipt). Their
+  numbers stay bound to the revisions named in §3; the contracts gates, the frontend gates and the
+  browser harness ran the real application end to end in this round.
 - **Intermittent browser cases**: the original run's `portal.spec.mjs` detach-toast failure did not
-  recur this round; instead two other `portal.spec.mjs` desktop cases ("detail output encodes
+  recur in the round-3 run; instead two other `portal.spec.mjs` desktop cases ("detail output encodes
   untrusted statuses…", "two browser contexts reject a stale project update") timed out under load in
   the 6.2 m legacy run and passed alone on the same revision on a quiet host. Recorded in
   `docs/TODO.md`, not explained.
