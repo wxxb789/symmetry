@@ -16,7 +16,7 @@ export function AttentionPage() {
     <PageHeading title="Attention" description="Reported blockers in the selected project.">
       <RefreshButton fetching={query.isFetching} refresh={refresh} />
     </PageHeading>
-    {search.unavailable && <section className="notice" role="status"><div><h2>This destination is unavailable</h2><p>The previous portal destination is not included in this read-only workspace. Use Attention or Projects to browse existing work.</p></div></section>}
+    {search.unavailable && <section className="notice" role="status"><div><h2>This destination is unavailable</h2><p>The previous portal destination is not included in this workspace. Use Attention or Projects to browse existing work.</p></div></section>}
     {projects?.[0] && <p className="filter-note">Showing {projects[0].name}. <Link to="/projects">Browse projects</Link></p>}
     {query.isPending && <LoadingState label="Loading blocked work…" />}
     {query.isError && <ErrorState error={query.error} retry={refresh} stale={query.data !== undefined} />}

@@ -129,6 +129,7 @@ defmodule SymmetryControlWeb.PortalJSON do
       review_status: delivery.review.status,
       delivery: delivery,
       external: external_work_item(work_item),
+      goal_managed: WorkItem.goal_managed?(work_item),
       version: work_item.lock_version,
       can_start:
         is_nil(work_item.orchestration_task_id) and work_item.assignee_type == "agent" and

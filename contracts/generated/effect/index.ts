@@ -628,6 +628,7 @@ export const DefinitionWorkspaceWorkItemGraph = S.suspend(() => withObjectProper
   "description": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "execution": S.optionalWith(exactOneOf(S.Union(DefinitionWorkItemExecutionGraph, S.Null), DefinitionWorkItemExecutionGraph, S.Null), { exact: true }),
   "external": S.optionalWith(exactOneOf(S.Union(DefinitionWorkItemExternalGraph, S.Null), DefinitionWorkItemExternalGraph, S.Null), { exact: true }),
+  "goal_managed": S.optionalWith(S.Boolean, { exact: true }),
   "id": DefinitionUUIDGraph,
   "key": stringConstraints(S.String, undefined, undefined, undefined),
   "position": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
@@ -736,6 +737,7 @@ export const DefinitionWorkItemExternalGraph = S.suspend(() => withObjectPropert
   "id": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "labels": arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined),
   "provider": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "provider_owned_fields": S.optionalWith(arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined), { exact: true }),
   "resource_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
   "state": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "updated_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, "date-time"), S.Null), stringConstraints(S.String, undefined, undefined, "date-time"), S.Null),
@@ -859,17 +861,22 @@ export const DefinitionTaskControlsGraph = S.suspend(() => withObjectPropertyBou
 })), undefined, undefined));
 
 export const DefinitionWorkspaceProjectGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "default_agent_profile": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "default_workspace": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "description": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "id": DefinitionUUIDGraph,
   "key": stringConstraints(S.String, undefined, undefined, undefined),
   "name": stringConstraints(S.String, undefined, undefined, undefined),
   "resources": S.optionalWith(arrayConstraints(S.Array(DefinitionWorkspaceResourceGraph), undefined, undefined, undefined), { exact: true }),
   "status": stringConstraints(S.String, undefined, undefined, undefined),
+  "version": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
   "work_items": arrayConstraints(S.Array(DefinitionWorkspaceWorkItemGraph), undefined, undefined, undefined)
 })), undefined, undefined));
 
 export const DefinitionWorkspaceResourceGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
+  "kind": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "name": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
   "status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "sync_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
 })), undefined, undefined));

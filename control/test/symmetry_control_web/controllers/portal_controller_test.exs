@@ -242,6 +242,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     assert selected_project_id == project["id"]
     assert Enum.map(workspace_project["resources"], & &1["id"]) == [repository["id"]]
     assert Enum.map(workspace_project["work_items"], & &1["id"]) == [item["id"]]
+    assert Enum.map(workspace_project["work_items"], & &1["goal_managed"]) == [false]
     assert health["connections"] == "healthy"
     assert health["runtimes"] == "offline"
 
@@ -368,6 +369,64 @@ defmodule SymmetryControlWeb.PortalControllerTest do
              api_conn()
              |> get("/portal/api/work-items/#{item["id"]}")
              |> json_response(200)
+  end
+
+  test "work item creation replays a client-minted identity with a distinct receipt", %{
+    conn: _conn
+  } do
+    project = create_project()
+
+    body = %{
+      "title" => "Idempotent delivery",
+      "description" => "A retried creation must not duplicate this work item.",
+      "status" => "ready",
+      "creation_id" => "draft-idempotent-1"
+    }
+
+    created =
+      api_conn()
+      |> post("/portal/api/projects/#{project["id"]}/work-items", body)
+      |> json_response(201)
+
+    assert created["disposition"] == "created"
+    work_item_id = created["work_item"]["id"]
+
+    replayed =
+      api_conn()
+      |> post("/portal/api/projects/#{project["id"]}/work-items", body)
+      |> json_response(200)
+
+    assert replayed["disposition"] == "replayed"
+    assert replayed["work_item"]["id"] == work_item_id
+
+    second =
+      api_conn()
+      |> post(
+        "/portal/api/projects/#{project["id"]}/work-items",
+        Map.put(body, "creation_id", "draft-idempotent-2")
+      )
+      |> json_response(201)
+
+    assert second["disposition"] == "created"
+    second_work_item_id = second["work_item"]["id"]
+    assert second_work_item_id != work_item_id
+
+    assert %{"projects" => projects} =
+             api_conn()
+             |> get("/portal/api/workspace?project_id=#{project["id"]}")
+             |> json_response(200)
+
+    items =
+      projects
+      |> Enum.find(&(&1["id"] == project["id"]))
+      |> Map.fetch!("work_items")
+
+    assert length(items) == 2
+
+    assert Enum.sort(Enum.map(items, & &1["id"])) ==
+             Enum.sort([work_item_id, second_work_item_id])
+
+    assert Enum.count(items, &(&1["id"] == work_item_id)) == 1
   end
 
   defp create_project do

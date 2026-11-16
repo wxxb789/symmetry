@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApi, Forbidden, Network, UnexpectedResponse, Validation } from "./api";
+import { createApi, Forbidden, Network, readRetry, UnexpectedResponse, Validation } from "./api";
 import { readWorkDetail } from "./api.fixtures";
 
 const workspace = {
@@ -99,6 +99,28 @@ describe("read boundary", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("surfaces a failed GET's status when its body cannot be read", async () => {
+    const body = new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 404 }));
+    const failure = await createApi(fetcher)
+      .workDetail(workItemId, new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).toMatchObject({ status: 404, transient: false });
+    expect(failure).not.toBeInstanceOf(Network);
+    expect(readRetry(0, failure)).toBe(false);
+  });
+
+  it("marks a server fault retryable so a command keeps its frozen intent", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 500 }));
+    const api = createApi(fetcher);
+    const failure = await api
+      .updateWorkItem(workItemId, { version: 1, title: "Fault probe" }, "csrf-token", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).toMatchObject({ status: 500, transient: true });
+  });
+
   it("aborts the underlying request when the consuming query is cancelled", async () => {
     let requestSignal: AbortSignal | null | undefined;
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
@@ -138,5 +160,26 @@ describe("read boundary", () => {
     expect(page.next_before).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher.mock.calls[0]?.[0]).toBe(`/portal/api/work-items/${workItemId}/timeline?before=cursor%2F%2B%3F%3D%26`);
+  });
+});
+
+describe("work-item receipts", () => {
+  it("sends the create draft verbatim and decodes the server's disposition", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "replayed", work_item: { id: workItemId } })));
+    const api = createApi(fetcher);
+    const draft = { title: "Retry me", creation_id: "11111111-2222-4333-8444-555555555555" };
+    const receipt = await api.createWorkItem("11111111-1111-4111-8111-111111111111", draft, "csrf", new AbortController().signal);
+    expect(receipt).toEqual({ id: workItemId, disposition: "replayed" });
+    const [path, init] = fetcher.mock.calls[0] ?? [];
+    expect(path).toBe("/portal/api/projects/11111111-1111-4111-8111-111111111111/work-items");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(JSON.stringify(draft));
+  });
+
+  it("treats an update receipt without a disposition as not replayed", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ work_item: { id: workItemId } })));
+    const api = createApi(fetcher);
+    const receipt = await api.updateWorkItem(workItemId, { version: 2, title: "Edited" }, "csrf", new AbortController().signal);
+    expect(receipt).toEqual({ id: workItemId, disposition: "" });
   });
 });

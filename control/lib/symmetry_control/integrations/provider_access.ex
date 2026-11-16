@@ -2444,7 +2444,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       :durable ->
         case Repo.get(WorkItem, Map.get(task, :work_item_id)) do
           %WorkItem{} = work_item ->
-            if goal_owned_work_item?(work_item), do: work_item, else: nil
+            if WorkItem.goal_managed?(work_item), do: work_item, else: nil
 
           _missing ->
             nil
@@ -2471,7 +2471,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
          %{task_id: task_id, work_item_id: work_item_id, membership: membership}
        ) do
     case membership do
-      :durable -> work_item.id == work_item_id and goal_owned_work_item?(work_item)
+      :durable -> work_item.id == work_item_id and WorkItem.goal_managed?(work_item)
       :legacy -> work_item.orchestration_task_id == task_id
     end
   end
@@ -2479,17 +2479,11 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   defp work_item_belongs_to_task?(work_item, %Task{} = task) do
     case task_work_item_membership(task) do
       :durable ->
-        work_item.id == Map.get(task, :work_item_id) and goal_owned_work_item?(work_item)
+        work_item.id == Map.get(task, :work_item_id) and WorkItem.goal_managed?(work_item)
 
       :legacy ->
         work_item.orchestration_task_id == task.id
     end
-  end
-
-  defp goal_owned_work_item?(work_item) do
-    is_binary(Map.get(work_item, :goal_id)) and
-      is_integer(Map.get(work_item, :admitted_revision)) and
-      is_map(Map.get(work_item, :acceptance_contract))
   end
 
   defp build_grants(connected, task, allowed_operations) do

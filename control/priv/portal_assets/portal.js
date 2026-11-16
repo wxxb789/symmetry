@@ -75,6 +75,8 @@
   const chat = { scope: "project", runId: null, contextKey: null, requestId: 0, snapshot: null, drafts: new Map(), pending: new Set(), notices: new Map() };
   const chatMarkup = new WeakMap();
   let submitLockGeneration = 0;
+  /** The open create form's client-minted creation identity (see newCreationId). */
+  let workItemCreationId = null;
 
   class PortalRequestError extends Error {
     constructor(message, code, causes = []) {
@@ -1198,6 +1200,17 @@
     return payload;
   }
 
+  // The creation identity of this classic surface's create form: minted when the
+  // dialog opens for a new item and replayed verbatim by every submission of
+  // that draft, so a resubmission after a lost response returns the original row
+  // (Control answers a replayed identity with 200 `disposition: "replayed"`)
+  // instead of inserting a second one. Editing an existing item never carries it.
+  function newCreationId() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
   async function withSubmitLock(form, operation) {
     if (form.dataset.submitting) return;
     const submit = form.querySelector('[type="submit"]');
@@ -1293,6 +1306,7 @@
     resetSubmitLock(form);
     showFormError(form, "");
     state.editingWorkItemId = item?.id || null;
+    workItemCreationId = item ? null : newCreationId();
     form.elements.id.value = item?.id || "";
     form.elements.version.value = item?.version || "";
     $("#work-item-dialog-title").textContent = item ? "Edit work item" : "Create work";
@@ -2057,6 +2071,7 @@
         } else {
           owner = beginMutation(form.closest("dialog"));
           payload.status = form.elements.status.value;
+          payload.creation_id = workItemCreationId;
           await request(`/portal/api/projects/${state.selectedProjectId}/work-items`, { method: "POST", body: JSON.stringify(payload) });
           if (!ownsMutation(owner)) return;
           form.reset();

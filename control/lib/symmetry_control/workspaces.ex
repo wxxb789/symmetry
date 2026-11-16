@@ -142,29 +142,42 @@ defmodule SymmetryControl.Workspaces do
   end
 
   @spec create_work_item(Ecto.UUID.t(), map()) ::
-          {:ok, WorkItem.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, WorkItem.t()}
+          | {:replayed, WorkItem.t()}
+          | {:error, :not_found | :invalid_request | Ecto.Changeset.t()}
   def create_work_item(project_id, attrs) when is_map(attrs) do
-    if valid_uuid?(project_id) do
+    with true <- valid_uuid?(project_id),
+         {:ok, creation_id} <- work_item_creation_id(attrs) do
+      # The project row is locked FOR UPDATE, which serializes same-project creates, so the
+      # identity lookup below cannot race another create carrying the same identity.
       Repo.transaction(fn ->
         project = lock_project(project_id)
         ensure_active_project(project) |> require_ok!()
 
-        attrs =
-          attrs
-          |> normalize_work_item_attrs(project)
-          |> put_attr(:position, next_position(project.id, work_item_status(attrs)))
+        case find_work_item_by_creation_id(project.id, creation_id) do
+          {:replayed, existing} ->
+            {:replayed, existing}
 
-        changeset =
-          project
-          |> Ecto.build_assoc(:work_items)
-          |> WorkItem.changeset(attrs)
-          |> validate_work_item_resources(project.id)
+          nil ->
+            attrs =
+              attrs
+              |> normalize_work_item_attrs(project)
+              |> put_creation_id(creation_id)
+              |> put_attr(:position, next_position(project.id, work_item_status(attrs)))
 
-        changeset |> Repo.insert() |> unwrap_or_rollback()
+            changeset =
+              project
+              |> Ecto.build_assoc(:work_items)
+              |> WorkItem.changeset(attrs)
+              |> validate_work_item_resources(project.id)
+
+            {:created, changeset |> Repo.insert() |> unwrap_or_rollback()}
+        end
       end)
-      |> unwrap_transaction()
+      |> unwrap_creation_transaction()
     else
-      {:error, :not_found}
+      false -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -763,15 +776,9 @@ defmodule SymmetryControl.Workspaces do
   # Goal ownership is an all-or-nothing relational invariant. Partial rows stay
   # on the legacy path until the Goals migration has made them authoritative.
   defp ensure_legacy_work_item(work_item) do
-    if goal_owned_work_item?(work_item),
+    if WorkItem.goal_managed?(work_item),
       do: {:error, :goal_authority_required},
       else: :ok
-  end
-
-  defp goal_owned_work_item?(work_item) do
-    is_binary(Map.get(work_item, :goal_id)) and
-      is_integer(Map.get(work_item, :admitted_revision)) and
-      is_map(Map.get(work_item, :acceptance_contract))
   end
 
   defp project_mutation_allowed(%Project{status: "active"}, _attrs), do: :ok
@@ -1192,6 +1199,15 @@ defmodule SymmetryControl.Workspaces do
       else: Map.put(attrs, key, value)
   end
 
+  defp put_creation_id(attrs, nil), do: attrs
+
+  defp put_creation_id(attrs, creation_id), do: put_attr(attrs, :creation_id, creation_id)
+
+  # A replay returns the row the first attempt created; only a real insert is `:created`.
+  defp unwrap_creation_transaction({:ok, {:created, work_item}}), do: {:ok, work_item}
+  defp unwrap_creation_transaction({:ok, {:replayed, work_item}}), do: {:replayed, work_item}
+  defp unwrap_creation_transaction({:error, reason}), do: {:error, reason}
+
   defp work_item_move_status(attrs) do
     status = attr_value(attrs, :status, nil)
 
@@ -1246,6 +1262,36 @@ defmodule SymmetryControl.Workspaces do
   end
 
   defp present(_value), do: nil
+
+  # The creation identity is minted by the client and replayed verbatim on retry; it follows
+  # the same format rule as an action id. An absent identity keeps the plain insert path.
+  defp work_item_creation_id(attrs) do
+    case attr_value(attrs, :creation_id, nil) do
+      nil ->
+        {:ok, nil}
+
+      creation_id when is_binary(creation_id) ->
+        if byte_size(creation_id) in 1..128 and not String.contains?(creation_id, <<0>>),
+          do: {:ok, creation_id},
+          else: {:error, :invalid_request}
+
+      _other ->
+        {:error, :invalid_request}
+    end
+  end
+
+  defp find_work_item_by_creation_id(_project_id, nil), do: nil
+
+  defp find_work_item_by_creation_id(project_id, creation_id) do
+    case Repo.one(
+           from item in WorkItem,
+             where: item.project_id == ^project_id and item.creation_id == ^creation_id,
+             lock: "FOR UPDATE"
+         ) do
+      nil -> nil
+      existing -> {:replayed, existing}
+    end
+  end
 
   defp validate_action_id(action_id) do
     if byte_size(action_id) in 1..128 and not String.contains?(action_id, <<0>>),

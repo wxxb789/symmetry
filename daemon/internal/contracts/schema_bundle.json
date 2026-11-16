@@ -30985,6 +30985,13 @@
               }
             ]
           },
+          "provider_owned_fields": {
+            "description": "Field names the external tracker owns; write refusals still come from Control.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "resource_id": {
             "oneOf": [
               {
@@ -31472,6 +31479,10 @@
                 "type": "null"
               }
             ]
+          },
+          "goal_managed": {
+            "description": "True only when the all-or-nothing Goal membership (goal_id, admitted_revision, acceptance_contract) is set; served so a client can present no writable path for a Goal-managed item.",
+            "type": "boolean"
           },
           "id": {
             "$ref": "#/definitions/UUID"
@@ -35805,6 +35816,13 @@
               }
             ]
           },
+          "provider_owned_fields": {
+            "description": "Field names the external tracker owns; write refusals still come from Control.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "resource_id": {
             "oneOf": [
               {
@@ -35967,6 +35985,21 @@
       "WorkspaceProject": {
         "additionalProperties": true,
         "properties": {
+          "default_agent_profile": {
+            "description": "Default agent profile the project editor seeds from.",
+            "type": "string"
+          },
+          "default_workspace": {
+            "description": "Default workspace the project editor seeds from.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "description": {
             "oneOf": [
               {
@@ -35995,6 +36028,10 @@
           "status": {
             "type": "string"
           },
+          "version": {
+            "description": "Optimistic-lock revision of the served project row.",
+            "type": "integer"
+          },
           "work_items": {
             "items": {
               "$ref": "#/definitions/WorkspaceWorkItem"
@@ -36018,6 +36055,14 @@
         "properties": {
           "id": {
             "$ref": "#/definitions/UUID"
+          },
+          "kind": {
+            "description": "Resource kind; the editor's repository and CI resource selects read it to label bindable resources.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Resource name; the editor's repository and CI resource selects read it to label bindable resources.",
+            "type": "string"
           },
           "status": {
             "oneOf": [
@@ -36137,6 +36182,10 @@
                 "type": "null"
               }
             ]
+          },
+          "goal_managed": {
+            "description": "True only when the all-or-nothing Goal membership (goal_id, admitted_revision, acceptance_contract) is set; served so a client can present no writable path for a Goal-managed item.",
+            "type": "boolean"
           },
           "id": {
             "$ref": "#/definitions/UUID"

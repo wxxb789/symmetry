@@ -170,7 +170,10 @@ defmodule SymmetryControlWeb.PortalApiController do
       {:ok, work_item} ->
         conn
         |> put_status(:created)
-        |> json(%{work_item: work_item_json(work_item)})
+        |> json(%{disposition: "created", work_item: work_item_json(work_item)})
+
+      {:replayed, work_item} ->
+        json(conn, %{disposition: "replayed", work_item: work_item_json(work_item)})
 
       {:error, reason} ->
         error(conn, reason)

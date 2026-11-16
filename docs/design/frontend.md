@@ -31,7 +31,11 @@ UnexpectedResponse. The query adapter returns a Promise and forwards AbortSignal
 into Effect/runtime cancellation and the underlying fetch. Read retry belongs to
 Query, capped and limited to transient faults. Effect performs one HTTP attempt.
 Mutation retries default off; an explicit retry reuses the original mutation ID
-and byte-equivalent normalized payload. No retry on 401/403/409/422.
+and byte-equivalent normalized payload. The portal's create paths mint that
+mutation ID client-side (`creation_id` on a work-item creation), persist it with
+the draft intent and replay it on every attempt of that draft; the server answers
+a replayed identity with the originally created row and a `replayed`
+disposition, never a second row. No retry on 401/403/409/422.
 
 Query keys include project/goal/work IDs and filters. Session expiry cancels
 in-flight work and clears private cache. Background invalidation cannot overwrite

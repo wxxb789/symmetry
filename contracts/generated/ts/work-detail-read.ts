@@ -63,6 +63,10 @@ export interface WorkspaceWorkItem {
   review_status?: string | null;
   delivery?: WorkItemDelivery;
   external?: WorkItemExternal | null;
+  /**
+   * True only when the all-or-nothing Goal membership (goal_id, admitted_revision, acceptance_contract) is set; served so a client can present no writable path for a Goal-managed item.
+   */
+  goal_managed?: boolean;
   version?: number;
   can_start?: boolean;
   execution?: WorkItemExecution | null;
@@ -110,6 +114,10 @@ export interface WorkItemExternal {
   labels: string[];
   updated_at: string | null;
   resource_id: UUID | null;
+  /**
+   * Field names the external tracker owns; write refusals still come from Control.
+   */
+  provider_owned_fields?: string[];
   [k: string]: unknown | undefined;
 }
 /**

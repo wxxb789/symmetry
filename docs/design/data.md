@@ -11,10 +11,21 @@ versioned payload data; identity, ownership, state and dedup keys stay relationa
 
 | Table | Additions and meaning |
 | --- | --- |
-| `work_items` | nullable `goal_id uuid`; `admitted_revision integer`; `required boolean DEFAULT true`; `integration boolean NOT NULL DEFAULT false`; `acceptance_contract jsonb`; nullable immutable `baseline_subject jsonb` or `baseline_dependency_id uuid`; nullable immutable `change_target jsonb`; goal-less items retain current behavior |
+| `work_items` | nullable `goal_id uuid`; `admitted_revision integer`; `required boolean DEFAULT true`; `integration boolean NOT NULL DEFAULT false`; `acceptance_contract jsonb`; nullable immutable `baseline_subject jsonb` or `baseline_dependency_id uuid`; nullable immutable `change_target jsonb`; nullable `creation_id text` (the client's creation identity, unique per owning project where present); goal-less items retain current behavior |
 | `tasks` | nullable `work_item_id uuid`, `goal_id uuid`, `goal_revision integer`, `context_snapshot_id uuid`; `purpose text DEFAULT 'implement'`; nullable `validation_of_task_id uuid`; `admission_key uuid`; `max_run_attempts integer` for goal tasks; nullable immutable `allowed_runtime_ids uuid[]` snapshot; nullable `requested_session_id uuid`; nullable immutable `handoff_source_run_id uuid` |
 | `runs` | nullable `harness_session_id uuid` paired with immutable `harness_binding_id uuid`; native result/evidence remain associated with the original execution fence |
 | `runtimes` | `harness_kind text`, `harness_version text`, `adapter_version text`, `adapter_protocol_version integer`, nullable `repository_resource_id uuid`; explicit capabilities described in protocol.md |
+
+`work_items.creation_id` is the client-minted creation identity of a portal
+create, persisted with the draft intent and replayed verbatim on retry; the
+partial unique index `(project_id, creation_id)` where the value is present is
+the database-level guarantee that one identity cannot create two rows. An absent
+value keeps the legacy insert path (provider synchronization and pre-identity
+rows stay NULL). The scope is the owning project because the portal's actor is
+the deployment's single authenticated operator; multi-operator identity would
+need its own actor column before the index could widen. A replay of an existing
+identity returns that original row and never inserts, updates or reinterprets it:
+with a lost create response the operator's retry must not become a second item.
 
 For goal-owned WorkItems, goal_id/admitted_revision/acceptance_contract are all
 non-null; enforce revision and same-project ownership via composite FKs. `integration`

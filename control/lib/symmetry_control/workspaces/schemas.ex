@@ -294,6 +294,7 @@ defmodule SymmetryControl.Workspaces.WorkItem do
   @foreign_key_type :binary_id
   schema "work_items" do
     field :number, :integer, read_after_writes: true
+    field :creation_id, :string
     belongs_to :project, Project
     belongs_to :orchestration_task, Task
     belongs_to :goal, SymmetryControl.Goals.Goal
@@ -349,10 +350,18 @@ defmodule SymmetryControl.Workspaces.WorkItem do
   def external_work_available?(%{external_work_item_resource_id: nil}), do: true
   def external_work_available?(%{external_available: available}), do: available
 
+  # A work item is Goal-owned only when the whole all-or-nothing membership is set.
+  def goal_managed?(work_item) do
+    is_binary(Map.get(work_item, :goal_id)) and
+      is_integer(Map.get(work_item, :admitted_revision)) and
+      is_map(Map.get(work_item, :acceptance_contract))
+  end
+
   def changeset(work_item, attrs) do
     work_item
     |> cast(attrs, [
       :project_id,
+      :creation_id,
       :repository_resource_id,
       :ci_resource_id,
       :title,
@@ -372,6 +381,10 @@ defmodule SymmetryControl.Workspaces.WorkItem do
       :ci_status,
       :review_status
     ])
+    |> validate_length(:creation_id, min: 1, max: 128)
+    |> unique_constraint([:project_id, :creation_id],
+      name: :work_items_project_creation_id_index
+    )
     |> validate_work_item()
     |> assoc_constraint(:project)
   end

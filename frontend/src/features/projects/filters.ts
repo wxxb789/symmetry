@@ -108,8 +108,15 @@ export interface BoardColumn {
   items: WorkItem[];
 }
 
+/**
+ * The board's column set. Every supported state always renders, empty or not:
+ * an empty column is a real movement destination, and without it a project
+ * whose items all sit in one state has no target at all. A served state
+ * outside the supported set keeps its own column too (a served state is never
+ * dropped) and sorts last, after the canonical order.
+ */
 export function boardColumns(items: readonly WorkItem[]): BoardColumn[] {
-  const columns = new Map<string, WorkItem[]>();
+  const columns = new Map<string, WorkItem[]>(workStateOrder.map((state) => [state, []]));
   for (const item of items) {
     const column = columns.get(item.status);
     if (column) column.push(item);

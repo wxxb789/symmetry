@@ -252,6 +252,13 @@ defmodule SymmetryControl.WorkspacesTest do
 
     goal = goal_fixture(project)
 
+    refute WorkItem.goal_managed?(item)
+
+    assert SymmetryControlWeb.PortalJSON.work_item(
+             Repo.preload(item, [:project, :repository_resource, :ci_resource]),
+             %{}
+           )[:goal_managed] == false
+
     assert {:ok, item} =
              item
              |> WorkItem.goal_membership_changeset(%{
@@ -266,6 +273,13 @@ defmodule SymmetryControl.WorkspacesTest do
                }
              })
              |> Repo.update()
+
+    assert WorkItem.goal_managed?(item)
+
+    assert SymmetryControlWeb.PortalJSON.work_item(
+             Repo.preload(item, [:project, :repository_resource, :ci_resource]),
+             %{}
+           )[:goal_managed] == true
 
     assert {:error, :goal_authority_required} =
              Workspaces.update_work_item(item.id, %{version: item.lock_version, title: "Bypass"})
@@ -308,6 +322,77 @@ defmodule SymmetryControl.WorkspacesTest do
 
     assert {:error, :not_found} = Workspaces.update_work_item(Ecto.UUID.generate(), %{})
     assert {:error, :not_found} = Workspaces.launch_work_item(Ecto.UUID.generate())
+  end
+
+  test "work item creation replays a client-minted identity instead of duplicating the row" do
+    project = project_fixture()
+
+    assert {:ok, other_project} =
+             Workspaces.create_project(%{
+               name: "Other project",
+               key: "OTHER",
+               default_agent_profile: "codex",
+               default_workspace: "primary"
+             })
+
+    assert {:ok, created} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Original title",
+               creation_id: "draft-42"
+             })
+
+    assert created.creation_id == "draft-42"
+    assert Repo.get!(WorkItem, created.id).creation_id == "draft-42"
+    count = Repo.aggregate(WorkItem, :count)
+
+    # Replaying the identity returns the original row: the retried title is not applied, the
+    # reply is neither a new creation nor an update, and nothing is written.
+    assert {:replayed, replayed} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Retried title",
+               creation_id: "draft-42"
+             })
+
+    assert replayed.id == created.id
+    assert replayed.title == "Original title"
+    assert Repo.get!(WorkItem, created.id).title == "Original title"
+    assert Repo.aggregate(WorkItem, :count) == count
+
+    # A different identity is a genuinely new creation.
+    assert {:ok, second} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Second item",
+               creation_id: "draft-43"
+             })
+
+    assert second.id != created.id
+    assert Repo.aggregate(WorkItem, :count) == count + 1
+
+    # The identity is scoped to the owning project.
+    assert {:ok, cross_project} =
+             Workspaces.create_work_item(other_project.id, %{
+               title: "Same identity, other project",
+               creation_id: "draft-42"
+             })
+
+    assert cross_project.id != created.id
+    assert Repo.aggregate(WorkItem, :count) == count + 2
+
+    # Malformed identities are refused before any write.
+    for invalid <- ["", String.duplicate("a", 129), "a" <> <<0>> <> "b", 42] do
+      assert {:error, :invalid_request} =
+               Workspaces.create_work_item(project.id, %{
+                 title: "Invalid identity",
+                 creation_id: invalid
+               })
+    end
+
+    assert Repo.aggregate(WorkItem, :count) == count + 2
+
+    # The legacy call without an identity still inserts, without recording one.
+    assert {:ok, legacy} = Workspaces.create_work_item(project.id, %{title: "Legacy item"})
+    assert legacy.creation_id == nil
+    assert Repo.aggregate(WorkItem, :count) == count + 3
   end
 
   defp project_fixture do

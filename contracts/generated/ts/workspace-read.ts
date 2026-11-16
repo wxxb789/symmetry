@@ -16,6 +16,18 @@ export interface WorkspaceProject {
   name: string;
   description: string | null;
   status: string;
+  /**
+   * Optimistic-lock revision of the served project row.
+   */
+  version?: number;
+  /**
+   * Default agent profile the project editor seeds from.
+   */
+  default_agent_profile?: string;
+  /**
+   * Default workspace the project editor seeds from.
+   */
+  default_workspace?: string | null;
   resources?: WorkspaceResource[];
   work_items: WorkspaceWorkItem[];
   [k: string]: unknown | undefined;
@@ -25,6 +37,14 @@ export interface WorkspaceProject {
  */
 export interface WorkspaceResource {
   id?: UUID;
+  /**
+   * Resource kind; the editor's repository and CI resource selects read it to label bindable resources.
+   */
+  kind?: string;
+  /**
+   * Resource name; the editor's repository and CI resource selects read it to label bindable resources.
+   */
+  name?: string;
   status?: string | null;
   sync_status?: string | null;
   [k: string]: unknown | undefined;
@@ -55,6 +75,10 @@ export interface WorkspaceWorkItem {
   review_status?: string | null;
   delivery?: WorkItemDelivery;
   external?: WorkItemExternal | null;
+  /**
+   * True only when the all-or-nothing Goal membership (goal_id, admitted_revision, acceptance_contract) is set; served so a client can present no writable path for a Goal-managed item.
+   */
+  goal_managed?: boolean;
   version?: number;
   can_start?: boolean;
   execution?: WorkItemExecution | null;
@@ -102,6 +126,10 @@ export interface WorkItemExternal {
   labels: string[];
   updated_at: string | null;
   resource_id: UUID | null;
+  /**
+   * Field names the external tracker owns; write refusals still come from Control.
+   */
+  provider_owned_fields?: string[];
   [k: string]: unknown | undefined;
 }
 /**
