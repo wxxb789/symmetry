@@ -49,7 +49,7 @@ import sys
 import time
 
 
-FIXTURE = "wxxb789/symmetry-0006h-provider-fixture"
+FIXTURE = "wxxb789/symmetry-provider-sandbox"
 BASE = "551e0057e4829816587eaa8efb39f0b18eaa6445"
 SECRET = re.compile(rb"(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]+|Bearer\s+[A-Za-z0-9._~+/-]{12,})", re.I)
 

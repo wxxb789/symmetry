@@ -107,7 +107,7 @@ GitHub Goal changes fail closed. Azure and non-Goal operation semantics remain
 unchanged. The binding migration refuses rollback once bindings exist.
 
 The opt-in credentialed witness is restricted to the operator-approved private
-`wxxb789/symmetry-0006h-provider-fixture` repository and isolated PostgreSQL port
+`wxxb789/symmetry-provider-sandbox` repository and isolated PostgreSQL port
 `55436`, database `symmetry_0006h_test`. It requires production `gh` keyring Auth,
 prepared real Subjects/branches and a manifest of the exact dirty source bytes.
 Run from the repository root to inspect its complete prerequisites and flags:

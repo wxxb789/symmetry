@@ -209,7 +209,7 @@ defmodule CredentialedProviderWitness.LocalNegativeControls do
     intent = authorization |> Map.take(~w(action_id resource_id connection_id project_id run_id task_id runtime_id work_item_id operation))
              |> Map.new(fn {key, value} -> {String.to_existing_atom(key), value} end)
              |> Map.merge(%{id: Ecto.UUID.generate(), provider: "github", resource_kind: "repository",
-                            resource_external_ref: "wxxb789/symmetry-0006h-provider-fixture",
+                            resource_external_ref: "wxxb789/symmetry-provider-sandbox",
                             account_ref: "wxxb789", input: input, action_binding: binding, state: "accepted"})
     %{authorization: authorization, intent: intent, binding: binding}
   end
@@ -221,7 +221,7 @@ defmodule CredentialedProviderWitness.LocalNegativeControls do
   end
 
   defp pull_request(binding) do
-    %{"number" => 18, "html_url" => "https://github.com/wxxb789/symmetry-0006h-provider-fixture/pull/18",
+    %{"number" => 18, "html_url" => "https://github.com/wxxb789/symmetry-provider-sandbox/pull/18",
       "head" => %{"sha" => binding["subject"]["commit"], "ref" => binding["target"]["source_branch"], "repo" => binding["repository"]},
       "base" => %{"ref" => "main", "repo" => binding["repository"]}}
   end
@@ -290,7 +290,7 @@ defmodule CredentialedProviderWitness.LocalNegativeControls do
 
   test "HTTP POST policy accepts only the exact authorized operation marker payload and branches", data do
     context = Witness.authorize_intent!(data.intent, data.authorization)
-    uri = URI.parse("https://api.github.com/repos/wxxb789/symmetry-0006h-provider-fixture/pulls")
+    uri = URI.parse("https://api.github.com/repos/wxxb789/symmetry-provider-sandbox/pulls")
     body = Map.merge(payload(data.binding), %{"head" => "local-current", "base" => "main"})
     assert :ok == HTTP.authorize_write!(:post, uri, body, context)
     for changed <- [Map.put(body, "head", "foreign"), Map.put(body, "base", "foreign"),
@@ -305,7 +305,7 @@ defmodule CredentialedProviderWitness.LocalNegativeControls do
 
   test "HTTP PATCH policy requires a same-action exact Subject and repository target read", data do
     context = Witness.authorize_intent!(data.intent, data.authorization)
-    uri = URI.parse("https://api.github.com/repos/wxxb789/symmetry-0006h-provider-fixture/pulls/18")
+    uri = URI.parse("https://api.github.com/repos/wxxb789/symmetry-provider-sandbox/pulls/18")
     body = payload(data.binding)
     assert_raise Failure, fn -> HTTP.authorize_write!(:patch, uri, body, context) end
     pr = pull_request(data.binding)
@@ -321,14 +321,14 @@ defmodule CredentialedProviderWitness.LocalNegativeControls do
   end
 
   test "HTTP update policy retains exact invocation target and read-only recovery phases", data do
-    url = "https://github.com/wxxb789/symmetry-0006h-provider-fixture/pull/18"
+    url = "https://github.com/wxxb789/symmetry-provider-sandbox/pull/18"
     authorization = Map.put(data.authorization, "operation", "change.update")
     input = Map.put(authorization["input"], "pull_request_url", url)
     binding = data.binding |> Map.put("operation", "change.update") |> Map.put("input", input)
     intent = %{data.intent | operation: "change.update", input: input, action_binding: binding}
     context = Witness.authorize_intent!(intent, authorization)
     HTTP.remember_targets({:ok, 200, %{}, pull_request(binding)}, context)
-    uri = URI.parse("https://api.github.com/repos/wxxb789/symmetry-0006h-provider-fixture/pulls/18")
+    uri = URI.parse("https://api.github.com/repos/wxxb789/symmetry-provider-sandbox/pulls/18")
     assert :ok == HTTP.authorize_write!(:patch, uri, payload(binding), context)
     other = put_in(context, ["action_binding", "input", "pull_request_url"], url <> "1")
     assert_raise Failure, fn -> HTTP.authorize_write!(:patch, uri, payload(other["action_binding"]), other) end
