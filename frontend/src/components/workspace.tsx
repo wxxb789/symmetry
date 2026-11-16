@@ -57,4 +57,3 @@ export function StatusBadge({ status }: { status: string }) {
     {statusLabel(status)}
   </span>;
 }
-

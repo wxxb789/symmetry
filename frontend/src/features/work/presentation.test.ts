@@ -43,6 +43,7 @@ describe("cost and acceptance truthfulness", () => {
     expect(reportedText(null)).toBeNull();
     expect(reportedResult({ generation: 2, result: { summary: { message: "12 passed" } } }).text).toBe('{"message":"12 passed"}');
     expect(evidenceRows("12 passed")).toEqual([{ text: "12 passed", attribution: null }]);
+    expect(evidenceRows({ passed: 12, failed: 0 })).toEqual([{ text: '{"passed":12,"failed":0}', attribution: null }]);
   });
 
   it("reads owner labels and owner filter keys from the served assignee", () => {
@@ -155,10 +156,14 @@ describe("evidence and timeline presentation", () => {
       "plain finding",
       { message: "unsafe write", severity: "error", source: "agent", generation: 2, event_id: taskId, recorded_at: "2026-03-01T09:00:00Z" },
       { name: "mix test", status: "passed" },
+      {},
       { unrelated: true },
     ]);
-    expect(rows.map((row) => row.text)).toEqual(["plain finding", "unsafe write", "mix test · passed"]);
+    // The finding (P2-1) requires a non-empty unrecognised record to render as
+    // its JSON; only the genuinely empty record still invents no row.
+    expect(rows.map((row) => row.text)).toEqual(["plain finding", "unsafe write", "mix test · passed", '{"unrelated":true}']);
     expect(rows[1]?.attribution).toEqual({ source: "agent", generation: 2, recordedAt: "2026-03-01T09:00:00Z" });
+    expect(rows[3]?.attribution).toBeNull();
     expect(attributionOf({ severity: "error" })).toBeNull();
     expect(evidenceRows(undefined)).toEqual([]);
   });

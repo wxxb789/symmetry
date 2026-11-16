@@ -471,6 +471,15 @@ describe("readable work views", () => {
     expect(within(detail).getByText('{"message":"legacy structured summary"}')).toBeVisible();
     expect(within(detail).queryByText("No reported execution output")).not.toBeInTheDocument();
   });
+
+  it("counts an unrecognised structured outcome value as reported output, not as an absence", async () => {
+    renderWorkspace(`/portal/work/${subjectId}`, workReadFetcher({
+      detail: readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle, outcomeTests: { passed: 12, failed: 0 } }),
+    }));
+    const detail = await screen.findByRole("dialog", { name: subjectTitle });
+    expect(within(detail).getByText('{"passed":12,"failed":0}')).toBeVisible();
+    expect(within(detail).queryByText("No reported execution output")).not.toBeInTheDocument();
+  });
 });
 
 describe("execution history boundaries", () => {

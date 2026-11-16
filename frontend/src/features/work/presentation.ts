@@ -192,9 +192,12 @@ export function evidenceRows(values: unknown): EvidenceRow[] {
     }
     const name = asText(record["name"]);
     const status = asText(record["status"]);
+    // Recognised fields first; otherwise the record's own JSON, so an
+    // unrecognised structured value (e.g. a served outcome.tests object) is
+    // still reported output and never judged as an absence.
     const text = name !== null && status !== null
       ? `${name} · ${status}`
-      : asText(record["message"]) ?? asText(record["title"]) ?? name ?? reportedText(record["summary"]) ?? asText(record["path"]) ?? asText(record["url"]) ?? asText(record["text"]);
+      : asText(record["message"]) ?? asText(record["title"]) ?? name ?? reportedText(record["summary"]) ?? asText(record["path"]) ?? asText(record["url"]) ?? asText(record["text"]) ?? reportedText(record);
     return text === null ? [] : [{ text, attribution: attributionOf(record) }];
   });
 }

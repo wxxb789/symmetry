@@ -21,21 +21,28 @@ pagination semantics; the only allowlist widening accepts the tab escape
 (`%09`) the shell itself writes into filter URLs. The repair pass only edits the
 working tree: no commit, push, or history rewrite was performed.
 
-Revision bindings: the feature is shipped as
-`03646d14428e40f1794e164cf65887661dd81ae6` on base
-`4e60b9d4b7f113cfe0162fa8003a26a01e90e4c9`. Round 1/2 evidence was produced on
-the pre-rebase working tree committed as `dae2388` (base
+Round 4 (fix pass on the round-2 Sol review, 2026-11-16) applies the three
+findings in `.tmp/0007b-findings-sol-round2.md`: unrecognised structured
+reported output renders as its JSON instead of reading as an absence (with
+red-before/green-after assertions), the revision binding below is rewritten in
+durable content-digest form, and the trailing blank line in
+`frontend/src/components/workspace.tsx` is removed. Like round 3, it edits only
+the working tree: no commit, push, or history rewrite.
+
+Explicit revision binding (durable, content-addressed, not commit-addressed):
+revisions here are identified by their tree digest, because this branch may be
+rebased before merge and a rebase rewrites SHAs. This receipt's evidence
+subject is the current repair tree (round-4 fixes, uncommitted):
+`sha256:353b10fcec5b3aba29a331a406f2efea0ba65761ccaae71afc514d381d6c1c3f`
+(390 entries; recomputed on this host with the algorithm under "Measurement
+and evidence subject", where every digest is listed with the revision it
+describes). Round 1/2 evidence was produced on the pre-rebase working tree
+committed as `dae2388` (base
 `343dea6a62484d73e7b577a0be2683ca233510f6`); its subject digest reproduces
-exactly on `dae2388` and not on the shipped revision, because the rebase
+exactly on that revision and not on the later trees, because the rebase
 replaced `.github/workflows/ci.yml`, the only digest-scope path that changed
 (`git diff --name-only dae2388..03646d1` lists four files; three are outside
-the digest set). Digest bindings: shipped feature revision
-`sha256:391930d0f0f098e023254ca0a8899b4884dfe410809f913e5bbbe168ddcb2f60`
-(390 entries) and round-2 tree
-`sha256:aa344b7ddd3f6f5682b0a7963cd294a7d918b44200796fd8d2174af1615c9527`
-(390 entries), both recomputed from `git archive` copies on this host; the
-round-3 repair tree digest is recorded under "Measurement and evidence subject"
-below.
+the digest set).
 
 ## Findings and authorized boundary
 
@@ -94,21 +101,25 @@ This receipt is the single source for the run's current measured counts. Older
 `test-ablation-*` receipts describe their own historical revisions and are not
 live consumers of this run.
 
-| Measurement | Baseline | Round 1 | Round 2 | Round 3 (current review-repair tree) | Measurement method |
-| --- | ---: | ---: | ---: | ---: | --- |
-| Frontend unit tests | 33 passed | 62 passed | 62 passed | 70 passed | Baseline archive Vitest run; final `pnpm --filter @symmetry/frontend test` (round 3 ran the package's pinned `vitest run` directly in the verified workspace: 7 files). |
-| Contract runtime tests | 31 passed | 32 passed | 32 passed | 32 passed (unchanged) | Baseline archive and final `node --test contracts/scripts/*.test.mjs`. |
-| Draft 7 root schemas | 15 | 17 | 17 | 17 (unchanged) | Contract generator/checker; common definitions are not a root. |
-| Manifest fixtures | 190 | 213 | 213 | 213 (unchanged; two invalid fixtures corrected) | Final schema/Effect gates exercise every manifest entry. |
-| Browser declarations / spec files | 41 / 8 | 47 / 9 | 47 / 9 | 47 / 9 (unchanged) | Baseline and final Playwright discovery. |
-| Expanded desktop + mobile browser cases | 82 | 94 | 94 | 94 (unchanged) | Executed `playwright test --list` in round 1; the round-3 broad run executed all 94 (79 passed + 15 skipped). |
-| Largest project snapshot in the completed measurement run | Not measured | 56,632 bytes / 15 work items | 74,388 bytes / 15 work items | 112,562 bytes / 15 work items | `snapshotMetrics` in the final list/board cases; exact response bytes, not a string-length estimate. The value moves with the shared development database as fixtures accumulate, not with this change. |
+| Measurement | Baseline | Round 1 | Round 2 | Round 3 (review-repair tree) | Round 4 (current fix tree) | Measurement method |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Frontend unit tests | 33 passed | 62 passed | 62 passed | 70 passed | 71 passed | Baseline archive Vitest run; final `pnpm --filter @symmetry/frontend test` (rounds 3–4 ran the package's pinned `vitest run` directly in the verified workspace: 7 files). |
+| Contract runtime tests | 31 passed | 32 passed | 32 passed | 32 passed (unchanged) | not re-run in round 4 | Baseline archive and final `node --test contracts/scripts/*.test.mjs`. |
+| Draft 7 root schemas | 15 | 17 | 17 | 17 (unchanged) | not re-run in round 4 | Contract generator/checker; common definitions are not a root. |
+| Manifest fixtures | 190 | 213 | 213 | 213 (unchanged; two invalid fixtures corrected) | not re-run in round 4 (fixtures untouched) | Final schema/Effect gates exercise every manifest entry. |
+| Browser declarations / spec files | 41 / 8 | 47 / 9 | 47 / 9 | 47 / 9 (unchanged) | not re-run in round 4 | Baseline and final Playwright discovery. |
+| Expanded desktop + mobile browser cases | 82 | 94 | 94 | 94 (unchanged) | 36 executed in round 4 (35 passed, 1 skipped); broad suite not re-run | Executed `playwright test --list` in round 1; the round-3 broad run executed all 94 (79 passed + 15 skipped). |
+| Largest project snapshot in the completed measurement run | Not measured | 56,632 bytes / 15 work items | 74,388 bytes / 15 work items | 112,562 bytes / 15 work items | 144,421 bytes / 15 work items (focused run) | `snapshotMetrics` in the final list/board cases; exact response bytes, not a string-length estimate. The value moves with the shared development database as fixtures accumulate, not with this change. |
 
-The Round 3 column is the current, authoritative value for the review-repair
-tree; the Baseline–Round 2 columns are retained history, not competing current
-numbers. Round 3 touches frontend presentation, session-allowlist and test
-surfaces, so the frontend unit count grows by the new assertions and the other
-counts are expected to be identical; the snapshot value moves with the fixture
+The Round 4 column records the current fix tree
+(`sha256:353b10fc…`): a re-measured number where present, and
+"not re-run"/"not re-measured" where round 4 executed nothing new and the
+round-3 value remains the last executed measurement. The Baseline–Round 3
+columns are retained history, not competing current numbers. Round 4 changes
+only the frontend reported-output fallback plus a trailing newline, so only the
+frontend unit count grows (the new router case); round 4 additionally executed
+the focused 36-case release-shell set (35 passed, 1 skipped) on the rebuilt
+release, not the broad 94-case suite; the snapshot value moves with the fixture
 database rather than with this change.
 
 The baseline browser suite was **listed, not executed**. No before-run pass
@@ -498,21 +509,28 @@ includes the directory metadata served by the unchanged workspace endpoint.
 Server-side work-item pagination remains absent; no list endpoint or pagination
 shape was invented. History uses only the existing opaque cursor API.
 
-Evidence-subject digests, each bound to the revision it was produced on (see
-the revision paragraph at the top): round-1 pre-rebase tree
+Evidence-subject digests, each stated as the content identity of the revision
+it describes (commit SHAs below are informative only; a rebase rewrites them):
+round-1 pre-rebase tree
 `sha256:3ddb5e44551f2d498628e8456d87a40684d6a90f0b85b215a22148b5cdb008a6`;
-round-2 pre-rebase tree `dae2388`
+round-2 pre-rebase tree — the revision committed as `dae2388` (base
+`343dea6a62484d73e7b577a0be2683ca233510f6`) —
 `sha256:aa344b7ddd3f6f5682b0a7963cd294a7d918b44200796fd8d2174af1615c9527`;
-shipped feature revision `03646d1`
+post-rebase feature tree — the revision committed as `03646d1` (base
+`4e60b9d4b7f113cfe0162fa8003a26a01e90e4c9`) —
 `sha256:391930d0f0f098e023254ca0a8899b4884dfe410809f913e5bbbe168ddcb2f60`;
-round-3 review-repair working tree
-`sha256:193ddbb2e257230b2e61e30d9d3a0431d0dfcd6329ef725e6a242b6bc5796817`
-(current). Each ran `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` (exit
-0; 390 file entries for the round-2, shipped and round-3 trees) in an extracted
-`git archive` copy of the named revision, or in the working tree for the repair
-pass. This is a source-manifest digest, not a commit hash and not a claim that
-the original frozen-install gate passed. The receipt and local output artifacts
-are excluded to avoid self-reference.
+round-3 review-repair tree — the revision committed as `6398caa` —
+`sha256:193ddbb2e257230b2e61e30d9d3a0431d0dfcd6329ef725e6a242b6bc5796817`;
+round-4 fix tree — the current uncommitted working tree (round-4 fixes over
+`6398caa`) —
+`sha256:353b10fcec5b3aba29a331a406f2efea0ba65761ccaae71afc514d381d6c1c3f`.
+Each ran `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` (exit 0; 390
+file entries for the round-2, post-rebase, round-3 and round-4 trees) in an
+extracted `git archive` copy of the named revision, or in the working tree for
+the uncommitted repair trees (round 3, round 4). This is a source-manifest
+digest, not a commit hash and not a claim that the original frozen-install gate
+passed. The receipt and local output artifacts are excluded to avoid
+self-reference.
 
 Reproduction algorithm: recursively enumerate files under the following roots;
 add the direct files in `frontend/`, `browser/`, and `contracts/`; add the
@@ -583,7 +601,7 @@ with `curl` `4000=200` / `4001=200`).
 | Focused release-shell run on the rebuilt release (`.tmp/0007b-round3-focused-results`) | 0 | **36 cases: 35 passed, 1 skipped, 0 failed**. |
 | Broad browser run on the rebuilt release (`.tmp/0007b-round3-broad-results`) | 0 | **94 cases: 79 passed, 15 skipped, 0 failed** — the same skips as round 2. `.last-run.json` is `{"status":"passed","failedTests":[]}`. |
 | `pwsh -NoProfile -File .tmp/0007b-tooling/browser/scripts/run-live-daemon-tests.ps1` (`.tmp/0007b-round3-live-results`) | 0 | **3 passed, 1 intentionally skipped**. Real-cursor history counts unchanged from round 2 (`firstPageEntries` 100 → `firstEntriesAfterOlderPage` 121; `currentEntriesAfterRetry` 121; three delivered faults; `retryCursorBoundTo` is the cursor of the consumed detail response). |
-| `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` | 0 | Round-3 review-repair tree: `sha256:193ddbb2e257230b2e61e30d9d3a0431d0dfcd6329ef725e6a242b6bc5796817` (390 entries). |
+| `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` | 0 | Round-3 review-repair tree (the revision committed as `6398caa`): `sha256:193ddbb2e257230b2e61e30d9d3a0431d0dfcd6329ef725e6a242b6bc5796817` (390 entries). |
 
 Red-before-green proofs, per repaired surface: frontend `presentation.test.ts`
 + `router.test.tsx` ran red at HEAD (`2 files failed, 7 failed / 31 passed`)
@@ -597,6 +615,35 @@ pre-fix release and green after the rebuild; the fixture probe showed the old
 failure reasons at `data` (not the enum) and the fixed fixtures failing only at
 the `source` const. The Compose/restart suite and the native
 credentialed-provider matrix remain unexecuted (limits below).
+
+### Round 4 fix verification (current tree)
+
+Scope: the three round-2 Sol findings (unrecognised structured output, durable
+revision binding, workspace trailing newline). Node gates ran in
+`.tmp/0007b-tooling/frontend`; the release-shell gate ran on the release
+rebuilt from the fix (rows below). Both copies are byte-identical to the
+repository tree for the changed files (`diff -rq frontend/src
+.tmp/0007b-tooling/frontend/src` exit 0; the five `docker cp`d files compare
+`OK` against `/repo-src` by `sha256sum` inside the node container).
+
+| Exact command / working directory | Exit | Observed result |
+| --- | ---: | --- |
+| `./node_modules/.bin/vitest run src/features/work/presentation.test.ts src/app/router.test.tsx` in `.tmp/0007b-tooling/frontend`, new assertions against the unfixed `presentation.ts` | 1 | **2 failed, 38 passed (40)** — exactly the new assertions: the served `outcome.tests={passed:12,failed:0}` was absent from the detail and `evidenceRows({passed:12,failed:0})` returned `[]`. |
+| `./node_modules/.bin/vitest run` in `.tmp/0007b-tooling/frontend`, fixed tree | 0 | 7 files, **71 passed** (round 3: 70 passed; the new router case adds the difference). |
+| `./node_modules/.bin/tsc --noEmit` in `.tmp/0007b-tooling/frontend` | 0 | Clean. |
+| `./node_modules/.bin/eslint . --max-warnings 0` in `.tmp/0007b-tooling/frontend` | 0 | Clean. |
+| `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` in the repository working tree | 0 | Round-4 fix tree: `sha256:353b10fcec5b3aba29a331a406f2efea0ba65761ccaae71afc514d381d6c1c3f` (390 entries). |
+| `docker cp` of the five changed `frontend/src` files into the node container's `/isolated`, checked by `sha256sum` against `/repo-src` | 0 | All five compare `OK` (byte-identical). |
+| `./node_modules/.bin/vite build && node scripts/stage-assets.mjs` in the container `/isolated/frontend` | 0 | `index-CBqVZxM1.js` 658,121 B / gzip 199.47 kB (round 3: 658,114 B); `index-D7KuRjr5.css` 20,927 B (byte-identical to round 3); sha256 `f1d3d9e6…` (js) / `c9805a9b…` (css); the >500 kB chunk warning remains. |
+| `mix release --overwrite` in the container `/app/control` with `MIX_ENV=prod` | 0 | Release rebuilt over the round-4 assets. |
+| `sh /repo-src/.tmp/0007b-restart-release.sh` in the control container, then host `curl` | 1 (script) | The script exits 1 at its `wget` readiness probe (`wget: not found`, the same limitation as round 3); host `curl` answers 4000=200 / 4001=200, and the served `/portal/assets/index-CBqVZxM1.js` answers 200 with 658,121 bytes. |
+| Focused release-shell run on the rebuilt release (`SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001`, `.tmp/0007b-round4-focused-results`) | 0 | **36 cases: 35 passed, 1 skipped, 0 failed** — the same set and result as round 3's focused gate (`portal-work-views` + `workspace-shell`, both widths). |
+
+Not re-run for this tree: the broad browser suite, the live-daemon suite, the
+Compose/restart specs, and the Elixir, Go and contract gates. The change is a
+frontend presentation fallback plus a trailing newline and has no contract,
+permission, pagination or daemon effect; those round-3 results stay bound to
+the round-3 tree (`sha256:193ddbb2…`).
 
 ## Review disposition and remaining limitations
 
@@ -617,12 +664,14 @@ credentialed-provider matrix remain unexecuted (limits below).
   project-scoped workspace directory after detail resolves. The shared detail
   query is deduplicated; the latter is not a second detail request.
 - The four fresh-session failures are fixed and re-verified (above), and every
-  Done-when predicate of `docs/goals/0007b-readable-work-views.md` now has
-  executed evidence on this revision: the list/board/detail/history/empty/error
-  browser cases with their desktop and narrow captures, the fresh-session
-  re-entry of the work and filtered-project deep links, the recorded keyboard
-  walk, the truth labels, the retained classic coverage with its migration map,
-  and the real-cursor history counts.
+  Done-when predicate of `docs/goals/0007b-readable-work-views.md` has
+  executed evidence on the round-3 repair tree (`sha256:193ddbb2…`): the
+  list/board/detail/history/empty/error browser cases with their desktop and
+  narrow captures, the fresh-session re-entry of the work and filtered-project
+  deep links, the recorded keyboard walk, the truth labels, the retained
+  classic coverage with its migration map, and the real-cursor history counts.
+  The round-4 fix tree (`sha256:353b10fc…`) re-ran the frontend unit gates
+  recorded above; the browser captures are not re-executed on it.
 - Still-unavailable evidence, recorded as limits rather than waived: the
   original frozen dependency installation; the Compose/restart browser specs
   (skipped locally, and **no CI job executes them** — the CI `compose` job runs

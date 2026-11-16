@@ -25,6 +25,8 @@ export interface ReadWorkDetailOptions extends ReadWorkItemOptions {
   timeline?: unknown[];
   /** Served outcome summary (open JSON); null by default. */
   outcomeSummary?: unknown;
+  /** Served outcome tests (open JSON value); empty by default. */
+  outcomeTests?: unknown;
 }
 
 const readDelivery = () => ({
@@ -88,7 +90,7 @@ export function readWorkDetail(options: ReadWorkDetailOptions): Record<string, u
       summary: options.outcomeSummary ?? null,
       findings: [],
       changed_artifacts: [],
-      tests: [],
+      tests: options.outcomeTests ?? [],
       blocker: null,
       pull_request_url: null,
       ci_status: null,
