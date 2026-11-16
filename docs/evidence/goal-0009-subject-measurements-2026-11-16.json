@@ -1,0 +1,58 @@
+{
+  "scope": "Final persistent-batch implementation; public Manager.MaterializeSubject under the existing 30-second context.",
+  "source_identity": "goal-0009-source-identity-2026-11-16.json",
+  "repository_resource_id": "eb968617-36be-48ce-8321-b6b20f7ce77f",
+  "observations": {
+    "linux": {
+      "production": {
+        "commit": "8ded77150ec0ae49d52355670fdad78a348bf1d5",
+        "tree_digest": "sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c",
+        "blob_count": 1091,
+        "cat_file_processes": 1,
+        "git_processes": 5,
+        "elapsed_ms": 377
+      },
+      "production_exit_code": 0,
+      "independent": {
+        "commit": "8ded77150ec0ae49d52355670fdad78a348bf1d5",
+        "tree_digest": "sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c"
+      },
+      "independent_exit_code": 0
+    },
+    "windows": {
+      "production": {
+        "commit": "8ded77150ec0ae49d52355670fdad78a348bf1d5",
+        "tree_digest": "sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c",
+        "blob_count": 1091,
+        "cat_file_processes": 1,
+        "git_processes": 5,
+        "elapsed_ms": 1649
+      },
+      "production_exit_code": 0,
+      "independent": {
+        "commit": "8ded77150ec0ae49d52355670fdad78a348bf1d5",
+        "tree_digest": "sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c"
+      },
+      "independent_exit_code": 0
+    }
+  },
+  "measurement_test": "TestSubjectMeasurementWitness",
+  "independent_command": "python scripts/ci/linux-v2-source-subject.py REPOSITORY 8ded77150ec0ae49d52355670fdad78a348bf1d5",
+  "sequence": [
+    "linux production",
+    "linux independent oracle",
+    "windows production",
+    "windows independent oracle"
+  ],
+  "full_suite_overlapped": false,
+  "timing_scope": "Elapsed inside MaterializeSubject; carrier checkout/bootstrap, Go compilation and test setup are excluded. Both platforms use the same carrier commit and resource.",
+  "timing_baseline": null,
+  "speedup_claimed": false,
+  "assertions": {
+    "blob_count_over_1000": true,
+    "one_cat_file_batch_each": true,
+    "elapsed_under_30000_ms_each": true,
+    "commit_and_digest_equal_independent_each": true,
+    "cross_platform_commit_and_digest_equal": true
+  }
+}

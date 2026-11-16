@@ -176,9 +176,15 @@ export type SymmetryGoalCommandV1 =
       expected_version: SafeInteger;
       expected_revision: Revision;
       kind: "achieve";
+      /**
+       * Operator achieve. An authenticated operator-issued achieve is itself the final operator acceptance for the goal-level operator-acceptance predicate and raises no completion decision for itself. The optional integration_work_item_id carries a server-enforced conditional obligation stated on that property; no caller-controlled required count exists.
+       */
       payload: {
         subject: Subject;
-        integration_work_item_id: UUID;
+        /**
+         * Optional on the wire; the schema cannot know the persisted required-item cardinality. A contract with exactly one required WorkItem binds that item as the integration item automatically at plan admission and achieve, ignoring optional items; a conflicting pre-marked designation or explicit selection is refused, never ignored or overridden. Every other required-item count still requires this payload, naming the current-revision WorkItem explicitly designated as the integration item.
+         */
+        integration_work_item_id?: string;
         /**
          * @maxItems 256
          */

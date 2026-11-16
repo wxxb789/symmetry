@@ -842,6 +842,48 @@
       "tags": ["goal-command", "complete-subject", "nullable"]
     },
     {
+      "id": "goal-command.achieve-omitted-integration",
+      "schema": "goal-command",
+      "path": "valid/goal-command.achieve-omitted-integration.json",
+      "valid": true,
+      "tags": ["goal-command", "complete-subject", "nullable", "integration-binding"]
+    },
+    {
+      "id": "goal-command.achieve-non-null-decision",
+      "schema": "goal-command",
+      "path": "valid/goal-command.achieve-non-null-decision.json",
+      "valid": true,
+      "tags": ["goal-command", "complete-subject", "decision-reference"]
+    },
+    {
+      "id": "goal-command.achieve-integration-null",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.achieve-integration-null.json",
+      "valid": false,
+      "tags": ["goal-command", "nullable", "integration-binding"]
+    },
+    {
+      "id": "goal-command.achieve-integration-uppercase-uuid",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.achieve-integration-uppercase-uuid.json",
+      "valid": false,
+      "tags": ["goal-command", "uuid-canonical", "integration-binding"]
+    },
+    {
+      "id": "goal-command.achieve-missing-decision",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.achieve-missing-decision.json",
+      "valid": false,
+      "tags": ["goal-command", "missing-control-field", "decision-reference"]
+    },
+    {
+      "id": "goal-command.achieve-decision-unsupported-uuid-version",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.achieve-decision-unsupported-uuid-version.json",
+      "valid": false,
+      "tags": ["goal-command", "uuid-version", "decision-reference"]
+    },
+    {
       "id": "goal-command.extra-control-field",
       "schema": "goal-command",
       "path": "invalid/goal-command.extra-control-field.json",

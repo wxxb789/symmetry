@@ -61,7 +61,7 @@ not busy-loop a wakeup worker.
 | pause | active | paused; no new admission; request safe pause of active runs |
 | resume | paused | active after checking current revision, decisions, budget |
 | amend | draft/active/paused | append revision; active becomes paused |
-| achieve | active/paused | achieved only through the completion rule below |
+| achieve | active/paused | achieved through the completion rule below; an authenticated operator achieve is itself that final operator acceptance |
 | cancel | draft/active/paused | cancelled; enqueue cancellation of active runs |
 
 Achieved/cancelled goal lifecycle and accepted contracts are immutable (late usage
@@ -124,8 +124,17 @@ requires a new plan decision; no automatic free-form backlog expansion.
 Dependencies only link WorkItems in the same goal. Cycle checks serialize on the
 goal row. An edge is satisfied by an accepted outcome for the current revision,
 not the board column. Retries are execution history, not graph cycles. For v1,
-one repository per WorkItem and no concurrent merge; integration is an explicit
-admitted item on a pinned combined commit with its own checks.
+one repository per WorkItem and no concurrent merge; integration is an admitted
+item on a pinned combined commit with its own checks. Owner-approved amendment B:
+when the contract has exactly one required WorkItem, that item binds the
+integration role automatically at plan admission and achieve, ignoring optional
+items; the derived designation is persisted only after the canonical proposal and
+its hash validate, so the approved proposal and its hash identity stay unchanged,
+and a designation or payload selecting a different item is refused rather than
+ignored or overridden. Every other required-item count keeps the explicit
+designation and payload requirements, and an already-admitted single-required-item
+plan whose stored designation selects an optional item is refused without
+rewriting its rows.
 
 `observe` tasks exist only when an agent must interpret evidence. Ordinary CI/PR
 polling uses integrations without an LLM. Waiting records persist an external
@@ -147,7 +156,20 @@ The nonterminal set is `queued`, `assigned`, `claimed`, `running`,
 [data.md](data.md). Check this predicate and commit `achieved` under the same
 Goal row lock used by admission; an admission must recheck that the goal is active
 after acquiring that lock. A cancellation request does not satisfy completion
-until the Task is terminal. Default final acceptance is an operator decision. Automatic final acceptance is allowed only when the approved
+until the Task is terminal. Default final acceptance is an operator decision.
+Owner-approved amendment A (operator acceptance): an authenticated operator
+achieve is itself that final operator acceptance act. It satisfies the goal-level
+operator-acceptance predicate without a separate completion decision raised and
+resolved by the same operator, and the readiness projection offers achieve
+directly with no completion decision in allowed actions, blockers or attention.
+Every other acceptance and decision path is unchanged: decisions required from
+another authority, WorkItem review acceptance, required-outcome and evidence
+predicates, and the unresolved-decision and nonterminal-task refusals still
+apply. On the operator final-acceptance path, where that validation already
+applies, a resolved completion reject for the exact current Goal/revision/Subject
+remains ineligible even when the achieve payload supplies a null decision; that
+Subject is not ready. The deterministic final-authority branch stays a no-op:
+this amendment adds no decision ceremony and no new rejection there. Automatic final acceptance is allowed only when the approved
 revision explicitly opts in and all final predicates are machine-verifiable;
 an LLM score alone is not such a predicate. Publication/merge authority is
 explicitly separate and defaults to disallowed.

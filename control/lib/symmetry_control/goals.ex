@@ -6610,7 +6610,10 @@ defmodule SymmetryControl.Goals do
 
   defp decision_request!(goal, "completion", nil, subject_hash, nil, _opts)
        when is_binary(subject_hash) do
-    {nil, subject_hash, completion_action_hash(goal, subject_hash), "Accept the Goal outcome?"}
+    action_hash =
+      ContractValidation.completion_action_hash(goal.id, goal.current_revision, subject_hash)
+
+    {nil, subject_hash, action_hash, "Accept the Goal outcome?"}
   end
 
   defp decision_request!(_goal, _kind, _work_item_id, _subject_hash, _proposal, _opts),
@@ -6643,6 +6646,7 @@ defmodule SymmetryControl.Goals do
     keys = Enum.map(items, &required_string!(&1, :key))
     if length(keys) != MapSet.size(MapSet.new(keys)), do: rollback(:invalid_plan)
     item_ids = Map.new(keys, &{&1, Ecto.UUID.generate()})
+    derived_key = derived_integration_key(items)
 
     policy = current_revision!(goal).execution_policy || %{}
     resources = allowed_values(policy, "allowed_resource_ids")
@@ -6696,7 +6700,7 @@ defmodule SymmetryControl.Goals do
           goal_id: goal.id,
           admitted_revision: goal.current_revision,
           required: value(item, :required, true),
-          integration: plan_item_integration!(item),
+          integration: plan_membership_integration!(item, derived_key),
           acceptance_contract: acceptance,
           baseline_subject: baseline.subject,
           baseline_dependency_id: baseline.dependency_id,
@@ -7264,7 +7268,7 @@ defmodule SymmetryControl.Goals do
     subject = required_map!(payload, :subject) |> parse_subject!()
     subject_hash = RequestHash.canonical(subject)
     evidence_ids = required_list!(payload, :evidence_ids)
-    integration_work_item_id = required_uuid!(payload, :integration_work_item_id)
+    integration_work_item_id = optional_uuid!(payload, :integration_work_item_id)
 
     current_items =
       Repo.all(
@@ -7275,13 +7279,10 @@ defmodule SymmetryControl.Goals do
         )
       )
 
-    integration_item =
-      Enum.find(current_items, &(&1.id == integration_work_item_id)) ||
-        rollback(:integration_outcome_required)
-
-    unless integration_item.integration, do: rollback(:integration_outcome_required)
-
     required_items = Enum.filter(current_items, & &1.required)
+
+    integration_item =
+      resolve_integration_item!(current_items, required_items, integration_work_item_id)
 
     current_items
     |> completion_relevant_items(goal, required_items, integration_item)
@@ -7318,14 +7319,32 @@ defmodule SymmetryControl.Goals do
     ensure_evidence_subject!(evidence, subject, subject_hash)
     ensure_final_acceptance_authority!(goal, final_acceptance, decision_id, subject_hash)
 
-    ensure_required_evidence!(
-      revision.acceptance_contract,
-      evidence,
-      subject_hash,
-      decision_id,
-      goal,
-      nil
-    )
+    ensure_required_evidence!(revision.acceptance_contract, evidence, subject_hash)
+  end
+
+  # The completion contract owns the integration designation: an
+  # exactly-one-required-item revision designates that item, and an explicit
+  # designation or payload that selects a different item contradicts the
+  # contract instead of overriding it. Other required counts keep the explicit
+  # payload and the admitted designation.
+  defp resolve_integration_item!(current_items, required_items, integration_work_item_id) do
+    case required_items do
+      [required_item] ->
+        if Enum.any?(current_items, &(&1.integration and &1.id != required_item.id)),
+          do: rollback(:invalid_plan)
+
+        case integration_work_item_id do
+          nil -> required_item
+          id when id == required_item.id -> required_item
+          _other -> rollback(:integration_outcome_required)
+        end
+
+      _other_count ->
+        id = integration_work_item_id || rollback(:invalid_request)
+
+        Enum.find(current_items, &(&1.id == id and &1.integration)) ||
+          rollback(:integration_outcome_required)
+    end
   end
 
   defp ensure_task_policy!(goal, item, purpose, model_profile, payload) do
@@ -8101,6 +8120,15 @@ defmodule SymmetryControl.Goals do
     end
   end
 
+  defp plan_membership_integration!(item, derived_key) do
+    explicit = plan_item_integration!(item)
+
+    case derived_key do
+      nil -> explicit
+      key -> explicit or value(item, :key) == key
+    end
+  end
+
   defp ensure_evidence_subject!(evidence, subject, subject_hash) do
     expected_hash = context_digest(subject_hash)
 
@@ -8137,7 +8165,7 @@ defmodule SymmetryControl.Goals do
     rows
   end
 
-  defp ensure_required_evidence!(contract, evidence, subject_hash, decision_id, goal, work_item) do
+  defp ensure_required_evidence!(contract, evidence, subject_hash) do
     predicates = value(contract || %{}, "predicates", [])
     if predicates == [], do: rollback(:missing_evidence)
 
@@ -8147,18 +8175,8 @@ defmodule SymmetryControl.Goals do
 
       case kind do
         "operator_acceptance" ->
-          decision_id || rollback(:operator_acceptance_required)
-
-          if work_item do
-            ensure_resolved_work_item_acceptance_decision!(
-              goal,
-              work_item,
-              decision_id,
-              subject_hash
-            )
-          else
-            ensure_resolved_completion_decision!(goal, decision_id, subject_hash)
-          end
+          # Enforced by the preceding ensure_final_acceptance_authority!/4 call.
+          :ok
 
         _ ->
           found =
@@ -8912,22 +8930,14 @@ defmodule SymmetryControl.Goals do
   defp ensure_resolved_completion_decision!(goal, decision_id, subject_hash) do
     decision = lock_decision(decision_id)
 
+    expected_action_hash =
+      ContractValidation.completion_action_hash(goal.id, goal.current_revision, subject_hash)
+
     unless decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
              decision.state == "resolved" and decision.kind == "completion" and
              is_nil(decision.work_item_id) and
              decision.subject_hash == subject_hash and
-             decision.action_hash == completion_action_hash(goal, subject_hash) and
-             value(decision.resolution || %{}, "option_id") == "accept",
-           do: rollback(:invalid_decision)
-  end
-
-  defp ensure_resolved_work_item_acceptance_decision!(goal, item, decision_id, subject_hash) do
-    decision = lock_decision(decision_id)
-
-    unless decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
-             decision.state == "resolved" and decision.kind == "review" and
-             decision.work_item_id == item.id and decision.subject_hash == subject_hash and
-             decision.action_hash == work_item_acceptance_action_hash(goal, item.id, subject_hash) and
+             decision.action_hash == expected_action_hash and
              value(decision.resolution || %{}, "option_id") == "accept",
            do: rollback(:invalid_decision)
   end
@@ -8947,13 +8957,39 @@ defmodule SymmetryControl.Goals do
     end
   end
 
+  # The authenticated operator command is itself the Goal-level acceptance act,
+  # so no separate completion Decision has to be raised and resolved first. A
+  # supplied completion Decision is still validated exactly, and a Subject this
+  # revision already rejected stays rejected.
   defp ensure_final_acceptance_authority!(goal, :operator, decision_id, subject_hash) do
-    decision_id || rollback(:operator_acceptance_required)
-    ensure_resolved_completion_decision!(goal, decision_id, subject_hash)
+    case decision_id do
+      nil -> ensure_completion_subject_not_rejected!(goal, subject_hash)
+      decision_id -> ensure_resolved_completion_decision!(goal, decision_id, subject_hash)
+    end
   end
 
   defp ensure_final_acceptance_authority!(_goal, :deterministic, _decision_id, _subject_hash),
     do: :ok
+
+  defp ensure_completion_subject_not_rejected!(goal, subject_hash) do
+    expected_action_hash =
+      ContractValidation.completion_action_hash(goal.id, goal.current_revision, subject_hash)
+
+    decision =
+      Repo.one(
+        from(decision in GoalDecision,
+          where:
+            decision.goal_id == ^goal.id and decision.goal_revision == ^goal.current_revision and
+              decision.state == "resolved" and decision.kind == "completion" and
+              is_nil(decision.work_item_id) and decision.subject_hash == ^subject_hash and
+              decision.action_hash == ^expected_action_hash,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    if decision && value(decision.resolution || %{}, "option_id") == "reject",
+      do: rollback(:invalid_decision)
+  end
 
   defp valid_initial_revision(revision, opts) when is_map(revision) and is_list(opts) do
     with {:ok, _} <- required_string(revision, :objective),
@@ -9044,7 +9080,7 @@ defmodule SymmetryControl.Goals do
       keys = Enum.map(items, &value(&1, :key))
       items_by_key = Map.new(items, &{value(&1, :key), &1})
 
-      Enum.any?(items, &(value(&1, :integration, false) == true)) and
+      plan_integration_designated?(items) and
         Enum.all?(items, &valid_plan_item?/1) and
         length(keys) == MapSet.size(MapSet.new(keys)) and
         Enum.all?(items, &plan_item_dependencies_valid?(&1, items_by_key)) and
@@ -9056,6 +9092,35 @@ defmodule SymmetryControl.Goals do
   end
 
   defp plan_admission_preflight?(_items, _opts), do: false
+
+  # The completion contract owns the integration designation: a plan with
+  # exactly one required item designates that item, and an explicit designation
+  # on any other item contradicts the contract instead of overriding it. Every
+  # other required count keeps the explicit designation.
+  defp plan_integration_designated?(items) do
+    case required_plan_items(items) do
+      [required_item] ->
+        Enum.all?(items, fn item ->
+          value(item, :integration, false) != true or
+            value(item, :key) == value(required_item, :key)
+        end)
+
+      _other_count ->
+        Enum.any?(items, &(value(&1, :integration, false) == true))
+    end
+  end
+
+  defp required_plan_items(items),
+    do: Enum.filter(items, &(value(&1, :required, true) == true))
+
+  # Only the exactly-one-required-item case derives a designation, and the
+  # admission preflight already refused a contradicting explicit one.
+  defp derived_integration_key(items) do
+    case required_plan_items(items) do
+      [required_item] -> value(required_item, :key)
+      _other_count -> nil
+    end
+  end
 
   defp plan_item_dependencies_valid?(item, items_by_key) do
     item_key = value(item, :key)
@@ -10546,15 +10611,6 @@ defmodule SymmetryControl.Goals do
       goal_id: goal.id,
       revision: goal.current_revision,
       proposal_hash: Base.encode16(proposal_hash, case: :lower)
-    })
-  end
-
-  defp completion_action_hash(goal, subject_hash) do
-    RequestHash.canonical(%{
-      kind: "completion",
-      goal_id: goal.id,
-      revision: goal.current_revision,
-      subject_hash: Base.encode16(subject_hash, case: :lower)
     })
   end
 

@@ -1159,7 +1159,7 @@ export const GoalCommandGraph = S.suspend(() => exactOneOf(S.Union(withObjectPro
   "payload": withObjectPropertyBounds(strictObject(S.Struct({
   "decision_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
   "evidence_ids": arrayConstraints(S.Array(DefinitionUUIDGraph), undefined, 256, true),
-  "integration_work_item_id": DefinitionUUIDGraph,
+  "integration_work_item_id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
   "subject": DefinitionSubjectGraph
 })), undefined, undefined),
   "schema_version": S.Literal("symmetry.goal_command.v1")
@@ -1380,7 +1380,7 @@ export const GoalCommandGraph = S.suspend(() => exactOneOf(S.Union(withObjectPro
   "payload": withObjectPropertyBounds(strictObject(S.Struct({
   "decision_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
   "evidence_ids": arrayConstraints(S.Array(DefinitionUUIDGraph), undefined, 256, true),
-  "integration_work_item_id": DefinitionUUIDGraph,
+  "integration_work_item_id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
   "subject": DefinitionSubjectGraph
 })), undefined, undefined),
   "schema_version": S.Literal("symmetry.goal_command.v1")

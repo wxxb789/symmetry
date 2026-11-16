@@ -15,8 +15,10 @@ recursively and arrays retain order.
 
 The fixture manifest at `fixtures/manifest.json` is the shared positive and
 negative corpus. It deliberately covers complete subjects, missing and extra
-fields, wrong identity, unknown enums, nullable values, version mismatch and
-safe-integer boundaries. Evidence receipts carry a `predicate_id`, complete
+fields, wrong identity, unknown enums, nullable values, version mismatch,
+safe-integer boundaries, and the conditional achieve integration selection
+(omitted, explicit null, noncanonical UUID) beside missing and unsupported
+`decision_id` values. Evidence receipts carry a `predicate_id`, complete
 `Subject` and `subject_hash`; `contracts:check` verifies the canonical sorted
 JSON Subject hash for TaskResults and evidence, plus kind-specific `source_ref`
 identity. A TaskResult always carries its complete result Subject; a
@@ -46,6 +48,19 @@ its ContextSnapshot have `purpose: "plan"` and `work_item_id: null`.
 `request_decision` currently supports plan, dependency-scope, review, and
 completion requests with fully typed intended effects. Budget and external-action
 requests remain unavailable until their effects have equally strict types.
+
+The amended achieve contract keeps `decision_id` a required nullable UUID and makes
+`integration_work_item_id` structurally optional: the input schema cannot know the
+persisted required-item cardinality, so the property and payload descriptions
+state, and Control enforces, the conditional obligation. A contract with exactly
+one required WorkItem (optional items are not counted) binds that item
+automatically at plan admission and achieve after the canonical proposal and its
+hash validate; a conflicting explicit designation or payload is refused without
+rewriting the approved plan; every other required-item count keeps the explicit
+marker plus UUID. No caller-controlled count field exists. An operator-issued
+achieve is itself the goal-level operator acceptance and needs no self-raised
+completion decision; other-authority and WorkItem decisions, the nullable decision
+shape and all unrelated refusals are unchanged.
 
 TaskResult includes a required nullable `proposal`: only `kind: "plan_proposed"`
 may carry a schema-valid PlanProposal; every other result kind must carry

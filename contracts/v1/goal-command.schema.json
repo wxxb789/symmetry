@@ -345,11 +345,15 @@
         "kind": {"const": "achieve"},
         "payload": {
           "type": "object",
+          "description": "Operator achieve. An authenticated operator-issued achieve is itself the final operator acceptance for the goal-level operator-acceptance predicate and raises no completion decision for itself. The optional integration_work_item_id carries a server-enforced conditional obligation stated on that property; no caller-controlled required count exists.",
           "additionalProperties": false,
-          "required": ["subject", "integration_work_item_id", "evidence_ids", "decision_id"],
+          "required": ["subject", "evidence_ids", "decision_id"],
           "properties": {
             "subject": {"$ref": "common.schema.json#/definitions/Subject"},
-            "integration_work_item_id": {"$ref": "common.schema.json#/definitions/UUID"},
+            "integration_work_item_id": {
+              "description": "Optional on the wire; the schema cannot know the persisted required-item cardinality. A contract with exactly one required WorkItem binds that item as the integration item automatically at plan admission and achieve, ignoring optional items; a conflicting pre-marked designation or explicit selection is refused, never ignored or overridden. Every other required-item count still requires this payload, naming the current-revision WorkItem explicitly designated as the integration item.",
+              "$ref": "common.schema.json#/definitions/UUID"
+            },
             "evidence_ids": {
               "type": "array",
               "uniqueItems": true,

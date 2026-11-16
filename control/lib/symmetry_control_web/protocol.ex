@@ -77,8 +77,6 @@ defmodule SymmetryControlWeb.Protocol do
     incomplete_work: {422, "incomplete_work", "required Goal work is incomplete"},
     unresolved_decision: {422, "unresolved_decision", "Goal has unresolved decisions"},
     nonterminal_task: {422, "nonterminal_task", "Goal has nonterminal tasks"},
-    operator_acceptance_required:
-      {422, "operator_acceptance_required", "operator acceptance is required"},
     strict_budget_requires_reservation:
       {422, "strict_budget_requires_reservation", "strict budget policy requires a reservation"},
     validation_required: {422, "validation_required", "independent validation is required"},

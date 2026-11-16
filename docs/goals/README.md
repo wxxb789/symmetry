@@ -1,5 +1,17 @@
 # Next goals for local Codex
 
+Goal [0009](archive/0009-achieve-contract-amendments.md) produced its A/B/C
+amendment evidence and is archived with its contract text unchanged. The
+[implementation receipt](../evidence/goal-0009-achieve-contract-amendments-2026-11-15.md)
+pairs every standalone Done-when clause with the amended documents/schema,
+real local operator achieve/readiness/replay/event, preserved refusals,
+single-required binding and approval identity, final 1,091-blob single-stream
+measurements, and independent amendment review. Its result is **produced and
+awaiting the owner's verdict**, not a model-signed owner acceptance. Windows
+aggregate test timeouts, missing Portal assets/fresh frontend dependencies and
+unexecuted qualification/browser/hosted-CI checks remain explicit; this closure
+does not convert them into passes or certify a release.
+
 Goal [0006-final](archive/0006-final.md) completed its documentation-only review
 recording on 2026-11-15 and is archived with its text unchanged and its five
 relative link targets rebased for the archive directory; **full-series acceptance
@@ -225,7 +237,7 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0009](0009-achieve-contract-amendments.md) | Approved achieve authority, single-item integration and single-stream Subject amendments A/B/C |
+| [0009](archive/0009-achieve-contract-amendments.md) | Produced achieve authority, single-item integration and single-stream Subject amendments A/B/C; owner verdict pending |
 
 Read [fixed design](../design/README.md) and root `AGENTS.md` before executing.
 Goal payloads define completion, not implementation plans. A dependency listed

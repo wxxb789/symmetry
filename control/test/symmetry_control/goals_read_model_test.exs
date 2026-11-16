@@ -1154,7 +1154,7 @@ defmodule SymmetryControl.GoalsReadModelTest do
       ],
       work_items: [
         %{id: "normal-item", required: true, integration: false, admitted_revision: 1},
-        %{id: "integration-item", required: false, integration: true, admitted_revision: 1},
+        %{id: "integration-item", required: true, integration: true, admitted_revision: 1},
         %{id: "optional-follow-up", required: false, integration: false, admitted_revision: 1},
         %{id: "optional-prerequisite", required: false, integration: false, admitted_revision: 1}
       ],
@@ -1360,7 +1360,7 @@ defmodule SymmetryControl.GoalsReadModelTest do
           ],
           work_items: [
             %{id: "required", required: true, integration: false, admitted_revision: 1},
-            %{id: "integration", required: false, integration: true, admitted_revision: 1},
+            %{id: "integration", required: true, integration: true, admitted_revision: 1},
             %{
               id: "optional-prerequisite",
               required: false,
@@ -1716,21 +1716,42 @@ defmodule SymmetryControl.GoalsReadModelTest do
     assert "achieve" in projection.allowed_actions
   end
 
-  test "a technically ready integration candidate without final operator authority remains visible" do
+  test "a ready operator integration candidate offers achieve without a completion Decision" do
     subject = subject()
     subject_hash = SymmetryControl.RequestHash.canonical(subject)
 
+    related = final_acceptance_related(subject, subject_hash, decisions: [])
+
     projection =
-      final_acceptance_related(subject, subject_hash, decisions: [])
-      |> then(
-        &ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, &1)
-      )
+      ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, related)
 
-    assert [%{reason: "final_acceptance_required", ids: ["integration-item"]}] =
-             projection.blockers
+    refute "final_acceptance_required" in projection.blocker_reasons
+    assert projection.completion.ready?
+    assert "achieve" in projection.allowed_actions
 
-    refute projection.completion.ready?
-    refute "achieve" in projection.allowed_actions
+    goal =
+      struct(Goal, %{
+        id: "goal-final-ready",
+        project_id: "project-final-ready",
+        title: "Ready without ceremony",
+        state: "active",
+        current_revision: 1,
+        lock_version: 1,
+        updated_at: ~U[2026-09-10 00:00:00Z],
+        revisions: related.revisions,
+        work_items: related.work_items,
+        dependencies: Map.get(related, :dependencies, []),
+        outcomes: related.outcomes,
+        decisions: related.decisions
+      })
+
+    Process.put(:goals_read_model_attention_rows, [goal])
+    on_exit(fn -> Process.delete(:goals_read_model_attention_rows) end)
+
+    assert {:ok, %{entries: [entry]}} = ReadModel.attention(repo: CursorRepo, limit: 1)
+    assert entry.goal_id == goal.id
+    assert entry.blocker_reasons == []
+    assert entry.ready_to_achieve?
   end
 
   test "deterministic completion with unmet required evidence is an inspectable attention blocker" do
@@ -1891,7 +1912,7 @@ defmodule SymmetryControl.GoalsReadModelTest do
     refute rejected.completion.ready?
   end
 
-  test "authority policy keeps deterministic execution behind an exact completion Decision" do
+  test "the operator completion fence offers achieve to the operator command" do
     subject = subject()
     subject_hash = SymmetryControl.RequestHash.canonical(subject)
 
@@ -1912,13 +1933,12 @@ defmodule SymmetryControl.GoalsReadModelTest do
     projection =
       ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, related)
 
-    refute projection.completion.ready?
-
-    assert [%{reason: "final_acceptance_required", ids: ["integration-item"]}] =
-             projection.blockers
+    refute "final_acceptance_required" in projection.blocker_reasons
+    assert projection.completion.ready?
+    assert "achieve" in projection.allowed_actions
   end
 
-  test "one authorized integration subject does not leave another candidate as a final-acceptance blocker" do
+  test "one accepted integration subject does not leave another candidate as a final-acceptance blocker" do
     subject_a = subject()
     subject_b = Map.put(subject(), "commit", String.duplicate("d", 40))
     hash_a = SymmetryControl.RequestHash.canonical(subject_a)
@@ -1946,7 +1966,7 @@ defmodule SymmetryControl.GoalsReadModelTest do
             subject_hash: hash_b
           }
         ],
-        decisions: [completion_decision("goal-final-ready", hash_a)]
+        decisions: []
       )
 
     projection =
@@ -1955,6 +1975,241 @@ defmodule SymmetryControl.GoalsReadModelTest do
     assert projection.completion.ready?
     assert "achieve" in projection.allowed_actions
     refute "final_acceptance_required" in projection.blocker_reasons
+  end
+
+  test "a rejected completion Subject is not offered for achieve" do
+    subject = subject()
+    subject_hash = SymmetryControl.RequestHash.canonical(subject)
+
+    rejected =
+      final_acceptance_related(subject, subject_hash,
+        decisions: [completion_decision("goal-final-ready", subject_hash, "reject")]
+      )
+
+    projection =
+      ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, rejected)
+
+    refute projection.completion.ready?
+    refute "achieve" in projection.allowed_actions
+
+    other_subject = Map.put(subject, "commit", String.duplicate("d", 40))
+    other_hash = SymmetryControl.RequestHash.canonical(other_subject)
+
+    scoped =
+      rejected
+      |> Map.put(:work_items, [
+        %{id: "integration-item", required: false, integration: true, admitted_revision: 1},
+        %{id: "other-integration-item", required: false, integration: true, admitted_revision: 1}
+      ])
+      |> Map.put(:outcomes, [
+        %{
+          id: "integration-outcome",
+          goal_revision: 1,
+          work_item_id: "integration-item",
+          disposition: "accepted",
+          subject_hash: subject_hash
+        },
+        %{
+          id: "other-integration-outcome",
+          goal_revision: 1,
+          work_item_id: "other-integration-item",
+          disposition: "accepted",
+          subject_hash: other_hash
+        }
+      ])
+
+    scoped_projection =
+      ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, scoped)
+
+    assert scoped_projection.completion.ready?
+    assert "achieve" in scoped_projection.allowed_actions
+
+    # The rejection is intentionally silent: neither a blocker nor an attention
+    # entry advertises the rejected Subject.
+    assert projection.blocker_reasons == []
+
+    goal =
+      struct(Goal, %{
+        id: "goal-final-ready",
+        project_id: "project-final-ready",
+        title: "Rejected completion subject",
+        state: "active",
+        current_revision: 1,
+        lock_version: 1,
+        updated_at: ~U[2026-09-10 00:00:00Z],
+        revisions: rejected.revisions,
+        work_items: rejected.work_items,
+        dependencies: rejected.dependencies,
+        outcomes: rejected.outcomes,
+        decisions: rejected.decisions
+      })
+
+    Process.put(:goals_read_model_attention_rows, [goal])
+    on_exit(fn -> Process.delete(:goals_read_model_attention_rows) end)
+
+    assert {:ok, %{entries: []}} = ReadModel.attention(repo: CursorRepo, limit: 1)
+  end
+
+  test "a single required WorkItem carries the integration designation in the projection" do
+    subject = subject()
+    subject_hash = SymmetryControl.RequestHash.canonical(subject)
+
+    related =
+      final_acceptance_related(subject, subject_hash,
+        work_items: [
+          %{id: "only-required", required: true, integration: true, admitted_revision: 1},
+          %{id: "optional-follow-up", required: false, integration: false, admitted_revision: 1}
+        ],
+        outcomes: [
+          %{
+            id: "required-outcome",
+            goal_revision: 1,
+            work_item_id: "only-required",
+            disposition: "accepted",
+            subject_hash: subject_hash
+          }
+        ],
+        decisions: []
+      )
+
+    projection =
+      ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, related)
+
+    items_by_id = Map.new(projection.work_items, &{&1.id, &1})
+
+    refute Map.fetch!(items_by_id, "optional-follow-up").integration
+    assert projection.completion.ready?
+    assert "achieve" in projection.allowed_actions
+  end
+
+  test "a legacy single-required plan without stored integration markers still offers achieve" do
+    subject = subject()
+    subject_hash = SymmetryControl.RequestHash.canonical(subject)
+
+    related =
+      final_acceptance_related(subject, subject_hash,
+        acceptance_contract: %{
+          "predicates" => [
+            %{"id" => "goal-check", "kind" => "check", "validator_profile" => "test"}
+          ]
+        },
+        work_items: [
+          %{id: "only-required", required: true, integration: false, admitted_revision: 1},
+          %{id: "optional-follow-up", required: false, integration: false, admitted_revision: 1}
+        ],
+        outcomes: [
+          %{
+            id: "required-outcome",
+            goal_revision: 1,
+            work_item_id: "only-required",
+            disposition: "accepted",
+            subject_hash: subject_hash
+          }
+        ],
+        decisions: [],
+        tasks: [
+          %{
+            id: "validation-task",
+            work_item_id: "only-required",
+            goal_id: "goal-final-ready",
+            goal_revision: 1,
+            purpose: "validate",
+            current_generation: 1,
+            state: "completed"
+          }
+        ],
+        runs: [
+          %{id: "validation-run", task_id: "validation-task", generation: 1, state: "completed"}
+        ],
+        evidence: [goal_check_evidence(subject, subject_hash)]
+      )
+
+    projection =
+      ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, related)
+
+    assert projection.completion.required_items == 1
+    assert projection.completion.ready?
+    assert "achieve" in projection.allowed_actions
+    assert projection.blocker_reasons == []
+
+    # The required-count rule is derived read-side without rewriting the stored
+    # role.
+    refute Enum.find(projection.work_items, &(&1.id == "only-required")).integration
+
+    # The attention feed loads its own rows, so the phantom check runs on the
+    # evidence-free operator contract of the same unmarked revision.
+    attention_related =
+      put_in(related, [:revisions, Access.at(0), :acceptance_contract], %{
+        "predicates" => [%{"id" => "operator", "kind" => "operator_acceptance"}]
+      })
+
+    goal =
+      struct(Goal, %{
+        id: "goal-final-ready",
+        project_id: "project-final-ready",
+        title: "Legacy unmarked plan",
+        state: "active",
+        current_revision: 1,
+        lock_version: 1,
+        updated_at: ~U[2026-09-10 00:00:00Z],
+        revisions: attention_related.revisions,
+        work_items: attention_related.work_items,
+        dependencies: attention_related.dependencies,
+        outcomes: attention_related.outcomes,
+        decisions: attention_related.decisions
+      })
+
+    Process.put(:goals_read_model_attention_rows, [goal])
+    on_exit(fn -> Process.delete(:goals_read_model_attention_rows) end)
+
+    assert {:ok, %{entries: [entry]}} = ReadModel.attention(repo: CursorRepo, limit: 1)
+    assert entry.goal_id == goal.id
+    assert entry.blocker_reasons == []
+    assert entry.ready_to_achieve?
+  end
+
+  test "a conflicting stored optional integration marker is not offered for achieve" do
+    subject = subject()
+    subject_hash = SymmetryControl.RequestHash.canonical(subject)
+
+    related =
+      final_acceptance_related(subject, subject_hash,
+        work_items: [
+          %{id: "only-required", required: true, integration: false, admitted_revision: 1},
+          %{id: "optional-integration", required: false, integration: true, admitted_revision: 1}
+        ],
+        outcomes: [
+          %{
+            id: "required-outcome",
+            goal_revision: 1,
+            work_item_id: "only-required",
+            disposition: "accepted",
+            subject_hash: subject_hash
+          },
+          %{
+            id: "optional-integration-outcome",
+            goal_revision: 1,
+            work_item_id: "optional-integration",
+            disposition: "accepted",
+            subject_hash: subject_hash
+          }
+        ],
+        decisions: [completion_decision("goal-final-ready", subject_hash)]
+      )
+
+    projection =
+      ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, related)
+
+    refute projection.completion.ready?
+    refute "achieve" in projection.allowed_actions
+
+    assert "integration_outcome_required" in projection.blocker_reasons
+
+    assert [%{reason: "integration_outcome_required", ids: [], details: [detail]}] =
+             Enum.filter(projection.blockers, &(&1.reason == "integration_outcome_required"))
+
+    assert detail.work_item_id == "optional-integration"
+    assert detail.reason == "conflicting_integration_designation"
   end
 
   test "accounting keeps held reservations separate from known usage leaves" do
@@ -2388,20 +2643,21 @@ defmodule SymmetryControl.GoalsReadModelTest do
         ]),
       decisions:
         Keyword.get(opts, :decisions, [completion_decision("goal-final-ready", subject_hash)]),
+      dependencies: Keyword.get(opts, :dependencies, []),
       tasks: Keyword.get(opts, :tasks, []),
       runs: Keyword.get(opts, :runs, []),
       evidence: Keyword.get(opts, :evidence, [])
     }
   end
 
-  defp completion_decision(goal_id, subject_hash) do
+  defp completion_decision(goal_id, subject_hash, option_id \\ "accept") do
     %{
       id: "completion-decision",
       goal_revision: 1,
       kind: "completion",
       state: "resolved",
       subject_hash: subject_hash,
-      resolution: %{"option_id" => "accept"},
+      resolution: %{"option_id" => option_id},
       action_hash:
         SymmetryControl.RequestHash.canonical(%{
           kind: "completion",

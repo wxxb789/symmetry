@@ -18,9 +18,23 @@ versioned payload data; identity, ownership, state and dedup keys stay relationa
 
 For goal-owned WorkItems, goal_id/admitted_revision/acceptance_contract are all
 non-null; enforce revision and same-project ownership via composite FKs. `integration`
-may be true only for a goal-owned WorkItem and is immutable once admitted. It is an
-explicit plan designation, never inferred from title, order, dependencies, or board
-state. Goal-less items leave these fields null and `integration` false.
+may be true only for a goal-owned WorkItem and is immutable once admitted. It records
+an explicit plan designation, or the designation the contract itself derives when
+exactly one required item exists (owner-approved amendment B); nothing else, such as
+title, order, dependencies or board state, implies the role, and optional items do
+not change the required count. The derived designation is written only after the
+canonical proposal and its operator-authorized hash validate; the approved proposal
+stays unchanged and no admitted plan is rewritten. Already-admitted
+single-required-item plans are read by the same required-count rule without mutating
+their rows, and a stored designation that selects an optional item is refused, never
+ignored, reinterpreted or rewritten. No column or caller-controlled count field is
+added for this rule. Goal-less items leave these fields null and `integration` false.
+
+Read-model `work_items[].integration` reports this stored column verbatim; it is
+not the effective designation. Clients apply the required-count contract
+themselves: with exactly one required WorkItem that item is the integration item
+even when the projected flag is false, and a projected true flag on any other
+item of such a revision is the refused conflict, not a role.
 
 Every Goal WorkItem pins exactly one automatic baseline source: a complete
 `baseline_subject` whose resource matches the WorkItem repository, or a
@@ -332,10 +346,15 @@ operating on goal-managed items must delegate before acquiring their old locks.
   acceptance payload. Usage ingestion is independent and never conditional on
   acceptance.
 - **Achieve:** replay; lock Goal; verify current revision, required outcomes,
-  goal predicates and decisions; reject if any goal Task is in the nonterminal
-  set used by the partial index, including optional WorkItem tasks. Commit
-  achieved state and goal event atomically. Concurrent admission uses the same
-  Goal lock and rechecks active state; it cannot insert after achievement.
+  goal predicates and decisions; with exactly one required item, bind that item's
+  integration role and refuse a payload or stored designation selecting a different
+  item, while every other required count still requires the explicit payload naming
+  a designated item. An authenticated operator command supplies the goal-level
+  operator acceptance directly; a non-null `decision_id` and every other authority
+  decision rule are validated as before. Reject if any goal Task is in the
+  nonterminal set used by the partial index, including optional WorkItem tasks.
+  Commit achieved state and goal event atomically. Concurrent admission uses the
+  same Goal lock and rechecks active state; it cannot insert after achievement.
 - **Resolve decision:** replay; lock scope; verify expected version/action hash;
   resolve + event + wakeup together. Double resolution differs -> conflict.
 - **Amend:** replay; lock goal/items; append revision, pause goal, supersede open

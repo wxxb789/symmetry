@@ -1716,3 +1716,106 @@ func TestLinuxCloneReuseRecoversExactRetainedTargetWithoutEffects(t *testing.T) 
 		t.Fatalf("reuse recovery changed the source seed: %v", err)
 	}
 }
+
+// TestLinuxCloneTreeDigestMatchesProductionSubjectDigest keeps the Linux clone
+// consumer on the canonical manifest digest, including executable files, a
+// symlink entry, embedded binary bytes and raw paths.
+func TestLinuxCloneTreeDigestMatchesProductionSubjectDigest(t *testing.T) {
+	repository := newSubjectRepository(t)
+	writeSubjectDigestFixture(t, repository)
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+	expected := subjectManifestDigest(t, repository, commit)
+
+	cloneDigest, err := linuxCloneTreeDigest(context.Background(), repository, commit)
+	if err != nil {
+		t.Fatalf("linuxCloneTreeDigest() error = %v", err)
+	}
+	if cloneDigest != expected {
+		t.Fatalf("linuxCloneTreeDigest() = %q, want canonical manifest digest %q", cloneDigest, expected)
+	}
+	manager := New(map[string]config.Workspace{
+		"primary": {
+			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways,
+		},
+	})
+	subject, err := manager.MaterializeSubject(context.Background(), "primary", subjectResourceID, commit)
+	if err != nil {
+		t.Fatalf("MaterializeSubject() error = %v", err)
+	}
+	if subject.TreeDigest != cloneDigest {
+		t.Fatalf("Linux clone digest %q differs from production Subject digest %q for the same commit", cloneDigest, subject.TreeDigest)
+	}
+}
+
+// TestLinuxCloneTreeDigestUsesOneBatchStream requires the Linux clone consumer
+// to read every committed blob through exactly one persistent Git batch stream
+// instead of one process per blob. The clone command policy fixes the child
+// environment, so the stream is counted deterministically at the digest's
+// batch opener rather than by process sampling.
+func TestLinuxCloneTreeDigestUsesOneBatchStream(t *testing.T) {
+	repository := newSubjectRepository(t)
+	writeSubjectDigestManyBlobsFixture(t, repository)
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	opened := 0
+	digest, err := gitTreeDigestWithReaders(context.Background(), repository, commit, linuxCloneGitOutput,
+		func(ctx context.Context, streamRepository string) (*subjectGitBatchStream, error) {
+			opened++
+			return linuxCloneOpenBatch(ctx, streamRepository)
+		})
+	if err != nil {
+		t.Fatalf("Linux clone tree digest error = %v", err)
+	}
+	if opened != 1 {
+		t.Fatalf("Linux clone digest of %d blobs opened %d Git batch streams, want exactly one persistent batch stream", subjectDigestManyBlobs, opened)
+	}
+	if want := subjectManifestDigest(t, repository, commit); digest != want {
+		t.Fatalf("Linux clone digest = %q, want canonical manifest digest %q", digest, want)
+	}
+}
+
+// TestLinuxCloneTreeDigestHonorsContextCancellation cancels a started Linux
+// clone batch stream and requires the caller to observe the cancellation while
+// no owned Git child stream keeps running. Cancelling as soon as the stream
+// opens keeps the observation deterministic instead of timed.
+func TestLinuxCloneTreeDigestHonorsContextCancellation(t *testing.T) {
+	repository := newSubjectRepository(t)
+	writeSubjectDigestFixture(t, repository)
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := gitTreeDigestWithReaders(ctx, repository, commit, linuxCloneGitOutput,
+		func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
+			stream, err := linuxCloneOpenBatch(openContext, streamRepository)
+			if err != nil {
+				return nil, err
+			}
+			cancel()
+			return stream, nil
+		})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Linux clone tree digest error = %v, want context.Canceled", err)
+	}
+	assertNoOwnedGitChildProcesses(t)
+}
+
+// TestLinuxCloneTreeDigestRefusesOversizedBlob keeps the per-blob size refusal
+// on the Linux clone consumer together with its unresolved-process fence: the
+// batch child is terminated mid-response and never left running.
+func TestLinuxCloneTreeDigestRefusesOversizedBlob(t *testing.T) {
+	repository := newSubjectRepository(t)
+	writeSubjectFixtureFile(t, repository, "oversized.bin", []byte(strings.Repeat("z", maxSubjectArtifactBlobBytes+1)))
+	runGit(t, repository, "add", "oversized.bin")
+	runGit(t, repository, "commit", "-m", "add oversized blob")
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+
+	_, err := linuxCloneTreeDigest(context.Background(), repository, commit)
+	if err == nil || !errors.Is(err, ErrSubjectArtifactTooLarge) {
+		t.Fatalf("linuxCloneTreeDigest() error = %v, want ErrSubjectArtifactTooLarge", err)
+	}
+	if !errors.Is(err, ErrLinuxCloneProcessUnresolved) {
+		t.Fatalf("linuxCloneTreeDigest() error = %v, want the unresolved process-group fence of a terminated batch stream", err)
+	}
+	assertNoOwnedGitChildProcesses(t)
+}
