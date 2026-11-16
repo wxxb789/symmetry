@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
-import type { TimelineItem } from "../../services/api";
+import { UnexpectedResponse, type TimelineItem } from "../../services/api";
 import { workTimelineOptions } from "../../app/application";
 import { timelineItemKey, timelineItemView, timestamp } from "./presentation";
 
@@ -13,6 +13,7 @@ export function WorkHistory({ workItemId, firstPage, cursor }: { workItemId: str
   const query = useInfiniteQuery(workTimelineOptions(application.api, workItemId, cursor));
   const items = [...firstPage, ...(query.data?.pages.flatMap((page) => page.items) ?? [])];
   const exhausted = query.isSuccess && query.hasNextPage === false;
+  const staleCursor = query.error instanceof UnexpectedResponse && query.error.status === 400;
   if (items.length === 0 && cursor === null) return <p className="muted">No execution history recorded</p>;
   return <>
     {items.length > 0 && <ol className="timeline">
@@ -21,7 +22,17 @@ export function WorkHistory({ workItemId, firstPage, cursor }: { workItemId: str
     {cursor === null ? null : query.isError
       ? <div className="notice notice-error" role="alert">
         <div><p>Earlier history could not be loaded.</p>
-          <button className="button" type="button" onClick={() => { void query.refetch(); }}>Retry history</button>
+          <button className="button" type="button" onClick={() => {
+            if (staleCursor) {
+              // The served boundary aged out (cursor max age): a fresh detail read
+              // re-issues it, and the disabled timeline query restarts from the
+              // newly served cursor through its query key.
+              void application.queryClient.resetQueries({ queryKey: ["work-item-timeline", { workItemId }] });
+              void application.queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId }] });
+              return;
+            }
+            void query.refetch();
+          }}>Retry history</button>
         </div>
       </div>
       : exhausted

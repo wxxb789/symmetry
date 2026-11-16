@@ -29,6 +29,7 @@ import {
   ownerLabel,
   priorityLabel,
   reportedResult,
+  reportedText,
   resultKindLabel,
   safeUrl,
   timestamp,
@@ -160,7 +161,7 @@ function WorkDetailSections({ detail }: { detail: WorkDetail }) {
   const ci = ciLabel(item.delivery);
   const decision = decisionView(execution?.waiting, asText(outcome.blocker));
   const nextAction = nextActionLabel(execution?.result);
-  const summary = asText(outcome.summary) ?? reported.text;
+  const summary = reportedText(outcome.summary) ?? reported.text;
   const reportedFailure = failureText(execution?.failure);
   const findings = evidenceRows(outcome.findings);
   const artifacts = evidenceRows(outcome.changed_artifacts);

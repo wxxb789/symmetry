@@ -5,7 +5,13 @@
       "run_id": "66666666-6666-4666-8666-666666666666",
       "generation": 1,
       "recorded_at": "2026-11-15T10:00:00.000000Z",
-      "data": {}
+      "data": {
+        "event_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "sequence": 1,
+        "kind": "progress",
+        "payload": {},
+        "occurred_at": "2026-11-15T10:00:00.000000Z"
+      }
     }
   ],
   "next_before": null

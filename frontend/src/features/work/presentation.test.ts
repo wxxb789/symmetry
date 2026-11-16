@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asRecord, asText, attributionOf, ciLabel, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, failureText, nextActionLabel, ownerKey, ownerLabel, reportedResult, timelineItemKey, timelineItemView, timestamp } from "./presentation";
+import { asRecord, asText, attributionOf, ciLabel, ciResourcesOf, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, failureText, nextActionLabel, ownerKey, ownerLabel, reportedResult, reportedText, timelineItemKey, timelineItemView, timestamp, type TimelineItemLike } from "./presentation";
 
 const workItemId = "11111111-1111-4111-8111-111111111111";
 const taskId = "22222222-2222-4222-8222-222222222222";
@@ -32,6 +32,19 @@ describe("cost and acceptance truthfulness", () => {
     expect(failureText(null)).toBeNull();
   });
 
+  it("renders structured reported output as its JSON text and invents no row for empty values", () => {
+    expect(reportedText("12 passed")).toBe("12 passed");
+    expect(reportedText({ message: "12 passed" })).toBe('{"message":"12 passed"}');
+    expect(reportedText(["a", "b"])).toBe('["a","b"]');
+    expect(reportedText(12)).toBe("12");
+    expect(reportedText(true)).toBe("true");
+    expect(reportedText([])).toBeNull();
+    expect(reportedText({})).toBeNull();
+    expect(reportedText(null)).toBeNull();
+    expect(reportedResult({ generation: 2, result: { summary: { message: "12 passed" } } }).text).toBe('{"message":"12 passed"}');
+    expect(evidenceRows("12 passed")).toEqual([{ text: "12 passed", attribution: null }]);
+  });
+
   it("reads owner labels and owner filter keys from the served assignee", () => {
     expect(ownerLabel({ type: "unassigned", name: null, agent_profile: null })).toBe("Unassigned");
     expect(ownerLabel({ type: "agent", name: "Worker", agent_profile: "reviewer" })).toBe("Agent · reviewer");
@@ -45,21 +58,50 @@ describe("cost and acceptance truthfulness", () => {
 
 describe("CI freshness", () => {
   const now = Date.parse("2026-03-01T12:00:00Z");
-  const ci = (status: string, source: string, recorded?: string) => ({
-    ci: { status, source, ...(recorded === undefined ? {} : { recorded_at: recorded }) },
+  const ci = (status: string, source: "none" | "manual" | "provider" | "agent", recorded?: string) => ({
+    // A served delivery entry is complete; only the fields under test vary.
+    ci: { value: null, source, generation: null, url: null, status, ...(recorded === undefined ? {} : { recorded_at: recorded }) },
   });
+  const syncedResource = { sync_status: "synced", status: "healthy" };
 
   it("never renders unknown or unrecorded CI as fresh", () => {
-    expect(ciLabel(null, now)).toMatchObject({ text: "CI unknown", tone: "unknown" });
-    expect(ciLabel(ci("unknown", "none"), now)).toMatchObject({ text: "CI unknown", tone: "unknown" });
-    expect(ciLabel(ci("passed", "manual"), now)).toMatchObject({ text: "CI passed · freshness unknown", tone: "unknown" });
+    expect(ciLabel(null, null, now)).toMatchObject({ text: "CI unknown", tone: "unknown" });
+    expect(ciLabel(ci("unknown", "none"), syncedResource, now)).toMatchObject({ text: "CI unknown", tone: "unknown" });
+    expect(ciLabel(ci("passed", "manual"), syncedResource, now)).toMatchObject({ text: "CI passed · freshness unknown", tone: "unknown" });
   });
 
   it("marks provider CI stale outside the freshness window and fresh inside it", () => {
-    expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), now)).toMatchObject({ text: "CI passed", tone: "passed" });
-    expect(ciLabel(ci("passed", "provider", "2026-02-20T09:00:00Z"), now)).toMatchObject({ text: "CI passed · stale", tone: "stale" });
-    expect(ciLabel(ci("failed", "provider", "2026-03-01T09:00:00Z"), now)).toMatchObject({ text: "CI failed", tone: "failed" });
-    expect(ciLabel(ci("pending", "provider", "2026-03-01T09:00:00Z"), now)).toMatchObject({ text: "CI pending", tone: "pending" });
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed", tone: "passed" });
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00.500+00:00"), syncedResource, now)).toMatchObject({ text: "CI passed", tone: "passed" });
+    expect(ciLabel(ci("passed", "provider", "2026-02-20T09:00:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · stale", tone: "stale" });
+    expect(ciLabel(ci("failed", "provider", "2026-03-01T09:00:00Z"), null, now)).toMatchObject({ text: "CI failed", tone: "failed" });
+    expect(ciLabel(ci("pending", "provider", "2026-03-01T09:00:00Z"), null, now)).toMatchObject({ text: "CI pending", tone: "pending" });
+  });
+
+  it("labels a bound-resource problem as stale instead of fresh", () => {
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), { sync_status: "stale", status: "healthy" }, now))
+      .toMatchObject({ text: "CI passed · bound resource stale", tone: "stale" });
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), { sync_status: "failed", status: "healthy" }, now))
+      .toMatchObject({ text: "CI passed · bound resource failed", tone: "stale" });
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), { sync_status: "synced", status: "degraded" }, now))
+      .toMatchObject({ text: "CI passed · bound resource degraded", tone: "stale" });
+    // The first problem in served order names the signal, so the sync problem wins.
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), { sync_status: "stale", status: "offline" }, now).title)
+      .toContain(" · bound resource stale");
+  });
+
+  it("requires a trusted source, a confirmed binding and a strict recorded time", () => {
+    expect(ciLabel(ci("passed", "agent", "2026-03-01T11:00:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · unverified source", tone: "unknown" });
+    expect(ciLabel(ci("passed", "provider", "2026-11-15 11:00"), syncedResource, now)).toMatchObject({ text: "CI passed · freshness unknown", tone: "unknown" });
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), null, now)).toMatchObject({ text: "CI passed · binding not confirmed", tone: "unknown" });
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), undefined, now)).toMatchObject({ text: "CI passed · binding not confirmed", tone: "unknown" });
+  });
+
+  it("maps the project's bound CI resources by id", () => {
+    const resources = ciResourcesOf({ resources: [{ id: "res-1", status: "healthy", sync_status: "synced" }, { id: null }, "not-a-resource"] });
+    expect(resources.get("res-1")).toEqual({ status: "healthy", sync_status: "synced" });
+    expect(resources.size).toBe(1);
+    expect(ciResourcesOf(null).size).toBe(0);
   });
 });
 
@@ -122,7 +164,7 @@ describe("evidence and timeline presentation", () => {
   });
 
   it("labels timeline items by their served source without dropping unknown payloads", () => {
-    const event = { source: "event", run_id: runId, generation: 1, recorded_at: "2026-03-01T09:00:00Z", data: { event_id: taskId, sequence: 4, kind: "artifact", payload: { path: "frontend/src/a.ts" }, occurred_at: null } };
+    const event: TimelineItemLike = { source: "event", run_id: runId, generation: 1, recorded_at: "2026-03-01T09:00:00Z", data: { event_id: taskId, sequence: 4, kind: "artifact", payload: { path: "frontend/src/a.ts" }, occurred_at: null } };
     expect(timelineItemView(event)).toEqual({ label: "event · artifact", headline: "frontend/src/a.ts", link: null });
     expect(timelineItemKey(event)).toBe(`event:${taskId}:1`);
     expect(timelineItemView({ source: "transition", generation: 1, data: { transition_id: taskId, state: "failed", payload: { reason: "boom" } } }))

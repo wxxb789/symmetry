@@ -7,9 +7,11 @@ defmodule SymmetryControlWeb.PortalSession do
   # Work-surface search state the shell itself writes into its own URLs: the
   # view, the text filters, and the JSON-encoded blocked flag. Values stay
   # anchored to that encoding, so an unencoded control character or an
-  # unescaped path separator is rejected instead of being passed through.
+  # unescaped path separator is rejected instead of being passed through. The
+  # only C0 escape the shell emits for filter text is the tab (%09), which is
+  # accepted; every other control-character escape stays rejected.
   @work_view_param ~r{\Aview=(?:list|board)\z}
-  @work_text_param ~r{\A(?:q|state|owner)=(?:[A-Za-z0-9*.+_-]|%(?![01])[0-9A-Fa-f][0-9A-Fa-f])*\z}
+  @work_text_param ~r{\A(?:q|state|owner)=(?:[A-Za-z0-9*.+_-]|%(?:09|[2-9A-Fa-f][0-9A-Fa-f]))*\z}
   @work_blocked_param ~r{\Ablocked=(?:1|%221%22)\z}
   @work_project_param ~r{\AprojectId=[A-Za-z0-9_-]+\z}
   @work_search_params [@work_view_param, @work_text_param, @work_blocked_param]

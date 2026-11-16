@@ -136,6 +136,10 @@ adds strict raw JSON checks before decoding a generated DTO. Full cross-field
 envelope validation belongs to `daemon/internal/protocol` and enters through
 `protocol.ValidateGoalEnvelope`.
 
+Known limitation: the quicktype-generated Go bundle flattens the timeline item
+`oneOf` into a single all-optional struct, so the Go side does not guarantee
+branch/data consistency; it has no consumers today.
+
 Validate every schema, fixture expectation and generated-file drift with:
 
 ```text

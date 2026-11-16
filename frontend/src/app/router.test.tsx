@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "../services/api";
-import { readWorkDetail } from "../services/api.fixtures";
+import { readWorkDetail, readWorkItem } from "../services/api.fixtures";
 import { createApplication, type Application } from "./application";
 import { createAppRouter } from "./router";
 
@@ -316,12 +316,13 @@ describe("workspace navigation", () => {
 
 const subjectId = "77777777-7777-4777-8777-777777777777";
 const subjectTitle = "Subject work item";
+const siblingId = "88888888-8888-4888-8888-888888888888";
 const siblingTitle = "Subject backlog item";
 const foreignTitle = "Foreign work item";
 const workViewProjects: Project[] = [
   { id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active", work_items: [
     { id: subjectId, key: "ONE-9", title: subjectTitle, status: "ready", blocked: false, blocker: null },
-    { id: "88888888-8888-4888-8888-888888888888", key: "ONE-10", title: siblingTitle, status: "backlog", blocked: false, blocker: null },
+    { id: siblingId, key: "ONE-10", title: siblingTitle, status: "backlog", blocked: false, blocker: null },
   ] },
   { id: secondProjectId, key: "TWO", name: "Project Two", description: "Second project", status: "archived", work_items: [
     { id: "99999999-9999-4999-8999-999999999999", key: "TWO-1", title: foreignTitle, status: "future_state", blocked: true, blocker: null },
@@ -423,5 +424,173 @@ describe("readable work views", () => {
     const list = screen.getByRole("list", { name: "Work items" });
     expect(within(list).getByText(subjectTitle)).toBeVisible();
     expect(within(list).queryByText(siblingTitle)).not.toBeInTheDocument();
+  });
+
+  it("renders a row's object result summary as its JSON text and marks a task-less row unreported", async () => {
+    const user = userEvent.setup();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const requestPath = input instanceof Request ? input.url : String(input);
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.includes("/portal/api/work-items/")) {
+        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
+          id: subjectId,
+          projectId: firstProjectId,
+          title: subjectTitle,
+          outcomeSummary: { message: "legacy structured summary" },
+        }))));
+      }
+      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
+      return Promise.resolve(new Response(JSON.stringify({
+        selected_project_id: null,
+        projects: [{
+          id: firstProjectId,
+          key: "ONE",
+          name: "Project One",
+          description: null,
+          status: "active",
+          work_items: projectId === firstProjectId ? [
+            readWorkItem({ id: subjectId, projectId: firstProjectId, title: subjectTitle, key: "ONE-9", execution: { generation: 2, result: { summary: { message: "12 passed" } } } }),
+            readWorkItem({ id: siblingId, projectId: firstProjectId, title: siblingTitle, key: "ONE-10", status: "backlog" }),
+          ] : [],
+        }],
+        health: { status: "unknown" },
+      })));
+    });
+    renderWorkspace(`/portal/projects/${firstProjectId}`, fetcher);
+    const list = await screen.findByRole("list", { name: "Work items" });
+    const reportedRow = within(list).getByRole("link", { name: subjectTitle });
+    expect(within(reportedRow).getByText("Acceptance not recorded")).toBeVisible();
+    expect(within(reportedRow).getByText('Reported: {"message":"12 passed"}')).toBeVisible();
+    const tasklessRow = within(list).getByRole("link", { name: siblingTitle });
+    expect(within(tasklessRow).getByText("No reported result")).toBeVisible();
+
+    // The detail's outcome summary is the same open JSON: a structured value is
+    // rendered as its JSON text, never as the "no reported output" absence.
+    await user.click(reportedRow);
+    const detail = await screen.findByRole("dialog", { name: subjectTitle });
+    expect(within(detail).getByText('{"message":"legacy structured summary"}')).toBeVisible();
+    expect(within(detail).queryByText("No reported execution output")).not.toBeInTheDocument();
+  });
+});
+
+describe("execution history boundaries", () => {
+  const timelineItemId = "66666666-6666-4666-8666-666666666666";
+  const olderEntry = {
+    source: "transition",
+    run_id: timelineItemId,
+    generation: 1,
+    recorded_at: "2026-03-01T09:00:00Z",
+    data: { transition_id: timelineItemId, state: "failed", payload: { reason: "older entry" } },
+  };
+
+  /**
+   * Counts detail reads and answers the timeline boundary the current cursor
+   * names: the first served boundary is refused as aged out, and the refreshed
+   * detail serves the next one.
+   */
+  function historyFetcher(reads: { details: number; timelineBefore: string[] }) {
+    return vi.fn<typeof fetch>().mockImplementation((input) => {
+      const requestPath = input instanceof Request ? input.url : String(input);
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.includes("/portal/api/work-items/")) {
+        const url = new URL(requestPath, "http://localhost");
+        if (url.pathname.endsWith("/timeline")) {
+          const before = url.searchParams.get("before");
+          reads.timelineBefore.push(before ?? "");
+          return Promise.resolve(before === "cursor-1"
+            ? new Response("{}", { status: 400 })
+            : new Response(JSON.stringify({ items: [olderEntry], next_before: null })));
+        }
+        reads.details += 1;
+        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
+          id: subjectId,
+          projectId: firstProjectId,
+          title: subjectTitle,
+          nextBefore: reads.details === 1 ? "cursor-1" : "cursor-2",
+        }))));
+      }
+      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
+      return Promise.resolve(new Response(JSON.stringify({
+        selected_project_id: null,
+        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
+        health: { status: "unknown" },
+      })));
+    });
+  }
+
+  it("re-reads the served boundary when the timeline cursor has aged out", async () => {
+    const user = userEvent.setup();
+    const reads = { details: 0, timelineBefore: [] as string[] };
+    renderWorkspace(`/portal/work/${subjectId}`, historyFetcher(reads));
+    await screen.findByRole("heading", { level: 1, name: subjectTitle });
+
+    await user.click(screen.getByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("Earlier history could not be loaded.")).toBeVisible();
+    expect(reads.timelineBefore).toEqual(["cursor-1"]);
+
+    await user.click(screen.getByRole("button", { name: "Retry history" }));
+    await waitFor(() => expect(reads.details).toBeGreaterThan(1));
+    await user.click(await screen.findByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("older entry")).toBeVisible();
+    expect(reads.timelineBefore).toEqual(["cursor-1", "cursor-2"]);
+  });
+
+  it("loads older history behind the refreshed detail boundary instead of the stale one", async () => {
+    const user = userEvent.setup();
+    const reads = { details: 0, timelineBefore: [] as string[] };
+    const { application } = renderWorkspace(`/portal/work/${subjectId}`, historyFetcher(reads));
+    await screen.findByRole("heading", { level: 1, name: subjectTitle });
+
+    await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["work-item", { workItemId: subjectId }], exact: true }); });
+    expect(reads.details).toBe(2);
+
+    await user.click(screen.getByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("older entry")).toBeVisible();
+    expect(reads.timelineBefore).toEqual(["cursor-2"]);
+  });
+
+  it("does not paginate a loaded older page against a superseded detail boundary", async () => {
+    const user = userEvent.setup();
+    const reads = { details: 0, timelineBefore: [] as string[] };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const requestPath = input instanceof Request ? input.url : String(input);
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.includes("/portal/api/work-items/")) {
+        const url = new URL(requestPath, "http://localhost");
+        if (url.pathname.endsWith("/timeline")) {
+          const before = url.searchParams.get("before");
+          reads.timelineBefore.push(before ?? "");
+          // The first boundary has a second page; the refreshed boundary is the
+          // only valid continuation once the detail re-renders.
+          if (before === "cursor-1") return Promise.resolve(new Response(JSON.stringify({ items: [olderEntry], next_before: "cursor-1b" })));
+          return Promise.resolve(new Response(JSON.stringify({ items: [{ ...olderEntry, data: { ...olderEntry.data, payload: { reason: "refreshed entry" } } }], next_before: null })));
+        }
+        reads.details += 1;
+        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
+          id: subjectId,
+          projectId: firstProjectId,
+          title: subjectTitle,
+          nextBefore: reads.details === 1 ? "cursor-1" : "cursor-2",
+        }))));
+      }
+      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
+      return Promise.resolve(new Response(JSON.stringify({
+        selected_project_id: null,
+        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
+        health: { status: "unknown" },
+      })));
+    });
+    const { application } = renderWorkspace(`/portal/work/${subjectId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: subjectTitle });
+
+    await user.click(screen.getByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("older entry")).toBeVisible();
+
+    await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["work-item", { workItemId: subjectId }], exact: true }); });
+    // The refreshed boundary re-identifies the history query, so the page that
+    // was loaded against the superseded cursor is not paginated further.
+    await user.click(await screen.findByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("refreshed entry")).toBeVisible();
+    expect(reads.timelineBefore).toEqual(["cursor-1", "cursor-2"]);
   });
 });

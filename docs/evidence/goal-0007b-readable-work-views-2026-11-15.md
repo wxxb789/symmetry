@@ -5,21 +5,43 @@ resolved the descriptive-contract conflict and reported the goal blocked on two
 verified predicates; round 2 applied exactly those two authorized changes (an
 additive authenticated HTML route for the work-detail deep link, and an anchored
 extension of the login `return_to` allowlist). No protocol, wire, shape,
-pagination, permission or session-lifetime semantics changed, and every path the
-allowlist rejected before is still rejected. Non-browser gates, the focused
-release-shell browser gate, the broad browser suite and the fresh-session deep
-links were re-run on the rebuilt release. Owner visual acceptance is **awaiting
-the owner's verdict**; the model does not supply that verdict.
+pagination, permission or session-lifetime semantics changed, and no rejection
+outside the authorized work-search surface was relaxed: the `/portal/work/:id`
+document route and the work surface's own search encoding are accepted by design
+(round 2), and every other previously rejected path, parameter and value still
+maps to `/portal`. Non-browser gates, the focused release-shell browser gate, the
+broad browser suite and the fresh-session deep links were re-run on the rebuilt
+release. Owner visual acceptance is **awaiting the owner's verdict**; the model
+does not supply that verdict.
 
-Base and unchanged commit: `343dea6a62484d73e7b577a0be2683ca233510f6`.
-The implementation and verification are on the uncommitted working tree; no
-commit, push, or history rewrite was performed.
+Round 3 (review repair pass, 2026-11-16) fixes the DeepSeek review findings on
+this branch: the three Spec MUST_FIX items, the ten Standards MUST_FIX items and
+the listed real defects. It changes no wire contract, no permission and no
+pagination semantics; the only allowlist widening accepts the tab escape
+(`%09`) the shell itself writes into filter URLs. The repair pass only edits the
+working tree: no commit, push, or history rewrite was performed.
+
+Revision bindings: the feature is shipped as
+`03646d14428e40f1794e164cf65887661dd81ae6` on base
+`4e60b9d4b7f113cfe0162fa8003a26a01e90e4c9`. Round 1/2 evidence was produced on
+the pre-rebase working tree committed as `dae2388` (base
+`343dea6a62484d73e7b577a0be2683ca233510f6`); its subject digest reproduces
+exactly on `dae2388` and not on the shipped revision, because the rebase
+replaced `.github/workflows/ci.yml`, the only digest-scope path that changed
+(`git diff --name-only dae2388..03646d1` lists four files; three are outside
+the digest set). Digest bindings: shipped feature revision
+`sha256:391930d0f0f098e023254ca0a8899b4884dfe410809f913e5bbbe168ddcb2f60`
+(390 entries) and round-2 tree
+`sha256:aa344b7ddd3f6f5682b0a7963cd294a7d918b44200796fd8d2174af1615c9527`
+(390 entries), both recomputed from `git archive` copies on this host; the
+round-3 repair tree digest is recorded under "Measurement and evidence subject"
+below.
 
 ## Findings and authorized boundary
 
 | ID | File / surface | Change or disposition | Evidence |
 | --- | --- | --- | --- |
-| F1 | `.tmp/0007b-findings.md`; `contracts/v1/`, `contracts/ts/`, `frontend/src/` | Valid. Added descriptive work-detail and timeline schemas, generated DTOs and Effect boundaries, and consumed those boundaries in list/board/detail/history. No handwritten parallel wire DTOs. Implemented project filters, saved views, truthful cost/CI/acceptance labels, desktop drawer/narrow page, and cursor-on-demand history. This was the round-1 blocker; round 2 re-runs its surfaces on the current revision. | Contract, frontend, Go, and Elixir results in this receipt; browser evidence is separate from schema proof. |
+| F1 | `.tmp/0007b-findings.md`; `contracts/v1/`, `contracts/ts/`, `frontend/src/` | Valid. Added descriptive work-detail and timeline schemas, generated DTOs and Effect boundaries, and consumed those boundaries in list/board/detail/history. The presentation readers derive their input shapes from the generated DTOs (`Loosen<>` views over the served projections; open-JSON members stay `unknown`), so no hand-written parallel wire DTO copies remain. Implemented project filters, saved views, truthful cost/CI/acceptance labels, desktop drawer/narrow page, and cursor-on-demand history. This was the round-1 blocker; round 2 re-runs its surfaces on the current revision, and round 3's review repairs are listed below. | Contract, frontend, Go, and Elixir results in this receipt; browser evidence is separate from schema proof. |
 | F2 | Authorized resolution in `.tmp/0007b-findings.md` | Applied as a scope rule, not dismissed as an invalid finding. Regenerated `contracts/generated/**` and `daemon/internal/contracts/{generated.go,schema_bundle.json}`; added matching fixtures and passive read-schema dispatch. `control/lib/**` stayed untouched by round 1; round 2 then made only the two changes authorized below. | Generation/drift gate and cross-language fixture decoders; all production read responses keep their original wire contract. |
 
 ### Round 2 authorized blockers, fixed
@@ -40,27 +62,54 @@ writes returned each filtered URL unchanged
 `/portal/work/w-1?view=list&q=%22x%22&projectId=p-1`, `/portal/work/w-1?blocked=1`)
 and still rejected `blocked=%220%22`, an unknown parameter and `q=%0d%0aX`.
 
+### Round 3 review findings (DeepSeek review of `4e60b9d..03646d1`)
+
+Every finding is either fixed with a reproducing check or explicitly recorded
+below; nothing was silently dropped.
+
+| ID | Surface | Change or disposition | Evidence |
+| --- | --- | --- | --- |
+| SPEC-A04 / STD-A02 | `frontend/src/features/work/presentation.ts`, `detail.tsx`, `work-surface.tsx` | Open-JSON reported output is no longer judged as absent: `reportedText/1` renders non-empty structured `outcome.summary` / `result.summary` / evidence values as JSON text, `evidenceRows` accepts a single served value, and both list rows and the detail render them. | Unit + router tests red before (characterised summary rendered as null / `No reported result`) and green after; exit codes in the round-3 gate table. |
+| SPEC-A04 / STD-A03 | `presentation.ts` (`ciLabel`), `work-surface.tsx` (`ciResourcesOf` threading) | `CI passed` green is now granted only to a provider source, a strict absolute `recorded_at` inside the 24 h window, and a bound CI resource the same snapshot reports as synced and not failed/offline/degraded; agent/manual sources render `CI passed · unverified source`, loose timestamps `freshness unknown`, stale/failed bound resources `CI passed · bound resource <signal>` with the stale tone, and missing bindings `binding not confirmed`. | Presentation unit tests red before (agent source and stale bound resource both rendered green) and green after; the browser list case's real stale-CI fixture row fails on both widths against the pre-fix release (in a `3 failed / 32 passed / 1 skipped` run) and passes after the rebuild. |
+| SPEC-A04 / STD-A09 | `browser/tests/portal-work-views.spec.mjs`, `frontend/src/app/router.test.tsx` | Row-level truth labels are now asserted: real rows must carry `Acceptance not recorded` and `No reported result`, and the unit row/detail test asserts `Reported: {"message":"12 passed"}` for a structured result summary and the detail's JSON `outcome.summary`, with no `No reported execution output` fallback. | Unit test red before (row showed `No reported result`), green after; browser assertions bound to the served rows. |
+| SPEC-A05 / STD-A06 | this receipt | The Compose/restart CI-coverage claim is rewritten truthfully (see the limits bullet below). | `ci.yml`: the `compose` job runs Compose smoke checks only and never installs Playwright or sets `SYMMETRY_COMPOSE*`; the only CI Playwright execution runs `workspace-shell` + `portal-work-views`. |
+| SPEC-A05 / STD-A07 | `browser/tests/portal-compose-restart.spec.mjs` | The post-restart rendered-read block now targets the retried workflow, whose generation-2 `summary` event is already proved in the same spec, instead of the waiting workflow whose fake agent serves no summary. | Code chain: fake-agent `runWaitForInput` emits no `summary`; the retried timeline assertion already requires the gen-2 `summary` kind. The Compose suite itself remains unexecuted (limits below). |
+| SPEC-A05 / STD-A10 | `browser/tests/portal-work-views.spec.mjs` keyboard case | The classic drawer Tab/Shift+Tab focus constraint is migrated to the new Radix drawer (desktop only): opening moves focus inside the dialog, Shift+Tab reaches the Close control, a second Shift+Tab stays inside, and Tab wraps back to Close. | Measured against the release with a throwaway probe (open focus H1 in dialog → Shift+Tab Close → Shift+Tab Refresh → Tab Close); the case passes before and after the frontend fix. |
+| SPEC-A07 / STD-A08 | this receipt | Every digest is rebound and each binding names its revision (see the revision paragraph and the evidence-subject section). | `git archive` copies digested on this host: `03646d1` → `391930d0…` (390 entries); `dae2388` → `aa344b7d…` (390 entries, the round-2 number). |
+| STD-A01 | `frontend/src/app/application.ts`, `router.test.tsx` | The served `before` boundary is part of the timeline query key, so a refreshed detail re-keys the disabled query instead of reusing pages from the old boundary. | Router test red before the key change: after a loaded older page (`cursor-1` → `cursor-1b`) and a detail refresh serving `cursor-2`, the old key paginated `cursor-1b` (`expected ['cursor-1','cursor-1b'] to deeply equal ['cursor-1','cursor-2']`); green after. |
+| STD-A05 | `contracts/fixtures/invalid/{work-timeline-read.unknown-source,work-detail-read.unknown-timeline-source}.json` | Both fixtures now carry a complete valid event-branch `data`, so the only failing constraint is the unknown `source` discriminator. | Ajv probe: the corrected fixtures fail only at the source const; setting `source: "event"` or widening the source const makes them valid. Node/Go/Elixir fixture gates green. |
+| STD-A11 | `control/lib/symmetry_control_web/portal_session.ex` | The `q`/`state`/`owner` text-param pattern accepts exactly `%09` (the one C0 escape the shell's URLSearchParams writes for filter text) and keeps rejecting every other `%0x`/`%1x` escape and injection case. | `portal_session_test.exs`: `q=a%09b` accepted on project and work routes; focus suite red 7/8 before (field degraded to `/portal`), green `20 passed` after; new `%0a`/`%1f`/`%00` rejections stay rejected. |
+| STD-A12 | `control/test/symmetry_control_web/portal_session_test.exs` | Accepted coverage now exercises the shell's real encodings (`owner=agent%3Acodex`, `q=%22123%22`, tab and combined work-route filter), so the escape branches cannot be deleted silently. | Focused suites `20 passed`; the added cases fail against the pre-fix regex and pass after. |
+| STD-A13 | `control/test/symmetry_control/goals/contract_fixture_manifest_test.exs` | Recorded as a limitation, not silently accepted: the read-schema fixtures are validated through the generated bundle with a test-local ECMA-262→PCRE2 `\u0000` adaptation, mirroring `ContractValidation`'s private production copy. | Comparison shows zero semantic difference today; the private copies can drift if a daemon-only rule changes. |
+| STD-A14 | `contracts/v1/work-timeline-read.schema.json`, `work-detail-read.schema.json` | Recorded as an explicit false-acceptance limitation: descriptive read schemas accept a half-open command identity pair and null `recorded_at`/`occurred_at` values the server does not serve; the database check constraint and `Protocol` remain the enforcement point. | Valid fixture `work-detail-read.active.json` serves `occurred_at: null`, so tightening the schema would reject a served shape; no schema change was made. |
+| STD-A15 | `contracts/README.md` | The quicktype Go flattening of the timeline `oneOf` is now a documented known limitation. | One-sentence note in the Go Boundary API section; verified against `generated.go`. |
+| STD-A16 | `frontend/src/features/work/history.tsx`, `router.test.tsx` | A 400 (aged-out cursor) on the older-history page now recovers: Retry resets the timeline query and re-reads the detail so the disabled query restarts from the newly served boundary; other errors keep the in-place refetch the live suite asserts. | Router test: Retry triggers a new detail read and the next older-page request uses `cursor-2` (red before: `cursor-1` loop). |
+| STD-A17 | `frontend/src/features/work/presentation.ts` | The hand-written parallel interfaces are replaced by derived `Loosen<>` views over the generated DTOs (open-JSON members stay `unknown`); the receipt claim is now true as written. | `tsc --noEmit` green; renamed/removed generated members would fail the derivation at typecheck. |
+| STD-A18 | `frontend/src/services/api.fixtures.ts`, `router.test.tsx` | Unit fixtures now accept served `execution`/`delivery`/`outcomeSummary` overrides, making structured reported output, the detail summary and delivery projection reachable in unit tests. | New router tests use them; the remaining waiting/narrow-unit gaps are recorded as limits (browser suites cover them). |
+| STD-A19 | `browser/tests/portal-work-views.spec.mjs` | Board capture fields are assertion-backed (exact column list, card count equal to the served work-item count), the ready-column horizontal walk is unconditional, and the owner filter is driven end to end (URL, filtered rows, reload). | Assertions use the same served values the capture records; the previously conditional arrow branch is now always executed. |
+
 ## Maintained measurements
 
 This receipt is the single source for the run's current measured counts. Older
 `test-ablation-*` receipts describe their own historical revisions and are not
 live consumers of this run.
 
-| Measurement | Baseline | Round 1 | Round 2 (current revision) | Measurement method |
-| --- | ---: | ---: | ---: | --- |
-| Frontend unit tests | 33 passed | 62 passed | 62 passed (unchanged) | Baseline archive Vitest run; final `pnpm --filter @symmetry/frontend test`. |
-| Contract runtime tests | 31 passed | 32 passed | 32 passed (unchanged) | Baseline archive and final `node --test contracts/scripts/*.test.mjs`. |
-| Draft 7 root schemas | 15 | 17 | 17 (unchanged) | Contract generator/checker; common definitions are not a root. |
-| Manifest fixtures | 190 | 213 | 213 (unchanged) | Final schema/Effect gates exercise every manifest entry. |
-| Browser declarations / spec files | 41 / 8 | 47 / 9 | 47 / 9 (unchanged) | Baseline and final Playwright discovery. |
-| Expanded desktop + mobile browser cases | 82 | 94 | 94 (unchanged) | Executed `playwright test --list` in round 1; the round-2 broad run executed all 94 (79 passed + 15 skipped). |
-| Largest project snapshot in the completed measurement run | Not measured | 56,632 bytes / 15 work items | 74,388 bytes / 15 work items | `snapshotMetrics` in the final list/board cases; exact response bytes, not a string-length estimate. Round 2's larger value is the same unchanged endpoint in the shared development database after more fixtures accumulated. |
+| Measurement | Baseline | Round 1 | Round 2 | Round 3 (current review-repair tree) | Measurement method |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Frontend unit tests | 33 passed | 62 passed | 62 passed | 70 passed | Baseline archive Vitest run; final `pnpm --filter @symmetry/frontend test` (round 3 ran the package's pinned `vitest run` directly in the verified workspace: 7 files). |
+| Contract runtime tests | 31 passed | 32 passed | 32 passed | 32 passed (unchanged) | Baseline archive and final `node --test contracts/scripts/*.test.mjs`. |
+| Draft 7 root schemas | 15 | 17 | 17 | 17 (unchanged) | Contract generator/checker; common definitions are not a root. |
+| Manifest fixtures | 190 | 213 | 213 | 213 (unchanged; two invalid fixtures corrected) | Final schema/Effect gates exercise every manifest entry. |
+| Browser declarations / spec files | 41 / 8 | 47 / 9 | 47 / 9 | 47 / 9 (unchanged) | Baseline and final Playwright discovery. |
+| Expanded desktop + mobile browser cases | 82 | 94 | 94 | 94 (unchanged) | Executed `playwright test --list` in round 1; the round-3 broad run executed all 94 (79 passed + 15 skipped). |
+| Largest project snapshot in the completed measurement run | Not measured | 56,632 bytes / 15 work items | 74,388 bytes / 15 work items | 112,562 bytes / 15 work items | `snapshotMetrics` in the final list/board cases; exact response bytes, not a string-length estimate. The value moves with the shared development database as fixtures accumulate, not with this change. |
 
-The Round 2 column is the current, authoritative value for this revision; the
-Baseline and Round 1 columns are retained history, not competing current numbers.
-Round 2 changed only the control-plane route/session layer, so the frontend,
-contract and browser-declaration counts are expected to be identical, and the
-snapshot value moves with the fixture database rather than with this change.
+The Round 3 column is the current, authoritative value for the review-repair
+tree; the Baseline–Round 2 columns are retained history, not competing current
+numbers. Round 3 touches frontend presentation, session-allowlist and test
+surfaces, so the frontend unit count grows by the new assertions and the other
+counts are expected to be identical; the snapshot value moves with the fixture
+database rather than with this change.
 
 The baseline browser suite was **listed, not executed**. No before-run pass
 count is claimed for Go or Elixir.
@@ -357,9 +406,14 @@ run artifacts, not checked-in screenshots or claims that a missing CI job ran.
 - **L** = `.tmp/0007b-list-v5-results`
 - **V** = `.tmp/0007b-browser-v3-results`
 - **H** = `.tmp/0007b-live-v3-results`
-- **R** = `.tmp/0007b-round2-focused-results` (round 2, current revision)
-- **B** = `.tmp/0007b-round2-broad-results` (round 2, current revision)
-- **H2** = `.tmp/0007b-round2-live-results` (round 2 native live runner, current revision)
+- **R** = `.tmp/0007b-round2-focused-results` (round 2 revision)
+- **B** = `.tmp/0007b-round2-broad-results` (round 2 revision)
+- **H2** = `.tmp/0007b-round2-live-results` (round 2 native live runner)
+- **R3** = `.tmp/0007b-round3-focused-results` (round 3 review-repair tree)
+- **B3** = `.tmp/0007b-round3-broad-results` (round 3 review-repair tree)
+- **H3** = `.tmp/0007b-round3-live-results` (round 3 native live runner)
+- **X** = `.tmp/0007b-round3-before-results` (pre-fix release with the new
+  assertions: 3 failed / 32 passed / 1 skipped)
 - **D** / **N** = `desktop-chromium` / `mobile-chromium` in the exact directory
   suffixes below; N is the narrow-screen project, not a second desktop context.
 
@@ -367,7 +421,9 @@ The L/V/H rows record the round-1 observations; round 2 re-produced the same
 captures on the current revision under R (focused gate), B (broad suite) and H2
 (native live runner, which is the only executor of the real-cursor history
 case). The two fresh-session rows below were failures in V and are re-pointed to
-R, where they pass; the two history rows are re-pointed to H2.
+R, where they pass; the two history rows are re-pointed to H2. Round 3
+re-produced the focused, broad and live captures on the review-repair tree under
+R3/B3/H3 (all green), with the pre-fix red run under X.
 
 | Required item | Desktop and narrow evidence | Observed result / limit |
 | --- | --- | --- |
@@ -383,7 +439,7 @@ R, where they pass; the two history rows are re-pointed to H2.
 | Project switch, detail switch, refresh, late responses | `V/portal-work-views-Readable-af807-oject-s-data-or-newer-state-desktop-chromium/late-response-guard.json` and `.png` | Desktop passed with both held real workspace and detail responses recorded as delivered; after release and the newer real refresh, no held project/work/detail data replaced current state. Narrow concurrency is not claimed. |
 | Foreign claimed project in work URL | `V/portal-work-views-Readable-5094f--never-renders-foreign-work-{D,N}/work-url-canonicalization.json` and `.png` | Both passed; the actual served project owns the picker/background/navigation and foreign filters/data are cleared. |
 | Older-history failure and Retry | Real-history JSON under H2 above (`faultAttemptOutcomes`, `retryCursorBoundTo`, `obsoleteFailureOutcomes`) | Both widths passed in round 2. An obsolete delivered 503 does not affect the newly selected work; a current failed older-page load renders the error and Retry, then requests the cursor from that navigation's consumed detail response and exhausts the real older page. Signed cursors from separate GETs are not compared. |
-| Truth rules | List/board/detail captures above and `frontend/src/features/work/presentation.test.ts` | Unknown cost is not `$0`; missing acceptance is not accepted evidence; real manual passed-CI fixtures have unknown freshness and no green tone. Provider timestamp-stale handling has unit proof only, not a real-provider browser capture. |
+| Truth rules | List/board/detail captures above and `frontend/src/features/work/presentation.test.ts` | Unknown cost is not `$0`; missing acceptance is not accepted evidence; real manual passed-CI fixtures have unknown freshness and no green tone; the real stale-CI fixture row bound through `ci_resource_id` renders the stale `CI passed · bound resource stale` label. Provider timestamp-stale handling has unit proof only, not a real-provider browser capture. |
 | Unsafe read content | `V/portal-work-views-Readable-7f7fe-er-as-markup-or-unsafe-URLs-{D,N}/malicious-response-injection.json` and `.png` | Both passed with schema-valid, positively rendered malicious strings and consumed unsafe URLs. Explicitly synthetic fault-injection/security evidence, **not** real-data surface proof. |
 | Classic parity and retirement | Migration map below; broad-run report and the final scoped runs | Executed retained classic cases pass; replaced read assertions moved to new routes, not dropped. Compose/restart additions remain unexecuted. |
 
@@ -432,20 +488,31 @@ created project 56,632 bytes. Round 2 re-ran the same list case in both the
 focused and broad suites and re-read the same fields from those four files
 (desktop 56,913 / 66,861 bytes, narrow 62,168 / 74,388 bytes). Each selected
 project had 15 work items, and the maintained maximum for this revision is in
-the measurements table above.
+the measurements table above. Round 3 re-ran the same list case in both suites
+and re-read the same fields from the four round-3 `work-list.json` files
+(focused 95,087 / 100,342 bytes; broad 105,035 / 112,562 bytes), again all
+15 work items; the maintained maximum is the round-3 value in the table above.
 This is the largest observed **project-scoped fixture snapshot in this run**,
 not a scalability benchmark or a maximum supported size. Snapshot size also
 includes the directory metadata served by the unchanged workspace endpoint.
 Server-side work-item pagination remains absent; no list endpoint or pagination
 shape was invented. History uses only the existing opaque cursor API.
 
-Final uncommitted evidence subject (current revision), superseding round 1's
-`sha256:3ddb5e44551f2d498628e8456d87a40684d6a90f0b85b215a22148b5cdb008a6`:
-`sha256:aa344b7ddd3f6f5682b0a7963cd294a7d918b44200796fd8d2174af1615c9527`
-(390 file entries; `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1`
-exited 0). This is a source-manifest digest, not a commit hash and not a claim
-that the original frozen-install gate passed. The receipt and local output
-artifacts are excluded to avoid self-reference.
+Evidence-subject digests, each bound to the revision it was produced on (see
+the revision paragraph at the top): round-1 pre-rebase tree
+`sha256:3ddb5e44551f2d498628e8456d87a40684d6a90f0b85b215a22148b5cdb008a6`;
+round-2 pre-rebase tree `dae2388`
+`sha256:aa344b7ddd3f6f5682b0a7963cd294a7d918b44200796fd8d2174af1615c9527`;
+shipped feature revision `03646d1`
+`sha256:391930d0f0f098e023254ca0a8899b4884dfe410809f913e5bbbe168ddcb2f60`;
+round-3 review-repair working tree
+`sha256:193ddbb2e257230b2e61e30d9d3a0431d0dfcd6329ef725e6a242b6bc5796817`
+(current). Each ran `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` (exit
+0; 390 file entries for the round-2, shipped and round-3 trees) in an extracted
+`git archive` copy of the named revision, or in the working tree for the repair
+pass. This is a source-manifest digest, not a commit hash and not a claim that
+the original frozen-install gate passed. The receipt and local output artifacts
+are excluded to avoid self-reference.
 
 Reproduction algorithm: recursively enumerate files under the following roots;
 add the direct files in `frontend/`, `browser/`, and `contracts/`; add the
@@ -486,6 +553,51 @@ Elixir test files, plus one documentation paragraph in `browser/README.md`;
 the browser, contract and frontend artifacts above are the same bytes as round
 1's, and the round-2 runs re-executed them against the rebuilt release.
 
+### Round 3 gate re-runs (review repair tree)
+
+Node gates ran against the verified workspace copy `.tmp/0007b-tooling` (the
+isolated dependency graph; package versions identical to the repository
+manifests). The frontend release build was additionally re-run in the
+`symmetry-0007b-node` container at `/isolated` because the workspace copy nested
+inside the repository changes Tailwind's automatic source detection (git-root
+scope) and would otherwise emit a different stylesheet; the container build
+reproduces the round-2 asset pipeline (`index-D7KuRjr5.css` byte-identical to
+round 2). Elixir ran in `symmetry-0007b-control`; Go on the host. The release
+was rebuilt with `mix release --overwrite` and both instances restarted with
+`.tmp/0007b-restart-release.sh` (the script's own readiness loop reports
+`wget: not found` inside this container; readiness was verified from the host
+with `curl` `4000=200` / `4001=200`).
+
+| Exact command / working directory | Exit | Observed result |
+| --- | ---: | --- |
+| `./node_modules/.bin/vitest run` in `.tmp/0007b-tooling/frontend` | 0 | 7 files, **70 passed** (was 62; the review repairs add the A02/A03/A16/A01/A09 assertions). |
+| `./node_modules/.bin/tsc --noEmit` | 0 | Clean on the derived `Loosen<>` presentation types and tests. |
+| `./node_modules/.bin/eslint . --max-warnings 0` | 0 | Clean. |
+| `./node_modules/.bin/vite build && node scripts/stage-assets.mjs` in the container `/isolated/frontend` | 0 | `index-uvBWRZjr.js` 658,114 B / gzip 197,130 B; `index-D7KuRjr5.css` 20,927 B / gzip 5,279 B (byte-identical to round 2's CSS); `index.html` 525 B. sha256 `b2d67ac6…` (js) / `c9805a9b…` (css); the release bundle serves exactly these bytes. |
+| `./node_modules/.bin/tsc --project contracts/tsconfig.json` + `node --test contracts/scripts/*.test.mjs` + `node contracts/scripts/check.mjs` + `node contracts/scripts/check-effect.mjs` in `.tmp/0007b-tooling` | 0 | Typecheck clean; **32 runtime tests**; 17 Draft 7 schemas; 213 fixtures; `Generated contract DTOs are up to date.`; Effect decoded all 213 raw fixtures (209 parsed reached Schema validation). |
+| `go vet ./...` in `daemon/` | 0 | Passed. |
+| `go test -count=1 ./internal/contracts ./internal/protocol` in `daemon/` | 0 | Both packages `ok` (3.0 s / 5.4 s) on the corrected fixtures. |
+| `mix format --check-formatted && mix compile --warnings-as-errors && mix test test/symmetry_control_web/portal_session_test.exs test/symmetry_control_web/controllers/portal_controller_test.exs` in the container `/app/control` | 0 | Formatter/compile clean; **20 passed**. |
+| `mix test test/symmetry_control/goals/contract_fixture_manifest_test.exs` | 0 | **1 passed** (all 213 manifest fixtures). |
+| Focused browser run against the pre-fix release with the new assertions (`.tmp/0007b-round3-before-results`, exit 1) | 1 | **3 failed, 32 passed, 1 skipped** — the stale-CI bound-resource label on both widths, plus the first focus-order assertion variant that the measured drawer behavior replaced (the drawer does not focus Close on open; the migrated assertion now follows the measured order). |
+| Focused release-shell run on the rebuilt release (`.tmp/0007b-round3-focused-results`) | 0 | **36 cases: 35 passed, 1 skipped, 0 failed**. |
+| Broad browser run on the rebuilt release (`.tmp/0007b-round3-broad-results`) | 0 | **94 cases: 79 passed, 15 skipped, 0 failed** — the same skips as round 2. `.last-run.json` is `{"status":"passed","failedTests":[]}`. |
+| `pwsh -NoProfile -File .tmp/0007b-tooling/browser/scripts/run-live-daemon-tests.ps1` (`.tmp/0007b-round3-live-results`) | 0 | **3 passed, 1 intentionally skipped**. Real-cursor history counts unchanged from round 2 (`firstPageEntries` 100 → `firstEntriesAfterOlderPage` 121; `currentEntriesAfterRetry` 121; three delivered faults; `retryCursorBoundTo` is the cursor of the consumed detail response). |
+| `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` | 0 | Round-3 review-repair tree: `sha256:193ddbb2e257230b2e61e30d9d3a0431d0dfcd6329ef725e6a242b6bc5796817` (390 entries). |
+
+Red-before-green proofs, per repaired surface: frontend `presentation.test.ts`
++ `router.test.tsx` ran red at HEAD (`2 files failed, 7 failed / 31 passed`)
+with the new assertions before the fixes and green (`39 passed`, including the
+added boundary test) after, and the
+superseded-boundary test was separately re-proved red against the old query key
+(`['cursor-1','cursor-1b']` vs the expected `['cursor-1','cursor-2']`); the
+Elixir session focus suite ran red `7/8 passed` against the unchanged allowlist
+and green `20 passed` after; the browser focused suite ran red `3 failed` on the
+pre-fix release and green after the rebuild; the fixture probe showed the old
+failure reasons at `data` (not the enum) and the fixed fixtures failing only at
+the `source` const. The Compose/restart suite and the native
+credentialed-provider matrix remain unexecuted (limits below).
+
 ## Review disposition and remaining limitations
 
 - Independent read-only state, schema, and acceptance reviews found real
@@ -512,12 +624,24 @@ the browser, contract and frontend artifacts above are the same bytes as round
   walk, the truth labels, the retained classic coverage with its migration map,
   and the real-cursor history counts.
 - Still-unavailable evidence, recorded as limits rather than waived: the
-  original frozen dependency installation, the Compose/restart browser specs
-  (skipped locally, exercised by the CI `compose` job), the provider
-  stale-timestamp visual branch (unit proof only), native credentialed-provider
-  qualification, and the complete CI/merge matrix for the eventual PR. Nothing
-  above satisfies or waives those, and none was made to pass by weakening an
-  assertion, a permission, a pagination rule or a wire contract.
+  original frozen dependency installation; the Compose/restart browser specs
+  (skipped locally, and **no CI job executes them** — the CI `compose` job runs
+  Compose smoke checks and never installs Playwright or sets
+  `SYMMETRY_COMPOSE*`; only the manual
+  `browser/scripts/run-compose-daemon-tests.ps1` runner executes them); the
+  provider stale-timestamp visual branch (unit proof only); native
+  credentialed-provider qualification; and the complete CI/merge matrix for the
+  eventual PR. Nothing above satisfies or waives those, and none was made to
+  pass by weakening an assertion, a permission, a pagination rule or a wire
+  contract.
+- Round 3 records these additional explicit limits: the Elixir read-fixture
+  validator keeps a test-local PCRE2 escape adaptation mirroring the production
+  private copy (STD-A13); the descriptive read schemas keep their documented
+  false-acceptance points (half-open command identity pair, null recorded
+  timestamps) with the database check constraint and `Protocol` as the
+  enforcement point (STD-A14); unit tests still cannot reach the waiting-state
+  and narrow-width branches, which only the browser suites cover (STD-A18); and
+  the provider timestamp-stale branch remains unit-only.
 - Owner visual acceptance remains the owner's own verdict and is not supplied
   here; the run reports the result as produced and awaiting that verdict. No
   model-issued `achieve` is recorded, and the working tree is uncommitted by

@@ -3,7 +3,7 @@ import { AlertCircle } from "lucide-react";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Project, WorkItem } from "../../services/api";
 import { EmptyState, StatusBadge, statusLabel } from "../../components/workspace";
-import { acceptanceLabel, ciLabel, costHint, costLabel, noBlocker, noReportedResult, ownerKeyLabel, ownerLabel, priorityLabel, reportedResult } from "../work/presentation";
+import { acceptanceLabel, ciLabel, ciResourcesOf, costHint, costLabel, noBlocker, noReportedResult, ownerKeyLabel, ownerLabel, priorityLabel, reportedResult, type CiResourceLike } from "../work/presentation";
 import {
   boardColumns,
   filterWorkItems,
@@ -38,6 +38,9 @@ export interface ViewLinkOptions {
 export function ProjectWorkSurface({ project, navigation }: { project: Project; navigation: WorkSurfaceNavigation }) {
   const { search, setSearch } = navigation;
   const items = project.work_items;
+  // Both views chip CI against the project's served resources, so an item's
+  // bound resource is read from one snapshot rather than re-derived per row.
+  const ciResources = ciResourcesOf(project);
   const filtered = filterWorkItems(items, filtersOf(search));
   const summary = summarizeWork(items);
   const rowSearch: WorkItemSearch = { ...search, projectId: project.id };
@@ -53,8 +56,8 @@ export function ProjectWorkSurface({ project, navigation }: { project: Project; 
           </span>
         </EmptyState>
       : (search.view ?? "list") === "board"
-        ? <WorkBoard items={filtered} search={rowSearch} />
-        : <WorkRows items={filtered} search={rowSearch} />}
+        ? <WorkBoard items={filtered} search={rowSearch} resources={ciResources} />
+        : <WorkRows items={filtered} search={rowSearch} resources={ciResources} />}
   </>;
 }
 
@@ -115,7 +118,7 @@ function WorkToolbar({ project, navigation }: { project: Project; navigation: Wo
   </section>;
 }
 
-function WorkRows({ items, search }: { items: readonly WorkItem[]; search: WorkItemSearch }) {
+function WorkRows({ items, search, resources }: { items: readonly WorkItem[]; search: WorkItemSearch; resources: ReadonlyMap<string, CiResourceLike> }) {
   return <ul className="work-list" aria-label="Work items">
     {items.map((item) => <li key={item.id} className="work-row">
       <Link className="work-row-link" to="/work/$workItemId" params={{ workItemId: item.id }} search={search} aria-label={item.title}>
@@ -124,13 +127,13 @@ function WorkRows({ items, search }: { items: readonly WorkItem[]; search: WorkI
         <WorkRowResult item={item} />
         <WorkRowBlocker item={item} />
         <span className="chip chip-unknown" title={costHint}>{costLabel}</span>
-        <CiChip item={item} />
+        <CiChip item={item} resources={resources} />
       </Link>
     </li>)}
   </ul>;
 }
 
-function WorkBoard({ items, search }: { items: readonly WorkItem[]; search: WorkItemSearch }) {
+function WorkBoard({ items, search, resources }: { items: readonly WorkItem[]; search: WorkItemSearch; resources: ReadonlyMap<string, CiResourceLike> }) {
   return <section className="work-board" aria-label="Work board" onKeyDown={moveBoardFocus}>
     {boardColumns(items).map((column) => {
       const headingId = `board-column-${column.state.replaceAll("_", "-")}`;
@@ -144,7 +147,7 @@ function WorkBoard({ items, search }: { items: readonly WorkItem[]; search: Work
               <span className="board-meta">{ownerLabel(item.assignee)}{priorityLabel(item.priority) === null ? "" : ` · ${priorityLabel(item.priority)}`}</span>
               <WorkRowResult item={item} />
               <WorkRowBlocker item={item} />
-              <span className="board-chips"><span className="chip chip-unknown" title={costHint}>{costLabel}</span><CiChip item={item} /></span>
+              <span className="board-chips"><span className="chip chip-unknown" title={costHint}>{costLabel}</span><CiChip item={item} resources={resources} /></span>
             </Link>
           </li>)}
         </ul>
@@ -177,8 +180,9 @@ function WorkRowBlocker({ item }: { item: WorkItem }) {
   return <span className="work-blocker"><AlertCircle size={14} aria-hidden="true" />Blocked: {item.blocker?.trim() || "Blocking reason unknown"}</span>;
 }
 
-function CiChip({ item }: { item: WorkItem }) {
-  const ci = ciLabel(item.delivery);
+function CiChip({ item, resources }: { item: WorkItem; resources: ReadonlyMap<string, CiResourceLike> }) {
+  const resourceId = item.ci_resource_id ?? null;
+  const ci = ciLabel(item.delivery, resourceId === null ? undefined : resources.get(resourceId) ?? null);
   return <span className={`chip chip-${ci.tone}`} title={ci.title}>{ci.text}</span>;
 }
 

@@ -38,6 +38,7 @@ const ui = {
   board: "Board",
   filter: "Filter work items",
   state: "Work state",
+  owner: "Work owner",
   allStates: "All states",
   blockedOnly: "Blocked only",
   savedViews: "Saved views",
@@ -264,9 +265,15 @@ test.describe("Readable work views", () => {
     await expect(blockedRow).toContainText("ready");
     await expect(blockedRow).toContainText("Needs architecture decision");
     await expect(blockedRow).toContainText(ui.costUnknown);
+    // Row-level truth labels: acceptance is never claimed for a row, and a row
+    // without a reported execution result says so instead of staying blank.
+    await expect(blockedRow).toContainText("Acceptance not recorded");
+    await expect(blockedRow).toContainText("No reported result");
     await expect(list.getByRole("link", { name: titles.agent })).toContainText(ui.ciUnknown);
     await expect(list.getByRole("link", { name: titles.manualCi })).toContainText("CI passed · freshness unknown");
-    await expect(list.getByRole("link", { name: titles.staleCi })).toContainText("CI passed · freshness unknown");
+    // Bound-resource staleness is exercised by a real API fixture: this row is
+    // bound through ci_resource_id to a resource whose sync_status is "stale".
+    await expect(list.getByRole("link", { name: titles.staleCi })).toContainText("CI passed · bound resource stale");
     await expect(page.locator("#main-content")).not.toContainText("$0");
 
     await page.getByLabel(ui.filter).fill("Human decision");
@@ -308,6 +315,21 @@ test.describe("Readable work views", () => {
     await expect(list.getByRole("link", { name: titles.agent })).toHaveCount(0);
     await page.getByLabel(ui.blockedOnly).uncheck();
 
+    // Owner filter: pick a real served option, prove the URL carries it, the
+    // rows are filtered by owner, and both survive a reload.
+    await page.getByLabel(ui.owner).selectOption({ label: "Agent · codex" });
+    await expect.poll(() => new URL(page.url()).searchParams.get("owner")).toBe("agent:codex");
+    await expect(list.getByRole("link", { name: titles.agent })).toBeVisible();
+    await expect(list.getByRole("link", { name: titles.review })).toBeVisible();
+    await expect(list.getByRole("link", { name: titles.blocked })).toHaveCount(0);
+    await expect(list.getByRole("link", { name: titles.progress })).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByLabel(ui.owner)).toHaveValue("agent:codex");
+    await expect(list.getByRole("link", { name: titles.agent })).toBeVisible();
+    await expect(list.getByRole("link", { name: titles.review })).toBeVisible();
+    await expect(list.getByRole("link", { name: titles.blocked })).toHaveCount(0);
+    await page.getByLabel(ui.owner).selectOption({ label: "All owners" });
+
     await page.getByLabel(ui.filter).fill("Human decision");
     await page.getByLabel(ui.savedViewName).fill(`Saved ${key}`);
     await page.getByRole("button", { name: ui.saveView }).click();
@@ -330,12 +352,13 @@ test.describe("Readable work views", () => {
         "work-item pagination would be a wire-contract addition and is reported as a limitation, not invented.",
       costAvailability: `Rendered "${ui.costUnknown}"; no $0 anywhere in the surface`,
       absentFilterHonesty: "select keeps future_state with option \"Unknown status: future_state (not in this project)\"",
-      ciLabels: [ui.ciUnknown, "CI passed · freshness unknown"],
+      ciLabels: [ui.ciUnknown, "CI passed · freshness unknown", "CI passed · bound resource stale"],
       ciLimitation:
-        "Exercised fixtures only: the manually configured passed-CI rows carry no recorded_at, so they render " +
-        "\"CI passed · freshness unknown\" with the non-green unknown tone, and the row without CI evidence renders " +
-        "\"CI unknown\". The provider-sourced stale timestamp branch is covered by the presentation unit test and is " +
-        "not exercised by these real API fixtures; provider ingestion is not used.",
+        "Exercised fixtures only: the manually configured passed-CI row carries no recorded_at, so it renders " +
+        "\"CI passed · freshness unknown\" with the non-green unknown tone; the row bound through ci_resource_id to a " +
+        "resource whose sync_status is \"stale\" renders \"CI passed · bound resource stale\" with the stale tone; and " +
+        "the row without CI evidence renders \"CI unknown\". The provider timestamp-stale branch remains covered by " +
+        "the presentation unit test and is not exercised by these real API fixtures; provider ingestion is not used.",
       url: page.url()
     });
 
@@ -347,6 +370,9 @@ test.describe("Readable work views", () => {
     for (const column of ["backlog", "ready", "in progress", "review", "done"]) {
       await expect(board.getByRole("heading", { name: column, exact: true })).toBeVisible();
     }
+    // The captured column list is exactly what the board renders, in order.
+    await expect(board.locator(".board-column h2"))
+      .toHaveText(["backlog", "ready", "in progress", "review", "done"]);
     await expect(board.getByRole("link", { name: titles.blocked })).toBeVisible();
     await expect(board.getByRole("link", { name: fillerTitles[0] })).toBeVisible();
     await page.reload();
@@ -372,10 +398,13 @@ test.describe("Readable work views", () => {
     expect(renderedOrder).toEqual([orderTitles.zulu, orderTitles.mike, orderTitles.alpha]);
     expect(renderedOrder).not.toEqual([orderTitles.zulu, orderTitles.mike, orderTitles.alpha].slice().sort());
     expect(renderedOrder).not.toEqual([orderTitles.zulu, orderTitles.alpha, orderTitles.mike]);
+    // Every served work item renders as exactly one board card: no column is
+    // dropped, no card is duplicated, and nothing is paginated away.
+    await expect(board.getByRole("link")).toHaveCount(metrics.workItemCount);
     await capture(page, testInfo, "work-board", {
       surface: "board",
       columns: ["backlog", "ready", "in progress", "review", "done"],
-      cards: 15,
+      cards: metrics.workItemCount,
       readyColumnOrder: renderedOrder,
       servedReadyOrder: servedReady,
       url: page.url()
@@ -562,6 +591,24 @@ test.describe("Readable work views", () => {
     await keys.press(page, "Enter");
     const detail = detailSurface(page, isMobile, titles.alpha);
     await expect(detail.getByRole("heading", { level: 1, name: titles.alpha })).toBeVisible();
+    if (!isMobile) {
+      // The desktop drawer is a modal dialog: opening it moves focus inside,
+      // Shift+Tab reaches the Close control and wraps within the dialog, and
+      // Tab wraps back to it. Narrow widths render a full page with no focus
+      // trap, so this branch is desktop-only.
+      const closeButton = detail.getByRole("button", { name: ui.closeDetail });
+      const focusInDialog = () => page.evaluate(() => {
+        const active = document.activeElement;
+        return active !== null && active.closest('[role="dialog"]') !== null;
+      });
+      expect(await focusInDialog(), "opening the drawer moves focus inside it").toBe(true);
+      await keys.press(page, "Shift+Tab");
+      await expect(closeButton).toBeFocused();
+      await keys.press(page, "Shift+Tab");
+      expect(await focusInDialog(), "Shift+Tab never leaves the dialog").toBe(true);
+      await keys.press(page, "Tab");
+      await expect(closeButton).toBeFocused();
+    }
     await closeDetail(page, isMobile, { escape: true, keys });
     await expect(page).toHaveURL(/[?&]q=Keyboard/);
     await expect(page.getByRole("heading", { level: 1, name: project.name })).toBeFocused();
@@ -577,12 +624,13 @@ test.describe("Readable work views", () => {
     const columns = (await board.locator("section h2").allTextContents()).map((column) => column.trim());
     const readyIndex = columns.indexOf("ready");
     expect(readyIndex, "the ready column renders on the board").toBeGreaterThanOrEqual(0);
-    if (readyIndex < columns.length - 1) {
-      await keys.press(page, "ArrowRight");
-      await expect.poll(async () => (await focusedCard(page)).column).toBe(columns[readyIndex + 1]);
-      await keys.press(page, "ArrowLeft");
-      await expect.poll(async () => (await focusedCard(page)).label).toBe(titles.beta);
-    }
+    // The keyboard fixture renders backlog, ready and in progress: ready is
+    // never the last column, so the horizontal walk always runs.
+    expect(readyIndex, "the ready column is not the last column").toBeLessThan(columns.length - 1);
+    await keys.press(page, "ArrowRight");
+    await expect.poll(async () => (await focusedCard(page)).column).toBe(columns[readyIndex + 1]);
+    await keys.press(page, "ArrowLeft");
+    await expect.poll(async () => (await focusedCard(page)).label).toBe(titles.beta);
     await keys.press(page, "Enter");
     const boardDetail = detailSurface(page, isMobile, titles.beta);
     await expect(boardDetail.getByRole("heading", { level: 1, name: titles.beta })).toBeVisible();

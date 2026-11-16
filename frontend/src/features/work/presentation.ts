@@ -4,46 +4,23 @@
  * labelled as unknown; nothing here invents acceptance, cost, or freshness.
  */
 
+import type { SymmetryWorkspaceReadV1, SymmetryWorkTimelineReadV1 } from "@symmetry/contracts";
+
 type Text = string | null | undefined;
 
-interface AssigneeLike {
-  readonly type?: Text;
-  readonly name?: Text;
-  readonly agent_profile?: Text;
-}
+/** Workspace rows are the served shape that carries assignee, delivery and execution. */
+type WorkItemRecord = SymmetryWorkspaceReadV1["projects"][number]["work_items"][number];
 
-interface DeliveryEntryLike {
-  readonly value?: Text;
-  readonly url?: Text;
-  readonly status?: Text;
-  readonly source?: Text;
-  readonly provider?: Text;
-  readonly generation?: number | null | undefined;
-  readonly recorded_at?: Text;
-}
+/**
+ * Presentation reads consumed members one at a time, so they are all optional
+ * here: a served payload missing one must still render as a labelled view.
+ */
+type Loosen<T> = { readonly [K in keyof T]?: T[K] };
 
-interface DeliveryLike {
-  readonly pull_request?: DeliveryEntryLike | null | undefined;
-  readonly ci?: DeliveryEntryLike | null | undefined;
-  readonly review?: DeliveryEntryLike | null | undefined;
-}
-
-interface ExecutionTimingLike {
-  readonly state_since?: Text;
-  readonly started_at?: Text;
-  readonly finished_at?: Text;
-}
-
-interface ExecutionLike {
-  readonly task_id?: Text;
-  readonly run_id?: Text;
-  readonly generation?: number | null | undefined;
-  readonly state?: Text;
-  readonly result?: unknown;
-  readonly failure?: unknown;
-  readonly timing?: ExecutionTimingLike | null | undefined;
-  readonly waiting?: unknown;
-}
+type AssigneeLike = Loosen<NonNullable<WorkItemRecord["assignee"]>>;
+type DeliveryEntryLike = Loosen<NonNullable<WorkItemRecord["delivery"]>["ci"]>;
+type DeliveryLike = Loosen<NonNullable<WorkItemRecord["delivery"]>>;
+type ExecutionLike = Loosen<NonNullable<WorkItemRecord["execution"]>>;
 
 /**
  * Free-form JSON that the wire carries inside decoded envelopes (agent payloads,
@@ -161,10 +138,25 @@ export function failureText(failure: unknown): string | null {
   return reason === null ? null : `Failed: ${reason}`;
 }
 
+/**
+ * Reported output is served either as text or as structured data; structured
+ * values render as their JSON text so nothing is silently dropped, and values
+ * with no renderable form stay null.
+ */
+export function reportedText(value: unknown): string | null {
+  const text = asText(value);
+  if (text !== null) return text;
+  if (Array.isArray(value)) return value.length === 0 ? null : JSON.stringify(value);
+  const record = asRecord(value);
+  if (record !== null) return Object.keys(record).length === 0 ? null : JSON.stringify(record);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return null;
+}
+
 export function reportedResult(execution: ExecutionLike | null | undefined): ReportedResult {
   const result = asRecord(execution?.result);
   return {
-    text: asText(result?.["summary"]) ?? asText(result?.["message"]) ?? failureText(execution?.failure),
+    text: reportedText(result?.["summary"]) ?? reportedText(result?.["message"]) ?? failureText(execution?.failure),
     kind: result === null ? null : asText(result["kind"]),
   };
 }
@@ -191,17 +183,18 @@ export interface EvidenceRow {
 }
 
 export function evidenceRows(values: unknown): EvidenceRow[] {
-  if (!Array.isArray(values)) return [];
-  return values.flatMap((value) => {
-    const direct = asText(value);
-    if (direct !== null) return [{ text: direct, attribution: null }];
+  const entries = Array.isArray(values) ? values : [values];
+  return entries.flatMap((value) => {
     const record = asRecord(value);
-    if (record === null) return [];
+    if (record === null) {
+      const text = reportedText(value);
+      return text === null ? [] : [{ text, attribution: null }];
+    }
     const name = asText(record["name"]);
     const status = asText(record["status"]);
     const text = name !== null && status !== null
       ? `${name} · ${status}`
-      : asText(record["message"]) ?? asText(record["title"]) ?? name ?? asText(record["summary"]) ?? asText(record["path"]) ?? asText(record["url"]) ?? asText(record["text"]);
+      : asText(record["message"]) ?? asText(record["title"]) ?? name ?? reportedText(record["summary"]) ?? asText(record["path"]) ?? asText(record["url"]) ?? asText(record["text"]);
     return text === null ? [] : [{ text, attribution: attributionOf(record) }];
   });
 }
@@ -212,20 +205,58 @@ export interface CiLabel {
   title: string;
 }
 
+/** Bound-resource fields the CI chip reads; every other served member is additive. */
+export interface CiResourceLike {
+  readonly status?: Text;
+  readonly sync_status?: Text;
+}
+
 /** A CI status is only rendered as fresh green while its recorded time is known and recent. */
 const ciFreshnessWindowMs = 24 * 60 * 60 * 1000;
 
-export function ciLabel(delivery: DeliveryLike | null | undefined, now: number = Date.now()): CiLabel {
-  const ci = delivery?.ci;
+/**
+ * Only a timestamp that carries its own zone names an instant; looser served
+ * text cannot support a freshness claim.
+ */
+const strictAbsoluteTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** Served bound-resource states that must override a passing CI signal. */
+const problemResourceStatuses = ["failed", "offline", "degraded"];
+
+/** The first bound-resource problem in served order, or null when the binding is clean. */
+function boundResourceSignal(resource: CiResourceLike | null | undefined): string | null {
+  if (resource === null || resource === undefined) return null;
+  const syncStatus = asText(resource.sync_status);
+  if (syncStatus !== null && syncStatus !== "synced") return syncStatus;
+  const status = asText(resource.status);
+  return status !== null && problemResourceStatuses.includes(status) ? status : null;
+}
+
+export function ciLabel(delivery: DeliveryLike | null | undefined, resource?: CiResourceLike | null, now: number = Date.now()): CiLabel {
+  const ci: DeliveryEntryLike | null | undefined = delivery?.ci;
   const status = (asText(ci?.status) ?? "unknown").toLocaleLowerCase();
   const recordedAt = asText(ci?.recorded_at);
-  const title = `CI source: ${asText(ci?.source) ?? "none"}${recordedAt === null ? " · no recorded time" : ` · recorded ${recordedAt}`}`;
+  const signal = boundResourceSignal(resource);
+  const title = `CI source: ${asText(ci?.source) ?? "none"}${recordedAt === null ? " · no recorded time" : ` · recorded ${recordedAt}`}${status === "passed" && signal !== null ? ` · bound resource ${signal}` : ""}`;
   if (status === "unknown") return { text: "CI unknown", tone: "unknown", title };
   if (status !== "passed") return { text: `CI ${status}`, tone: status === "failed" ? "failed" : "pending", title };
-  const recorded = recordedAt === null ? Number.NaN : Date.parse(recordedAt);
+  if (signal !== null) return { text: `CI passed · bound resource ${signal}`, tone: "stale", title };
+  const recorded = recordedAt === null || !strictAbsoluteTimestamp.test(recordedAt) ? Number.NaN : Date.parse(recordedAt);
   if (Number.isNaN(recorded)) return { text: "CI passed · freshness unknown", tone: "unknown", title };
+  if (asText(ci?.source) !== "provider") return { text: "CI passed · unverified source", tone: "unknown", title };
+  if (resource === null || resource === undefined) return { text: "CI passed · binding not confirmed", tone: "unknown", title };
   if (now - recorded > ciFreshnessWindowMs) return { text: "CI passed · stale", tone: "stale", title };
   return { text: "CI passed", tone: "passed", title };
+}
+
+/** The project read's bound resources, addressable by id for the CI chip on each row. */
+export function ciResourcesOf(project: unknown): ReadonlyMap<string, CiResourceLike> {
+  const resources = new Map<string, CiResourceLike>();
+  for (const record of asRecords(asRecord(project)?.["resources"])) {
+    const id = asText(record["id"]);
+    if (id !== null) resources.set(id, { status: asText(record["status"]), sync_status: asText(record["sync_status"]) });
+  }
+  return resources;
 }
 
 export interface DeliveryRow {
@@ -236,7 +267,7 @@ export interface DeliveryRow {
   url: string | null;
 }
 
-export function deliveryRows(delivery: DeliveryLike | null | undefined, now: number = Date.now()): DeliveryRow[] {
+export function deliveryRows(delivery: DeliveryLike | null | undefined, resource?: CiResourceLike | null, now: number = Date.now()): DeliveryRow[] {
   const rows: DeliveryRow[] = [];
   const pullRequest = delivery?.pull_request;
   const review = delivery?.review;
@@ -251,7 +282,7 @@ export function deliveryRows(delivery: DeliveryLike | null | undefined, now: num
   });
   rows.push({
     label: "CI",
-    value: ciLabel(delivery, now).text,
+    value: ciLabel(delivery, resource, now).text,
     source: asText(delivery?.ci?.source) ?? "none",
     recordedAt: asText(delivery?.ci?.recorded_at),
     url: safeUrl(delivery?.ci?.url),
@@ -350,13 +381,8 @@ export function resultKindLabel(kind: string | null): string | null {
   return kind === null ? null : kind.replaceAll("_", " ");
 }
 
-export interface TimelineItemLike {
-  readonly source?: Text;
-  readonly run_id?: Text;
-  readonly generation?: number | null | undefined;
-  readonly recorded_at?: Text;
-  readonly data?: unknown;
-}
+/** Timeline rows arrive from both the detail read and the timeline page; only `data` stays free-form. */
+export type TimelineItemLike = Omit<Loosen<SymmetryWorkTimelineReadV1["items"][number]>, "data"> & { readonly data?: unknown };
 
 export interface TimelineView {
   label: string;

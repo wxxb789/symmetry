@@ -89,7 +89,9 @@ export const workDetailOptions = (api: Api, workItemId: string) => queryOptions(
  * `before` cursor.
  */
 export const workTimelineOptions = (api: Api, workItemId: string, cursor: string | null) => infiniteQueryOptions({
-  queryKey: ["work-item-timeline", { workItemId }],
+  // The served boundary is part of the identity: a refreshed detail re-keys the
+  // disabled query, so its page param restarts from the newly served cursor.
+  queryKey: ["work-item-timeline", { workItemId, cursor }],
   queryFn: ({ signal, pageParam }) => api.workTimeline(workItemId, pageParam, signal),
   initialPageParam: cursor,
   getNextPageParam: (lastPage) => lastPage.next_before,
