@@ -1,0 +1,110 @@
+{
+  "attempts": [
+    {
+      "explanations": {
+        "Explain how the confirmation is pid-reuse-safe and bounded, and what Close does when settlement cannot be established before the deadline.": "For successfully observed bindings, the implementation records PID plus the creation FILETIME identity produced by processIdentityFromHandle. Each production probe opens the process with query and synchronization rights, reads its identity, and checks WaitForSingleObject(handle, 0). A signaled process is settled; a different creation identity establishes that the original process no longer occupies that PID, without targeting the replacement. Pending same-identity running processes are polled at intervals capped at 10 ms against the shared five-second close deadline. Continued running produces errContainmentSettlementUnproven. The supervisor-less path performs handle cleanup and caches that error; durable paths also attempt supervisor stop and retain their existing receipt/release handling. This is not a complete fail-closed implementation: arbitrary observation failures and ownership-enumeration failures become success evidence, and supported durable retries can forget unresolved bindings, as detailed in F1-F3.",
+        "Explain how the required coverage drives the production close path deterministically (which seam, which injected sequence) instead of duplicating the proof inside the test.": "Both required tests invoke jobContainment.Close directly. restoreJobCalls injects successful termination, zero active-process accounting, and handle cleanup. installOwnedSettlementSeams replaces observeOwnedJobProcesses and readOwnedProcessState, leaving the production confirmation loop intact. The success test supplies three bindings: PID 4242 remains running for one probe and then reports the same identity stopped; PID 4343 returns a generic read error; PID 4444 reports a replacement creation identity. It asserts the observation/termination/accounting/probe/cleanup sequence and idempotency. The failure test keeps PID 5252 running with its original identity, exercises the real five-second polling deadline, and checks the settlement error, cleanup, and subsequent error preservation. The tests therefore exercise production logic rather than duplicate its proof, but the generic-error success case encodes F1 and they omit F2-F3. I inspected the recorded test events and validator output: each required named test ran once, passed once, and was not skipped. The recorded package test and vet commands both exited zero, with matching sealed subject hashes before and after each gate.",
+        "Explain why an empty Job Object accounting sample does not by itself prove that an owned process has stopped running, and which recorded observation motivated this change.": "ActiveProcesses == 0 is an accounting observation, not an observation that each owned process object is signaled. Termination initiation and process execution settlement need not coincide. The frozen task records an intermittent TestCloseStopsOwnedChildAfterLeaderExit failure as the motivating observation; the unchanged test's final assertion checks whether tasklist still reports the owned child after Close succeeds. I read that assertion and the actual change. The historical failure was supplied by the frozen contract, not reproduced during this review. Attempt-0001 records the existing regression test passing, which does not invalidate the recorded intermittent failure."
+      },
+      "findings": [
+        {
+          "description": "Process-observation errors incorrectly establish settlement. In daemon/internal/platform/process_windows.go:695-697, a PID reported by the Job is omitted whenever its state cannot be read. At :799-803, an already identity-bound process is removed from the pending set on any read error. OpenProcess access denial or GetProcessTimes failure does not establish that the process exited. Consequently, Close can return success without confirming an observed owned process stopped. The new success test in daemon/internal/platform/process_owned_settle_windows_test.go explicitly injects a generic error for PID 4343 and expects immediate settlement, so it preserves this unsafe interpretation. Distinguish definitive process absence from observation failure; unresolved failures must remain pending or produce a preserved close error.",
+          "id": "F1",
+          "severity": "high",
+          "status": "open"
+        },
+        {
+          "description": "Failure to enumerate ownership silently disables the new proof. daemon/internal/platform/process_windows.go:560 discards the error from observeOwnedJobProcesses. queryOwnedJobProcessIDs can fail, including its explicit process-list capacity refusal at :742-743; that error propagates through observeOwnedWindowsJobProcesses but is ignored by Close. A nil binding set then passes confirmation immediately, leaving success dependent on the empty accounting sample that the frozen contract expressly declares insufficient. Preserving baseline non-real-handle fixtures does not justify treating every production enumeration failure as an empty ownership set. Preserve fixture compatibility without swallowing real ownership-discovery failures, and cover that failure through Close.",
+          "id": "F2",
+          "severity": "high",
+          "status": "open"
+        },
+        {
+          "description": "Durable Close retries discard previously observed, unsettled identities. daemon/internal/platform/process_windows.go:497-527 permits another stop attempt when a durable stop-capable supervisor has not produced a receipt. The owned bindings exist only in the local variable at :560. If settlement times out and supervisor.stop also fails, the handle remains retained, but the next Close replaces the original bindings with a fresh post-termination enumeration. If that enumeration is empty, confirmation performs no probes; a successful supervisor response then allows Close to return nil despite never confirming the previously observed process settled. Exhausting the shared deadline before supervisor.stop makes the first supervisor failure plausible. Retain unresolved bindings across supported retries or preserve the settlement failure as terminal. The new repeated-Close coverage uses no supervisor and therefore does not exercise this branch.",
+          "id": "F3",
+          "severity": "medium",
+          "status": "open"
+        }
+      ],
+      "gate_weakening": false,
+      "reviewed_check_attempt_id": "attempt-0001",
+      "reviewed_check_attempt_sha256": "sha256:586952da7072bd41471c83aaef4befad430b64ac093f083f434bd35484a51de7",
+      "reviewed_check_wall_seconds": 44,
+      "reviewed_diffstat": [
+        {
+          "added_lines": 259,
+          "deleted_lines": 0,
+          "path": "daemon/internal/platform/process_owned_settle_windows_test.go",
+          "status": "A"
+        },
+        {
+          "added_lines": 162,
+          "deleted_lines": 1,
+          "path": "daemon/internal/platform/process_windows.go",
+          "status": "M"
+        }
+      ],
+      "reviewed_routes_sha256": "sha256:8dae684d23ab045e0708ef1e6238d17c46ed8ba274d563023df72486e2c3d9bf",
+      "reviewed_subject_hash": "sha256:630c227594e6704c18c5a31a6bd7e451d9a034e70590e546c8ca4e9fdac464a7",
+      "reviewer_model_id": "gpt-6.1-sol",
+      "verdict": "fail"
+    },
+    {
+      "explanations": {
+        "Explain how the confirmation is pid-reuse-safe and bounded, and what Close does when settlement cannot be established before the deadline.": "Close samples JobObjectBasicProcessIDList before its termination call. readOwnedWindowsProcessState opens each process with query and synchronization access, observes its signaled state, and reads creation FILETIME through the same handle. Running identities are compared against the captured PID-plus-creation-time binding; a different creation identity proves the original process object is gone rather than confusing the replacement with it. Unreadable processes remain pending, with initially unknown identities adopting the first readable identity conservatively. Polling uses the existing five-second close deadline and at most ten-millisecond sleeps; unresolved bindings produce errContainmentSettlementUnproven, remain retained across supported durable stop retries, and follow existing cleanup/receipt handling. Enumeration errors are retained separately. However, the deliverable does not satisfy the unconditional fail-closed/error-preservation requirement: F4 identifies a supported non-durable supervisor branch where repeated Close returns nil after an unproven first attempt.",
+        "Explain how the required coverage drives the production close path deterministically (which seam, which injected sequence) instead of duplicating the proof inside the test.": "Both required tests call jobContainment.Close directly. restoreJobCalls injects termination, an immediately empty accounting result, and handle release; installOwnedSettlementSeams replaces observeOwnedJobProcesses and readOwnedProcessState while leaving the production settlement algorithm intact. The success test supplies three identity-bound PIDs: 4242 remains running for one probe then stops; 4343 produces a generic observation error then definitive absence; 4444 immediately reports a different creation identity. It asserts the observation/termination/accounting/probe/release order and idempotent repetition. The failure test supplies PID 5252 continuously running with its original identity and PID 5353 continuously unreadable, requiring production polling through the deadline, preserved errors, and cleanup. Additional tests exercise real Job enumeration, enumeration failure, and retained bindings across durable retries. I inspected attempt-0002's raw Go JSON events and verified evidence digests: both required tests ran once, passed once, and were not skipped; the recorded package-test and vet exit codes are zero. I also recomputed the current source Subject and confirmed it matches the sealed hash. These passing gates do not cover the F4 branch.",
+        "Explain why an empty Job Object accounting sample does not by itself prove that an owned process has stopped running, and which recorded observation motivated this change.": "Job accounting reaching ActiveProcesses == 0 is not a positive observation that each owned process object has stopped running. The frozen task records an intermittent TestCloseStopsOwnedChildAfterLeaderExit failure in which an owned child was still observed after Close returned successfully. The implementation therefore adds a separate process-object settlement check instead of treating accounting emptiness as sufficient. I read the protected regression test, both changed files completely, and the actual diff; the recorded historical failure is supplied by the frozen contract, not independently reproduced during this read-only review."
+      },
+      "findings": [
+        {
+          "description": "Previous F1 is resolved. In daemon/internal/platform/process_windows.go, observeOwnedWindowsJobProcesses retains unreadable processes as pending PID bindings, and unsettledOwnedProcesses retains bindings on observation errors. Only definitive absence, a positively observed stopped process, or a different creation-time identity establishes settlement. daemon/internal/platform/process_owned_settle_windows_test.go now injects an observation error for PID 4343 followed by definitive absence and requires both probes; its failure test also requires an unreadable process to remain unresolved through the deadline.",
+          "id": "F1",
+          "severity": "high",
+          "status": "resolved"
+        },
+        {
+          "description": "Previous F2's discarded enumeration error is resolved. daemon/internal/platform/process_windows.go:579-595 records enumeration failures in settlementObservationErr and joins them into stopErr on subsequent attempts. TestCloseFailsClosedWhenOwnedProcessObservationFails in daemon/internal/platform/process_owned_settle_windows_test.go covers both immediate failure and a durable retry whose fresh enumeration is empty. The ERROR_INVALID_HANDLE compatibility exception remains paired with termination of the same handle, which fails for a genuinely invalid production handle. A separate repeated-Close error-caching defect remains in F4.",
+          "id": "F2",
+          "severity": "high",
+          "status": "resolved"
+        },
+        {
+          "description": "Previous F3 is resolved. daemon/internal/platform/process_windows.go retains pendingSettlement on jobContainment, merges subsequent ownership samples into it at line 586, and saves the unresolved remainder returned by settleOwnedProcesses at line 593. TestCloseRetainsUnsettledOwnedProcessesAcrossDurableStopRetries in daemon/internal/platform/process_owned_settle_windows_test.go drives an initial supervisor-stop failure followed by empty re-enumeration and verifies that the retained identity is probed again. It covers both eventual settlement and continued failure.",
+          "id": "F3",
+          "severity": "medium",
+          "status": "resolved"
+        },
+        {
+          "description": "The non-durable containmentSupervisorStopLease branch loses the new fail-closed error on repeated Close. At daemon/internal/platform/process_windows.go:601-605, successful supervisor cleanup assigns only releaseHandleLocked() to job.closeErr, while stopErr is included only in the returned errors.Join. If enumeration fails or owned-process settlement times out and handle release succeeds, the first Close returns that failure but caches nil. The next Close takes the !durableAuthority branch at lines 524-526 and returns nil without confirming settlement. This branch is reachable with noopContainmentSupervisorLease, explicitly returned for Go test binaries by containment_supervisor_windows.go:934. Although the branch predates this revision, routing the new proof through it leaves the frozen repeated-Close/error-preservation contract unsatisfied. The new tests cover no-supervisor and durable-supervisor cases, but not this compatibility branch. Cache the joined settlement/observation and cleanup errors, and cover repeated Close with a non-durable stop-capable supervisor.",
+          "id": "F4",
+          "severity": "medium",
+          "status": "open"
+        }
+      ],
+      "gate_weakening": false,
+      "reviewed_check_attempt_id": "attempt-0002",
+      "reviewed_check_attempt_sha256": "sha256:1420a8dd23039c5a56ebc86df7bcf9948dab455f4fe840cd89b999e34f867dd2",
+      "reviewed_check_wall_seconds": 50,
+      "reviewed_diffstat": [
+        {
+          "added_lines": 604,
+          "deleted_lines": 0,
+          "path": "daemon/internal/platform/process_owned_settle_windows_test.go",
+          "status": "A"
+        },
+        {
+          "added_lines": 290,
+          "deleted_lines": 1,
+          "path": "daemon/internal/platform/process_windows.go",
+          "status": "M"
+        }
+      ],
+      "reviewed_routes_sha256": "sha256:8dae684d23ab045e0708ef1e6238d17c46ed8ba274d563023df72486e2c3d9bf",
+      "reviewed_subject_hash": "sha256:1ce76d473dc5c7e0f9eb63d0786fa25140c1a8b0426041a5963e039ec9f6c23f",
+      "reviewer_model_id": "gpt-6.1-sol",
+      "verdict": "fail"
+    }
+  ],
+  "note": "Independent review records for this arm in the order they were produced. A record whose verdict is fail is preserved evidence of a revision that was not accepted; only a pass verdict bound to the accepted checkpoint appears in the receipt. Each record also carries the coordinator check identity and wall seconds for the revision it reviewed, and the diffstat of that revision computed from its sealed bytes; each revision's bytes were re-sealed to reproduce the recorded subject_hash before the diffstat was recorded, and the attempt-0001 bytes are preserved in the coordinator's worker-session blob store.",
+  "schema": "symmetry-model-routing-review-attempts/v1"
+}

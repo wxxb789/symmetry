@@ -1,0 +1,197 @@
+{
+  "all_expected_refusals": true,
+  "control_count": 9,
+  "observed_refusals": 8,
+  "record_rendering": {
+    "note": "The controls were observed with the operator's absolute disposable root; that root is deliberately not published and was rendered to the token before this record was written. No credential, token or secret appears in any field.",
+    "roots_rendered": 1,
+    "token": "<disposable-root>",
+    "tool": "scripts/ci/model-routing-record-sanitize.py",
+    "tool_sha256": "sha256:b8b252f3c7491b5c69317e2f42f1a0772ce5e8a965477964bfd06693e7d2c973"
+  },
+  "results": [
+    {
+      "argv": [
+        "python scripts/ci/model-routing-evaluation.py",
+        "check",
+        "--run-dir",
+        "<disposable-root>\\controls\\baseline-protocol"
+      ],
+      "control": "baseline-protocol-named-tests-absent",
+      "exit_code": 1,
+      "expected": "check exit 1: the Go run itself passes but the named-test validator refuses the absent required names",
+      "gates": [
+        {
+          "id": "protocol-tests",
+          "passed": false,
+          "validator_exit_code": 1,
+          "validator_stderr": "Go native acceptance event gate failed: bad=TestValidateMicroUSDEnforcesWireMonetaryContract=run:0,pass:0,skip:0; TestValidateCommitPathRejectsUnnormalizedPaths=run:0,pass:0,skip:0, skipped=[], fail_events=0, invalid_json_lines=0"
+        },
+        {
+          "id": "protocol-vet",
+          "passed": true,
+          "validator_exit_code": null,
+          "validator_stderr": null
+        }
+      ],
+      "operation": "check",
+      "output": "{\n  \"attempt_id\": \"attempt-0001\",\n  \"attempt_sha256\": \"sha256:263668f7c48ddd564e787e2667341fefff63472bc5aa18ded67c27c121107af3\",\n  \"complete\": true,\n  \"passed\": false,\n  \"subject_hash\": \"sha256:bdfece43590cf85d3f2999e197388c2f45cdd2fa57df1c3b11686447d9d19c34\"\n}\ncheck attempt attempt-0001 failed; evidence preserved under <disposable-root>\\controls\\baseline-protocol\\checks\\attempt-0001\n",
+      "output_sha256": "sha256:c6273707a276e41e09575d63f762242a7fa15bc2e0ca224fab339a5d2fcd76e3"
+    },
+    {
+      "argv": [
+        "python scripts/ci/model-routing-evaluation.py",
+        "check",
+        "--run-dir",
+        "<disposable-root>\\controls\\baseline-platform"
+      ],
+      "control": "baseline-platform-named-tests-absent",
+      "exit_code": 1,
+      "expected": "check exit 1: the Go run itself passes but the named-test validator refuses the absent required names",
+      "gates": [
+        {
+          "id": "platform-tests",
+          "passed": false,
+          "validator_exit_code": 1,
+          "validator_stderr": "Go native acceptance event gate failed: bad=TestCloseFailsClosedWhenOwnedProcessSettlementIsUnproven=run:0,pass:0,skip:0; TestCloseConfirmsOwnedProcessSettlementBeforeSuccess=run:0,pass:0,skip:0, skipped=[], fail_events=0, invalid_json_lines=0"
+        },
+        {
+          "id": "platform-vet",
+          "passed": true,
+          "validator_exit_code": null,
+          "validator_stderr": null
+        }
+      ],
+      "operation": "check",
+      "output": "{\n  \"attempt_id\": \"attempt-0001\",\n  \"attempt_sha256\": \"sha256:c1c863951c200b4f28dd3eab3a04774d755ef4870ba5a90f47bd9e5c616ffb6d\",\n  \"complete\": true,\n  \"passed\": false,\n  \"subject_hash\": \"sha256:74ffc3a3bf5ae16bcd4bd696371f87ab4c2ccc8ca507e28b90256041a422a56e\"\n}\ncheck attempt attempt-0001 failed; evidence preserved under <disposable-root>\\controls\\baseline-platform\\checks\\attempt-0001\n",
+      "output_sha256": "sha256:49cad9867384284966a17e9df9986d345ab8e0654457cde6a115d73b65bce4f4"
+    },
+    {
+      "argv": [
+        "python scripts/ci/model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "<disposable-root>\\controls\\accept-refusals\\stale-source"
+      ],
+      "control": "accepted-copy-baseline",
+      "exit_code": 0,
+      "expected": "accept exit 0: the unmodified copy reproduces the accepted receipt",
+      "operation": "accept",
+      "output": "{\n  \"accepted\": true,\n  \"receipt_sha256\": \"sha256:ffe5a86e8355decf17c2714e35baf42f2848d8120a54ca18bd116de50a60d101\",\n  \"subject_hash\": \"sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f\",\n  \"task_id\": \"0008b-go-boundary-validator-coverage\"\n}\n",
+      "output_sha256": "sha256:350cbd03629243249623677c432114e2ec5f2bd9c418f92471a155dc5a6349e3"
+    },
+    {
+      "argv": [
+        "python scripts/ci/model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "<disposable-root>\\controls\\accept-refusals\\stale-source"
+      ],
+      "control": "stale-content-revision",
+      "exit_code": 1,
+      "expected": "accept exit 1: current source does not match the sealed subject",
+      "operation": "accept",
+      "output": "model-routing-evaluation refused: current source does not match the sealed subject; re-run seal and its checks before continuing\n",
+      "output_sha256": "sha256:b0c72be952aa41b377ebbf5a43eaa1e30cd938cf4ecc953697438449dec2b2ce"
+    },
+    {
+      "argv": [
+        "python scripts/ci/model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "<disposable-root>\\controls\\accept-refusals\\fabricated-billing"
+      ],
+      "control": "fabricated-billing",
+      "exit_code": 1,
+      "expected": "accept exit 1: the submitted receipt does not match the derived evidence",
+      "operation": "accept",
+      "output": "model-routing-evaluation refused: the submitted receipt does not match the derived evidence at $.cost.reported_cost: 0 != None\n",
+      "output_sha256": "sha256:067b6abced6c45e0445703609f085370d7cd02cb49ed5ef9ddf84e4564552581"
+    },
+    {
+      "argv": [
+        "python scripts/ci/model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "<disposable-root>\\controls\\accept-refusals\\missing-required-test"
+      ],
+      "control": "missing-required-test",
+      "exit_code": 1,
+      "expected": "accept exit 1: current source does not match the sealed subject",
+      "operation": "accept",
+      "output": "model-routing-evaluation refused: current source does not match the sealed subject; re-run seal and its checks before continuing\n",
+      "output_sha256": "sha256:b0c72be952aa41b377ebbf5a43eaa1e30cd938cf4ecc953697438449dec2b2ce"
+    },
+    {
+      "argv": [
+        "python scripts/ci/model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "<disposable-root>\\controls\\accept-refusals\\weakened-frozen-task"
+      ],
+      "control": "weakened-frozen-task",
+      "exit_code": 1,
+      "expected": "accept exit 1: frozen task bytes changed after prepare",
+      "operation": "accept",
+      "output": "model-routing-evaluation refused: frozen task bytes changed after prepare\n",
+      "output_sha256": "sha256:3a27d90036dd04495c2b6aee51e0975e4e7dac416b6c7effb8ebbcd5263cc96d"
+    },
+    {
+      "argv": [
+        "python scripts/ci/model-routing-evaluation.py",
+        "seal",
+        "--run-dir",
+        "<disposable-root>\\controls\\accept-refusals\\weakened-baseline-test"
+      ],
+      "control": "weakened-baseline-test",
+      "exit_code": 1,
+      "expected": "seal exit 1: a change to an existing baseline test is refused",
+      "operation": "seal",
+      "output": "model-routing-evaluation refused: seal refused a change to the protected asset daemon/internal/protocol/goal_validation_test.go (M)\n",
+      "output_sha256": "sha256:251cc42e67423472222dbc6e2623bd918f1a98433d2a339b21954d7f8e8a3b78"
+    },
+    {
+      "argv": [
+        "python scripts/ci/model-routing-evaluation.py",
+        "check",
+        "--run-dir",
+        "<disposable-root>\\controls\\accept-refusals\\skipped-required-test"
+      ],
+      "control": "skipped-required-test",
+      "exit_code": 1,
+      "expected": "check exit 1: the validator refuses a skipped required test",
+      "gates": [
+        {
+          "id": "protocol-tests",
+          "passed": false,
+          "validator_exit_code": 1,
+          "validator_stderr": "Go native acceptance event gate failed: bad=TestValidateMicroUSDEnforcesWireMonetaryContract=run:1,pass:0,skip:1, skipped=['TestValidateMicroUSDEnforcesWireMonetaryContract'], fail_events=0, invalid_json_lines=0"
+        },
+        {
+          "id": "protocol-vet",
+          "passed": true,
+          "validator_exit_code": null,
+          "validator_stderr": null
+        }
+      ],
+      "operation": "check",
+      "output": "{\n  \"attempt_id\": \"attempt-0002\",\n  \"attempt_sha256\": \"sha256:b86d762afddefb77bda636f18449546e3d25256b2f33d33e10140714cee7f769\",\n  \"complete\": true,\n  \"passed\": false,\n  \"subject_hash\": \"sha256:52bd8467b3a34ef54558864cc34a6a22a8175e4d6f7cd08e71fe9435bed6ba16\"\n}\ncheck attempt attempt-0002 failed; evidence preserved under <disposable-root>\\controls\\accept-refusals\\skipped-required-test\\checks\\attempt-0002\n",
+      "output_sha256": "sha256:5130790db46c7fc9bd43f6c16108fcf54367dc7cc4e3f2bcca22cab36b005a29",
+      "seal_exit_code": 0
+    }
+  ],
+  "schema": "symmetry-model-routing-evaluation-controls/v1",
+  "scope": "Every control ran on a disposable copy of a real 0008b run or of a frozen base revision; no original source, attempt, review or receipt was modified. stdout and stderr are captured in one combined file (the CLI writes its JSON summary to stdout and refusals to stderr), so the recorded digest binds the observed text instead of splitting streams. No mock provider or fixture-only result replaced the live task, and no gate, permission or acceptance condition was weakened to obtain a pass. Host-specific absolute paths are rendered before publication: the operator-specific disposable root of these controls is recorded as the token `<disposable-root>` (rendered with `scripts/ci/model-routing-record-sanitize.py`), so argv and output name no personal path. Each output digest binds the recorded, rendered text with CRLF line endings.",
+  "source_accepted_receipt_sha256": "sha256:ffe5a86e8355decf17c2714e35baf42f2848d8120a54ca18bd116de50a60d101",
+  "source_subject_hashes": {
+    "base-checkout": "sha256:bdfece43590cf85d3f2999e197388c2f45cdd2fa57df1c3b11686447d9d19c34",
+    "go-bounded-regression": "sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f",
+    "go-native-ownership-settlement": null
+  },
+  "tooling_sources": {
+    "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+    "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+    "model-routing-evaluation.py": "sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56",
+    "model-routing-omp-usage.py": "sha256:5d361246ef10e79d72bdbcb3f984564559d55031d4ca04bdfcf7010928b7923d"
+  }
+}

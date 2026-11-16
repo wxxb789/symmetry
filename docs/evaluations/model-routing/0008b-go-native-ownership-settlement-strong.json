@@ -1,0 +1,824 @@
+{
+  "acceptance_blockers": [
+    "no independent review record was imported",
+    "task explanations are not attested by an independent review"
+  ],
+  "accepted": false,
+  "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "checks": [
+    {
+      "argv": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "./internal/platform"
+      ],
+      "cwd": "daemon",
+      "exit_code": 0,
+      "go_package": "github.com/wxxb789/symmetry/daemon/internal/platform",
+      "go_tests": [
+        "TestCloseFailsClosedWhenOwnedProcessSettlementIsUnproven",
+        "TestCloseConfirmsOwnedProcessSettlementBeforeSuccess"
+      ],
+      "id": "platform-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": 0
+    },
+    {
+      "argv": [
+        "go",
+        "vet",
+        "./internal/platform"
+      ],
+      "cwd": "daemon",
+      "exit_code": 0,
+      "go_package": null,
+      "go_tests": null,
+      "id": "platform-vet",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    }
+  ],
+  "cost": {
+    "accounting_complete": false,
+    "estimated_cost": 2.0244584999999997,
+    "incomplete_reasons": [
+      "missing price version in 4 model phase(s)",
+      "no provider-reported cost in 4 model phase(s)"
+    ],
+    "known_estimated_cost_subtotal": 2.0244585,
+    "known_reported_cost_subtotal": 0,
+    "price_versions": [],
+    "reported_cost": null
+  },
+  "environment": {
+    "git_version": "git version 2.56.0.windows.4",
+    "machine": "AMD64",
+    "platform": "win32",
+    "python_version": "3.12.10"
+  },
+  "evidence": {
+    "check_attempt": {
+      "attempt_id": "attempt-0002",
+      "attempt_sha256": "sha256:86bc36650dfe47c6e4dba04ab1f18e28f7fb829bd4b1e062a2fc47e0f65887f9",
+      "complete": true,
+      "gates": [
+        {
+          "id": "platform-tests",
+          "passed": true,
+          "result_sha256": "sha256:63ad9c44e931704ceb980fa37aee30601bf6671610e372c5be73c5e420f53754",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:8275686432d0bd8e5cb21a5c2655064c6f2be4e73c9c041b4279d56e377cf5ef",
+          "validator_exit_code": 0,
+          "validator_stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_stdout_sha256": "sha256:80e7518ca751f33378e101f99756ffd0d9c91e780301a318bb45906c9304f379"
+        },
+        {
+          "id": "platform-vet",
+          "passed": true,
+          "result_sha256": "sha256:39eeacecf92f898343ccd832efc9315fd40a87062f9501bec6c72ce0e39cde3f",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        }
+      ],
+      "passed": true,
+      "routes_sha256": "sha256:c4c2d8452b725cc0b782035a30130aafb4b01291cc280043365434b2006959b9",
+      "subject_hash": "sha256:d44e99a19199073398dc4c388a2401e1049e9c6f55133075262890a194178065",
+      "task_sha256": "sha256:287d0ab9769001a058f599e0aeeef20e4fbb3bbe1ea0036e489d67938827773f"
+    },
+    "frozen_review_sha256": null,
+    "frozen_routes_sha256": "sha256:c4c2d8452b725cc0b782035a30130aafb4b01291cc280043365434b2006959b9",
+    "frozen_task_sha256": "sha256:287d0ab9769001a058f599e0aeeef20e4fbb3bbe1ea0036e489d67938827773f",
+    "frozen_usage_sha256": "sha256:ab630cae96978b59d4339500fc5020a9ef646e3114cff48118a82d293fec8b08",
+    "tooling_sources": {
+      "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+      "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+      "model-routing-evaluation.py": "sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56"
+    }
+  },
+  "explanations": [
+    "Explain why an empty Job Object accounting sample does not by itself prove that an owned process has stopped running, and which recorded observation motivated this change.",
+    "Explain how the confirmation is pid-reuse-safe and bounded, and what Close does when settlement cannot be established before the deadline.",
+    "Explain how the required coverage drives the production close path deterministically (which seam, which injected sequence) instead of duplicating the proof inside the test."
+  ],
+  "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "language": "go",
+  "later_defects": [],
+  "model_ids": [
+    {
+      "api": "openai-responses",
+      "model": "gpt-6.1-sol",
+      "provider": "ghc"
+    }
+  ],
+  "outcome": "Strengthen the Windows containment close proof in daemon/internal/platform. Today jobContainment.Close reports a successful stop once JobObjectBasicAccountingInformation.ActiveProcesses reaches zero; the recorded intermittent failure of TestCloseStopsOwnedChildAfterLeaderExit shows that this accounting sample does not by itself establish that an owned process has stopped running. Before Close reports success, every process the Job Object reported owning must be confirmed no longer running, bound to that process's creation-time identity so a recycled PID cannot satisfy the confirmation, within the existing bounded close deadline; Close must fail closed when an observed owned process cannot be confirmed settled before that deadline. Preserve the existing stop-receipt, helper-release, idempotency, retry and error-preservation behavior, and every existing assertion: the package's baseline tests are unmodifiable and already drive Close through its job-call seams with non-real job handles, so Close must keep its current observable behavior for those fixtures. The change stays bounded to the Windows close proof plus the required coverage; no new daemon-wide mechanism, scheduler or second authority may be introduced.",
+  "phases": [
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.7911402,
+      "known_subtotals": {
+        "assistant_messages": 28,
+        "assistant_messages_with_cost_total": 28,
+        "assistant_messages_with_usage": 28,
+        "cacheRead": {
+          "messages": 28,
+          "sum": 2166247
+        },
+        "cacheWrite": {
+          "messages": 28,
+          "sum": 113215
+        },
+        "cached": {
+          "messages": 28,
+          "sum": 2279462
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 28,
+            "sum": 0.21662470000000003
+          },
+          "cacheWrite": {
+            "messages": 28,
+            "sum": 0.2830375
+          },
+          "input": {
+            "messages": 28,
+            "sum": 0.00016800000000000004
+          },
+          "output": {
+            "messages": 28,
+            "sum": 0.2913099999999999
+          },
+          "total": {
+            "messages": 28,
+            "sum": 0.7911402
+          }
+        },
+        "input": {
+          "messages": 28,
+          "sum": 84
+        },
+        "output": {
+          "messages": 28,
+          "sum": 29131
+        },
+        "reasoningTokens": {
+          "messages": 26,
+          "sum": 20201
+        },
+        "totalTokens": {
+          "messages": 28,
+          "sum": 2308677
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 28,
+        "assistant_messages_with_cost_total": 28,
+        "assistant_messages_with_usage": 28,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-ghc-configured",
+        "custom_messages": 1,
+        "entry_types": {
+          "custom": 74,
+          "custom_message": 1,
+          "message": 100,
+          "model_change": 2,
+          "model_usage": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          },
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 3
+          }
+        ],
+        "records": 182,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:84ad47b2be0cdc5e6606f3faf843b1840318e6a9a837bebbf5248c028234b080",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 28,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:d5677a6f3af1304a98460bdf7919b2f282ac3b4bcf68fba819cd960539433c01"
+        },
+        {
+          "index": 0,
+          "kind": "custom_message",
+          "sha256": "sha256:e900001f4cc31a434cd1b8d5e5787e055e7e1e7d6b15d2d43fe405d9753ec04f"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e640-09ff-7767-8985-d0e4a12289d5",
+      "stage": "implementation",
+      "tokens": {
+        "cached": 2279462,
+        "input": 84,
+        "output": 29131
+      },
+      "wall_time": 746.039
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.28857109999999997,
+      "known_subtotals": {
+        "assistant_messages": 13,
+        "assistant_messages_with_cost_total": 13,
+        "assistant_messages_with_usage": 13,
+        "cacheRead": {
+          "messages": 13,
+          "sum": 649856
+        },
+        "cacheWrite": {
+          "messages": 13,
+          "sum": 55975
+        },
+        "cached": {
+          "messages": 13,
+          "sum": 705831
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 13,
+            "sum": 0.0649856
+          },
+          "cacheWrite": {
+            "messages": 13,
+            "sum": 0.13993750000000005
+          },
+          "input": {
+            "messages": 13,
+            "sum": 7.799999999999999e-05
+          },
+          "output": {
+            "messages": 13,
+            "sum": 0.08356999999999999
+          },
+          "total": {
+            "messages": 13,
+            "sum": 0.28857109999999997
+          }
+        },
+        "input": {
+          "messages": 13,
+          "sum": 39
+        },
+        "output": {
+          "messages": 13,
+          "sum": 8357
+        },
+        "reasoningTokens": {
+          "messages": 11,
+          "sum": 3512
+        },
+        "totalTokens": {
+          "messages": 13,
+          "sum": 714227
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 13,
+        "assistant_messages_with_cost_total": 13,
+        "assistant_messages_with_usage": 13,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-ghc-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 46,
+          "message": 57,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          },
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 3
+          }
+        ],
+        "records": 108,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:b924d2586462af7301886176786ddffb1ea9f19900905d4e71b7ee0096037008",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 13,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:b2c4492d6ca7180d95cfe6faa800130cc2fb3caf7b679ec9159d85d13609f1f6"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e655-51e9-728f-b085-6cac217619cf",
+      "stage": "repair",
+      "tokens": {
+        "cached": 705831,
+        "input": 39,
+        "output": 8357
+      },
+      "wall_time": 194.366
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.5554874,
+      "known_subtotals": {
+        "assistant_messages": 19,
+        "assistant_messages_with_cost_total": 19,
+        "assistant_messages_with_usage": 19,
+        "cacheRead": {
+          "messages": 19,
+          "sum": 1373409
+        },
+        "cacheWrite": {
+          "messages": 19,
+          "sum": 105109
+        },
+        "cached": {
+          "messages": 19,
+          "sum": 1478518
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 19,
+            "sum": 0.13734090000000002
+          },
+          "cacheWrite": {
+            "messages": 19,
+            "sum": 0.2627725
+          },
+          "input": {
+            "messages": 19,
+            "sum": 0.00011399999999999997
+          },
+          "output": {
+            "messages": 19,
+            "sum": 0.15526000000000004
+          },
+          "total": {
+            "messages": 19,
+            "sum": 0.5554874
+          }
+        },
+        "input": {
+          "messages": 19,
+          "sum": 57
+        },
+        "output": {
+          "messages": 19,
+          "sum": 15526
+        },
+        "reasoningTokens": {
+          "messages": 15,
+          "sum": 9291
+        },
+        "totalTokens": {
+          "messages": 19,
+          "sum": 1494101
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 19,
+        "assistant_messages_with_cost_total": 19,
+        "assistant_messages_with_usage": 19,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-ghc-configured",
+        "custom_messages": 2,
+        "entry_types": {
+          "custom": 72,
+          "custom_message": 2,
+          "message": 89,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          },
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 3
+          }
+        ],
+        "records": 168,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:b7534fa6b0a198fe00a5cd26e771666aeff2ae0fdc1c20db8cd24fc2be726da4",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 19,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:a392c21641c124040547f947383d92f745609dd5087a62ac1bb09d23a7dc5a53"
+        },
+        {
+          "index": 0,
+          "kind": "custom_message",
+          "sha256": "sha256:22b9ffac4223f1730799b2239c82421d03996c2bb6f018067b9c6311e71da434"
+        },
+        {
+          "index": 1,
+          "kind": "custom_message",
+          "sha256": "sha256:fa003d62cace6da844da303259986dc91983e0639d1ec5643ca1fb459f09eba3"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e64c-5aab-72fc-a182-fbf6f6b30375",
+      "stage": "review",
+      "tokens": {
+        "cached": 1478518,
+        "input": 57,
+        "output": 15526
+      },
+      "wall_time": 580.779
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.38925980000000004,
+      "known_subtotals": {
+        "assistant_messages": 18,
+        "assistant_messages_with_cost_total": 18,
+        "assistant_messages_with_usage": 18,
+        "cacheRead": {
+          "messages": 18,
+          "sum": 1121768
+        },
+        "cacheWrite": {
+          "messages": 18,
+          "sum": 74878
+        },
+        "cached": {
+          "messages": 18,
+          "sum": 1196646
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 18,
+            "sum": 0.11217680000000003
+          },
+          "cacheWrite": {
+            "messages": 18,
+            "sum": 0.187195
+          },
+          "input": {
+            "messages": 18,
+            "sum": 0.00010799999999999997
+          },
+          "output": {
+            "messages": 18,
+            "sum": 0.08977999999999998
+          },
+          "total": {
+            "messages": 18,
+            "sum": 0.38925980000000004
+          }
+        },
+        "input": {
+          "messages": 18,
+          "sum": 54
+        },
+        "output": {
+          "messages": 18,
+          "sum": 8978
+        },
+        "reasoningTokens": {
+          "messages": 16,
+          "sum": 3837
+        },
+        "totalTokens": {
+          "messages": 18,
+          "sum": 1205678
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 18,
+        "assistant_messages_with_cost_total": 18,
+        "assistant_messages_with_usage": 18,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-ghc-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 70,
+          "message": 86,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          },
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 3
+          }
+        ],
+        "records": 161,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:2194fde266a8c8505f3f4dfe1ed0dd0bdf843920a1fd27a31ca9a05aea75d222",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 18,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:4b8985f0f037d852959d018bacca7642d0b2d2aed0272cc6a42905d42ba4b773"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e658-fa2c-72a7-8b6e-25d79279c4cf",
+      "stage": "review",
+      "tokens": {
+        "cached": 1196646,
+        "input": 54,
+        "output": 8978
+      },
+      "wall_time": 505.058
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "Scoped code exploration happened inside the single charged worker session recorded in the implementation phase; no separate exploration model call was made.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "exploration",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0.0
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "Frozen gates were executed by the coordinator runner in the sealed checkout for attempt-0001 (rejected revision) and attempt-0002 (repaired revision); the phase seconds are the recorded gate wall windows.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "verification",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 58.0
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "The first revision failed independent semantic review with one open finding; its work is charged in the implementation and first review rows, so it is not double-counted here.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "failed_attempt",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0.0
+    }
+  ],
+  "prompt_hashes": [
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:22b9ffac4223f1730799b2239c82421d03996c2bb6f018067b9c6311e71da434"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:e900001f4cc31a434cd1b8d5e5787e055e7e1e7d6b15d2d43fe405d9753ec04f"
+    },
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:fa003d62cace6da844da303259986dc91983e0639d1ec5643ca1fb459f09eba3"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:4b8985f0f037d852959d018bacca7642d0b2d2aed0272cc6a42905d42ba4b773"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:a392c21641c124040547f947383d92f745609dd5087a62ac1bb09d23a7dc5a53"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:b2c4492d6ca7180d95cfe6faa800130cc2fb3caf7b679ec9159d85d13609f1f6"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:d5677a6f3af1304a98460bdf7919b2f282ac3b4bcf68fba819cd960539433c01"
+    }
+  ],
+  "repair_count": 1,
+  "review": null,
+  "review_time": 1085.837,
+  "reviewed_explanations": null,
+  "reviewer_findings": [],
+  "risk_class": "native-ownership-settlement",
+  "routes": {
+    "reviewer": {
+      "authorization_ref": "0008b reuse_existing authorization: same configured strong route in a separate reviewer invocation; recorded as invocation separation, not model-family diversity",
+      "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+      "model_id": "gpt-6.1-sol",
+      "provenance": "omp headless independent reviewer invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; separate invocation and context from the strong-only worker"
+    },
+    "worker": {
+      "authorization_ref": "0008b reuse_existing authorization: existing configured strong route used for the strong-only baseline arm, no new profile, spend cap or credential",
+      "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+      "model_id": "gpt-6.1-sol",
+      "provenance": "omp headless strong-only worker invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; no per-call model override"
+    }
+  },
+  "schema": "symmetry-model-routing-evaluation/v1",
+  "subject": {
+    "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+    "changed_paths": [
+      {
+        "path": "daemon/internal/platform/process_owned_settle_windows_test.go",
+        "status": "A"
+      },
+      {
+        "path": "daemon/internal/platform/process_windows.go",
+        "status": "M"
+      }
+    ],
+    "content_revision": "uncommitted:sha256:b68a329c1d583f2e4bfa6741ce5e97426364f89456bf20f1130d4656bb9eadd0",
+    "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+    "manifest_digest": "sha256:b68a329c1d583f2e4bfa6741ce5e97426364f89456bf20f1130d4656bb9eadd0",
+    "subject_hash": "sha256:d44e99a19199073398dc4c388a2401e1049e9c6f55133075262890a194178065"
+  },
+  "subject_hash": "sha256:d44e99a19199073398dc4c388a2401e1049e9c6f55133075262890a194178065",
+  "task_id": "0008b-go-close-owned-settle",
+  "tokens": {
+    "cached": 5660457,
+    "input": 234,
+    "known_cached_subtotal": 5660457,
+    "known_input_subtotal": 234,
+    "known_output_subtotal": 61992,
+    "output": 61992
+  },
+  "wall_time": 2154.0,
+  "workflow": "reuse_existing"
+}

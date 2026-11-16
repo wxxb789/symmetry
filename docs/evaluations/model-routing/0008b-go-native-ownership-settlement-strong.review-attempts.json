@@ -1,0 +1,86 @@
+{
+  "attempts": [
+    {
+      "explanations": {
+        "Explain how the confirmation is pid-reuse-safe and bounded, and what Close does when settlement cannot be established before the deadline.": "openOwnedJobProcess opens each reported PID with query and synchronization access, captures its creation FILETIME through the same handle, and verifies membership in the exact Job using IsProcessInJob. Retaining that handle pins the process object, so confirmation waits on the original object rather than reopening a potentially recycled PID. Close captures identities before termination and continues observing during polling; accounting zero remains pending until every retained handle returns WAIT_OBJECT_0. Census, identity capture and confirmation share the original five-second deadline, with nonblocking process waits. Timeout or observation failure returns an error rather than accepting empty accounting. Terminal cleanup releases retained process handles; durable failed-stop attempts without a receipt retain them for retry. Finding F1 qualifies the boundedness assessment: deadline checks exist, but census growth can consume excessive memory between them.",
+        "Explain how the required coverage drives the production close path deterministically (which seam, which injected sequence) instead of duplicating the proof inside the test.": "Both required tests invoke the actual jobContainment.Close with a nonempty jobID. They inject queryJobProcessIDs, openJobProcess and waitJobProcess alongside existing job-call seams. The census first reports PID 71 and subsequently becomes empty, while accounting always reports zero. The success test supplies WAIT_TIMEOUT followed by WAIT_OBJECT_0 and uses the real waitForJobToEmpty, requiring Close to retain and confirm the original handle before cleanup. The failure test supplies WAIT_TIMEOUT throughout and replaces waitForEmptyJob only to invoke the real waiter with an immediately expired deadline; the production query wrapper must keep zero accounting pending. It asserts failure caching, Terminate error preservation and cleanup. An additional durable-retry test checks retained-handle reuse, and the unchanged child-after-leader-exit test exercises native enumeration and opening. Coordinator events and validator output show both required tests ran once, passed once and were not skipped; the package test and vet gates exited zero. I read both changed files completely, confirmed the change stayed within the two allowed paths, and recomputed the sealed source, routes and attempt digests successfully.",
+        "Explain why an empty Job Object accounting sample does not by itself prove that an owned process has stopped running, and which recorded observation motivated this change.": "ActiveProcesses == 0 is an aggregate accounting observation, not confirmation that each owned process object's handle has signaled termination. The frozen contract records an intermittent TestCloseStopsOwnedChildAfterLeaderExit failure in which an owned child survived the apparent successful Close after its leader had exited. The revision correctly adds retained process-handle confirmation instead of relying solely on accounting. The coordinator's attempt-0001 raw event stream records that unchanged native regression test running and passing."
+      },
+      "findings": [
+        {
+          "description": "daemon/internal/platform/process_windows.go:718-725 grows the census buffer even after QueryInformationJobObject succeeds whenever numberOfAssignedProcesses exceeds numberOfProcessIDsInList. Microsoft's BuildXL implementation records that this discrepancy can occur for a complete list and additionally requires ERROR_MORE_DATA before treating it as insufficient capacity (https://github.com/microsoft/BuildXL/blob/main/Public/Src/Utilities/Native/Processes/JobObject.cs, TryGetProcessIds). [INFERENCE] If the discrepancy persists, this pre-termination loop repeatedly doubles an already sufficient buffer, permitting gigabyte-scale allocations and risking memory exhaustion or an unnecessary terminal Close failure. The deadline check and size guard both remain operative; neither is guaranteed to fire first. Honor successful enumeration after visiting its returned entries and grow on ERROR_MORE_DATA rather than the count discrepancy alone. The discrepancy was not reproduced on this host; attempt-0001 passed. The required tests replace queryJobProcessIDs and therefore do not exercise this native buffer-growth decision.",
+          "id": "F1",
+          "severity": "medium",
+          "status": "open"
+        }
+      ],
+      "gate_weakening": false,
+      "reviewed_check_attempt_id": "attempt-0001",
+      "reviewed_check_attempt_sha256": "sha256:82108781e207adf4e98e6af85635676de56dd835b9d0396adfab3a825803f91b",
+      "reviewed_check_wall_seconds": 30,
+      "reviewed_diffstat": [
+        {
+          "added_lines": 604,
+          "deleted_lines": 0,
+          "path": "daemon/internal/platform/process_owned_settle_windows_test.go",
+          "status": "A"
+        },
+        {
+          "added_lines": 206,
+          "deleted_lines": 8,
+          "path": "daemon/internal/platform/process_windows.go",
+          "status": "M"
+        }
+      ],
+      "reviewed_routes_sha256": "sha256:c4c2d8452b725cc0b782035a30130aafb4b01291cc280043365434b2006959b9",
+      "reviewed_subject_hash": "sha256:aeafa56bc1d5a4129d0a9947adf02b556f552fcd400480c119c957c2ad5e4ad1",
+      "reviewer_model_id": "gpt-6.1-sol",
+      "verdict": "fail"
+    },
+    {
+      "explanations": {
+        "Explain how the confirmation is pid-reuse-safe and bounded, and what Close does when settlement cannot be established before the deadline.": "openOwnedJobProcess opens each newly reported PID with SYNCHRONIZE plus PROCESS_QUERY_LIMITED_INFORMATION, reads its creation-time identity through GetProcessTimes, and checks IsProcessInJob on that same handle before retaining it. Confirmation waits on the retained process object, not a newly opened PID, so PID recycling cannot substitute another process for the captured object. Native attachments carry jobID, including the amended AttachSuspendedProcess path; unnamed legacy fixtures retain their existing accounting seams. Census, capture, confirmation and the existing waiter share the five-second Close deadline; waits are nonblocking, and an unsignalled retained handle prevents an accounting-zero sample from completing the waiter. Observation errors, wait errors and deadline exhaustion return failure, with cleanup and durable retry boundaries retained. This is not fully satisfied across repeated calls: F2 identifies a non-durable stop-lease branch that returns the failure initially but subsequently reports nil without confirmation.",
+        "Explain how the required coverage drives the production close path deterministically (which seam, which injected sequence) instead of duplicating the proof inside the test.": "Both required tests invoke the real jobContainment.Close and waitForJobToEmpty. They inject native-operation seams: the census reports one PID before termination and then becomes empty, openJobProcess supplies one retained identity-bound handle, and accounting always reports zero. The positive test injects waitTimeout followed by waitObject0 and verifies that success and cleanup occur only after confirmation, without reopening the process or repeating work on another Close. The negative test injects perpetual waitTimeout and uses waitForEmptyJob to call the real waiter with an expired outer deadline, deterministically exercising its actual failure rather than returning an injected error. It checks cleanup and cached failure, but omits the non-durable supervisor case in F2. Attempt-0002 raw Go events and validator output show each required test ran once, passed once and was not skipped; the package and vet gates both exited zero, with matching sealed Subject hashes before and after each gate. The existing native child test also passed. The opt-in production-supervisor witness was skipped and is not claimed as executed.",
+        "Explain why an empty Job Object accounting sample does not by itself prove that an owned process has stopped running, and which recorded observation motivated this change.": "ActiveProcesses is an aggregate accounting observation, not a wait on each owned process object. Zero accounting therefore does not establish that every previously observed process handle has signalled termination. The frozen contract records an intermittent TestCloseStopsOwnedChildAfterLeaderExit failure in which an owned child remained observable after Close returned successfully. The protected test at process_windows_test.go:936-1005 checks that exact outcome. The change retains process handles across disappearance from the census and requires their settlement in addition to zero accounting."
+      },
+      "findings": [
+        {
+          "description": "Previous F1 is resolved. daemon/internal/platform/process_windows.go:700-733 now visits returned PIDs and accepts a successful native enumeration regardless of the assigned-count discrepancy or stale ERROR_MORE_DATA; buffer growth occurs only after a failed call reporting ERROR_MORE_DATA. daemon/internal/platform/process_owned_settle_windows_test.go:607-680 exercises this native-call seam directly, including both successful-enumeration cases and partial-list visitation before growth. Coordinator attempt-0002 records all three regression subtests passing.",
+          "id": "F1",
+          "severity": "medium",
+          "status": "resolved"
+        },
+        {
+          "description": "daemon/internal/platform/process_windows.go:607-612 loses the new settlement failure on repeated Close when the supervisor implements containmentSupervisorStopLease without durable authority. With a named Job, an observed process handle that never signals, successful supervisor.close, and successful Job-handle cleanup, the first Close returns stopErr but caches only the nil releaseHandleLocked result. The next Close takes :509-511 and returns nil without having confirmed settlement. This is reachable through the native Go-test-binary AttachProcess route, which returns noopContainmentSupervisorLease (containment_supervisor_windows.go:925-934,1491-1501); the normal production daemon uses durable authority and is not affected by this branch. Although the cache statement predates this diff, it now discards the newly introduced owned-process proof failure, violating its fail-closed/error-preservation contract. The new tests use either no supervisor or a durable supervisor and miss this replay case. Cache the complete joined failure in this branch and add a repeated-Close regression with the non-durable stop lease. Evidence is a deterministic source trace, not an executed reproduction.",
+          "id": "F2",
+          "severity": "medium",
+          "status": "open"
+        }
+      ],
+      "gate_weakening": false,
+      "reviewed_check_attempt_id": "attempt-0002",
+      "reviewed_check_attempt_sha256": "sha256:86bc36650dfe47c6e4dba04ab1f18e28f7fb829bd4b1e062a2fc47e0f65887f9",
+      "reviewed_check_wall_seconds": 28,
+      "reviewed_diffstat": [
+        {
+          "added_lines": 680,
+          "deleted_lines": 0,
+          "path": "daemon/internal/platform/process_owned_settle_windows_test.go",
+          "status": "A"
+        },
+        {
+          "added_lines": 212,
+          "deleted_lines": 8,
+          "path": "daemon/internal/platform/process_windows.go",
+          "status": "M"
+        }
+      ],
+      "reviewed_routes_sha256": "sha256:c4c2d8452b725cc0b782035a30130aafb4b01291cc280043365434b2006959b9",
+      "reviewed_subject_hash": "sha256:d44e99a19199073398dc4c388a2401e1049e9c6f55133075262890a194178065",
+      "reviewer_model_id": "gpt-6.1-sol",
+      "verdict": "fail"
+    }
+  ],
+  "note": "Independent review records for this arm in the order they were produced. A record whose verdict is fail is preserved evidence of a revision that was not accepted; only a pass verdict bound to the accepted checkpoint appears in the receipt. Each record also carries the coordinator check identity and wall seconds for the revision it reviewed, and the diffstat of that revision computed from its sealed bytes; each revision's bytes were re-sealed to reproduce the recorded subject_hash before the diffstat was recorded, and the attempt-0001 bytes are preserved in the coordinator's worker-session blob store.",
+  "schema": "symmetry-model-routing-review-attempts/v1"
+}

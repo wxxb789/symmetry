@@ -1,0 +1,799 @@
+{
+  "acceptance_blockers": [
+    "no independent review record was imported",
+    "task explanations are not attested by an independent review"
+  ],
+  "accepted": false,
+  "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "checks": [
+    {
+      "argv": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "./internal/platform"
+      ],
+      "cwd": "daemon",
+      "exit_code": 0,
+      "go_package": "github.com/wxxb789/symmetry/daemon/internal/platform",
+      "go_tests": [
+        "TestCloseFailsClosedWhenOwnedProcessSettlementIsUnproven",
+        "TestCloseConfirmsOwnedProcessSettlementBeforeSuccess"
+      ],
+      "id": "platform-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": 0
+    },
+    {
+      "argv": [
+        "go",
+        "vet",
+        "./internal/platform"
+      ],
+      "cwd": "daemon",
+      "exit_code": 0,
+      "go_package": null,
+      "go_tests": null,
+      "id": "platform-vet",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    }
+  ],
+  "cost": {
+    "accounting_complete": false,
+    "estimated_cost": 1.3038045,
+    "incomplete_reasons": [
+      "missing price version in 4 model phase(s)",
+      "no provider-reported cost in 4 model phase(s)"
+    ],
+    "known_estimated_cost_subtotal": 1.3038045,
+    "known_reported_cost_subtotal": 0,
+    "price_versions": [],
+    "reported_cost": null
+  },
+  "environment": {
+    "git_version": "git version 2.56.0.windows.4",
+    "machine": "AMD64",
+    "platform": "win32",
+    "python_version": "3.12.10"
+  },
+  "evidence": {
+    "check_attempt": {
+      "attempt_id": "attempt-0002",
+      "attempt_sha256": "sha256:1420a8dd23039c5a56ebc86df7bcf9948dab455f4fe840cd89b999e34f867dd2",
+      "complete": true,
+      "gates": [
+        {
+          "id": "platform-tests",
+          "passed": true,
+          "result_sha256": "sha256:0e37aa0c7988acae643db4a7390ba84496ce8c915cfae39a7c1fbfe9638dcf4d",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:63924d85a12ad89a33eab7e73a2a9f0b1de19798aee1da566065d05dd9c7df0a",
+          "validator_exit_code": 0,
+          "validator_stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_stdout_sha256": "sha256:80e7518ca751f33378e101f99756ffd0d9c91e780301a318bb45906c9304f379"
+        },
+        {
+          "id": "platform-vet",
+          "passed": true,
+          "result_sha256": "sha256:e2c76024a10b485af6e01cb55b51307769789e8446f1cca718a46bb5000a444c",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        }
+      ],
+      "passed": true,
+      "routes_sha256": "sha256:8dae684d23ab045e0708ef1e6238d17c46ed8ba274d563023df72486e2c3d9bf",
+      "subject_hash": "sha256:1ce76d473dc5c7e0f9eb63d0786fa25140c1a8b0426041a5963e039ec9f6c23f",
+      "task_sha256": "sha256:287d0ab9769001a058f599e0aeeef20e4fbb3bbe1ea0036e489d67938827773f"
+    },
+    "frozen_review_sha256": null,
+    "frozen_routes_sha256": "sha256:8dae684d23ab045e0708ef1e6238d17c46ed8ba274d563023df72486e2c3d9bf",
+    "frozen_task_sha256": "sha256:287d0ab9769001a058f599e0aeeef20e4fbb3bbe1ea0036e489d67938827773f",
+    "frozen_usage_sha256": "sha256:34d484bf6a9b3429d3946a19e8b88418aacb673254d5c092570aeb116ea97d23",
+    "tooling_sources": {
+      "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+      "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+      "model-routing-evaluation.py": "sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56"
+    }
+  },
+  "explanations": [
+    "Explain why an empty Job Object accounting sample does not by itself prove that an owned process has stopped running, and which recorded observation motivated this change.",
+    "Explain how the confirmation is pid-reuse-safe and bounded, and what Close does when settlement cannot be established before the deadline.",
+    "Explain how the required coverage drives the production close path deterministically (which seam, which injected sequence) instead of duplicating the proof inside the test."
+  ],
+  "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "language": "go",
+  "later_defects": [],
+  "model_ids": [
+    {
+      "api": "openai-completions",
+      "model": "deepseek-v4.1-flash-fast",
+      "provider": "tencent-litellm"
+    },
+    {
+      "api": "openai-responses",
+      "model": "gpt-6.1-sol",
+      "provider": "ghc"
+    }
+  ],
+  "outcome": "Strengthen the Windows containment close proof in daemon/internal/platform. Today jobContainment.Close reports a successful stop once JobObjectBasicAccountingInformation.ActiveProcesses reaches zero; the recorded intermittent failure of TestCloseStopsOwnedChildAfterLeaderExit shows that this accounting sample does not by itself establish that an owned process has stopped running. Before Close reports success, every process the Job Object reported owning must be confirmed no longer running, bound to that process's creation-time identity so a recycled PID cannot satisfy the confirmation, within the existing bounded close deadline; Close must fail closed when an observed owned process cannot be confirmed settled before that deadline. Preserve the existing stop-receipt, helper-release, idempotency, retry and error-preservation behavior, and every existing assertion: the package's baseline tests are unmodifiable and already drive Close through its job-call seams with non-real job handles, so Close must keep its current observable behavior for those fixtures. The change stays bounded to the Windows close proof plus the required coverage; no new daemon-wide mechanism, scheduler or second authority may be introduced.",
+  "phases": [
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.3103850999999999,
+      "known_subtotals": {
+        "assistant_messages": 71,
+        "assistant_messages_with_cost_total": 71,
+        "assistant_messages_with_usage": 71,
+        "cacheRead": {
+          "messages": 71,
+          "sum": 9606656
+        },
+        "cacheWrite": {
+          "messages": 71,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 71,
+          "sum": 9606656
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 71,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 71,
+            "sum": 0
+          },
+          "input": {
+            "messages": 71,
+            "sum": 0.1257831
+          },
+          "output": {
+            "messages": 71,
+            "sum": 0.18460199999999993
+          },
+          "total": {
+            "messages": 71,
+            "sum": 0.3103850999999999
+          }
+        },
+        "input": {
+          "messages": 71,
+          "sum": 419277
+        },
+        "output": {
+          "messages": 71,
+          "sum": 153835
+        },
+        "reasoningTokens": {
+          "messages": 58,
+          "sum": 126413
+        },
+        "totalTokens": {
+          "messages": 71,
+          "sum": 10179768
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 71,
+        "assistant_messages_with_cost_total": 71,
+        "assistant_messages_with_usage": 71,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-tencent-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 87,
+          "message": 157,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1,
+          "ttsr_injection": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          },
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 3
+          }
+        ],
+        "records": 250,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.flash_max",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:3f39d10e02163ded92a845c2b235f74b0f02db8723125be4106a54f5616a52c1",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 71,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:526686324e037db60a68750128f96d35df8138a8f039449df37e9bed8a45858f"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e615-e46a-700a-a4c5-c2f08451c83a",
+      "stage": "implementation",
+      "tokens": {
+        "cached": 9606656,
+        "input": 419277,
+        "output": 153835
+      },
+      "wall_time": 1151.006
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.19245389999999996,
+      "known_subtotals": {
+        "assistant_messages": 26,
+        "assistant_messages_with_cost_total": 26,
+        "assistant_messages_with_usage": 26,
+        "cacheRead": {
+          "messages": 26,
+          "sum": 2182208
+        },
+        "cacheWrite": {
+          "messages": 26,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 26,
+          "sum": 2182208
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 26,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 26,
+            "sum": 0
+          },
+          "input": {
+            "messages": 26,
+            "sum": 0.07236150000000001
+          },
+          "output": {
+            "messages": 26,
+            "sum": 0.12009240000000002
+          },
+          "total": {
+            "messages": 26,
+            "sum": 0.19245389999999996
+          }
+        },
+        "input": {
+          "messages": 26,
+          "sum": 241205
+        },
+        "output": {
+          "messages": 26,
+          "sum": 100077
+        },
+        "reasoningTokens": {
+          "messages": 26,
+          "sum": 84047
+        },
+        "totalTokens": {
+          "messages": 26,
+          "sum": 2523490
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 26,
+        "assistant_messages_with_cost_total": 26,
+        "assistant_messages_with_usage": 26,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-tencent-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 37,
+          "message": 61,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          },
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 3
+          }
+        ],
+        "records": 103,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.flash_max",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:b8a4030fa81a4774a19f419a88ac662041dec7199bbf13d75ccfd03ec851ad7a",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 26,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:396ffc4e583b3d2f46d404011b1742d5dd46453735ab8677e2fecb6295a34e85"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e62f-efca-76b6-bc95-9d7a535d7363",
+      "stage": "repair",
+      "tokens": {
+        "cached": 2182208,
+        "input": 241205,
+        "output": 100077
+      },
+      "wall_time": 537.854
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.38095819999999997,
+      "known_subtotals": {
+        "assistant_messages": 13,
+        "assistant_messages_with_cost_total": 13,
+        "assistant_messages_with_usage": 13,
+        "cacheRead": {
+          "messages": 13,
+          "sum": 726477
+        },
+        "cacheWrite": {
+          "messages": 13,
+          "sum": 85469
+        },
+        "cached": {
+          "messages": 13,
+          "sum": 811946
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 13,
+            "sum": 0.07264770000000001
+          },
+          "cacheWrite": {
+            "messages": 13,
+            "sum": 0.21367250000000007
+          },
+          "input": {
+            "messages": 13,
+            "sum": 7.799999999999999e-05
+          },
+          "output": {
+            "messages": 13,
+            "sum": 0.09456000000000002
+          },
+          "total": {
+            "messages": 13,
+            "sum": 0.38095819999999997
+          }
+        },
+        "input": {
+          "messages": 13,
+          "sum": 39
+        },
+        "output": {
+          "messages": 13,
+          "sum": 9456
+        },
+        "reasoningTokens": {
+          "messages": 10,
+          "sum": 5204
+        },
+        "totalTokens": {
+          "messages": 13,
+          "sum": 821441
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 13,
+        "assistant_messages_with_cost_total": 13,
+        "assistant_messages_with_usage": 13,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-ghc-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 54,
+          "message": 65,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          },
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 3
+          }
+        ],
+        "records": 124,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:ffe5bd839a28cb291e431e0f15df0444ac8bc116c26f9dfab7a7de83ed166dcd",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 13,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:f0ff1d29213d8db3f005abd0fd73840ace6b9fa5387f52b35f62f72dbccecf57"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e628-8c7b-7170-8c36-2adccee0f6fb",
+      "stage": "review",
+      "tokens": {
+        "cached": 811946,
+        "input": 39,
+        "output": 9456
+      },
+      "wall_time": 459.547
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.4200073000000001,
+      "known_subtotals": {
+        "assistant_messages": 15,
+        "assistant_messages_with_cost_total": 15,
+        "assistant_messages_with_usage": 15,
+        "cacheRead": {
+          "messages": 15,
+          "sum": 967823
+        },
+        "cacheWrite": {
+          "messages": 15,
+          "sum": 84562
+        },
+        "cached": {
+          "messages": 15,
+          "sum": 1052385
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 15,
+            "sum": 0.0967823
+          },
+          "cacheWrite": {
+            "messages": 15,
+            "sum": 0.21140500000000004
+          },
+          "input": {
+            "messages": 15,
+            "sum": 8.999999999999998e-05
+          },
+          "output": {
+            "messages": 15,
+            "sum": 0.11173000000000002
+          },
+          "total": {
+            "messages": 15,
+            "sum": 0.4200073000000001
+          }
+        },
+        "input": {
+          "messages": 15,
+          "sum": 45
+        },
+        "output": {
+          "messages": 15,
+          "sum": 11173
+        },
+        "reasoningTokens": {
+          "messages": 13,
+          "sum": 4489
+        },
+        "totalTokens": {
+          "messages": 15,
+          "sum": 1063603
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 15,
+        "assistant_messages_with_cost_total": 15,
+        "assistant_messages_with_usage": 15,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-ghc-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 77,
+          "message": 90,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          },
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 3
+          }
+        ],
+        "records": 172,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:505cd2d81aca89abad48e49cf2fecd0d9daf0198cae18a762259d496e12c06ff",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 15,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:0eedcf66327db4d5a03e6e6a4fc63f99bcc7e4738acf8b24a81ac24fa64df6f6"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e639-b6d1-7234-9401-2736546ff3b2",
+      "stage": "review",
+      "tokens": {
+        "cached": 1052385,
+        "input": 45,
+        "output": 11173
+      },
+      "wall_time": 366.81
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "Scoped code exploration happened inside the single charged worker session recorded in the implementation phase; no separate exploration model call was made.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "exploration",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0.0
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "Frozen gates were executed by the coordinator runner in the sealed checkout for attempt-0001 (rejected revision) and attempt-0002 (repaired revision); the phase seconds are the recorded gate wall windows.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "verification",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 94.0
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "The first revision failed independent semantic review with three open findings (F1-F3); its work is charged in the implementation and first review rows, so it is not double-counted here.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "failed_attempt",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0.0
+    }
+  ],
+  "prompt_hashes": [
+    {
+      "kind": "user_message",
+      "sha256": "sha256:0eedcf66327db4d5a03e6e6a4fc63f99bcc7e4738acf8b24a81ac24fa64df6f6"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:396ffc4e583b3d2f46d404011b1742d5dd46453735ab8677e2fecb6295a34e85"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:526686324e037db60a68750128f96d35df8138a8f039449df37e9bed8a45858f"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:f0ff1d29213d8db3f005abd0fd73840ace6b9fa5387f52b35f62f72dbccecf57"
+    }
+  ],
+  "repair_count": 1,
+  "review": null,
+  "review_time": 826.357,
+  "reviewed_explanations": null,
+  "reviewer_findings": [],
+  "risk_class": "native-ownership-settlement",
+  "routes": {
+    "reviewer": {
+      "authorization_ref": "0008b reuse_existing authorization: existing configured strong route for independent verification/review; invocation separation recorded, not model-family diversity",
+      "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+      "model_id": "gpt-6.1-sol",
+      "provenance": "omp headless independent reviewer invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; separate invocation and context from the worker"
+    },
+    "worker": {
+      "authorization_ref": "0008b reuse_existing authorization: existing configured lightweight worker route, no new profile, spend cap or credential",
+      "credential_route": "Existing configured tencent-litellm provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+      "model_id": "deepseek-v4.1-flash-fast",
+      "provenance": "omp headless worker invocation with configured role @flash_max (modelRoles.flash_max = tencent-litellm/deepseek-v4.1-flash-fast:max); provider tencent-litellm; api openai-completions; no per-call model override"
+    }
+  },
+  "schema": "symmetry-model-routing-evaluation/v1",
+  "subject": {
+    "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+    "changed_paths": [
+      {
+        "path": "daemon/internal/platform/process_owned_settle_windows_test.go",
+        "status": "A"
+      },
+      {
+        "path": "daemon/internal/platform/process_windows.go",
+        "status": "M"
+      }
+    ],
+    "content_revision": "uncommitted:sha256:f98cd39d39f3dc716b5d436f8cba6279efdadfd794dc3e4c460de1844637cee8",
+    "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+    "manifest_digest": "sha256:f98cd39d39f3dc716b5d436f8cba6279efdadfd794dc3e4c460de1844637cee8",
+    "subject_hash": "sha256:1ce76d473dc5c7e0f9eb63d0786fa25140c1a8b0426041a5963e039ec9f6c23f"
+  },
+  "subject_hash": "sha256:1ce76d473dc5c7e0f9eb63d0786fa25140c1a8b0426041a5963e039ec9f6c23f",
+  "task_id": "0008b-go-close-owned-settle",
+  "tokens": {
+    "cached": 13653195,
+    "input": 660566,
+    "known_cached_subtotal": 13653195,
+    "known_input_subtotal": 660566,
+    "known_output_subtotal": 274541,
+    "output": 274541
+  },
+  "wall_time": 2734.0,
+  "workflow": "reuse_existing"
+}
