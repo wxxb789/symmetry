@@ -159,6 +159,14 @@ test("real response loading, network failure and recovery", async ({ page }, tes
   await page.unrouteAll({ behavior: "wait" });
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
   allowBrowserError(page, /net::ERR_FAILED|Failed to fetch|Failed to load resource/);
+  // The attention entry point reads the workspace only for its project scope,
+  // so a workspace-only failure there correctly renders the stale variant
+  // ("Refresh failed — showing last loaded data") because the attention read
+  // itself succeeded. The un-stale failure heading belongs on the projects
+  // surface, whose primary read IS the workspace one, so the assertions below
+  // move there instead of being weakened.
+  await page.goto("/portal/projects");
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
   await page.route("**/portal/api/workspace*", (route) => route.abort("failed"));
   await page.reload();
   await expect(page.getByRole("heading", { name: "Unable to load workspace" })).toBeVisible();
