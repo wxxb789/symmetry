@@ -29,6 +29,50 @@ defmodule SymmetryControl.Integrations do
     Repo.all(from connection in Connection, order_by: [asc: connection.name, asc: connection.id])
   end
 
+  @doc """
+  Supported provider catalog for the connection surfaces.
+
+  The allowed auth type and capability ids come from the connection schema, so
+  the browser never restates provider policy.
+  """
+  def connection_providers do
+    Enum.map(Connection.providers(), fn provider ->
+      [auth_type] = Connection.auth_types(provider)
+
+      %{
+        id: provider,
+        auth_type: auth_type,
+        capabilities: Connection.capabilities()
+      }
+    end)
+  end
+
+  @doc """
+  Bound resources grouped by connection, used by the connection reads.
+
+  Pass `:all` for every connection or a list of connection ids to scope the
+  read. Each returned resource carries its `project` association.
+  """
+  def list_bound_resources(connection_ids \\ :all) do
+    query =
+      from resource in ProjectResource,
+        join: project in Project,
+        on: project.id == resource.project_id,
+        where: not is_nil(resource.connection_id),
+        order_by: [asc: project.key, asc: resource.kind, asc: resource.name, asc: resource.id],
+        preload: [project: project]
+
+    query =
+      case connection_ids do
+        :all -> query
+        ids -> from resource in query, where: resource.connection_id in ^ids
+      end
+
+    query
+    |> Repo.all()
+    |> Enum.group_by(& &1.connection_id)
+  end
+
   def create_connection(attrs) when is_map(attrs) do
     with :ok <- reject_secret_attrs(attrs),
          {:ok, auth_type} <- auth_type_for(attr_value(attrs, :provider)) do
@@ -37,9 +81,16 @@ defmodule SymmetryControl.Integrations do
         |> drop_attrs([:status, :status_message, :metadata, :last_checked_at])
         |> put_attr(:auth_type, auth_type)
 
-      %Connection{}
-      |> Connection.changeset(attrs)
-      |> Repo.insert()
+      case applied_connection(attrs) do
+        {:ok, connection} ->
+          {:replayed, connection}
+
+        :error ->
+          %Connection{}
+          |> Connection.changeset(attrs)
+          |> Repo.insert()
+          |> replay_racing_connection(attrs)
+      end
     end
   end
 
@@ -1741,6 +1792,55 @@ defmodule SymmetryControl.Integrations do
       do: {:error, :invalid_request},
       else: :ok
   end
+
+  # An identical connection submission is the same intent: `[provider, name]` is
+  # the natural key, so a repeat (double submit, retry after an unknown outcome)
+  # returns the applied row instead of creating a second one or a duplicate-name
+  # error. A different payload keeps the ordinary validation error.
+  defp applied_connection(attrs) do
+    with name when is_binary(name) <- attr_value(attrs, :name),
+         provider when is_binary(provider) <- attr_value(attrs, :provider),
+         %Connection{} = connection <-
+           Repo.get_by(Connection, provider: provider, name: String.trim(name)),
+         true <- equivalent_intent?(connection, attrs) do
+      {:ok, connection}
+    else
+      _value -> :error
+    end
+  end
+
+  defp equivalent_intent?(connection, attrs) do
+    connection.account_ref == trimmed(attr_value(attrs, :account_ref)) and
+      normalized_capabilities(connection.capabilities) ==
+        normalized_capabilities(attr_value(attrs, :capabilities))
+  end
+
+  defp replay_racing_connection({:error, %Ecto.Changeset{} = changeset}, attrs) do
+    with true <- duplicate_name?(changeset),
+         {:ok, connection} <- applied_connection(attrs) do
+      {:replayed, connection}
+    else
+      _value -> {:error, changeset}
+    end
+  end
+
+  defp replay_racing_connection(result, _attrs), do: result
+
+  defp duplicate_name?(changeset) do
+    Enum.any?(changeset.errors, fn
+      {:name, {_message, options}} -> options[:constraint] == :unique
+      _error -> false
+    end)
+  end
+
+  defp normalized_capabilities(value) when is_list(value) do
+    value |> Enum.filter(&is_binary/1) |> Enum.uniq() |> Enum.sort()
+  end
+
+  defp normalized_capabilities(_value), do: nil
+
+  defp trimmed(value) when is_binary(value), do: String.trim(value)
+  defp trimmed(value), do: value
 
   defp auth_type_for("github"), do: {:ok, "gh_cli"}
   defp auth_type_for("azure_devops"), do: {:ok, "entra_id"}

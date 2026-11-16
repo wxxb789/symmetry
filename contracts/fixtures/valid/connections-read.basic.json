@@ -1,0 +1,70 @@
+{
+  "providers": [
+    {
+      "id": "github",
+      "auth_type": "gh_cli",
+      "capabilities": ["repositories", "work_items", "changes", "ci"],
+      "label": "GitHub"
+    },
+    {
+      "id": "azure_devops",
+      "auth_type": "entra_id",
+      "capabilities": ["repositories", "work_items", "changes", "ci"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "20000000-0000-4000-8000-000000000001",
+      "provider": "github",
+      "name": "GitHub engineering",
+      "account_ref": "acme",
+      "auth_type": "gh_cli",
+      "capabilities": ["repositories", "work_items", "changes", "ci"],
+      "status": "healthy",
+      "status_message": null,
+      "metadata": {"actor": "acme-operator", "account_type": "Organization", "latency_ratio": 0.5},
+      "last_checked_at": "2026-11-16T08:30:00.123456Z",
+      "version": 3,
+      "resources": [
+        {
+          "id": "30000000-0000-4000-8000-000000000001",
+          "project_id": "10000000-0000-4000-8000-000000000001",
+          "project_key": "EXT",
+          "project_name": "Connected engineering",
+          "project_status": "active",
+          "kind": "repository",
+          "name": "symmetry",
+          "provider": "github",
+          "external_ref": "acme/symmetry",
+          "url": "https://github.com/acme/symmetry",
+          "status": "healthy",
+          "sync_status": "synced",
+          "status_message": null,
+          "metadata": {"default_branch": "main", "repository_id": 1457073269},
+          "last_checked_at": "2026-11-16T08:31:00.000000Z",
+          "last_synced_at": "2026-11-16T08:31:00.000000Z",
+          "version": 4
+        },
+        {
+          "id": "30000000-0000-4000-8000-000000000002",
+          "project_id": "10000000-0000-4000-8000-000000000002",
+          "project_key": "OLD",
+          "project_name": "Archived delivery",
+          "project_status": "archived",
+          "kind": "ci",
+          "name": "symmetry pipelines",
+          "provider": "github",
+          "external_ref": "acme/symmetry",
+          "url": null,
+          "status": "unknown",
+          "sync_status": "unknown",
+          "status_message": "Not synchronized since the last capability change",
+          "metadata": {},
+          "last_checked_at": null,
+          "last_synced_at": null,
+          "version": 1
+        }
+      ]
+    }
+  ]
+}

@@ -51,7 +51,8 @@ defmodule SymmetryControl.Goals.ContractValidation do
     decision: "decision.schema.json",
     usage: "usage.schema.json",
     adapter_capabilities: "adapter-capabilities.schema.json",
-    workspace_read: "workspace-read.schema.json"
+    workspace_read: "workspace-read.schema.json",
+    connections_read: "connections-read.schema.json"
   }
 
   @draft7 "http://json-schema.org/draft-07/schema#"
@@ -126,6 +127,9 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   @spec validate_workspace_read(map(), keyword()) :: validation_result()
   def validate_workspace_read(data, opts \\ []), do: validate(:workspace_read, data, opts)
+
+  @spec validate_connections_read(map(), keyword()) :: validation_result()
+  def validate_connections_read(data, opts \\ []), do: validate(:connections_read, data, opts)
 
   @spec validate_adapter_capabilities(map() | list(), keyword()) :: validation_result()
   def validate_adapter_capabilities(data, opts \\ []),

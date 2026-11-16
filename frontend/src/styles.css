@@ -48,7 +48,7 @@
   .nav-link:hover { text-decoration: none; background: var(--color-canvas); color: var(--color-ink); }
   .nav-link.active { background: var(--color-accent-soft); color: var(--color-accent); }
   .sidebar-footer { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px; color: var(--color-muted); font-size: 12px; }
-  .read-only-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-muted); }
+  .state-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-muted); }
   .workspace-body { min-width: 0; display: flex; flex-direction: column; }
   .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 76px; padding: 16px 32px; border-bottom: 1px solid var(--color-line); background: var(--color-surface); }
   .topbar-start, .topbar-actions { display: flex; align-items: center; gap: 16px; min-width: 0; }
@@ -116,6 +116,40 @@
   .command-result { display: flex; gap: 12px; align-items: center; color: var(--color-ink); padding: 10px 12px; border-radius: 6px; }
   .command-result:hover, .command-result:focus-visible { text-decoration: none; background: var(--color-accent-soft); }
   .navigation-dialog { inset: 0 auto 0 0; width: min(300px, calc(100vw - 40px)); }
+  .connection-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); gap: 24px; align-items: start; }
+  .connection-list { display: grid; gap: 12px; }
+  .connection-row { display: block; }
+  .connection-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; width: 100%; text-align: left; padding: 16px 20px; border: 1px solid var(--color-line); border-radius: 8px; background: var(--color-surface); color: var(--color-ink); }
+  .connection-card:hover { background: var(--color-canvas); }
+  .connection-card-selected { border-color: var(--color-accent); background: var(--color-accent-soft); }
+  .connection-main { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+  .connection-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .connection-capabilities { display: flex; flex-wrap: wrap; gap: 6px; }
+  .capability-chip { padding: 2px 8px; border: 1px solid var(--color-line); border-radius: 5px; font-size: 11px; color: var(--color-muted); }
+  .connection-meta { display: grid; gap: 6px; justify-items: end; text-align: right; color: var(--color-muted); }
+  .connection-detail { border: 1px solid var(--color-line); border-radius: var(--radius-panel); background: var(--color-surface); padding: 20px; display: grid; gap: 16px; }
+  .connection-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 0; }
+  .connection-facts dt { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--color-muted); }
+  .connection-facts dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+  .connection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .bound-resource-list { display: grid; gap: 8px; }
+  .bound-resource-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--color-line); }
+  .bound-resource-main { min-width: 0; overflow-wrap: anywhere; display: grid; gap: 4px; }
+  .bound-resource-state { display: grid; gap: 6px; justify-items: end; }
+  .connection-form { display: grid; gap: 8px; margin-top: 16px; }
+  .connection-form label { font-size: 12px; color: var(--color-muted); }
+  .capability-fieldset { display: grid; gap: 8px; border: 1px solid var(--color-line); border-radius: 8px; padding: 12px; margin: 8px 0 0; }
+  .capability-fieldset legend { font-size: 12px; color: var(--color-muted); padding: 0 4px; }
+  .capability-option { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-ink); }
+  .capability-option input { min-height: 0; }
+  .field-error { color: var(--color-danger); font-size: 12px; }
+  .dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .status-attention { border-color: #e4cfae; background: var(--color-warning-soft); color: var(--color-warning); }
+  /* The dialog is offset from the top, so its height budget has to subtract that
+     offset: with a fixed 100dvh - 64px the action buttons ended up below the
+     viewport on a 915px-tall mobile viewport once the field and refusal notices
+     were rendered, leaving Cancel unclickable. */
+  .connection-dialog { max-height: calc(100dvh - min(18vh, 120px) - 24px); overflow-y: auto; }
   .loading-icon { animation: spin 1s linear infinite; }
 }
 
@@ -189,6 +223,7 @@
 @media (prefers-reduced-motion: reduce) { .loading-icon { animation: none; } }
 @media (max-width: 900px) {
   .topbar { padding: 16px 24px; }
+  .connection-layout { grid-template-columns: minmax(0, 1fr); }
   .command-trigger > span, .command-trigger > kbd { display: none; }
   .workspace-content { padding: 28px 24px 40px; }
   .content-footer { padding-inline: 24px; }

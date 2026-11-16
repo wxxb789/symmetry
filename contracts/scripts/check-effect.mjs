@@ -10,10 +10,12 @@ const presentationReadSchemas = new Set([
   "work-detail-read",
   "work-timeline-read",
   "workspace-read",
+  "connections-read",
 ]);
 const decoders = {
   "adapter-capabilities": Contracts.AdapterCapabilities,
   admission: Contracts.Admission,
+  "connections-read": Contracts.ConnectionsRead,
   "context-snapshot": Contracts.ContextSnapshot,
   decision: Contracts.Decision,
   "evidence-batch-conflict-details": Contracts.EvidenceBatchConflictDetails,
@@ -33,6 +35,7 @@ const decoders = {
 const schemas = {
   "adapter-capabilities": Contracts.AdapterCapabilitiesSchema,
   admission: Contracts.AdmissionSchema,
+  "connections-read": Contracts.ConnectionsReadSchema,
   "context-snapshot": Contracts.ContextSnapshotSchema,
   decision: Contracts.DecisionSchema,
   "evidence-batch-conflict-details": Contracts.EvidenceBatchConflictDetailsSchema,

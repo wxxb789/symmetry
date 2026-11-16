@@ -106,6 +106,111 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
              |> json_response(422)
   end
 
+  test "connection read lists provider policy, connections and bound resources" do
+    connection = create_connection("Read projection")
+    project = create_project()
+
+    assert %{"resource" => resource} =
+             api_conn()
+             |> post("/portal/api/projects/#{project["id"]}/resources", %{
+               "connection_id" => connection["id"],
+               "kind" => "work_tracking",
+               "name" => "Read tracker",
+               "external_ref" => "acme/symmetry"
+             })
+             |> json_response(201)
+
+    assert %{"providers" => providers, "connections" => connections} =
+             api_conn() |> get("/portal/api/connections") |> json_response(200)
+
+    assert Enum.map(providers, & &1["id"]) |> Enum.sort() == ["azure_devops", "github"]
+
+    assert %{"auth_type" => "gh_cli", "capabilities" => capabilities} =
+             Enum.find(providers, &(&1["id"] == "github"))
+
+    assert capabilities == ["repositories", "work_items", "changes", "ci"]
+
+    listed = Enum.find(connections, &(&1["id"] == connection["id"]))
+    assert listed["version"] == connection["version"]
+    assert listed["auth_type"] == "gh_cli"
+    refute Map.has_key?(listed, "credential")
+
+    assert [bound] = listed["resources"]
+    assert bound["id"] == resource["id"]
+    assert bound["project_id"] == project["id"]
+    assert bound["project_key"] == project["key"]
+    assert bound["project_status"] == "active"
+    assert bound["status"] == "unknown"
+    assert bound["sync_status"] == "unknown"
+  end
+
+  test "an identical connection submission replays the applied connection" do
+    payload = %{
+      "provider" => "github",
+      "name" => "Replayed submission",
+      "account_ref" => "acme",
+      "capabilities" => ["repositories", "ci"]
+    }
+
+    assert %{"disposition" => "created", "connection" => created} =
+             api_conn() |> post("/portal/api/connections", payload) |> json_response(201)
+
+    assert %{"disposition" => "replayed", "connection" => replayed} =
+             api_conn() |> post("/portal/api/connections", payload) |> json_response(200)
+
+    assert replayed["id"] == created["id"]
+
+    assert %{"connections" => connections} =
+             api_conn() |> get("/portal/api/connections") |> json_response(200)
+
+    assert length(Enum.filter(connections, &(&1["name"] == "Replayed submission"))) == 1
+
+    # Ecto attributes a composite unique constraint to its first field; the
+    # message names the actual conflict so the console can render it verbatim.
+    assert %{
+             "error" => %{
+               "code" => "validation_failed",
+               "fields" => %{"provider" => ["already has a connection with this name"]}
+             }
+           } =
+             api_conn()
+             |> post("/portal/api/connections", %{payload | "capabilities" => ["work_items"]})
+             |> json_response(422)
+  end
+
+  test "a capability update resets bound resource health in the connection read" do
+    connection = create_connection("Reset projection")
+    project = create_project()
+    tracker = create_tracker(project, connection, "Reset tracker")
+
+    assert %{"resource" => synced} =
+             api_conn()
+             |> post("/portal/api/resources/#{tracker["id"]}/sync")
+             |> json_response(200)
+
+    assert synced["status"] == "healthy"
+    assert synced["sync_status"] == "synced"
+
+    assert %{"connection" => updated} =
+             api_conn()
+             |> patch("/portal/api/connections/#{connection["id"]}", %{
+               "version" => connection["version"],
+               "capabilities" => ["work_items", "ci"]
+             })
+             |> json_response(200)
+
+    assert updated["status"] == "unknown"
+    assert updated["last_checked_at"] == nil
+    assert [reset] = updated["resources"]
+    assert reset["id"] == tracker["id"]
+    assert reset["status"] == "unknown"
+    assert reset["sync_status"] == "unknown"
+    assert reset["status_message"] == nil
+    assert reset["last_checked_at"] == nil
+    assert reset["last_synced_at"] == nil
+    assert reset["version"] == synced["version"] + 1
+  end
+
   test "portal connects a provider, binds resources, syncs work, and never returns credentials" do
     assert %{"connection" => connection} =
              api_conn()

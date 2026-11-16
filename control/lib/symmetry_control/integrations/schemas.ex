@@ -7,6 +7,7 @@ defmodule SymmetryControl.Integrations.Connection do
   @providers ["github", "azure_devops"]
   @statuses ["healthy", "degraded", "offline", "unknown"]
   @capabilities ["repositories", "work_items", "changes", "ci"]
+  @auth_types %{"github" => ["gh_cli"], "azure_devops" => ["entra_id"]}
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -46,7 +47,7 @@ defmodule SymmetryControl.Integrations.Connection do
     |> validate_connection()
     |> validate_inclusion(:status, @statuses)
     |> validate_status_message()
-    |> unique_constraint([:provider, :name])
+    |> unique_constraint([:provider, :name], message: "already has a connection with this name")
   end
 
   def update_changeset(connection, attrs) do
@@ -64,7 +65,7 @@ defmodule SymmetryControl.Integrations.Connection do
     |> validate_connection()
     |> validate_inclusion(:status, @statuses)
     |> validate_status_message()
-    |> unique_constraint([:provider, :name])
+    |> unique_constraint([:provider, :name], message: "already has a connection with this name")
     |> optimistic_lock(:lock_version)
   end
 
@@ -86,6 +87,11 @@ defmodule SymmetryControl.Integrations.Connection do
     |> no_assoc_constraint(:provider_action_intents)
     |> optimistic_lock(:lock_version)
   end
+
+  def providers, do: @providers
+  def statuses, do: @statuses
+  def capabilities, do: @capabilities
+  def auth_types(provider), do: Map.get(@auth_types, provider, [])
 
   defp normalize(changeset) do
     changeset
@@ -128,14 +134,11 @@ defmodule SymmetryControl.Integrations.Connection do
   end
 
   defp validate_auth_type(changeset) do
-    allowed =
-      case get_field(changeset, :provider) do
-        "github" -> ["gh_cli"]
-        "azure_devops" -> ["entra_id"]
-        _ -> []
-      end
-
-    validate_inclusion(changeset, :auth_type, allowed)
+    validate_inclusion(
+      changeset,
+      :auth_type,
+      auth_types(get_field(changeset, :provider))
+    )
   end
 
   defp validate_status_message(changeset) do

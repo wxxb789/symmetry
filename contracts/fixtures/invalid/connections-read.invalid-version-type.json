@@ -1,0 +1,21 @@
+{
+  "providers": [
+    {"id": "github", "auth_type": "gh_cli", "capabilities": ["repositories"]}
+  ],
+  "connections": [
+    {
+      "id": "20000000-0000-4000-8000-000000000003",
+      "provider": "github",
+      "name": "Stale version type",
+      "account_ref": "acme",
+      "auth_type": "gh_cli",
+      "capabilities": ["repositories"],
+      "status": "unknown",
+      "status_message": null,
+      "metadata": {},
+      "last_checked_at": null,
+      "version": "1",
+      "resources": []
+    }
+  ]
+}

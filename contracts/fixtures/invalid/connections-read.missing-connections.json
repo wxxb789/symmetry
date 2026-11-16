@@ -1,0 +1,5 @@
+{
+  "providers": [
+    {"id": "github", "auth_type": "gh_cli", "capabilities": ["repositories"]}
+  ]
+}

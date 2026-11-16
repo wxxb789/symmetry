@@ -16,6 +16,11 @@ describe("one-time legacy navigation", () => {
     expect(legacyDestination("#board", "?project_id=p2")).toBe("/portal/classic?project_id=p2#board");
   });
 
+  it("sends the retired connections anchor to the new route", () => {
+    expect(legacyDestination("#connections")).toBe("/portal/connections");
+    expect(legacyDestination("#connections", "?connectionId=abc")).toBe("/portal/connections?connectionId=abc");
+  });
+
   it("explains unsupported destinations rather than inventing pages", () => {
     expect(legacyDestination("#unknown")).toBe("/portal/attention?unavailable=unknown");
   });

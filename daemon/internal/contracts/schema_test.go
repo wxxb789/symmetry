@@ -15,8 +15,8 @@ func TestAllGoalSchemasCompileAndGeneratedTimestampsStayStrings(t *testing.T) {
 	if err := ensureSchemas(); err != nil {
 		t.Fatalf("schemas did not compile: %v", err)
 	}
-	if len(schemas) != 17 {
-		t.Fatalf("compiled schemas = %d, want 17", len(schemas))
+	if len(schemas) != 18 {
+		t.Fatalf("compiled schemas = %d, want 18", len(schemas))
 	}
 	if commitPath == nil || commitPath.MatchTimeout != 10*time.Millisecond {
 		t.Fatalf("CommitPath regex timeout = %v, want %v", commitPath.MatchTimeout, 10*time.Millisecond)

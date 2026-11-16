@@ -1,6 +1,7 @@
 import { createRootRouteWithContext, createRoute, createRouter, Link, redirect } from "@tanstack/react-router";
 import type { Router, RouterHistory } from "@tanstack/react-router";
 import { AttentionPage } from "../features/attention/attention";
+import { ConnectionsPage } from "../features/connections/connections";
 import { workItemSearch, workSearch } from "../features/projects/filters";
 import { ProjectPage, ProjectsPage } from "../features/projects/projects";
 import { WorkDetailPage } from "../features/work/detail";
@@ -9,7 +10,7 @@ import { WorkspaceRoot } from "./shell";
 
 const rootRoute = createRootRouteWithContext<{ application: Application }>()({
   component: WorkspaceRoot,
-  notFoundComponent: () => <><h1 id="content-heading" tabIndex={-1}>Page not found</h1><p>This destination is not available in the read-only workspace.</p><Link to="/attention" search={{}}>Go to Attention</Link></>,
+  notFoundComponent: () => <><h1 id="content-heading" tabIndex={-1}>Page not found</h1><p>This destination is not available in this workspace.</p><Link to="/attention" search={{}}>Go to Attention</Link></>,
 });
 
 const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", beforeLoad: (): void => { redirect({ to: "/attention", search: {}, throw: true }); } });
@@ -25,7 +26,15 @@ const attentionRoute = createRoute({
 const projectsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/projects", component: ProjectsPage });
 const projectRoute = createRoute({ getParentRoute: () => rootRoute, path: "/projects/$projectId", validateSearch: workSearch, component: ProjectPage });
 const workItemRoute = createRoute({ getParentRoute: () => rootRoute, path: "/work/$workItemId", validateSearch: workItemSearch, component: WorkDetailPage });
-const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, projectsRoute, projectRoute, workItemRoute]);
+const connectionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/connections",
+  validateSearch: (search: Record<string, unknown>): { connectionId?: string } => ({
+    ...(typeof search["connectionId"] === "string" && search["connectionId"] ? { connectionId: search["connectionId"] } : {}),
+  }),
+  component: ConnectionsPage,
+});
+const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, projectsRoute, projectRoute, workItemRoute, connectionsRoute]);
 
 export type AppRouter = Router<typeof routeTree, "never", false, RouterHistory>;
 

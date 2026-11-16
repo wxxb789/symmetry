@@ -24,6 +24,12 @@ partial projections, while a production server serves them all.
 The detail read carries `outcome.summary` and `outcome.tests` verbatim from the
 reported task result or its evidence fallback, so those two fields require
 presence without constraining their JSON value shape.
+`connections-read.schema.json` describes the consumed fields of
+`/portal/api/connections` and of the connection projections the mutation
+endpoints return under the same names. It carries the server-owned provider
+catalog (allowed auth type and capability ids) plus each connection's bound
+resources, and keeps presentation values as open strings so an unknown status,
+capability or auth type stays renderable. Consume it as `ConnectionsRead`.
 `ContextSnapshot.content_hash` is the SHA-256 of canonical UTF-8 JSON for the
 schema-valid snapshot with its top-level `content_hash` omitted; keys sort
 recursively and arrays retain order.

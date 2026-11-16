@@ -11,6 +11,7 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
   @validators %{
     "adapter-capabilities" => &ContractValidation.validate_adapter_capabilities/2,
     "admission" => &ContractValidation.validate_admission/2,
+    "connections-read" => &ContractValidation.validate_connections_read/2,
     "context-snapshot" => &ContractValidation.validate_context_snapshot/2,
     "decision" => &ContractValidation.validate_decision/2,
     "evidence" => &ContractValidation.validate_evidence/2,

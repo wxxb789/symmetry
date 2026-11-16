@@ -51,3 +51,40 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
       classifier's skip list against the jobs that actually ran before treating the trim as
       fully accepted.
+
+- [ ] Revalidate the unreachable resource synchronization states. `project_resources` has a
+      `project_resources_sync_status_check` constraint admitting `syncing` and `stale`, and
+      `SymmetryControl.Workspaces.ReadModel` maps them to `syncing`/`attention` labels, but no
+      writer sets either value (`Integrations.persist_sync/4`,
+      `Integrations.record_resource_failure/3` and the connection/capability resets in
+      `Integrations.update_connection/2` and `Workspaces.update_resource/2` only write
+      `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
+      constraint and labels, and decide in a separate maintenance change whether the states
+      need a writer or the vocabulary needs a migration.
+
+- [ ] Investigate the intermittent browser failure `project, resource, work-item,
+      filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
+      detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
+      detached" (desktop-chromium). Observed once while implementing goal 0007d
+      (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
+      9 skipped) with two Control compiles running on the same host; the same test passed
+      twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
+      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
+      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
+
+- [ ] Investigate the environment-limited Windows command test. `CommandTest` "provider
+      token commands can keep stderr diagnostics out of stdout" fails with
+      `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
+      (observed while implementing goal 0007d: the full control suite reported 828/829
+      passed, 21 skipped, 1 failed on a clean dedicated test database).
+      `System.find_executable("pwsh")` returns `nil` here while `powershell.exe` resolves,
+      and putting the `WindowsApps` store alias on PATH makes two cases in that file fail
+      instead of one. `Command.run/3` and the test itself are untouched by 0007d.
+      Revalidate the Windows shell resolution; keep the assertion.
+
+- [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
+      the 0007d fixture database, 10 control tests fail because committed fixture rows are
+      visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
+      controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
+      on a clean dedicated test database. The browser harness recreates its own database;
+      the suite should use the repository default (`symmetry_control_test`).

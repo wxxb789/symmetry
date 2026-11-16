@@ -1,0 +1,41 @@
+{
+  "providers": [
+    {"id": "future_provider", "auth_type": "future_auth", "capabilities": ["repositories", "future_capability"]}
+  ],
+  "connections": [
+    {
+      "id": "20000000-0000-4000-8000-000000000002",
+      "provider": "future_provider",
+      "name": "Provider added after this build",
+      "account_ref": "acme",
+      "auth_type": "future_auth",
+      "capabilities": ["future_capability"],
+      "status": "degraded",
+      "status_message": "Provider authentication failed",
+      "metadata": {},
+      "last_checked_at": "2026-11-16T08:30:00.000000Z",
+      "version": 2,
+      "resources": [
+        {
+          "id": "30000000-0000-4000-8000-000000000003",
+          "project_id": "10000000-0000-4000-8000-000000000001",
+          "project_key": "EXT",
+          "project_name": "Connected engineering",
+          "project_status": "active",
+          "kind": "future_kind",
+          "name": "Future resource",
+          "provider": "future_provider",
+          "external_ref": "acme/future",
+          "url": "https://example.invalid/acme/future",
+          "status": "offline",
+          "sync_status": "stale",
+          "status_message": null,
+          "metadata": {"note": "unknown values stay renderable"},
+          "last_checked_at": null,
+          "last_synced_at": null,
+          "version": 1
+        }
+      ]
+    }
+  ]
+}

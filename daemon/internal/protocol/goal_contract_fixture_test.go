@@ -53,6 +53,13 @@ func TestGoalTransportParsesContractFixtures(t *testing.T) {
 
 			var semanticErr error
 			switch contractdto.Envelope(fixture.Schema) {
+			case contractdto.EnvelopeConnectionsRead:
+				var connections map[string]any
+				semanticErr = contractdto.DecodeSchema(
+					contractdto.EnvelopeConnectionsRead,
+					data,
+					&connections,
+				)
 			case contractdto.EnvelopeWorkspaceRead, contractdto.EnvelopeWorkDetailRead, contractdto.EnvelopeWorkTimelineRead:
 				var presentation map[string]any
 				semanticErr = contractdto.DecodeSchema(contractdto.Envelope(fixture.Schema), data, &presentation)

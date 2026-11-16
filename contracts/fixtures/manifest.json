@@ -81,6 +81,41 @@
       "tags": ["read-projection", "wrong-type"]
     },
     {
+      "id": "connections-read.basic",
+      "schema": "connections-read",
+      "path": "valid/connections-read.basic.json",
+      "valid": true,
+      "tags": ["read-projection", "nullable", "additive-fields", "fractional-metadata"]
+    },
+    {
+      "id": "connections-read.empty",
+      "schema": "connections-read",
+      "path": "valid/connections-read.empty.json",
+      "valid": true,
+      "tags": ["read-projection", "empty"]
+    },
+    {
+      "id": "connections-read.unknown-values",
+      "schema": "connections-read",
+      "path": "valid/connections-read.unknown-values.json",
+      "valid": true,
+      "tags": ["read-projection", "unknown-enum"]
+    },
+    {
+      "id": "connections-read.missing-connections",
+      "schema": "connections-read",
+      "path": "invalid/connections-read.missing-connections.json",
+      "valid": false,
+      "tags": ["read-projection", "missing-field"]
+    },
+    {
+      "id": "connections-read.invalid-version-type",
+      "schema": "connections-read",
+      "path": "invalid/connections-read.invalid-version-type.json",
+      "valid": false,
+      "tags": ["read-projection", "wrong-type"]
+    },
+    {
       "id": "goal-revision.basic",
       "schema": "goal-revision",
       "path": "valid/goal-revision.basic.json",

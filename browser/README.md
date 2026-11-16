@@ -103,6 +103,57 @@ project scope) as its return target while every other path stays rejected. Both
 are asserted by the fresh-session deep-link cases, which re-enter the work
 detail and the filtered board from a signed-out context and reload them.
 
+## Connection management acceptance
+
+`tests/portal-connections.spec.mjs` drives `/portal/connections` against the real
+Portal API and PostgreSQL: create, inspect, test, update, remove, repeated
+submission, stale update, concurrent removal, refused submissions and the
+capability reset of bound resource health. Provider calls go through the
+controlled fixture transport in `scripts/ci/portal-connection-fixture.exs`, which
+replaces the provider HTTP client and the local CLI session; no provider host is
+contacted and every fixture call is appended to the JSONL log below. The fixture
+CLI tokens are canaries: each test asserts no canary reaches a recorded
+same-origin response, the DOM, web storage or request headers.
+
+```sh
+cd control
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55440 POSTGRES_DB=symmetry_0007d_test mix ecto.create
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55440 POSTGRES_DB=symmetry_0007d_test mix ecto.migrate
+PHX_SERVER=true PORT=4021 \
+  SYMMETRY_FIXTURE_TRANSPORT_LOG=/tmp/symmetry-fixture-calls.jsonl \
+  SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS=expired-fixture \
+  mix run --no-halt ../scripts/ci/portal-connection-fixture.exs
+```
+
+Then, from the repository root, with the same operator token and the built
+frontend staged into `control/priv/static/portal`:
+
+```sh
+SYMMETRY_PORTAL_URL=http://127.0.0.1:4021 \
+  mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test tests/portal-connections.spec.mjs
+```
+
+`scripts/run-connection-fixture-tests.ps1` does that whole sequence in one
+command — recreates and migrates the fixture database (other portal specs leave
+projects, work items and resources behind in it), starts the fixture control
+plane, runs the spec, scans the control logs and the provider-call log for the
+fixture canaries, and stops the server:
+
+```powershell
+pwsh -NoProfile -File .\browser\scripts\run-connection-fixture-tests.ps1
+```
+
+The fixture is deliberately quieter than a development server: it logs at
+`warning` level, and it terminates the orchestration scheduler and reconciler
+after boot so their per-second database traffic does not contend with the flows
+under test. That makes `/healthz` report those two checks as down; readiness is
+the endpoint answering `/portal/login`. Provider access stays up, and the page
+load per browser run stays inside the spec's assertion budget.
+
+`tests/portal-classic-resources.spec.mjs` retains the classic workspace's
+resource binding, synchronization and assignment checks at `/portal/classic`;
+connection management itself is asserted on the new route above.
+
 ## Live daemon acceptance
 
 With the control plane running at `http://127.0.0.1:4000`, run the real daemon

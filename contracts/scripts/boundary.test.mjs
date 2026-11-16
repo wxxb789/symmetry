@@ -6,6 +6,7 @@ import addFormats from "ajv-formats";
 import { Effect, Either, Schema } from "effect";
 import {
   Admission,
+  ConnectionsRead,
   GoalCreate,
   PlanProposal,
   TaskResult,
@@ -85,6 +86,37 @@ test("WorkspaceRead still validates consumed fields after presentation JSON pars
   );
   assert.ok(Either.isLeft(result));
   assert.equal(result.left._tag, "ParseError");
+});
+
+test("ConnectionsRead keeps unknown presentation values renderable and consumed fields checked", async () => {
+  const bytes = await fs.readFile(
+    new URL("../fixtures/valid/connections-read.unknown-values.json", import.meta.url),
+  );
+  const decoded = await Effect.runPromise(ConnectionsRead.decodeJson(bytes));
+  assert.equal(decoded.connections[0].status, "degraded");
+  assert.equal(decoded.connections[0].resources[0].sync_status, "stale");
+  assert.deepEqual(decoded, JSON.parse(bytes.toString("utf8")));
+
+  const connection = await fixture("connections-read.basic");
+  assert.equal(
+    connection.connections[0].metadata.latency_ratio,
+    0.5,
+    "presentation numbers survive the read boundary",
+  );
+  const missing = { providers: connection.providers };
+  const missingResult = await Effect.runPromise(
+    Effect.either(ConnectionsRead.decodeJson(JSON.stringify(missing))),
+  );
+  assert.ok(Either.isLeft(missingResult));
+  assert.equal(missingResult.left._tag, "ParseError");
+
+  const wrongVersion = structuredClone(connection);
+  wrongVersion.connections[0].version = 1.5;
+  const versionResult = await Effect.runPromise(
+    Effect.either(ConnectionsRead.decodeJson(JSON.stringify(wrongVersion))),
+  );
+  assert.ok(Either.isLeft(versionResult));
+  assert.equal(versionResult.left._tag, "ParseError");
 });
 
 test("presentation numbers cannot bypass consumed integer schema constraints", async () => {

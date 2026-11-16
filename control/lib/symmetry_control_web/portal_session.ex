@@ -2,7 +2,8 @@ defmodule SymmetryControlWeb.PortalSession do
   @moduledoc false
 
   @default_max_age_seconds 8 * 60 * 60
-  @shell_path ~r{\A/portal(?:/(?:attention|projects(?:/[A-Za-z0-9_-]+)?|work/[A-Za-z0-9_-]+))?\z}
+  @shell_path ~r{\A/portal(?:/(?:attention|connections|projects(?:/[A-Za-z0-9_-]+)?|work/[A-Za-z0-9_-]+))?\z}
+  @connection_identifier_param ~r{\AconnectionId=[A-Za-z0-9_-]+\z}
   @classic_identifier_param ~r{\A(?:project_id|run_id)=[A-Za-z0-9_-]+\z}
   # Work-surface search state the shell itself writes into its own URLs: the
   # view, the text filters, and the JSON-encoded blocked flag. Values stay
@@ -40,6 +41,9 @@ defmodule SymmetryControlWeb.PortalSession do
 
   defp shell_query?("/portal/attention", query),
     do: Regex.match?(~r{\AprojectId=[A-Za-z0-9_-]+\z}, query)
+
+  defp shell_query?("/portal/connections", query),
+    do: Regex.match?(@connection_identifier_param, query)
 
   defp shell_query?("/portal/projects/" <> _project_id, query),
     do: work_query?(query, @work_search_params)
