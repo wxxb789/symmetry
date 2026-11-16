@@ -200,15 +200,19 @@ create/edit/archive/restore, work-item create/edit, board keyboard move and
 reorder, double submit, explicit retry, two-context conflicts on projects and
 work items, a draft kept across a background refresh, the cross-project race
 where a late board move lands only on its own project, Goal-managed and
-provider-owned items with no writable path, and an archived project's read-only
-board. Every mutation goes through the running control plane; interception only
-holds or aborts a captured request to inject the races the contract names.
+provider-owned items with no writable path, an archived project's read-only
+board, a create whose committed response is lost and replayed without a second
+row, moves into rendered empty columns (a backlog-only board and a board
+filtered to one state), and an open editor draft kept across the responsive
+breakpoint. Every mutation goes through the running control plane; interception
+only holds, aborts or replays a captured request to inject the races the
+contract names.
 `browser/scripts/run-planning-tests.ps1` is its harness: it starts the real
 control plane on a loopback port with a dedicated database and a per-run
 operator token, and the spec skips itself without that environment (the runner
 turns a skipped summary into a failure).
 
-The cases with a rendered end state (ten of the fourteen) capture a full-page
+The cases with a rendered end state (fourteen of the eighteen) capture a full-page
 screenshot plus an observation JSON through the shared `capture` helper; they
 land in the Playwright output directory
 (`SYMMETRY_PLAYWRIGHT_OUTPUT` when set, otherwise the per-user temp

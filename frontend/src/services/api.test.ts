@@ -162,3 +162,24 @@ describe("read boundary", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe(`/portal/api/work-items/${workItemId}/timeline?before=cursor%2F%2B%3F%3D%26`);
   });
 });
+
+describe("work-item receipts", () => {
+  it("sends the create draft verbatim and decodes the server's disposition", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "replayed", work_item: { id: workItemId } })));
+    const api = createApi(fetcher);
+    const draft = { title: "Retry me", creation_id: "11111111-2222-4333-8444-555555555555" };
+    const receipt = await api.createWorkItem("11111111-1111-4111-8111-111111111111", draft, "csrf", new AbortController().signal);
+    expect(receipt).toEqual({ id: workItemId, disposition: "replayed" });
+    const [path, init] = fetcher.mock.calls[0] ?? [];
+    expect(path).toBe("/portal/api/projects/11111111-1111-4111-8111-111111111111/work-items");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(JSON.stringify(draft));
+  });
+
+  it("treats an update receipt without a disposition as not replayed", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ work_item: { id: workItemId } })));
+    const api = createApi(fetcher);
+    const receipt = await api.updateWorkItem(workItemId, { version: 2, title: "Edited" }, "csrf", new AbortController().signal);
+    expect(receipt).toEqual({ id: workItemId, disposition: "" });
+  });
+});

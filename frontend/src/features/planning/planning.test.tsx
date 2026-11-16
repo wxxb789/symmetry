@@ -7,7 +7,7 @@ import { createApplication, type Application } from "../../app/application";
 import { createAppRouter } from "../../app/router";
 import type { Project, WorkItem } from "../../services/api";
 import { readWorkDetail } from "../../services/api.fixtures";
-import { boardMoveRequest, failureMode, providerOwnedControlsOf, workItemDraftOf, workItemFormStateOf, type BoardColumnSnapshot } from "./write-policy";
+import { boardMoveRequest, failureMode, providerOwnedControlsOf, resetPendingWorkItemCreations, workItemDraftOf, workItemFormStateOf, type BoardColumnSnapshot } from "./write-policy";
 
 // This suite drives the real component tree against a stateful HTTP double: the
 // double keeps a served revision per row and applies the same rules the Control
@@ -43,6 +43,8 @@ interface HarnessProject {
   default_workspace?: string;
   resources: HarnessResource[];
   work_items: WorkItem[];
+  /** creation_id -> work item id: the server's own creation identity index. */
+  creation_ids: Record<string, string>;
 }
 
 interface HarnessState {
@@ -97,6 +99,7 @@ function baseState(): HarnessState {
           { id: repositoryResourceId, kind: "repository", name: "Repo resource" },
           { id: "88888888-8888-4888-8888-888888888888", kind: "ci", name: "CI resource" },
         ],
+        creation_ids: {},
         work_items: [
           workItem({ id: firstItemId, title: "Legacy item", status: "backlog", position: 0 }),
           workItem({ id: secondItemId, title: "Ready item", status: "ready", position: 0 }),
@@ -131,6 +134,7 @@ function baseState(): HarnessState {
         default_agent_profile: "default",
         default_workspace: "primary",
         resources: [],
+        creation_ids: {},
         work_items: [workItem({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", project_id: secondProjectId, key: "TWO-1", title: "Archived item" })],
       },
     ],
@@ -159,6 +163,8 @@ interface Harness {
   requests: RecordedRequest[];
   /** The next mutation fails with a transport error before it reaches the double. */
   failNextMutation: { current: boolean };
+  /** The next work-item create commits on the double and its response is destroyed at the transport. */
+  loseNextCreateResponse: { current: boolean };
   /** Holds mutations until the returned release function runs. */
   holdNextMutation: () => () => void;
   fetcher: typeof fetch;
@@ -171,6 +177,7 @@ function createHarness(state: HarnessState = baseState()): Harness {
     state,
     requests,
     failNextMutation: { current: false },
+    loseNextCreateResponse: { current: false },
     holdNextMutation: () => {
       const resolvers = Promise.withResolvers<void>();
       gate = { promise: resolvers.promise, release: resolvers.resolve };
@@ -218,6 +225,7 @@ function createHarness(state: HarnessState = baseState()): Harness {
         default_agent_profile: text(body?.["default_agent_profile"], "default"),
         default_workspace: text(body?.["default_workspace"], "primary"),
         resources: [],
+        creation_ids: {},
         work_items: [],
       };
       state.projects = [...state.projects, created];
@@ -245,9 +253,20 @@ function createHarness(state: HarnessState = baseState()): Harness {
       if (title.trim() === "") {
         return json({ error: { code: "validation_failed", message: "request contains invalid fields", fields: { title: ["can't be blank"] } } }, 422);
       }
+      // The server's creation identity: a replayed identity answers with the
+      // row the original submission created instead of inserting a second one.
+      const creationId = typeof body?.["creation_id"] === "string" ? body["creation_id"] : "";
+      const replayedId = creationId === "" ? undefined : project.creation_ids[creationId];
+      if (replayedId !== undefined) return json({ disposition: "replayed", work_item: { id: replayedId } });
       const created = workItem({ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", title, project_id: project.id, status: text(body?.["status"], "backlog") });
       project.work_items = [...project.work_items, created];
-      return json({ work_item: { id: created.id } }, 201);
+      if (creationId !== "") project.creation_ids[creationId] = created.id;
+      if (harness.loseNextCreateResponse.current) {
+        harness.loseNextCreateResponse.current = false;
+        // Committed on the double; the answer dies at the transport.
+        throw new TypeError("fetch failed");
+      }
+      return json({ disposition: "created", work_item: { id: created.id } }, 201);
     }
     const moveMatch = /^\/portal\/api\/work-items\/([^/]+)\/move$/.exec(url.pathname);
     if (method === "PATCH" && moveMatch !== undefined && moveMatch !== null) {
@@ -284,7 +303,7 @@ function createHarness(state: HarnessState = baseState()): Harness {
 }
 
 const applications: Application[] = [];
-afterEach(() => { for (const application of applications) application.queryClient.clear(); applications.length = 0; localStorage.clear(); });
+afterEach(() => { for (const application of applications) application.queryClient.clear(); applications.length = 0; localStorage.clear(); resetPendingWorkItemCreations(); });
 
 function renderWorkspace(path: string, harness: Harness) {
   const application = createApplication({ fetcher: harness.fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
@@ -320,6 +339,12 @@ describe("planning write policy", () => {
     const second = columns[0]?.items[1];
     if (first === undefined || second === undefined) throw new Error("fixture missing");
     expect(boardMoveRequest({ direction: "left", item: first, columns, stateLabel: label, version: 4 })).toBeNull();
+    // An empty rendered column is a destination too: the move targets the
+    // column, not a card that happens to sit in it.
+    expect(boardMoveRequest({ direction: "right", item: first, columns: [{ state: "backlog", items: [first] }, { state: "ready", items: [] }], stateLabel: label, version: 4 })).toEqual({
+      intent: { version: 4, status: "ready", beforeId: null },
+      announcement: "Moved to READY",
+    });
     expect(boardMoveRequest({ direction: "right", item: first, columns, stateLabel: label, version: 4 })).toEqual({
       intent: { version: 4, status: "ready", beforeId: null },
       announcement: "Moved to READY",
@@ -565,6 +590,68 @@ describe("work item planning", () => {
     expect(await screen.findByText("can't be blank")).toBeVisible();
     expect(screen.getByLabelText("Title")).toHaveValue(" ");
     expect(within(screen.getByRole("dialog")).getByText(/validation_failed/)).toBeVisible();
+  });
+
+  it("mints one creation identity per draft and replays it verbatim on an explicit retry", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness();
+    renderWorkspace(`/portal/projects/${firstProjectId}`, harness);
+    await user.click(await screen.findByRole("button", { name: "New work item" }));
+    await user.type(screen.getByLabelText("Title"), "Identity item");
+    // The first attempt never reaches the double: the operator retries the
+    // frozen intent, and both attempts must carry the same identity.
+    harness.failNextMutation.current = true;
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    await screen.findByText("Work item created.");
+    const posts = postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`);
+    expect(posts).toHaveLength(2);
+    const firstIdentity = posts[0]?.body?.["creation_id"];
+    expect(typeof firstIdentity).toBe("string");
+    expect(firstIdentity).not.toBe("");
+    expect(posts[1]?.body?.["creation_id"]).toBe(firstIdentity);
+    expect(projectOf(harness.state, firstProjectId)?.work_items.filter((item) => item.title === "Identity item")).toHaveLength(1);
+  });
+
+  it("answers a committed create whose response was lost with the original row's notice", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness();
+    renderWorkspace(`/portal/projects/${firstProjectId}`, harness);
+    await user.click(await screen.findByRole("button", { name: "New work item" }));
+    await user.type(screen.getByLabelText("Title"), "Lost answer");
+    // The double commits the row and then destroys the response: the retry
+    // replays the identity and the server's own disposition says so.
+    harness.loseNextCreateResponse.current = true;
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    await screen.findByText("Work item already existed; the server returned the original row, so this submission was not applied.");
+    expect(projectOf(harness.state, firstProjectId)?.work_items.filter((item) => item.title === "Lost answer")).toHaveLength(1);
+    const posts = postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.body?.["creation_id"]).toBe(posts[0]?.body?.["creation_id"]);
+  });
+
+  it("keeps the pending creation identity when the operator reopens the draft", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness();
+    renderWorkspace(`/portal/projects/${firstProjectId}`, harness);
+    await user.click(await screen.findByRole("button", { name: "New work item" }));
+    await user.type(screen.getByLabelText("Title"), "Reopened draft");
+    harness.loseNextCreateResponse.current = true;
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByText(/Cannot reach the server/);
+    // The operator closes the failed draft and starts it again: an identity
+    // that has not been acknowledged must survive the dialog, or the reopened
+    // submission would become the duplicate the retry is meant to avoid.
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "New work item" }));
+    await user.type(screen.getByLabelText("Title"), "Reopened draft");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByText("Work item already existed; the server returned the original row, so this submission was not applied.");
+    const posts = postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.body?.["creation_id"]).toBe(posts[0]?.body?.["creation_id"]);
+    expect(projectOf(harness.state, firstProjectId)?.work_items.filter((item) => item.title === "Reopened draft")).toHaveLength(1);
   });
 
   it("moves the focused card between columns, keeps focus on it and re-reads the new order", async () => {

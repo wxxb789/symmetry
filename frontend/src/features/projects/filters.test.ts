@@ -43,9 +43,13 @@ describe("work filtering and projections", () => {
     expect(filterWorkItems(work, filtersOf(workSearch({ q: "migration", blocked: "1", state: "ready" })))).toEqual([]);
   });
 
-  it("orders board columns canonically and keeps unknown states last", () => {
-    expect(boardColumns(work).map((column) => column.state)).toEqual(["ready", "in_progress", "future_state"]);
-    expect(boardColumns([])).toEqual([]);
+  it("renders every supported board column, orders them canonically and keeps unknown states last", () => {
+    // Every supported state renders even with no item: the empty column is the
+    // movement destination a board whose items all sit in one state lacks.
+    expect(boardColumns(work).map((column) => column.state)).toEqual(["backlog", "ready", "in_progress", "review", "done", "future_state"]);
+    expect(boardColumns([]).map((column) => column.state)).toEqual(["backlog", "ready", "in_progress", "review", "done"]);
+    expect(boardColumns([]).every((column) => column.items.length === 0)).toBe(true);
+    expect(boardColumns(work).map((column) => column.items.map((item) => item.key))).toEqual([[], ["ONE-1"], ["ONE-2"], [], [], ["ONE-3"]]);
     expect(stateOptions(work)).toEqual(["ready", "in_progress", "future_state"]);
   });
 

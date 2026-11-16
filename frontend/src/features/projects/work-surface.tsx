@@ -294,6 +294,7 @@ function WorkBoard({ items, search, resources, projectStatus }: { items: readonl
             </Link>
           </li>)}
         </ul>
+        {column.items.length === 0 && <p className="board-empty muted text-small">No items in this state.</p>}
       </section>;
     })}
   </section>;

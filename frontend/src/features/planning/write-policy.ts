@@ -55,6 +55,36 @@ export type VersionedProject = Project & { version: number };
 export type VersionedWorkItem = WorkItem & { version: number };
 
 /**
+ * The pending work-item creation identity per project. A create that has not
+ * been acknowledged — neither created nor replayed — keeps its identity, so
+ * closing and reopening the draft after a lost response still replays the
+ * original attempt instead of minting a fresh identity and duplicating the row.
+ * An acknowledged create clears it, so the next draft gets a new identity, and
+ * the store is in memory only: the draft itself does not survive a reload, and
+ * this surface keeps no browser-local store.
+ */
+const pendingCreationIds = new Map<string, string>();
+
+/** The identity every attempt of this project's pending create draft replays. */
+export function workItemCreationId(projectId: string): string {
+  const pending = pendingCreationIds.get(projectId);
+  if (pending !== undefined) return pending;
+  const minted = crypto.randomUUID();
+  pendingCreationIds.set(projectId, minted);
+  return minted;
+}
+
+/** A create the server acknowledged (created or replayed) releases its identity. */
+export function acknowledgeWorkItemCreation(projectId: string): void {
+  pendingCreationIds.delete(projectId);
+}
+
+/** Test seam: module-scope pending identities must not leak between cases. */
+export function resetPendingWorkItemCreations(): void {
+  pendingCreationIds.clear();
+}
+
+/**
  * A board move is always a legacy write. A Goal-managed item has no move path
  * at all; a provider-owned state column is not writable, so only ordering
  * (which does not change a provider-owned field) stays available for it.

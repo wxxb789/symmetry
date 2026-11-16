@@ -132,7 +132,7 @@ export function ProjectPage() {
       onSaved={(_receipt, text) => { setSettings(false); setNotice({ tone: "status", text }); void reRead(); }}
       onRefused={(message) => { setSettings(false); setNotice({ tone: "alert", text: message }); void reRead(); }}
       onClose={() => setSettings(false)} />}
-    {project !== undefined && creatingWork && <WorkItemEditor project={project} item={null} api={application.api} csrf={csrf}
+    {project !== undefined && creatingWork && <WorkItemEditor presentation="page" project={project} item={null} api={application.api} csrf={csrf}
       onWriteStart={() => setPendingWrites((count) => count + 1)}
       onWriteSettled={() => setPendingWrites((count) => Math.max(0, count - 1))}
       onSaved={(_receipt, text) => { setCreatingWork(false); setNotice({ tone: "status", text }); void reRead(); }}

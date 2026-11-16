@@ -1,9 +1,10 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useRef, useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { ServerRefusal, type Api, type Project, type ProjectChanges, type ProjectDraft, type WorkItemChanges, type WorkItemDraft } from "../../services/api";
 import {
+  acknowledgeWorkItemCreation,
   deliveryValueEditable,
   failureMode,
   projectCreatePayload,
@@ -15,6 +16,7 @@ import {
   workItemFormStateOf,
   workItemUpdatePayload,
   withoutProviderOwned,
+  workItemCreationId,
   type ProjectFormState,
   type VersionedProject,
   type VersionedWorkItem,
@@ -197,6 +199,30 @@ export interface WorkItemEditorProps {
   onClose: () => void;
   onWriteStart: () => void;
   onWriteSettled: () => void;
+  /**
+   * The presentation this editor is mounted into. `"drawer"` portals the
+   * dialog's DOM into the detail drawer's host node: the drawer is then an
+   * ancestor of the open editor, so Radix's aria-hidden bookkeeping keeps the
+   * editor visible whichever of the two dialogs mounted first. `"page"` uses
+   * the default body portal.
+   */
+  presentation: "page" | "drawer";
+  /** The drawer's host node, owned by the detail page; required by `"drawer"`. */
+  drawerHost?: HTMLElement | null;
+}
+
+interface WorkItemDraftState {
+  form: WorkItemFormState;
+  set: (patch: Partial<WorkItemFormState>) => void;
+  failure: unknown;
+  pending: boolean;
+  retryable: boolean;
+  hasIntent: boolean;
+  targetVersion: number | null;
+  submit: () => void;
+  retry: () => void;
+  close: () => void;
+  openerRef: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -204,8 +230,22 @@ export interface WorkItemEditorProps {
  * are rendered read-only, delivery values owned by a provider or by reported
  * evidence are rendered read-only with their source, and the update never
  * carries a status (Control refuses move fields on this path; the board moves).
+ *
+ * The draft state lives here, outside the responsive presentation branches:
+ * the presentation props gate and place only the dialog shell below, so a
+ * breakpoint change cannot discard the form, the frozen intent or a pending
+ * answer.
  */
-export function WorkItemEditor({ project, item, api, csrf, onSaved, onRefused, onClose, onWriteStart, onWriteSettled }: WorkItemEditorProps) {
+export function WorkItemEditor(props: WorkItemEditorProps) {
+  const draft = useWorkItemDraft(props);
+  // The drawer renders its host node in the commit it mounts; the shell needs
+  // that node to exist before it can portal into it.
+  if (props.presentation === "drawer" && !props.drawerHost) return null;
+  return <WorkItemEditorDialog {...props} draft={draft} />;
+}
+
+/** The draft, its frozen submission intent, and the create identity it replays. */
+function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClose, onWriteStart, onWriteSettled }: WorkItemEditorProps): WorkItemDraftState {
   const openerRef = useOpenerRef();
   const [target] = useState(() => item === null ? null : { id: item.id, version: item.version });
   const [form, setForm] = useState<WorkItemFormState>(() => workItemFormStateOf(project, item));
@@ -224,7 +264,16 @@ export function WorkItemEditor({ project, item, api, csrf, onSaved, onRefused, o
       ? api.createWorkItem(project.id, submitted.payload, csrf, new AbortController().signal)
       : api.updateWorkItem(item?.id ?? "", submitted.payload, csrf, new AbortController().signal),
     onSuccess: (receipt, submitted) => {
-      const base = submitted.kind === "create" ? "Work item created." : "Work item updated.";
+      // An acknowledged create releases its identity: the next draft mints a
+      // new one, while an unacknowledged draft keeps replaying this one.
+      if (submitted.kind === "create") acknowledgeWorkItemCreation(project.id);
+      // The disposition is the server's own statement: a replayed creation
+      // returned the row the original submission created, not a new one.
+      const base = submitted.kind === "create"
+        ? receipt.disposition === "replayed"
+          ? "Work item already existed; the server returned the original row, so this submission was not applied."
+          : "Work item created."
+        : "Work item updated.";
       const notes = notesRef.current;
       if (notes.length === 0) return onSaved(receipt, base);
       onSaved(receipt, `${base} ${notes.join(" ")}`);
@@ -235,7 +284,6 @@ export function WorkItemEditor({ project, item, api, csrf, onSaved, onRefused, o
     onSettled: () => { inFlightRef.current = false; onWriteSettled(); },
   });
   const failure = save.error;
-  const retryable = failure !== null && failureMode(failure) === "retryable";
   const pending = save.isPending;
   const set = (patch: Partial<WorkItemFormState>) => setForm((current) => ({ ...current, ...patch }));
   const submit = () => {
@@ -243,7 +291,9 @@ export function WorkItemEditor({ project, item, api, csrf, onSaved, onRefused, o
     let submitted: WorkItemIntent;
     if (target === null || item === null) {
       notesRef.current = [];
-      submitted = { kind: "create", payload: workItemDraftOf(form, { includeStatus: true, deliveryEditable: delivery }) };
+      // The creation identity travels with the frozen intent, not with the
+      // form: every attempt of this draft replays the same identity verbatim.
+      submitted = { kind: "create", payload: { ...workItemDraftOf(form, { includeStatus: true, deliveryEditable: delivery }), creation_id: workItemCreationId(project.id) } };
     } else {
       const intended = workItemUpdatePayload(form, target.version, delivery) as Record<string, unknown>;
       const payload = withoutProviderOwned(workItemUpdatePayload(form, target.version, delivery), owned);
@@ -292,7 +342,36 @@ export function WorkItemEditor({ project, item, api, csrf, onSaved, onRefused, o
     onWriteStart();
     save.mutate(submitted);
   };
+  const retry = () => {
+    if (intent === null || inFlightRef.current) return;
+    inFlightRef.current = true;
+    onWriteStart();
+    save.mutate(intent);
+  };
   const close = () => { if (!pending) onClose(); };
+  return {
+    form,
+    set,
+    failure,
+    pending,
+    retryable: failure !== null && failureMode(failure) === "retryable",
+    hasIntent: intent !== null,
+    targetVersion: target === null ? null : target.version,
+    submit,
+    retry,
+    close,
+    openerRef,
+  };
+}
+
+function WorkItemEditorDialog({ project, item, presentation, drawerHost, draft }: WorkItemEditorProps & { draft: WorkItemDraftState }) {
+  const { form, set, failure, pending, retryable, hasIntent, targetVersion, submit, retry, close, openerRef } = draft;
+  const owned = providerOwnedControlsOf(item ?? {});
+  const delivery = {
+    pullRequest: deliveryValueEditable(item?.delivery?.pull_request),
+    ci: deliveryValueEditable(item?.delivery?.ci),
+    review: deliveryValueEditable(item?.delivery?.review),
+  };
   const resources = project.resources ?? [];
   const repositories = resources.filter((resource) => resource.kind === "repository");
   const ciResources = resources.filter((resource) => resource.kind === "ci");
@@ -300,7 +379,7 @@ export function WorkItemEditor({ project, item, api, csrf, onSaved, onRefused, o
   // Same draft-survival rule as the project editor: only the operator's own
   // dismissals close this form.
   return <Dialog.Root open>
-    <Dialog.Portal>
+    <Dialog.Portal container={presentation === "drawer" ? drawerHost ?? undefined : undefined}>
       <Dialog.Overlay className="dialog-overlay" />
       <Dialog.Content className="command-dialog planning-dialog" aria-describedby="work-item-editor-description"
         onEscapeKeyDown={() => close()}
@@ -310,7 +389,7 @@ export function WorkItemEditor({ project, item, api, csrf, onSaved, onRefused, o
         <Dialog.Description id="work-item-editor-description" className="muted">
           {item === null
             ? `Created in ${project.name} with the status you choose.`
-            : `Version ${target?.version ?? item.version}. Status and order move on the board; this form edits the recorded fields.`}
+            : `Version ${targetVersion ?? item.version}. Status and order move on the board; this form edits the recorded fields.`}
         </Dialog.Description>
         <form className="planning-form" aria-busy={pending} onSubmit={(event) => { event.preventDefault(); submit(); }}>
           <label htmlFor="work-item-title">Title</label>
@@ -442,8 +521,7 @@ export function WorkItemEditor({ project, item, api, csrf, onSaved, onRefused, o
           {failure !== null && failureMode(failure) !== "authoritative" && <p className="notice notice-error" role="alert">{refusalNotice(failure)}</p>}
           <div className="dialog-actions">
             <button className="button button-primary" type="submit" disabled={pending}>{pending ? "Saving…" : item === null ? "Create" : "Save"}</button>
-            {retryable && intent !== null && <button className="button" type="button" disabled={pending}
-              onClick={() => { if (inFlightRef.current) return; inFlightRef.current = true; onWriteStart(); save.mutate(intent); }}>Try again</button>}
+            {retryable && hasIntent && <button className="button" type="button" disabled={pending} onClick={retry}>Try again</button>}
             <button className="button" type="button" onClick={close} disabled={pending}>Cancel</button>
           </div>
         </form>

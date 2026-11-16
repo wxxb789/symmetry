@@ -54,7 +54,19 @@ goal makes writable. No new route is introduced: mutations live on `/portal/proj
    consumed as identity + disposition only (the authoritative projection is re-read), the same
    documented treatment 0007d gave `{disposition, connection.id}`.
 
-No migration, no new endpoint, no permission, no session or pagination change.
+5. PR-bot repair round (2026-11-17), additive and optional: `POST /portal/api/projects/:id/work-items`
+   accepts an optional client-minted `creation_id` (1..128 bytes, no NUL — the same format rule as
+   an action id). It persists on `work_items.creation_id` under the partial unique index
+   `(project_id, creation_id)` where the value is present; a replay of an existing identity
+   answers 200 `{disposition: "replayed", work_item: <the original row>}` and never inserts or
+   updates, while a fresh create still answers 201 `{disposition: "created", ...}` and a request
+   without the field keeps the legacy insert. The index scope is the owning project because the
+   portal's actor is the deployment's single operator. The SPA persists the identity with the
+   frozen draft intent (`WorkItemDraft.creation_id`) and replays it on every attempt of that draft.
+   Project creation does not need the mechanism: `projects.key` is already unique, so a replayed
+   identical create is refused with the field error instead of duplicating a row.
+
+No migration beyond (5), no new endpoint, no permission, no session or pagination change.
 
 ## 4. Frontend design
 
@@ -180,11 +192,14 @@ harness runs concurrently with the full suite on this host.
    `review_status` stay editable only while the served `delivery.*.source` is `none` or `manual`; a
    `provider` or `agent` value renders read-only with its source. This keeps the classic surface's
    manual-delivery intent without offering a write over provider- or evidence-owned data.
-4. **Board keyboard movement targets rendered columns only.** The board renders the states the
-   served rows actually use (0007b's rule: a served state is never dropped), so a state with no
-   item has no column to move into; creating the first item of a new state is the create form's
-   `Status` select. Recorded as a UX limitation, not a defect: no request is sent when there is no
-   neighbouring column, and the card stays focused.
+4. **Board keyboard movement targets rendered columns, and every supported state renders.**
+   Initially the board rendered only the states the served rows used (0007b's rule: a served state
+   is never dropped), which left a project whose items all sit in one state — or a board filtered
+   to one state — with no destination at all. The PR-bot repair round renders all five supported
+   states always (plus any served state outside that set, ordered last) and each empty column is a
+   real destination, so a backlog-only board can move a card to Ready. A move from the last
+   rendered column still has no neighbour: no request is sent and the card stays focused, which is
+   the remaining, narrower limitation.
 5. **Project creation stays on the list.** The notice and the created row are both on
    `/portal/projects` (the re-read is what makes them truthful); the operator opens the new project
    from its row instead of being navigated away before the notice can be read.
@@ -223,3 +238,15 @@ harness runs concurrently with the full suite on this host.
     viewport-framed capture replaces the full-page one for the provider-owned editor, because a
     full-page capture resizes the emulated viewport. Evidence, red-before/green-after values and the
     residual limitations are in the receipt.
+
+11. **PR-bot repair round (2026-11-17): the draft owner lives above the detail's responsive
+    branches.** `features/work/detail.tsx` previously owned `editing` and the editor inside the
+    branch that swaps trees at 1024 px (drawer above, page below), so a breakpoint crossing
+    remounted the owner and discarded an open draft. The page now owns `editing`, the notices, the
+    pending-write count and the editor itself, rendered once in a stable position outside both
+    presentations; `WorkItemEditor` keeps the draft, frozen intent and creation identity in the
+    outer component and waits one commit before mounting its Radix dialog shell (`shellReady`
+    prop) when the drawer is the presentation — that way the drawer's layer registers and its
+    aria-hidden bookkeeping runs first, so an already-open editor is not marked hidden by the
+    drawer and stays the topmost layer, exactly like a normally opened editor. The wait never
+    touches the form values (all inputs are controlled by the surviving state).

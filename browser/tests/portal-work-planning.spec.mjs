@@ -120,6 +120,9 @@ async function closeDetail(page, isMobile) {
 
 const boardCard = (page, title) => page.getByRole("link", { name: title });
 const columnOf = (page, title) => page.locator("[data-board-card]", { has: boardCard(page, title) }).getAttribute("data-board-column");
+/** The rendered column, addressed by its heading: an empty destination has no cards to address it by. */
+const boardColumn = (page, state) =>
+  page.locator(".board-column", { has: page.getByRole("heading", { name: new RegExp(`^${state.replaceAll("_", " ")}$`, "i") }) });
 const focusedLabel = (page) => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? "");
 const readyColumnTitles = async (page, projectId) =>
   (await storedProject(page, projectId)).work_items
@@ -580,6 +583,196 @@ test.describe("planning work-item mutations", () => {
       surface: "board",
       url: page.url(),
       ready: await page.evaluate(() => Array.from(document.querySelectorAll("[data-board-column='ready'] .board-card")).map((card) => card.getAttribute("aria-label")))
+    });
+  });
+
+  test("moves work into a ready column that has no cards on the board", async ({ page }, testInfo) => {
+    await login(page);
+    const project = await seedProject(page, {
+      prefix: "EC",
+      items: [{ title: "Empty column target", status: "backlog", priority: "medium", assignee_type: "unassigned" }]
+    });
+    await page.goto(projectUrl(project.id, { view: "board" }));
+    // The only card is in backlog, so the ready column holds no served row: it
+    // must still render, because the column itself is the movement destination.
+    const ready = boardColumn(page, "ready");
+    await expect(ready.getByRole("heading", { name: /^ready$/i })).toBeVisible();
+    await expect(ready.locator("[data-board-card]")).toHaveCount(0);
+    const readyColumnCardsBeforeMove = await ready.locator("[data-board-card]").count();
+    await expect(boardCard(page, "Empty column target")).toBeVisible();
+
+    await moveByKeyboard(page, "Empty column target", "ArrowRight");
+    await expect(statusNotice(page, /Moved to/)).toBeVisible();
+    await expect.poll(() => columnOf(page, "Empty column target")).toBe("ready");
+    const stored = await storedItem(page, project.id, "Empty column target");
+    expect(stored.status).toBe("ready");
+    await capture(page, testInfo, "planning-empty-column-move", {
+      surface: "board",
+      url: page.url(),
+      readyColumnCardsBeforeMove,
+      moveNotice: (await statusNotice(page, /Moved to/).first().textContent())?.trim(),
+      movedColumn: await columnOf(page, "Empty column target"),
+      storedStatus: stored.status
+    });
+  });
+
+  test("keeps the ready destination while the board is filtered to backlog", async ({ page }, testInfo) => {
+    await login(page);
+    const project = await seedProject(page, {
+      prefix: "FB",
+      items: [
+        { title: "Filtered move", status: "backlog", priority: "medium", assignee_type: "unassigned" },
+        // A second backlog card keeps the filtered board rendered after the
+        // move, so the live move notice can be read instead of unmounting with it.
+        { title: "Filtered stay", status: "backlog", priority: "medium", assignee_type: "unassigned" },
+        { title: "Filtered ready", status: "ready", priority: "medium", assignee_type: "unassigned" }
+      ]
+    });
+    await page.goto(projectUrl(project.id, { view: "board", state: "backlog" }));
+    await expect(boardCard(page, "Filtered move")).toBeVisible();
+    // The ready card is filtered out, but its column stays: the destination is
+    // the column, not the filtered row.
+    await expect(boardCard(page, "Filtered ready")).toHaveCount(0);
+    const ready = boardColumn(page, "ready");
+    await expect(ready.getByRole("heading", { name: /^ready$/i })).toBeVisible();
+    await expect(ready.locator("[data-board-card]")).toHaveCount(0);
+
+    await moveByKeyboard(page, "Filtered move", "ArrowRight");
+    await expect(statusNotice(page, /Moved to/)).toBeVisible();
+    const stored = await storedItem(page, project.id, "Filtered move");
+    expect(stored.status).toBe("ready");
+    await expect(boardCard(page, "Filtered ready")).toHaveCount(0);
+    await expect(ready.locator("[data-board-card]")).toHaveCount(0);
+    await capture(page, testInfo, "planning-filtered-column-move", {
+      surface: "board filtered to backlog",
+      url: page.url(),
+      readyColumnCards: await ready.locator("[data-board-card]").count(),
+      moveNotice: (await statusNotice(page, /Moved to/).first().textContent())?.trim(),
+      storedStatus: stored.status
+    });
+  });
+
+  test("replays a lost create response without duplicating the work item", async ({ page }, testInfo) => {
+    await login(page);
+    // The aborted transport is the point of the case: the browser reports it.
+    allowBrowserError(page, /net::ERR_FAILED/);
+    const project = await seedProject(page, { prefix: "LR" });
+    const title = `Lost create ${project.key}`;
+    await page.goto(projectUrl(project.id));
+    await page.getByRole("button", { name: ui.newWorkItem }).click();
+    const dialog = page.getByRole("dialog", { name: "New work item" });
+    await dialog.getByLabel("Title").fill(title);
+    await dialog.getByLabel("Status").selectOption("ready");
+
+    const bodies = [];
+    await page.route(`**/portal/api/projects/${project.id}/work-items`, async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      bodies.push(route.request().postDataJSON());
+      if (bodies.length === 1) {
+        // The first attempt commits on the control plane and only its response
+        // is lost: the retry below is the duplicate this case rules out.
+        const committed = await route.fetch();
+        expect(committed.status()).toBe(201);
+        return route.abort("failed");
+      }
+      return route.continue();
+    });
+
+    await dialog.getByRole("button", { name: ui.create }).click();
+    const retry = dialog.getByRole("button", { name: ui.tryAgain });
+    await expect(retry).toBeVisible();
+    await expect(dialog.getByText(/Cannot reach the server/)).toBeVisible();
+    await retry.click();
+
+    // The server answers the replayed identity with the original row, and the
+    // notice names the replay instead of claiming a second creation.
+    const replay = statusNotice(page, "Work item already existed; the server returned the original row, so this submission was not applied.");
+    await expect(replay).toBeVisible();
+    expect(await replay.evaluate((node) => node.firstChild?.textContent)).toBe("Work item already existed; the server returned the original row, so this submission was not applied.");
+    // Both recorded attempts carry the frozen intent, including the client-minted
+    // creation identity.
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(typeof bodies[0].creation_id).toBe("string");
+    expect(bodies[0].creation_id).not.toBe("");
+    const stored = await storedProject(page, project.id);
+    expect(stored.work_items.filter((item) => item.title === title)).toHaveLength(1);
+    expect(stored.work_items).toHaveLength(1);
+    expect(stored.work_items[0].status).toBe("ready");
+    await capture(page, testInfo, "planning-create-replay", {
+      surface: "project",
+      url: page.url(),
+      attempts: bodies.length,
+      identicalBodies: JSON.stringify(bodies[1]) === JSON.stringify(bodies[0]),
+      creationId: bodies[0].creation_id,
+      storedItems: stored.work_items.length,
+      storedStatus: stored.work_items[0].status
+    });
+  });
+
+  test("keeps an open editor draft across the responsive breakpoint", async ({ page }, testInfo) => {
+    await login(page);
+    const project = await seedProject(page, {
+      prefix: "RD",
+      items: [{ title: "Resize draft", status: "ready", priority: "medium", assignee_type: "unassigned" }]
+    });
+    // The viewport width is this case's subject: both Playwright projects drive
+    // the same 1280 -> 900 -> 1280 crossing instead of the project's device
+    // emulation, because the case changes the viewport itself.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(projectUrl(project.id));
+    await page.getByRole("link", { name: "Resize draft" }).click();
+    const drawer = page.locator(".work-drawer");
+    await expect(drawer).toHaveCount(1);
+    await drawer.getByRole("button", { name: ui.editWorkItem }).click();
+    const editor = page.getByRole("dialog", { name: "Edit work item" });
+    await editor.getByLabel("Branch").fill("feat/resize-draft");
+    await expect(editor).toBeVisible();
+    await expect(editor.getByLabel("Branch")).toHaveValue("feat/resize-draft");
+    // What each width presented, recorded at the crossing: the drawer count and
+    // the draft the open editor still holds.
+    const crossings = [];
+    const observeCrossing = async () => {
+      crossings.push({
+        width: page.viewportSize()?.width ?? 0,
+        drawer: await drawer.count(),
+        branch: await editor.getByLabel("Branch").inputValue()
+      });
+    };
+    await observeCrossing();
+
+    // Narrow: the detail becomes a page and the drawer unmounts, while the
+    // editor and its draft stay mounted.
+    await page.setViewportSize({ width: 900, height: 900 });
+    expect(page.viewportSize()?.width ?? 0).toBeLessThan(1024);
+    await expect(drawer).toHaveCount(0);
+    // The narrow presentation really is the page: it renders the item's own
+    // heading. It is asserted as rendered content because the open modal editor
+    // correctly makes the page behind it inert (aria-hidden), which the
+    // accessibility tree excludes.
+    await expect(page.locator("#main-content h1", { hasText: "Resize draft" })).toBeVisible();
+    await expect(editor).toBeVisible();
+    await expect(editor.getByLabel("Branch")).toHaveValue("feat/resize-draft");
+    await observeCrossing();
+
+    // Wide again: the drawer returns to the same open editor, still with the draft.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    expect(page.viewportSize()?.width ?? 0).toBeGreaterThanOrEqual(1024);
+    await expect(drawer).toHaveCount(1);
+    await expect(editor).toBeVisible();
+    await expect(editor.getByLabel("Branch")).toHaveValue("feat/resize-draft");
+    await observeCrossing();
+
+    await editor.getByRole("button", { name: ui.save }).click();
+    await expect(statusNotice(page, "Work item updated.")).toBeVisible();
+    const stored = await storedItem(page, project.id, "Resize draft");
+    expect(stored.branch).toBe("feat/resize-draft");
+    await capture(page, testInfo, "planning-resize-draft", {
+      surface: "detail after the breakpoint crossings",
+      url: page.url(),
+      crossings,
+      drawerCount: await drawer.count(),
+      storedBranch: stored.branch
     });
   });
 });
