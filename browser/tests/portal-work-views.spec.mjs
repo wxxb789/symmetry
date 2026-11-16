@@ -582,7 +582,15 @@ test.describe("Readable work views", () => {
     });
 
     await page.goto(projectUrl(project.id));
-    await page.getByLabel(ui.filter).fill("Keyboard");
+    // URL-backed filters update only the search parameters; every keystroke must
+    // keep focus in the input (a search-only update is not a route change).
+    // fill() would set the value in one event and hide a focus reset.
+    const filter = page.getByLabel(ui.filter);
+    await filter.click();
+    await filter.pressSequentially("Keyboard", { delay: 25 });
+    await expect(filter).toBeFocused();
+    await expect(filter).toHaveValue("Keyboard");
+    await expect(page).toHaveURL(/[?&]q=Keyboard/);
     const list = page.getByRole("list", { name: ui.workItems });
     await expect(list.getByRole("link", { name: titles.alpha })).toBeVisible();
 

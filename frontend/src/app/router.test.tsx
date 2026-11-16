@@ -426,6 +426,39 @@ describe("readable work views", () => {
     expect(within(list).queryByText(siblingTitle)).not.toBeInTheDocument();
   });
 
+  it("keeps focus and every keystroke in the URL-backed work filter while the search changes", async () => {
+    const user = userEvent.setup();
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`, workReadFetcher({ detail: subjectDetail() }));
+    await screen.findByRole("heading", { level: 1, name: "Project One" });
+    const filter = screen.getByLabelText("Filter work items");
+    // Every keystroke updates the URL search. A search-only update is not a route
+    // change, so the input must keep focus and every character must land.
+    await user.click(filter);
+    await user.keyboard("Subject");
+    expect(filter).toHaveFocus();
+    expect(filter).toHaveValue("Subject");
+    await waitFor(() => expect(new URL(history.location.href, "http://localhost").searchParams.get("q")).toBe("Subject"));
+    // The same class of URL-backed control: a select keeps focus on its change.
+    const state = screen.getByLabelText("Work state");
+    await user.selectOptions(state, "ready");
+    expect(state).toHaveFocus();
+    await waitFor(() => expect(new URL(history.location.href, "http://localhost").searchParams.get("state")).toBe("ready"));
+    const list = screen.getByRole("list", { name: "Work items" });
+    expect(within(list).getByText(subjectTitle)).toBeVisible();
+    expect(within(list).queryByText(siblingTitle)).not.toBeInTheDocument();
+  });
+
+  it("focuses the content heading on a genuine route change", async () => {
+    const user = userEvent.setup();
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`, workReadFetcher({ detail: subjectDetail() }));
+    const list = await screen.findByRole("list", { name: "Work items" });
+    // The route change into the work detail still moves focus to its heading.
+    await user.click(within(list).getByRole("link", { name: subjectTitle }));
+    const heading = await screen.findByRole("heading", { level: 1, name: subjectTitle });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(new URL(history.location.href, "http://localhost").pathname).toBe(`/portal/work/${subjectId}`);
+  });
+
   it("renders a row's object result summary as its JSON text and marks a task-less row unreported", async () => {
     const user = userEvent.setup();
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
