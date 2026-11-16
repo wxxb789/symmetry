@@ -113,19 +113,23 @@ capability reset of bound resource health. Provider calls go through the
 controlled fixture transport in `scripts/ci/portal-connection-fixture.exs`, which
 replaces the provider HTTP client and the local CLI session; no provider host is
 contacted and every fixture call is appended to the JSONL log below. The fixture
-CLI tokens are canaries: each test asserts no canary reaches a recorded
-same-origin response, the DOM, web storage, the cookie jar (including HttpOnly
-cookies), request headers and bodies, or the console. A missing or unreadable
-evidence surface fails the test instead of passing the scan.
+CLI tokens are canaries: each test scans the recorded same-origin response
+bodies and response headers, the rendered HTML, web storage, the cookie jar
+(sampled during the run, so a cookie that was set and cleared — HttpOnly
+included — is still visible), request headers and bodies, and every console
+message and page error the page produced during the run. Response records,
+header lists and jar samples must be non-empty and readable, so a missing or
+unreadable capture fails the test instead of passing the scan.
 
 The spec runs only against this fixture. The harness starts the control plane
 with a per-run identity, an identity file and a per-run operator token; the spec
 proves the identity file carries the run's identity for the portal port and logs
 in with the per-run token before any provider check. Without those values it
-fails at collection instead of driving a normal Control instance that would use
-its real `gh`/`az` sessions. The fixture keeps the application's real supervision
-topology — scheduler, reconciler and provider access stay up — and readiness
-requires `/healthz` to answer `ok`. The harness refuses a `-PortalUrl` whose port
+skips at collection — and the harness fails a run that reports a skip — instead
+of driving a normal Control instance that would use its real `gh`/`az` sessions.
+The fixture keeps the application's real supervision topology — scheduler,
+reconciler and provider access stay up — and readiness requires `/healthz` to
+answer `ok`. The harness refuses a `-PortalUrl` whose port
 is not the one it starts the fixture on, refuses an occupied port, and stops only
 the process tree it started plus the listener PID recorded after the identity
 handshake.
@@ -134,13 +138,18 @@ handshake.
 cd control
 POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55440 POSTGRES_DB=symmetry_0007d_test mix ecto.create
 POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55440 POSTGRES_DB=symmetry_0007d_test mix ecto.migrate
-SYMMETRY_OPERATOR_TOKEN=<run token> SYMMETRY_FIXTURE_IDENTITY=<run identity> \
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55440 POSTGRES_DB=symmetry_0007d_test \
+  SYMMETRY_OPERATOR_TOKEN=<run token> SYMMETRY_FIXTURE_IDENTITY=<run identity> \
   SYMMETRY_FIXTURE_IDENTITY_FILE=/tmp/symmetry-fixture-identity.json \
   PHX_SERVER=true PORT=4021 \
   SYMMETRY_FIXTURE_TRANSPORT_LOG=/tmp/symmetry-fixture-calls.jsonl \
   SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS=expired-fixture \
-  mix run --no-halt ../scripts/ci/portal-connection-fixture.exs
+  mix run --no-halt --no-start ../scripts/ci/portal-connection-fixture.exs
 ```
+
+`--no-start` is required: the script installs the fixture transports and only
+then starts the application, so no boot-time provider recovery can reach a real
+HTTP client or CLI session.
 
 Then, from the repository root, with the same operator token and the built
 frontend staged into `control/priv/static/portal`:

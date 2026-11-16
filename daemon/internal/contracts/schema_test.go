@@ -210,6 +210,27 @@ func TestWorkspaceReadAcceptsFractionalMetadataWithoutRelaxingCommands(t *testin
 	}
 }
 
+func TestConnectionsReadRejectsVersionBeyondTheSafeIntegerBound(t *testing.T) {
+	data := strings.Replace(
+		string(readContractFixture(t, "valid/connections-read.basic.json")),
+		"\"version\": 3,\n      \"resources\"",
+		"\"version\": 9007199254740992,\n      \"resources\"",
+		1,
+	)
+	if !strings.Contains(data, "9007199254740992") {
+		t.Fatal("the fixture edit did not apply")
+	}
+	// The read projection admits finite presentation numbers, so the bound —
+	// not the raw-number policy — has to answer this version.
+	err := ValidateSchema(EnvelopeConnectionsRead, []byte(data))
+	if err == nil {
+		t.Fatal("presentation schema accepted a version beyond the safe-integer bound")
+	}
+	if !strings.Contains(err.Error(), "/connections/0/version") || !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("rejection does not point at the version bound: %v", err)
+	}
+}
+
 func TestWorkspaceReadAcceptsAdditiveMetadataPath(t *testing.T) {
 	data := readContractFixture(t, "valid/workspace-read.additive-metadata-path.json")
 	if err := ValidateSchema(EnvelopeWorkspaceRead, data); err != nil {

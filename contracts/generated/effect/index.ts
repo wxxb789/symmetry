@@ -540,7 +540,7 @@ export const DefinitionConnectionGraph = S.suspend(() => withObjectPropertyBound
   "resources": arrayConstraints(S.Array(DefinitionConnectionResourceGraph), undefined, undefined, undefined),
   "status": stringConstraints(S.String, undefined, undefined, undefined),
   "status_message": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
-  "version": numberConstraints(S.Int, 1, undefined)
+  "version": DefinitionRevisionGraph
 })), undefined, undefined));
 
 export const DefinitionConnectionResourceGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
@@ -560,7 +560,7 @@ export const DefinitionConnectionResourceGraph = S.suspend(() => withObjectPrope
   "status_message": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "sync_status": stringConstraints(S.String, undefined, undefined, undefined),
   "url": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
-  "version": numberConstraints(S.Int, 1, undefined)
+  "version": DefinitionRevisionGraph
 })), undefined, undefined));
 
 export const DefinitionConflictItemGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({

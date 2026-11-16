@@ -16,26 +16,33 @@
 // identity file and a per-run operator token. Every test proves the target is
 // that fixture (identity file matches the run and the portal port) and logs in
 // with the per-run token before any provider check. Without the harness-provided
-// environment this spec fails at collection instead of driving a normal Control
-// instance that would use its real gh/az sessions.
+// environment the file skips at collection instead of driving a normal Control
+// instance that would use its real gh/az sessions, so the repository-wide
+// `pnpm test` commands still collect it; the harness treats a skip as a failed
+// acceptance run and a partially configured environment still fails.
 import fs from "node:fs/promises";
 import { allowBrowserError, expect as baseExpect, test } from "./fixtures.mjs";
 
-function requiredEnvironment(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(
-      `${name} is required: run browser/scripts/run-connection-fixture-tests.ps1, ` +
-        "which starts the fixture control plane and publishes the run identity"
-    );
-  }
-  return value;
+const fixtureVariables = [
+  "SYMMETRY_OPERATOR_TOKEN",
+  "SYMMETRY_FIXTURE_IDENTITY",
+  "SYMMETRY_FIXTURE_IDENTITY_FILE",
+  "SYMMETRY_PORTAL_URL",
+];
+const missingVariables = fixtureVariables.filter((name) => !process.env[name]);
+if (missingVariables.length > 0 && missingVariables.length < fixtureVariables.length) {
+  throw new Error(
+    `${missingVariables.join(", ")} must be set together: run browser/scripts/run-connection-fixture-tests.ps1, ` +
+      "which starts the fixture control plane and publishes the run identity",
+  );
 }
-
-const operatorToken = requiredEnvironment("SYMMETRY_OPERATOR_TOKEN");
-const fixtureIdentity = requiredEnvironment("SYMMETRY_FIXTURE_IDENTITY");
-const fixtureIdentityFile = requiredEnvironment("SYMMETRY_FIXTURE_IDENTITY_FILE");
-const portalUrl = new URL(requiredEnvironment("SYMMETRY_PORTAL_URL"));
+test.skip(missingVariables.length > 0, "run browser/scripts/run-connection-fixture-tests.ps1 to publish the fixture identity");
+// The placeholders exist only for the skipped, environment-less collection; a
+// run with the harness always carries all four values.
+const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN ?? "";
+const fixtureIdentity = process.env.SYMMETRY_FIXTURE_IDENTITY ?? "";
+const fixtureIdentityFile = process.env.SYMMETRY_FIXTURE_IDENTITY_FILE ?? "";
+const portalUrl = new URL(process.env.SYMMETRY_PORTAL_URL ?? "http://127.0.0.1:4021");
 if (!["127.0.0.1", "localhost", "::1"].includes(portalUrl.hostname)) {
   throw new Error(`SYMMETRY_PORTAL_URL must be loopback for the fixture run, got ${portalUrl.origin}`);
 }

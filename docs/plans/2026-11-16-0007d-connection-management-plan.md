@@ -62,8 +62,10 @@ browser flows, focused browser gate, docs closure.
   deviation in §10.8.
 - Locked error envelopes keep their existing shape (`{error: {code, message, fields?}}`); the
   connections page decodes them (including the projection the check endpoint already returns).
-- `GET /portal/api/connections` is additive to the workspace read: `PortalJSON.workspace/1`
-  keeps its `connections` list unchanged, so classic `portal.js` and existing clients are untouched.
+- `GET /portal/api/connections` is additive to the workspace read: `PortalJSON.workspace/1` keeps
+  its `connections` list entries compatible — each entry gains the additive `resources` array and
+  the projection runs one all-connections resource query — and classic `portal.js` reads only the
+  named scalars it consumed, so it and existing clients are untouched.
 
 ## 4. Frontend design
 
@@ -75,7 +77,8 @@ browser flows, focused browser gate, docs closure.
   checkboxes from the server catalog; the capability coupling (`changes` requires `repositories`) is
   enforced by the server changeset and surfaced as a field error, not re-implemented as policy.
 - Test/check button: pending until the server answers; renders the new status, `last_checked_at` and
-  the redacted reason; a refused check keeps the degraded projection the server returned.
+  the redacted reason; a refused check renders the server's refusal envelope and re-reads the list
+  for the authoritative state (the projection in the 502 body is not consumed directly).
 - Update: submits the loaded `version`; a 409 renders "This connection changed elsewhere…" plus the
   server's current values (refetch), never a silent success.
 - Delete: confirm dialog; 409/404 renders "already changed or removed" and reconciles to server truth.
@@ -92,13 +95,13 @@ browser flows, focused browser gate, docs closure.
 ## 5. Contracts
 
 One new Draft 7 schema `contracts/v1/connections-read.schema.json` (root: providers + connections;
-definitions: `ConnectionProvider`, `Connection`, `ConnectionResource`), fixtures (valid empty/basic/
-degraded, invalid missing-connections/unknown-status), manifest entries, regenerated TS/Go/Effect
-DTOs (`pnpm contracts:generate`; schema counts 15 → 16 in `generate.mjs`, `check.mjs`,
-`daemon/internal/contracts/schema*.go`), and the existing fixture-manifest registrations for the Go
-and Elixir checks. Legacy envelopes (`{connection}`, `{disposition}`, `{deleted_connection_id}`,
-`{error:{code,message,fields}}`) keep their hand-written Effect decoders in `services/api.ts`, the
-same treatment `/portal/api/session` already has.
+definitions: `ConnectionProvider`, `Connection`, `ConnectionResource`), fixtures (valid
+basic/empty/unknown-values, invalid missing-connections/invalid-version-type), manifest entries,
+regenerated TS/Go/Effect DTOs (`pnpm contracts:generate`; schema counts 15 → 16 in `generate.mjs`,
+`check.mjs`, `daemon/internal/contracts/schema*.go`), and the existing fixture-manifest
+registrations for the Go and Elixir checks. Legacy envelopes (`{connection}`, `{disposition}`,
+`{deleted_connection_id}`, `{error:{code,message,fields}}`) keep their hand-written Effect decoders
+in `services/api.ts`, the same treatment `/portal/api/session` already has.
 
 ## 6. Browser acceptance and classic retirement
 
@@ -141,9 +144,11 @@ full suite.
 
 1. Idempotency key = the natural key `(provider, name)` + normalized payload equality, not a stored
    client `mutation_id`. Reason: the unique index already defines identity; no migration, no new
-   field, no wire change for classic clients, and the observable property (repeat → one row, applied
-   state) holds. Alternative rejected: storing `mutation_id` (schema churn, no additional guarantee
-   for this surface).
+   field, no wire change for classic clients, and the observable property (a repeat of the same
+   submission converges on one row with the applied state) holds while the applied row keeps its
+   name: renaming or removing that row before the retry makes the retry a new submission, because
+   the natural key no longer resolves to it. Alternative rejected: storing `mutation_id` (schema
+   churn, no additional guarantee for this surface).
 2. Selection is a search param on the single design route instead of a new child route; the fixed
    design's table lists first-screen content, and attention already scopes by `?projectId=`.
 3. The fixture transport lives in `scripts/ci/` (matching `credentialed-provider-witness.exs`), not

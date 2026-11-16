@@ -1,4 +1,4 @@
-import { infiniteQueryOptions, QueryCache, QueryClient, queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, MutationCache, QueryCache, QueryClient, queryOptions } from "@tanstack/react-query";
 import { createApi, readRetry, Unauthenticated, type Api } from "../services/api";
 
 interface BrowserLocation {
@@ -49,6 +49,14 @@ export function createApplication(options: { fetcher?: typeof fetch; location?: 
         if (error instanceof Unauthenticated) expireSession();
       },
     }),
+    // The cache-level handler runs for every mutation, including the ones that
+    // supply their own onError: a command refusal must expire the session even
+    // when its mutation also re-reads an inactive query.
+    mutationCache: new MutationCache({
+      onError: (error) => {
+        if (error instanceof Unauthenticated) expireSession();
+      },
+    }),
     defaultOptions: {
       queries: {
         retry: readRetry,
@@ -60,9 +68,6 @@ export function createApplication(options: { fetcher?: typeof fetch; location?: 
         // Mutation retries default off; an intentional retry reuses the same
         // normalized payload, and 401/403/409/422 are never retried.
         retry: false,
-        onError: (error) => {
-          if (error instanceof Unauthenticated) expireSession();
-        },
       },
     },
   });

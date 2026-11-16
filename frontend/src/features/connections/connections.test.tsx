@@ -69,10 +69,14 @@ afterEach(() => {
   applications.length = 0;
 });
 
-function renderConnections(handler: (request: { method: string; path: string; body: unknown; url: URL }) => Response | Promise<Response>, path = "/portal/connections") {
+function renderConnections(
+  handler: (request: { method: string; path: string; body: unknown; url: URL }) => Response | Promise<Response>,
+  path = "/portal/connections",
+  options: { deferReads?: Promise<void> } = {},
+) {
   let current: Connection[] = [connection()];
   let readFailure: (() => Response) | null = null;
-  let readGate: Promise<void> | null = null;
+  let readGate: Promise<void> | null = options.deferReads ?? null;
   const requests: Harness["requests"] = [];
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
@@ -760,5 +764,93 @@ describe("connection management", () => {
     await user.click(changes);
     expect(changes).toBeChecked();
     expect(repositories).toBeChecked();
+  });
+
+  it("waits for the provider catalog before opening the create editor", async () => {
+    const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+    const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", { deferReads: gate });
+    const user = userEvent.setup();
+    // The first read (which carries the provider catalog) is still in flight:
+    // creation must wait instead of opening a form whose provider select has
+    // no option and whose submit would send an empty provider.
+    const create = await screen.findByRole("button", { name: "New connection" });
+    expect(create).toBeDisabled();
+    create.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(screen.queryByRole("dialog", { name: "New connection" })).toBeNull();
+
+    release();
+    await waitFor(() => expect(screen.getByRole("button", { name: "New connection" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "New connection" }));
+    expect(await screen.findByRole("dialog", { name: "New connection" })).toBeVisible();
+    expect(screen.getByLabelText("Provider")).toHaveValue("github");
+    expect(screen.getByRole("checkbox", { name: "Repositories" })).toBeChecked();
+    await user.type(screen.getByLabelText("Name"), "Catalog complete");
+    await user.type(screen.getByLabelText("Account or organization"), "acme");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1));
+    expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
+      provider: "github",
+      name: "Catalog complete",
+      account_ref: "acme",
+      capabilities: providers[0]!.capabilities,
+    });
+  });
+
+  it("closes the editor with a notice when the edited connection is removed elsewhere", async () => {
+    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
+    const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    harness.setConnections([connection(), second]);
+    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
+    await user.type(screen.getByLabelText("Name"), " (draft)");
+
+    // Another operator removes the connection while the editor is open: the
+    // draft has no subject any more, so the dialog closes and says so instead
+    // of losing the draft silently and leaking the open editor into the next
+    // selection.
+    harness.setConnections([second]);
+    await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["connections"] }); });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull());
+    expect(screen.getByText(/removed elsewhere/)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /Second connection/ }));
+    expect(await screen.findByRole("complementary", { name: "Connection detail" })).toHaveTextContent("Second connection");
+    expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull();
+  });
+
+  it("does not claim a capability reset when the edit only changed the name", async () => {
+    const harness = renderConnections(({ method }) => method === "PATCH"
+      ? new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4, name: "Renamed engineering" }) }), { status: 200 })
+      : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
+    await user.clear(screen.getByLabelText("Name"));
+    await user.type(screen.getByLabelText("Name"), "Renamed engineering");
+    harness.setConnections([connection({ version: 4, name: "Renamed engineering" })]);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Connection updated.")).toBeVisible();
+    expect(screen.queryByText(/Bound resource health and sync state was reset/)).toBeNull();
+    expect(harness.requests.filter((request) => request.method === "PATCH")[0]?.body).toEqual({
+      version: 3,
+      name: "Renamed engineering",
+      capabilities: ["repositories", "work_items", "changes", "ci"],
+    });
+  });
+
+  it("surfaces a replayed create receipt as already applied", async () => {
+    const harness = renderConnections(({ method }) => method === "POST"
+      ? new Response(JSON.stringify({ disposition: "replayed", connection: { id: connectionId } }), { status: 200 })
+      : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New connection" }));
+    await user.type(screen.getByLabelText("Name"), "GitHub engineering");
+    await user.type(screen.getByLabelText("Account or organization"), "acme");
+    harness.setConnections([connection({ name: "GitHub engineering" })]);
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByText(/already applied; the server returned the existing connection/)).toBeVisible();
+    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
   });
 });

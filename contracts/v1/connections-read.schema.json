@@ -62,7 +62,7 @@
             {"type": "null"}
           ]
         },
-        "version": {"type": "integer", "minimum": 1},
+        "version": {"$ref": "common.schema.json#/definitions/Revision"},
         "resources": {
           "type": "array",
           "items": {"$ref": "#/definitions/ConnectionResource"}
@@ -126,7 +126,7 @@
             {"type": "null"}
           ]
         },
-        "version": {"type": "integer", "minimum": 1}
+        "version": {"$ref": "common.schema.json#/definitions/Revision"}
       }
     }
   }

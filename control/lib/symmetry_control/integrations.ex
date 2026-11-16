@@ -87,14 +87,14 @@ defmodule SymmetryControl.Integrations do
       # validated before the fast path: an invalid payload is refused with the
       # ordinary field errors instead of being normalized into a match.
       if changeset.valid? do
-        case applied_connection(attrs) do
+        case applied_connection(changeset) do
           {:ok, connection} ->
             {:replayed, connection}
 
           :error ->
             changeset
             |> Repo.insert()
-            |> replay_racing_connection(attrs)
+            |> replay_racing_connection()
         end
       else
         {:error, changeset}
@@ -1804,35 +1804,40 @@ defmodule SymmetryControl.Integrations do
   # An identical connection submission is the same intent: `[provider, name]` is
   # the natural key, so a repeat (double submit, retry after an unknown outcome)
   # returns the applied row instead of creating a second one or a duplicate-name
-  # error. A different payload keeps the ordinary validation error.
-  defp applied_connection(attrs) do
-    with name when is_binary(name) <- attr_value(attrs, :name),
-         provider when is_binary(provider) <- attr_value(attrs, :provider),
-         %Connection{} = connection <-
-           Repo.get_by(Connection, provider: provider, name: String.trim(name)),
-         true <- equivalent_intent?(connection, attrs) do
+  # error. The comparison uses the values this submission would store
+  # (`apply_changes/1`: a create that omits capabilities stores the schema
+  # default), so an omitted optional field is the same intent as its default
+  # instead of an unmatchable `nil`. A different payload keeps the ordinary
+  # validation error. The natural key is renamable: if the applied row was
+  # renamed or removed before the retry, the retry is a new submission.
+  defp applied_connection(%Ecto.Changeset{} = changeset) do
+    applied = Ecto.Changeset.apply_changes(changeset)
+
+    with %Connection{} = connection <-
+           Repo.get_by(Connection, provider: applied.provider, name: applied.name),
+         true <- equivalent_intent?(connection, applied) do
       {:ok, connection}
     else
       _value -> :error
     end
   end
 
-  defp equivalent_intent?(connection, attrs) do
-    connection.account_ref == trimmed(attr_value(attrs, :account_ref)) and
+  defp equivalent_intent?(connection, applied) do
+    connection.account_ref == applied.account_ref and
       normalized_capabilities(connection.capabilities) ==
-        normalized_capabilities(attr_value(attrs, :capabilities))
+        normalized_capabilities(applied.capabilities)
   end
 
-  defp replay_racing_connection({:error, %Ecto.Changeset{} = changeset}, attrs) do
+  defp replay_racing_connection({:error, %Ecto.Changeset{} = changeset}) do
     with true <- duplicate_name?(changeset),
-         {:ok, connection} <- applied_connection(attrs) do
+         {:ok, connection} <- applied_connection(changeset) do
       {:replayed, connection}
     else
       _value -> {:error, changeset}
     end
   end
 
-  defp replay_racing_connection(result, _attrs), do: result
+  defp replay_racing_connection(result), do: result
 
   # Ecto attributes a composite unique-constraint error to the first field of
   # the constraint, so the `[provider, name]` index reports on `:provider`.
@@ -1847,11 +1852,6 @@ defmodule SymmetryControl.Integrations do
   defp normalized_capabilities(value) when is_list(value) do
     value |> Enum.filter(&is_binary/1) |> Enum.uniq() |> Enum.sort()
   end
-
-  defp normalized_capabilities(_value), do: nil
-
-  defp trimmed(value) when is_binary(value), do: String.trim(value)
-  defp trimmed(value), do: value
 
   defp auth_type_for("github"), do: {:ok, "gh_cli"}
   defp auth_type_for("azure_devops"), do: {:ok, "entra_id"}

@@ -2,6 +2,7 @@
 
 export type UUID = string;
 export type UtcTimestamp = string;
+export type Revision = number;
 
 /**
  * Consumed fields of the existing portal connection read and its mutation projections. Presentation values stay open strings so an unknown status, capability or auth type remains renderable; unconsumed presentation fields remain additive.
@@ -28,7 +29,7 @@ export interface Connection {
   status_message: string | null;
   metadata: {};
   last_checked_at: UtcTimestamp | null;
-  version: number;
+  version: Revision;
   resources: ConnectionResource[];
   [k: string]: unknown | undefined;
 }
@@ -49,6 +50,6 @@ export interface ConnectionResource {
   metadata: {};
   last_checked_at: UtcTimestamp | null;
   last_synced_at: UtcTimestamp | null;
-  version: number;
+  version: Revision;
   [k: string]: unknown | undefined;
 }

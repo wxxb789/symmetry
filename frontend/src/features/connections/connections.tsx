@@ -120,7 +120,7 @@ interface EditorProps {
   csrf: string;
   editorId: number;
   fallbackFocus: RefObject<HTMLElement | null>;
-  onSaved: (disposition: string, connectionId: string, editorId: number) => void;
+  onSaved: (disposition: string, connectionId: string, editorId: number, capabilitiesChanged: boolean) => void;
   onWriteStart: () => void;
   onWriteSettled: () => void;
   onClose: () => void;
@@ -129,6 +129,9 @@ interface EditorProps {
 function ConnectionEditor({ connection, providers, api, csrf, editorId, fallbackFocus, onSaved, onWriteStart, onWriteSettled, onClose }: EditorProps) {
   const queryClient = useQueryClient();
   const first = providers[0];
+  // The capabilities this editor was opened from; the notice after a successful
+  // update compares the submission against them.
+  const [editedCapabilities] = useState<readonly string[] | null>(() => connection ? [...connection.capabilities] : null);
   // Radix restores focus on close only to a Dialog.Trigger, and this dialog has
   // no trigger of its own; capture the invoking control before Radix moves
   // keyboard focus into the dialog, and give it back when the dialog closes.
@@ -149,7 +152,17 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
     mutationFn: (payload: ConnectionDraft) => editedTarget
       ? api.updateConnection(editedTarget.id, { version: editedTarget.version, name: payload.name, capabilities: [...payload.capabilities] }, csrf, new AbortController().signal)
       : api.createConnection(payload, csrf, new AbortController().signal),
-    onSuccess: (receipt) => onSaved(receipt.disposition, receipt.connectionId, editorId),
+    // The server resets bound resource health and sync state only when the
+    // update changes the capabilities; the receipt notice must not claim a
+    // reset that did not happen.
+    onSuccess: (receipt, payload) => onSaved(
+      receipt.disposition,
+      receipt.connectionId,
+      editorId,
+      editedCapabilities !== null &&
+        (payload.capabilities.length !== editedCapabilities.length ||
+          payload.capabilities.some((capability) => !editedCapabilities.includes(capability))),
+    ),
     // A refused write is never rendered as success: re-read the server's state
     // so the console shows what the server actually holds.
     onError: () => { void queryClient.invalidateQueries({ queryKey: ["connections"] }); },
@@ -267,10 +280,10 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
     mutationFn: () => api.checkConnection(connection.id, csrf, new AbortController().signal),
     onMutate: () => onRequest(connection.id, "check", true),
     onSettled: () => onRequest(connection.id, "check", false),
-    onSuccess: async (receipt) => {
-      if (receipt.disposition === "replayed") onNotice("This provider check was already applied; the server returned the existing connection.");
-      await refresh();
-    },
+    // The server answers a provider check with `checked`; a replayed receipt is
+    // not part of that surface, so the read after the check is the only notice
+    // the operator needs.
+    onSuccess: async () => { await refresh(); },
     onError: async (error) => {
       onNotice(refusalNotice(error));
       await refresh();
@@ -352,7 +365,10 @@ export function ConnectionsPage() {
   const queryClient = useQueryClient();
   const query = useQuery(connectionsOptions(application.api));
   const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState(false);
+  // The connection an open edit dialog belongs to: a background refresh that
+  // removes that connection must close the dialog, and a stale subject must not
+  // reopen an editor, unsolicited, on the next selected connection.
+  const [editingSubject, setEditingSubject] = useState<string | null>(null);
   const [pendingWrites, setPendingWrites] = useState(0);
   // A check or a removal is a request against one connection, not against one
   // detail instance: the counts are kept by connection id so the exclusion
@@ -370,6 +386,11 @@ export function ConnectionsPage() {
   const refresh = () => { if (!query.isFetching) void query.refetch(); };
   const connections = query.data?.connections ?? [];
   const selected = connections.find((connection) => connection.id === search.connectionId);
+  // The editor renders from the subject it was opened for, re-read from the
+  // authoritative list; when that connection is gone the dialog closes and the
+  // operator is told instead of losing the draft silently.
+  const editSubject = editingSubject === null ? undefined : connections.find((connection) => connection.id === editingSubject);
+  const editSubjectRemoved = editingSubject !== null && query.data !== undefined && editSubject === undefined;
   // This page's own lifetime: a continuation that settles after the operator
   // navigated away must not pull them back to this route.
   const mounted = useRef(true);
@@ -386,13 +407,14 @@ export function ConnectionsPage() {
     if (!query.data || !search.connectionId || selected) return;
     void navigate({ to: "/connections", search: {}, replace: true });
   }, [navigate, query.data, search.connectionId, selected]);
-  const openEditor = (kind: "create" | "edit") => {
+  const openEditor = (kind: "create" | "edit", connectionId: string | null) => {
     setNotice(null);
     editorSequence.current += 1;
     setOpenEditorId(editorSequence.current);
-    if (kind === "create") setCreating(true); else setEditing(true);
+    if (kind === "create") { setCreating(true); setEditingSubject(null); }
+    else { setCreating(false); setEditingSubject(connectionId); }
   };
-  const closeEditor = () => { editorSequence.current += 1; setOpenEditorId(0); setCreating(false); setEditing(false); };
+  const closeEditor = () => { editorSequence.current += 1; setOpenEditorId(0); setCreating(false); setEditingSubject(null); };
   // Editor saves hold the page-level pending count until they settle, even
   // after their dialog closes: while any check, update or removal is pending,
   // none of the others can start.
@@ -412,7 +434,7 @@ export function ConnectionsPage() {
   const clearSelectionFor = (connectionId: string) => {
     if (mounted.current && selectionRef.current === connectionId) void navigate({ to: "/connections", search: {} });
   };
-  const saved = (disposition: string, connectionId: string, editor: number) => {
+  const saved = (disposition: string, connectionId: string, editor: number, capabilitiesChanged: boolean) => {
     if (editor !== editorSequence.current) {
       // A late response for an editor that has since closed: the write is real,
       // so re-read the list, but never close or navigate the open editor.
@@ -427,7 +449,9 @@ export function ConnectionsPage() {
     const generation = editorSequence.current;
     setNotice(disposition === "replayed"
       ? "This connection submission was already applied; the server returned the existing connection."
-      : disposition === "created" ? "Connection created." : "Connection capabilities updated. Bound resource health and sync state was reset where the change affects it.");
+      : disposition === "created" ? "Connection created."
+      : capabilitiesChanged ? "Connection capabilities updated. Bound resource health and sync state was reset where the change affects it."
+      : "Connection updated.");
     // Re-read the authoritative list before selecting the changed connection,
     // and only move the operator if neither the selection nor the editor
     // generation changed while the re-read was in flight.
@@ -441,10 +465,13 @@ export function ConnectionsPage() {
   const attention = connections.filter((connection) => connection.status !== "healthy").length;
   return <>
     <PageHeading title="Connections" description="GitHub and Azure DevOps connections this server authenticates through.">
-      <button className="button" type="button" onClick={() => openEditor("create")}><Plus size={16} aria-hidden="true" />New connection</button>
+      {/* The provider catalog arrives with this query: until it is loaded the
+          create draft would have no provider to choose or submit. */}
+      <button className="button" type="button" disabled={query.data === undefined} onClick={() => openEditor("create", null)}><Plus size={16} aria-hidden="true" />New connection</button>
       <RefreshButton fetching={query.isFetching} refresh={refresh} />
     </PageHeading>
     {notice && <p className="notice" role="status">{notice}<button className="button" type="button" onClick={() => setNotice(null)}>Dismiss</button></p>}
+    {editSubjectRemoved && <p className="notice notice-error" role="status">The connection being edited was removed elsewhere before the change was saved; the unsaved draft was discarded.</p>}
     {query.isPending && <LoadingState label="Loading connections…" />}
     {query.isError && <ErrorState error={query.error} retry={refresh} stale={query.data !== undefined} />}
     {query.data && <div className="connection-layout">
@@ -457,12 +484,18 @@ export function ConnectionsPage() {
           ? <EmptyState title="No connections yet">Connect GitHub or Azure DevOps to bind provider resources to a project.</EmptyState>
           : <ul className="connection-list" aria-label="Connections">{connections.map((connection) => <ConnectionRow key={connection.id}
             connection={connection} selected={connection.id === search.connectionId}
-            onSelect={() => { setNotice(null); void navigate({ to: "/connections", search: { connectionId: connection.id } }); }} />)}</ul>}
+            onSelect={() => {
+              setNotice(null);
+              // A removed editor subject must not reopen itself if that row
+              // comes back: selecting a connection supersedes it.
+              setEditingSubject(null);
+              void navigate({ to: "/connections", search: { connectionId: connection.id } });
+            }} />)}</ul>}
       </section>
       {selected
         ? <ConnectionDetail key={selected.id} connection={selected} api={application.api} csrf={csrf} writePending={pendingWrites > 0}
             requests={pendingRequests[selected.id] ?? noPendingRequests} closeButtonRef={detailCloseRef} onRequest={trackRequest}
-            onEdit={() => openEditor("edit")} onNotice={(notice) => noticeFor(selected.id, notice)} onRemoved={() => clearSelectionFor(selected.id)} />
+            onEdit={() => openEditor("edit", selected.id)} onNotice={(notice) => noticeFor(selected.id, notice)} onRemoved={() => clearSelectionFor(selected.id)} />
         : <aside className="connection-detail" aria-label="Connection detail">
           <Cable size={28} aria-hidden="true" />
           <h2>Select a connection</h2>
@@ -471,6 +504,6 @@ export function ConnectionsPage() {
       <p className="sr-only" role="status">{query.isFetching && !query.isPending ? "Refreshing connections" : ""}</p>
     </div>}
     {creating && <ConnectionEditor connection={null} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} fallbackFocus={detailCloseRef} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
-    {editing && selected && <ConnectionEditor connection={selected} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} fallbackFocus={detailCloseRef} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
+    {editSubject && <ConnectionEditor connection={editSubject} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} fallbackFocus={detailCloseRef} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
   </>;
 }

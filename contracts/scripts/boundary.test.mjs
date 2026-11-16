@@ -97,7 +97,10 @@ test("ConnectionsRead keeps unknown presentation values renderable and consumed 
   assert.equal(decoded.connections[0].resources[0].sync_status, "stale");
   assert.deepEqual(decoded, JSON.parse(bytes.toString("utf8")));
 
-  const connection = await fixture("connections-read.basic");
+  const connectionBytes = await fs.readFile(
+    new URL("../fixtures/valid/connections-read.basic.json", import.meta.url),
+  );
+  const connection = await Effect.runPromise(ConnectionsRead.decodeJson(connectionBytes));
   assert.equal(
     connection.connections[0].metadata.latency_ratio,
     0.5,

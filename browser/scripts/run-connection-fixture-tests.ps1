@@ -20,6 +20,7 @@ $runRoot = Join-Path $env:TEMP ("symmetry-0007d-connections-" + [guid]::NewGuid(
 New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
 $fixtureLog = Join-Path $runRoot "fixture-calls.jsonl"
 $serverLog = Join-Path $runRoot "control.log"
+$specLog = Join-Path $runRoot "spec.log"
 $identityFile = Join-Path $runRoot "fixture-identity.json"
 
 $target = [Uri]$PortalUrl
@@ -65,8 +66,11 @@ try {
   # the run less reproducible, and the rows are referenced across tables, so the
   # fixture recreates the database instead of deleting rows selectively.
   mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix ecto.drop --quiet
+  if ($LASTEXITCODE -ne 0) { throw "mix ecto.drop failed with exit code ${LASTEXITCODE}: refusing to run on an inherited database" }
   mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix ecto.create --quiet
+  if ($LASTEXITCODE -ne 0) { throw "mix ecto.create failed with exit code ${LASTEXITCODE}: refusing to run on an inherited database" }
   mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix ecto.migrate --quiet
+  if ($LASTEXITCODE -ne 0) { throw "mix ecto.migrate failed with exit code ${LASTEXITCODE}: refusing to run against an unmigrated database" }
 } finally {
   Pop-Location
 }
@@ -78,6 +82,8 @@ $stopFailed = $false
 try {
   # `set "NAME=value"` is the cmd form that does not fold the space before `&&`
   # into the value; plain `set NAME=value && …` would set "4021 " and "… .jsonl ".
+  # --no-start: the fixture script installs its transports before it starts the
+  # application, so no boot-time provider recovery can reach a real transport.
   $fixtureCommand = "set `"PHX_SERVER=true`" && set `"PORT=$Port`" && " +
     "set `"SYMMETRY_OPERATOR_TOKEN=$operatorToken`" && " +
     "set `"SYMMETRY_FIXTURE_IDENTITY=$identity`" && " +
@@ -85,7 +91,7 @@ try {
     "set `"SYMMETRY_FIXTURE_TRANSPORT_LOG=$fixtureLog`" && " +
     "set `"SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS=expired-fixture`" && " +
     "cd /d `"$controlRoot`" && " +
-    "mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix run --no-halt ../scripts/ci/portal-connection-fixture.exs"
+    "mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix run --no-halt --no-start ../scripts/ci/portal-connection-fixture.exs"
   $server = Start-Process -FilePath "cmd.exe" -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError "$serverLog.err" `
     -ArgumentList "/c", $fixtureCommand
 
@@ -136,7 +142,9 @@ try {
     # policy check" with a node_modules warning, and the script still runs.
     # node_modules is already installed for this exact lockfile
     # (pnpm-lock.yaml sha256 2a0c9ef0…), so the warning is expected here.
-    mise exec pnpm@12.17.0 -- pnpm --offline --filter symmetry-browser-acceptance test tests/portal-connections.spec.mjs
+    # The spec output is kept so the summary below can prove the file ran
+    # instead of skipping.
+    mise exec pnpm@12.17.0 -- pnpm --offline --filter symmetry-browser-acceptance test tests/portal-connections.spec.mjs 2>&1 | Tee-Object -FilePath $specLog
     $specStatus = $LASTEXITCODE
   } finally {
     Pop-Location
@@ -144,6 +152,18 @@ try {
 
   if ($server.HasExited) {
     Write-Host "fixture control plane exited during the spec run; see $serverLog.err"
+    $specStatus = 1
+  }
+
+  # The spec skips itself when the harness environment is absent (so the
+  # repository-wide commands still collect it); a skipped run exits 0, so the
+  # acceptance gate reads the summary instead of trusting the exit code.
+  # 10 = the file's 5 flows on the desktop and mobile projects.
+  $summary = Select-String -Path $specLog -Pattern "(\d+) passed" -ErrorAction SilentlyContinue | Select-Object -Last 1
+  $passed = if ($summary) { [int]$summary.Matches[0].Groups[1].Value } else { 0 }
+  $skipped = [bool](Select-String -Path $specLog -Quiet -Pattern "\d+ skipped" -ErrorAction SilentlyContinue)
+  if ($passed -ne 10 -or $skipped) {
+    Write-Host "spec summary reports $passed passed (skipped=$skipped); expected 10 passed and no skips: see $specLog"
     $specStatus = 1
   }
 

@@ -54,7 +54,10 @@ func TestGoalTransportParsesContractFixtures(t *testing.T) {
 			var semanticErr error
 			switch contractdto.Envelope(fixture.Schema) {
 			case contractdto.EnvelopeConnectionsRead:
-				var connections map[string]any
+				// Decode into the generated DTO, not a map: this is the only
+				// place the daemon decodes the connections read projection, and
+				// a map would let a broken nullable field pass unnoticed.
+				var connections contractdto.SymmetryConnectionsReadV1
 				semanticErr = contractdto.DecodeSchema(
 					contractdto.EnvelopeConnectionsRead,
 					data,
@@ -70,6 +73,32 @@ func TestGoalTransportParsesContractFixtures(t *testing.T) {
 				t.Fatalf("semantic validity = %t, want %t: %v", got, want, semanticErr)
 			}
 		})
+	}
+}
+
+func TestConnectionsReadDTOFillsNullableFields(t *testing.T) {
+	root := contractRepositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "contracts", "fixtures", "valid", "connections-read.unknown-values.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var decoded contractdto.SymmetryConnectionsReadV1
+	if err := contractdto.DecodeSchema(contractdto.EnvelopeConnectionsRead, data, &decoded); err != nil {
+		t.Fatalf("valid connections read rejected: %v", err)
+	}
+	if len(decoded.Connections) != 1 {
+		t.Fatalf("decoded %d connections, want 1", len(decoded.Connections))
+	}
+	connection := decoded.Connections[0]
+	if connection.Status != "degraded" || connection.StatusMessage == nil || *connection.StatusMessage != "Provider authentication failed" {
+		t.Fatalf("nullable status fields did not decode: status=%q message=%v", connection.Status, connection.StatusMessage)
+	}
+	if connection.LastCheckedAt == nil {
+		t.Fatalf("nullable last_checked_at did not decode")
+	}
+	if connection.Version != 2 {
+		t.Fatalf("version = %d, want 2", connection.Version)
 	}
 }
 

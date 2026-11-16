@@ -62,8 +62,22 @@ defmodule PortalConnectionFixture.Transport do
   def request(method, url, headers, _body \\ nil) do
     uri = URI.parse(url)
     unauthorized = unauthorized_accounts()
+    authorization = authorization_shape(headers)
 
-    case respond(method, uri, unauthorized) do
+    # Only the fixture's own provider calls are answered: a GET to one of the
+    # two provider hosts carrying that provider's fixture token. A dropped or
+    # mismatched bearer, or a changed method, fails the run instead of being
+    # answered by a blanket canned document.
+    expected = expected_authorization(method, uri)
+
+    result =
+      if expected == authorization do
+        respond(method, uri, unauthorized)
+      else
+        {:error, {:fixture_unexpected_request, uri.host, to_string(method), authorization, expected}}
+      end
+
+    case result do
       {:ok, status, document} ->
         PortalConnectionFixture.Log.append(%{
           kind: "http",
@@ -71,7 +85,7 @@ defmodule PortalConnectionFixture.Transport do
           host: uri.host,
           path: uri.path,
           status: status,
-          authorization: authorization_shape(headers)
+          authorization: authorization
         })
 
         {:ok, status, %{}, document}
@@ -84,12 +98,22 @@ defmodule PortalConnectionFixture.Transport do
           path: uri.path,
           status: "rejected",
           reason: inspect(reason),
-          authorization: authorization_shape(headers)
+          authorization: authorization
         })
 
         {:error, reason}
     end
   end
+
+  # The fixture's provider modules authenticate with their own fixture tokens;
+  # these shapes are the kinds fixture_token_kind/1 assigns to
+  # Commands.token(:github) and Commands.token(:azure_devops), and a token
+  # change has to update them in the same edit.
+  # `SymmetryControl.Integrations.HTTP.request/4` takes the method as a
+  # lowercase atom (`:get`/`:post`/`:patch`/`:put`), which `to_string/1` logs.
+  defp expected_authorization(:get, %URI{host: "api.github.com"}), do: "bearer:github-fixture"
+  defp expected_authorization(:get, %URI{host: "dev.azure.com"}), do: "bearer:azure-fixture"
+  defp expected_authorization(_method, _uri), do: :unexpected
 
   # No status field is logged for the bearer header; only its shape, so the log
   # proves a fixture token was used without recording its value.
@@ -201,6 +225,13 @@ Application.put_env(
   :integration_http_client,
   PortalConnectionFixture.Transport
 )
+
+# The harness starts this script with `mix run --no-start`: the transports must
+# be installed before the application boots, because the boot-time provider
+# recovery sweep would otherwise use the real HTTP client or CLI session even
+# for provider work an earlier run left pending. The application starts here,
+# with the fixture transports already in its environment.
+{:ok, _started} = Application.ensure_all_started(:symmetry_control)
 
 # The development logger prints every SQL statement at debug level. A browser
 # run produces thousands of them, and a blocked output pipe stalls the endpoint

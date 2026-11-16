@@ -53,10 +53,11 @@ exact MaxInt64 boundary, and rejection of MaxInt64+1. UUIDs use the daemon's
 canonical lowercase form with version `1`-`5` and RFC 4122 variant `8|9|a|b`.
 For command and transport envelopes, the fixture checker rejects
 fractional/exponent JSON number lexemes and raw integers outside the JSON
-safe-integer range before `JSON.parse` or Ajv can round them. Presentation reads
-admit finite presentation numbers in existing additive metadata; their consumed
-fields still pass the generated schema. UTF-8, duplicate-key and Unicode checks
-remain in force for both policies.
+safe-integer range before `JSON.parse` or Ajv can round them. The `WorkspaceRead`,
+`WorkDetailRead`, `WorkTimelineRead` and `ConnectionsRead` read projections admit
+finite presentation numbers in existing additive metadata; their consumed fields
+still pass the generated schema. UTF-8, duplicate-key and Unicode checks remain
+in force for both policies.
 
 `goal-create.schema.json`, `goal-command.schema.json`, and
 `plan-proposal.schema.json` are the canonical input authority for the Goal
@@ -179,10 +180,10 @@ const checked = Admission.decodeUnknown(value);
 
 `decodeJson` accepts a string or UTF-8 bytes and rejects malformed UTF-8,
 duplicate keys and invalid JSON. Command and transport decoders also reject
-noncanonical numeric lexemes; `WorkspaceRead`, `WorkDetailRead` and
-`WorkTimelineRead` instead permit finite presentation numbers. Both entry
-points reject invalid structure, unpaired
-surrogates, and inconsistent hashes or cross-field values.
+noncanonical numeric lexemes; `WorkspaceRead`, `WorkDetailRead`,
+`WorkTimelineRead` and `ConnectionsRead` instead permit finite presentation
+numbers. Both entry points reject invalid structure, unpaired surrogates, and
+inconsistent hashes or cross-field values.
 The error channel distinguishes `WireJsonError`, Effect `ParseError`, and
 `SemanticError`. A caller that already parsed a rounded number cannot recover
 its original lexeme; use `decodeJson` at an HTTP body boundary.

@@ -4162,8 +4162,7 @@
             ]
           },
           "version": {
-            "minimum": 1,
-            "type": "integer"
+            "$ref": "#/definitions/Revision"
           }
         },
         "required": [
@@ -4304,8 +4303,7 @@
             ]
           },
           "version": {
-            "minimum": 1,
-            "type": "integer"
+            "$ref": "#/definitions/Revision"
           }
         },
         "required": [

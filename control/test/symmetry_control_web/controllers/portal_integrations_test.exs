@@ -181,6 +181,44 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
              api_conn()
              |> post("/portal/api/connections", %{payload | "capabilities" => ["work_items"]})
              |> json_response(422)
+
+    # The natural key matches but the account is part of the intent: the retry
+    # is a different submission and keeps the ordinary refusal.
+    assert %{
+             "error" => %{
+               "code" => "validation_failed",
+               "fields" => %{"provider" => ["already has a connection with this name"]}
+             }
+           } =
+             api_conn()
+             |> post("/portal/api/connections", %{payload | "account_ref" => "another-account"})
+             |> json_response(422)
+  end
+
+  test "a submission that omits capabilities replays the applied connection" do
+    payload = %{
+      "provider" => "github",
+      "name" => "Capability-free submission",
+      "account_ref" => "acme"
+    }
+
+    assert %{"disposition" => "created", "connection" => created} =
+             api_conn() |> post("/portal/api/connections", payload) |> json_response(201)
+
+    # The omitted optional field lands as the schema default, so the retry of
+    # the same submission is the same intent and must replay instead of
+    # colliding with the unique index as a duplicate name.
+    assert created["capabilities"] == []
+
+    assert %{"disposition" => "replayed", "connection" => replayed} =
+             api_conn() |> post("/portal/api/connections", payload) |> json_response(200)
+
+    assert replayed["id"] == created["id"]
+
+    assert %{"connections" => connections} =
+             api_conn() |> get("/portal/api/connections") |> json_response(200)
+
+    assert length(Enum.filter(connections, &(&1["name"] == "Capability-free submission"))) == 1
   end
 
   test "a replay never accepts an invalid payload as a repeat of the applied connection" do
@@ -307,6 +345,17 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
     project = create_project()
     tracker = create_tracker(project, connection, "Reset tracker")
 
+    # The connection is healthy and checked before the capability update: the
+    # reset assertions below fail when the reset skips that state, where a
+    # freshly created connection is already unknown and never checked.
+    assert %{"connection" => checked} =
+             api_conn()
+             |> post("/portal/api/connections/#{connection["id"]}/check")
+             |> json_response(200)
+
+    assert checked["status"] == "healthy"
+    assert checked["last_checked_at"] != nil
+
     assert %{"resource" => synced} =
              api_conn()
              |> post("/portal/api/resources/#{tracker["id"]}/sync")
@@ -315,10 +364,19 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
     assert synced["status"] == "healthy"
     assert synced["sync_status"] == "synced"
 
+    # The sync above cleared the message; restore the failure state a resource
+    # can carry so the reset has one to clear.
+    SymmetryControl.Repo.update_all(
+      from(resource in SymmetryControl.Workspaces.ProjectResource,
+        where: resource.id == ^tracker["id"]
+      ),
+      set: [status_message: "previous provider failure"]
+    )
+
     assert %{"connection" => updated} =
              api_conn()
              |> patch("/portal/api/connections/#{connection["id"]}", %{
-               "version" => connection["version"],
+               "version" => checked["version"],
                "capabilities" => ["work_items", "ci"]
              })
              |> json_response(200)
