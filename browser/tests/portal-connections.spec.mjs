@@ -6,9 +6,11 @@
 // scripts/ci/portal-connection-fixture.exs, which replaces each provider's
 // external transport (HTTP client and local CLI session) with canned provider
 // documents. No provider host is contacted. The fixture CLI tokens are canaries:
-// each test asserts that no canary reaches a recorded same-origin response, the
-// DOM, web storage, the cookie jar (including HttpOnly cookies), request
-// headers and bodies, or the console.
+// each test asserts that no canary reaches a recorded same-origin response
+// (body and every header, including each Set-Cookie), the DOM, web storage, the
+// cookie jar (document.cookie cannot see HttpOnly cookies; the jar is sampled
+// at every same-origin response and once more at the end), request headers and
+// bodies, or the console.
 //
 // Fixture identity: the harness starts the fixture with a per-run identity, an
 // identity file and a per-run operator token. Every test proves the target is
@@ -99,6 +101,7 @@ function recordApiBodies(page) {
   const requests = [];
   const consoleMessages = [];
   const pageErrors = [];
+  const cookieJarSamples = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (url.origin !== portalOrigin) return;
@@ -107,28 +110,40 @@ function recordApiBodies(page) {
   page.on("response", (response) => {
     const url = new URL(response.url());
     if (url.origin !== portalOrigin) return;
-    const status = response.status();
-    if (status >= 300 && status < 400) {
-      // A redirect has no readable body; its Location header is scanned in its
-      // place, and a redirect without one is an evidence failure (304 has no
-      // body by protocol).
-      const location = response.headers()["location"];
-      responses.push(Promise.resolve({
-        path: url.pathname,
-        status,
-        text: location ?? "",
-        unreadable: !location && status !== 304 ? "redirect response without a Location header" : undefined
-      }));
-      return;
-    }
-    responses.push(response.text().then(
-      (text) => ({ path: url.pathname, status: response.status(), text }),
-      (error) => ({ path: url.pathname, status: response.status(), text: null, unreadable: String(error) })
-    ));
+    // The full header list is recorded when the response arrives: response
+    // headers are the surface that introduces an HttpOnly cookie (page scripts
+    // can neither write nor read HttpOnly state), and this record still holds
+    // the evidence after a transient cookie has been cleared.
+    responses.push((async () => {
+      const headers = (await response.headersArray()).map(({ name, value }) => `${name}: ${value}`);
+      const status = response.status();
+      if (status >= 300 && status < 400) {
+        // A redirect has no readable body; its Location header is scanned in
+        // its place, and a redirect without one is an evidence failure (304
+        // has no body by protocol).
+        const location = response.headers()["location"];
+        return {
+          path: url.pathname,
+          status,
+          headers,
+          text: location ?? "",
+          unreadable: !location && status !== 304 ? "redirect response without a Location header" : undefined
+        };
+      }
+      try {
+        const text = await response.text();
+        return { path: url.pathname, status, headers, text };
+      } catch (error) {
+        return { path: url.pathname, status, headers, text: null, unreadable: String(error) };
+      }
+    })());
+    // The jar is sampled while the run is in flight, not only at the end, so a
+    // cookie that exists for part of the run is still scanned.
+    cookieJarSamples.push(page.context().cookies());
   });
   page.on("console", (message) => consoleMessages.push({ type: message.type(), text: message.text() }));
   page.on("pageerror", (error) => pageErrors.push(String(error?.stack || error)));
-  return { responses, requests, consoleMessages, pageErrors };
+  return { responses, requests, consoleMessages, pageErrors, cookieJarSamples };
 }
 
 async function assertNoCredentials(page, recorded) {
@@ -141,16 +156,22 @@ async function assertNoCredentials(page, recorded) {
   for (const [where, text] of Object.entries(browserState)) {
     expect(text, `${where} must not contain a provider credential`).not.toMatch(secretPattern);
   }
-  // document.cookie cannot see HttpOnly cookies; the cookie jar can, and an
-  // unreadable or empty jar is an evidence failure, not a pass.
+  // document.cookie cannot see HttpOnly cookies; the Playwright cookie jar
+  // can. It is sampled at every same-origin response and once more here, so a
+  // cookie that was set and later cleared is still scanned, and the final
+  // sample must be readable and non-empty as evidence the jar was observable.
   const jar = await page.context().cookies();
   expect(jar.length, "the cookie jar must be readable and non-empty for the credential scan").toBeGreaterThan(0);
-  for (const cookie of jar) {
-    expect(`${cookie.name}=${cookie.value}`, `cookie ${cookie.name} must not contain a provider credential`).not.toMatch(secretPattern);
+  expect(recorded.cookieJarSamples.length, "the jar must have been sampled during the run, not only at the end").toBeGreaterThan(0);
+  for (const cookie of [...jar, ...(await Promise.all(recorded.cookieJarSamples)).flat()]) {
+    expect(`${cookie.name}=${cookie.value}`, `cookie ${cookie.name} from a jar sample must not contain a provider credential`).not.toMatch(secretPattern);
   }
+  expect(recorded.responses.length, "same-origin responses must be recorded for the credential scan").toBeGreaterThan(0);
   for (const entry of await Promise.all(recorded.responses)) {
     expect(entry.unreadable, `response ${entry.path} must be readable for the credential scan`).toBeUndefined();
+    expect(entry.headers.length, `response ${entry.path} must have headers for the credential scan`).toBeGreaterThan(0);
     expect(entry.text, `response ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
+    expect(entry.headers.join("\n"), `response headers for ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
   }
   for (const recordedRequest of recorded.requests) {
     // allHeaders() includes the browser-managed headers (cookies) that
@@ -236,6 +257,10 @@ test("a connection is created, inspected, tested and removed through the real AP
   await page.getByRole("button", { name: new RegExp(name) }).click();
   await page.getByRole("complementary", { name: "Connection detail" }).getByRole("button", { name: "Remove", exact: true }).click();
   await page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) }).getByRole("button", { name: "Remove connection", exact: true }).click();
+  // The removal receipt closes the dialog when the write settles; only then is
+  // the row count meaningful (an open modal hides the list from the
+  // accessibility tree, so a role-based count can pass while the row persists).
+  await expect(page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) })).toBeHidden();
   await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(0);
   const list = await api(page, "/portal/api/connections", { method: "GET" });
   expect(list.status).toBe(200);
@@ -427,6 +452,10 @@ test("Azure DevOps connection management runs on the new route", async ({ page }
   await page.getByRole("button", { name: new RegExp(name) }).click();
   await page.getByRole("complementary", { name: "Connection detail" }).getByRole("button", { name: "Remove", exact: true }).click();
   await page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) }).getByRole("button", { name: "Remove connection", exact: true }).click();
+  // The removal receipt closes the dialog when the write settles; only then is
+  // the row count meaningful (an open modal hides the list from the
+  // accessibility tree, so a role-based count can pass while the row persists).
+  await expect(page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) })).toBeHidden();
   await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(0);
   const removed = await api(page, "/portal/api/connections", { method: "GET" });
   expect(removed.status).toBe(200);

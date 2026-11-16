@@ -55,7 +55,11 @@ browser flows, focused browser gate, docs closure.
   `provider` + `name` and the same `account_ref` + `capabilities` is returned with 200/`replayed`
   (identical submission converged); any other payload keeps the current path and error.
   A concurrent identical insert that loses the unique-index race is re-read and replayed the same way.
-- `update` receipt adds `reset_resource_ids` (the active-project bound resources the transaction reset).
+- `update` receipt repeats the connection read projection instead of adding the
+  `reset_resource_ids` list this plan originally promised: the projection's resource entries
+  already carry the reset `status`/`sync_status`/`last_synced_at`, and nothing in the contract
+  consumed an id list. The unimplemented promise and its replacement are recorded as the
+  deviation in §10.8.
 - Locked error envelopes keep their existing shape (`{error: {code, message, fields?}}`); the
   connections page decodes them (including the projection the check endpoint already returns).
 - `GET /portal/api/connections` is additive to the workspace read: `PortalJSON.workspace/1`
@@ -154,9 +158,12 @@ Measured during the browser gate; each note names the evidence, not a preference
    log volume blocked the endpoint's output pipe and the scheduler tick contended with the page's
    reads: a `GET /portal/api/connections` that the server answers in 0.48 s over curl was still
    unanswered after 10 s in the browser (Playwright trace `status: -1`), and shell bootstrap took
-   ~12 s. `scripts/ci/portal-connection-fixture.exs` now sets the logger to `:warning` and terminates
-   the `Orchestration.Scheduler`/`Reconciler` children after boot (provider access stays up; no
-   production behaviour changes). The spec also gets a 30 s assertion budget and a 120 s per-test
+   ~12 s. `scripts/ci/portal-connection-fixture.exs` sets the logger to `:warning` and keeps the
+   application's real supervision topology: an early cut also terminated the
+   `Orchestration.Scheduler`/`Reconciler` children after boot, and the first fix round (`bbc9b6f`) removed that
+   termination (the receipt's `/healthz` readiness now covers the real database, scheduler,
+   reconciler and provider access; no production behaviour changes). The spec also gets a 30 s
+   assertion budget and a 120 s per-test
    timeout instead of the shared 10 s/60 s, and
    `browser/scripts/run-connection-fixture-tests.ps1` clears the acceptance database's portal rows
    before starting, so the run does not inherit a growing connection list.
@@ -198,3 +205,10 @@ Measured during the browser gate; each note names the evidence, not a preference
    (the repository default `symmetry_control_test`), where it reports 828/829 passed, 21 skipped and
    one environment-limited failure that needs a working `pwsh`. Both findings are recorded in
    `docs/TODO.md`.
+8. **Update-receipt deviation.** §3 promised that the `update` receipt would add
+   `reset_resource_ids` (the active-project bound resources the transaction reset). The
+   implementation never returned that list: the PATCH receipt repeats the connection read
+   projection, whose resource entries carry the reset `status`/`sync_status`/`last_synced_at`
+   (observed in the receipt's §5), and no contract clause or client consumed an id list. The
+   promise is corrected in §3 instead of implemented; an id list would add wire surface with no
+   consumer.

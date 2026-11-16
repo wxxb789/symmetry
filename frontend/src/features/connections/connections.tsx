@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouteContext, useSearch } from "@tanstack/react-router";
 import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { connectionsOptions } from "../../app/application";
 import { useSessionToken } from "../../app/session";
 import {
@@ -103,12 +103,18 @@ interface EditorProps {
   csrf: string;
   editorId: number;
   onSaved: (disposition: string, connectionId: string, editorId: number) => void;
+  onWriteStart: () => void;
+  onWriteSettled: () => void;
   onClose: () => void;
 }
 
-function ConnectionEditor({ connection, providers, api, csrf, editorId, onSaved, onClose }: EditorProps) {
+function ConnectionEditor({ connection, providers, api, csrf, editorId, onSaved, onWriteStart, onWriteSettled, onClose }: EditorProps) {
   const queryClient = useQueryClient();
   const first = providers[0];
+  // Radix restores focus on close only to a Dialog.Trigger, and this dialog has
+  // no trigger of its own; capture the invoking control before Radix moves
+  // keyboard focus into the dialog, and give it back when the dialog closes.
+  const opener = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   // The draft belongs to the editor generation that created it: the update is
   // submitted against the version it was edited from, so a background refresh
   // that loads another operator's change cannot turn the stale draft into a
@@ -129,6 +135,9 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, onSaved,
     // A refused write is never rendered as success: re-read the server's state
     // so the console shows what the server actually holds.
     onError: () => { void queryClient.invalidateQueries({ queryKey: ["connections"] }); },
+    // The page-level pending count drops only when the request settles, so the
+    // exclusion holds even after this editor closes while the write is pending.
+    onSettled: () => onWriteSettled(),
   });
   // Capability coupling is server-owned policy: "changes" requires
   // "repositories", so selecting one selects the other and dropping
@@ -147,7 +156,12 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, onSaved,
   return <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
     <Dialog.Portal>
       <Dialog.Overlay className="dialog-overlay" />
-      <Dialog.Content className="command-dialog connection-dialog" aria-describedby="connection-dialog-description">
+      <Dialog.Content className="command-dialog connection-dialog" aria-describedby="connection-dialog-description"
+        onCloseAutoFocus={(event) => {
+          const target = opener.current;
+          opener.current = null;
+          if (target?.isConnected) { event.preventDefault(); target.focus(); }
+        }}>
         <div className="dialog-heading">
           <Dialog.Title>{connection ? "Connection settings" : "New connection"}</Dialog.Title>
           <Dialog.Close asChild><button className="icon-button" type="button" aria-label="Close connection dialog"><X size={20} aria-hidden="true" /></button></Dialog.Close>
@@ -155,7 +169,7 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, onSaved,
         <Dialog.Description id="connection-dialog-description" className="muted">
           Connections authenticate through this server's provider session. No credential is entered, displayed or stored in the browser.
         </Dialog.Description>
-        <form className="connection-form" onSubmit={(event) => { event.preventDefault(); if (!blocked) save.mutate(draft); }}>
+        <form className="connection-form" onSubmit={(event) => { event.preventDefault(); if (!blocked) { onWriteStart(); save.mutate(draft); } }}>
           <label htmlFor="connection-provider">Provider</label>
           <select id="connection-provider" name="provider" value={draft.provider} disabled={Boolean(connection) || save.isPending}
             onChange={(event) => {
@@ -206,40 +220,56 @@ interface DetailProps {
   connection: Connection;
   api: Api;
   csrf: string;
+  writePending: boolean;
   onEdit: () => void;
   onNotice: (notice: string) => void;
 }
 
-function ConnectionDetail({ connection, api, csrf, onEdit, onNotice }: DetailProps) {
+function ConnectionDetail({ connection, api, csrf, writePending, onEdit, onNotice }: DetailProps) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // The version the operator confirmed when the removal dialog opened; a
+  // background refresh that loads another operator's change must not turn the
+  // confirmed intent into a delete of a revision the operator never saw.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; version: number } | null>(null);
+  const deleteOpener = useRef<HTMLElement | null>(null);
+  // This detail instance belongs to exactly one connection (the list keys it by
+  // connection id). A mutation callback that fires after the operator selected
+  // another connection must not act on that connection's UI: the instance is
+  // unmounted at that point, and every side effect re-confirms it is still the
+  // one the operator is looking at.
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["connections"] });
   const check = useMutation({
     mutationFn: () => api.checkConnection(connection.id, csrf, new AbortController().signal),
     onSuccess: async (receipt) => {
-      if (receipt.disposition === "replayed") onNotice("This provider check was already applied; the server returned the existing connection.");
+      if (alive.current && receipt.disposition === "replayed") onNotice("This provider check was already applied; the server returned the existing connection.");
       await refresh();
     },
     onError: async (error) => {
-      onNotice(refusalNotice(error));
+      if (alive.current) onNotice(refusalNotice(error));
       await refresh();
     },
   });
   const remove = useMutation({
-    mutationFn: () => api.deleteConnection(connection.id, connection.version, csrf, new AbortController().signal),
+    mutationFn: (target: { id: string; version: number }) => api.deleteConnection(target.id, target.version, csrf, new AbortController().signal),
     onSuccess: async () => {
       setConfirmingDelete(false);
       await refresh();
-      void navigate({ to: "/connections", search: {} });
+      if (alive.current) void navigate({ to: "/connections", search: {} });
     },
     onError: async (error) => {
       setConfirmingDelete(false);
-      onNotice(`${refusalNotice(error)} The server's current state is shown instead.`);
+      if (alive.current) onNotice(`${refusalNotice(error)} The server's current state is shown instead.`);
       await refresh();
     },
   });
-  const busy = check.isPending || remove.isPending;
+  const busy = check.isPending || remove.isPending || writePending;
   return <aside className="connection-detail" aria-label="Connection detail">
     <div className="section-heading">
       <h2>{connection.name}</h2>
@@ -258,7 +288,11 @@ function ConnectionDetail({ connection, api, csrf, onEdit, onNotice }: DetailPro
     <div className="connection-actions">
       <button className="button" type="button" disabled={busy} onClick={() => check.mutate()}>{check.isPending ? "Checking…" : "Test connection"}</button>
       <button className="button" type="button" disabled={busy} onClick={onEdit}>Edit capabilities</button>
-      <button className="button" type="button" disabled={busy} onClick={() => setConfirmingDelete(true)}><Trash2 size={16} aria-hidden="true" />Remove</button>
+      <button className="button" type="button" disabled={busy} onClick={(event) => {
+        deleteOpener.current = event.currentTarget;
+        setDeleteTarget({ id: connection.id, version: connection.version });
+        setConfirmingDelete(true);
+      }}><Trash2 size={16} aria-hidden="true" />Remove</button>
     </div>
     <div className="section-heading"><h3>Bound resources <span className="count">{connection.resources.length}</span></h3></div>
     <p className="muted text-small">A capability change resets the health and sync state of bound resources in active projects, so nothing keeps looking synchronized until it is synchronized again.</p>
@@ -266,14 +300,19 @@ function ConnectionDetail({ connection, api, csrf, onEdit, onNotice }: DetailPro
     <Dialog.Root open={confirmingDelete} onOpenChange={(open) => { if (!open) setConfirmingDelete(false); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className="command-dialog" aria-describedby="connection-delete-description">
+        <Dialog.Content className="command-dialog" aria-describedby="connection-delete-description"
+          onCloseAutoFocus={(event) => {
+            const target = deleteOpener.current;
+            deleteOpener.current = null;
+            if (target?.isConnected) { event.preventDefault(); target.focus(); }
+          }}>
           <div className="dialog-heading"><Dialog.Title>Remove {connection.name}?</Dialog.Title>
             <Dialog.Close asChild><button className="icon-button" type="button" aria-label="Close removal dialog"><X size={20} aria-hidden="true" /></button></Dialog.Close></div>
           <Dialog.Description id="connection-delete-description" className="muted">
             A connection that still has bound resources cannot be removed. An already removed or changed connection is refused with the server's own reason.
           </Dialog.Description>
           <div className="dialog-actions">
-            <button className="button" type="button" disabled={remove.isPending} onClick={() => remove.mutate()}>{remove.isPending ? "Removing…" : "Remove connection"}</button>
+            <button className="button" type="button" disabled={remove.isPending} onClick={() => { if (deleteTarget) remove.mutate(deleteTarget); }}>{remove.isPending ? "Removing…" : "Remove connection"}</button>
             <button className="button" type="button" onClick={() => setConfirmingDelete(false)} disabled={remove.isPending}>Cancel</button>
           </div>
           {remove.error && <p className="notice notice-error" role="alert">{refusalNotice(remove.error)}</p>}
@@ -292,6 +331,7 @@ export function ConnectionsPage() {
   const query = useQuery(connectionsOptions(application.api));
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [pendingWrites, setPendingWrites] = useState(0);
   // Every editor open gets its own identity: a mutation response only closes
   // and navigates for the editor the operator still has open.
   const editorSequence = useRef(0);
@@ -300,6 +340,18 @@ export function ConnectionsPage() {
   const refresh = () => { if (!query.isFetching) void query.refetch(); };
   const connections = query.data?.connections ?? [];
   const selected = connections.find((connection) => connection.id === search.connectionId);
+  // This page's own lifetime: a continuation that settles after the operator
+  // navigated away must not pull them back to this route.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  // The live selection, readable by continuations that outlive this render: a
+  // response that arrives after the operator chose another subject must not
+  // navigate them back or act on the newer subject.
+  const selectionRef = useRef<string | null>(search.connectionId ?? null);
+  useLayoutEffect(() => { selectionRef.current = search.connectionId ?? null; }, [search.connectionId]);
   useEffect(() => {
     if (!query.data || !search.connectionId || selected) return;
     void navigate({ to: "/connections", search: {}, replace: true });
@@ -311,6 +363,11 @@ export function ConnectionsPage() {
     if (kind === "create") setCreating(true); else setEditing(true);
   };
   const closeEditor = () => { editorSequence.current += 1; setOpenEditorId(0); setCreating(false); setEditing(false); };
+  // Editor saves hold the page-level pending count until they settle, even
+  // after their dialog closes: while any check, update or removal is pending,
+  // none of the others can start.
+  const beginWrite = () => setPendingWrites((count) => count + 1);
+  const endWrite = () => setPendingWrites((count) => Math.max(0, count - 1));
   const saved = (disposition: string, connectionId: string, editor: number) => {
     if (editor !== editorSequence.current) {
       // A late response for an editor that has since closed: the write is real,
@@ -322,9 +379,15 @@ export function ConnectionsPage() {
     setNotice(disposition === "replayed"
       ? "This connection submission was already applied; the server returned the existing connection."
       : disposition === "created" ? "Connection created." : "Connection capabilities updated. Bound resource health and sync state was reset where the change affects it.");
-    // Re-read the authoritative list before selecting the changed connection.
+    // Re-read the authoritative list before selecting the changed connection,
+    // and only move the operator if the selection did not change while the
+    // re-read was in flight.
+    const selection = selectionRef.current;
     void queryClient.invalidateQueries({ queryKey: ["connections"] })
-      .then(() => navigate({ to: "/connections", search: { connectionId } }));
+      .then(() => {
+        if (!mounted.current || selectionRef.current !== selection) return;
+        void navigate({ to: "/connections", search: { connectionId } });
+      });
   };
   const attention = connections.filter((connection) => connection.status !== "healthy").length;
   return <>
@@ -348,7 +411,7 @@ export function ConnectionsPage() {
             onSelect={() => { setNotice(null); void navigate({ to: "/connections", search: { connectionId: connection.id } }); }} />)}</ul>}
       </section>
       {selected
-        ? <ConnectionDetail connection={selected} api={application.api} csrf={csrf} onEdit={() => openEditor("edit")} onNotice={setNotice} />
+        ? <ConnectionDetail key={selected.id} connection={selected} api={application.api} csrf={csrf} writePending={pendingWrites > 0} onEdit={() => openEditor("edit")} onNotice={setNotice} />
         : <aside className="connection-detail" aria-label="Connection detail">
           <Cable size={28} aria-hidden="true" />
           <h2>Select a connection</h2>
@@ -356,7 +419,7 @@ export function ConnectionsPage() {
         </aside>}
       <p className="sr-only" role="status">{query.isFetching && !query.isPending ? "Refreshing connections" : ""}</p>
     </div>}
-    {creating && <ConnectionEditor connection={null} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} onSaved={saved} onClose={closeEditor} />}
-    {editing && selected && <ConnectionEditor connection={selected} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} onSaved={saved} onClose={closeEditor} />}
+    {creating && <ConnectionEditor connection={null} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
+    {editing && selected && <ConnectionEditor connection={selected} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
   </>;
 }

@@ -60,6 +60,7 @@ interface Harness {
   history: RouterHistory;
   setConnections: (value: Connection[]) => void;
   failReads: (response: () => Response) => void;
+  gateReads: (gate: Promise<void> | null) => void;
 }
 
 const applications: Application[] = [];
@@ -71,6 +72,7 @@ afterEach(() => {
 function renderConnections(handler: (request: { method: string; path: string; body: unknown; url: URL }) => Response | Promise<Response>, path = "/portal/connections") {
   let current: Connection[] = [connection()];
   let readFailure: (() => Response) | null = null;
+  let readGate: Promise<void> | null = null;
   const requests: Harness["requests"] = [];
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
@@ -81,6 +83,7 @@ function renderConnections(handler: (request: { method: string; path: string; bo
       return new Response(JSON.stringify({ csrf_token: "session-token" }));
     }
     if (method === "GET" && url.pathname === "/portal/api/connections") {
+      if (readGate) await readGate;
       if (readFailure) return readFailure();
       return new Response(JSON.stringify({ providers, connections: current }));
     }
@@ -100,6 +103,7 @@ function renderConnections(handler: (request: { method: string; path: string; bo
     history,
     setConnections: (value: Connection[]) => { current = value; },
     failReads: (response: () => Response) => { readFailure = response; },
+    gateReads: (gate: Promise<void> | null) => { readGate = gate; },
   };
 }
 
@@ -208,14 +212,18 @@ describe("connection management", () => {
     expect(screen.queryByText(/gho_|Bearer |token/i)).toBeNull();
   });
 
-  it("reports a refused removal and reconciles to the server's current state", async () => {
+  it("confirms a removal against the version the dialog opened with, even after a background refresh", async () => {
     const harness = renderConnections(({ method }) => method === "DELETE"
       ? refusal(409, "stale", "resource changed since it was loaded")
       : refusal(404, "not_found", "unexpected request"));
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Remove" }));
-    harness.setConnections([connection({ version: 4 })]);
+    // A background refresh loads the row another operator already changed while
+    // the confirmation dialog is open; the removal stays fenced to the version
+    // the operator confirmed instead of deleting the newer revision.
+    harness.setConnections([connection({ version: 4, name: "Changed elsewhere" })]);
+    await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["connections"] }); });
     await user.click(screen.getByRole("button", { name: "Remove connection" }));
     expect(await screen.findByText(/resource changed since it was loaded \(stale\)/)).toBeVisible();
     expect(screen.getByText(/The server's current state is shown instead\./)).toBeVisible();
@@ -330,6 +338,190 @@ describe("connection management", () => {
     });
     expect(await screen.findByRole("button", { name: "Test connection" })).toBeEnabled();
     expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+  });
+
+  it("keeps check and removal blocked while an editor save is pending", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method }) =>
+      method === "PATCH" ? pending : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
+    await user.click(screen.getByRole("checkbox", { name: "CI" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    // The operator closes the editor while the update is pending; its write
+    // still holds the surface until it settles.
+    await user.click(screen.getByRole("button", { name: "Close connection dialog" }));
+    expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull();
+
+    expect(screen.getByRole("button", { name: "Test connection" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+    screen.getByRole("button", { name: "Test connection" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    screen.getByRole("button", { name: "Remove" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(screen.queryByRole("dialog", { name: /Remove/ })).toBeNull();
+    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(0);
+    expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(0);
+
+    await act(async () => {
+      release(new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4 }) }), { status: 200 }));
+      await pending;
+    });
+    expect(await screen.findByRole("button", { name: "Test connection" })).toBeEnabled();
+    expect(harness.requests.filter((request) => request.method === "PATCH")).toHaveLength(1);
+  });
+
+  it("keeps check and editing blocked while a removal is pending", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method }) =>
+      method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(await screen.findByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: "Remove connection" }));
+    expect(screen.getByRole("button", { name: "Removing…" })).toBeDisabled();
+    // The operator closes the confirmation dialog while the removal is pending;
+    // the write still holds the surface until it settles.
+    await user.click(screen.getByRole("button", { name: "Close removal dialog" }));
+    expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull();
+
+    expect(screen.getByRole("button", { name: "Test connection" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit capabilities" })).toBeDisabled();
+    screen.getByRole("button", { name: "Test connection" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    screen.getByRole("button", { name: "Edit capabilities" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull();
+    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(0);
+    expect(harness.requests.filter((request) => request.method === "PATCH")).toHaveLength(0);
+
+    await act(async () => {
+      release(new Response(JSON.stringify({ disposition: "deleted", deleted_connection_id: connectionId }), { status: 200 }));
+      await pending;
+    });
+    await waitFor(() => expect(harness.history.location.search).not.toContain(connectionId));
+    expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
+  });
+
+  it("drops a provider check receipt that arrives after the operator selected another connection", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
+    const harness = renderConnections(({ method, path }) =>
+      method === "POST" && path.endsWith("/check") ? pending : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    harness.setConnections([connection(), second]);
+    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
+
+    // The operator moves to another connection while the check is in flight:
+    // the pending check belongs to the first connection and must not surface
+    // on the second one, not even when its refusal arrives late.
+    await user.click(screen.getByRole("button", { name: /Second connection/ }));
+    expect(await screen.findByRole("complementary", { name: "Connection detail" })).toHaveTextContent("Second connection");
+    expect(screen.getByRole("button", { name: "Test connection" })).toBeEnabled();
+
+    harness.setConnections([connection({ version: 4, status: "degraded", status_message: "Provider authentication failed" }), second]);
+    await act(async () => {
+      release(refusal(502, "provider_unauthorized", "external provider authentication failed"));
+      await pending;
+    });
+    expect(screen.queryByText(/provider_unauthorized/)).toBeNull();
+    expect(screen.getByRole("complementary", { name: "Connection detail" })).toHaveTextContent("Second connection");
+    expect(screen.getByRole("button", { name: "Test connection" })).toBeEnabled();
+  });
+
+  it("does not clear the newly selected connection when a removal settles late", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
+    const harness = renderConnections(({ method }) =>
+      method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    harness.setConnections([connection(), second]);
+    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(await screen.findByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: "Remove connection" }));
+    // The operator abandons the pending removal and inspects the other
+    // connection; the late completion must not clear that selection.
+    await user.click(screen.getByRole("button", { name: "Close removal dialog" }));
+    await user.click(screen.getByRole("button", { name: /Second connection/ }));
+    expect(await screen.findByRole("complementary", { name: "Connection detail" })).toHaveTextContent("Second connection");
+
+    harness.setConnections([second]);
+    await act(async () => {
+      release(new Response(JSON.stringify({ disposition: "deleted", deleted_connection_id: connectionId }), { status: 200 }));
+      await pending;
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: /GitHub engineering/ })).toBeNull());
+    expect(harness.history.location.search).toContain(second.id);
+  });
+
+  it("does not navigate back when the operator selects another connection during the save's re-read", async () => {
+    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
+    const harness = renderConnections(({ method }) => method === "PATCH"
+      ? new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4 }) }), { status: 200 })
+      : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    harness.setConnections([connection(), second]);
+    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
+    await user.click(screen.getByRole("checkbox", { name: "CI" }));
+
+    // The authoritative re-read behind the save is still in flight when the
+    // operator selects the other connection.
+    const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+    harness.gateReads(gate);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull());
+    await waitFor(() => expect(harness.requests.filter((request) => request.method === "GET" && request.path === "/portal/api/connections")).toHaveLength(3));
+    await user.click(screen.getByRole("button", { name: /Second connection/ }));
+    expect(await screen.findByRole("complementary", { name: "Connection detail" })).toHaveTextContent("Second connection");
+
+    release();
+    harness.gateReads(null);
+    await waitFor(() => expect(screen.queryByText("Refreshing connections")).toBeNull());
+    expect(harness.history.location.search).toContain(second.id);
+    expect(harness.history.location.search).not.toContain(connectionId);
+  });
+
+  it("does not pull the operator back after they left the page while a save was pending", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method }) =>
+      method === "PATCH" ? pending : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
+    await user.click(screen.getByRole("checkbox", { name: "CI" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    // The operator leaves the connections page while the write is pending; the
+    // late response must not navigate them back.
+    act(() => { harness.history.push("/portal/projects"); });
+    await act(async () => {
+      release(new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4 }) }), { status: 200 }));
+      await pending;
+    });
+    expect(harness.history.location.pathname).toBe("/portal/projects");
+  });
+
+  it("returns keyboard focus to the invoking control when either dialog closes", async () => {
+    renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+
+    const create = await screen.findByRole("button", { name: "New connection" });
+    await user.click(create);
+    expect(await screen.findByRole("dialog", { name: "New connection" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New connection" })).toBeNull());
+    expect(create).toHaveFocus();
+
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    const remove = await screen.findByRole("button", { name: "Remove" });
+    await user.click(remove);
+    expect(await screen.findByRole("dialog", { name: /Remove GitHub engineering/ })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull());
+    expect(remove).toHaveFocus();
   });
 
   it("keeps keyboard focus on the connection row across a background refresh", async () => {

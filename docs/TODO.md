@@ -35,6 +35,13 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       (`.tmp/0009/control-full.log`). Preserve the runtime fixture behavior and
       leave cleanup and verification to separate maintenance.
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
+
+- [ ] Revalidate and remove the unused `Connection.statuses/0` accessor at
+      `control/lib/symmetry_control/integrations/schemas.ex:92`. A scoped search for
+      `Connection.statuses` and `Integrations.Connection.statuses` in `control/lib` and
+      `control/test` found no caller; the changesets read the `@statuses` module attribute
+      directly. Observed while fixing goal 0007d. Leave removal and verification to separate
+      maintenance.
 - [ ] Investigate the intermittent Linux failure `TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`
       in `daemon/internal/platform` (`containment_supervisor_linux_test.go:1128: decode
       wrong-session helper witness: unexpected end of JSON input`). Observed in run
@@ -76,7 +83,8 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       token commands can keep stderr diagnostics out of stdout" fails with
       `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
       (observed while implementing goal 0007d: the full control suite reported 828/829
-      passed, 21 skipped, 1 failed on a clean dedicated test database).
+      passed, 21 skipped, 1 failed on a clean dedicated test database; the current tree
+      (control identical to `bbc9b6f`) reports 844/845 passed with the same single failure).
       `System.find_executable("pwsh")` returns `nil` here while `powershell.exe` resolves,
       and putting the `WindowsApps` store alias on PATH makes two cases in that file fail
       instead of one. `Command.run/3` and the test itself are untouched by 0007d.
