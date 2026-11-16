@@ -217,7 +217,7 @@ class EvaluationTests(unittest.TestCase):
             wrapper.chmod(0o755)
         probe = subprocess.run([str(wrapper), "test"], capture_output=True, text=True, check=False)
         if "mix test gate ran" not in probe.stdout:
-            self.skipTest(f"the fake mix fixture did not launch: {probe.returncode} {probe.stdout} {probe.stderr}")
+            self.fail(f"the fake mix fixture did not launch: {probe.returncode} {probe.stdout} {probe.stderr}")
         return wrapper
 
     def exunit_gate(self, mix, *, gate_id="exunit-gate", tests, files=("test/witness_test.exs",), cwd=".", argv=None):
@@ -1808,6 +1808,45 @@ class EvaluationTests(unittest.TestCase):
         receipt = self.stored_receipt(run)
         self.assertIsNone(receipt["checks"][0]["exunit_exit_code"])
         self.assertIsNone(receipt["checks"][0]["exunit_error"])
+
+    def test_measured_surface_records_host_paths_as_hashed_tokens(self) -> None:
+        windows_root = "C:/Users/fixture/AppData/Local/Temp/eval-run/build"
+        posix_root = "/home/fixture/tmp/eval-run/deps"
+
+        def token(raw: str) -> str:
+            return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+        measured = {
+            "build_root": f"{windows_root} (outside the checkout)",
+            "deps_root": f"{posix_root} (outside the checkout)",
+            "kernel": "6.8.0-fixture",
+        }
+        run = self.root / "run-measured-redaction"
+        path = self.write_json(self.root / "inputs" / "environment-redaction.json", measured)
+        self.accepted_run(run=run, environment_json=path)
+        stored = self.run_record(run)["environment"]["measured"]
+        self.assertEqual(stored["build_root"], f"{token(windows_root)} (outside the checkout)")
+        self.assertEqual(stored["deps_root"], f"{token(posix_root)} (outside the checkout)")
+        self.assertEqual(stored["kernel"], "6.8.0-fixture")
+        self.assertNotIn("fixture/AppData", json.dumps(stored))
+        receipt_measured = self.stored_receipt(run)["environment"]["measured"]
+        self.assertEqual(receipt_measured["build_root"], f"{token(windows_root)} (outside the checkout)")
+        self.assertEqual(receipt_measured["deps_root"], f"{token(posix_root)} (outside the checkout)")
+
+    def test_fixture_probe_failure_fails_instead_of_skipping(self) -> None:
+        interpreter = sys.executable
+        sys.executable = str(self.root / "missing-interpreter")
+        raised = None
+        try:
+            self.install_fake_mix(("Result: 1 passed",))
+        except BaseException as error:
+            raised = error
+        finally:
+            sys.executable = interpreter
+        self.assertIsNotNone(raised, "the broken fixture probe did not fail the suite")
+        self.assertNotIsInstance(raised, unittest.SkipTest, "a fixture failure must not be a skip")
+        self.assertIsInstance(raised, AssertionError)
+        self.assertIn("the fake mix fixture did not launch", str(raised))
 
 
 if __name__ == "__main__":

@@ -6,7 +6,9 @@ Operations:
            without host-dependent end-of-line conversion, then freeze the exact
            task and routes bytes in an external run directory; optional
            --environment-json records measured, non-secret execution-surface facts
-           alongside the host environment in the run record
+           alongside the host environment in the run record, with every
+           host-specific absolute path in a value recorded as a sha256: token
+           instead of the raw path
   seal     refuse a checkout whose Git index carries assume-unchanged,
            skip-worktree or other nonstandard entries, whose Git view carries
            checkout-local attribute/filter machinery, or whose object store
@@ -108,6 +110,15 @@ SECRET_KEY_PATTERN = re.compile(
     r"(^|[^a-z0-9])(api[_-]?key|apikey|secret|password|passwd|token|bearer"
     r"|private[_-]?key|access[_-]?key)([^a-z0-9]|$)",
     re.IGNORECASE,
+)
+# Recorded measured-surface values must not republish the operator profile or a
+# disposable evaluation root. These are the shapes a host-specific absolute path
+# actually takes: Windows drive-rooted and UNC paths, and POSIX home or temporary
+# roots. System paths such as /usr or /etc are not host-specific and stay readable.
+HOST_PATH_PATTERNS = (
+    re.compile(r'[A-Za-z]:[\\/][^\s"\']*'),
+    re.compile(r'\\\\[^\s\\"\']+\\[^\s"\']*'),
+    re.compile(r'(?<![\w./-])/(?:home|Users|root|tmp|var/(?:tmp|folders)|private/(?:var|tmp))(/[^\s"\']*)?'),
 )
 GATE_ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 MEASURED_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
@@ -1138,8 +1149,26 @@ def validate_routes(value: Any) -> dict[str, dict[str, str]]:
     return routes
 
 
-def validate_measured_mapping(value: Any, source: str) -> dict[str, str]:
-    """Validate one measured execution-surface mapping (run record or environment JSON)."""
+def redact_host_paths(value: str) -> str:
+    """Replace every host-specific absolute path in a recorded value with a hashed token.
+
+    The token is ``sha256:<digest of the matched path bytes>``: two records that name
+    the same path still agree, and no operator profile or disposable root is published
+    by the record itself.
+    """
+    for pattern in HOST_PATH_PATTERNS:
+        value = pattern.sub(lambda match: sha256_hex(match.group(0).encode("utf-8")), value)
+    return value
+
+
+def validate_measured_mapping(value: Any, source: str, redact: bool = False) -> dict[str, str]:
+    """Validate one measured execution-surface mapping (run record or environment JSON).
+
+    ``redact`` is set on the recording path (``prepare --environment-json``), so raw
+    host paths never enter the run record or the receipts derived from it. Re-reading a
+    run record validates recorded values unchanged, which keeps run directories written
+    before this extension re-derivable byte for byte.
+    """
     if not isinstance(value, dict):
         raise Refused(f"{source} must be a JSON object")
     if len(value) > 24:
@@ -1157,7 +1186,7 @@ def validate_measured_mapping(value: Any, source: str) -> dict[str, str]:
             raise Refused(
                 f"{source} {name} must be a non-empty single-line string without NUL, at most 300 characters"
             )
-        measured[name] = item
+        measured[name] = redact_host_paths(item) if redact else item
     return {name: measured[name] for name in sorted(measured)}
 
 
@@ -2557,7 +2586,8 @@ def command_prepare(arguments: argparse.Namespace) -> int:
             pathlib.Path(arguments.environment_json), MAX_RECORD_BYTES, "environment JSON"
         )
         measured = validate_measured_mapping(
-            strict_json(environment_raw, "environment JSON", MAX_RECORD_BYTES), "environment JSON"
+            strict_json(environment_raw, "environment JSON", MAX_RECORD_BYTES), "environment JSON",
+            redact=True,
         )
 
     created_here = not run_dir.exists()

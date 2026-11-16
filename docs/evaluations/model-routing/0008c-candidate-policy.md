@@ -120,6 +120,9 @@ bills):
 So on this host the lightweight implementer was 2.4–3.6× cheaper by harness estimate but 1.2–1.5×
 slower in wall time, and it consumed far more cached tokens. Neither number is a bill, neither is a
 saving, and both arms' verification and review costs are counted separately in their receipts.
+The token columns mix two providers whose cache accounting differs, so token totals are comparable
+only within one provider; the harness USD estimate is the one common unit across providers, and it
+is an estimate with no provider bill and no price version.
 
 The verdicts above use the receipts' run totals, not the worker rows, so review and failed-attempt
 work is charged to the arm that caused it:
@@ -165,8 +168,11 @@ consume the lock version), so class B measures how each workflow executed a desi
 rather than two rival designs.
 
 Evidence gaps that no verdict may paper over: no provider-reported cost or price version exists for
-any row (accounting is explicitly incomplete); one run per arm per class gives no variability
-estimate; the classes exercise only the resource-synchronization path (not goals/orchestration
+any row (accounting is explicitly incomplete); cross-provider token totals are not comparable
+(cache accounting is per provider and `cached` counts cache read plus cache write there), so only
+the harness estimate is a common unit — and it is an estimate, with no provider bill and no price
+version; one run per arm per class gives no variability estimate; the classes exercise only the
+resource-synchronization path (not goals/orchestration
 settlement, protocol, chat or portal surfaces); the "notification" element is the syncer's
 process-local completion message only, not a durable wakeup; the review route is the configured
 reviewer role (invocation-separated, not a different model family), so correlated mistakes are not

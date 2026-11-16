@@ -120,7 +120,7 @@ flowchart TB
 - Run and record: `mix format --check-formatted`; `mix compile --warnings-as-errors`; `mix test` (full suite); the provider-broker and goal-receipt integration gates with their CI flags.
 - Exit 0 on all four surfaces is the entry condition for U1. Any failure is reported as the exact missing item and no run starts.
 
-Measured outcome: format exit 0; compile exit 0 (66.1 s); full suite exit 0 with `851 passed, 21 skipped` in 511.1 s; provider-broker gate exit 0 with `4 passed`; goal-receipt gate exit 0 with `1 passed, 10 excluded`. Two environment prerequisites were reproduced rather than assumed (a real PowerShell 7 for `CommandTest`, the staged frontend bundle for the portal tests) and one gate design was corrected from measurement: the goal-receipt gate cannot carry the derived ExUnit cross-check because its `unboxed_run` fixtures make a second execution against the same database fail (measured: `Result: 0/1 passed`, exit 2). The measured trace and summary shapes also replaced two wrong assumptions in the runner (see the evidence record).
+Measured outcome: format exit 0; compile exit 0 (66.1 s operator-observed; that timer's output was not retained); full suite exit 0 with `851 passed, 21 skipped` in 511.1 s; provider-broker gate exit 0 with `4 passed`; goal-receipt gate exit 0 with `1 passed, 10 excluded`. Two environment prerequisites were reproduced rather than assumed (a real PowerShell 7 for `CommandTest`, the staged frontend bundle for the portal tests) and one gate design was corrected from measurement: the goal-receipt gate cannot carry the derived ExUnit cross-check because its `unboxed_run` fixtures make a second execution against the same database fail (measured: `Result: 0/1 passed`, exit 2). The measured trace and summary shapes also replaced two wrong assumptions in the runner (see the evidence record).
 
 ### U1. Runner extensions in place, with tests
 
@@ -165,4 +165,4 @@ as failed attempts.
 
 - Every clause of the archived contract is paired with executed evidence in the closure record, or reported as an unresolved limitation with the exact missing item.
 - `docs/goals/archive/0008c-elixir-model-routing.md` is archived byte-identically, the active index is updated, and the goal's own PR boundary (one mergeable increment, repository runnable by itself) holds.
-- The tree is left uncommitted for verification; nothing is pushed; no other worktree or `main` is touched.
+- Nothing is pushed and no other worktree or `main` is touched. The coordinator never ran `git commit`; an external snapshot commit `cab222b` (subject `base`) appeared on the local `feat/0008c-elixir-model-routing` branch during closure and carries the whole increment, while the edits made after it stay uncommitted — the observed state is recorded in the closure record.

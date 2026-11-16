@@ -41,6 +41,13 @@ PostgreSQL:
 | `mix test test/symmetry_control/integrations/command_test.exs` without PowerShell 7 on `PATH` | `2/3 passed`; the provider-token case fails with `{:error, {:command_unavailable, "pwsh"}}` | 2 |
 | same focused file with portable PowerShell 7.7.0 first on `PATH` | `3 passed` | 0 |
 
+Three wall-time figures in that table are operator-observed rather than logged: the `mix compile`
+66.1 s, the provider-broker gate's outer wall `2m32.248s` and the goal-receipt gate's outer wall
+`0m26.933s` — the shell-timer output for those three was not retained. The figures that are
+retained are the `mix test` wall `8m39.057s` (`surface/full-test-timing.log`), `Finished in 511.1
+seconds` (`surface/full-test.log`) and the ExUnit-internal `Finished in 69.2 seconds`
+(`surface/broker-e2e.log`).
+
 Measured execution surface of that proof (the same surface every evaluation run's `environment`
 field states): Windows host (NT 10.0.26300, x64); Elixir 1.20.4 on Erlang/OTP 29 (erts-17.1.1)
 selected through the host toolchain manager by exporting `MISE_ELIXIR_VERSION=1.20.4-otp-29` and
@@ -64,7 +71,7 @@ protected paths:
 | Class | Task file | SHA-256 |
 | --- | --- | --- |
 | `elixir-established-pattern` | `docs/evaluations/model-routing/tasks/0008c-elixir-sync-identity-loss.json` | `bfbb2d43a2f2e5253eaa1f00dba6b9c81352970764e60fe7ba9ca8ba7e03cf72` |
-| `elixir-db-concurrency-authority` | `docs/evaluations/model-routing/tasks/0008c-elixir-sync-inflight-marker.json` | `45972aa8121ba9c0850fc73e9ef6f4d4679b8ee8c7e13fedc1a4f763de721cb7` |
+| `elixir-db-concurrency-authority` | `docs/evaluations/model-routing/tasks/0008c-elixir-sync-inflight-marker.json` | current amended bytes `4bf7eb0c7bb81dc73cd535e714ee067afd006b175c2c88fff6184742094bb7b3`, superseding the pre-correction `45972aa8121ba9c0850fc73e9ef6f4d4679b8ee8c7e13fedc1a4f763de721cb7` (superseded-and-unretained: no copy of those bytes survives in the repository or the run store, so that digest is an unverifiable assertion, never a current value) |
 
 Both classes cover the contract's required subjects: an established-pattern production edit against
 a named database constraint (`project_resources_sync_status_check`), and a
@@ -78,7 +85,9 @@ the harness, not by the prompt): `a-packet.md` `dd5338058c190538a31d98c017ab6105
 for the identity-loss class and `b-packet.md` `2b37954b05fdb9b01ef993a8d128eb970874c1071adba5aaaf500eec2006ed48`
 for the in-flight-marker class. The in-flight-marker packet was regenerated from the amended task
 file before either class-B arm was sealed; the superseded packet (`f9795c5fc7917391f478cccfd4f990b751617f3e89e527c7e1e69087caa10c24`)
-belongs to the two charged class-B failed attempts described under the contract correction below.
+belongs to the two charged class-B failed attempts described under the contract correction below
+(superseded-and-unretained as well: those packet bytes also survive nowhere reachable, so that
+digest is an unverifiable assertion too).
 
 ## Runner extension (in place, with regression tests)
 
@@ -128,45 +137,45 @@ frozen task bytes and the worker packet were still being corrected; the two kill
 change and are charged in the ledger as failed attempts with their observed usage and harness
 estimates (USD `0.033549` and `0.2531725`, 91.9 s and 104.3 s), never as zero and never as a bill.
 
-The extended tooling is byte-frozen for the whole evaluation: `scripts/ci/model-routing-evaluation.py`
+The extended tooling is byte-frozen for the whole evaluation, and the receipts name the bytes that
+actually executed the runs. Produced revision, byte-retrievable from snapshot commit `cab222b`:
+`scripts/ci/model-routing-evaluation.py`
 `sha256:932290d7f76f5bd18e2778cd468b88b6852ba9a10721ae997bc10325db190ef5`,
 `scripts/ci/test-model-routing-evaluation.py` `sha256:0ef724556bdf604cc334742fed44d0d5ee882f5aabbc8b3d5398c725c34c87ea`,
 `scripts/ci/assert-go-test-json.py` `sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a` and
 `scripts/ci/linux-v2-source-subject.py` `sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e`.
-Each receipt records those digests in `evidence.tooling_sources`, the digest on disk still matches
-every accepted receipt, and the runner digest named there is the same file that executed all four
-runs — no gate was re-run under different tooling bytes.
+Each receipt records the runner and both helper digests in `evidence.tooling_sources`; the
+test-suite digest is part of this record, not a receipt field. The post-audit repair changed two
+produced files — the fake-`mix` fixture probe now fails the suite instead of skipping, and
+`prepare --environment-json` records host-specific absolute paths as `sha256:` tokens — so the
+current worktree bytes are
+`sha256:8ae5b2b6ba961924f7702aa4181e8488913b4d63171922bf1cf760e62142db50` (runner) and
+`sha256:74b7553c4ea3b732d1733d6f20f6648dd9576167b8a5acfc147f9da21d7775b5` (tests). One consequence
+is stated rather than hidden: because `tooling_sources` binds the runner, re-running `accept` with
+the current bytes refuses each receipt at `$.evidence.tooling_sources.model-routing-evaluation.py`
+(measured, exit 1) — the repository's documented rule that changing tooling invalidates an older
+submitted receipt. With the produced revision's bytes all four re-verify (`git archive cab222b
+scripts/ci`, then `accept --run-dir <store run> --receipt docs/evaluations/model-routing/0008c-<run>.json`,
+exit 0 each, `accepted: true`). No gate was re-run under different tooling bytes, and every receipt,
+store copy, Subject and attempt digest still recomputes.
+
+The three tooling suites ran on the produced bytes: `python
+scripts/ci/test-model-routing-evaluation.py` — 44 tests, `OK (skipped=2)`, exit 0 (`Ran 44 tests`
+in the run's session transcript; 44 `def test_` methods statically counted in `cab222b`); `python
+scripts/ci/test-model-routing-omp-usage.py` — 31 tests, `OK`, exit 0; `python
+scripts/ci/linux-v2-source-subject.py` — 4 tests, `OK`, exit 0. On this win32 host exactly two
+guards fire, one skip each, and both are the `os.name != "posix"` representation of a platform
+limit: `test_file_modes_are_bound_when_git_tracks_them`
+(`scripts/ci/test-model-routing-evaluation.py:1007`) and `test_non_utf8_checkout_paths_are_refused`
+(`:1474`). The recorded count is also the proof of which guards fired: every other skip in that
+suite is conditional on a real construction or toolchain — symlink creation, the Go toolchain, the
+directory-junction helper — so `skipped=2` shows that all of them executed, including the two new
+fake-`mix`/ExUnit tests, which would have pushed the count above 2 had the fixture been skipped
+instead of running. After the repair, the same first suite was re-run on the current bytes:
+46 tests, `OK (skipped=2)`, exit 0 — the two added tests are the fixture-probe-failure and
+host-path-redaction regressions, and the two skips are the same guards.
 
 ## Runs
-
-## Closure and simplification
-
-The contract moved to `docs/goals/archive/0008c-elixir-model-routing.md` without a text change:
-5,528 bytes, SHA-256 `376e1b3c76ff636a22abd7013b5a4b3e58adc572370369d068a1bdd70c5ef1d8`, byte
-identical to the active copy (the same digest and size before and after the move, and the active
-path is now absent). The goal index row points at the archived file, and the four documents that
-referenced the active path — this record, the candidate policy, the plan and the index — were
-updated in the same change so no link dangles.
-
-The accepted strong-only artifacts were integrated as the policy's fixed rule requires: the two
-sealed diffs (`sha256:345ca2bd8a6f7bd0cd8fd55b7c8d671fbd61d0faa9fe7d4af76fe2f554769bb3` for class A,
-`sha256:c9d05cc34ee88cc5ba5db34fcbb75d3695470634a64a4c0486f9ac2a7950ea62` for class B) applied in
-order, the two accepted focused test files copied at their sealed digests
-(`sha256:69abc923dde6a55d6636aa62869855194adbf6f640269c6ddebce4f2f3531418` and
-`sha256:8e03ed4230156a0b323809add0caaa4496ff79982fcac0c07efd484ebd0cc2c8`), and the provisioned
-frontend bundle staged with the index digest the sealed runs declared (`6ac43ef4…`). The mixed arms'
-revisions stay sealed evaluation evidence with their own Subjects and receipts, exactly as the rule
-says.
-
-Scoped simplification: the only repository code this increment owns is the Elixir extension of the
-0008a runner, its regression tests and three instruction documents. That extension was simplified
-before the runs (the first parser version that matched no real ExUnit line was replaced by the
-measured shape, and the vacuous-pass closure was merged into the existing gate pipeline instead of a
-second runner); after the runs it cannot be simplified further without changing bytes whose digests
-every accepted receipt records, which would invalidate the evidence. The integrated artifacts are
-accepted subjects and are likewise frozen. No wrapper layer, duplicate cache or second mechanism was
-added: the runner, the source-subject seal, the receipt/manifest format and the review route are the
-0008a ones.
 
 ### Contract correction before any class-B acceptance
 
@@ -229,13 +238,16 @@ shape: the production file, the new focused test file and the three bundle files
 
 | Run | Task SHA-256 | Routes SHA-256 | Subject | Changed production artifact |
 | --- | --- | --- | --- | --- |
-| class A mixed | `bfbb2d43a2f2e5253eaa1f00dba6b9c81352970764e60fe7ba9ca8ba7e03cf72` | `sha256:a4dd5ffc9630b5df55f45a339e79816b3f45c5fa06c5f7cfdca58f18ba24fcf8` | `sha256:5c8b1a800a17acb7231545ce3168b04f84a3fc3d21f6608e6ea6077f105d2ddc` | `integrations.ex` +11/−1 (helper `failure_sync_status/1`), 338-line test file |
+| class A mixed | `bfbb2d43a2f2e5253eaa1f00dba6b9c81352970764e60fe7ba9ca8ba7e03cf72` | `sha256:a4dd5ffc9630b5df55f45a339e79816b3f45c5fa06c5f7cfdca58f18ba24fcf8` | `sha256:5c8b1a800a17acb7231545ce3168b04f84a3fc3d21f6608e6ea6077f105d2ddc` | `integrations.ex` +10/−1 (helper `failure_sync_status/1`), 338-line test file |
 | class A strong | same | `sha256:7e43051f313012e4804dbd4a3adffc4d85576d1137a37421de157ce353a327eb` | `sha256:09dd5f8840f3d3fed81cc4c22e1fe7f9a981c78c941b27de8309f7b5643999af` | `integrations.ex` +1/−1 (inline `if code == :not_found`), 201-line test file |
-| class B mixed | `4bf7eb0c7bb81dc73cd535e714ee067afd006b175c2c88fff6184742094bb7b3` | `sha256:a4dd5ffc9630b5df55f45a339e79816b3f45c5fa06c5f7cfdca58f18ba24fcf8` | `sha256:986bbd6e8818d128a96dc84eb38f1267e134041e63dd5f562674e27217386864` | `integrations.ex` +76/−11, test file with a provider stub |
+| class B mixed | `4bf7eb0c7bb81dc73cd535e714ee067afd006b175c2c88fff6184742094bb7b3` | `sha256:a4dd5ffc9630b5df55f45a339e79816b3f45c5fa06c5f7cfdca58f18ba24fcf8` | `sha256:986bbd6e8818d128a96dc84eb38f1267e134041e63dd5f562674e27217386864` | `integrations.ex` +73/−7, test file with a provider stub |
 | class B strong | same | `sha256:7e43051f313012e4804dbd4a3adffc4d85576d1137a37421de157ce353a327eb` | `sha256:2d98eaec565495be3bafc12559b99f9bc4beb51837fc8faf2ab3b0630bf3f2e1` | `integrations.ex` +62, 270-line test file |
 
 Worker sessions and their observed usage (harness estimates, never provider bills; price versions
-unknown; `cached` is `cacheRead + cacheWrite` and is not a subset of `input`):
+unknown; `cached` is `cacheRead + cacheWrite` and is not a subset of `input`; the two providers
+account caches differently, so these token totals are comparable only within one provider — the
+harness estimate is the one common unit across providers, and it is an estimate with no provider
+bill and no price version):
 
 | Run | Implementer session | Served identity | input / output / cached tokens | Harness estimate | Wall time | Observed prompt hash |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -271,11 +283,15 @@ behaviour, not code shape, so the two arms are not required to produce identical
 
 `attempt-0001` is both the first and the accepted attempt: `complete=true`, `passed=true`, attempt
 evidence `sha256:0207588d45c03ae0ace87c3eb4873c49f703a914c81eb60de5db1d9c8101eab6`, `check` exit 0
-in 747.7 s. One operational note: while this check was mid-flight the coordinator briefly moved the
-in-progress attempt directory outside the store as part of quarantining crash remnants and restored
-it in the same minute; the gate that was running at that moment (`provider-broker-e2e`) completed
-with its full evidence, the attempt record digests recompute cleanly, and no gate result was lost
-or rewritten.
+in 747.7 s. One operational note: this check overlapped the quarantine of the strong arm's crash
+remnants — an entry was renamed out of `runs/a-mixed/checks` at `05:22:27` (that directory's mtime;
+`runs/a-strong/checks` carries `05:22:23` and the private root's `orphaned/` `05:22:27`), while the
+gate in flight was `full-suite` (last written `05:29:22`; `provider-broker-e2e` had already
+finished at `05:20:23`). The surviving mtimes do not record which directory was moved or whether
+anything was moved back, so this record does not claim the attempt directory itself was the moved
+object. The accepted attempt still recomputes from disk — every gate digest recorded in
+`attempt.json` and the attempt digest itself match the stored files — every gate holds its full
+evidence, and no gate result was lost or rewritten.
 
 | Gate | argv | Exit | Observed |
 | --- | --- | --- | --- |
@@ -306,11 +322,18 @@ Receipt `docs/evaluations/model-routing/0008c-a-mixed.json`
 
 Sealed Subject `sha256:09dd5f8840f3d3fed81cc4c22e1fe7f9a981c78c941b27de8309f7b5643999af` (1,198 files;
 changed: `integrations.ex` modified, the new focused test file and the staged bundle added).
-Three check attempts exist in the store: `attempt-0001` (five of six gates, its coordinator process
-was lost when the host dropped two background processes — no gate failure), `attempt-0002` (its
-`goal-receipt-e2e` failed with `Result: 0/1 passed, 10 excluded`, `Failed: 1 test`, exit 2 because
-that gate's database had not been recreated for the new attempt) and `attempt-0003`, the accepted
-attempt: `complete=true`, `passed=true`, attempt evidence
+The run store `runs/a-strong/checks/` holds only the accepted `attempt-0003`; `attempt-0001` and
+`attempt-0002` were quarantined out of the store into the private root's
+`orphaned/a-strong-attempt-0001` and `orphaned/a-strong-attempt-0002` (`runs/a-strong/checks` mtime
+`05:22:23`, `orphaned/` `05:22:27`). Each residue holds exactly three completed gate results plus a
+started-but-empty `focused-tests`, and neither has an `attempt.json`: both check processes were lost
+before publication — the operator's session observation is that the host dropped two background
+processes; no log of that drop is retained. `attempt-0001`: `goal-receipt-e2e`, `format` and
+`compile` all exit 0, no gate failure. `attempt-0002`: its `goal-receipt-e2e` (exit 2,
+`Result: 0/1 passed, 10 excluded`, `Failed: 1 test`) failed the gate's own "requires an empty
+projects table" assertion because that gate's database was reused instead of recreated for the new
+attempt; `format` and `compile` exit 0. `attempt-0003`, the accepted attempt: `complete=true`,
+`passed=true`, attempt evidence
 `sha256:001828a548ace6cb0e434e45559269ca1d15bc92257edd8762fa55f87107d3dc`, `check` exit 0 in 772 s.
 
 | Gate | argv | Exit | Observed |
@@ -344,7 +367,7 @@ cost, no price version) — an estimate, never a bill.
 
 Sealed Subject `sha256:986bbd6e8818d128a96dc84eb38f1267e134041e63dd5f562674e27217386864` under the
 amended frozen task `4bf7eb0c7bb81dc73cd535e714ee067afd006b175c2c88fff6184742094bb7b3`:
-`integrations.ex` +76/−11 (marker commit under the resource's optimistic lock, one finalization,
+`integrations.ex` +73/−7 (marker commit under the resource's optimistic lock, one finalization,
 rollback of a refused finalization) and a new focused test file carrying a provider stub.
 `attempt-0001` was accepted: `complete=true`, `passed=true`, attempt evidence
 `sha256:ef343531aee485497dc64f8de8ca08f7cea76753ebea8878c3de22ca9a16df97`, `check` exit 0 in
@@ -411,3 +434,85 @@ Receipt `docs/evaluations/model-routing/0008c-b-strong.json`
 tokens and USD 0.0758565; one failed attempt 42 / 4,986 / 752,223 tokens and USD 0.2991183 (the
 escalation); run totals 58,763 input / 70,858 output / 4,466,218 cached tokens and USD 0.8367779
 estimated, `accounting_complete: false` (no provider billing, no price version).
+
+## Standalone Done-when mapping
+
+| Required witness | Evidence and observed result |
+| --- | --- |
+| Frozen Elixir classes with identical contracts, permissions, budgets, evidence, checks and review across the two arms | Two frozen task files (`sha256:bfbb2d43…` for the identity-loss class, `sha256:4bf7eb0c…` for the in-flight-marker class after the documented correction), one per class used by both arms; every run record binds base `5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a`, its class's task digest and its arm's routes digest |
+| Mixed-model and strong-only runs with per-class receipts | `docs/evaluations/model-routing/0008c-a-mixed.json`, `0008c-a-strong.json`, `0008c-b-mixed.json`, `0008c-b-strong.json`: four `accepted: true` receipts with no acceptance blockers and no later defects, Subjects `5c8b1a80…`, `09dd5f88…`, `986bbd6e…`, `2d98eaec…` |
+| Actual model identities, provenance, prompt/skill identity, credential route and token/cost rows per accepted change | Every receipt's phases carry the served identities (`deepseek-v4.1-flash-fast`/tencent-litellm/openai-completions and `gpt-6.1-sol`/ghc/openai-responses), the non-secret `credential_route` and `routing_provenance` metadata, observed prompt hashes (the class-A packet digest `b2e5f319…` is identical across the arms), token rows and harness estimates with `accounting_complete: false`, no provider cost and no price version |
+| Total cost covering exploration, implementation, verification, review, repair and failed attempts, plus verification/review effort, repairs, failures and limitations | Each ledger covers all six stages: model rows for implementation, review and a failed attempt, explicit non-model rows for exploration, verification (the gate wall time) and repair, `repair_count` 0, `review_time` per run, and a `limitations` list on every model row |
+| Every accepted result passes the applicable Elixir and integration gates and an independent semantic review for that revision | Per-run gate tables above: each accepted attempt has six gates with exit 0, the named ExUnit tests observed in the derived trace, and a frozen review recorded against the same Subject (`0008c-*-review.json`: verdict `pass`, `gate_weakening: false`, every finding `resolved`) |
+| Proven execution surface stated for each class | Every receipt's `environment.measured`: this Windows host, Elixir 1.20.4 on Erlang/OTP 29, PostgreSQL 18.6 in the pinned container on `127.0.0.1:55461`, deps and build paths outside the checkout, the PowerShell 7 route, and the staged bundle digest |
+| Candidate policy with per-class verdicts, every acceptance regression, not-cheaper class and evidence gap | `docs/evaluations/model-routing/0008c-candidate-policy.md`: criteria fixed before the results, both frozen classes **strong-only** with the measured asymmetry (mixed arms 2.2× / 3.2× cheaper by harness estimate but worse in input/output/cached tokens and wall time), all review findings, the class-B contract correction and the evidence gaps |
+| No claim for untested Elixir work, Go or TypeScript | The policy's scope statement: untested Elixir areas, Go and TypeScript get no verdict, no savings percentage is claimed, and owner acceptance stays pending |
+| Tooling and refusal controls | The in-place Elixir extension of the 0008a runner with its regression tests (`python scripts/ci/test-model-routing-evaluation.py`: 44 tests, 2 skips, exit 0 on the produced bytes; 46 tests, 2 skips, exit 0 after the post-audit repair — see the labelled tooling history above) and the three visible negative controls, including the named-test refusal |
+| Closure | Contract archived byte-identically, index updated, accepted strong artifacts integrated, closure gates re-run on the delivered tree (below) |
+
+Closure gates on the integrated tree (`control/`, `MIX_BUILD_PATH` outside the checkout, the same
+pinned toolchain and PostgreSQL container as the runs):
+
+| Gate | Observed result | Exit |
+| --- | --- | --- |
+| `mix format --check-formatted` | no file reported unformatted (includes both integrated test files) | 0 |
+| `mix compile --warnings-as-errors` | 61 files compiled, app generated, no warning | 0 |
+| `mix test` (fresh `POSTGRES_DB=symmetry_0008c_closure`) | `859 passed, 21 skipped`, `Finished in 471.4 seconds` — the base suite's 851 passes plus the three class-A and five class-B named tests | 0 |
+| `mix test test/symmetry_control/provider_broker_e2e_test.exs` with `SYMMETRY_PROVIDER_BROKER_E2E=1` | `4 passed`, `Finished in 43.5 seconds` | 0 |
+| `mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e` with `SYMMETRY_GOAL_RECEIPT_E2E=1` and a fresh `symmetry_receipt_e2e_<32 hex>` database | `1 passed, 10 excluded`, `Finished in 33.0 seconds` | 0 |
+
+Two environment facts from these runs belong in the record. First, the goal-receipt gate failed
+twice before passing, and both failures were in the invoking shell rather than the tree; both are
+retained under the private root's `closure/`: `goal-receipt.log` records the gate's own
+ephemeral-database setup assertion failing before any test ran (`goal receipt E2E requires its
+dedicated ephemeral PostgreSQL database`; the operator's account, not printed by the gate, is that
+the database name carried a stray carriage return), and `goal-receipt-attempt2.log` records
+`** (RuntimeError) go test -c ./internal/control failed with status 1`; `goal-receipt-final.log`
+records the exit-0 run above.
+The second failure's cause was not captured — the gate's `go` stderr was not saved — so the
+operator's diagnosis, not logged evidence, is that the session's `TMP`/`TEMP` directory had been
+removed (`go: creating work dir: GetFileAttributesEx … The system cannot find the file specified`)
+and that exporting `TMP`/`TEMP` to an existing directory and re-running produced the passing run.
+Second, the `mix test` stdout of every gate carries the same pre-existing runtime warnings from
+`orchestration_goal_admission_test.exs` (unused variables and an unused default argument) that all
+four sealed runs' stored `full-suite/stderr.bin` also carry, plus the deliberate
+`goal_0006_active_session_run_identity` database exceptions the suite raises on purpose; neither is
+introduced by this increment.
+
+## Closure and simplification
+
+The contract moved to `docs/goals/archive/0008c-elixir-model-routing.md` without a text change:
+5,528 bytes, SHA-256 `376e1b3c76ff636a22abd7013b5a4b3e58adc572370369d068a1bdd70c5ef1d8`, byte
+identical to the active copy (the same digest and size before and after the move, and the active
+path is now absent). The goal index row points at the archived file, and the four documents that
+referenced the active path — this record, the candidate policy, the plan and the index — were
+updated in the same change so no link dangles.
+
+The accepted strong-only artifacts were integrated as the policy's fixed rule requires: the two
+sealed diffs (`sha256:345ca2bd8a6f7bd0cd8fd55b7c8d671fbd61d0faa9fe7d4af76fe2f554769bb3` for class A,
+`sha256:c9d05cc34ee88cc5ba5db34fcbb75d3695470634a64a4c0486f9ac2a7950ea62` for class B) applied in
+order, the two accepted focused test files copied at their sealed digests
+(`sha256:69abc923dde6a55d6636aa62869855194adbf6f640269c6ddebce4f2f3531418` and
+`sha256:8e03ed4230156a0b323809add0caaa4496ff79982fcac0c07efd484ebd0cc2c8`), and the provisioned
+frontend bundle staged with the index digest the sealed runs declared (`6ac43ef4…`). The integrated
+`control/lib/symmetry_control/integrations.ex` (`sha256:4f25669dae8ea3d28a9f40cc499c6c30cbcbc016a2792e5fe00e11c3b828b2ea`)
+was verified by re-applying the class-B diff onto the class-A sealed revision in a scratch copy and
+comparing digests. The mixed arms' revisions stay sealed evaluation evidence with their own Subjects
+and receipts, exactly as the rule says.
+
+Scoped simplification: the only repository code this increment owns is the Elixir extension of the
+0008a runner, its regression tests and three instruction documents. That extension was simplified
+before the runs (the first parser version that matched no real ExUnit line was replaced by the
+measured shape, and the vacuous-pass closure was merged into the existing gate pipeline instead of a
+second runner); after the runs it cannot be simplified further without changing bytes whose digests
+every accepted receipt records, which would invalidate the evidence. The integrated artifacts are
+accepted subjects and are likewise frozen. No wrapper layer, duplicate cache or second mechanism was
+added: the runner, the source-subject seal, the receipt/manifest format and the review route are the
+0008a ones.
+
+One external repository change appeared during closure and is recorded rather than touched: commit
+`cab222b` (subject `base`, 23 paths, +5,830/−29) now carries the whole increment on the local
+`feat/0008c-elixir-model-routing` branch. The coordinator did not create it — it never ran
+`git commit` — and it did not amend, reset, rewrite or push it: the branch is one commit ahead of
+`origin/main` and no `0008c` head exists on the remote. The edits made after that commit, including
+this section, remain uncommitted, so the tree still carries uncommitted changes for verification.

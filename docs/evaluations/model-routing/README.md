@@ -105,7 +105,7 @@ An Elixir gate declares the CI commands unchanged (`mix format --check-formatted
 
 Host prerequisites for the Elixir carrier (measured, not assumed): a real PostgreSQL reachable through `POSTGRES_*` (`mix test` creates and migrates the database named by `POSTGRES_DB`; the goal-receipt gate additionally requires `POSTGRES_DB` to match `symmetry_receipt_e2e_[0-9a-f]{32}` and its committed fixture rows to be absent, so give that gate a fresh database), the pinned Elixir/OTP toolchain and `go` for the integration gates' Go builds, and a real PowerShell 7 on `PATH` for the existing provider-command tests. Build output stays outside the sealed checkout (`MIX_DEPS_PATH`, `MIX_BUILD_PATH`); the checkout's only permitted generated content is the staged frontend bundle under `control/priv/static/portal/**`, which must be declared in `allowed_paths` because the portal tests read the built entry through `Application.app_dir/2`.
 
-`prepare --environment-json PATH` records the measured execution surface of the run (host, toolchain, PostgreSQL identity and route, database, bundle digest) under the run record's `environment.measured`, which every receipt row then states. Keys and values are validated and secret-shaped names are refused; the field carries no credential value.
+`prepare --environment-json PATH` records the measured execution surface of the run (host, toolchain, PostgreSQL identity and route, database, bundle digest) under the run record's `environment.measured`, which every receipt row then states. Keys and values are validated, secret-shaped names are refused, and each recorded value has every host-specific absolute path replaced by a `sha256:` token, so a disposable root or the operator profile is never republished by a record. Recording a credential value is a policy prohibition on the caller: the guard refuses secret-shaped *names*, not arbitrary values, so an ordinary-looking secret cannot be detected by shape.
 
 ## Receipt and cost semantics
 
@@ -118,6 +118,7 @@ Account for exploration, implementation, verification, independent review, repai
 An unperformed model phase is explicit `non_model` evidence, not a zero-dollar model call.
 Unknown tokens, prices and billing stay null with a reason.
 `cached` is `cacheRead` + `cacheWrite` for the same records and is counted separately from `input`; it is not a subset of the input total.
+Token rows come from the provider that served the call, and cache accounting is provider-local: totals from two providers are not comparable, only within one provider. The harness estimate is the one common unit across providers, and it stays an estimate — never a provider bill — with no price version behind it.
 Keep known subtotals separate from unknown totals, including costs from failed or rejected attempts: a known subtotal sums complete session totals plus the validated partial-session observations (`known_subtotals`) of sessions whose own total stays unknown, and no known subtotal is ever promoted into an unknown total.
 `review_time` is the recorded reviewer-session elapsed window, including parked coordination intervals, not a claim about active reasoning time.
 An empty `later_defects` array means none recorded through the observation window, not a zero-defect guarantee.
@@ -163,6 +164,7 @@ The coordinator retains all attempts and raw evidence outside Git; this is not a
 Deleting coordinator-owned history or editing its metadata is outside the same-user trust boundary.
 A process interruption before `attempt.json` is written leaves preserved but unreadable partial evidence: the runner refuses review/acceptance rather than silently discarding it or retrying to green.
 Model usage can still be exported and charged to a subsequent coordinator ledger; the interrupted store is not advertised as automatically resumable.
+A run directory written by a harness revision before the 0008c gate/result extension is refused, not upgraded: the strict result and gate key checks require the extended key sets in full (11 result keys and 3 gate keys were added for the Elixir carrier), so a pre-extension `result.json` fails validation and such a run is no longer re-derivable with the current bytes. This is fail-closed; no shipped receipt is affected, because each receipt is a self-contained document byte-identical to its store copy.
 Abnormal validator-process termination may also make its record unreadable instead of producing a negative receipt; no validator-crash qualification is claimed.
 Source binding observes the checkout before and after each gate, not transient edits restored inside one gate; stop the worker before handing off to coordinator verification.
 The derived `go test -list` cross-check raises the cost of silent test forgery but cannot defeat a test binary that controls its own stdout and branches on `-test.list`; named-test evidence still depends on the independent review reading the diff of changed test files.
