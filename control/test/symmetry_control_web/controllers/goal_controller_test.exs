@@ -187,6 +187,46 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     )
   end
 
+  test "goal events serve the after/limit window, cap the page and refuse unknown parameters", %{
+    conn: conn
+  } do
+    goal_id = create_goal_with_accepted_plan(conn)
+
+    # `after` is the last rendered sequence and `limit` the served page size:
+    # one entry per page here, paging strictly forward.
+    assert %{"entries" => [first], "next_after" => next_after} =
+             operator_conn(conn)
+             |> get("/api/v1/goals/#{goal_id}/events?limit=1")
+             |> json_response(200)
+
+    assert first["sequence"] == 1
+    assert next_after == 1
+
+    assert %{"entries" => [second]} =
+             operator_conn(conn)
+             |> get("/api/v1/goals/#{goal_id}/events?after=#{next_after}&limit=1")
+             |> json_response(200)
+
+    assert second["sequence"] > next_after
+
+    # The read model's own maximum (100) is served; anything beyond it and any
+    # parameter the read does not define is caller input, not a served window.
+    assert %{"entries" => entries} =
+             operator_conn(conn)
+             |> get("/api/v1/goals/#{goal_id}/events?after=0&limit=100")
+             |> json_response(200)
+
+    assert entries != []
+
+    for query <- ["limit=101", "after=-1", "after=not-a-sequence", "unknown=1", "limit=0"] do
+      assert_error(
+        operator_conn(conn) |> get("/api/v1/goals/#{goal_id}/events?#{query}"),
+        400,
+        "invalid_request"
+      )
+    end
+  end
+
   test "portal routes share the Goal command implementation and retain portal authentication", %{
     conn: conn
   } do

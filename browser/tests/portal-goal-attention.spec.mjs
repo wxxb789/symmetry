@@ -8,9 +8,12 @@ import fs from "node:fs/promises";
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
 
 const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
+// A second release instance started with Goal rollout off. Without it the
+// rollout-off case is explicitly skipped, never passed on the primary instance.
+const goalsOffUrl = process.env.SYMMETRY_GOALS_OFF_URL;
 
-async function login(page, path = "/portal/attention") {
-  await page.goto(`/portal/login?return_to=${encodeURIComponent(path)}`);
+async function login(page, path = "/portal/attention", base = "") {
+  await page.goto(`${base}/portal/login?return_to=${encodeURIComponent(path)}`);
   await page.getByLabel("Operator token").fill(operatorToken);
   await page.getByRole("button", { name: "Open workspace" }).click();
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
@@ -181,7 +184,7 @@ async function capture(page, testInfo, name, observations) {
 }
 
 test.describe("Goal attention workspace", () => {
-  test("attention merges Goal attention with the project blockers and stays usable when the Goal feed refuses", async ({ page }, testInfo) => {
+  test("attention merges Goal attention with the project blockers from real reads", async ({ page }, testInfo) => {
     await login(page);
     const project = await createProject(page, "A", { blocked: true });
 
@@ -192,7 +195,14 @@ test.describe("Goal attention workspace", () => {
     expect(empty.body.goal_attention.unavailable).toBe(null);
 
     const repositoryId = await attachRepository(page, project.id);
-    await createGoalWithPlan(page, project, repositoryId, "Attention merge goal");
+    const { goalId } = await createGoalWithPlan(page, project, repositoryId, "Attention merge goal");
+
+    // The served document itself carries the Goal entry beside the blockers;
+    // the page below renders those two reads, not a substituted response.
+    const served = await api(page, "GET", `/portal/api/attention?project_id=${project.id}`);
+    expect(served.status).toBe(200);
+    expect(served.body.goal_attention.unavailable).toBe(null);
+    expect(served.body.goal_attention.entries.map((entry) => entry.goal_id)).toContain(goalId);
 
     await page.goto(`/portal/attention?projectId=${project.id}`);
     await expect(page.getByRole("heading", { level: 1, name: "Attention", exact: true })).toBeVisible();
@@ -200,21 +210,6 @@ test.describe("Goal attention workspace", () => {
     await expect(page.getByRole("heading", { name: `Blocked work ${project.key}`, exact: true })).toBeVisible();
     await expect(page.getByText("Operator review required")).toBeVisible();
     await capture(page, testInfo, "attention-merged", "Goal attention and the project blocked work render on the same attention entry point from real server reads");
-
-    // A refusal from the Goal read must not hide the real project blockers.
-    await page.route("**/portal/api/attention*", async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      body.goal_attention.entries = [];
-      body.goal_attention.unavailable = { code: "goal_admission_disabled", message: "goal admission is disabled" };
-      await route.fulfill({ response, body: JSON.stringify(body) });
-    });
-    await page.reload();
-    await expect(page.getByRole("heading", { name: "Goal attention is unavailable on this server" })).toBeVisible();
-    await expect(page.getByText("goal_admission_disabled")).toBeVisible();
-    await expect(page.getByRole("heading", { name: `Blocked work ${project.key}`, exact: true })).toBeVisible();
-    await capture(page, testInfo, "attention-goal-unavailable", "Goal feed refusal is stated and the project blockers stay served");
-    await page.unrouteAll({ behavior: "wait" });
   });
 
   test("plan approval, activation, pause, resume and amendment run through the delegated commands with server versions", async ({ page }, testInfo) => {
@@ -454,5 +449,63 @@ test.describe("Goal attention workspace", () => {
     const admitted = await api(page, "GET", `/portal/api/goals/${goalId}`);
     expect(admitted.body.work_items).toHaveLength(1);
     await capture(page, testInfo, "goal-recovered", "Retry re-read the real Goal read and the admitted work item is rendered");
+  });
+
+  test("with Goal rollout off a present Goal still serves its real attention entry", async ({ page }, testInfo) => {
+    test.skip(!goalsOffUrl, "SYMMETRY_GOALS_OFF_URL is not set: a rollout-off release instance is required, so this case is skipped, not passed.");
+    await login(page, "/portal/attention", goalsOffUrl);
+    const project = await createProject(page, "J", { blocked: true });
+
+    // Admission is disabled on this instance, but creation is an ordinary
+    // accepted command; the read is what this case binds.
+    const created = await api(page, "POST", `/portal/api/projects/${project.id}/goals`, {
+      schema_version: "symmetry.goal_create.v1",
+      mutation_id: crypto.randomUUID(),
+      title: "Rollout-off goal",
+      initial_revision: {
+        objective: "Serve the attention read while Goal admission is disabled.",
+        non_goals: [],
+        acceptance_contract: acceptance(),
+        authority_policy: authorityPolicy(),
+        execution_policy: executionPolicy(),
+        context_manifest: contextManifest(),
+        reason: "Initial approved Goal contract"
+      }
+    });
+    expect(created.status).toBe(201);
+    const goalId = created.body.goal.id;
+
+    // What the rollout-off server actually serves: the Goal entry beside the
+    // project blockers, with no unavailable feed stated.
+    const served = await api(page, "GET", `/portal/api/attention?project_id=${project.id}`);
+    expect(served.status).toBe(200);
+    expect(served.body.goal_attention.unavailable).toBe(null);
+    expect(served.body.goal_attention.entries.map((entry) => entry.goal_id)).toContain(goalId);
+
+    await page.goto(`${goalsOffUrl}/portal/attention?projectId=${project.id}`);
+    await expect(page.getByRole("heading", { level: 1, name: "Attention", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Rollout-off goal" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: `Blocked work ${project.key}`, exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Goal attention is unavailable on this server" })).toHaveCount(0);
+    await capture(page, testInfo, "attention-rollout-off", "With Goal rollout off the real attention read serves the present Goal beside the project blockers and states no unavailable feed");
+  });
+
+  test("the attention list is keyboard reachable and the Goal surface hands focus back", async ({ page }, testInfo) => {
+    await login(page);
+    const project = await createProject(page, "K");
+    const repositoryId = await attachRepository(page, project.id);
+    const { goalId } = await createGoalWithPlan(page, project, repositoryId, "Keyboard goal");
+
+    await page.goto(`/portal/attention?projectId=${project.id}`);
+    const link = page.getByRole("link", { name: "Keyboard goal" });
+    await link.focus();
+    await expect(link).toBeFocused();
+    await link.press("Enter");
+    await expect(page).toHaveURL(new RegExp(`/portal/goals/${goalId}$`));
+    // The shell moves focus into the destination content: the Goal heading.
+    await expect(page.getByRole("heading", { level: 1, name: "Keyboard goal" })).toBeFocused();
+    await page.goBack();
+    await expect(page.getByRole("heading", { level: 1, name: "Attention", exact: true })).toBeFocused();
+    await capture(page, testInfo, "attention-keyboard-walk", "Keyboard: Enter on the attention Goal link opens the Goal surface and focus lands on its heading; history back returns focus to the attention heading");
   });
 });

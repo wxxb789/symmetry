@@ -10,7 +10,6 @@ export interface SymmetryAttentionReadV1 {
   selected_project_id?: UUID | null;
   goal_attention: GoalAttentionFeed;
   project_blocked: ProjectBlockedFeed;
-  projects?: AttentionProjectOption[];
   [k: string]: unknown | undefined;
 }
 export interface GoalAttentionFeed {
@@ -34,7 +33,7 @@ export interface GoalAttentionEntry {
   attention_reasons?: string[];
   active_tasks?: number;
   nonterminal_tasks?: number;
-  ready_to_achieve?: boolean;
+  "ready_to_achieve?": boolean;
   updated_at?: string | null;
   [k: string]: unknown | undefined;
 }
@@ -53,7 +52,7 @@ export interface SettlementAttention {
   task_id?: string | null;
   run_id?: string | null;
   generation?: number | null;
-  required?: boolean;
+  "required?": boolean;
   settlement: string;
   reason?: string | null;
   decision_id?: string | null;
@@ -92,12 +91,5 @@ export interface ProjectBlockedEntry {
   blocked: boolean;
   blocker?: string | null;
   updated_at?: string | null;
-  [k: string]: unknown | undefined;
-}
-export interface AttentionProjectOption {
-  id: UUID;
-  key: string;
-  name: string;
-  status: string;
   [k: string]: unknown | undefined;
 }

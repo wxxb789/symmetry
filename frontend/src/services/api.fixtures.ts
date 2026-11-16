@@ -3,6 +3,18 @@
  * imports this module, and the shapes mirror what the running control plane serves.
  */
 
+import servedAttention from "../../../contracts/fixtures/valid/attention-read.basic.json";
+import servedGoalRead from "../../../contracts/fixtures/valid/goal-read.active.json";
+
+/**
+ * The imported documents are captures of a real portal server's own responses
+ * (sanitized identifiers only) validated against the contract bundle by the
+ * portal controller gate and the Elixir fixture-manifest test. The served-read
+ * fixtures below derive from them: overrides replace values, never member
+ * names, so a test can never inject a spelling the server does not send.
+ */
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
 export interface ReadWorkItemOptions {
   id: string;
   projectId: string;
@@ -113,17 +125,24 @@ export interface ReadAttentionOptions {
   projectUnavailable?: { code: string; message: string } | null;
 }
 
-/** The merged attention read exactly as the portal API serves it. */
+/** The merged attention read as the portal API serves it, overridden per test. */
 export function readAttention(options: ReadAttentionOptions): Record<string, unknown> {
+  const document = clone(servedAttention);
+  const goalTemplate = document.goal_attention.entries[0]!;
+  const blockedTemplate = document.project_blocked.entries[0]!;
+
   return {
+    ...document,
     selected_project_id: options.selectedProjectId,
     goal_attention: {
+      ...document.goal_attention,
       entries: (options.goals ?? []).map((goal) => ({
+        ...goalTemplate,
         goal_id: goal.goalId,
         project_id: goal.projectId,
         title: goal.title,
-        state: goal.state ?? "draft",
-        current_revision: goal.currentRevision ?? 1,
+        state: goal.state ?? goalTemplate.state,
+        current_revision: goal.currentRevision ?? goalTemplate.current_revision,
         blockers: [],
         blocker_reasons: goal.blockerReasons ?? [],
         settlement_attention: [],
@@ -131,24 +150,22 @@ export function readAttention(options: ReadAttentionOptions): Record<string, unk
         active_tasks: goal.activeTasks ?? 0,
         nonterminal_tasks: goal.nonterminalTasks ?? 0,
         "ready_to_achieve?": goal.readyToAchieve ?? false,
-        updated_at: null,
       })),
       next_cursor: options.nextCursor ?? null,
       unavailable: options.goalUnavailable ?? null,
     },
     project_blocked: {
+      ...document.project_blocked,
       entries: (options.blocked ?? []).map((entry) => ({
+        ...blockedTemplate,
         project_id: entry.projectId,
-        project_key: entry.projectKey ?? "DEMO",
-        project_name: entry.projectName ?? "Demo project",
-        project_status: "active",
+        project_key: entry.projectKey ?? blockedTemplate.project_key,
+        project_name: entry.projectName ?? blockedTemplate.project_name,
         work_item_id: entry.workItemId,
-        work_item_key: entry.key ?? "DEMO-1",
+        work_item_key: entry.key ?? blockedTemplate.work_item_key,
         title: entry.title,
-        status: entry.status ?? "ready",
-        blocked: true,
+        status: entry.status ?? blockedTemplate.status,
         blocker: entry.blocker ?? null,
-        updated_at: null,
       })),
       unavailable: options.projectUnavailable ?? null,
     },
@@ -168,7 +185,7 @@ export interface ReadGoalOptions {
   allowedActions?: string[];
   workItems?: Array<Record<string, unknown>>;
   decisions?: Array<Record<string, unknown>>;
-  graph?: { nodes?: Array<Record<string, unknown>>; edges?: Array<Record<string, unknown>>; cycleDetected?: boolean };
+  graph?: { nodes?: Array<Record<string, unknown>>; edges?: Array<Record<string, unknown>>; "cycle_detected?"?: boolean };
   accounting?: Record<string, unknown>;
   externalWaits?: Array<Record<string, unknown>>;
   acceptedOutcomes?: Array<Record<string, unknown>>;
@@ -176,69 +193,52 @@ export interface ReadGoalOptions {
   settlementAttention?: Array<Record<string, unknown>>;
 }
 
-/** One Goal read exactly as the portal API serves it (consumed members only). */
+/** One Goal read as the portal API serves it, overridden per test. */
 export function readGoalProjection(options: ReadGoalOptions): Record<string, unknown> {
+  const document = clone(servedGoalRead);
+  const state = options.state ?? document.state;
+  const currentRevision = options.currentRevision ?? document.current_revision;
+  const workItems = options.workItems ?? [];
+  const requiredItems = workItems.filter((item) => item["required?"] !== false);
+  const acceptedRequired = requiredItems.filter((item) => item["accepted?"] === true);
+
   return {
+    ...document,
     id: options.id,
     project_id: options.projectId,
-    project_key: options.projectKey ?? "DEMO",
-    project_name: options.projectName ?? "Demo project",
+    project_key: options.projectKey ?? document.project_key,
+    project_name: options.projectName ?? document.project_name,
     title: options.title,
-    state: options.state ?? "active",
-    current_revision: options.currentRevision ?? 1,
-    version: options.version ?? 1,
-    updated_at: "2026-11-16T10:00:00Z",
-    lifecycle: { state: options.state ?? "active", "terminal?": false, "scheduling_paused?": false, "immutable?": false },
+    state,
+    current_revision: currentRevision,
+    version: options.version ?? document.version,
+    lifecycle: { ...document.lifecycle, state },
     revision: {
-      revision: options.currentRevision ?? 1,
+      ...document.revision,
+      revision: currentRevision,
       objective: options.objective ?? options.title,
-      non_goals: [],
-      acceptance_contract: { predicates: [{ id: "operator", kind: "operator_acceptance" }] },
-      authority_policy: { operator_required_for_scope_change: true, operator_required_for_completion: true, publication_allowed: false, allowed_actions: [] },
-      execution_policy: { final_acceptance: "operator", allowed_actions: [], allowed_resource_ids: [] },
-      context_manifest: { byte_budget: 32768, required_source_kinds: ["repository"], include_advisory_recall: false },
-      inserted_at: "2026-11-16T09:00:00Z",
     },
     blockers: options.blockers ?? [],
     blocker_reasons: (options.blockers ?? []).map((blocker) => (typeof blocker["reason"] === "string" ? blocker["reason"] : "")),
     settlement_attention: options.settlementAttention ?? [],
-    attention_reasons: [],
     completion: {
-      "current_revision?": true,
-      required_items: (options.workItems ?? []).filter((item) => item["required?"] !== false).length,
-      accepted_required_items: (options.workItems ?? []).filter((item) => item["accepted?"] === true).length,
-      "all_required_accepted?": false,
-      no_open_decisions: true,
-      no_nonterminal_tasks: true,
-      "ready?": false,
+      ...document.completion,
+      required_items: requiredItems.length,
+      accepted_required_items: acceptedRequired.length,
       accepted_outcomes: (options.acceptedOutcomes ?? []).length,
-      rejected_outcomes: 0,
     },
     allowed_actions: options.allowedActions ?? [],
-    work_items: options.workItems ?? [],
-    graph: {
-      nodes: options.graph?.nodes ?? [],
-      edges: options.graph?.edges ?? [],
-      cycle_detected: options.graph?.cycleDetected ?? false,
+    work_items: workItems,
+    graph: options.graph === undefined ? { ...document.graph, nodes: [], edges: [] } : {
+      ...document.graph,
+      nodes: options.graph.nodes ?? [],
+      edges: options.graph.edges ?? [],
+      "cycle_detected?": options.graph["cycle_detected?"] ?? false,
     },
     decisions: options.decisions ?? [],
     accepted_outcomes: options.acceptedOutcomes ?? [],
-    accounting: options.accounting ?? {
-      held_microusd: null,
-      unknown_reservation_count: 0,
-      settled_reservation_count: 0,
-      released_reservation_count: 0,
-      usage_records: 0,
-      usage_leaf_count: 0,
-      known_usage_cost_microusd: null,
-      usage_cost_microusd: null,
-      usage_cost_unknown: false,
-      unknown_usage_count: 0,
-    },
+    accounting: options.accounting ?? document.accounting,
     external_waits: options.externalWaits ?? [],
-    history: { work_items: [], dependencies: [], outcomes: [], external_waits: [] },
-    execution: { task_count: 0, active_task_count: 0, nonterminal_task_count: 0 },
-    planning: null,
   };
 }
 

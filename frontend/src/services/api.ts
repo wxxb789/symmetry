@@ -135,7 +135,6 @@ export type GoalProjection = SymmetryGoalReadV1;
 export type GoalWorkItem = GoalProjection["work_items"][number];
 export type GoalDecision = GoalProjection["decisions"][number];
 export type GoalGraph = GoalProjection["graph"];
-export type GoalContext = { snapshot_id?: string; [member: string]: unknown };
 
 /** A project creation submission: exactly the fields the server's create changeset casts. */
 export interface ProjectDraft {
@@ -286,7 +285,6 @@ const GoalEventsShape = Schema.Struct({
 });
 export type GoalEvent = typeof GoalEventShape.Type;
 export type GoalEvents = typeof GoalEventsShape.Type;
-const GoalContextShape = Schema.Record({ key: Schema.String, value: Schema.Unknown });
 const runtime = ManagedRuntime.make(Layer.empty);
 
 // Control responses carry the same PortalJSON projections the read schemas
@@ -371,7 +369,6 @@ export interface Api {
   attention: (projectId: string | null, cursor: string | null, signal: AbortSignal) => Promise<Attention>;
   goal: (goalId: string, signal: AbortSignal) => Promise<GoalProjection>;
   goalEvents: (goalId: string, after: number, signal: AbortSignal) => Promise<GoalEvents>;
-  goalContext: (goalId: string, snapshotId: string, signal: AbortSignal) => Promise<GoalContext>;
   session: (signal: AbortSignal) => Promise<Session>;
   connections: (signal: AbortSignal) => Promise<ConnectionsReadModel>;
   createConnection: (draft: ConnectionDraft, csrf: string, signal: AbortSignal) => Promise<ConnectionReceipt>;
@@ -583,9 +580,6 @@ export function createApi(
     goalEvents(goalId: string, after: number, signal: AbortSignal): Promise<GoalEvents> {
       const query = `?${new URLSearchParams({ after: String(after) })}`;
       return run(request(fetcher, `/portal/api/goals/${encodeURIComponent(goalId)}/events${query}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(GoalEventsShape))(text)))), signal);
-    },
-    goalContext(goalId: string, snapshotId: string, signal: AbortSignal): Promise<GoalContext> {
-      return run(request(fetcher, `/portal/api/goals/${encodeURIComponent(goalId)}/contexts/${encodeURIComponent(snapshotId)}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(GoalContextShape))(text)))), signal);
     },
     session(signal: AbortSignal): Promise<Session> {
       return run(request(fetcher, "/portal/api/session", { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(Session))(text)))), signal);

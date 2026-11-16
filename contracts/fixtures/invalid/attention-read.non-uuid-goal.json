@@ -1,24 +1,93 @@
 {
-  "selected_project_id": null,
   "goal_attention": {
-    "entries": [{
-      "goal_id": "33333333-3333-4333-8333-333333333333",
-      "title": "Deliver the attention entry point",
-      "state": "active",
-      "current_revision": 2,
-      "blocker_reasons": ["waiting_dependency"]
-    }, {
-      "goal_id": 33333333,
-      "title": "Deliver the attention entry point",
-      "state": "active",
-      "current_revision": 2,
-      "blocker_reasons": []
-    }],
-    "next_cursor": null,
-    "unavailable": null
+    "unavailable": null,
+    "entries": [
+      {
+        "active_tasks": 0,
+        "state": "active",
+        "title": "Deliver the attention entry point",
+        "source": "durable_records",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "goal_id": "33333333-3333-4333-8333-333333333333",
+        "current_revision": 1,
+        "updated_at": "2026-11-16T09:01:00Z",
+        "blockers": [
+          {
+            "count": 1,
+            "reason": "waiting_dependency",
+            "details": [
+              {
+                "revision": 1,
+                "work_item_id": "55555555-5555-4555-8555-555555555555",
+                "depends_on_id": "44444444-4444-4444-8444-444444444444"
+              }
+            ],
+            "ids": [
+              "55555555-5555-4555-8555-555555555555"
+            ]
+          }
+        ],
+        "blocker_reasons": [
+          "waiting_dependency"
+        ],
+        "settlement_attention": [],
+        "attention_reasons": [],
+        "nonterminal_tasks": 0,
+        "ready_to_achieve?": false
+      },
+      {
+        "active_tasks": 0,
+        "state": "active",
+        "title": "Deliver the attention entry point",
+        "source": "durable_records",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "goal_id": 33333333,
+        "current_revision": 1,
+        "updated_at": "2026-11-16T09:01:00Z",
+        "blockers": [
+          {
+            "count": 1,
+            "reason": "waiting_dependency",
+            "details": [
+              {
+                "revision": 1,
+                "work_item_id": "55555555-5555-4555-8555-555555555555",
+                "depends_on_id": "44444444-4444-4444-8444-444444444444"
+              }
+            ],
+            "ids": [
+              "55555555-5555-4555-8555-555555555555"
+            ]
+          }
+        ],
+        "blocker_reasons": [
+          "waiting_dependency"
+        ],
+        "settlement_attention": [],
+        "attention_reasons": [],
+        "nonterminal_tasks": 0,
+        "ready_to_achieve?": false
+      }
+    ],
+    "next_cursor": null
   },
   "project_blocked": {
-    "entries": [],
-    "unavailable": null
-  }
+    "unavailable": null,
+    "entries": [
+      {
+        "blocked": true,
+        "status": "ready",
+        "title": "Review the exact workspace subject",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "work_item_id": "22222222-2222-4222-8222-222222222222",
+        "updated_at": "2026-11-16T09:00:00Z",
+        "blocker": "Operator review required",
+        "work_item_key": "SHELL-9",
+        "project_key": "SHELL",
+        "project_name": "Workspace fixture",
+        "project_status": "active"
+      }
+    ]
+  },
+  "selected_project_id": "11111111-1111-4111-8111-111111111111"
 }

@@ -238,17 +238,18 @@ test.describe("Goal 2 feature acceptance", () => {
     // board and detail keyboard walk with focus return now runs on
     // /portal/projects/:projectId and /portal/work/:workItemId in
     // portal-work-views.spec.mjs. The classic attention rail's keyboard walk is
-    // retired with it: the Goal attention and blocked-work lists live on
-    // /portal/attention and are covered by portal-goal-attention.spec.mjs. The
-    // classic work-detail execution control walk (the Activity rail walk, its
-    // live timer, Cancel run -> Cancelled, Retry availability and retry hidden
-    // after reassignment, the Activity row's "Execution stopped") is retired
-    // here as well: the start/cancel/retry flow, its rendered state and its
-    // server-side gating now run on /portal/work/:workItemId in
-    // portal-execution-control.spec.mjs and, against a live daemon, in
-    // portal-live-daemon.spec.mjs. The reassignment edit path itself remains
-    // classic-owned editing coverage (goal 0007c) and is not migrated here. The
-    // dialog and control paths above stay.
+    // retired with it: the equivalent walk now runs on /portal/attention in
+    // portal-goal-attention.spec.mjs ("the attention list is keyboard reachable
+    // and the Goal surface hands focus back"). The classic work-detail
+    // execution control walk (the Activity rail walk, its live timer, Cancel
+    // run -> Cancelled, Retry availability and retry hidden after reassignment,
+    // the Activity row's "Execution stopped") is retired here as well: the
+    // start/cancel/retry flow, its rendered state and its server-side gating
+    // now run on /portal/work/:workItemId in portal-execution-control.spec.mjs
+    // and, against a live daemon, in portal-live-daemon.spec.mjs. The
+    // reassignment edit path itself remains classic-owned editing coverage
+    // (goal 0007c) and is not migrated here. The dialog and control paths above
+    // stay.
 
     const dimensions = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,

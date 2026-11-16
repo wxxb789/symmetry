@@ -22,11 +22,14 @@ defmodule SymmetryControlWeb.PortalApiController do
   The attention entry point: the existing Goal attention feed merged with the
   project-level blocked work items the workspace read already serves.
 
-  Goal rollout is not required for this page. When the Goal read is unavailable
-  the response still carries the real workspace blockers under HTTP 200 and
-  states the Goal feed's mapped error code; when the workspace read is
-  unavailable the Goal entries are still served and the Project feed states the
-  refusal. Nothing here grants or implies Goal authority.
+  Goal rollout is not required for this page: the feed serves the durable Goal
+  projection whether or not admission is enabled. The Goal feed's own admission
+  refusal is the only refusal stated inline under HTTP 200 (the real workspace
+  blockers stay served); caller-input errors keep their protocol status; any
+  other Goal-feed reason is a server fault and surfaces with its real status.
+  When the workspace read is unavailable the Goal entries are still served and
+  the Project feed states the refusal. Nothing here grants or implies Goal
+  authority.
   """
   def attention(conn, params) do
     with {:ok, project_id, goal_options} <- attention_options(conn, params),
@@ -49,10 +52,14 @@ defmodule SymmetryControlWeb.PortalApiController do
       {:ok, page} -> {:ok, %{page: page, unavailable: nil}}
       # The caller's own input is a request error, not an unavailable feed.
       {:error, reason} when reason in [:invalid_cursor, :invalid_request] -> {:error, reason}
-      {:error, reason} -> {:ok, %{page: empty_attention_page(), unavailable: reason}}
+      # The feed's own admission refusal is the one refusal this page states
+      # inline: the page serves the real project blockers and names the refusal.
+      {:error, :goal_admission_disabled} ->
+        {:ok, %{page: empty_attention_page(), unavailable: :goal_admission_disabled}}
+      # Anything else is a server fault. It must surface with its real status
+      # instead of being reported as a client error inside a 200 response.
+      {:error, _unexpected} -> {:error, :internal_error}
     end
-  rescue
-    _error -> {:ok, %{page: empty_attention_page(), unavailable: :internal_error}}
   end
 
   defp empty_attention_page, do: %{entries: [], next_after: nil, next_cursor: nil}

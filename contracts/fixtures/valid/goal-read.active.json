@@ -1,394 +1,273 @@
 {
   "id": "33333333-3333-4333-8333-333333333333",
-  "project_id": "11111111-1111-4111-8111-111111111111",
-  "project_key": "SHELL",
-  "project_name": "Workspace fixture",
-  "title": "Deliver the attention entry point",
+  "version": 8,
   "state": "active",
-  "current_revision": 2,
-  "version": 7,
-  "updated_at": "2026-11-16T10:00:00Z",
-  "lifecycle": {
-    "state": "active",
-    "terminal?": false,
-    "scheduling_paused?": false,
-    "immutable?": false
+  "completion": {
+    "accepted_outcomes": 0,
+    "ready?": false,
+    "accepted_required_items": 0,
+    "all_required_accepted?": false,
+    "current_revision?": true,
+    "no_nonterminal_tasks?": true,
+    "no_open_decisions?": true,
+    "rejected_outcomes": 0,
+    "required_items": 2
   },
-  "revision": {
-    "revision": 2,
-    "objective": "Merge Goal attention with the project blocked items and expose Goal detail.",
-    "non_goals": [
-      "Provider connections"
+  "graph": {
+    "nodes": [
+      {
+        "id": "44444444-4444-4444-8444-444444444444",
+        "title": "Merge the attention feed",
+        "number": 1,
+        "required?": true,
+        "blockers": [],
+        "board_status": "backlog",
+        "accepted?": false
+      },
+      {
+        "id": "55555555-5555-4555-8555-555555555555",
+        "title": "Render the Goal detail surface",
+        "number": 2,
+        "required?": true,
+        "blockers": [
+          "waiting_dependency"
+        ],
+        "board_status": "backlog",
+        "accepted?": false
+      }
     ],
+    "edges": [
+      {
+        "id": null,
+        "revision": 1,
+        "to": "44444444-4444-4444-8444-444444444444",
+        "from": "55555555-5555-4555-8555-555555555555",
+        "work_item_id": "55555555-5555-4555-8555-555555555555",
+        "blocker": "waiting_dependency",
+        "depends_on_id": "44444444-4444-4444-8444-444444444444",
+        "satisfied?": false
+      }
+    ],
+    "cycle_detected?": false
+  },
+  "title": "Deliver the attention entry point",
+  "history": {
+    "dependencies": [],
+    "outcomes": [],
+    "work_items": [],
+    "external_waits": []
+  },
+  "source": "durable_records",
+  "revision": {
+    "revision": 1,
+    "authority_policy": {
+      "allowed_actions": [],
+      "operator_required_for_completion": true,
+      "operator_required_for_scope_change": true,
+      "publication_allowed": false
+    },
+    "execution_policy": {
+      "allowed_actions": [],
+      "allowed_model_profiles": [],
+      "allowed_resource_ids": [],
+      "allowed_runtime_ids": [],
+      "automatic_execution": false,
+      "budget_limit_microusd": null,
+      "budget_mode": "soft",
+      "final_acceptance": "operator",
+      "hard_cost_limit_required": false,
+      "max_parallel_tasks": 1,
+      "max_run_attempts_per_task": 2,
+      "max_task_admissions": 4,
+      "per_run_cost_limit_microusd": null
+    },
+    "inserted_at": "2026-11-16T09:00:00Z",
     "acceptance_contract": {
-      "schema_version": "symmetry.acceptance.v1",
       "description": "Operator verifies the Goal workspace boundary.",
       "predicates": [
         {
           "id": "operator",
           "kind": "operator_acceptance"
         }
-      ]
-    },
-    "authority_policy": {
-      "operator_required_for_scope_change": true,
-      "operator_required_for_completion": true,
-      "publication_allowed": false,
-      "allowed_actions": []
-    },
-    "execution_policy": {
-      "automatic_execution": false,
-      "max_parallel_tasks": 1,
-      "max_task_admissions": 4,
-      "max_run_attempts_per_task": 2,
-      "budget_limit_microusd": "5000000",
-      "per_run_cost_limit_microusd": null,
-      "budget_mode": "soft",
-      "hard_cost_limit_required": false,
-      "allowed_runtime_ids": [],
-      "allowed_model_profiles": [
-        "codex"
       ],
-      "final_acceptance": "operator",
-      "allowed_actions": [],
-      "allowed_resource_ids": [
-        "88888888-8888-4888-8888-888888888888"
-      ]
+      "schema_version": "symmetry.acceptance.v1"
     },
     "context_manifest": {
       "byte_budget": 32768,
+      "include_advisory_recall": false,
       "required_source_kinds": [
         "repository"
-      ],
-      "include_advisory_recall": false
+      ]
     },
-    "inserted_at": "2026-11-16T09:30:00Z"
+    "objective": "Merge Goal attention with the project blocked items and expose Goal detail.",
+    "non_goals": [
+      "Provider connections"
+    ]
   },
+  "project_id": "11111111-1111-4111-8111-111111111111",
+  "allowed_actions": [
+    "pause",
+    "amend",
+    "cancel"
+  ],
+  "current_revision": 1,
+  "updated_at": "2026-11-16T09:03:00Z",
+  "decisions": [
+    {
+      "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "version": 2,
+      "state": "resolved",
+      "options": [
+        {
+          "consequence": "Apply the approved action.",
+          "id": "accept",
+          "label": "Accept"
+        },
+        {
+          "consequence": "Keep the current approved state.",
+          "id": "reject",
+          "label": "Reject"
+        }
+      ],
+      "kind": "plan",
+      "open?": false,
+      "expires_at": null,
+      "question": "Accept the proposed plan?",
+      "work_item_id": null,
+      "goal_revision": 1,
+      "updated_at": "2026-11-16T09:02:00Z",
+      "inserted_at": "2026-11-16T09:01:00Z",
+      "resolution": {
+        "actor_ref": "portal_operator",
+        "comment": null,
+        "option_id": "accept",
+        "resolved_at": "2026-11-16T09:02:00Z"
+      }
+    }
+  ],
+  "next_wake_at": null,
+  "work_items": [
+    {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "position": 0,
+      "priority": "no_priority",
+      "status": "backlog",
+      "description": "Server-side merge with the project blocked items.",
+      "title": "Merge the attention feed",
+      "number": 1,
+      "required?": true,
+      "change_target": null,
+      "repository_resource_id": "88888888-8888-4888-8888-888888888888",
+      "current_revision": 1,
+      "goal_revision": 1,
+      "admitted_revision": 1,
+      "agent_profile": "codex",
+      "workspace": "primary",
+      "assignee_name": "codex",
+      "assignee_type": "agent",
+      "integration": false,
+      "baseline": {
+        "kind": "subject",
+        "subject": {
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "resource_id": "88888888-8888-4888-8888-888888888888",
+          "tree_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "execution": null,
+      "blockers": [],
+      "board_status": "backlog",
+      "accepted?": false,
+      "accepted_outcome": null
+    },
+    {
+      "id": "55555555-5555-4555-8555-555555555555",
+      "position": 0,
+      "priority": "no_priority",
+      "status": "backlog",
+      "description": "Objective, accepted progress, blockers and the read-only graph.",
+      "title": "Render the Goal detail surface",
+      "number": 2,
+      "required?": true,
+      "change_target": null,
+      "repository_resource_id": "88888888-8888-4888-8888-888888888888",
+      "current_revision": 1,
+      "goal_revision": 1,
+      "admitted_revision": 1,
+      "agent_profile": "codex",
+      "workspace": "primary",
+      "assignee_name": "codex",
+      "assignee_type": "agent",
+      "integration": true,
+      "baseline": {
+        "kind": "subject",
+        "subject": {
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "resource_id": "88888888-8888-4888-8888-888888888888",
+          "tree_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "execution": null,
+      "blockers": [
+        "waiting_dependency"
+      ],
+      "board_status": "backlog",
+      "accepted?": false,
+      "accepted_outcome": null
+    }
+  ],
+  "execution": {
+    "states": {},
+    "active_task_count": 0,
+    "nonterminal_task_count": 0,
+    "active_run_count": 0,
+    "run_count": 0,
+    "run_states": {},
+    "task_count": 0,
+    "terminal_task_count": 0
+  },
+  "project_key": "SHELL",
+  "project_name": "Workspace fixture",
+  "accepted_outcomes": [],
+  "external_waits": [],
   "blockers": [
     {
-      "reason": "waiting_dependency",
       "count": 1,
-      "ids": [
-        "44444444-4444-4444-8444-444444444444"
-      ],
+      "reason": "waiting_dependency",
       "details": [
         {
-          "work_item_id": "44444444-4444-4444-8444-444444444444"
+          "revision": 1,
+          "work_item_id": "55555555-5555-4555-8555-555555555555",
+          "depends_on_id": "44444444-4444-4444-8444-444444444444"
         }
+      ],
+      "ids": [
+        "55555555-5555-4555-8555-555555555555"
       ]
     }
   ],
   "blocker_reasons": [
     "waiting_dependency"
   ],
-  "settlement_attention": [
-    {
-      "event_id": "15151515-1515-4515-8515-151515151515",
-      "event_sequence": 12,
-      "goal_revision": 2,
-      "work_item_id": "55555555-5555-4555-8555-555555555555",
-      "task_id": "66666666-6666-4666-8666-666666666666",
-      "run_id": "77777777-7777-4777-8777-777777777777",
-      "generation": 1,
-      "required?": true,
-      "settlement": "awaiting_validation",
-      "reason": null,
-      "decision_id": null,
-      "blocker": null,
-      "proposed_next_action": "Run the bound validation profile",
-      "proposed_next_action_status": "proposal_only",
-      "subject_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "evidence_refs": [
-        {
-          "id": "99999999-9999-4999-8999-999999999999",
-          "kind": "check"
-        }
-      ]
-    }
-  ],
-  "attention_reasons": [
-    "awaiting_validation"
-  ],
-  "completion": {
-    "required_items": 2,
-    "accepted_required_items": 1,
-    "accepted_outcomes": 1,
-    "rejected_outcomes": 0,
-    "all_required_accepted?": false,
-    "current_revision?": true,
-    "no_open_decisions?": false,
-    "no_nonterminal_tasks?": false,
-    "ready?": false
-  },
-  "allowed_actions": [
-    "pause",
-    "amend",
-    "cancel"
-  ],
-  "work_items": [
-    {
-      "id": "44444444-4444-4444-8444-444444444444",
-      "number": 1,
-      "title": "Merge the attention feed",
-      "description": "Server-side merge with the project blocked items.",
-      "status": "in_progress",
-      "board_status": "in_progress",
-      "required?": true,
-      "integration?": false,
-      "priority": "high",
-      "position": 1,
-      "assignee_type": "agent",
-      "assignee_name": null,
-      "agent_profile": "codex",
-      "workspace": "primary",
-      "admitted_revision": 2,
-      "repository_resource_id": "88888888-8888-4888-8888-888888888888",
-      "baseline": {
-        "kind": "subject",
-        "subject": {
-          "resource_id": "88888888-8888-4888-8888-888888888888",
-          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "tree_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        }
-      },
-      "change_target": null,
-      "accepted?": false,
-      "accepted_outcome": null,
-      "execution": {
-        "task": {
-          "id": "66666666-6666-4666-8666-666666666666",
-          "state": "running",
-          "purpose": "implement",
-          "goal_revision": 2,
-          "work_item_id": "44444444-4444-4444-8444-444444444444"
-        },
-        "run": {
-          "id": "77777777-7777-4777-8777-777777777777",
-          "state": "running",
-          "generation": 1
-        },
-        "runtime": null,
-        "state": "running",
-        "terminal?": false,
-        "pending_assignment": null,
-        "source": "task_run_records"
-      },
-      "blockers": []
-    },
-    {
-      "id": "55555555-5555-4555-8555-555555555555",
-      "number": 2,
-      "title": "Render the Goal detail surface",
-      "description": "Objective, accepted progress, blockers and the read-only graph.",
-      "status": "in_progress",
-      "board_status": "in_progress",
-      "required?": true,
-      "integration?": true,
-      "priority": "high",
-      "position": 2,
-      "assignee_type": "agent",
-      "assignee_name": null,
-      "agent_profile": "codex",
-      "workspace": "primary",
-      "admitted_revision": 2,
-      "repository_resource_id": "88888888-8888-4888-8888-888888888888",
-      "baseline": {
-        "kind": "dependency",
-        "work_item_id": "44444444-4444-4444-8444-444444444444"
-      },
-      "change_target": null,
-      "accepted?": false,
-      "accepted_outcome": null,
-      "execution": {
-        "task": {
-          "id": "88888888-1111-4111-8111-888888888888",
-          "state": "queued",
-          "purpose": "implement",
-          "goal_revision": 2,
-          "work_item_id": "55555555-5555-4555-8555-555555555555"
-        },
-        "run": null,
-        "runtime": null,
-        "state": "queued",
-        "terminal?": false,
-        "pending_assignment": {
-          "repository_resource_id": "88888888-8888-4888-8888-888888888888",
-          "agent_profile": "codex",
-          "workspace": "primary",
-          "requested_session_id": null,
-          "handoff_source_run_id": null,
-          "machine_affinity": null
-        },
-        "source": "task_run_records"
-      },
-      "blockers": [
-        "waiting_dependency"
-      ]
-    }
-  ],
-  "graph": {
-    "nodes": [
-      {
-        "id": "44444444-4444-4444-8444-444444444444",
-        "number": 1,
-        "title": "Merge the attention feed",
-        "required?": true,
-        "board_status": "in_progress",
-        "accepted?": false,
-        "blockers": []
-      },
-      {
-        "id": "55555555-5555-4555-8555-555555555555",
-        "number": 2,
-        "title": "Render the Goal detail surface",
-        "required?": true,
-        "board_status": "queued",
-        "accepted?": false,
-        "blockers": [
-          "waiting_dependency"
-        ]
-      }
-    ],
-    "edges": [
-      {
-        "id": "aaaaaaa1-1111-4111-8111-aaaaaaaaaaa1",
-        "work_item_id": "55555555-5555-4555-8555-555555555555",
-        "depends_on_id": "44444444-4444-4444-8444-444444444444",
-        "from": "55555555-5555-4555-8555-555555555555",
-        "to": "44444444-4444-4444-8444-444444444444",
-        "satisfied": false,
-        "blocker": "waiting_dependency",
-        "revision": 2
-      }
-    ],
-    "cycle_detected": false
-  },
-  "decisions": [
-    {
-      "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-      "goal_revision": 2,
-      "work_item_id": "44444444-4444-4444-8444-444444444444",
-      "kind": "plan",
-      "state": "open",
-      "open?": true,
-      "question": "Accept the proposed plan?",
-      "options": [
-        {
-          "id": "accept",
-          "label": "Accept",
-          "recommended": true,
-          "consequences": "The revision admits the proposed work items."
-        },
-        {
-          "id": "reject",
-          "label": "Reject",
-          "recommended": false,
-          "consequences": "The proposal is discarded."
-        }
-      ],
-      "resolution": null,
-      "expires_at": null,
-      "inserted_at": "2026-11-16T09:45:00Z",
-      "updated_at": "2026-11-16T09:45:00Z"
-    }
-  ],
-  "accepted_outcomes": [
-    {
-      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-      "goal_id": "33333333-3333-4333-8333-333333333333",
-      "goal_revision": 2,
-      "work_item_id": "44444444-4444-4444-8444-444444444444",
-      "producing_task_id": "66666666-6666-4666-8666-666666666666",
-      "producing_run_id": "77777777-7777-4777-8777-777777777777",
-      "producing_result_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
-      "validation_task_id": null,
-      "candidate_subject": {
-        "resource_id": "88888888-8888-4888-8888-888888888888",
-        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "tree_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-      },
-      "subject_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "evidence_ids": [
-        "99999999-9999-4999-8999-999999999999"
-      ],
-      "disposition": "accepted",
-      "reason": null,
-      "decision_id": null,
-      "inserted_at": "2026-11-16T09:50:00Z"
-    }
-  ],
+  "settlement_attention": [],
+  "attention_reasons": [],
   "accounting": {
-    "held_microusd": "250000",
-    "unknown_reservation_count": 1,
-    "settled_reservation_count": 1,
+    "usage_leaf_count": 0,
+    "unknown_usage_count": 0,
+    "held_microusd": "0",
+    "known_usage_cost_microusd": "0",
     "released_reservation_count": 0,
-    "usage_records": 2,
-    "usage_leaf_count": 2,
-    "known_usage_cost_microusd": "120000",
-    "usage_cost_microusd": null,
-    "usage_cost_unknown": true,
-    "unknown_usage_count": 1
+    "settled_reservation_count": 0,
+    "unknown_reservation_count": 0,
+    "usage_cost_microusd": "0",
+    "usage_cost_unknown?": false,
+    "usage_records": 0
   },
-  "external_waits": [
-    {
-      "id": "12121212-1212-4212-8212-121212121212",
-      "goal_revision": 2,
-      "work_item_id": "55555555-5555-4555-8555-555555555555",
-      "task_id": "88888888-1111-4111-8111-888888888888",
-      "run_id": null,
-      "generation": null,
-      "result_id": null,
-      "state": "waiting",
-      "reason": null,
-      "resource_id": "88888888-8888-4888-8888-888888888888",
-      "external_ref": "wxxb789/symmetry",
-      "subject": null,
-      "source_ref": null,
-      "next_check_at": "2026-11-16T11:00:00Z",
-      "check_seq": 3,
-      "receipt_event_id": null,
-      "inserted_at": "2026-11-16T09:55:00Z",
-      "updated_at": "2026-11-16T10:00:00Z"
-    }
-  ],
-  "history": {
-    "work_items": [],
-    "dependencies": [],
-    "outcomes": [],
-    "external_waits": []
+  "lifecycle": {
+    "state": "active",
+    "terminal?": false,
+    "immutable?": false,
+    "scheduling_paused?": false
   },
-  "execution": {
-    "task_count": 2,
-    "active_task_count": 1,
-    "nonterminal_task_count": 2,
-    "terminal_task_count": 0,
-    "run_count": 1,
-    "active_run_count": 1,
-    "states": {
-      "running": 1,
-      "queued": 1
-    },
-    "run_states": {
-      "running": 1
-    }
-  },
-  "planning": {
-    "task": {
-      "id": "13131313-1313-4313-8313-131313131313",
-      "state": "completed",
-      "purpose": "plan",
-      "goal_revision": 2,
-      "work_item_id": null
-    },
-    "run": {
-      "id": "14141414-1414-4414-8414-141414141414",
-      "state": "completed",
-      "generation": 1
-    },
-    "runtime": null,
-    "state": "completed",
-    "terminal?": true,
-    "pending_assignment": null,
-    "source": "task_run_records"
-  }
+  "planning": null
 }

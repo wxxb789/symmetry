@@ -67,10 +67,9 @@ type SymmetryAdmissionV1Subject struct {
 // Unconsumed presentation members remain additive, and every policy member (attention
 // reasons, blockers, readiness) is the server's own projection, never a client derivation.
 type SymmetryAttentionReadV1 struct {
-	GoalAttention     GoalAttentionFeed        `json:"goal_attention"`
-	ProjectBlocked    ProjectBlockedFeed       `json:"project_blocked"`
-	Projects          []AttentionProjectOption `json:"projects,omitempty"`
-	SelectedProjectID *string                  `json:"selected_project_id"`
+	GoalAttention     GoalAttentionFeed  `json:"goal_attention"`
+	ProjectBlocked    ProjectBlockedFeed `json:"project_blocked"`
+	SelectedProjectID *string            `json:"selected_project_id"`
 }
 
 type GoalAttentionFeed struct {
@@ -90,7 +89,7 @@ type GoalAttentionEntry struct {
 	GoalID              string                     `json:"goal_id"`
 	NonterminalTasks    *int64                     `json:"nonterminal_tasks,omitempty"`
 	ProjectID           *string                    `json:"project_id,omitempty"`
-	ReadyToAchieve      *bool                      `json:"ready_to_achieve,omitempty"`
+	ReadyToAchieve      bool                       `json:"ready_to_achieve?"`
 	SettlementAttention []EntrySettlementAttention `json:"settlement_attention,omitempty"`
 	State               string                     `json:"state"`
 	Title               string                     `json:"title"`
@@ -115,7 +114,7 @@ type EntrySettlementAttention struct {
 	ProposedNextAction       *string                  `json:"proposed_next_action"`
 	ProposedNextActionStatus *string                  `json:"proposed_next_action_status"`
 	Reason                   *string                  `json:"reason"`
-	Required                 *bool                    `json:"required,omitempty"`
+	Required                 bool                     `json:"required?"`
 	RunID                    *string                  `json:"run_id"`
 	Settlement               string                   `json:"settlement"`
 	SubjectHash              *string                  `json:"subject_hash"`
@@ -149,13 +148,6 @@ type ProjectBlockedEntry struct {
 	UpdatedAt     *string `json:"updated_at"`
 	WorkItemID    string  `json:"work_item_id"`
 	WorkItemKey   *string `json:"work_item_key"`
-}
-
-type AttentionProjectOption struct {
-	ID     string `json:"id"`
-	Key    string `json:"key"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
 }
 
 // Consumed fields of the existing portal connection read and its mutation projections.
@@ -762,7 +754,7 @@ type GoalReadAccounting struct {
 	UnknownReservationCount  int64   `json:"unknown_reservation_count"`
 	UnknownUsageCount        int64   `json:"unknown_usage_count"`
 	UsageCostMicrousd        *string `json:"usage_cost_microusd"`
-	UsageCostUnknown         *bool   `json:"usage_cost_unknown,omitempty"`
+	UsageCostUnknown         bool    `json:"usage_cost_unknown?"`
 	UsageLeafCount           *int64  `json:"usage_leaf_count,omitempty"`
 	UsageRecords             *int64  `json:"usage_records,omitempty"`
 }
@@ -779,11 +771,11 @@ type SymmetryGoalReadV1Blocker struct {
 type GoalCompletion struct {
 	AcceptedOutcomes      *int64 `json:"accepted_outcomes,omitempty"`
 	AcceptedRequiredItems int64  `json:"accepted_required_items"`
-	AllRequiredAccepted   *bool  `json:"all_required_accepted?,omitempty"`
-	CurrentRevision       *bool  `json:"current_revision?,omitempty"`
-	NoNonterminalTasks    *bool  `json:"no_nonterminal_tasks?,omitempty"`
-	NoOpenDecisions       *bool  `json:"no_open_decisions?,omitempty"`
-	Ready                 *bool  `json:"ready?,omitempty"`
+	AllRequiredAccepted   bool   `json:"all_required_accepted?"`
+	CurrentRevision       bool   `json:"current_revision?"`
+	NoNonterminalTasks    bool   `json:"no_nonterminal_tasks?"`
+	NoOpenDecisions       bool   `json:"no_open_decisions?"`
+	Ready                 bool   `json:"ready?"`
 	RejectedOutcomes      *int64 `json:"rejected_outcomes,omitempty"`
 	RequiredItems         int64  `json:"required_items"`
 }
@@ -827,18 +819,20 @@ type GoalReadExternalWait struct {
 // Read-only dependency projection: nodes, dependency edges with their satisfaction, and the
 // server's cycle flag. No write affordance exists on this surface.
 type GoalReadGraph struct {
-	CycleDetected *bool               `json:"cycle_detected,omitempty"`
+	CycleDetected bool                `json:"cycle_detected?"`
 	Edges         []GoalReadGraphEdge `json:"edges"`
 	Nodes         []GoalReadGraphNode `json:"nodes"`
 }
 
+// One durable work dependency as served. The dependency row has no single-column identity,
+// so id is served as null; from/to carry the work item ids.
 type GoalReadGraphEdge struct {
 	Blocker     *string `json:"blocker"`
 	DependsOnID *string `json:"depends_on_id"`
 	From        string  `json:"from"`
-	ID          string  `json:"id"`
+	ID          *string `json:"id"`
 	Revision    *int64  `json:"revision"`
-	Satisfied   bool    `json:"satisfied"`
+	Satisfied   bool    `json:"satisfied?"`
 	To          string  `json:"to"`
 	WorkItemID  *string `json:"work_item_id"`
 }
@@ -878,7 +872,7 @@ type SymmetryGoalReadV1SettlementAttention struct {
 	ProposedNextAction       *string                  `json:"proposed_next_action"`
 	ProposedNextActionStatus *string                  `json:"proposed_next_action_status"`
 	Reason                   *string                  `json:"reason"`
-	Required                 *bool                    `json:"required,omitempty"`
+	Required                 bool                     `json:"required?"`
 	RunID                    *string                  `json:"run_id"`
 	Settlement               string                   `json:"settlement"`
 	SubjectHash              *string                  `json:"subject_hash"`
@@ -900,7 +894,7 @@ type GoalReadWorkItem struct {
 	Description          *string                `json:"description"`
 	Execution            map[string]interface{} `json:"execution"`
 	ID                   string                 `json:"id"`
-	Integration          *bool                  `json:"integration?,omitempty"`
+	Integration          bool                   `json:"integration"`
 	Number               *int64                 `json:"number"`
 	Position             *int64                 `json:"position"`
 	Priority             *string                `json:"priority"`

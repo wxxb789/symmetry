@@ -3914,30 +3914,6 @@
         ],
         "type": "object"
       },
-      "AttentionProjectOption": {
-        "additionalProperties": true,
-        "properties": {
-          "id": {
-            "$ref": "#/definitions/UUID"
-          },
-          "key": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "key",
-          "name",
-          "status"
-        ],
-        "type": "object"
-      },
       "AuthorityPolicy": {
         "additionalProperties": false,
         "properties": {
@@ -4666,7 +4642,7 @@
           "project_id": {
             "$ref": "#/definitions/UUID"
           },
-          "ready_to_achieve": {
+          "ready_to_achieve?": {
             "type": "boolean"
           },
           "settlement_attention": {
@@ -4697,7 +4673,8 @@
           "title",
           "state",
           "current_revision",
-          "blocker_reasons"
+          "blocker_reasons",
+          "ready_to_achieve?"
         ],
         "type": "object"
       },
@@ -5726,7 +5703,7 @@
               }
             ]
           },
-          "required": {
+          "required?": {
             "type": "boolean"
           },
           "run_id": {
@@ -5774,7 +5751,8 @@
           }
         },
         "required": [
-          "settlement"
+          "settlement",
+          "required?"
         ],
         "type": "object"
       },
@@ -5909,12 +5887,6 @@
       },
       "project_blocked": {
         "$ref": "#/definitions/ProjectBlockedFeed"
-      },
-      "projects": {
-        "items": {
-          "$ref": "#/definitions/AttentionProjectOption"
-        },
-        "type": "array"
       },
       "selected_project_id": {
         "oneOf": [
@@ -24313,6 +24285,11 @@
           }
         },
         "required": [
+          "all_required_accepted?",
+          "current_revision?",
+          "no_open_decisions?",
+          "no_nonterminal_tasks?",
+          "ready?",
           "required_items",
           "accepted_required_items"
         ],
@@ -24364,7 +24341,7 @@
               }
             ]
           },
-          "usage_cost_unknown": {
+          "usage_cost_unknown?": {
             "type": "boolean"
           },
           "usage_leaf_count": {
@@ -24377,7 +24354,8 @@
         "required": [
           "held_microusd",
           "unknown_reservation_count",
-          "unknown_usage_count"
+          "unknown_usage_count",
+          "usage_cost_unknown?"
         ],
         "type": "object"
       },
@@ -24661,7 +24639,7 @@
         "additionalProperties": true,
         "description": "Read-only dependency projection: nodes, dependency edges with their satisfaction, and the server's cycle flag. No write affordance exists on this surface.",
         "properties": {
-          "cycle_detected": {
+          "cycle_detected?": {
             "type": "boolean"
           },
           "edges": {
@@ -24679,12 +24657,14 @@
         },
         "required": [
           "nodes",
-          "edges"
+          "edges",
+          "cycle_detected?"
         ],
         "type": "object"
       },
       "GoalReadGraphEdge": {
         "additionalProperties": true,
+        "description": "One durable work dependency as served. The dependency row has no single-column identity, so id is served as null; from/to carry the work item ids.",
         "properties": {
           "blocker": {
             "oneOf": [
@@ -24710,7 +24690,14 @@
             "type": "string"
           },
           "id": {
-            "$ref": "#/definitions/UUID"
+            "oneOf": [
+              {
+                "$ref": "#/definitions/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "revision": {
             "oneOf": [
@@ -24722,7 +24709,7 @@
               }
             ]
           },
-          "satisfied": {
+          "satisfied?": {
             "type": "boolean"
           },
           "to": {
@@ -24743,7 +24730,7 @@
           "id",
           "from",
           "to",
-          "satisfied"
+          "satisfied?"
         ],
         "type": "object"
       },
@@ -25082,7 +25069,7 @@
           "id": {
             "$ref": "#/definitions/UUID"
           },
-          "integration?": {
+          "integration": {
             "type": "boolean"
           },
           "number": {
@@ -25150,7 +25137,8 @@
           "title",
           "status",
           "required?",
-          "accepted?"
+          "accepted?",
+          "integration"
         ],
         "type": "object"
       },
@@ -25983,7 +25971,7 @@
               }
             ]
           },
-          "required": {
+          "required?": {
             "type": "boolean"
           },
           "run_id": {
@@ -26031,7 +26019,8 @@
           }
         },
         "required": [
-          "settlement"
+          "settlement",
+          "required?"
         ],
         "type": "object"
       },

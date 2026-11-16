@@ -1,11 +1,17 @@
 defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  import Ecto.Query
+
+  alias SymmetryControl.Goals.{ContextSnapshot, GoalDecision, GoalEvent, RunUsage}
+  alias SymmetryControl.Orchestration.{Machine, Run, Runtime, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
+  alias SymmetryControl.Workspaces.WorkItem
   alias SymmetryControlWeb.PortalSession
 
   @operator_token "test-operator-token"
+  @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
 
   setup do
     previous = Application.fetch_env!(:symmetry_control, :goals)
@@ -65,17 +71,22 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert title == blocked.title
   end
 
-  test "attention keeps the project blockers served while Goal admission is disabled" do
+  test "attention serves the real Goal feed while Goal admission is disabled", %{conn: conn} do
     goals_config = Application.fetch_env!(:symmetry_control, :goals)
     Application.put_env(:symmetry_control, :goals, Keyword.put(goals_config, :rollout_enabled, false))
 
     project = create_project()
     create_blocked_work_item(project)
+    goal_id = create_goal(conn, project, "Rollout-off attention goal")
 
-    response = portal_conn() |> get("/portal/api/attention") |> json_response(200)
+    response =
+      portal_conn() |> get("/portal/api/attention?project_id=#{project.id}") |> json_response(200)
 
+    # The attention read is not gated by Goal admission: with rollout off the
+    # page still serves the real Goal entry beside the project blockers and
+    # states no unavailable feed. Rollout gates admission commands, not reads.
     assert %{
-             "goal_attention" => %{"entries" => [], "unavailable" => nil},
+             "goal_attention" => %{"entries" => [%{"goal_id" => ^goal_id}], "unavailable" => nil},
              "project_blocked" => %{"entries" => [_ | _], "unavailable" => nil}
            } = response
   end
@@ -196,12 +207,137 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert work_item_id == hd(selected.work_items).id
   end
 
+  test "the attention projection states a Goal-feed refusal and still serves the project blockers" do
+    selected = %{id: Ecto.UUID.generate(), key: "SEL", name: "Selected", status: "active", work_items: []}
+
+    projection =
+      SymmetryControlWeb.PortalJSON.attention(
+        selected.id,
+        %{page: %{entries: [], next_after: nil, next_cursor: nil}, unavailable: :goal_admission_disabled},
+        {:ok, %{snapshot: %{projects: [selected], selected_project: selected}}}
+      )
+
+    assert projection.goal_attention.unavailable == %{
+             code: "goal_admission_disabled",
+             message: "Goal admission is currently unavailable"
+           }
+
+    assert projection.goal_attention.entries == []
+    assert projection.project_blocked.unavailable == nil
+  end
+
+  test "attention states an unavailable project feed while the Goal feed stays served" do
+    project = create_project()
+    unknown_project_id = Ecto.UUID.generate()
+
+    response =
+      portal_conn()
+      |> get("/portal/api/attention?project_id=#{unknown_project_id}")
+      |> json_response(200)
+
+    # The project scope does not exist: the workspace read refuses that feed
+    # with its own mapped code while the Goal feed is still served (scoped to
+    # the same unknown project, so it is empty but not unavailable).
+    assert %{
+             "goal_attention" => %{"entries" => [], "unavailable" => nil},
+             "project_blocked" => %{
+               "entries" => [],
+               "unavailable" => %{"code" => "not_found", "message" => _message}
+             }
+           } = response
+
+    assert project.id != unknown_project_id
+  end
+
+  test "an attention cursor the read model cannot cast surfaces as a server fault, not a 200" do
+    cursor =
+      %{"updated_at" => "2026-11-16T10:00:00Z", "id" => "not-a-uuid"}
+      |> Jason.encode!()
+      |> Base.url_encode64(padding: false)
+
+    # The read model decodes this cursor and the database then rejects the
+    # parameter that is not a UUID. That is a server-side query fault: it must
+    # not be reported as a client error inside a success response.
+    assert %{"error" => %{"code" => "internal_error", "message" => "internal server error"}} =
+             portal_conn()
+             |> get("/portal/api/attention?cursor=#{cursor}")
+             |> json_response(500)
+  end
+
+  # The systemic gate: the documents the server actually serves must validate
+  # against the contract bundle. A fixture that spells a member differently
+  # from the server fails here, on the server's own output, instead of passing
+  # review. The scenario exercises a dependency edge, an integration work item,
+  # a settlement receipt and an unknown-cost usage leaf so those member names
+  # are pinned by the projection itself.
+  test "the real served attention and goal reads validate against the contract bundle", %{
+    conn: conn
+  } do
+    project = create_project()
+    create_blocked_work_item(project)
+    goal_id = create_goal(conn, project, "Served document gate")
+
+    items_fun = fn repository_id ->
+      [
+        plan_item("implement", "Merge the attention feed", repository_id,
+          integration: false,
+          depends_on_keys: []
+        ),
+        plan_item("render", "Render the Goal detail surface", repository_id,
+          integration: true,
+          depends_on_keys: ["implement"]
+        )
+      ]
+    end
+
+    {decision_id, proposal} = request_plan_decision(conn, goal_id, items_fun)
+    approve_plan(conn, goal_id, decision_id, proposal)
+    activate(conn, goal_id)
+
+    read = portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+
+    assert read["state"] == "active"
+    integration_item = Enum.find(read["work_items"], &(&1["integration"] == true))
+    assert integration_item["title"] == "Render the Goal detail surface"
+    assert [%{"satisfied?" => false, "blocker" => "waiting_dependency"}] = read["graph"]["edges"]
+    assert read["graph"]["cycle_detected?"] == false
+
+    insert_settlement_with_unknown_usage!(
+      goal_id,
+      read["current_revision"],
+      integration_item["id"]
+    )
+
+    read = portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+
+    assert read["accounting"]["usage_cost_unknown?"] == true
+    assert read["accounting"]["usage_cost_microusd"] == nil
+
+    assert [%{"required?" => true, "settlement" => "repair_required"}] =
+             read["settlement_attention"]
+
+    attention =
+      portal_conn()
+      |> get("/portal/api/attention?project_id=#{project.id}")
+      |> json_response(200)
+
+    assert [entry] = attention["goal_attention"]["entries"]
+    assert entry["goal_id"] == goal_id
+    assert entry["ready_to_achieve?"] == false
+
+    assert [%{"required?" => true, "settlement" => "repair_required"}] =
+             entry["settlement_attention"]
+
+    validate_served_document!("goal-read", read)
+    validate_served_document!("attention-read", attention)
+  end
+
   test "portal goal read carries the project label, the served versions and no write policy", %{
     conn: conn
   } do
     project = create_project()
     goal_id = create_goal(conn, project)
-    decision_id = request_plan_decision(conn, goal_id)
+    {decision_id, _proposal} = request_plan_decision(conn, goal_id)
 
     portal_read = portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
@@ -221,7 +357,9 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert project_key == project.key
     assert project_name == project.name
     assert is_integer(version) and version >= 1
-    assert allowed_actions == portal_read["allowed_actions"]
+    # A draft goal whose plan decision is pending acceptance has exactly the
+    # durable transition set; the portal projection copies it unchanged.
+    assert allowed_actions == ["amend", "cancel"]
     assert is_binary(objective)
 
     assert %{
@@ -245,6 +383,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert Map.has_key?(operator_read, "source")
     refute Map.has_key?(operator_read, "project_key")
     refute Map.has_key?(operator_read, "decision_versions")
+    assert operator_read["allowed_actions"] == portal_read["allowed_actions"]
 
     assert [%{"id" => ^decision_id}] = operator_read["decisions"]
   end
@@ -428,7 +567,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     goal_id
   end
 
-  defp request_plan_decision(conn, goal_id) do
+  defp request_plan_decision(conn, goal_id, items_fun \\ &single_integration_items/1) do
     {:ok, goal} = SymmetryControl.Goals.fetch_goal(goal_id)
 
     {:ok, repository} =
@@ -442,28 +581,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       "proposal_id" => Ecto.UUID.generate(),
       "goal_id" => goal_id,
       "expected_revision" => 1,
-      "items" => [
-        %{
-          "key" => "implement",
-          "title" => "Implement the Goal workspace",
-          "description" => "Bounded Goal work",
-          "required" => true,
-          "integration" => true,
-          "repository_resource_id" => repository.id,
-          "acceptance" => acceptance_contract(),
-          "depends_on_keys" => [],
-          "model_profile" => "codex",
-          "change_target" => nil,
-          "baseline" => %{
-            "kind" => "subject",
-            "subject" => %{
-              "resource_id" => repository.id,
-              "commit" => String.duplicate("a", 40),
-              "tree_digest" => "sha256:" <> String.duplicate("b", 64)
-            }
-          }
-        }
-      ]
+      "items" => items_fun.(repository.id)
     }
 
     read = operator_conn(conn) |> get("/api/v1/goals/#{goal_id}") |> json_response(200)
@@ -485,8 +603,258 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       })
       |> json_response(200)
 
-    decision_id
+    {decision_id, proposal}
   end
+
+  defp single_integration_items(repository_id) do
+    [
+      plan_item("implement", "Implement the Goal workspace", repository_id,
+        integration: true,
+        depends_on_keys: []
+      )
+    ]
+  end
+
+  defp plan_item(key, title, repository_id, opts) do
+    %{
+      "key" => key,
+      "title" => title,
+      "description" => "Bounded Goal work",
+      "required" => Keyword.get(opts, :required, true),
+      "integration" => Keyword.get(opts, :integration, false),
+      "repository_resource_id" => repository_id,
+      "acceptance" => acceptance_contract(),
+      "depends_on_keys" => Keyword.get(opts, :depends_on_keys, []),
+      "model_profile" => "codex",
+      "change_target" => nil,
+      "baseline" => %{
+        "kind" => "subject",
+        "subject" => %{
+          "resource_id" => repository_id,
+          "commit" => String.duplicate("a", 40),
+          "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+        }
+      }
+    }
+  end
+
+  defp approve_plan(conn, goal_id, decision_id, proposal) do
+    decision_version = Repo.get!(GoalDecision, decision_id).lock_version
+
+    portal_command!(conn, goal_id, "resolve_decision", %{
+      "decision_id" => decision_id,
+      "expected_decision_version" => decision_version,
+      "option_id" => "accept",
+      "comment" => nil
+    })
+
+    portal_command!(conn, goal_id, "accept_plan", %{
+      "proposal" => proposal,
+      "proposal_hash" =>
+        "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
+      "decision_id" => decision_id
+    })
+  end
+
+  defp activate(conn, goal_id),
+    do: portal_command!(conn, goal_id, "activate", %{"approved_revision" => 1})
+
+  defp portal_command!(conn, goal_id, kind, payload) do
+    read = portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+
+    portal_conn()
+    |> post("/portal/api/goals/#{goal_id}/commands", %{
+      "schema_version" => "symmetry.goal_command.v1",
+      "mutation_id" => Ecto.UUID.generate(),
+      "expected_version" => read["version"],
+      "expected_revision" => read["current_revision"],
+      "kind" => kind,
+      "payload" => payload
+    })
+    |> json_response(200)
+  end
+
+  # A durable task/run/settlement receipt with one unknown-cost usage leaf over
+  # an admitted work item: the served projection must state `required?` and
+  # `usage_cost_unknown?` for the document gate. The rows follow the durable
+  # shapes the settlement writer produces (payload/response agreement included).
+  defp insert_settlement_with_unknown_usage!(goal_id, revision, work_item_id) do
+    now = DateTime.utc_now()
+
+    snapshot =
+      %ContextSnapshot{}
+      |> ContextSnapshot.changeset(%{
+        goal_id: goal_id,
+        goal_revision: revision,
+        work_item_id: work_item_id,
+        schema_version: 1,
+        content_hash: :crypto.hash(:sha256, "served-document-gate-context"),
+        payload: %{"sources" => []}
+      })
+      |> Repo.insert!()
+
+    task =
+      %Task{}
+      |> Task.changeset(%{
+        idempotency_key: "served-gate-task-#{System.unique_integer([:positive])}",
+        request_hash: :crypto.hash(:sha256, "served-document-gate"),
+        goal_id: goal_id,
+        goal_revision: revision,
+        work_item_id: work_item_id,
+        context_snapshot_id: snapshot.id,
+        admission_key: Ecto.UUID.generate(),
+        allowed_runtime_ids: [],
+        max_run_attempts: 1,
+        goal: "Served document gate work",
+        agent_profile: "codex",
+        workspace: "primary",
+        required_capabilities: %{},
+        input: %{},
+        state: "failed",
+        current_generation: 1,
+        attempt_generation: 1,
+        purpose: "implement"
+      })
+      |> Repo.insert!()
+
+    Repo.update_all(
+      from(item in WorkItem, where: item.id == ^work_item_id),
+      set: [orchestration_task_id: task.id]
+    )
+
+    runtime = insert_runtime!()
+
+    run =
+      %Run{}
+      |> Run.changeset(%{
+        task_id: task.id,
+        runtime_id: runtime.id,
+        generation: 1,
+        state: "failed",
+        assigned_at: now,
+        assignment_expires_at: DateTime.add(now, 60, :second)
+      })
+      |> Repo.insert!()
+
+    %RunUsage{}
+    |> RunUsage.changeset(%{
+      run_id: run.id,
+      usage_key: "served-gate-usage",
+      provider: "codex",
+      model: "codex",
+      cost_basis: "unknown",
+      cost_microusd: nil,
+      input_tokens: 10,
+      output_tokens: 5
+    })
+    |> Repo.insert!()
+
+    settled = %{
+      "goal_id" => goal_id,
+      "goal_revision" => revision,
+      "task_id" => task.id,
+      "run_id" => run.id,
+      "generation" => 1,
+      "settlement" => "repair_required",
+      "reason" => "task failed before a verified result",
+      "proposed_next_action" => "Run the bound repair",
+      "proposed_next_action_status" => "proposal_only",
+      "evidence_refs" => []
+    }
+
+    sequence =
+      Repo.aggregate(from(event in GoalEvent, where: event.goal_id == ^goal_id), :max, :sequence)
+
+    %GoalEvent{}
+    |> GoalEvent.changeset(%{
+      id: Ecto.UUID.generate(),
+      goal_id: goal_id,
+      sequence: (sequence || 0) + 1,
+      kind: "task_settled",
+      actor_ref: "system:settlement",
+      request_hash: :crypto.hash(:sha256, "served-document-gate-settlement"),
+      revision: revision,
+      payload: %{
+        "task_id" => task.id,
+        "run_id" => run.id,
+        "generation" => 1,
+        "state" => "failed",
+        "goal_revision" => revision
+      },
+      response: settled
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_runtime! do
+    machine =
+      %Machine{}
+      |> Machine.changeset(%{
+        name: "served-gate-machine-#{System.unique_integer([:positive])}",
+        token_digest: :crypto.strong_rand_bytes(32)
+      })
+      |> Repo.insert!()
+
+    %Runtime{}
+    |> Runtime.changeset(%{
+      machine_id: machine.id,
+      runtime_key: "served-gate-runtime-#{System.unique_integer([:positive])}",
+      name: "Served document gate runtime",
+      daemon_instance_id: Ecto.UUID.generate(),
+      connection_epoch: 1,
+      capacity: 1,
+      agent_profile: "codex",
+      workspace: "primary",
+      capabilities: %{},
+      harness_kind: "codex",
+      harness_version: "1.0.0",
+      adapter_version: "1.0.0",
+      adapter_protocol_version: 1,
+      status: "online",
+      heartbeat_interval_ms: 5_000
+    })
+    |> Repo.insert!()
+  end
+
+  # Validate a real served document against the same canonical bundle the
+  # manifest gate and the daemon use. A member-name disagreement with the
+  # serving projection fails here.
+  defp validate_served_document!(name, document) do
+    bundle = @schema_bundle |> File.read!() |> Jason.decode!()
+
+    schema =
+      bundle
+      |> Map.fetch!("#{name}.schema.json")
+      |> rewrite_pcre2_pattern_escapes()
+      |> ExJsonSchema.Schema.resolve()
+
+    case ExJsonSchema.Validator.validate(schema, document) do
+      :ok ->
+        :ok
+
+      {:error, errors} ->
+        flunk(
+          "#{name} real served document failed the contract bundle: #{inspect(errors, pretty: true)}"
+        )
+    end
+  end
+
+  # Match ContractValidation's ECMA-262-to-PCRE2 adaptation, exactly as the
+  # manifest gate does, so the bundle resolves in ExJsonSchema.
+  defp rewrite_pcre2_pattern_escapes(value) when is_map(value) do
+    Map.new(value, fn
+      {"pattern", pattern} when is_binary(pattern) ->
+        {"pattern", String.replace(pattern, "\\u0000", "\\x{0}")}
+
+      {key, child} ->
+        {key, rewrite_pcre2_pattern_escapes(child)}
+    end)
+  end
+
+  defp rewrite_pcre2_pattern_escapes(value) when is_list(value),
+    do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
+
+  defp rewrite_pcre2_pattern_escapes(value), do: value
 
   defp acceptance_contract do
     %{

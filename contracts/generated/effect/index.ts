@@ -539,7 +539,7 @@ export const DefinitionGoalAttentionEntryGraph = S.suspend(() => withObjectPrope
   "goal_id": DefinitionUUIDGraph,
   "nonterminal_tasks": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
   "project_id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
-  "ready_to_achieve": S.optionalWith(S.Boolean, { exact: true }),
+  "ready_to_achieve?": S.Boolean,
   "settlement_attention": S.optionalWith(arrayConstraints(S.Array(DefinitionSettlementAttentionGraph), undefined, undefined, undefined), { exact: true }),
   "state": stringConstraints(S.String, undefined, undefined, undefined),
   "title": stringConstraints(S.String, undefined, undefined, undefined),
@@ -565,13 +565,6 @@ export const DefinitionProjectBlockedEntryGraph = S.suspend(() => withObjectProp
   "work_item_key": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
 })), undefined, undefined));
 
-export const DefinitionAttentionProjectOptionGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "id": DefinitionUUIDGraph,
-  "key": stringConstraints(S.String, undefined, undefined, undefined),
-  "name": stringConstraints(S.String, undefined, undefined, undefined),
-  "status": stringConstraints(S.String, undefined, undefined, undefined)
-})), undefined, undefined));
-
 export const DefinitionGoalBlockerGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "count": numberConstraints(S.Int, undefined, undefined),
   "details": S.optionalWith(arrayConstraints(S.Array(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined)), undefined, undefined, undefined), { exact: true }),
@@ -590,7 +583,7 @@ export const DefinitionSettlementAttentionGraph = S.suspend(() => withObjectProp
   "proposed_next_action": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "proposed_next_action_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "reason": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "required": S.optionalWith(S.Boolean, { exact: true }),
+  "required?": S.Boolean,
   "run_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "settlement": stringConstraints(S.String, undefined, undefined, undefined),
   "subject_hash": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
@@ -710,11 +703,11 @@ export const DefinitionGoalReadRevisionGraph = S.suspend(() => withObjectPropert
 export const DefinitionGoalCompletionGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "accepted_outcomes": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
   "accepted_required_items": numberConstraints(S.Int, undefined, undefined),
-  "all_required_accepted?": S.optionalWith(S.Boolean, { exact: true }),
-  "current_revision?": S.optionalWith(S.Boolean, { exact: true }),
-  "no_nonterminal_tasks?": S.optionalWith(S.Boolean, { exact: true }),
-  "no_open_decisions?": S.optionalWith(S.Boolean, { exact: true }),
-  "ready?": S.optionalWith(S.Boolean, { exact: true }),
+  "all_required_accepted?": S.Boolean,
+  "current_revision?": S.Boolean,
+  "no_nonterminal_tasks?": S.Boolean,
+  "no_open_decisions?": S.Boolean,
+  "ready?": S.Boolean,
   "rejected_outcomes": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
   "required_items": numberConstraints(S.Int, undefined, undefined)
 })), undefined, undefined));
@@ -733,7 +726,7 @@ export const DefinitionGoalReadWorkItemGraph = S.suspend(() => withObjectPropert
   "description": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "execution": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
   "id": DefinitionUUIDGraph,
-  "integration?": S.optionalWith(S.Boolean, { exact: true }),
+  "integration": S.Boolean,
   "number": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
   "position": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
   "priority": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
@@ -745,7 +738,7 @@ export const DefinitionGoalReadWorkItemGraph = S.suspend(() => withObjectPropert
 })), undefined, undefined));
 
 export const DefinitionGoalReadGraphGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "cycle_detected": S.optionalWith(S.Boolean, { exact: true }),
+  "cycle_detected?": S.Boolean,
   "edges": arrayConstraints(S.Array(DefinitionGoalReadGraphEdgeGraph), undefined, undefined, undefined),
   "nodes": arrayConstraints(S.Array(DefinitionGoalReadGraphNodeGraph), undefined, undefined, undefined)
 })), undefined, undefined));
@@ -764,9 +757,9 @@ export const DefinitionGoalReadGraphEdgeGraph = S.suspend(() => withObjectProper
   "blocker": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "depends_on_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "from": stringConstraints(S.String, undefined, undefined, undefined),
-  "id": DefinitionUUIDGraph,
+  "id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
   "revision": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
-  "satisfied": S.Boolean,
+  "satisfied?": S.Boolean,
   "to": stringConstraints(S.String, undefined, undefined, undefined),
   "work_item_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
 })), undefined, undefined));
@@ -812,7 +805,7 @@ export const DefinitionGoalReadAccountingGraph = S.suspend(() => withObjectPrope
   "unknown_reservation_count": numberConstraints(S.Int, undefined, undefined),
   "unknown_usage_count": numberConstraints(S.Int, undefined, undefined),
   "usage_cost_microusd": S.optionalWith(exactOneOf(S.Union(DefinitionMicrousdGraph, S.Null), DefinitionMicrousdGraph, S.Null), { exact: true }),
-  "usage_cost_unknown": S.optionalWith(S.Boolean, { exact: true }),
+  "usage_cost_unknown?": S.Boolean,
   "usage_leaf_count": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
   "usage_records": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true })
 })), undefined, undefined));
@@ -1262,7 +1255,6 @@ export const AdmissionSchema: S.Schema<SymmetryAdmissionV1, unknown> = S.Unknown
 export const AttentionReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "goal_attention": DefinitionGoalAttentionFeedGraph,
   "project_blocked": DefinitionProjectBlockedFeedGraph,
-  "projects": S.optionalWith(arrayConstraints(S.Array(DefinitionAttentionProjectOptionGraph), undefined, undefined, undefined), { exact: true }),
   "selected_project_id": S.optionalWith(exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null), { exact: true })
 })), undefined, undefined));
 

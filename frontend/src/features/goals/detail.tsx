@@ -73,7 +73,7 @@ export function GoalDetailPage() {
    * and never reuses a stale version.
    */
   const approvePlan = useMutation({
-    mutationFn: async ({ decision, proposal, proposalHash }: { decision: GoalDecision; proposal: unknown; proposalHash: string }) => {
+    mutationFn: async ({ decision, optionId, proposal, proposalHash }: { decision: GoalDecision; optionId: string; proposal: unknown; proposalHash: string }) => {
       const csrf = session.data?.csrf_token;
       if (!csrf) throw new Error("The session token is unavailable; refresh the page.");
       const goal = query.data;
@@ -83,7 +83,7 @@ export function GoalDetailPage() {
         application.fetcher,
         csrf,
         goalId,
-        commandEnvelope("resolve_decision", { decision_id: decision.id, expected_decision_version: decision.version ?? null, option_id: "accept", comment: "Accepted from the Goal surface." }, { version: goal.version, current_revision: goal.current_revision }),
+        commandEnvelope("resolve_decision", { decision_id: decision.id, expected_decision_version: decision.version ?? null, option_id: optionId, comment: "Accepted from the Goal surface." }, { version: goal.version, current_revision: goal.current_revision }),
       );
       if (!resolved) throw new Error("The server returned no receipt for the decision resolution.");
 
@@ -215,7 +215,7 @@ function RowBody({ item }: { item: GoalWorkItem }) {
       <span className="goal-row-title">{item.title}</span>
       <StatusBadge status={item.status} />
       {item["required?"] === false && <span className="status-badge">optional</span>}
-      {item["integration?"] === true && <span className="status-badge">integration</span>}
+      {item["integration"] === true && <span className="status-badge">integration</span>}
       <span className={item["accepted?"] ? "status-badge status-complete" : "status-badge"}>{item["accepted?"] ? "accepted" : "not accepted"}</span>
     </div>
     <p className="text-small muted">{item["accepted?"] ? `Accepted outcome ${item.accepted_outcome?.subject_hash ?? "recorded"}` : "No accepted outcome bound to this item"}{item.blockers && item.blockers.length > 0 ? ` · blocked: ${item.blockers.join(", ")}` : ""}</p>
@@ -248,43 +248,63 @@ function Blockers({ goal }: { goal: GoalProjection }) {
   </section>;
 }
 
-function Decisions({ goal, busy, onApprovePlan }: { goal: GoalProjection; busy: boolean; onApprovePlan: (request: { decision: GoalDecision; proposal: unknown; proposalHash: string }) => void }) {
+function Decisions({ goal, busy, onApprovePlan }: { goal: GoalProjection; busy: boolean; onApprovePlan: (request: { decision: GoalDecision; optionId: string; proposal: unknown; proposalHash: string }) => void }) {
   if (goal.decisions.length === 0) return <section className="goal-section" aria-labelledby="decisions-heading"><div className="section-heading"><h2 id="decisions-heading">Decisions</h2></div><p className="muted">No decision is recorded for this goal.</p></section>;
   return <section className="goal-section" aria-labelledby="decisions-heading">
     <div className="section-heading"><h2 id="decisions-heading">Decisions <span className="count">{goal.decisions.length}</span></h2></div>
-    <ul className="attention-list">{goal.decisions.map((decision) => <li className="attention-card" key={decision.id}>
-      <div className="attention-main">
-        <div className="goal-row-head"><h3>{decision.kind} decision</h3><StatusBadge status={decision.state} /><span className="item-key">{decision.id}</span></div>
-        <p>{decision.question ?? "No question recorded"}</p>
-        <p className="text-small muted">Revision {decision.goal_revision ?? "not recorded"} · version {servedText(decision.version, "not served")}</p>
-        <ul className="decision-options">{decision.options?.map((option, index) => {
-          const row = option as Record<string, unknown>;
-          const recommended = row["recommended"] === true;
-          return <li key={servedText(row["id"], String(index))}>
-            <span className="option-id">{servedText(row["id"], "option")}</span>
-            <span>{servedText(row["label"], "")}</span>
-            {recommended && <span className="recommendation">Recommendation (advisory): {servedText(row["consequence"] ?? row["consequences"], "")}</span>}
-            {!recommended && row["consequence"] !== undefined && <span className="muted text-small"> {servedText(row["consequence"], "")}</span>}
-          </li>;
-        })}</ul>
-        {/* An open plan decision is itself the surface's authority to approve:
-            the server keeps `request_plan`/`accept_plan` out of `allowed_actions`
-            while a plan decision is pending acceptance. */}
-        {decision["open?"] === true && decision.kind === "plan" && <PlanApproval decision={decision} busy={busy} onApprove={onApprovePlan} />}
-        {decision["open?"] === true && decision.kind !== "plan" && <p className="text-small muted">This decision type has no surface action; the server still lists the action it permits, if any.</p>}
-        {decision["open?"] !== true && <p className="text-small muted">Resolved: {decision.resolution ? JSON.stringify(decision.resolution) : "no resolution recorded"}</p>}
-      </div>
-    </li>)}</ul>
+    <ul className="attention-list">{goal.decisions.map((decision) => {
+      const approvalOption = planApprovalOption(decision);
+      return <li className="attention-card" key={decision.id}>
+        <div className="attention-main">
+          <div className="goal-row-head"><h3>{decision.kind} decision</h3><StatusBadge status={decision.state} /><span className="item-key">{decision.id}</span></div>
+          <p>{decision.question ?? "No question recorded"}</p>
+          <p className="text-small muted">Revision {decision.goal_revision ?? "not recorded"} · version {servedText(decision.version, "not served")}</p>
+          <ul className="decision-options">{decision.options?.map((option, index) => {
+            const row = option as Record<string, unknown>;
+            const recommended = row["recommended"] === true;
+            return <li key={servedText(row["id"], String(index))}>
+              <span className="option-id">{servedText(row["id"], "option")}</span>
+              <span>{servedText(row["label"], "")}</span>
+              {recommended && <span className="recommendation">Recommendation (advisory): {servedText(row["consequence"] ?? row["consequences"], "")}</span>}
+              {!recommended && row["consequence"] !== undefined && <span className="muted text-small"> {servedText(row["consequence"], "")}</span>}
+            </li>;
+          })}</ul>
+          {approvalOption
+            ? <PlanApproval decision={decision} optionId={String(approvalOption["id"])} busy={busy} onApprove={onApprovePlan} />
+            : decision["open?"] === true && <p className="text-small muted">{decision.kind === "plan" ? "The served plan decision carries no acceptance option; this surface offers no resolution for it." : "This decision type has no surface action; the server still lists the action it permits, if any."}</p>}
+          {decision["open?"] !== true && <p className="text-small muted">Resolved: {decision.resolution ? JSON.stringify(decision.resolution) : "no resolution recorded"}</p>}
+        </div>
+      </li>;
+    })}</ul>
   </section>;
 }
 
 /**
- * Plan approval follows the accepted two-step contract: the decision is resolved
- * with `accept`, then `accept_plan` presents the same proposal with the canonical
- * digest this surface computes from the served proposal; the server compares it
- * with its own hash and refuses a mismatch.
+ * The served acceptance option of an open plan decision, or null when this
+ * surface must offer no resolution.
+ *
+ * Documented authority exception: the read model never lists decision
+ * resolution in `allowed_actions` (a pending plan decision instead suppresses
+ * `request_plan`), so the approval control cannot be gated on that list. It is
+ * driven by the served decision's own members — an open plan decision whose
+ * served options carry `accept` — and it presents the served option id. The
+ * control stays fail-closed: the server validates the decision version and the
+ * plan admission and refuses both with its own code.
  */
-function PlanApproval({ decision, busy, onApprove }: { decision: GoalDecision; busy: boolean; onApprove: (request: { decision: GoalDecision; proposal: unknown; proposalHash: string }) => void }) {
+function planApprovalOption(decision: GoalDecision): Record<string, unknown> | null {
+  if (decision["open?"] !== true || decision.kind !== "plan") return null;
+  return (decision.options ?? [])
+    .map((option) => option as Record<string, unknown>)
+    .find((option) => option["id"] === "accept") ?? null;
+}
+
+/**
+ * Plan approval follows the accepted two-step contract: the decision is resolved
+ * with the served acceptance option, then `accept_plan` presents the same
+ * proposal with the canonical digest this surface computes from the served
+ * proposal; the server compares it with its own hash and refuses a mismatch.
+ */
+function PlanApproval({ decision, optionId, busy, onApprove }: { decision: GoalDecision; optionId: string; busy: boolean; onApprove: (request: { decision: GoalDecision; optionId: string; proposal: unknown; proposalHash: string }) => void }) {
   const [proposalText, setProposalText] = useState("");
   const [digest, setDigest] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -300,7 +320,7 @@ function PlanApproval({ decision, busy, onApprove }: { decision: GoalDecision; b
     }
     const hash = await canonicalDigest(proposal);
     setDigest(hash);
-    onApprove({ decision, proposal, proposalHash: hash });
+    onApprove({ decision, optionId, proposal, proposalHash: hash });
   };
 
   return <div className="plan-approval">
@@ -326,7 +346,7 @@ function NextAction({ goal, busy, onCommand, resources }: { goal: GoalProjection
 
   const allowed = goal.allowed_actions;
   const repositories = resources.filter((resource) => resource.kind === "repository");
-  const integrationItem = goal.work_items.find((item) => item["integration?"] === true);
+  const integrationItem = goal.work_items.find((item) => item["integration"] === true);
 
   const identity = (kind: string): string => {
     const existing = mutationIds[kind];
@@ -435,7 +455,7 @@ function actionPayload(
     case "achieve": {
       if (!input.evidenceSubject) return null;
       const evidenceIds = [...new Set((goal.accepted_outcomes ?? []).flatMap((outcome) => outcome.evidence_ids ?? []))];
-      const integrationWorkItemId = goal.work_items.find((item) => item["integration?"] === true)?.id;
+      const integrationWorkItemId = goal.work_items.find((item) => item["integration"] === true)?.id;
       return {
         subject: input.evidenceSubject,
         // Exactly-one-required-item contracts bind their integration item
@@ -469,12 +489,12 @@ function Budget({ goal }: { goal: GoalProjection }) {
     <dl className="fact-grid">
       <div><dt>Held reservation</dt><dd>{formatMicroUsd(accounting.held_microusd)}</dd></div>
       <div><dt>Known consumption</dt><dd>{formatMicroUsd(accounting.known_usage_cost_microusd)}</dd></div>
-      <div><dt>Settled consumption</dt><dd>{accounting.usage_cost_unknown ? "unknown (contains unknown usage)" : formatMicroUsd(accounting.usage_cost_microusd)}</dd></div>
+      <div><dt>Settled consumption</dt><dd>{accounting["usage_cost_unknown?"] ? "unknown (contains unknown usage)" : formatMicroUsd(accounting.usage_cost_microusd)}</dd></div>
       <div><dt>Unknown usage records</dt><dd>{accounting.unknown_usage_count}</dd></div>
       <div><dt>Unknown reservations</dt><dd>{accounting.unknown_reservation_count}</dd></div>
       <div><dt>Reservations held / settled / released</dt><dd>{accounting.settled_reservation_count} settled · {accounting.released_reservation_count} released</dd></div>
     </dl>
-    {accounting.usage_cost_unknown && <p className="text-small muted">Unknown consumption is never shown as zero.</p>}
+    {accounting["usage_cost_unknown?"] && <p className="text-small muted">Unknown consumption is never shown as zero.</p>}
   </section>;
 }
 
@@ -501,7 +521,7 @@ function DependencyGraph({ graph }: { graph: GoalGraph }) {
     {graph.nodes.length === 0
       ? <p className="muted">No admitted work item carries a dependency in the current revision.</p>
       : <>
-        {graph.cycle_detected === true && <p className="form-error" role="alert">The server reports a dependency cycle in the current revision.</p>}
+        {graph["cycle_detected?"] === true && <p className="form-error" role="alert">The server reports a dependency cycle in the current revision.</p>}
         <ul className="graph-nodes">{graph.nodes.map((node) => <li key={node.id}>
           <span className="item-key">{node.number === null || node.number === undefined ? "item" : `#${node.number}`}</span>
           <span className="goal-row-title">{node.title}</span>
@@ -509,11 +529,11 @@ function DependencyGraph({ graph }: { graph: GoalGraph }) {
           {node.blockers?.map((blocker) => <span className="status-badge warning" key={blocker}>{blocker}</span>)}
         </li>)}
         </ul>
-        <ul className="graph-edges" aria-label="Dependency edges">{graph.edges.map((edge) => <li key={edge.id}>
+        <ul className="graph-edges" aria-label="Dependency edges">{graph.edges.map((edge) => <li key={`${edge.from}->${edge.to}`}>
           <span>{nodeLabel(graph, edge.from)}</span>
           <span className="edge-arrow" aria-hidden="true">→</span>
           <span>{nodeLabel(graph, edge.to)}</span>
-          <span className={edge.satisfied ? "status-badge status-complete" : "status-badge warning"}>{edge.satisfied ? "satisfied" : edge.blocker ?? "waiting"}</span>
+          <span className={edge["satisfied?"] ? "status-badge status-complete" : "status-badge warning"}>{edge["satisfied?"] ? "satisfied" : edge.blocker ?? "waiting"}</span>
         </li>)}</ul>
       </>}
   </section>;
@@ -536,15 +556,18 @@ function Receipts({ goalId }: { goalId: string }) {
   const entries: GoalEvent[] = pages.flatMap((page) => page.data?.entries ?? []);
   const latest = pages[pages.length - 1];
   const nextAfter = latest?.data?.next_after ?? null;
-  const firstPageError = pages[0]?.error;
+  // react-query 5 initialises `error` to null (not undefined): only a truthy
+  // error renders the failure, and only the absence of one renders the empty
+  // state.
+  const firstPageError = pages[0]?.error ?? null;
   const firstPagePending = pages[0]?.isPending ?? false;
   const fetching = pages.some((page) => page.isFetching);
 
   return <section className="goal-section" aria-labelledby="receipts-heading">
     <div className="section-heading"><h2 id="receipts-heading">Receipts</h2><span className="muted text-small">{entries.length} loaded</span></div>
     {firstPagePending && entries.length === 0 && <LoadingState label="Loading receipts…" />}
-    {firstPageError !== undefined && <ErrorState error={firstPageError} retry={() => { void pages[0]?.refetch(); }} stale={entries.length > 0} />}
-    {entries.length === 0 && !firstPagePending && firstPageError === undefined && <EmptyState title="No receipts">This goal has no recorded audit event.</EmptyState>}
+    {firstPageError && <ErrorState error={firstPageError} retry={() => { void pages[0]?.refetch(); }} stale={entries.length > 0} />}
+    {entries.length === 0 && !firstPagePending && !firstPageError && <EmptyState title="No receipts">This goal has no recorded audit event.</EmptyState>}
     {entries.length > 0 && <ul className="receipt-list">{entries.map((entry: GoalEvent) => <li key={entry.sequence}>
       <span className="item-key">#{entry.sequence}</span>
       <span className="goal-row-title">{entry.kind}</span>

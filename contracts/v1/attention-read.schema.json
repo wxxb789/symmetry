@@ -11,11 +11,7 @@
       "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
     },
     "goal_attention": {"$ref": "#/definitions/GoalAttentionFeed"},
-    "project_blocked": {"$ref": "#/definitions/ProjectBlockedFeed"},
-    "projects": {
-      "type": "array",
-      "items": {"$ref": "#/definitions/AttentionProjectOption"}
-    }
+    "project_blocked": {"$ref": "#/definitions/ProjectBlockedFeed"}
   },
   "definitions": {
     "GoalAttentionFeed": {
@@ -37,7 +33,7 @@
       "type": "object",
       "additionalProperties": true,
       "description": "Goals.ReadModel.attention/1 entry as served; the goal surface re-reads the full projection for detail.",
-      "required": ["goal_id", "title", "state", "current_revision", "blocker_reasons"],
+      "required": ["goal_id", "title", "state", "current_revision", "blocker_reasons", "ready_to_achieve?"],
       "properties": {
         "goal_id": {"$ref": "common.schema.json#/definitions/UUID"},
         "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
@@ -53,7 +49,7 @@
         "attention_reasons": {"type": "array", "items": {"type": "string"}},
         "active_tasks": {"type": "integer"},
         "nonterminal_tasks": {"type": "integer"},
-        "ready_to_achieve": {"type": "boolean"},
+        "ready_to_achieve?": {"type": "boolean"},
         "updated_at": {"oneOf": [{"type": "string"}, {"type": "null"}]}
       }
     },
@@ -90,17 +86,6 @@
         "updated_at": {"oneOf": [{"type": "string"}, {"type": "null"}]}
       }
     },
-    "AttentionProjectOption": {
-      "type": "object",
-      "additionalProperties": true,
-      "required": ["id", "key", "name", "status"],
-      "properties": {
-        "id": {"$ref": "common.schema.json#/definitions/UUID"},
-        "key": {"type": "string"},
-        "name": {"type": "string"},
-        "status": {"type": "string"}
-      }
-    },
     "GoalBlocker": {
       "type": "object",
       "additionalProperties": true,
@@ -115,7 +100,7 @@
     "SettlementAttention": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["settlement"],
+      "required": ["settlement", "required?"],
       "properties": {
         "event_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "event_sequence": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
@@ -124,7 +109,7 @@
         "task_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "run_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "generation": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
-        "required": {"type": "boolean"},
+        "required?": {"type": "boolean"},
         "settlement": {"type": "string"},
         "reason": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "decision_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},

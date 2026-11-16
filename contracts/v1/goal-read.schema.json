@@ -263,7 +263,8 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "settlement"
+        "settlement",
+        "required?"
       ],
       "properties": {
         "event_id": {
@@ -336,7 +337,7 @@
             }
           ]
         },
-        "required": {
+        "required?": {
           "type": "boolean"
         },
         "settlement": {
@@ -415,6 +416,11 @@
       "additionalProperties": true,
       "description": "The server's completion projection. ready is the same predicate allowed_actions uses to offer achieve; the surface renders it and never recomputes it.",
       "required": [
+        "all_required_accepted?",
+        "current_revision?",
+        "no_open_decisions?",
+        "no_nonterminal_tasks?",
+        "ready?",
         "required_items",
         "accepted_required_items"
       ],
@@ -456,7 +462,8 @@
         "title",
         "status",
         "required?",
-        "accepted?"
+        "accepted?",
+        "integration"
       ],
       "properties": {
         "id": {
@@ -623,7 +630,7 @@
         "accepted?": {
           "type": "boolean"
         },
-        "integration?": {
+        "integration": {
           "type": "boolean"
         }
       }
@@ -634,7 +641,8 @@
       "description": "Read-only dependency projection: nodes, dependency edges with their satisfaction, and the server's cycle flag. No write affordance exists on this surface.",
       "required": [
         "nodes",
-        "edges"
+        "edges",
+        "cycle_detected?"
       ],
       "properties": {
         "nodes": {
@@ -649,7 +657,7 @@
             "$ref": "#/definitions/GoalReadGraphEdge"
           }
         },
-        "cycle_detected": {
+        "cycle_detected?": {
           "type": "boolean"
         }
       }
@@ -698,15 +706,23 @@
     "GoalReadGraphEdge": {
       "type": "object",
       "additionalProperties": true,
+      "description": "One durable work dependency as served. The dependency row has no single-column identity, so id is served as null; from/to carry the work item ids.",
       "required": [
         "id",
         "from",
         "to",
-        "satisfied"
+        "satisfied?"
       ],
       "properties": {
         "id": {
-          "$ref": "common.schema.json#/definitions/UUID"
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/definitions/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "work_item_id": {
           "oneOf": [
@@ -734,7 +750,7 @@
         "to": {
           "type": "string"
         },
-        "satisfied": {
+        "satisfied?": {
           "type": "boolean"
         },
         "blocker": {
@@ -1008,7 +1024,8 @@
       "required": [
         "held_microusd",
         "unknown_reservation_count",
-        "unknown_usage_count"
+        "unknown_usage_count",
+        "usage_cost_unknown?"
       ],
       "properties": {
         "held_microusd": {
@@ -1056,7 +1073,7 @@
             }
           ]
         },
-        "usage_cost_unknown": {
+        "usage_cost_unknown?": {
           "type": "boolean"
         },
         "unknown_usage_count": {

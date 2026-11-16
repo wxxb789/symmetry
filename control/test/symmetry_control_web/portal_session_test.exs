@@ -150,6 +150,7 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/work/work-123?view=list&q=a%09b&owner=agent%3Acodex&blocked=1&projectId=project-123",
           "/portal/runtimes",
           "/portal/runtimes?projectId=project-123",
+          "/portal/goals/goal-123",
           "/portal/classic"
         ] do
       redirect_response = conn |> get(path)
@@ -277,6 +278,12 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/runtimes?projectId=project-123%0d%0alocation%3ahttps://example.com",
           "/portal/runtimes?view=board",
           "/portal/runtimes/extra",
+          "/portal/goals",
+          "/portal/goals/goal-123?unknown=1",
+          "/portal/goals/goal-123#not-a-view",
+          "/portal/goals/../login",
+          "/portal/goals/%2e%2e",
+          "/portal/goals/goal-123/extra",
           "/portal#chat",
           "/portal\r\nlocation:https://example.com",
           "\"><script>alert(1)</script>"

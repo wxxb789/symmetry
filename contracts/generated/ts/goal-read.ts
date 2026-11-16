@@ -73,7 +73,7 @@ export interface SettlementAttention {
   task_id?: string | null;
   run_id?: string | null;
   generation?: number | null;
-  required?: boolean;
+  "required?": boolean;
   settlement: string;
   reason?: string | null;
   decision_id?: string | null;
@@ -92,11 +92,11 @@ export interface GoalCompletion {
   accepted_required_items: number;
   accepted_outcomes?: number;
   rejected_outcomes?: number;
-  "all_required_accepted?"?: boolean;
-  "current_revision?"?: boolean;
-  "no_open_decisions?"?: boolean;
-  "no_nonterminal_tasks?"?: boolean;
-  "ready?"?: boolean;
+  "all_required_accepted?": boolean;
+  "current_revision?": boolean;
+  "no_open_decisions?": boolean;
+  "no_nonterminal_tasks?": boolean;
+  "ready?": boolean;
   [k: string]: unknown | undefined;
 }
 export interface GoalReadWorkItem {
@@ -121,7 +121,7 @@ export interface GoalReadWorkItem {
   blockers?: string[];
   "required?": boolean;
   "accepted?": boolean;
-  "integration?"?: boolean;
+  integration: boolean;
   [k: string]: unknown | undefined;
 }
 export interface GoalReadOutcome {
@@ -148,7 +148,7 @@ export interface GoalReadOutcome {
 export interface GoalReadGraph {
   nodes: GoalReadGraphNode[];
   edges: GoalReadGraphEdge[];
-  cycle_detected?: boolean;
+  "cycle_detected?": boolean;
   [k: string]: unknown | undefined;
 }
 export interface GoalReadGraphNode {
@@ -161,13 +161,16 @@ export interface GoalReadGraphNode {
   "accepted?"?: boolean;
   [k: string]: unknown | undefined;
 }
+/**
+ * One durable work dependency as served. The dependency row has no single-column identity, so id is served as null; from/to carry the work item ids.
+ */
 export interface GoalReadGraphEdge {
-  id: UUID;
+  id: UUID | null;
   work_item_id?: string | null;
   depends_on_id?: string | null;
   from: string;
   to: string;
-  satisfied: boolean;
+  "satisfied?": boolean;
   blocker?: string | null;
   revision?: number | null;
   [k: string]: unknown | undefined;
@@ -199,7 +202,7 @@ export interface GoalReadAccounting {
   usage_leaf_count?: number;
   known_usage_cost_microusd?: Microusd | null;
   usage_cost_microusd?: Microusd | null;
-  usage_cost_unknown?: boolean;
+  "usage_cost_unknown?": boolean;
   unknown_usage_count: number;
   [k: string]: unknown | undefined;
 }

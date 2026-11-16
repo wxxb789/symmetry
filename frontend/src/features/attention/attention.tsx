@@ -78,7 +78,7 @@ function GoalAttention({ entries, unavailable, nextCursor, fetching, onLoadMore 
         <p className="text-small muted">Revision {entry.current_revision} · {entry.active_tasks ?? 0} active task(s) · {entry.nonterminal_tasks ?? 0} nonterminal</p>
         {(entry.blocker_reasons?.length ?? 0) > 0 && <p className="blocker">{entry.blocker_reasons?.join(", ")}</p>}
         {(entry.attention_reasons?.length ?? 0) > 0 && <p className="text-small muted">Settlement attention: {entry.attention_reasons?.join(", ")}</p>}
-        {entry.ready_to_achieve === true && <p className="goal-ready"><CircleCheck size={14} aria-hidden="true" />Ready to achieve on the server</p>}
+        {entry["ready_to_achieve?"] === true && <p className="goal-ready"><CircleCheck size={14} aria-hidden="true" />Ready to achieve on the server</p>}
       </div>
     </li>)}</ul>}
     {nextCursor && <button className="button" type="button" disabled={fetching} onClick={onLoadMore}>{fetching ? "Loading…" : "Load more Goal attention"}</button>}

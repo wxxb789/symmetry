@@ -2475,17 +2475,6 @@
       ]
     },
     {
-      "id": "attention-read.goal-unavailable",
-      "schema": "attention-read",
-      "path": "valid/attention-read.goal-unavailable.json",
-      "valid": true,
-      "tags": [
-        "read-projection",
-        "attention-merge",
-        "goal-unavailable"
-      ]
-    },
-    {
       "id": "attention-read.missing-project-blocked",
       "schema": "attention-read",
       "path": "invalid/attention-read.missing-project-blocked.json",
@@ -2525,9 +2514,9 @@
         "read-projection",
         "goal-read",
         "dependency-projection",
-        "settlement-attention",
+        "integration-item",
         "accounting",
-        "external-wait"
+        "captured-response"
       ]
     },
     {
