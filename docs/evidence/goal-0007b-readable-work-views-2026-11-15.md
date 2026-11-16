@@ -46,8 +46,11 @@ commit-addressed): revisions here are identified by a content digest, because
 this branch may be rebased before merge and a rebase rewrites SHAs. This
 receipt's binding is the **source subject** of the revision it describes: the
 digest of the source-file manifest over the digest scope below with every path
-under `docs/**` excluded, so editing this receipt or any other document cannot
-change the value it records. For the current revision — branch HEAD
+under `docs/**` excluded, so editing this receipt or any file under `docs/**`
+cannot change the value it records. This guarantee does NOT cover documentation
+outside `docs/`: `browser/README.md`, `contracts/README.md` and
+`frontend/AGENTS.md` are in the digest scope, so editing those does change it.
+For the current revision — branch HEAD
 `01eb1344e4415ed2ce978e71030739cbfed4a09e`, whose source content is unchanged
 by documentation-only commits after it — the source subject is
 
@@ -61,9 +64,10 @@ a historical fact with its revision named: commit
 `01eb1344e4415ed2ce978e71030739cbfed4a09e` →
 `sha256:1e345643837bcaaf5f26e5218df52156965f564618257239100dceccbb02aca5`
 (396 entries; `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1 -Scope
-full`). Documentation-only commits after `01eb134` do not change the source
-subject. The exact final source-subject digest of the merge revision will be
-recorded in the PR description, not inside this receipt.
+full`). Commits that only touch `docs/**` after `01eb134` do not change the source
+subject (documentation outside `docs/` does). The exact final source-subject
+digest of the merge revision will be recorded in the PR description, not inside
+this receipt.
 
 Round 4's earlier binding `sha256:353b10fc…` (390 entries) was computed over
 the round-4 uncommitted tree on the pre-rebase line (`6398caa` plus the five
@@ -170,8 +174,9 @@ which the checker counts 17 Draft 7 root schemas — the excluded file is
 (`contracts/scripts/check.mjs:114`) — and `contracts/fixtures/manifest.json`
 lists 219 fixtures = 82 valid + 137 invalid. The corpus grew from 213 to 219
 with the rebase onto `259ea7d` (0009 amendments: six `goal-command` achieve
-fixtures plus regenerated `goal-command` artifacts); no 0007b round added or
-removed fixtures, and the 17-root count is unchanged since round 1 added the
+fixtures plus regenerated `goal-command` artifacts). This round (Round 5) added
+or removed no fixtures; the 0007b feature commit itself added 23 (manifest 196
+at `259ea7d`, 219 at `714e33c`). The 17-root count is unchanged since round 1 added the
 two read-schema roots (15 → 17). Contract evidence on this revision: the Node
 contract gates, the Go contract packages and the Elixir manifest gate were
 re-run in round 5 against the re-synced tooling copy and container (exact
@@ -625,8 +630,9 @@ Reproduction algorithm (`-Scope source`, the durable binding): recursively
 enumerate files under the following roots; add the direct files in `frontend/`,
 `browser/`, and `contracts/`; add the explicit files below except every path
 under `docs/`; **exclusion rule: no path under `docs/` is ever in scope**, so
-editing this receipt or any other document cannot change the value recorded
-above; deduplicate full paths. For each file compute lowercase SHA-256 and a
+editing this receipt or any file under `docs/` cannot change the value recorded
+above (files under other documentation paths, such as `browser/README.md`, ARE
+in scope and do change it); deduplicate full paths. For each file compute lowercase SHA-256 and a
 repository-relative path with `/` separators. Sort by path using PowerShell
 `Sort-Object -Property Path -Culture ""`. Hash UTF-8 without BOM of
 `hash + two spaces + path + LF` for every entry, including the final LF.
