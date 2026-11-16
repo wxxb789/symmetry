@@ -23,6 +23,18 @@
         "name": {"type": "string"},
         "description": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "status": {"type": "string"},
+        "version": {
+          "type": "integer",
+          "description": "Optimistic-lock revision of the served project row."
+        },
+        "default_agent_profile": {
+          "type": "string",
+          "description": "Default agent profile the project editor seeds from."
+        },
+        "default_workspace": {
+          "oneOf": [{"type": "string"}, {"type": "null"}],
+          "description": "Default workspace the project editor seeds from."
+        },
         "resources": {
           "type": "array",
           "items": {"$ref": "#/definitions/WorkspaceResource"}
@@ -36,6 +48,14 @@
       "description": "PortalJSON.resource/1 as served inside workspace projects. The CI chip reads the identity and the bound-resource signals; every other served member stays additive. All members stay optional because a project row keeps accepting older partial projections, while a production server serves them all.",
       "properties": {
         "id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "kind": {
+          "type": "string",
+          "description": "Resource kind; the editor's repository and CI resource selects read it to label bindable resources."
+        },
+        "name": {
+          "type": "string",
+          "description": "Resource name; the editor's repository and CI resource selects read it to label bindable resources."
+        },
         "status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "sync_status": {"oneOf": [{"type": "string"}, {"type": "null"}]}
       }
@@ -72,6 +92,10 @@
         "review_status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "delivery": {"$ref": "#/definitions/WorkItemDelivery"},
         "external": {"oneOf": [{"$ref": "#/definitions/WorkItemExternal"}, {"type": "null"}]},
+        "goal_managed": {
+          "type": "boolean",
+          "description": "True only when the all-or-nothing Goal membership (goal_id, admitted_revision, acceptance_contract) is set; served so a client can present no writable path for a Goal-managed item."
+        },
         "version": {"type": "integer"},
         "can_start": {"type": "boolean"},
         "execution": {"oneOf": [{"$ref": "#/definitions/WorkItemExecution"}, {"type": "null"}]},
@@ -278,6 +302,11 @@
         "updated_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
         "resource_id": {
           "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        },
+        "provider_owned_fields": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Field names the external tracker owns; write refusals still come from Control."
         }
       }
     }

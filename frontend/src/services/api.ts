@@ -64,6 +64,57 @@ export type WorkDetail = SymmetryWorkDetailReadV1;
 export type WorkTimeline = SymmetryWorkTimelineReadV1;
 export type TimelineItem = WorkTimeline["items"][number];
 
+/** A project creation submission: exactly the fields the server's create changeset casts. */
+export interface ProjectDraft {
+  key: string;
+  name: string;
+  description: string;
+  default_agent_profile: string;
+  default_workspace: string;
+}
+
+/** A versioned project update. `version` is the revision the editor was opened from. */
+export interface ProjectChanges {
+  version: number;
+  name?: string;
+  description?: string;
+  default_agent_profile?: string;
+  default_workspace?: string;
+  status?: string;
+}
+
+/** A work-item submission: exactly the fields the server's changesets cast. */
+export interface WorkItemDraft {
+  title: string;
+  description?: string;
+  status?: string;
+  priority?: string;
+  assignee_type?: string;
+  assignee_name?: string;
+  agent_profile?: string;
+  workspace?: string;
+  repository_resource_id?: string | null;
+  ci_resource_id?: string | null;
+  branch?: string;
+  blocked?: boolean;
+  blocker?: string;
+}
+
+/** A versioned work-item edit; status and order move through the move endpoint. */
+export type WorkItemChanges = Omit<WorkItemDraft, "status"> & { version: number };
+
+/** The confirmed board movement: status, and the card this item is inserted before. */
+export interface MoveIntent {
+  version: number;
+  status: string;
+  beforeId: string | null;
+}
+
+/** Write receipts repeat the served projection; this surface consumes the identity. */
+export interface WriteReceipt {
+  id: string;
+}
+
 const Session = Schema.Struct({ csrf_token: Schema.NonEmptyString });
 export type Session = typeof Session.Type;
 const ServerError = Schema.Struct({
@@ -86,6 +137,11 @@ const DeletedConnectionBody = Schema.Struct({
   disposition: Schema.NonEmptyString,
   deleted_connection_id: Schema.NonEmptyString,
 });
+// A write receipt repeats the served project/work-item projection. This surface
+// steers from the authoritative read (the projection's unloaded associations
+// render as empty arrays), so it consumes the identity and discards the rest.
+const ProjectReceiptBody = Schema.Struct({ project: Schema.Struct({ id: Schema.NonEmptyString }) });
+const WorkItemReceiptBody = Schema.Struct({ work_item: Schema.Struct({ id: Schema.NonEmptyString }) });
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 interface RequestInit {
   method: Method;
@@ -104,6 +160,11 @@ export interface Api {
   updateConnection: (connectionId: string, update: ConnectionUpdate, csrf: string, signal: AbortSignal) => Promise<ConnectionReceipt>;
   deleteConnection: (connectionId: string, version: number, csrf: string, signal: AbortSignal) => Promise<{ disposition: string; deletedConnectionId: string }>;
   checkConnection: (connectionId: string, csrf: string, signal: AbortSignal) => Promise<ConnectionReceipt>;
+  createProject: (draft: ProjectDraft, csrf: string, signal: AbortSignal) => Promise<WriteReceipt>;
+  updateProject: (projectId: string, changes: ProjectChanges, csrf: string, signal: AbortSignal) => Promise<WriteReceipt>;
+  createWorkItem: (projectId: string, draft: WorkItemDraft, csrf: string, signal: AbortSignal) => Promise<WriteReceipt>;
+  updateWorkItem: (workItemId: string, changes: WorkItemChanges, csrf: string, signal: AbortSignal) => Promise<WriteReceipt>;
+  moveWorkItem: (workItemId: string, intent: MoveIntent, csrf: string, signal: AbortSignal) => Promise<WriteReceipt>;
 }
 
 // Strict byte-level decoding keeps invalid UTF-8 visible to the schema boundary;
@@ -126,7 +187,10 @@ function statusError(status: number): ReadError {
     default: return new UnexpectedResponse({
       message: status >= 500 ? "The server is temporarily unavailable." : "The server returned an unexpected response.",
       status,
-      transient: status === 408 || status === 429 || status === 502 || status === 503 || status === 504,
+      // Every server-side fault is retryable: a command keeps its frozen intent
+      // and a read keeps its recorded state instead of being treated as the
+      // server's authoritative answer.
+      transient: status >= 500 || status === 408 || status === 429,
     });
   }
 }
@@ -209,6 +273,18 @@ function run<A>(effect: Effect.Effect<A, ApiError>, signal: AbortSignal): Promis
   });
 }
 
+const projectReceipt = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(ProjectReceiptBody))(text)),
+    Effect.map((value) => ({ id: value.project.id })),
+  );
+
+const workItemReceipt = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(WorkItemReceiptBody))(text)),
+    Effect.map((value) => ({ id: value.work_item.id })),
+  );
+
 export function createApi(fetcher: typeof fetch = globalThis.fetch.bind(globalThis)): Api {
   return {
     workspace(projectId: string | null, signal: AbortSignal): Promise<Workspace> {
@@ -245,6 +321,25 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch.bind(globalTh
     },
     checkConnection(connectionId: string, csrf: string, signal: AbortSignal): Promise<ConnectionReceipt> {
       return run(request(fetcher, `/portal/api/connections/${encodeURIComponent(connectionId)}/check`, { method: "POST", csrf }, receipt), signal);
+    },
+    createProject(draft: ProjectDraft, csrf: string, signal: AbortSignal): Promise<WriteReceipt> {
+      return run(request(fetcher, "/portal/api/projects", { method: "POST", body: draft, csrf }, projectReceipt), signal);
+    },
+    updateProject(projectId: string, changes: ProjectChanges, csrf: string, signal: AbortSignal): Promise<WriteReceipt> {
+      return run(request(fetcher, `/portal/api/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: changes, csrf }, projectReceipt), signal);
+    },
+    createWorkItem(projectId: string, draft: WorkItemDraft, csrf: string, signal: AbortSignal): Promise<WriteReceipt> {
+      return run(request(fetcher, `/portal/api/projects/${encodeURIComponent(projectId)}/work-items`, { method: "POST", body: draft, csrf }, workItemReceipt), signal);
+    },
+    updateWorkItem(workItemId: string, changes: WorkItemChanges, csrf: string, signal: AbortSignal): Promise<WriteReceipt> {
+      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, { method: "PATCH", body: changes, csrf }, workItemReceipt), signal);
+    },
+    moveWorkItem(workItemId: string, intent: MoveIntent, csrf: string, signal: AbortSignal): Promise<WriteReceipt> {
+      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}/move`, {
+        method: "PATCH",
+        body: { version: intent.version, status: intent.status, before_id: intent.beforeId },
+        csrf,
+      }, workItemReceipt), signal);
     },
   };
 }

@@ -242,6 +242,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     assert selected_project_id == project["id"]
     assert Enum.map(workspace_project["resources"], & &1["id"]) == [repository["id"]]
     assert Enum.map(workspace_project["work_items"], & &1["id"]) == [item["id"]]
+    assert Enum.map(workspace_project["work_items"], & &1["goal_managed"]) == [false]
     assert health["connections"] == "healthy"
     assert health["runtimes"] == "offline"
 

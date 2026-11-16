@@ -99,6 +99,16 @@ describe("read boundary", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("marks a server fault retryable so a command keeps its frozen intent", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 500 }));
+    const api = createApi(fetcher);
+    const failure = await api
+      .updateWorkItem(workItemId, { version: 1, title: "Fault probe" }, "csrf-token", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).toMatchObject({ status: 500, transient: true });
+  });
+
   it("aborts the underlying request when the consuming query is cancelled", async () => {
     let requestSignal: AbortSignal | null | undefined;
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {

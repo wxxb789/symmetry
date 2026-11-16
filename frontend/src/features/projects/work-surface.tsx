@@ -1,9 +1,12 @@
-import { Link } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, useRouteContext } from "@tanstack/react-router";
 import { AlertCircle } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { Project, WorkItem } from "../../services/api";
+import { useSessionToken } from "../../app/session";
+import type { MoveIntent, Project, WorkItem } from "../../services/api";
 import { EmptyState, StatusBadge, statusLabel } from "../../components/workspace";
 import { acceptanceLabel, ciLabel, ciResourcesOf, costHint, costLabel, noBlocker, noReportedResult, ownerKeyLabel, ownerLabel, priorityLabel, reportedResult, type CiResourceLike } from "../work/presentation";
+import { boardMoveRequest, hasServedRevision, isGoalManaged, providerOwnedControlsOf, refusalNotice, workItemMovePolicy } from "../planning/write-policy";
 import {
   boardColumns,
   filterWorkItems,
@@ -25,6 +28,9 @@ export interface WorkSurfaceNavigation {
   setSearch: (next: (previous: WorkSearch) => WorkSearch, options?: { replace?: boolean }) => void;
   /** The routes own their link targets; the surface owns the label, active state and target search. */
   renderViewLink: (options: ViewLinkOptions) => ReactNode;
+  /** Present only on the project route: the detail's background surface stays read-only behind its dialog. */
+  createWorkItem?: () => void;
+  createDisabled?: boolean;
 }
 
 export interface ViewLinkOptions {
@@ -100,9 +106,13 @@ export function ProjectWorkSurface({ project, navigation }: { project: Project; 
   const filtered = filterWorkItems(items, filtersOf(search));
   const summary = summarizeWork(items);
   const rowSearch: WorkItemSearch = { ...search, projectId: project.id };
+  const view = search.view ?? "list";
   return <>
     <WorkToolbar project={project} navigation={navigation} />
     <p className="work-summary">{workSummaryText(summary.total, summary.blocked)}{filtered.length === summary.total ? "" : ` · showing ${filtered.length}`}</p>
+    {view === "board" && (project.status === "archived"
+      ? <p className="board-hint muted text-small">This project is archived: the board is read-only until it is restored.</p>
+      : <p className="board-hint muted text-small">Tab or the arrow keys move between cards; Enter opens one. Shift + ←/→ moves the focused card to another column; Shift + ↑/↓ reorders it inside its column.</p>)}
     {filtered.length === 0
       ? items.length === 0
         ? <EmptyState title="No work items">This project does not have any work items yet.</EmptyState>
@@ -111,14 +121,14 @@ export function ProjectWorkSurface({ project, navigation }: { project: Project; 
             <button className="button" type="button" onClick={() => { setSearch((previous) => workSearch({ view: previous.view }), { replace: false }); focusWorkControl("work-filter-input"); }}>Clear filters</button>
           </span>
         </EmptyState>
-      : (search.view ?? "list") === "board"
-        ? <WorkBoard items={filtered} search={rowSearch} resources={ciResources} />
+      : view === "board"
+        ? <WorkBoard items={filtered} search={rowSearch} resources={ciResources} projectStatus={project.status} />
         : <WorkRows items={filtered} search={rowSearch} resources={ciResources} />}
   </>;
 }
 
 function WorkToolbar({ project, navigation }: { project: Project; navigation: WorkSurfaceNavigation }) {
-  const { search, setSearch, renderViewLink } = navigation;
+  const { search, setSearch, renderViewLink, createWorkItem, createDisabled = false } = navigation;
   const view = search.view ?? "list";
   const saved = useSavedViews(project.id);
   const [name, setName] = useState("");
@@ -141,7 +151,11 @@ function WorkToolbar({ project, navigation }: { project: Project; navigation: Wo
         {viewLink("list")}
         {viewLink("board")}
       </nav>
-      <span className="muted text-small">Read-only</span>
+      {project.status === "archived"
+        ? <span className="muted text-small">Archived project · read-only until restored</span>
+        : createWorkItem !== undefined
+          ? <button className="button button-primary" type="button" disabled={createDisabled} onClick={createWorkItem}>New work item</button>
+          : <span className="muted text-small">Read-only in this context</span>}
     </div>
     <div className="toolbar-row">
       <input id="work-filter-input" className="filter-input" type="search" aria-label="Filter work items" placeholder="Search title, key or owner" value={search.q ?? ""}
@@ -190,10 +204,81 @@ function WorkRows({ items, search, resources }: { items: readonly WorkItem[]; se
   </ul>;
 }
 
-function WorkBoard({ items, search, resources }: { items: readonly WorkItem[]; search: WorkItemSearch; resources: ReadonlyMap<string, CiResourceLike> }) {
+export function OwnershipChip({ item }: { item: WorkItem }) {
+  if (isGoalManaged(item)) return <span className="chip chip-owned" title="This work item's changes go through Goal admission, not this surface">Goal-managed</span>;
+  if (providerOwnedControlsOf(item).size > 0) return <span className="chip chip-owned" title="Its external work tracker owns the fields listed in the editor">Provider-owned</span>;
+  return null;
+}
+
+function WorkBoard({ items, search, resources, projectStatus }: { items: readonly WorkItem[]; search: WorkItemSearch; resources: ReadonlyMap<string, CiResourceLike>; projectStatus: string }) {
+  const { application } = useRouteContext({ from: "__root__" });
+  const csrf = useSessionToken();
+  const queryClient = useQueryClient();
   const workRoot = useWorkFocusRestore<HTMLElement>();
-  return <section className="work-board" aria-label="Work board" onKeyDown={moveBoardFocus} ref={workRoot}>
-    {boardColumns(items).map((column) => {
+  const [announcement, setAnnouncement] = useState("");
+  const [moveFailure, setMoveFailure] = useState<string | null>(null);
+  const columns = boardColumns(items);
+  const move = useMutation({
+    mutationFn: (request: { itemId: string; intent: MoveIntent; announcement: string }) => application.api.moveWorkItem(request.itemId, request.intent, csrf, new AbortController().signal),
+    // The move is applied by the server; the board re-reads it and announces the
+    // confirmed position. Focus follows the work item id through the regroup.
+    onSuccess: async (_receipt, request) => {
+      setMoveFailure(null);
+      setAnnouncement(request.announcement);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workspace"] }),
+        queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId: request.itemId }] }),
+      ]);
+    },
+    onError: async (error) => {
+      setAnnouncement("");
+      setMoveFailure(refusalNotice(error));
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+  const moveFocusedCard = (event: KeyboardEvent<HTMLElement>, item: WorkItem, direction: "left" | "right" | "up" | "down") => {
+    event.preventDefault();
+    if (move.isPending) return;
+    if (!hasServedRevision(item)) {
+      setAnnouncement("This card's revision was not served; refresh the project before moving it.");
+      return;
+    }
+    const policy = workItemMovePolicy(projectStatus, item);
+    const applies = direction === "left" || direction === "right" ? policy.statusChange : policy.reorder;
+    if (!applies) {
+      setAnnouncement(isGoalManaged(item)
+        ? "Goal-managed work has no board movement here; its changes go through Goal admission."
+        : projectStatus === "archived"
+          ? "This project is archived; restore it to move work."
+          : "This work item's state column is owned by the external work tracker.");
+      return;
+    }
+    const request = boardMoveRequest({ direction, item, columns, stateLabel: statusLabel, version: item.version });
+    if (request === null) return;
+    setAnnouncement("");
+    setMoveFailure(null);
+    move.mutate({ itemId: item.id, intent: request.intent, announcement: request.announcement });
+  };
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    const direction = event.key === "ArrowLeft" ? "left" : event.key === "ArrowRight" ? "right" : event.key === "ArrowUp" ? "up" : event.key === "ArrowDown" ? "down" : null;
+    if (direction === null) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const card = target.closest<HTMLElement>("[data-board-card]");
+    if (card === null) return;
+    if (!event.shiftKey) {
+      moveBoardFocus(event);
+      return;
+    }
+    const itemId = card.querySelector<HTMLElement>("[data-work-item]")?.dataset["workItem"];
+    const item = items.find((candidate) => candidate.id === itemId);
+    if (item === undefined) return;
+    moveFocusedCard(event, item, direction);
+  };
+  return <section className="work-board" aria-label="Work board" onKeyDown={handleKeyDown} ref={workRoot}>
+    <p className="sr-only" role="status">{move.isPending ? "Moving the focused card…" : announcement}</p>
+    {moveFailure !== null && <p className="notice notice-error" role="alert">{moveFailure}</p>}
+    {columns.map((column) => {
       const headingId = `board-column-${column.state.replaceAll("_", "-")}`;
       return <section className="board-column" key={column.state} aria-labelledby={headingId}>
         <div className="board-heading"><h2 id={headingId}>{statusLabel(column.state)}</h2><span className="count">{column.items.length}</span></div>
@@ -205,7 +290,7 @@ function WorkBoard({ items, search, resources }: { items: readonly WorkItem[]; s
               <span className="board-meta">{ownerLabel(item.assignee)}{priorityLabel(item.priority) === null ? "" : ` · ${priorityLabel(item.priority)}`}</span>
               <WorkRowResult item={item} />
               <WorkRowBlocker item={item} />
-              <span className="board-chips"><span className="chip chip-unknown" title={costHint}>{costLabel}</span><CiChip item={item} resources={resources} /></span>
+              <span className="board-chips"><OwnershipChip item={item} /><span className="chip chip-unknown" title={costHint}>{costLabel}</span><CiChip item={item} resources={resources} /></span>
             </Link>
           </li>)}
         </ul>
@@ -217,7 +302,7 @@ function WorkBoard({ items, search, resources }: { items: readonly WorkItem[]; s
 function WorkRowIdentity({ item }: { item: WorkItem }) {
   const priority = priorityLabel(item.priority);
   return <span className="work-main">
-    <span className="work-identity"><span className="item-key">{item.key}</span><span className="work-title">{item.title}</span></span>
+    <span className="work-identity"><span className="item-key">{item.key}</span><span className="work-title">{item.title}</span><OwnershipChip item={item} /></span>
     <span className="work-context">
       <span className="work-cell">{ownerLabel(item.assignee)}</span>
       {priority !== null && <span className="work-cell muted">Priority {priority}</span>}

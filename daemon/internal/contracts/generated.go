@@ -1016,32 +1016,36 @@ type PurpleTimelineData struct {
 // effect generator shares one graph for both roots; the JSON Schema to TypeScript modules
 // and the quicktype Go output may still restate the shape per root.
 type SymmetryWorkDetailReadV1WorkItem struct {
-	Assignee             *OwnerClass              `json:"assignee,omitempty"`
-	Blocked              bool                     `json:"blocked"`
-	Blocker              *string                  `json:"blocker"`
-	Branch               *string                  `json:"branch"`
-	CanStart             *bool                    `json:"can_start,omitempty"`
-	CiResource           *string                  `json:"ci_resource"`
-	CiResourceID         *string                  `json:"ci_resource_id"`
-	CiStatus             *string                  `json:"ci_status"`
-	Delivery             *OutcomeDelivery         `json:"delivery,omitempty"`
-	Description          *string                  `json:"description"`
-	Execution            *PurpleWorkItemExecution `json:"execution"`
-	External             *PurpleWorkItemExternal  `json:"external"`
-	ID                   string                   `json:"id"`
-	Key                  string                   `json:"key"`
-	Position             *int64                   `json:"position,omitempty"`
-	Priority             *string                  `json:"priority,omitempty"`
-	ProjectID            *string                  `json:"project_id,omitempty"`
-	PullRequestURL       *string                  `json:"pull_request_url"`
-	Repository           *string                  `json:"repository"`
-	RepositoryResourceID *string                  `json:"repository_resource_id"`
-	ReviewStatus         *string                  `json:"review_status"`
-	Status               string                   `json:"status"`
-	Title                string                   `json:"title"`
-	UpdatedAt            *string                  `json:"updated_at"`
-	Version              *int64                   `json:"version,omitempty"`
-	Workspace            *string                  `json:"workspace"`
+	Assignee     *OwnerClass              `json:"assignee,omitempty"`
+	Blocked      bool                     `json:"blocked"`
+	Blocker      *string                  `json:"blocker"`
+	Branch       *string                  `json:"branch"`
+	CanStart     *bool                    `json:"can_start,omitempty"`
+	CiResource   *string                  `json:"ci_resource"`
+	CiResourceID *string                  `json:"ci_resource_id"`
+	CiStatus     *string                  `json:"ci_status"`
+	Delivery     *OutcomeDelivery         `json:"delivery,omitempty"`
+	Description  *string                  `json:"description"`
+	Execution    *PurpleWorkItemExecution `json:"execution"`
+	External     *PurpleWorkItemExternal  `json:"external"`
+	// True only when the all-or-nothing Goal membership (goal_id, admitted_revision,
+	// acceptance_contract) is set; served so a client can present no writable path for a
+	// Goal-managed item.
+	GoalManaged          *bool   `json:"goal_managed,omitempty"`
+	ID                   string  `json:"id"`
+	Key                  string  `json:"key"`
+	Position             *int64  `json:"position,omitempty"`
+	Priority             *string `json:"priority,omitempty"`
+	ProjectID            *string `json:"project_id,omitempty"`
+	PullRequestURL       *string `json:"pull_request_url"`
+	Repository           *string `json:"repository"`
+	RepositoryResourceID *string `json:"repository_resource_id"`
+	ReviewStatus         *string `json:"review_status"`
+	Status               string  `json:"status"`
+	Title                string  `json:"title"`
+	UpdatedAt            *string `json:"updated_at"`
+	Version              *int64  `json:"version,omitempty"`
+	Workspace            *string `json:"workspace"`
 }
 
 // PortalJSON.execution_summary/1 as served when the work item has an orchestration task;
@@ -1075,15 +1079,17 @@ type PurpleWorkItemExecutionTiming struct {
 // PortalJSON.external_work_item/1 safe display and link fields; raw provider payloads
 // (data, delivery_data) remain additive and unconsumed.
 type PurpleWorkItemExternal struct {
-	Assignee   *string  `json:"assignee"`
-	Available  bool     `json:"available"`
-	ID         *string  `json:"id"`
-	Labels     []string `json:"labels"`
-	Provider   *string  `json:"provider"`
-	ResourceID *string  `json:"resource_id"`
-	State      *string  `json:"state"`
-	UpdatedAt  *string  `json:"updated_at"`
-	URL        *string  `json:"url"`
+	Assignee  *string  `json:"assignee"`
+	Available bool     `json:"available"`
+	ID        *string  `json:"id"`
+	Labels    []string `json:"labels"`
+	Provider  *string  `json:"provider"`
+	// Field names the external tracker owns; write refusals still come from Control.
+	ProviderOwnedFields []string `json:"provider_owned_fields,omitempty"`
+	ResourceID          *string  `json:"resource_id"`
+	State               *string  `json:"state"`
+	UpdatedAt           *string  `json:"updated_at"`
+	URL                 *string  `json:"url"`
 }
 
 // Consumed fields of the existing Protocol.timeline_page/2 read served by the work item
@@ -1135,13 +1141,19 @@ type SymmetryWorkspaceReadV1 struct {
 }
 
 type WorkspaceProject struct {
-	Description *string             `json:"description"`
-	ID          string              `json:"id"`
-	Key         string              `json:"key"`
-	Name        string              `json:"name"`
-	Resources   []WorkspaceResource `json:"resources,omitempty"`
-	Status      string              `json:"status"`
-	WorkItems   []WorkItemElement   `json:"work_items"`
+	// Default agent profile the project editor seeds from.
+	DefaultAgentProfile *string `json:"default_agent_profile,omitempty"`
+	// Default workspace the project editor seeds from.
+	DefaultWorkspace *string             `json:"default_workspace"`
+	Description      *string             `json:"description"`
+	ID               string              `json:"id"`
+	Key              string              `json:"key"`
+	Name             string              `json:"name"`
+	Resources        []WorkspaceResource `json:"resources,omitempty"`
+	Status           string              `json:"status"`
+	// Optimistic-lock revision of the served project row.
+	Version   *int64            `json:"version,omitempty"`
+	WorkItems []WorkItemElement `json:"work_items"`
 }
 
 // PortalJSON.resource/1 as served inside workspace projects. The CI chip reads the identity
@@ -1149,7 +1161,13 @@ type WorkspaceProject struct {
 // stay optional because a project row keeps accepting older partial projections, while a
 // production server serves them all.
 type WorkspaceResource struct {
-	ID         *string `json:"id,omitempty"`
+	ID *string `json:"id,omitempty"`
+	// Resource kind; the editor's repository and CI resource selects read it to label bindable
+	// resources.
+	Kind *string `json:"kind,omitempty"`
+	// Resource name; the editor's repository and CI resource selects read it to label bindable
+	// resources.
+	Name       *string `json:"name,omitempty"`
 	Status     *string `json:"status"`
 	SyncStatus *string `json:"sync_status"`
 }
@@ -1159,32 +1177,36 @@ type WorkspaceResource struct {
 // effect generator shares one graph for both roots; the JSON Schema to TypeScript modules
 // and the quicktype Go output may still restate the shape per root.
 type WorkItemElement struct {
-	Assignee             *PurpleWorkItemAssignee  `json:"assignee,omitempty"`
-	Blocked              bool                     `json:"blocked"`
-	Blocker              *string                  `json:"blocker"`
-	Branch               *string                  `json:"branch"`
-	CanStart             *bool                    `json:"can_start,omitempty"`
-	CiResource           *string                  `json:"ci_resource"`
-	CiResourceID         *string                  `json:"ci_resource_id"`
-	CiStatus             *string                  `json:"ci_status"`
-	Delivery             *PurpleWorkItemDelivery  `json:"delivery,omitempty"`
-	Description          *string                  `json:"description"`
-	Execution            *FluffyWorkItemExecution `json:"execution"`
-	External             *FluffyWorkItemExternal  `json:"external"`
-	ID                   string                   `json:"id"`
-	Key                  string                   `json:"key"`
-	Position             *int64                   `json:"position,omitempty"`
-	Priority             *string                  `json:"priority,omitempty"`
-	ProjectID            *string                  `json:"project_id,omitempty"`
-	PullRequestURL       *string                  `json:"pull_request_url"`
-	Repository           *string                  `json:"repository"`
-	RepositoryResourceID *string                  `json:"repository_resource_id"`
-	ReviewStatus         *string                  `json:"review_status"`
-	Status               string                   `json:"status"`
-	Title                string                   `json:"title"`
-	UpdatedAt            *string                  `json:"updated_at"`
-	Version              *int64                   `json:"version,omitempty"`
-	Workspace            *string                  `json:"workspace"`
+	Assignee     *PurpleWorkItemAssignee  `json:"assignee,omitempty"`
+	Blocked      bool                     `json:"blocked"`
+	Blocker      *string                  `json:"blocker"`
+	Branch       *string                  `json:"branch"`
+	CanStart     *bool                    `json:"can_start,omitempty"`
+	CiResource   *string                  `json:"ci_resource"`
+	CiResourceID *string                  `json:"ci_resource_id"`
+	CiStatus     *string                  `json:"ci_status"`
+	Delivery     *PurpleWorkItemDelivery  `json:"delivery,omitempty"`
+	Description  *string                  `json:"description"`
+	Execution    *FluffyWorkItemExecution `json:"execution"`
+	External     *FluffyWorkItemExternal  `json:"external"`
+	// True only when the all-or-nothing Goal membership (goal_id, admitted_revision,
+	// acceptance_contract) is set; served so a client can present no writable path for a
+	// Goal-managed item.
+	GoalManaged          *bool   `json:"goal_managed,omitempty"`
+	ID                   string  `json:"id"`
+	Key                  string  `json:"key"`
+	Position             *int64  `json:"position,omitempty"`
+	Priority             *string `json:"priority,omitempty"`
+	ProjectID            *string `json:"project_id,omitempty"`
+	PullRequestURL       *string `json:"pull_request_url"`
+	Repository           *string `json:"repository"`
+	RepositoryResourceID *string `json:"repository_resource_id"`
+	ReviewStatus         *string `json:"review_status"`
+	Status               string  `json:"status"`
+	Title                string  `json:"title"`
+	UpdatedAt            *string `json:"updated_at"`
+	Version              *int64  `json:"version,omitempty"`
+	Workspace            *string `json:"workspace"`
 }
 
 // PortalJSON owner/1: assignee identity as served, with null members when unset.
@@ -1288,15 +1310,17 @@ type FluffyWorkItemWaitingDecisionOption struct {
 // PortalJSON.external_work_item/1 safe display and link fields; raw provider payloads
 // (data, delivery_data) remain additive and unconsumed.
 type FluffyWorkItemExternal struct {
-	Assignee   *string  `json:"assignee"`
-	Available  bool     `json:"available"`
-	ID         *string  `json:"id"`
-	Labels     []string `json:"labels"`
-	Provider   *string  `json:"provider"`
-	ResourceID *string  `json:"resource_id"`
-	State      *string  `json:"state"`
-	UpdatedAt  *string  `json:"updated_at"`
-	URL        *string  `json:"url"`
+	Assignee  *string  `json:"assignee"`
+	Available bool     `json:"available"`
+	ID        *string  `json:"id"`
+	Labels    []string `json:"labels"`
+	Provider  *string  `json:"provider"`
+	// Field names the external tracker owns; write refusals still come from Control.
+	ProviderOwnedFields []string `json:"provider_owned_fields,omitempty"`
+	ResourceID          *string  `json:"resource_id"`
+	State               *string  `json:"state"`
+	UpdatedAt           *string  `json:"updated_at"`
+	URL                 *string  `json:"url"`
 }
 
 type Guidance string

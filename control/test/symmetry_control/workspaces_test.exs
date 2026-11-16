@@ -252,6 +252,13 @@ defmodule SymmetryControl.WorkspacesTest do
 
     goal = goal_fixture(project)
 
+    refute WorkItem.goal_managed?(item)
+
+    assert SymmetryControlWeb.PortalJSON.work_item(
+             Repo.preload(item, [:project, :repository_resource, :ci_resource]),
+             %{}
+           )[:goal_managed] == false
+
     assert {:ok, item} =
              item
              |> WorkItem.goal_membership_changeset(%{
@@ -266,6 +273,13 @@ defmodule SymmetryControl.WorkspacesTest do
                }
              })
              |> Repo.update()
+
+    assert WorkItem.goal_managed?(item)
+
+    assert SymmetryControlWeb.PortalJSON.work_item(
+             Repo.preload(item, [:project, :repository_resource, :ci_resource]),
+             %{}
+           )[:goal_managed] == true
 
     assert {:error, :goal_authority_required} =
              Workspaces.update_work_item(item.id, %{version: item.lock_version, title: "Bypass"})

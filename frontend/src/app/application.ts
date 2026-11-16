@@ -33,7 +33,7 @@ export function createApplication(options: { fetcher?: typeof fetch; location?: 
   const listeners = new Set<() => void>();
   let signedOut = false;
   // Session expiry is one recovery for reads and for commands: cancel in-flight
-  // work, drop private cache, then return to the login page with a safe path.
+  // work, drop the private cache, then return to the login page with a safe path.
   const expireSession = () => {
     if (signedOut) return;
     signedOut = true;
@@ -65,8 +65,8 @@ export function createApplication(options: { fetcher?: typeof fetch; location?: 
         refetchOnWindowFocus: true,
       },
       mutations: {
-        // Mutation retries default off; an intentional retry reuses the same
-        // normalized payload, and 401/403/409/422 are never retried.
+        // Mutation retries default off; an explicit retry reuses the frozen
+        // normalized intent, and 401/403/409/422 are never retried.
         retry: false,
       },
     },

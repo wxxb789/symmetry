@@ -763,15 +763,9 @@ defmodule SymmetryControl.Workspaces do
   # Goal ownership is an all-or-nothing relational invariant. Partial rows stay
   # on the legacy path until the Goals migration has made them authoritative.
   defp ensure_legacy_work_item(work_item) do
-    if goal_owned_work_item?(work_item),
+    if WorkItem.goal_managed?(work_item),
       do: {:error, :goal_authority_required},
       else: :ok
-  end
-
-  defp goal_owned_work_item?(work_item) do
-    is_binary(Map.get(work_item, :goal_id)) and
-      is_integer(Map.get(work_item, :admitted_revision)) and
-      is_map(Map.get(work_item, :acceptance_contract))
   end
 
   defp project_mutation_allowed(%Project{status: "active"}, _attrs), do: :ok

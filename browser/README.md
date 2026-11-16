@@ -2,15 +2,16 @@
 
 These tests exercise the authenticated React shell and the retained classic
 workspace against a running Phoenix control plane. Classic acceptance keeps its
-editing, resource and control flows and fixture semantics at `/portal/classic`.
+resource and control flows and fixture semantics at `/portal/classic`; project
+and work-item planning moved to the planning suite below (0007c).
 The 0007b list, board, detail and history read checks that the new
 `/portal/projects/:projectId` and `/portal/work/:workItemId` surfaces replace -
 including the classic detail-security probe and the delayed-detail,
 older-history and delayed-workspace races - are retired from the classic suite
 and covered by `tests/portal-work-views.spec.mjs` (races replay held real
 responses; the older-history failure race uses a real daemon cursor in
-`tests/portal-live-daemon.spec.mjs`). No editing, resource or control coverage
-was removed.
+`tests/portal-live-daemon.spec.mjs`). No resource or control coverage was
+removed.
 
 ```sh
 mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile
@@ -189,6 +190,40 @@ change the application topology under test.
 `tests/portal-classic-resources.spec.mjs` retains the classic workspace's
 resource binding, synchronization and assignment checks at `/portal/classic`;
 connection management itself is asserted on the new route above.
+
+## Safe planning acceptance
+
+`tests/portal-work-planning.spec.mjs` is the real-API planning acceptance for
+the new `/portal/projects` and `/portal/work/:workItemId` surfaces: project
+create/edit/archive/restore, work-item create/edit, board keyboard move and
+reorder, double submit, explicit retry, two-context conflicts on projects and
+work items, a draft kept across a background refresh, the cross-project race
+where a late board move lands only on its own project, Goal-managed and
+provider-owned items with no writable path, and an archived project's read-only
+board. Every mutation goes through the running control plane; interception only
+holds or aborts a captured request to inject the races the contract names.
+`browser/scripts/run-planning-tests.ps1` is its harness: it starts the real
+control plane on a loopback port with a dedicated database and a per-run
+operator token, and the spec skips itself without that environment (the runner
+turns a skipped summary into a failure).
+
+The cases with a rendered end state (ten of the fourteen) capture a full-page
+screenshot plus an observation JSON through the shared `capture` helper; they
+land in the Playwright output directory
+(`SYMMETRY_PLAYWRIGHT_OUTPUT` when set, otherwise the per-user temp
+`symmetry-playwright-results`), and the harness prints that run's spec and
+control-plane log paths.
+
+The classic planning dialogs are retired from `tests/portal.spec.mjs`, which
+still owns resource attach/update/detach, the Activity and run-control walk,
+the browser session boundary and background-refresh drawer retention. Two item
+kinds cannot come from the portal API - Goal admission is 0007h's surface and
+provider sync is 0007e's - so `scripts/ci/portal-planning-fixture.exs` applies
+them through Control's own changesets: `--goal-managed <work_item_id>
+<repository_resource_id>` writes the Goal, its first revision, the repository
+baseline and the all-or-nothing membership, and `--provider-owned
+<work_item_id> <resource_id> <provider> <external_id>` binds the item to an
+external tracker.
 
 ## Live daemon acceptance
 

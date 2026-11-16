@@ -111,10 +111,16 @@ export async function snapshotMetrics(page, projectId) {
   }, projectId);
 }
 
-export async function capture(page, testInfo, name, observations) {
+/**
+ * Captures a page for owner acceptance. `options.fullPage: false` frames the
+ * viewport instead: a full-page capture resizes the emulated viewport, which
+ * disturbs an open nested modal, so a case that captures an open editor uses
+ * the viewport framing.
+ */
+export async function capture(page, testInfo, name, observations, options = {}) {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const image = testInfo.outputPath(`${name}.png`);
-  await page.screenshot({ path: image, fullPage: true });
+  await page.screenshot({ path: image, fullPage: options.fullPage ?? true });
   await testInfo.attach(name, { path: image, contentType: "image/png" });
   await fs.writeFile(testInfo.outputPath(`${name}.json`), JSON.stringify({
     url: page.url(), viewport: page.viewportSize(), observations

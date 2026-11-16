@@ -1,13 +1,16 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useRouteContext, useSearch } from "@tanstack/react-router";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useSessionToken } from "../../app/session";
 import { workDetailOptions, workspaceOptions } from "../../app/application";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
-import type { WorkDetail } from "../../services/api";
+import { errorMessage, type Project, type WorkDetail } from "../../services/api";
 import { workSearch, type WorkSearch } from "../projects/filters";
-import { ProjectWorkSurface, type WorkSurfaceNavigation } from "../projects/work-surface";
+import { OwnershipChip, ProjectWorkSurface, type WorkSurfaceNavigation } from "../projects/work-surface";
+import { WorkItemEditor } from "../planning/editors";
+import { hasServedRevision, isGoalManaged, workItemEditable } from "../planning/write-policy";
 import { WorkHistory } from "./history";
 import {
   acceptanceLabel,
@@ -58,6 +61,14 @@ export function WorkDetailPage() {
   const queryProjectId = search.projectId;
   const itemProjectId = detail?.work_item.project_id;
   const foreignScope = queryProjectId !== undefined && itemProjectId !== undefined && queryProjectId !== itemProjectId;
+  // The project snapshot drives the editor's resource selects and the archived
+  // read-only gate. It is read from the cache the drawer background already
+  // fills on desktop; a cold deep link fetches it only when the operator opens
+  // the editor (see WorkDetailBody), so no read path pays for it.
+  const cachedProject = useQuery({
+    ...workspaceOptions(application.api, (itemProjectId ?? queryProjectId) ?? ""),
+    enabled: false,
+  }).data?.projects.find((candidate) => candidate.id === (itemProjectId ?? queryProjectId));
   useEffect(() => {
     if (!foreignScope || itemProjectId === undefined) return;
     // Canonical URL for the actual subject: the other project's list filters do not apply.
@@ -75,7 +86,7 @@ export function WorkDetailPage() {
     });
   // Filters of another project never describe this subject, so both detail branches
   // drop them once the served scope is known to be foreign.
-  if (!desktop) return <WorkDetailBody workItemId={workItemId} scopedProjectId={queryProjectId ?? null} backSearch={foreignScope ? {} : listState} />;
+  if (!desktop) return <WorkDetailBody workItemId={workItemId} scopedProjectId={queryProjectId ?? null} backSearch={foreignScope ? {} : listState} projectStatus={cachedProject?.status} />;
   const close = () => {
     const projectId = itemProjectId ?? queryProjectId;
     if (projectId === undefined) {
@@ -91,12 +102,16 @@ export function WorkDetailPage() {
       setSearch,
       renderViewLink: (options) => <Link className={options.className} aria-current={options["aria-current"]} to="/work/$workItemId" params={{ workItemId }} search={{ ...options.search, projectId: backgroundProjectId }}>{options.label}</Link>,
     }} />}
-    <Dialog.Root open onOpenChange={(open) => { if (!open) close(); }}>
+    {/* Only the operator's own dismissals close the drawer: Escape, the overlay
+        and the close control. An unattributable layer request (a window resize)
+        is ignored, so a resize cannot navigate out from under an open form. */}
+    <Dialog.Root open>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className="work-drawer" onCloseAutoFocus={(event) => event.preventDefault()}>
-          <Dialog.Close asChild><button className="icon-button work-drawer-close" type="button" aria-label="Close work detail"><X size={20} aria-hidden="true" /></button></Dialog.Close>
-          <WorkDetailBody workItemId={workItemId} scopedProjectId={queryProjectId ?? itemProjectId ?? null} backSearch={foreignScope ? {} : listState} drawer />
+        <Dialog.Content className="work-drawer" onCloseAutoFocus={(event) => event.preventDefault()}
+          onEscapeKeyDown={close} onPointerDownOutside={close}>
+          <button className="icon-button work-drawer-close" type="button" aria-label="Close work detail" onClick={close}><X size={20} aria-hidden="true" /></button>
+          <WorkDetailBody workItemId={workItemId} scopedProjectId={queryProjectId ?? itemProjectId ?? null} backSearch={foreignScope ? {} : listState} projectStatus={cachedProject?.status} drawer />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -121,34 +136,99 @@ function ProjectWorkBackground({ projectId, navigation }: { projectId: string; n
   </div>;
 }
 
-function WorkDetailBody({ workItemId, scopedProjectId, backSearch, drawer = false }: {
+function WorkDetailBody({ workItemId, scopedProjectId, backSearch, projectStatus, drawer = false }: {
   workItemId: string;
   scopedProjectId: string | null;
   backSearch: WorkSearch;
+  /** The last loaded status of the item's project; a cold deep link leaves it unknown. */
+  projectStatus: string | undefined;
   drawer?: boolean;
 }) {
   const { application } = useRouteContext({ from: "__root__" });
+  const csrf = useSessionToken();
+  const queryClient = useQueryClient();
   const query = useQuery(workDetailOptions(application.api, workItemId));
   const detail = query.data;
   const item = detail?.work_item;
   const backToProjectId = item?.project_id ?? scopedProjectId;
+  const [editing, setEditing] = useState<Project | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [pendingWrites, setPendingWrites] = useState(0);
+  const [notice, setNotice] = useState<{ tone: "status" | "alert"; text: string } | null>(null);
+  const cachedProject = useQuery({ ...workspaceOptions(application.api, item?.project_id ?? scopedProjectId ?? ""), enabled: false })
+    .data?.projects.find((candidate) => candidate.id === (item?.project_id ?? scopedProjectId));
+  const editable = item !== undefined && workItemEditable(projectStatus ?? cachedProject?.status, item);
+  const versionedItem = item !== undefined && hasServedRevision(item) ? item : null;
+  // An editor whose row stops carrying a served revision has no writable path:
+  // the form is not rendered and the surface says so instead of dropping the
+  // draft silently.
+  const revisionLost = editing !== null && item !== undefined && !hasServedRevision(item);
+  const shownNotice = revisionLost
+    ? { tone: "alert" as const, text: "This work item's revision is no longer served, so the open form was closed without writing anything." }
+    : notice;
   const refresh = () => { if (!query.isFetching) void query.refetch(); };
+  const reRead = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId }] }),
+    queryClient.invalidateQueries({ queryKey: ["workspace"] }),
+  ]);
+  // The editor needs the project snapshot for its resource selects and its
+  // archived gate; a cold deep link fetches it here, once, when the operator
+  // actually opens the editor.
+  const openEditor = async () => {
+    if (item === undefined || opening) return;
+    const projectId = item.project_id ?? scopedProjectId;
+    if (projectId === null || projectId === undefined) {
+      setNotice({ tone: "alert", text: "This work item's project was not served, so its editor cannot load the project's resources." });
+      return;
+    }
+    setOpening(true);
+    try {
+      const workspace = cachedProject === undefined
+        ? await queryClient.fetchQuery(workspaceOptions(application.api, projectId))
+        : null;
+      const project = cachedProject ?? workspace?.projects.find((candidate) => candidate.id === projectId);
+      if (project === undefined) {
+        setNotice({ tone: "alert", text: "This work item's project is unavailable, so its editor cannot load the project's resources." });
+        return;
+      }
+      if (project.status === "archived") {
+        setNotice({ tone: "alert", text: "This project is archived. Restore it before editing its work." });
+        return;
+      }
+      setNotice(null);
+      setEditing(project);
+    } catch (error) {
+      setNotice({ tone: "alert", text: errorMessage(error) });
+    } finally {
+      setOpening(false);
+    }
+  };
   return <>
     {drawer && <>
       <Dialog.Title className="sr-only">{item?.title ?? "Work item"}</Dialog.Title>
-      <Dialog.Description className="sr-only">Read-only work detail. Escape closes it and returns to the project.</Dialog.Description>
+      <Dialog.Description className="sr-only">Work detail. Escape closes it and returns to the project.</Dialog.Description>
     </>}
     <PageHeading title={item?.title ?? "Work item"} description={item === undefined ? "Loading this work item…" : `${item.key} · ${ownerLabel(item.assignee)}`}>
       <div className="heading-actions">
         {backToProjectId === null
           ? <Link className="button" to="/projects">Back to projects</Link>
           : <Link className="button" to="/projects/$projectId" params={{ projectId: backToProjectId }} search={backSearch}>Back to project</Link>}
+        {item !== undefined && editable && <button className="button button-primary" type="button" disabled={opening || pendingWrites > 0} onClick={() => { void openEditor(); }}>{opening ? "Opening…" : "Edit work item"}</button>}
         <RefreshButton fetching={query.isFetching} refresh={refresh} />
       </div>
     </PageHeading>
+    {shownNotice !== null && (shownNotice.tone === "status"
+      ? <p className="notice" role="status">{shownNotice.text}<button className="button" type="button" onClick={() => setNotice(null)}>Dismiss</button></p>
+      : <p className="notice notice-error" role="alert">{shownNotice.text}</p>)}
     {query.isPending && <LoadingState label="Loading work item…" />}
     {query.isError && <ErrorState error={query.error} retry={refresh} stale={detail !== undefined} />}
     {detail && item && <WorkDetailSections detail={detail} />}
+    {editing !== null && versionedItem !== null && <WorkItemEditor key={versionedItem.id} project={editing} item={versionedItem} api={application.api} csrf={csrf}
+      onWriteStart={() => setPendingWrites((count) => count + 1)}
+      onWriteSettled={() => setPendingWrites((count) => Math.max(0, count - 1))}
+      onSaved={(_receipt, text) => { setEditing(null); setNotice({ tone: "status", text }); void reRead(); }}
+      onRefused={(message) => { setEditing(null); setNotice({ tone: "alert", text: message }); void reRead(); }}
+      onClose={() => setEditing(null)} />}
   </>;
 }
 
@@ -180,14 +260,19 @@ function WorkDetailSections({ detail }: { detail: WorkDetail }) {
   const scopeLabel = decisionScopeLabel(execution?.waiting);
   const generation = execution === null || execution === undefined ? null : typeof execution.generation === "number" ? execution.generation : null;
   const runId = execution?.run_id ?? null;
+  const goalManaged = isGoalManaged(item);
+  const providerOwned = item.external?.provider_owned_fields ?? [];
   return <>
     <p className="detail-chips">
       <StatusBadge status={item.status} />
+      <OwnershipChip item={item} />
       {executionState !== null && <span className="chip">{executionState}</span>}
       <span className={`chip chip-${ci.tone}`} title={ciTitle}>{ci.text}</span>
       {reviewStatus !== null && <span className="chip">review {reviewStatus}</span>}
       <span className="chip chip-unknown" title={costHint}>{costLabel}</span>
     </p>
+    {goalManaged && <p className="notice" role="status">This work item is managed by a Goal. Its run, retry and move paths go through Goal admission; this surface records its current state and offers no writable path for it.</p>}
+    {!goalManaged && providerOwned.length > 0 && <p className="notice" role="status">The external work tracker owns {providerOwned.join(", ")} on this item; those fields are read-only here and its state column is not movable from this board.</p>}
 
     <section className="detail-section" aria-labelledby="outcome-section">
       <h2 id="outcome-section">Outcome</h2>

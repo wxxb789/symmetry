@@ -349,6 +349,13 @@ defmodule SymmetryControl.Workspaces.WorkItem do
   def external_work_available?(%{external_work_item_resource_id: nil}), do: true
   def external_work_available?(%{external_available: available}), do: available
 
+  # A work item is Goal-owned only when the whole all-or-nothing membership is set.
+  def goal_managed?(work_item) do
+    is_binary(Map.get(work_item, :goal_id)) and
+      is_integer(Map.get(work_item, :admitted_revision)) and
+      is_map(Map.get(work_item, :acceptance_contract))
+  end
+
   def changeset(work_item, attrs) do
     work_item
     |> cast(attrs, [

@@ -45,6 +45,10 @@
         "review_status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "delivery": {"$ref": "#/definitions/WorkItemDelivery"},
         "external": {"oneOf": [{"$ref": "#/definitions/WorkItemExternal"}, {"type": "null"}]},
+        "goal_managed": {
+          "type": "boolean",
+          "description": "True only when the all-or-nothing Goal membership (goal_id, admitted_revision, acceptance_contract) is set; served so a client can present no writable path for a Goal-managed item."
+        },
         "version": {"type": "integer"},
         "can_start": {"type": "boolean"},
         "execution": {"oneOf": [{"$ref": "#/definitions/WorkItemExecution"}, {"type": "null"}]},
@@ -251,6 +255,11 @@
         "updated_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
         "resource_id": {
           "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        },
+        "provider_owned_fields": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Field names the external tracker owns; write refusals still come from Control."
         }
       }
     },
