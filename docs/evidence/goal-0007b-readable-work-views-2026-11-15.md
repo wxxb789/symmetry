@@ -26,29 +26,65 @@ findings in `.tmp/0007b-findings-sol-round2.md`: unrecognised structured
 reported output renders as its JSON instead of reading as an absence (with
 red-before/green-after assertions), the revision binding below is rewritten in
 durable content-digest form, and the trailing blank line in
-`frontend/src/components/workspace.tsx` is removed. Like round 3, it edits only
-the working tree: no commit, push, or history rewrite.
+`frontend/src/components/workspace.tsx` is removed. Like round 3, that pass
+edited only the working tree: it performed no commit, push, or history rewrite;
+the branch's content was committed later (`01eb134` carries the round-4 source
+edits together with the receipt update).
 
-Explicit revision binding (durable, content-addressed, not commit-addressed):
-revisions here are identified by their tree digest, because this branch may be
-rebased before merge and a rebase rewrites SHAs. This receipt's evidence
-subject is the current repair tree (round-4 fixes, uncommitted):
-`sha256:353b10fcec5b3aba29a331a406f2efea0ba65761ccaae71afc514d381d6c1c3f`
-(390 entries; recomputed on this host with the algorithm under "Measurement
-and evidence subject", where every digest is listed with the revision it
-describes). Round 1/2 evidence was produced on the pre-rebase working tree
-committed as `dae2388` (base
-`343dea6a62484d73e7b577a0be2683ca233510f6`); its subject digest reproduces
-exactly on that revision and not on the later trees, because the rebase
-replaced `.github/workflows/ci.yml`, the only digest-scope path that changed
-(`git diff --name-only dae2388..03646d1` lists four files; three are outside
-the digest set).
+Round 5 (fix pass on the round-3 Sol review, 2026-11-16, this pass) is
+documentation-only: it rebinds the evidence subject as a durable source digest
+that excludes `docs/**`, names the revision behind every recorded digest and
+count, keeps the pre-round-5 numbers as historical evidence bound to their own
+revisions, states the current contract inventory with its scope, re-syncs the
+retained `.tmp/0007b-tooling` contract scope to this revision, and re-runs the
+contract and frontend gates there (section "Round 5 verification"). No source
+file, test or assertion changed; like the earlier passes it edits the working
+tree only (no commit, push, or history rewrite).
+
+Explicit revision binding (durable, source-subject-addressed, not
+commit-addressed): revisions here are identified by a content digest, because
+this branch may be rebased before merge and a rebase rewrites SHAs. This
+receipt's binding is the **source subject** of the revision it describes: the
+digest of the source-file manifest over the digest scope below with every path
+under `docs/**` excluded, so editing this receipt or any other document cannot
+change the value it records. For the current revision — branch HEAD
+`01eb1344e4415ed2ce978e71030739cbfed4a09e`, whose source content is unchanged
+by documentation-only commits after it — the source subject is
+
+`sha256:4019477f8ebf9b80294960cff305092cec22de070157cf830529ad16b6e1c323`
+(393 entries; recomputed on this host in the clean working tree at that
+revision with `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1`).
+
+The same revision's full-tree digest — the source subject plus the three
+explicit `docs/**` files the older rounds included — is recorded here only as
+a historical fact with its revision named: commit
+`01eb1344e4415ed2ce978e71030739cbfed4a09e` →
+`sha256:1e345643837bcaaf5f26e5218df52156965f564618257239100dceccbb02aca5`
+(396 entries; `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1 -Scope
+full`). Documentation-only commits after `01eb134` do not change the source
+subject. The exact final source-subject digest of the merge revision will be
+recorded in the PR description, not inside this receipt.
+
+Round 4's earlier binding `sha256:353b10fc…` (390 entries) was computed over
+the round-4 uncommitted tree on the pre-rebase line (`6398caa` plus the five
+round-4 source files) and is retained below only as historical evidence, not
+as the current tree: it is not the digest of the revision this receipt
+describes. The rebase onto the current base (`259ea7d`, the 0009 contract
+amendments) brought in six additional `goal-command` fixtures, a `goal-command`
+schema amendment and its regenerated artifacts, which is why the current
+revision has 396 full-tree entries and 219 manifest fixtures. Round 1/2
+evidence was produced on the pre-rebase working tree committed as `dae2388`
+(base `343dea6a62484d73e7b577a0be2683ca233510f6`); its subject digest
+reproduces exactly on that revision and not on the later trees, because the
+rebase replaced `.github/workflows/ci.yml`, the only digest-scope path that
+changed (`git diff --name-only dae2388..03646d1` lists four files; three are
+outside the digest set).
 
 ## Findings and authorized boundary
 
 | ID | File / surface | Change or disposition | Evidence |
 | --- | --- | --- | --- |
-| F1 | `.tmp/0007b-findings.md`; `contracts/v1/`, `contracts/ts/`, `frontend/src/` | Valid. Added descriptive work-detail and timeline schemas, generated DTOs and Effect boundaries, and consumed those boundaries in list/board/detail/history. The presentation readers derive their input shapes from the generated DTOs (`Loosen<>` views over the served projections; open-JSON members stay `unknown`), so no hand-written parallel wire DTO copies remain. Implemented project filters, saved views, truthful cost/CI/acceptance labels, desktop drawer/narrow page, and cursor-on-demand history. This was the round-1 blocker; round 2 re-runs its surfaces on the current revision, and round 3's review repairs are listed below. | Contract, frontend, Go, and Elixir results in this receipt; browser evidence is separate from schema proof. |
+| F1 | `.tmp/0007b-findings.md`; `contracts/v1/`, `contracts/ts/`, `frontend/src/` | Valid. Added descriptive work-detail and timeline schemas, generated DTOs and Effect boundaries, and consumed those boundaries in list/board/detail/history. The presentation readers derive their input shapes from the generated DTOs (`Loosen<>` views over the served projections; open-JSON members stay `unknown`), so no hand-written parallel wire DTO copies remain. Implemented project filters, saved views, truthful cost/CI/acceptance labels, desktop drawer/narrow page, and cursor-on-demand history. This was the round-1 blocker; round 2 re-runs its surfaces on the round-2 revision, and round 3's review repairs are listed below. | Contract, frontend, Go, and Elixir results in this receipt; browser evidence is separate from schema proof. |
 | F2 | Authorized resolution in `.tmp/0007b-findings.md` | Applied as a scope rule, not dismissed as an invalid finding. Regenerated `contracts/generated/**` and `daemon/internal/contracts/{generated.go,schema_bundle.json}`; added matching fixtures and passive read-schema dispatch. `control/lib/**` stayed untouched by round 1; round 2 then made only the two changes authorized below. | Generation/drift gate and cross-language fixture decoders; all production read responses keep their original wire contract. |
 
 ### Round 2 authorized blockers, fixed
@@ -97,40 +133,66 @@ below; nothing was silently dropped.
 
 ## Maintained measurements
 
-This receipt is the single source for the run's current measured counts. Older
-`test-ablation-*` receipts describe their own historical revisions and are not
-live consumers of this run.
+This receipt is the single source for the run's measured counts: the Round 5
+column carries the current revision's re-executed evidence, and every earlier
+column records its own revision. Older `test-ablation-*` receipts describe
+their own historical revisions and are not live consumers of this run.
 
-| Measurement | Baseline | Round 1 | Round 2 | Round 3 (review-repair tree) | Round 4 (current fix tree) | Measurement method |
-| --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Frontend unit tests | 33 passed | 62 passed | 62 passed | 70 passed | 71 passed | Baseline archive Vitest run; final `pnpm --filter @symmetry/frontend test` (rounds 3–4 ran the package's pinned `vitest run` directly in the verified workspace: 7 files). |
-| Contract runtime tests | 31 passed | 32 passed | 32 passed | 32 passed (unchanged) | not re-run in round 4 | Baseline archive and final `node --test contracts/scripts/*.test.mjs`. |
-| Draft 7 root schemas | 15 | 17 | 17 | 17 (unchanged) | not re-run in round 4 | Contract generator/checker; common definitions are not a root. |
-| Manifest fixtures | 190 | 213 | 213 | 213 (unchanged; two invalid fixtures corrected) | not re-run in round 4 (fixtures untouched) | Final schema/Effect gates exercise every manifest entry. |
-| Browser declarations / spec files | 41 / 8 | 47 / 9 | 47 / 9 | 47 / 9 (unchanged) | not re-run in round 4 | Baseline and final Playwright discovery. |
-| Expanded desktop + mobile browser cases | 82 | 94 | 94 | 94 (unchanged) | 36 executed in round 4 (35 passed, 1 skipped); broad suite not re-run | Executed `playwright test --list` in round 1; the round-3 broad run executed all 94 (79 passed + 15 skipped). |
-| Largest project snapshot in the completed measurement run | Not measured | 56,632 bytes / 15 work items | 74,388 bytes / 15 work items | 112,562 bytes / 15 work items | 144,421 bytes / 15 work items (focused run) | `snapshotMetrics` in the final list/board cases; exact response bytes, not a string-length estimate. The value moves with the shared development database as fixtures accumulate, not with this change. |
+| Measurement | Baseline | Round 1 (`3ddb5e44…`) | Round 2 (`dae2388`) | Round 3 (`6398caa`) | Round 4 (`353b10fc…`, historical) | Round 5 (`01eb134`, current) | Measurement method |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Frontend unit tests | 33 passed | 62 passed | 62 passed | 70 passed | 71 passed | 71 passed (re-run) | Baseline archive Vitest run; final `pnpm --filter @symmetry/frontend test` (rounds 3–5 ran the package's pinned `vitest run` directly in the verified workspace: 7 files). |
+| Contract runtime tests | 31 passed | 32 passed | 32 passed | 32 passed (unchanged) | not re-run in round 4 | 32 passed (re-run) | Baseline archive and final `node --test contracts/scripts/*.test.mjs`. |
+| Draft 7 root schemas | 15 | 17 | 17 | 17 (unchanged) | not re-run in round 4 | 17 counted, of 18 files (re-run) | Contract generator/checker; `common.schema.json` is the excluded shared-definitions file (`contracts/scripts/check.mjs:114`), not a root. |
+| Manifest fixtures | 190 | 213 | 213 | 213 (unchanged; two invalid fixtures corrected) | not re-run in round 4 (fixtures untouched) | 219 = 82 valid + 137 invalid (re-run) | Final schema/Effect gates exercise every manifest entry. |
+| Browser declarations / spec files | 41 / 8 | 47 / 9 | 47 / 9 | 47 / 9 (unchanged) | not re-run in round 4 | 47 / 9 (re-listed) | Baseline and final Playwright discovery; declarations counted as `^\s*test\(` in `browser/tests/*.spec.mjs`. |
+| Expanded desktop + mobile browser cases | 82 | 94 | 94 | 94 (unchanged) | 36 executed in round 4 (35 passed, 1 skipped); broad suite not re-run | 94 listed, not executed in round 5 | Executed `playwright test --list` in round 1; the round-3 broad run executed all 94 (79 passed + 15 skipped). |
+| Largest project snapshot in the completed measurement run | Not measured | 56,632 bytes / 15 work items | 74,388 bytes / 15 work items | 112,562 bytes / 15 work items | 144,421 bytes / 15 work items (focused run) | not re-measured in round 5 | `snapshotMetrics` in the final list/board cases; exact response bytes, not a string-length estimate. The value moves with the shared development database as fixtures accumulate, not with this change. |
 
-The Round 4 column records the current fix tree
-(`sha256:353b10fc…`): a re-measured number where present, and
-"not re-run"/"not re-measured" where round 4 executed nothing new and the
-round-3 value remains the last executed measurement. The Baseline–Round 3
-columns are retained history, not competing current numbers. Round 4 changes
-only the frontend reported-output fallback plus a trailing newline, so only the
-frontend unit count grows (the new router case); round 4 additionally executed
-the focused 36-case release-shell set (35 passed, 1 skipped) on the rebuilt
-release, not the broad 94-case suite; the snapshot value moves with the fixture
-database rather than with this change.
+Column revisions: Baseline is the archived pre-0007b workspace; Round 1 the
+round-1 pre-rebase tree (`sha256:3ddb5e44…`); Round 2 the pre-rebase revision
+`dae2388` (`sha256:aa344b7d…`); Round 3 the pre-rebase review-repair revision
+`6398caa` (`sha256:193ddbb2…`); Round 4 the round-4 uncommitted tree
+`sha256:353b10fc…` over `6398caa` (historical evidence, not the current tree);
+Round 5 the current revision `01eb134` (source subject `sha256:4019477f…`,
+`docs/**` excluded). Full digests are listed under "Measurement and evidence
+subject".
+
+The Round 5 column records what round 5 re-executed on the current revision —
+frontend unit tests, contract runtime tests, the schema/fixture inventory and
+browser discovery. "Not re-run in round 5" keeps the last executed value in its
+own revision's column; "not re-run in round 4" rows in the Round 4 column are
+that tree's historical state. Round 1–4 numbers are retained history, never
+restated as new passes.
+
+Current contract inventory with scope: `contracts/v1` holds 18 schema files, of
+which the checker counts 17 Draft 7 root schemas — the excluded file is
+`common.schema.json`, shared definitions rather than a root
+(`contracts/scripts/check.mjs:114`) — and `contracts/fixtures/manifest.json`
+lists 219 fixtures = 82 valid + 137 invalid. The corpus grew from 213 to 219
+with the rebase onto `259ea7d` (0009 amendments: six `goal-command` achieve
+fixtures plus regenerated `goal-command` artifacts); no 0007b round added or
+removed fixtures, and the 17-root count is unchanged since round 1 added the
+two read-schema roots (15 → 17). Contract evidence on this revision: the Node
+contract gates, the Go contract packages and the Elixir manifest gate were
+re-run in round 5 against the re-synced tooling copy and container (exact
+commands and exit codes under "Round 5 verification"); the focused/broad/live
+browser suites, the Compose/restart specs, the Elixir full suite, the Go full
+tree, and the frozen dependency installation were not re-run on this revision
+and keep the revision bindings recorded here.
 
 The baseline browser suite was **listed, not executed**. No before-run pass
 count is claimed for Go or Elixir.
 
-## Executed non-browser gates
+## Executed non-browser gates (round-1 tree, subject `sha256:3ddb5e44…`)
 
 Node commands below ran in the disposable `symmetry-0007b-node` container at
 `/isolated`, using pnpm 12.17.0, Node 24.22.3, the repository's package versions,
 and the verified isolated dependency graph described below. They are not a pass
 of the failed original frozen-install gate.
+
+Every result in this section is bound to the round-1 pre-rebase tree
+(`sha256:3ddb5e44551f2d498628e8456d87a40684d6a90f0b85b215a22148b5cdb008a6`);
+its 17-schema / 213-fixture rows describe that tree, not the current revision.
 
 | Exact command / working directory | Exit | Observed result |
 | --- | ---: | --- |
@@ -152,13 +214,15 @@ The table expands the component commands from the executed shell chains; each
 successful component printed an explicit zero marker. Go event counts separate
 top-level tests from subtests to avoid double-counting them.
 
-### Round 2 gate re-runs (current revision)
+### Round 2 gate re-runs (pre-rebase revision `dae2388`, subject `sha256:aa344b7d…`)
 
 The same containers and toolchains were reused on the fixed tree. Round 2
 changed only `control/lib/**` and `control/test/**`; the node gates were re-run
 because the isolated workspace had been left at the earlier round-1 file set,
-after its gate-relevant files were synced to the current revision (306 files
-verified byte-identical between `/isolated` and the working tree).
+after its gate-relevant files were synced to that revision (306 files
+verified byte-identical between `/isolated` and the working tree). Every result
+in this section is bound to `dae2388` (`sha256:aa344b7d…`); its 17-schema /
+213-fixture rows describe that revision's corpus.
 
 | Exact command / working directory | Exit | Observed result |
 | --- | ---: | --- |
@@ -169,7 +233,7 @@ verified byte-identical between `/isolated` and the working tree).
 | `docker exec -w /isolated symmetry-0007b-node pnpm --filter @symmetry/frontend lint` | 0 | `eslint . --max-warnings 0` clean. |
 | `docker exec -w /isolated symmetry-0007b-node pnpm --filter @symmetry/frontend test` | 0 | 7 files, 62 passed; 9.06 s. jsdom still reports its unimplemented `Window.scrollTo`. |
 | `docker exec -w /isolated symmetry-0007b-node pnpm --filter @symmetry/frontend build` | 0 | `vite build && node scripts/stage-assets.mjs`; 2866 modules; `index-D8XHWnI_.js` 656.77 kB / gzip 199.06 kB, `index-D7KuRjr5.css` 20.92 kB / gzip 5.24 kB; the Vite greater-than-500-kB chunk warning remains. |
-| `go vet ./...` in `daemon/` | 0 | Windows host vet passed on the current revision. |
+| `go vet ./...` in `daemon/` | 0 | Windows host vet passed on the round-2 revision. |
 | `go test -json ./...` in `daemon/`, redirected to `.tmp/0007b-round2-go-all.jsonl` | 1 | **1,728 top-level passes, 55 top-level skips, 2,351 subtest passes, 20 packages passed, one package failed**; 311.9 s. Two `daemon/internal/app` tests failed on start deadlines: `TestGoalAdmissionLeavesProviderAccessNilForNativeHarness` ("native turn did not start", 1 s deadline) and `TestReconcilePendingRecoverySchedulesSnapshotBeforeBackoff` ("Control snapshot assignment was not started after pending recovery reconcile", 7.38 s). `daemon/**` is unchanged by both rounds except the round-1 contract artifacts, and neither failing file was edited. |
 | `go test ./internal/app` in `daemon/`, alone after the full run | 0 | `ok github.com/wxxb789/symmetry/daemon/internal/app 274.200s` — both previously failing tests pass when the host is not also running the browser suite, the live daemon fixtures and another agent's workloads. |
 | `docker exec -d -e MIX_ENV=test -e POSTGRES_DB=symmetry_control_test symmetry-0007b-control sh -lc 'cd /app/control && mix test > /tmp/0007b-round2-mix-full2.log 2>&1; echo "EXIT=$?" >> /tmp/0007b-round2-mix-full2.log'` | 0 | Clean full suite on the fixed tree: **826 passed, 21 skipped**, seed 357852, 423.0 s — the same totals as round 1. |
@@ -198,8 +262,8 @@ serves: `index-D8XHWnI_.js`
 `index.html`
 `sha256:331cf9b2943fc588cf148d410536b837e99ff6aadfa0824138f90aefd7b31613` in
 `/isolated/control/priv/static/portal/`, `/app/control/priv/static/portal/` and
-the release's own `priv`, so the release under test serves exactly this
-revision's build.
+the release's own `priv`, so the release under test serves exactly the
+round-2 revision's build (`dae2388`).
 
 pnpm's pre-run dependency verification attempted the registry on every scripted
 run and failed with `ERR_PNPM_RESOLVING_NPM_RESOLVER_NETWORK_ERROR` /
@@ -328,7 +392,7 @@ its narrow counterpart is intentionally skipped. Other skips in the broad run
 include environment-gated live/Compose suites and pre-existing mobile
 concurrency exclusions; a skip is not proof.
 
-### Round 2 runs (current release revision)
+### Round 2 runs (pre-rebase revision `dae2388`)
 
 The release was rebuilt from the fixed tree (`mix release --overwrite` in
 `/app/control`, then both instances restarted: primary on `:4000`, expiry on
@@ -340,7 +404,7 @@ re-run against it with Chromium 156.0.8078.4 / Playwright 1.64.1 from
 | --- | ---: | --- |
 | `mise exec pnpm@12.17.0 -- pnpm --dir .tmp/0007b-tooling --filter symmetry-browser-acceptance test tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs` | 0 | Focused release-shell gate: 36 cases, **35 passed, 1 skipped, 0 failed**; 2.9 min wall. Both fresh-session deep-link cases pass on both widths (cases 5, 6, 23, 24). `.tmp/0007b-round2-focused-results` and `.tmp/0007b-round2-focused-report`. |
 | `mise exec pnpm@12.17.0 -- pnpm --dir .tmp/0007b-tooling --filter symmetry-browser-acceptance test` | 0 | Broad native run, nine spec files: 94 cases, **79 passed, 15 skipped, 0 failed**; 304.25 s wall / 5.0 min Playwright. Round 1 was 70/15/9; the nine previously failing cases all pass. `.tmp/0007b-round2-broad-results` and `.tmp/0007b-round2-broad-report`; `.last-run.json` is `{"status":"passed","failedTests":[]}`. |
-| `pwsh -NoProfile -File .tmp/0007b-tooling/browser/scripts/run-live-daemon-tests.ps1` | 0 | Native live runner on the current release: **3 passed, 1 intentionally skipped** mobile lifecycle case; 95.8 s wall / 1.4 min Playwright. Both widths executed the real-cursor history case (`firstPageEntries` 100 → `firstEntriesAfterOlderPage` 121, `currentEntriesAfterRetry` 121), the same counts as round 1. `.tmp/0007b-round2-live-results` and `.tmp/0007b-round2-live-report`; logs at `C:\Users\lhan\AppData\Local\Temp\symmetry-goal-02-live-c3d449fb4b71404980b99a52f7f447ab`. |
+| `pwsh -NoProfile -File .tmp/0007b-tooling/browser/scripts/run-live-daemon-tests.ps1` | 0 | Native live runner on the round-2 release: **3 passed, 1 intentionally skipped** mobile lifecycle case; 95.8 s wall / 1.4 min Playwright. Both widths executed the real-cursor history case (`firstPageEntries` 100 → `firstEntriesAfterOlderPage` 121, `currentEntriesAfterRetry` 121), the same counts as round 1. `.tmp/0007b-round2-live-results` and `.tmp/0007b-round2-live-report`; logs at `C:\Users\lhan\AppData\Local\Temp\symmetry-goal-02-live-c3d449fb4b71404980b99a52f7f447ab`. |
 
 Round-2 environment assignments (identical to round 1 except for the output
 directories; the focused run used `.tmp/0007b-round2-focused-results` and
@@ -414,27 +478,35 @@ Capture roots below are repository-relative. Each `.png` has a same-basename
 `.json` recording the actual URL, viewport, and observations. These are local
 run artifacts, not checked-in screenshots or claims that a missing CI job ran.
 
-- **L** = `.tmp/0007b-list-v5-results`
-- **V** = `.tmp/0007b-browser-v3-results`
-- **H** = `.tmp/0007b-live-v3-results`
-- **R** = `.tmp/0007b-round2-focused-results` (round 2 revision)
-- **B** = `.tmp/0007b-round2-broad-results` (round 2 revision)
-- **H2** = `.tmp/0007b-round2-live-results` (round 2 native live runner)
-- **R3** = `.tmp/0007b-round3-focused-results` (round 3 review-repair tree)
-- **B3** = `.tmp/0007b-round3-broad-results` (round 3 review-repair tree)
-- **H3** = `.tmp/0007b-round3-live-results` (round 3 native live runner)
-- **X** = `.tmp/0007b-round3-before-results` (pre-fix release with the new
-  assertions: 3 failed / 32 passed / 1 skipped)
+- **L** = `.tmp/0007b-list-v5-results` (round-1 tree `sha256:3ddb5e44…`)
+- **V** = `.tmp/0007b-browser-v3-results` (round-1 tree `sha256:3ddb5e44…`)
+- **H** = `.tmp/0007b-live-v3-results` (round-1 tree `sha256:3ddb5e44…`)
+- **R** = `.tmp/0007b-round2-focused-results` (round-2 revision `dae2388` /
+  `sha256:aa344b7d…`)
+- **B** = `.tmp/0007b-round2-broad-results` (round-2 revision `dae2388` /
+  `sha256:aa344b7d…`)
+- **H2** = `.tmp/0007b-round2-live-results` (round-2 native live runner,
+  `dae2388`)
+- **R3** = `.tmp/0007b-round3-focused-results` (pre-rebase round-3 review-repair
+  tree `6398caa` / `sha256:193ddbb2…`)
+- **B3** = `.tmp/0007b-round3-broad-results` (pre-rebase round-3 review-repair
+  tree `6398caa` / `sha256:193ddbb2…`)
+- **H3** = `.tmp/0007b-round3-live-results` (pre-rebase round-3 native live
+  runner, `6398caa`)
+- **X** = `.tmp/0007b-round3-before-results` (pre-fix release on the round-3
+  tree with the new assertions: 3 failed / 32 passed / 1 skipped)
 - **D** / **N** = `desktop-chromium` / `mobile-chromium` in the exact directory
   suffixes below; N is the narrow-screen project, not a second desktop context.
 
 The L/V/H rows record the round-1 observations; round 2 re-produced the same
-captures on the current revision under R (focused gate), B (broad suite) and H2
+captures on the round-2 revision (`dae2388`) under R (focused gate), B (broad
+suite) and H2
 (native live runner, which is the only executor of the real-cursor history
 case). The two fresh-session rows below were failures in V and are re-pointed to
 R, where they pass; the two history rows are re-pointed to H2. Round 3
-re-produced the focused, broad and live captures on the review-repair tree under
-R3/B3/H3 (all green), with the pre-fix red run under X.
+re-produced the focused, broad and live captures on the pre-rebase review-repair
+tree (`6398caa` / `sha256:193ddbb2…`) under R3/B3/H3 (all green), with the
+pre-fix red run under X.
 
 | Required item | Desktop and narrow evidence | Observed result / limit |
 | --- | --- | --- |
@@ -511,33 +583,56 @@ shape was invented. History uses only the existing opaque cursor API.
 
 Evidence-subject digests, each stated as the content identity of the revision
 it describes (commit SHAs below are informative only; a rebase rewrites them):
-round-1 pre-rebase tree
-`sha256:3ddb5e44551f2d498628e8456d87a40684d6a90f0b85b215a22148b5cdb008a6`;
-round-2 pre-rebase tree — the revision committed as `dae2388` (base
-`343dea6a62484d73e7b577a0be2683ca233510f6`) —
-`sha256:aa344b7ddd3f6f5682b0a7963cd294a7d918b44200796fd8d2174af1615c9527`;
-post-rebase feature tree — the revision committed as `03646d1` (base
-`4e60b9d4b7f113cfe0162fa8003a26a01e90e4c9`) —
-`sha256:391930d0f0f098e023254ca0a8899b4884dfe410809f913e5bbbe168ddcb2f60`;
-round-3 review-repair tree — the revision committed as `6398caa` —
-`sha256:193ddbb2e257230b2e61e30d9d3a0431d0dfcd6329ef725e6a242b6bc5796817`;
-round-4 fix tree — the current uncommitted working tree (round-4 fixes over
-`6398caa`) —
-`sha256:353b10fcec5b3aba29a331a406f2efea0ba65761ccaae71afc514d381d6c1c3f`.
-Each ran `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` (exit 0; 390
-file entries for the round-2, post-rebase, round-3 and round-4 trees) in an
-extracted `git archive` copy of the named revision, or in the working tree for
-the uncommitted repair trees (round 3, round 4). This is a source-manifest
-digest, not a commit hash and not a claim that the original frozen-install gate
-passed. The receipt and local output artifacts are excluded to avoid
-self-reference.
 
-Reproduction algorithm: recursively enumerate files under the following roots;
-add the direct files in `frontend/`, `browser/`, and `contracts/`; add the
-explicit files below; deduplicate full paths. For each file compute lowercase
-SHA-256 and a repository-relative path with `/` separators. Sort by path using
-PowerShell `Sort-Object -Property Path -Culture ""`. Hash UTF-8 without BOM
-of `hash + two spaces + path + LF` for every entry, including the final LF.
+- round-1 pre-rebase tree —
+  `sha256:3ddb5e44551f2d498628e8456d87a40684d6a90f0b85b215a22148b5cdb008a6`
+  (full-tree scope);
+- round-2 pre-rebase tree — the revision committed as `dae2388` (base
+  `343dea6a62484d73e7b577a0be2683ca233510f6`) —
+  `sha256:aa344b7ddd3f6f5682b0a7963cd294a7d918b44200796fd8d2174af1615c9527`
+  (full-tree scope, 390 entries);
+- post-rebase feature tree — the revision committed as `03646d1` (base
+  `4e60b9d4b7f113cfe0162fa8003a26a01e90e4c9`) —
+  `sha256:391930d0f0f098e023254ca0a8899b4884dfe410809f913e5bbbe168ddcb2f60`
+  (full-tree scope, 390 entries);
+- round-3 pre-rebase review-repair tree — the revision committed as `6398caa` —
+  `sha256:193ddbb2e257230b2e61e30d9d3a0431d0dfcd6329ef725e6a242b6bc5796817`
+  (full-tree scope, 390 entries);
+- round-4 uncommitted tree over `6398caa` —
+  `sha256:353b10fcec5b3aba29a331a406f2efea0ba65761ccaae71afc514d381d6c1c3f`
+  (full-tree scope, 390 entries; **historical evidence only**, not the revision
+  this receipt describes);
+- current revision, branch HEAD
+  `01eb1344e4415ed2ce978e71030739cbfed4a09e` — source subject
+  `sha256:4019477f8ebf9b80294960cff305092cec22de070157cf830529ad16b6e1c323`
+  (393 entries, `docs/**` excluded, `-Scope source`) and full-tree digest
+  `sha256:1e345643837bcaaf5f26e5218df52156965f564618257239100dceccbb02aca5`
+  (396 entries, the historical variant that includes the three explicit
+  `docs/**` files, `-Scope full`).
+
+Every value was recomputed on this host with `pwsh -NoProfile -File
+.tmp/0007b-subject-digest.ps1` (exit 0) — `-Scope source` (default) for the
+source subject, `-Scope full` for the historical full-tree values — in an
+extracted `git archive` copy of the named revision, or in the clean working
+tree at it (rounds 3–5). These are source-manifest digests, not commit hashes
+and not a claim that the original frozen-install gate passed. The receipt and
+local output artifacts are excluded from both scopes to avoid self-reference;
+the `docs/**` exclusion keeps the source subject insensitive to documentation
+edits, including this receipt's own round-5 edits (recomputed after them:
+unchanged).
+
+Reproduction algorithm (`-Scope source`, the durable binding): recursively
+enumerate files under the following roots; add the direct files in `frontend/`,
+`browser/`, and `contracts/`; add the explicit files below except every path
+under `docs/`; **exclusion rule: no path under `docs/` is ever in scope**, so
+editing this receipt or any other document cannot change the value recorded
+above; deduplicate full paths. For each file compute lowercase SHA-256 and a
+repository-relative path with `/` separators. Sort by path using PowerShell
+`Sort-Object -Property Path -Culture ""`. Hash UTF-8 without BOM of
+`hash + two spaces + path + LF` for every entry, including the final LF.
+`-Scope full` runs the identical algorithm with the `docs/**` exclusion
+removed; it reproduces the historical full-tree values, including `01eb134` →
+`sha256:1e345643…`.
 
 ```text
 Recursive roots:
@@ -552,7 +647,7 @@ contracts/generated
 daemon/internal/contracts
 control/lib
 
-Explicit files:
+Explicit files (`-Scope source` drops the last three `docs/**` lines):
 package.json
 pnpm-lock.yaml
 pnpm-workspace.yaml
@@ -571,7 +666,7 @@ Elixir test files, plus one documentation paragraph in `browser/README.md`;
 the browser, contract and frontend artifacts above are the same bytes as round
 1's, and the round-2 runs re-executed them against the rebuilt release.
 
-### Round 3 gate re-runs (review repair tree)
+### Round 3 gate re-runs (pre-rebase review-repair tree `6398caa`, subject `sha256:193ddbb2…`; historical)
 
 Node gates ran against the verified workspace copy `.tmp/0007b-tooling` (the
 isolated dependency graph; package versions identical to the repository
@@ -584,7 +679,11 @@ round 2). Elixir ran in `symmetry-0007b-control`; Go on the host. The release
 was rebuilt with `mix release --overwrite` and both instances restarted with
 `.tmp/0007b-restart-release.sh` (the script's own readiness loop reports
 `wget: not found` inside this container; readiness was verified from the host
-with `curl` `4000=200` / `4001=200`).
+with `curl` `4000=200` / `4001=200`). Every row below is bound to that
+pre-rebase revision (`6398caa` / `sha256:193ddbb2…`) and to the tooling-copy
+state of that time; the tooling copy's contract scope was re-synced to the
+current revision in round 5 ("Round 5 verification"), and these rows are not
+relabelled as current.
 
 | Exact command / working directory | Exit | Observed result |
 | --- | ---: | --- |
@@ -604,9 +703,9 @@ with `curl` `4000=200` / `4001=200`).
 | `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` | 0 | Round-3 review-repair tree (the revision committed as `6398caa`): `sha256:193ddbb2e257230b2e61e30d9d3a0431d0dfcd6329ef725e6a242b6bc5796817` (390 entries). |
 
 Red-before-green proofs, per repaired surface: frontend `presentation.test.ts`
-+ `router.test.tsx` ran red at HEAD (`2 files failed, 7 failed / 31 passed`)
-with the new assertions before the fixes and green (`39 passed`, including the
-added boundary test) after, and the
++ `router.test.tsx` ran red against the unfixed round-3 sources (`2 files
+failed, 7 failed / 31 passed`) with the new assertions before the fixes and
+green (`39 passed`, including the added boundary test) after, and the
 superseded-boundary test was separately re-proved red against the old query key
 (`['cursor-1','cursor-1b']` vs the expected `['cursor-1','cursor-2']`); the
 Elixir session focus suite ran red `7/8 passed` against the unchanged allowlist
@@ -616,7 +715,7 @@ failure reasons at `data` (not the enum) and the fixed fixtures failing only at
 the `source` const. The Compose/restart suite and the native
 credentialed-provider matrix remain unexecuted (limits below).
 
-### Round 4 fix verification (current tree)
+### Round 4 fix verification (historical: uncommitted tree over `6398caa`, subject `sha256:353b10fc…`)
 
 Scope: the three round-2 Sol findings (unrecognised structured output, durable
 revision binding, workspace trailing newline). Node gates ran in
@@ -624,7 +723,9 @@ revision binding, workspace trailing newline). Node gates ran in
 rebuilt from the fix (rows below). Both copies are byte-identical to the
 repository tree for the changed files (`diff -rq frontend/src
 .tmp/0007b-tooling/frontend/src` exit 0; the five `docker cp`d files compare
-`OK` against `/repo-src` by `sha256sum` inside the node container).
+`OK` against `/repo-src` by `sha256sum` inside the node container). Every row
+below is historical evidence bound to `353b10fc…`; the same source content is
+now part of the branch history (commit `01eb134`).
 
 | Exact command / working directory | Exit | Observed result |
 | --- | ---: | --- |
@@ -643,7 +744,44 @@ Not re-run for this tree: the broad browser suite, the live-daemon suite, the
 Compose/restart specs, and the Elixir, Go and contract gates. The change is a
 frontend presentation fallback plus a trailing newline and has no contract,
 permission, pagination or daemon effect; those round-3 results stay bound to
-the round-3 tree (`sha256:193ddbb2…`).
+the round-3 tree (`sha256:193ddbb2…`). Round 5 re-ran the contract and
+frontend gates on the current revision (next section).
+
+### Round 5 verification (current revision `01eb134`, documentation-only pass)
+
+The retained `.tmp/0007b-tooling` copy was re-synced to this revision before
+these runs — `rsync -a --delete --exclude node_modules contracts/
+.tmp/0007b-tooling/contracts/`, the same for `daemon/internal/contracts/`, then
+verified byte-identical (`diff -rq .tmp/0007b-tooling/contracts contracts -x
+node_modules` exit 0; `diff -rq .tmp/0007b-tooling/daemon/internal/contracts
+daemon/internal/contracts` exit 0; `diff -rq .tmp/0007b-tooling/frontend/src
+frontend/src` exit 0; `diff -rq .tmp/0007b-tooling/browser/tests
+browser/tests` exit 0). The Elixir gate ran in `symmetry-0007b-control` after
+`docker cp`-ing the current `contracts/v1`, `contracts/fixtures`,
+`daemon/internal/contracts`, `control/lib` and `control/test` trees and
+verifying `sha256sum` equality for the manifest, the schema bundle and the
+contract validator.
+
+| Exact command / working directory | Exit | Observed result |
+| --- | ---: | --- |
+| `./node_modules/.bin/tsc --project contracts/tsconfig.json` in `.tmp/0007b-tooling` | 0 | Contract typecheck clean. |
+| `node --test contracts/scripts/*.test.mjs` in `.tmp/0007b-tooling` | 0 | 32 tests, 32 pass, 0 fail. |
+| `node contracts/scripts/check.mjs` in `.tmp/0007b-tooling` | 0 | `Generated contract DTOs are up to date.`; `Validated 17 Draft 7 schemas and 219 fixtures.` |
+| `node contracts/scripts/check-effect.mjs` in `.tmp/0007b-tooling` | 0 | `Effect decoded all 219 raw fixtures; 215 parsed documents reached Schema validation`. |
+| `go test -count=1 ./internal/contracts ./internal/protocol` in `daemon/` (host) | 0 | Both packages `ok` (2.249 s / 2.402 s) on the 219-fixture corpus. |
+| `docker exec -e MIX_ENV=test -e POSTGRES_DB=symmetry_control_test symmetry-0007b-control sh -lc 'cd /app/control && mix test test/symmetry_control/goals/contract_fixture_manifest_test.exs'` | 0 | **1 passed** (all 219 manifest fixtures; 4 files compiled on the synced sources). |
+| `./node_modules/.bin/vitest run` in `.tmp/0007b-tooling/frontend` | 0 | 7 files, **71 passed**. jsdom still reports its unimplemented `Window.scrollTo`. |
+| `./node_modules/.bin/tsc --noEmit` in `.tmp/0007b-tooling/frontend` | 0 | Clean. |
+| `./node_modules/.bin/eslint . --max-warnings 0` in `.tmp/0007b-tooling/frontend` | 0 | Clean. |
+| `./node_modules/.bin/playwright test --list` in `.tmp/0007b-tooling/browser` | 0 | **Total: 94 tests in 9 files**; declarations counted as `^\s*test\(`: 47 in 9 spec files. |
+| `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` in the repository working tree | 0 | Source subject (393 entries, `docs/**` excluded): `sha256:4019477f8ebf9b80294960cff305092cec22de070157cf830529ad16b6e1c323`. |
+| `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1 -Scope full` in the repository working tree | 0 | Full-tree digest of `01eb134` (396 entries): `sha256:1e345643837bcaaf5f26e5218df52156965f564618257239100dceccbb02aca5`. |
+| `pwsh -NoProfile -File .tmp/0007b-subject-digest.ps1` (source scope), re-run after this receipt's edits | 0 | Same digest `sha256:4019477f…` (393 entries): the documentation edits did not change the source subject. |
+
+Not re-run in round 5: the focused/broad/live browser suites, the
+Compose/restart specs, the Elixir full suite, the Go full-tree run, and the
+frozen dependency installation. Their last executed results remain bound to
+their own revisions above.
 
 ## Review disposition and remaining limitations
 
@@ -671,7 +809,10 @@ the round-3 tree (`sha256:193ddbb2…`).
   deep links, the recorded keyboard walk, the truth labels, the retained
   classic coverage with its migration map, and the real-cursor history counts.
   The round-4 fix tree (`sha256:353b10fc…`) re-ran the frontend unit gates
-  recorded above; the browser captures are not re-executed on it.
+  recorded above; the browser captures are not re-executed on it. Round 5
+  re-executed the contract and frontend gates on the current revision
+  (`01eb134`, source subject `sha256:4019477f…`); the browser captures remain
+  bound to the revisions recorded with them.
 - Still-unavailable evidence, recorded as limits rather than waived: the
   original frozen dependency installation; the Compose/restart browser specs
   (skipped locally, and **no CI job executes them** — the CI `compose` job runs
@@ -693,5 +834,6 @@ the round-3 tree (`sha256:193ddbb2…`).
   the provider timestamp-stale branch remains unit-only.
 - Owner visual acceptance remains the owner's own verdict and is not supplied
   here; the run reports the result as produced and awaiting that verdict. No
-  model-issued `achieve` is recorded, and the working tree is uncommitted by
-  this stage's rules.
+  model-issued `achieve` is recorded, and rounds 3–5 edited only the working
+  tree without committing (the stage's rules); the branch content is recorded
+  in the branch history.
