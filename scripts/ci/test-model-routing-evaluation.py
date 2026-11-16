@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -299,7 +300,17 @@ class EvaluationTests(unittest.TestCase):
             if metadata:
                 row["metadata"] = {"accounting_complete": False}
                 row["limitations"] = ["harness estimate without a price version"]
-                row["known_subtotals"] = {"estimated_cost": estimated_cost}
+                known_subtotals = {
+                    "assistant_messages": 1,
+                    "assistant_messages_with_usage": 1,
+                    "assistant_messages_with_cost_total": 1,
+                }
+                if estimated_cost is not None:
+                    known_subtotals["cost"] = {"total": {"sum": estimated_cost, "messages": 1}}
+                for field, value in tokens_value.items():
+                    if value is not None:
+                        known_subtotals[field] = {"sum": value, "messages": 1}
+                row["known_subtotals"] = known_subtotals
             return row
 
         def non_model_row(stage, reason):
@@ -637,6 +648,24 @@ class EvaluationTests(unittest.TestCase):
         def empty_prompt_hashes(phases):
             phases[0]["prompt_hashes"] = []
 
+        def unknown_subtotal_key(phases):
+            phases[0]["known_subtotals"]["estimated_cost"] = 1.5
+
+        def incomplete_subtotal_entry(phases):
+            phases[0]["known_subtotals"]["input"] = {"sum": 10}
+
+        def zero_message_subtotal(phases):
+            phases[0]["known_subtotals"]["output"] = {"sum": 2, "messages": 0}
+
+        def negative_subtotal(phases):
+            phases[0]["known_subtotals"]["input"] = {"sum": -1, "messages": 1}
+
+        def disagreeing_subtotal(phases):
+            phases[0]["known_subtotals"]["input"] = {"sum": 99, "messages": 1}
+
+        def non_model_subtotals(phases):
+            phases[2]["known_subtotals"] = {"assistant_messages": 0}
+
         cases = (
             ("drop-repair", drop_repair, "cover every evaluation stage"),
             ("both-missing", both_missing, "exactly one of"),
@@ -651,6 +680,12 @@ class EvaluationTests(unittest.TestCase):
             ("duplicate-session", duplicate_session, "duplicate model session"),
             ("missing-worker-session", missing_worker_session, "implementing worker session"),
             ("empty-prompt-hashes", empty_prompt_hashes, "prompt hash"),
+            ("unknown-subtotal-key", unknown_subtotal_key, "unexpected subtotal key"),
+            ("incomplete-subtotal-entry", incomplete_subtotal_entry, "missing keys"),
+            ("zero-message-subtotal", zero_message_subtotal, "integer >= 1"),
+            ("negative-subtotal", negative_subtotal, "finite number"),
+            ("disagreeing-subtotal", disagreeing_subtotal, "disagrees with the complete session total"),
+            ("non-model-subtotals", non_model_subtotals, "known subtotals without a session_ref"),
         )
         for label, mutate, needle in cases:
             with self.subTest(case=label):
@@ -707,6 +742,7 @@ class EvaluationTests(unittest.TestCase):
         self.assert_ok(self.check())
         usage = self.usage_rows()
         for row in usage["phases"]:
+            row.pop("known_subtotals", None)
             row.update(session_ref=None, non_model_reason="No model usage evidence was recorded.",
                        model_ids=[], prompt_hashes=[], tokens={"input": None, "output": None, "cached": None},
                        reported_cost=None, estimated_cost=None, cost_provenance=None, price_version=None)
@@ -866,6 +902,36 @@ class EvaluationTests(unittest.TestCase):
         )
         self.assert_refused(self.accept(run=run), "nonaccepted row")
 
+    def test_timed_out_gate_terminates_its_descendants(self) -> None:
+        descendant = (
+            "import time\n"
+            "time.sleep(1.0)\n"
+            "open('late-descendant.txt', 'w').write('late')\n"
+        )
+        gate_code = (
+            "import subprocess, sys, time\n"
+            f"subprocess.Popen([sys.executable, '-c', {descendant!r}])\n"
+            "time.sleep(60)\n"
+        )
+        run = self.root / "run-timeout-tree"
+        task = self.task(gates=[self.gate_plain("slow", gate_code)])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        checked = self.check("--timeout", "0.5", run=run)
+        self.assertNotEqual(checked.returncode, 0, checked.stdout)
+        summary = json.loads(checked.stdout)
+        self.assertFalse(summary["passed"])
+        result = json.loads(
+            (run / "checks" / summary["attempt_id"] / "slow" / "result.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(result["timed_out"])
+        time.sleep(2.0)
+        self.assertFalse(
+            (self.checkout(run) / "late-descendant.txt").exists(),
+            "a gate descendant survived the per-gate timeout",
+        )
+
     def test_symlink_targets_are_bound(self) -> None:
         run = self.root / "run-symlink"
         self.assert_ok(self.prepare(task=self.task(allowed_paths=["link.txt"]), run=run))
@@ -986,6 +1052,103 @@ class EvaluationTests(unittest.TestCase):
 
         self.remove_base_echo_filter(run)
         self.assert_ok(self.seal(run=run))
+
+    def test_replacement_objects_cannot_substitute_the_frozen_baseline(self) -> None:
+        weakened = "package app\n\nimport \"testing\"\n\nfunc TestBaseline(t *testing.T) { t.Skip() }\n"
+
+        run = self.root / "run-replace-blob"
+        self.assert_ok(self.prepare(run=run))
+        checkout = self.checkout(run)
+        self.edit("app/main_test.go", weakened, run=run)
+        base_object = self.git_text("rev-parse", f"{self.base}:app/main_test.go", cwd=checkout)
+        replacement = subprocess.check_output(
+            ["git", "-C", str(checkout), "hash-object", "-w", "--stdin"], input=weakened.encode("utf-8")
+        ).decode("ascii").strip()
+        self.git("replace", base_object, replacement, cwd=checkout)
+        # Bypass premise: the replacement serves the weakened bytes under the frozen
+        # blob id, so an unguarded seal sees the "frozen" baseline already matching.
+        self.assertEqual(
+            subprocess.check_output(["git", "-C", str(checkout), "cat-file", "blob", base_object]),
+            weakened.encode("utf-8"),
+        )
+        self.assert_refused(self.seal(run=run), "replacement refs")
+
+        # With the replacement removed the erased baseline test is refused for what it
+        # is, and the legitimate clean seal still passes.
+        self.git("replace", "-d", base_object, cwd=checkout)
+        self.assert_refused(self.seal(run=run), "baseline test")
+        self.write(checkout / "app/main_test.go", FILES["app/main_test.go"])
+        self.assertEqual(self.assert_ok(self.seal(run=run))["changed_paths"], [])
+
+        # The same bypass through a replaced base commit: ls-tree then serves a tree
+        # whose baseline test already matches the weakened worktree.
+        self.write(self.repo / "app/main_test.go", weakened)
+        self.git("add", "-A")
+        self.git("commit", "--quiet", "-m", "fixture weakened baseline")
+        weakened_commit = self.git_text("rev-parse", "HEAD")
+        run = self.root / "run-replace-commit"
+        self.assert_ok(self.prepare(run=run))
+        checkout = self.checkout(run)
+        self.git("replace", self.base, weakened_commit, cwd=checkout)
+        self.edit("app/main_test.go", weakened, run=run)
+        self.assertEqual(
+            self.git_text("ls-tree", "-r", self.base, "app/main_test.go", cwd=checkout).split()[2],
+            self.git_text("rev-parse", f"{weakened_commit}:app/main_test.go", cwd=checkout),
+        )
+        self.assert_refused(self.seal(run=run), "replacement refs")
+
+        # Grafted ancestry is the same class: refused while present.
+        self.git("replace", "-d", self.base, cwd=checkout)
+        self.git("replace", "--graft", self.base, weakened_commit, cwd=checkout)
+        self.assert_refused(self.seal(run=run), "replacement refs")
+        self.git("replace", "-d", self.base, cwd=checkout)
+        grafts = checkout / ".git" / "info" / "grafts"
+        grafts.parent.mkdir(parents=True, exist_ok=True)
+        grafts.write_bytes((self.base + "\n").encode("ascii"))
+        self.assert_refused(self.seal(run=run), "grafts")
+        grafts.unlink()
+        self.assert_refused(self.seal(run=run), "baseline test")
+        self.write(checkout / "app/main_test.go", FILES["app/main_test.go"])
+        self.assertEqual(self.assert_ok(self.seal(run=run))["changed_paths"], [])
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        sealed = self.assert_ok(self.seal(run=run))
+        self.assertEqual([change["path"] for change in sealed["changed_paths"]], ["app/main.go"])
+
+    def test_bound_symlink_targets_may_not_escape_the_manifest_scope(self) -> None:
+        run = self.root / "run-symlink-escape"
+        task = self.task(allowed_paths=["app/main.go", "app/app.go"])
+        self.assert_ok(self.prepare(task=task, run=run))
+        checkout = self.checkout(run)
+
+        # Reproduced bypass: app/main.go was bound as link text, so a payload under
+        # .git (excluded from the manifest) could change what the gates read without
+        # changing any frozen record.
+        (checkout / "app" / "main.go").unlink()
+        (checkout / ".git" / "payload.go").write_bytes(b"package app\n\nvar Payload = 1\n")
+        try:
+            os.symlink("../.git/payload.go", checkout / "app" / "main.go")
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"symlink creation is unavailable: {error}")
+        self.assert_refused(self.seal(run=run), "points into .git")
+
+        # A target outside the checkout is refused the same way.
+        (checkout / "app" / "main.go").unlink()
+        self.write(self.root / "outside-payload.go", "package app\n\nvar Outside = 1\n")
+        os.symlink("../../outside-payload.go", checkout / "app" / "main.go")
+        self.assert_refused(self.seal(run=run), "escapes the checkout")
+
+        # Positive control: an in-tree symlink stays legitimate, its gates still run,
+        # and the bytes behind it are bound through the target's own manifest entry.
+        (checkout / "app" / "main.go").unlink()
+        os.symlink("app.go", checkout / "app" / "main.go")
+        first = self.assert_ok(self.seal(run=run))
+        self.assertEqual([change["path"] for change in first["changed_paths"]], ["app/main.go"])
+        checked = self.assert_ok(self.check(run=run))
+        self.assertTrue(checked["passed"])
+        self.edit("app/app.go", "package app\n\nvar Bound = 1\n", run=run)
+        second = self.assert_ok(self.seal(run=run))
+        self.assertNotEqual(first["subject_hash"], second["subject_hash"])
+        self.assertIn("app/app.go", [change["path"] for change in second["changed_paths"]])
 
     def test_sealed_changed_paths_are_reverified(self) -> None:
         run = self.root / "run-reverify-paths"
@@ -1114,7 +1277,7 @@ class EvaluationTests(unittest.TestCase):
         self.accepted_run(run=run, usage=usage)
         cost = self.stored_receipt(run)["cost"]
         self.assertIsNone(cost["estimated_cost"])
-        self.assertEqual(cost["known_estimated_cost_subtotal"], 1.5)
+        self.assertEqual(cost["known_estimated_cost_subtotal"], 4.5)
         self.assertIsNone(cost["reported_cost"])
         self.assertEqual(cost["known_reported_cost_subtotal"], 0)
         self.assertFalse(cost["accounting_complete"])
@@ -1129,7 +1292,7 @@ class EvaluationTests(unittest.TestCase):
         usage["phases"][3].update(estimated_cost=None, reported_cost=None)
         self.accepted_run(run=run, usage=usage)
         cost = self.stored_receipt(run)["cost"]
-        self.assertEqual(cost["known_estimated_cost_subtotal"], 3.0)
+        self.assertEqual(cost["known_estimated_cost_subtotal"], 4.5)
         self.assertIsNone(cost["estimated_cost"])
         self.assertFalse(cost["accounting_complete"])
         self.assertIn("unknown estimated cost in 1 model phase(s)", cost["incomplete_reasons"])
@@ -1139,6 +1302,9 @@ class EvaluationTests(unittest.TestCase):
         phases = usage["phases"]
         phases[0].update(reported_cost=1.0, estimated_cost=None)
         phases[1].update(reported_cost=None, estimated_cost=2.0)
+        # One session keeps one observed cost subtotal: the complete 2.0 total and its
+        # known subtotal must agree instead of surviving as two versions.
+        phases[1]["known_subtotals"]["cost"]["total"]["sum"] = 2.0
         for row in (phases[0], phases[1], phases[3]):
             row["price_version"] = "fixture-price-v1"
         self.accepted_run(run=run, usage=usage)
@@ -1148,6 +1314,36 @@ class EvaluationTests(unittest.TestCase):
         self.assertFalse(cost["accounting_complete"])
         self.assertIn("no provider-reported cost in 2 model phase(s)", cost["incomplete_reasons"])
         self.assertIn("unknown estimated cost in 1 model phase(s)", cost["incomplete_reasons"])
+
+    def test_partial_session_known_subtotals_reach_the_receipt_totals(self) -> None:
+        run = self.root / "run-partial-subtotals"
+        usage = self.usage_rows()
+        partial = usage["phases"][1]
+        partial["tokens"] = {"input": None, "output": None, "cached": None}
+        partial["estimated_cost"] = None
+        partial["known_subtotals"] = {
+            "assistant_messages": 2,
+            "assistant_messages_with_usage": 1,
+            "assistant_messages_with_cost_total": 1,
+            "input": {"sum": 100, "messages": 1},
+            "output": {"sum": 20, "messages": 1},
+            "cached": {"sum": 0, "messages": 1},
+            "cost": {"total": {"sum": 0.5, "messages": 1}},
+        }
+        self.accepted_run(run=run, usage=usage)
+        self.assert_ok(self.accept(run=run))
+        receipt = self.stored_receipt(run)
+        self.assertIsNone(receipt["tokens"]["input"])
+        self.assertIsNone(receipt["tokens"]["output"])
+        self.assertIsNone(receipt["tokens"]["cached"])
+        self.assertEqual(receipt["tokens"]["known_input_subtotal"], 120)
+        self.assertEqual(receipt["tokens"]["known_output_subtotal"], 24)
+        self.assertEqual(receipt["tokens"]["known_cached_subtotal"], 0)
+        self.assertIsNone(receipt["cost"]["estimated_cost"])
+        self.assertEqual(receipt["cost"]["known_estimated_cost_subtotal"], 3.5)
+        self.assertFalse(receipt["cost"]["accounting_complete"])
+        self.assertIn("unknown token usage in 1 model phase(s)", receipt["cost"]["incomplete_reasons"])
+        self.assertIn("unknown estimated cost in 1 model phase(s)", receipt["cost"]["incomplete_reasons"])
 
     def test_usage_requires_the_review_record_identity(self) -> None:
         run = self.root / "run-review-identity"

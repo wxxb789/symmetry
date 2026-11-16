@@ -6,12 +6,17 @@ Operations:
            without host-dependent end-of-line conversion, then freeze the exact
            task and routes bytes in an external run directory
   seal     refuse a checkout whose Git index carries assume-unchanged,
-           skip-worktree or other nonstandard entries or whose Git view carries
-           checkout-local attribute/filter machinery, then bind the checkout
-           (actual base/head plus a deterministic manifest) into an evaluation
-           Subject from a byte comparison between the object store and the worktree
-  check    execute every frozen gate argv without a shell, capture outputs, bind
-           the Subject before and after, and require named Go tests through the
+           skip-worktree or other nonstandard entries, whose Git view carries
+           checkout-local attribute/filter machinery, or whose object store
+           carries replacement refs or grafts, then bind the checkout (actual
+           base/head plus a deterministic manifest, refusing bound symlinks whose
+           real target escapes the checkout or points under .git) into an
+           evaluation Subject from a byte comparison between the object store and
+           the worktree
+  check    execute every frozen gate argv without a shell inside an owned process
+           group (POSIX session / Windows process tree), terminate and reap that
+           whole tree on timeout, capture outputs, bind the Subject before and
+           after, and require named Go tests through the
            existing assert-go-test-json.py event gate plus a derived
            `go test -list` run that proves the named package really lists them
   review   import the coordinator's independent review record for the sealed
@@ -39,11 +44,17 @@ Change detection: the sealed change set is derived from bytes, never from Git's
 filtered or cached view of them. seal refuses assume-unchanged, skip-worktree
 and other nonstandard index entries; hashes base blobs straight from the object
 store and worktree files straight from disk, so no clean/smudge filter,
-attribute, index flag or stat cache can influence the comparison; compares
-symlink targets by blob object id and file modes where the host and Git track
-them; refuses any checkout-local
+attribute, index flag, stat cache or replacement ref can influence the
+comparison; compares symlink targets by blob object id and file modes where the
+host and Git track them; refuses any checkout-local
 attribute or filter machinery outright even while the checkout matches; and
 re-derives the changed path list whenever it re-verifies a sealed Subject.
+Frozen object reads run with replacement refs disabled, and a checkout carrying
+`refs/replace/*` or `.git/info/grafts` is refused outright, so no replacement or
+graft can serve different bytes or ancestry under a frozen object id. Every bound
+symlink must resolve inside the checkout and outside `.git`: the gates read the
+real target bytes, so an escaping target is refused instead of being bound by
+link text alone.
 """
 
 from __future__ import annotations
@@ -59,6 +70,7 @@ import pathlib
 import platform as host_platform
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -79,6 +91,7 @@ MAX_RECEIPT_BYTES = 16 << 20
 MAX_RESULT_BYTES = 16 << 20
 MAX_CAPTURE_BYTES = 256 << 20
 DEFAULT_TIMEOUT = 1800.0
+PROCESS_TREE_REAP_SECONDS = 10.0
 GO_LIST_FAILURE_PREFIX = "the package test binary did not list the named Go tests: "
 SOURCE_CHANGED_SUFFIX = "source changed while executing this gate"
 
@@ -136,6 +149,17 @@ PHASE_KEYS = {
     "price_version", "wall_time",
 }
 TOKEN_KEYS = {"input", "output", "cached"}
+# The extractor in model-routing-omp-usage.py emits these per-field observed
+# subtotals for partial sessions; keep both lists in sync with its TOKEN_FIELDS,
+# COST_FIELDS and assistant-message counters.
+KNOWN_SUBTOTAL_MESSAGE_KEYS = (
+    "assistant_messages", "assistant_messages_with_usage", "assistant_messages_with_cost_total",
+)
+KNOWN_SUBTOTAL_TOKEN_FIELDS = (
+    "input", "output", "cacheRead", "cacheWrite", "cached", "totalTokens", "reasoningTokens",
+)
+KNOWN_SUBTOTAL_COST_FIELDS = ("input", "output", "cacheRead", "cacheWrite", "total")
+KNOWN_SUBTOTAL_ENTRY_KEYS = {"sum", "messages"}
 PHASE_OPTIONAL_KEYS = {"metadata", "limitations", "known_subtotals"}
 MODEL_ID_KEYS = {"model", "provider", "api", "assistant_messages"}
 PROMPT_HASH_KEYS = {"kind", "sha256", "index"}
@@ -458,7 +482,10 @@ def is_protected_asset(path: str) -> bool:
 
 
 def git_output(repository: str, *arguments: str) -> bytes:
-    command = ["git", "-c", f"safe.directory={repository}", "-C", repository, *arguments]
+    # Replacement refs stay disabled for every read: a checkout can carry
+    # refs/replace that would otherwise serve different bytes under a frozen object
+    # id, and refuse_object_substitution refuses such a checkout outright.
+    command = ["git", "--no-replace-objects", "-c", f"safe.directory={repository}", "-C", repository, *arguments]
     try:
         completed = subprocess.run(command, capture_output=True, check=False)
     except OSError as error:
@@ -540,6 +567,37 @@ def iter_source_paths(checkout: pathlib.Path) -> list[str]:
     return sorted(paths, key=utf8_path_key)
 
 
+def refuse_escaping_symlink(checkout: pathlib.Path, path: str, raw_target: bytes) -> None:
+    """Refuse a bound symlink whose real target leaves the manifest scope.
+
+    The manifest binds the link text, but every gate reads the bytes behind the
+    link. A target that leaves the checkout, or enters `.git` (which the manifest
+    excludes), would let a worker change what runs without changing any bound byte,
+    so such a link is refused instead of being trusted. In-tree targets stay
+    legitimate: each hop and the final target are enumerated and bound as their own
+    manifest entries.
+    """
+    try:
+        resolved = os.path.realpath(pathlib.Path(checkout, *path.split("/")))
+    except OSError as error:
+        raise Refused(f"cannot resolve the bound symlink {path}: {error}")
+    try:
+        relative = os.path.relpath(resolved, os.path.realpath(checkout))
+    except ValueError:  # a Windows target on another drive is never in-tree
+        relative = os.pardir
+    display = raw_target.decode("utf-8", "replace")[:200]
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        raise Refused(
+            f"the bound symlink {path} escapes the checkout; the gates read its real target:"
+            f" -> {display!r}"
+        )
+    if ".git" in pathlib.PurePath(relative).parts:
+        raise Refused(
+            f"the bound symlink {path} points into .git, which the Source manifest excludes:"
+            f" -> {display!r}"
+        )
+
+
 def read_worktree_entries(checkout: pathlib.Path) -> dict[str, tuple[str, str, str]]:
     """Bind bytes and modes of every checkout file, including ignored files."""
     executable_bits = executable_bits_tracked(checkout)
@@ -556,6 +614,7 @@ def read_worktree_entries(checkout: pathlib.Path) -> dict[str, tuple[str, str, s
                 data = os.fsencode(os.readlink(target))
             except OSError as error:
                 raise Refused(f"cannot read symlink {path}: {error}")
+            refuse_escaping_symlink(checkout, path, data)
             digest = hashlib.sha256(data)
         elif stat.S_ISREG(info.st_mode):
             kind = "file"
@@ -632,18 +691,48 @@ def refuse_index_hacks(checkout: pathlib.Path) -> None:
         )
 
 
+def refuse_object_substitution(checkout: pathlib.Path) -> None:
+    """Refuse a checkout whose Git object view is rewritten.
+
+    A replacement ref serves different bytes under a frozen object id, and a
+    `.git/info/grafts` file rewrites commit ancestry; either mechanism invalidates
+    the byte and object-id binding the seal derives, even while the worktree still
+    matches. Object reads additionally run with replacement refs disabled, so this
+    check is the fail-closed boundary rather than the only defense.
+    """
+    replacements = git_output(str(checkout), "for-each-ref", "refs/replace").decode("utf-8", "replace").strip()
+    if replacements:
+        names = sorted(line.split("\t", 1)[1] for line in replacements.splitlines() if "\t" in line)
+        raise Refused(
+            "the checkout carries Git replacement refs, which substitute object bytes under frozen "
+            "ids; re-create the isolated checkout from an unrewritten source: " + ", ".join(names[:5])
+        )
+    resolved = git_output(str(checkout), "rev-parse", "--git-path", "info/grafts").decode("utf-8", "replace").strip()
+    grafts = pathlib.Path(resolved)
+    if not grafts.is_absolute():
+        grafts = checkout / grafts
+    if grafts.exists():
+        raise Refused(
+            "the checkout rewrites Git ancestry with .git/info/grafts; remove it and re-create the "
+            "isolated checkout"
+        )
+
+
 def read_base_blob_digests(checkout: pathlib.Path, objects: Iterable[str]) -> dict[str, str]:
     """Hash base blob bytes straight out of the object store.
 
     Object-store content is what the base commit stores: no clean/smudge filter,
-    attribute, index flag or stat cache can influence it. The whole request and its
-    output are held in memory, which is bounded by the base tree size.
+    attribute, index flag, stat cache or replacement ref can influence it. The whole
+    request and its output are held in memory, which is bounded by the base tree size.
     """
     ordered = sorted(set(objects))
     if not ordered:
         return {}
     request = "".join(object_id + "\n" for object_id in ordered).encode("ascii")
-    command = ["git", "-c", f"safe.directory={checkout}", "-C", str(checkout), "cat-file", "--batch"]
+    command = [
+        "git", "--no-replace-objects", "-c", f"safe.directory={checkout}", "-C", str(checkout),
+        "cat-file", "--batch",
+    ]
     try:
         completed = subprocess.run(command, input=request, capture_output=True, check=False)
     except OSError as error:
@@ -774,6 +863,9 @@ def symlink_blob_entry(path: str, target: pathlib.Path, object_format: str) -> t
 
 
 def verify_base_commit(checkout: pathlib.Path, base: str) -> None:
+    refuse_object_substitution(checkout)
+    # Replacement refs are disabled for this peel, so the frozen base resolves to the
+    # exact commit whose stored tree every later read binds.
     resolved = git_text(str(checkout), "rev-parse", "--verify", base + "^{commit}")
     if resolved != base:
         raise Refused("the frozen base commit is not the resolved checkout base")
@@ -1215,6 +1307,72 @@ def run_validator(gate_dir: pathlib.Path, gate: dict[str, Any]) -> dict[str, Any
     }
 
 
+def terminate_owned_process_tree(process: subprocess.Popen) -> None:
+    """Terminate one owned gate process group and all its descendants.
+
+    POSIX gates start in their own session, so one SIGKILL to the process group
+    reaches every descendant. Windows has no portable group kill; `taskkill /T`
+    walks the process tree. A failure is reported instead of continuing, because a
+    surviving gate process can still mutate the checkout or hold resources.
+    """
+    if os.name == "nt":
+        killed = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, check=False
+        )
+        if killed.returncode != 0 and process.poll() is None:
+            raise Refused(f"could not terminate the gate process tree (taskkill exit {killed.returncode})")
+        return
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except OSError:
+        process.kill()
+
+
+def run_owned_command(
+    argv: list[str], cwd: str, timeout: float | None
+) -> tuple[int | None, bytes, bytes, bool]:
+    """Run one command in an owned process group; return (exit_code, stdout, stderr, timed_out).
+
+    On timeout the whole tree is terminated and reaped before returning, so a later
+    gate never runs next to survivors that could write into the checkout. A
+    descendant that escaped the owned group (or the platform process tree) and still
+    holds a pipe cannot be reached; that case keeps the captured partial output and
+    marks the run timed out instead of hanging the runner.
+    """
+    created: dict[str, Any] = {}
+    if os.name == "nt":
+        created["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        created["start_new_session"] = True
+    process = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **created)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return process.returncode, stdout, stderr, False
+    except subprocess.TimeoutExpired as expired:
+        stdout = expired.stdout or b""
+        stderr = expired.stderr or b""
+        terminate_owned_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=PROCESS_TREE_REAP_SECONDS)
+        except subprocess.TimeoutExpired as lingering:
+            stdout += lingering.stdout or b""
+            stderr += lingering.stderr or b""
+            for stream in (process.stdout, process.stderr):
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=PROCESS_TREE_REAP_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+        return None, stdout, stderr, True
+
+
 def execute_gate(
     checkout: pathlib.Path, gate: dict[str, Any], gate_dir: pathlib.Path, timeout: float | None
 ) -> dict[str, Any]:
@@ -1229,16 +1387,9 @@ def execute_gate(
         error = f"gate cwd {gate['cwd']!r} is missing in the checkout"
     else:
         try:
-            completed = subprocess.run(
-                gate["argv"], cwd=str(cwd), capture_output=True, timeout=timeout, check=False
+            exit_code, stdout_raw, stderr_raw, timed_out = run_owned_command(
+                gate["argv"], str(cwd), timeout
             )
-            stdout_raw = completed.stdout
-            stderr_raw = completed.stderr
-            exit_code = completed.returncode
-        except subprocess.TimeoutExpired as expired:
-            timed_out = True
-            stdout_raw = expired.stdout or b""
-            stderr_raw = expired.stderr or b""
         except OSError as failure:
             error = f"could not execute gate argv: {failure}"
     write_bytes(gate_dir / "stdout.bin", stdout_raw)
@@ -1253,13 +1404,9 @@ def execute_gate(
         # print fake pass frames and exit without running anything. The package binary
         # must also list every named test when asked for it.
         try:
-            listed = subprocess.run(list_argv, cwd=str(cwd), capture_output=True, timeout=timeout, check=False)
-            list_exit_code = listed.returncode
-            list_stdout_raw = listed.stdout
-            list_stderr_raw = listed.stderr
-        except subprocess.TimeoutExpired as expired:
-            list_stdout_raw = expired.stdout or b""
-            list_stderr_raw = expired.stderr or b""
+            list_exit_code, list_stdout_raw, list_stderr_raw, _list_timed_out = run_owned_command(
+                list_argv, str(cwd), timeout
+            )
         except OSError as failure:
             raise Refused(f"could not run the Go package test list for gate {gate['id']}: {failure}")
         write_bytes(gate_dir / "go-list.stdout.bin", list_stdout_raw)
@@ -1629,9 +1776,45 @@ def validate_prompt_hashes(value: Any, source: str) -> list[dict[str, Any]]:
     return records
 
 
+def validate_known_subtotal_entry(entry: Any, source: str) -> dict[str, int | float]:
+    record = require_object(entry, source, KNOWN_SUBTOTAL_ENTRY_KEYS, KNOWN_SUBTOTAL_ENTRY_KEYS)
+    return {
+        "sum": require_number(record["sum"], source + " sum"),
+        "messages": require_integer(record["messages"], source + " messages", minimum=1),
+    }
+
+
+def validate_known_subtotals(value: Any, source: str) -> dict[str, Any]:
+    """Validate one phase's observed partial-session subtotals.
+
+    The receipt includes these validated sums in its known totals, so the shape and
+    numbers are checked here instead of being trusted as opaque metadata.
+    """
+    if not isinstance(value, dict):
+        raise Refused(f"{source} must be a JSON object")
+    subtotals: dict[str, Any] = {}
+    for key in sorted(value):
+        entry = value[key]
+        if key in KNOWN_SUBTOTAL_MESSAGE_KEYS:
+            subtotals[key] = require_integer(entry, f"{source} {key}")
+        elif key == "cost":
+            block = require_object(entry, f"{source} cost", set(KNOWN_SUBTOTAL_COST_FIELDS), set())
+            subtotals["cost"] = {
+                field: validate_known_subtotal_entry(block[field], f"{source} cost.{field}")
+                for field in sorted(block)
+            }
+        elif key in KNOWN_SUBTOTAL_TOKEN_FIELDS:
+            subtotals[key] = validate_known_subtotal_entry(entry, f"{source} {key}")
+        else:
+            raise Refused(f"{source} has an unexpected subtotal key: {key}")
+    return subtotals
+
+
 def validate_phase_extra(name: str, value: Any, source: str) -> Any:
     if name == "limitations":
         return require_text_list(value, source, minimum=0, unique=True, max_length=1000)
+    if name == "known_subtotals":
+        return validate_known_subtotals(value, source)
     if not isinstance(value, dict):
         raise Refused(f"{source} must be a JSON object")
     return value
@@ -1677,6 +1860,8 @@ def validate_usage(raw: bytes) -> tuple[list[dict[str, Any]], int, float | int]:
                 raise Refused(f"{source} must not report cost without a session_ref")
             if price_version is not None:
                 raise Refused(f"{source} must not report a price version without a session_ref")
+            if "known_subtotals" in phase:
+                raise Refused(f"{source} must not report known subtotals without a session_ref")
         elif not model_ids:
             raise Refused(f"{source} must list the served model ids for its session")
         elif not prompt_hashes:
@@ -1701,6 +1886,25 @@ def validate_usage(raw: bytes) -> tuple[list[dict[str, Any]], int, float | int]:
         for optional in sorted(PHASE_OPTIONAL_KEYS):
             if optional in phase:
                 row[optional] = validate_phase_extra(optional, phase[optional], f"{source} {optional}")
+        known_subtotals = row.get("known_subtotals")
+        if known_subtotals:
+            # A validated known subtotal feeds the receipt, so a complete session total
+            # and its observed subtotal must agree instead of surviving as two versions
+            # of the same number.
+            for field in ("input", "output", "cached"):
+                complete = token_values[field]
+                partial = known_subtotals.get(field)
+                if complete is not None and partial is not None and partial["sum"] != complete:
+                    raise Refused(
+                        f"{source} known {field} subtotal {partial['sum']!r} disagrees with the "
+                        f"complete session total {complete!r}"
+                    )
+            partial_cost = known_subtotals.get("cost", {}).get("total")
+            if estimated_cost is not None and partial_cost is not None and partial_cost["sum"] != estimated_cost:
+                raise Refused(
+                    f"{source} known cost.total subtotal {partial_cost['sum']!r} disagrees with the "
+                    f"complete session cost {estimated_cost!r}"
+                )
         rows.append(row)
     missing = sorted(set(STAGES) - {row["stage"] for row in rows})
     if missing:
@@ -1748,11 +1952,27 @@ def build_receipt(
 ) -> dict[str, Any]:
     model_rows = [row for row in rows if row["session_ref"] is not None]
     token_fields = ("input", "output", "cached")
+
+    def known_token_total(field: str) -> int | float:
+        # A complete row contributes its session total; a row whose session total is
+        # unknown contributes its validated partial-session observation, if any, so
+        # observed tokens from a mixed session never collapse to zero.
+        total: int | float = 0
+        for row in model_rows:
+            value = row["tokens"][field]
+            if value is not None:
+                total += value
+                continue
+            partial = (row.get("known_subtotals") or {}).get(field)
+            if partial is not None:
+                total += partial["sum"]
+        return total
+
     tokens: dict[str, int | None] = {}
     for field in token_fields:
         values = [row["tokens"][field] for row in model_rows]
         tokens[field] = None if not values or any(value is None for value in values) else sum(values)
-        tokens["known_" + field + "_subtotal"] = sum(value for value in values if value is not None)
+        tokens["known_" + field + "_subtotal"] = known_token_total(field)
     unknown_token_rows = sum(
         1 for row in model_rows if any(row["tokens"][field] is None for field in token_fields)
     )
@@ -1760,6 +1980,19 @@ def build_receipt(
     estimated_values = [row["estimated_cost"] for row in model_rows]
     reported_total = None if not model_rows or any(value is None for value in reported_values) else sum(reported_values)
     estimated_total = None if not model_rows or any(value is None for value in estimated_values) else sum(estimated_values)
+    # Only observed provider-reported costs feed the reported channel; the extractor's
+    # validated cost subtotals are harness estimates, so they feed the estimated channel
+    # (never provider billing) when a mixed session has no complete cost total.
+    known_reported_cost = sum(value for value in reported_values if value is not None)
+    known_estimated_cost: int | float = 0
+    for row in model_rows:
+        value = row["estimated_cost"]
+        if value is not None:
+            known_estimated_cost += value
+            continue
+        partial_cost = (row.get("known_subtotals") or {}).get("cost", {}).get("total")
+        if partial_cost is not None:
+            known_estimated_cost += partial_cost["sum"]
     unknown_reported_rows = sum(1 for row in model_rows if row["reported_cost"] is None)
     unknown_estimated_rows = sum(1 for row in model_rows if row["estimated_cost"] is None)
     unknown_price_rows = sum(1 for row in model_rows if row["price_version"] is None)
@@ -1863,8 +2096,8 @@ def build_receipt(
         "cost": {
             "reported_cost": reported_total,
             "estimated_cost": estimated_total,
-            "known_reported_cost_subtotal": sum(value for value in reported_values if value is not None),
-            "known_estimated_cost_subtotal": sum(value for value in estimated_values if value is not None),
+            "known_reported_cost_subtotal": known_reported_cost,
+            "known_estimated_cost_subtotal": known_estimated_cost,
             "price_versions": sorted({row["price_version"] for row in model_rows if row["price_version"] is not None}),
             "accounting_complete": not reasons,
             "incomplete_reasons": reasons,
@@ -2062,6 +2295,7 @@ def finish_prepare(
     head = require_commit(git_text(str(checkout), "rev-parse", "HEAD"), "isolated checkout HEAD")
     if head != task["base"]:
         raise Refused("the isolated checkout is not at the frozen base commit")
+    refuse_object_substitution(checkout)
     try:
         base_subject = load_source_subject()(str(checkout), task["base"])
     except SystemExit as refusal:
