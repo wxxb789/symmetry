@@ -28,7 +28,6 @@ import datetime
 import hashlib
 import json
 import math
-import pathlib
 import re
 import sys
 
@@ -469,13 +468,13 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
             session_ref_source = "hashed_id"
     else:
         note("session_id_absent")
-        try:
-            reference = str(pathlib.Path(path).resolve())
-        except OSError:
-            reference = str(path)
+        # Without an observed id the export's own bytes are the only stable evidence of
+        # which session the row describes: byte-identical copies of one export must
+        # collapse onto one session_ref so the runner refuses to count them twice, while
+        # different exports keep distinct identities.
         session_ref = "sha256:" + hashlib.sha256(
-            reference.encode("utf-8", "surrogatepass")).hexdigest()
-        session_ref_source = "hashed_path"
+            b"omp-usage-session-export\0" + source_hash.hexdigest().encode("ascii")).hexdigest()
+        session_ref_source = "source_sha256"
 
     wall_time = None
     time_values = list(record_times) + ([session_start] if session_start is not None else [])

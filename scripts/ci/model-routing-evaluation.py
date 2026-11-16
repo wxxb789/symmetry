@@ -2,12 +2,14 @@
 """Run one auditable acceptance evaluation against a frozen task and routes.
 
 Operations:
-  prepare  fresh isolated clone of --source at the frozen task base, then freeze
-           the exact task and routes bytes in an external run directory
+  prepare  fresh isolated clone of --source at the frozen task base, materialized
+           without host-dependent end-of-line conversion, then freeze the exact
+           task and routes bytes in an external run directory
   seal     refuse a checkout whose Git index carries assume-unchanged,
-           skip-worktree or other nonstandard entries, then bind the checkout
+           skip-worktree or other nonstandard entries or whose Git view carries
+           checkout-local attribute/filter machinery, then bind the checkout
            (actual base/head plus a deterministic manifest) into an evaluation
-           Subject from a content-derived comparison against the frozen base tree
+           Subject from a byte comparison between the object store and the worktree
   check    execute every frozen gate argv without a shell, capture outputs, bind
            the Subject before and after, and require named Go tests through the
            existing assert-go-test-json.py event gate plus a derived
@@ -33,10 +35,14 @@ evidence. Build outputs must stay outside the checkout or be cleaned before
 seal; Elixir _build or other ignored artifact directories are deliberately not
 exempted.
 
-Change detection: the sealed change set is derived from content, never from
-cached Git stat data. seal refuses assume-unchanged, skip-worktree and other
-nonstandard index entries, refreshes every worktree mtime so Git must re-hash
-content, compares symlink targets and file modes by blob object id, and
+Change detection: the sealed change set is derived from bytes, never from Git's
+filtered or cached view of them. seal refuses assume-unchanged, skip-worktree
+and other nonstandard index entries; hashes base blobs straight from the object
+store and worktree files straight from disk, so no clean/smudge filter,
+attribute, index flag or stat cache can influence the comparison; compares
+symlink targets by blob object id and file modes where the host and Git track
+them; refuses any checkout-local
+attribute or filter machinery outright even while the checkout matches; and
 re-derives the changed path list whenever it re-verifies a sealed Subject.
 """
 
@@ -496,6 +502,15 @@ def git_config_bool(checkout: pathlib.Path, key: str) -> bool:
     return completed.stdout.decode("utf-8", "replace").strip() != "false"
 
 
+def executable_bits_tracked(checkout: pathlib.Path) -> bool:
+    """Whether this host and checkout can represent Git's executable bit.
+
+    When they cannot, Git itself ignores mode-only differences, and so does the seal:
+    reporting a pristine executable file as modified would be a false positive.
+    """
+    return os.name == "posix" and git_config_bool(checkout, "core.filemode")
+
+
 def iter_source_paths(checkout: pathlib.Path) -> list[str]:
     """Every checkout file and symlink; only .git internals are excluded."""
     paths: list[str] = []
@@ -527,7 +542,7 @@ def iter_source_paths(checkout: pathlib.Path) -> list[str]:
 
 def read_worktree_entries(checkout: pathlib.Path) -> dict[str, tuple[str, str, str]]:
     """Bind bytes and modes of every checkout file, including ignored files."""
-    executable_bits = os.name == "posix" and git_config_bool(checkout, "core.filemode")
+    executable_bits = executable_bits_tracked(checkout)
     entries: dict[str, tuple[str, str, str]] = {}
     for path in iter_source_paths(checkout):
         target = pathlib.Path(checkout, *path.split("/"))
@@ -617,20 +632,129 @@ def refuse_index_hacks(checkout: pathlib.Path) -> None:
         )
 
 
-def refresh_worktree_mtimes(checkout: pathlib.Path) -> None:
-    """Touch every worktree file so Git re-hashes content instead of trusting stat."""
-    for path in iter_source_paths(checkout):
-        target = pathlib.Path(checkout, *path.split("/"))
+def read_base_blob_digests(checkout: pathlib.Path, objects: Iterable[str]) -> dict[str, str]:
+    """Hash base blob bytes straight out of the object store.
+
+    Object-store content is what the base commit stores: no clean/smudge filter,
+    attribute, index flag or stat cache can influence it. The whole request and its
+    output are held in memory, which is bounded by the base tree size.
+    """
+    ordered = sorted(set(objects))
+    if not ordered:
+        return {}
+    request = "".join(object_id + "\n" for object_id in ordered).encode("ascii")
+    command = ["git", "-c", f"safe.directory={checkout}", "-C", str(checkout), "cat-file", "--batch"]
+    try:
+        completed = subprocess.run(command, input=request, capture_output=True, check=False)
+    except OSError as error:
+        raise Refused(f"could not run git cat-file: {error}")
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise Refused(f"git cat-file --batch failed ({completed.returncode}): {detail}")
+    payload = completed.stdout
+    digests: dict[str, str] = {}
+    offset = 0
+    for object_id in ordered:
+        newline = payload.find(b"\n", offset)
+        if newline < 0:
+            raise Refused("git cat-file ended before every base blob was read")
+        header = payload[offset:newline].split(b" ")
+        if len(header) != 3 or header[0] != object_id.encode("ascii") or header[1] != b"blob":
+            raise Refused(f"unexpected git cat-file output for the base blob {object_id}")
         try:
-            info = target.lstat()
+            size = int(header[2])
+        except ValueError:
+            raise Refused(f"unexpected git cat-file size for the base blob {object_id}")
+        start = newline + 1
+        end = start + size
+        if size < 0 or end >= len(payload) or payload[end] != 0x0A:
+            raise Refused(f"git cat-file truncated the base blob {object_id}")
+        digests[object_id] = "sha256:" + hashlib.sha256(payload[start:end]).hexdigest()
+        offset = end + 1
+    if offset != len(payload):
+        raise Refused("git cat-file returned more output than the base blobs requested")
+    return digests
+
+
+def config_origin_inside_checkout(checkout: pathlib.Path, origin: str) -> bool:
+    """Whether a `git config --show-origin` origin names state inside the checkout.
+
+    Unknown or non-file origins fail closed. Origins outside the checkout are not
+    worker-writable through the isolated checkout and never reach this seal anyway,
+    because the byte comparison does not consult Git's filtered view.
+    """
+    if not origin.startswith("file:"):
+        return True
+    candidate = pathlib.Path(origin[len("file:"):])
+    if not candidate.is_absolute():
+        candidate = checkout / candidate
+    # Normalize lexically instead of resolving: a symlinked config file inside the
+    # checkout must stay classified as checkout-local, not escape through resolve().
+    root = os.path.normcase(os.path.normpath(str(checkout.absolute())))
+    text = os.path.normcase(os.path.normpath(str(candidate.absolute())))
+    return text == root or text.startswith(root + os.sep)
+
+
+def refuse_filter_machinery(checkout: pathlib.Path, bound_paths: list[str]) -> None:
+    """Refuse checkout-local attribute or filter machinery outright.
+
+    collect_changes already reads object-store and worktree bytes directly, so no
+    filter can influence that comparison; this check exists so no later Git command,
+    gate or reader ever has to reason about which of them trusted rewritten content.
+    """
+    refusal_prefix = "seal refuses a checkout with checkout-local attribute or filter machinery: "
+
+    def run(*arguments: str, stdin: bytes | None = None) -> subprocess.CompletedProcess:
+        command = ["git", "-c", f"safe.directory={checkout}", "-C", str(checkout), *arguments]
+        try:
+            return subprocess.run(command, input=stdin, capture_output=True, check=False)
         except OSError as error:
-            raise Refused(f"cannot read source entry {path}: {error}")
-        if stat.S_ISLNK(info.st_mode):
+            raise Refused(f"could not run git {arguments[0]}: {error}")
+
+    configured = run("config", "--show-origin", "--get-regexp", r"^filter\.")
+    if configured.returncode not in (0, 1):
+        detail = configured.stderr.decode("utf-8", "replace").strip()
+        raise Refused(f"git config failed ({configured.returncode}): {detail}")
+    keys: set[str] = set()
+    for line in configured.stdout.decode("utf-8", "replace").splitlines():
+        origin, _, entry = line.partition("\t")
+        if entry and config_origin_inside_checkout(checkout, origin):
+            keys.add(entry.split(" ", 1)[0])
+    if keys:
+        raise Refused(refusal_prefix + "Git filter configuration [" + ", ".join(sorted(keys)) + "]")
+
+    resolved = run("rev-parse", "--git-path", "info/attributes")
+    if resolved.returncode != 0:
+        raise Refused(refusal_prefix + "cannot resolve .git/info/attributes")
+    attributes = pathlib.Path(resolved.stdout.decode("utf-8", "replace").strip())
+    if not attributes.is_absolute():
+        attributes = checkout / attributes
+    if attributes.exists():
+        raise Refused(refusal_prefix + ".git/info/attributes exists")
+
+    attributes_file = run("config", "--get", "core.attributesFile")
+    if attributes_file.returncode == 0 and attributes_file.stdout.strip():
+        value = attributes_file.stdout.decode("utf-8", "replace").strip()
+        raise Refused(refusal_prefix + f"core.attributesFile is set ({value})")
+    if attributes_file.returncode not in (0, 1):
+        raise Refused(refusal_prefix + f"git config failed ({attributes_file.returncode})")
+
+    request = b"".join(utf8_path_key(path) + b"\0" for path in bound_paths)
+    assigned = run("check-attr", "-a", "--stdin", "-z", "--", stdin=request)
+    if assigned.returncode != 0:
+        raise Refused(refusal_prefix + f"git check-attr failed ({assigned.returncode})")
+    tokens = assigned.stdout.split(b"\0")
+    rewrites: list[str] = []
+    for index in range(0, len(tokens) - 2, 3):
+        path_bytes, attribute_bytes, value_bytes = tokens[index], tokens[index + 1], tokens[index + 2]
+        if not path_bytes:
             continue
-        try:
-            os.utime(target, None)
-        except OSError as error:
-            raise Refused(f"cannot refresh the worktree mtime for {path}: {error}")
+        attribute = attribute_bytes.decode("utf-8", "replace")
+        value = value_bytes.decode("utf-8", "replace")
+        if attribute in ("filter", "working-tree-encoding") and value not in ("unspecified", "unset"):
+            rewrites.append(f"{decode_path(path_bytes)} {attribute}={value}")
+    if rewrites:
+        raise Refused(refusal_prefix + "attributes assign content rewrites [" + ", ".join(rewrites[:5]) + "]")
 
 
 def blob_object_id(payload: bytes, object_format: str) -> str:
@@ -677,51 +801,57 @@ def compute_subject(checkout: pathlib.Path, task_id: str, base: str, head: str) 
 def collect_changes(checkout: pathlib.Path, base: str) -> dict[str, set[str]]:
     refuse_index_hacks(checkout)
     base_tree = read_base_tree(checkout, base)
-    refresh_worktree_mtimes(checkout)
+    entries = read_worktree_entries(checkout)
     changes: dict[str, set[str]] = {}
-    for arguments in (
-        ("diff", "--no-renames", "--name-status", "-z", base, "--"),
-        ("diff", "--cached", "--no-renames", "--name-status", "-z", base, "--"),
-    ):
-        tokens = [token for token in git_output(str(checkout), *arguments).split(b"\0") if token]
-        if len(tokens) % 2:
-            raise Refused("unexpected git diff --name-status output")
-        for index in range(0, len(tokens), 2):
-            changes.setdefault(decode_path(tokens[index + 1]), set()).add(
-                tokens[index].decode("ascii", "replace")[:1]
-            )
-    base_paths = set(base_tree)
-    worktree_paths = set(iter_source_paths(checkout))
-    for path in worktree_paths - base_paths:
-        changes.setdefault(path, set()).add("A")
-    for path in base_paths - worktree_paths:
-        changes.setdefault(path, set()).add("D")
-    # The mtime refresh cannot cover symlinks and git diff cannot be trusted for file
-    # type changes, so those entries are compared explicitly by blob object id.
+    for path in entries:
+        if path not in base_tree:
+            changes.setdefault(path, set()).add("A")
+    for path in base_tree:
+        if path not in entries:
+            changes.setdefault(path, set()).add("D")
+    # Content is compared as bytes: the base side comes from the object store and the
+    # worktree side was read directly, so no Git filter, attribute, index flag or stat
+    # cache can make a changed file look unchanged.
     object_format = git_text(str(checkout), "rev-parse", "--show-object-format")
     if object_format not in ("sha1", "sha256"):
         raise Refused(f"unsupported Git repository object format: {object_format}")
+    mode_tracked = executable_bits_tracked(checkout)
+    content_objects = {
+        base_object
+        for path, (base_mode, base_object) in base_tree.items()
+        if base_mode != "120000" and path in entries and entries[path][1] == "file"
+    }
+    base_digests = read_base_blob_digests(checkout, content_objects)
     for path in sorted(base_tree, key=utf8_path_key):
         base_mode, base_object = base_tree[path]
-        target = pathlib.Path(checkout, *path.split("/"))
-        try:
-            info = target.lstat()
-        except OSError:
+        entry = entries.get(path)
+        if entry is None:
             continue  # a missing entry is already reported by the D name-set difference
-        base_is_symlink = base_mode == "120000"
-        worktree_is_symlink = stat.S_ISLNK(info.st_mode)
-        if not base_is_symlink and not worktree_is_symlink:
+        worktree_mode, kind, worktree_digest = entry
+        if base_mode == "120000" and kind == "symlink":
+            target = pathlib.Path(checkout, *path.split("/"))
+            if symlink_blob_entry(path, target, object_format) != (base_mode, base_object):
+                changes.setdefault(path, set()).add("M")
             continue
-        if base_is_symlink != worktree_is_symlink:
-            changes.setdefault(path, set()).add("M")
-        elif symlink_blob_entry(path, target, object_format) != (base_mode, base_object):
-            changes.setdefault(path, set()).add("M")
+        if base_mode != "120000" and kind == "file":
+            mode_changed = mode_tracked and worktree_mode != base_mode
+            if mode_changed or worktree_digest != base_digests[base_object]:
+                changes.setdefault(path, set()).add("M")
+            continue
+        changes.setdefault(path, set()).add("M")  # file<->symlink type change
     return changes
 
 
 def validate_changes(
-    task: dict[str, Any], base_files: set[str], changes: dict[str, set[str]]
+    checkout: pathlib.Path, task: dict[str, Any], base_files: set[str], changes: dict[str, set[str]]
 ) -> list[dict[str, str]]:
+    """Apply the seal's path rules, then refuse checkout-local filter machinery.
+
+    The path rules run first so a hidden edit is refused as the edit it is; the
+    machinery check then refuses every filtered or attribute-driven checkout, whether
+    or not it currently matches the base, because the whole run must proceed on a
+    checkout whose Git view no clean/smudge filter can rewrite.
+    """
     allowed = PathMatcher(task["allowed_paths"])
     protected = PathMatcher(task["protected_paths"])
     sealed_changes: list[dict[str, str]] = []
@@ -737,6 +867,7 @@ def validate_changes(
         if not allowed.matches(path):
             raise Refused(f"seal refused a changed path outside allowed_paths: {path} ({status})")
         sealed_changes.append({"path": path, "status": status})
+    refuse_filter_machinery(checkout, sorted(base_files | set(changes), key=utf8_path_key))
     return sealed_changes
 
 
@@ -756,7 +887,9 @@ def require_current_subject(
             "current source does not match the sealed subject; re-run seal and its checks before continuing"
         )
     checkout = run_dir / "checkout"
-    recomputed = validate_changes(task, list_base_paths(checkout, task["base"]), collect_changes(checkout, task["base"]))
+    recomputed = validate_changes(
+        checkout, task, list_base_paths(checkout, task["base"]), collect_changes(checkout, task["base"])
+    )
     if recomputed != sealed["changed_paths"]:
         raise Refused("the sealed changed paths no longer match the checkout changes; re-run seal")
     return subject
@@ -1910,9 +2043,14 @@ def finish_prepare(
 ) -> int:
     source = str(arguments.source)
     checkout = run_dir / "checkout"
+    # The seal compares worktree bytes with object-store bytes, so the isolated
+    # checkout must materialize the stored blob bytes: never apply a host-dependent
+    # end-of-line rendering during prepare.
+    eol_overrides = ["-c", "core.autocrlf=false", "-c", "core.eol=lf"]
     try:
         clone = subprocess.run(
-            ["git", "-c", f"safe.directory={source}", "clone", "--quiet", "--no-hardlinks", source, str(checkout)],
+            ["git", "-c", f"safe.directory={source}", *eol_overrides,
+             "clone", "--quiet", "--no-hardlinks", source, str(checkout)],
             capture_output=True, check=False,
         )
     except OSError as error:
@@ -1920,7 +2058,7 @@ def finish_prepare(
     if clone.returncode != 0:
         detail = clone.stderr.decode("utf-8", "replace").strip()
         raise Refused(f"could not clone {source}: {detail}")
-    git_output(str(checkout), "checkout", "--quiet", "--detach", task["base"])
+    git_output(str(checkout), *eol_overrides, "checkout", "--quiet", "--detach", task["base"])
     head = require_commit(git_text(str(checkout), "rev-parse", "HEAD"), "isolated checkout HEAD")
     if head != task["base"]:
         raise Refused("the isolated checkout is not at the frozen base commit")
@@ -1970,7 +2108,7 @@ def command_seal(arguments: argparse.Namespace) -> int:
     head = require_commit(git_text(str(checkout), "rev-parse", "HEAD"), "checkout HEAD")
     base_files = list_base_paths(checkout, task["base"])
     changes = collect_changes(checkout, task["base"])
-    sealed_changes = validate_changes(task, base_files, changes)
+    sealed_changes = validate_changes(checkout, task, base_files, changes)
     subject = compute_subject(checkout, task["task_id"], task["base"], head)
     if collect_changes(checkout, task["base"]) != changes:
         raise Refused("source changed while sealing its subject")

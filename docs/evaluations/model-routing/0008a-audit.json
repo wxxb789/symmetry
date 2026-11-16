@@ -442,7 +442,7 @@
       }
     ],
     "owner_routing_verdict_issued": false,
-    "post_review_changes": "As of the bound revision c45db2c: only evidence generation, clarified metric labels and unchanged-goal archival/canonical pointers followed the final executable-source review and 20-case suite. The later repair increments recorded in this audit (F1-F3, delivered as 1baf76c, and the DeepSeek-review repairs F4-F9) change files under scripts/ci/ and docs/, so that source review does not bind them.",
+    "post_review_changes": "As of the bound revision c45db2c: only evidence generation, clarified metric labels and unchanged-goal archival/canonical pointers followed the final executable-source review and 20-case suite. The later repair increments recorded in this audit (F1-F3, delivered as 1baf76c; the DeepSeek-review repairs F4-F9, delivered as bdbcdc7; and the PR-review repairs F10-F11) change files under scripts/ci/ and docs/, so that source review does not bind them.",
     "reviewed_revision": {
       "scripts/ci/model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1 (unchanged; my prior source review still binds)",
       "scripts/ci/test-model-routing-evaluation.py": "sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0 (W6 fixture fix only; no production change)"
@@ -501,6 +501,16 @@
         "defect": "audit and document reconciliation gaps: resolved dispositions carried review-time values that contradicted the delivered receipts, a disposition pointed at a non-existent remaining_blockers field, the unversioned-estimate subtotal omitted the open coordinator prefix, the evidence record claimed no commit was performed and no executable source changed after the reviewed 20-case gate, and the review instructions requested a non-schema reviewed-paths field",
         "fix": "dispositions updated to the final values, references point at retained_nonblocking_limits, the estimate labels separate the completed-session subtotal from the open prefix, the delivery commit and later repair increments are stated explicitly, and the review instructions match the strict record schema",
         "id": "F9"
+      },
+      {
+        "defect": "seal derived changed_paths from `git diff`, so a worker could hide a modification of a baseline test behind checkout-local Git filter machinery: `.git/info/attributes` (highest attribute precedence, and `.git` is excluded from the Source manifest) assigning `filter=hide` plus a `filter.hide.clean` command that echoes the base bytes made `git diff` report no change while the gates executed the modified file (reproduced: seal exit 0 with changed_paths [] and `t.Skip()` in app/main_test.go)",
+        "fix": "the change set is now derived from bytes no checkout-local filter can influence: base blob contents are read from the object store (`git cat-file --batch`) and worktree files are hashed from disk; symlink targets are compared by blob object id and file modes where the host and Git track them (the untrackable-mode case matches Git's own core.filemode rule, a false positive the private-store control caught); and validate_changes refuses checkout-local attribute or filter machinery outright (a `filter.*` configuration inside the checkout, `.git/info/attributes`, `core.attributesFile`, or a `filter`/`working-tree-encoding` attribute on a bound path) even while the checkout matches. prepare materializes the checkout with `core.autocrlf=false`/`core.eol=lf`, and the change-set re-derivation performs no writes at all",
+        "id": "F10"
+      },
+      {
+        "defect": "an export without a session id got a `session_ref` derived from its filesystem path, so byte-identical copies of one export placed at different paths presented as different sessions; the runner's per-session duplicate refusal could not stop the same tokens and cost from being counted once per phase (reproduced: identical metadata.source_sha256, distinct `hashed_path` refs)",
+        "fix": "the fallback identity is derived from the export's own bytes instead (`session_ref_source: \"source_sha256\"`, a domain-separated hash of metadata.source_sha256), so byte-identical copies collapse onto one `session_ref` and the runner refuses the double import as `duplicates a model session`, while genuinely different exports keep distinct identities",
+        "id": "F11"
       }
     ],
     "frozen_receipt_effect": {
@@ -516,6 +526,11 @@
           "exit_code": 1,
           "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256",
           "note": "the stored gate results predate the F4-F9 go-list result schema, so the repaired tooling refuses the preserved attempt before reaching the tooling-sources comparison; the private store is unchanged"
+        },
+        "f10_f11_tooling": {
+          "exit_code": 1,
+          "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256",
+          "note": "the F10-F11 object-store comparison re-derives the preserved change sets without a false positive and stops at the same preserved-attempt schema refusal; the private store's file listing, sizes and mtimes hash identically before and after the run"
         },
         "repaired_tooling": {
           "exit_code": 1,
@@ -541,13 +556,18 @@
           "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256",
           "note": "same schema-refusal as the negative receipt; the corrected delivered review/receipt digests are never reached because the preserved attempts predate the go-list schema"
         },
+        "f10_f11_tooling": {
+          "exit_code": 1,
+          "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256",
+          "note": "same schema-refusal as the negative receipt under the F10-F11 comparison, which no longer touches the private checkout at all"
+        },
         "repaired_tooling": {
           "exit_code": 1,
           "refusal": "the submitted receipt does not match the derived evidence at $.evidence.tooling_sources.model-routing-evaluation.py: 'sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1' != 'sha256:c4b3db66375ce0c8da0acccb048e5c6b85521103d2d92a828214c26e811ecafe'"
         }
       },
-      "private_store": "no frozen task/routes/review/usage byte, run record, attempt record or stored receipt in the coordinator run directory was rewritten; the F4-F9 change-set re-derivation refreshed working-tree mtimes in the private checkouts only (file content bytes unchanged)",
-      "statement": "the published receipts bind the tooling digests of the bound revision; the F1-F3 tooling re-derives them up to the tooling-sources comparison, and the F4-F9 tooling refuses earlier because the preserved gate results predate the go-list result schema. An evaluated run must be re-derived end to end by reviewed tooling before any published receipt can be accepted (runbook: changing that tooling invalidates an older submitted receipt)."
+      "private_store": "no frozen task/routes/review/usage byte, run record, attempt record or stored receipt in the coordinator run directory was rewritten; the F4-F9 change-set re-derivation refreshed working-tree mtimes in the private checkouts only (file content bytes unchanged), and the F10-F11 re-derivation performs no writes at all: the store's file listing, sizes and mtimes hash identically before and after both accept controls",
+      "statement": "the published receipts bind the tooling digests of the bound revision; the F1-F3 tooling re-derives them up to the tooling-sources comparison, and the F4-F9 and F10-F11 tooling refuse earlier because the preserved gate results predate the go-list result schema. An evaluated run must be re-derived end to end by reviewed tooling before any published receipt can be accepted (runbook: changing that tooling invalidates an older submitted receipt)."
     },
     "gate_results": {
       "contract_checks": {
@@ -683,6 +703,134 @@
           ]
         }
       },
+      "pr_review_repairs": {
+        "evaluation_harness": {
+          "command": [
+            "python",
+            "scripts/ci/test-model-routing-evaluation.py",
+            "-v"
+          ],
+          "exit_code": 0,
+          "failures": 0,
+          "passed": 33,
+          "skip_reasons": [
+            "executable file modes are not tracked on this host",
+            "non-UTF-8 file names are only constructible on POSIX hosts"
+          ],
+          "skipped": 2,
+          "tests": 35,
+          "wall_time": 825.832
+        },
+        "go_regression": {
+          "go_test": {
+            "command": [
+              "go",
+              "test",
+              "./..."
+            ],
+            "exit_code": 0,
+            "packages_ok": 21
+          },
+          "go_vet": {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          "note": "contextual regression coverage for unchanged Go sources from daemon/; the re-run overlapped the targeted Python re-checks on this host, so no wall-time figure is recorded."
+        },
+        "note": "F10-F11 worktree runs on this host, after the F4-F9 runs recorded above. The object-store comparison caught a real false positive rather than being signed off from the fixtures alone: on this host the first F10 build reported the private positive checkout's pristine `scripts/audit-no-legacy-routes.sh` as modified (tracked mode 100755, host cannot represent it), and the repaired rule now matches Git's own core.filemode behaviour and re-derives both private checkouts cleanly up to the preserved-attempt schema refusal.",
+        "private_store_controls": [
+          {
+            "command": [
+              "accept",
+              "--run-dir",
+              "<private coordinator run dir>/positive",
+              "--receipt",
+              "docs/evaluations/model-routing/0008a-positive.json"
+            ],
+            "exit_code": 1,
+            "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256"
+          },
+          {
+            "command": [
+              "accept",
+              "--run-dir",
+              "<private coordinator run dir>/negative",
+              "--receipt",
+              "docs/evaluations/model-routing/0008a-negative.json"
+            ],
+            "exit_code": 1,
+            "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256"
+          }
+        ],
+        "red_before_repair": [
+          {
+            "observation": "the pre-F10 seal returned exit 0 with `changed_paths: []` while app/main_test.go carried `t.Skip()` behind a `.git/info/attributes` clean filter that echoed the base bytes; the new regression test failed at its refusal assertion",
+            "test": "scripts/ci/test-model-routing-evaluation.py test_checkout_local_filter_cannot_hide_a_weakened_baseline_test"
+          },
+          {
+            "observation": "two byte-identical ID-less exports copied to different paths produced distinct `hashed_path` session_refs with identical metadata.source_sha256 (sha256:caa5559c... vs sha256:60fa9963... in the recorded probe), so the runner could count the same session and its cost once per phase; the new regression test failed on the shared-identity assertion",
+            "test": "scripts/ci/test-model-routing-omp-usage.py test_byte_identical_id_less_exports_share_one_session_identity"
+          }
+        ],
+        "regression_controls": [
+          {
+            "pre_fix_tooling": {
+              "exit_code": 1,
+              "observation": "the seal returned exit 0 with changed_paths [] and the weakened baseline test still present, so the test failed at assert_refused"
+            },
+            "repaired_tooling": {
+              "exit_code": 0
+            },
+            "test": "scripts/ci/test-model-routing-evaluation.py test_checkout_local_filter_cannot_hide_a_weakened_baseline_test"
+          },
+          {
+            "pre_fix_tooling": {
+              "exit_code": 1,
+              "observation": "identical bytes, distinct path-derived refs; validate_usage accepted the same session under two phases"
+            },
+            "repaired_tooling": {
+              "exit_code": 0
+            },
+            "test": "scripts/ci/test-model-routing-omp-usage.py test_byte_identical_id_less_exports_share_one_session_identity"
+          },
+          {
+            "pre_fix_tooling": {
+              "exit_code": 1,
+              "observation": "a pristine base-tracked 100755 file was reported as modified on a host that cannot represent the executable bit (the private-store control caught this before any fixture test did)"
+            },
+            "repaired_tooling": {
+              "exit_code": 0
+            },
+            "test": "scripts/ci/test-model-routing-evaluation.py test_pristine_tracked_executables_report_no_mode_change"
+          }
+        ],
+        "reused_source_binder": {
+          "command": [
+            "python",
+            "scripts/ci/test-linux-v2-source-subject.py"
+          ],
+          "exit_code": 0,
+          "failures": 0,
+          "tests": 4,
+          "wall_time": 5.569
+        },
+        "store_mutations": "none: the accept controls re-run the change-set derivation only; the private store's file listing, sizes and mtimes hashed identically before and after (the F4-F9 path refreshed worktree mtimes, the F10-F11 path performs no writes at all)",
+        "usage_harness": {
+          "command": [
+            "python",
+            "scripts/ci/test-model-routing-omp-usage.py",
+            "-v"
+          ],
+          "exit_code": 0,
+          "failures": 0,
+          "tests": 31,
+          "wall_time": 14.034
+        }
+      },
       "recorded_refusal_controls": {
         "duplicate-session-usage": {
           "exit_code": 1,
@@ -757,10 +905,17 @@
         "scripts/ci/model-routing-omp-usage.py": "sha256:ffdb47bbc9bda758d670949f02ff50d4349cd810cc1a06c72c7989fef6d764ec",
         "scripts/ci/test-model-routing-evaluation.py": "sha256:f9f86d6fde7e89f1027efddea9eea3f65a20d23d00454b74e2360e593c0545da",
         "scripts/ci/test-model-routing-omp-usage.py": "sha256:e9395d36ef7c0ff7e7e4fefd4de9554d1a63815951405053f8246345f9ff8b57"
+      },
+      "f10_f11_repairs": {
+        "docs/evaluations/model-routing/README.md": "sha256:76315b78e129b7916ff489020bad1e15955fd4b918b1f7105cb1ab71a5b75dcd",
+        "scripts/ci/model-routing-evaluation.py": "sha256:5e09165ee5a145f0b78c2f3735edd7a4cc6879c8331054f5dde5364b83b5fc64",
+        "scripts/ci/model-routing-omp-usage.py": "sha256:5d361246ef10e79d72bdbcb3f984564559d55031d4ca04bdfcf7010928b7923d",
+        "scripts/ci/test-model-routing-evaluation.py": "sha256:61061a28df4c6fa074db8ad93f091c9340aeabe86f365e57a60341f86dc70156",
+        "scripts/ci/test-model-routing-omp-usage.py": "sha256:f82a39dcbdd85613006b4b888f2b3dbacf86c595b62c00b397d86be065ae70be"
       }
     },
-    "review_status": "neither repair increment has an independent review; the source verdict above binds the bound revision only",
-    "state": "F1-F3 were uncommitted worktree edits when the bound-revision gate results were recorded and are delivered as commit 1baf76c; F4-F9 are uncommitted worktree edits after that commit and are not covered by the source review or the frozen receipts"
+    "review_status": "no repair increment has an independent review; the source verdict above binds the bound revision only",
+    "state": "F1-F3 were uncommitted worktree edits when the bound-revision gate results were recorded and are delivered as commit 1baf76c; F4-F9 were delivered as commit bdbcdc7; F10-F11 are uncommitted worktree edits after that commit. No repair increment is covered by the source review or by the frozen receipts"
   },
   "retained_nonblocking_limits": [
     "Incomplete provider billing/prices, unreported helpers/transport usage and post-cutoff coordinator tail remain unknown, never zero.",

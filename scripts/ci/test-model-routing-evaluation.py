@@ -197,6 +197,32 @@ class EvaluationTests(unittest.TestCase):
         self.git("config", "core.trustctime", "false", cwd=self.checkout(run))
         self.git("update-index", "--refresh", cwd=self.checkout(run))
 
+    def install_base_echo_filter(self, relative: str, run: pathlib.Path | None = None) -> None:
+        """Configure the checkout-local clean filter that echoes one path's base bytes.
+
+        `.git/info/attributes` has the highest attribute precedence and `.git` is
+        excluded from the Source manifest, so this is exactly what a worker with write
+        access to the isolated checkout can install without touching any bound file.
+        """
+        checkout = self.checkout(run)
+        attributes = checkout / ".git" / "info" / "attributes"
+        attributes.parent.mkdir(parents=True, exist_ok=True)
+        attributes.write_bytes(f"{relative} filter=hide\n".encode("utf-8"))
+        self.git("config", "filter.hide.clean",
+                 f"git cat-file blob {self.base}:{relative}", cwd=checkout)
+
+    def remove_base_echo_filter(self, run: pathlib.Path | None = None) -> None:
+        checkout = self.checkout(run)
+        attributes = checkout / ".git" / "info" / "attributes"
+        if attributes.exists():
+            attributes.unlink()
+        self.unset_base_echo_filter(run)
+
+    def unset_base_echo_filter(self, run: pathlib.Path | None = None) -> None:
+        """Drop only the clean-filter configuration, leaving any attribute file alone."""
+        subprocess.run(["git", "-C", str(self.checkout(run)), "config", "--unset", "filter.hide.clean"],
+                       capture_output=True, check=False)
+
     def seal(self, run: pathlib.Path | None = None) -> subprocess.CompletedProcess:
         return self.cli("seal", "--run-dir", str(run or self.run_dir()))
 
@@ -872,6 +898,19 @@ class EvaluationTests(unittest.TestCase):
         second = self.assert_ok(self.seal(run=run))
         self.assertNotEqual(first["subject_hash"], second["subject_hash"])
 
+    def test_pristine_tracked_executables_report_no_mode_change(self) -> None:
+        # A base that tracks an executable file must seal clean on hosts that cannot
+        # represent the executable bit, exactly as `git diff` honors core.filemode.
+        self.write(self.repo / "scripts/executable.sh", "#!/bin/sh\necho fixture\n")
+        self.git("add", "scripts/executable.sh")
+        self.git("update-index", "--chmod=+x", "scripts/executable.sh")
+        self.git("commit", "--quiet", "-m", "add executable fixture")
+        self.base = self.git_text("rev-parse", "HEAD")
+        run = self.root / "run-executable-pristine"
+        self.assert_ok(self.prepare(run=run))
+        sealed = self.assert_ok(self.seal(run=run))
+        self.assertEqual(sealed["changed_paths"], [])
+
     def test_content_derived_change_detection_hides_nothing(self) -> None:
         run = self.root / "run-content-derived"
         task = self.task(allowed_paths=["**"])
@@ -904,6 +943,49 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(self.git_text("diff", "--name-status", cwd=checkout), "")
         sealed = self.assert_ok(self.seal(run=run))
         self.assertEqual([change["path"] for change in sealed["changed_paths"]], ["app/main.go"])
+
+    def test_checkout_local_filter_cannot_hide_a_weakened_baseline_test(self) -> None:
+        run = self.root / "run-filter-bypass"
+        task = self.task(allowed_paths=["**"])
+        self.assert_ok(self.prepare(task=task, run=run))
+        checkout = self.checkout(run)
+        self.install_base_echo_filter("app/main_test.go", run)
+        weakened = "package app\n\nimport \"testing\"\n\nfunc TestBaseline(t *testing.T) { t.Skip() }\n"
+        self.edit("app/main_test.go", weakened, run=run)
+
+        # Bypass premise: the clean filter makes git diff report no change at all.
+        self.assertEqual(self.git_text("diff", "--name-status", cwd=checkout), "")
+
+        # The seal compares object-store bytes with worktree bytes, so the weakened
+        # baseline test is still found and refused with the filter installed.
+        self.assert_refused(self.seal(run=run), "baseline test")
+        self.assertEqual(self.read(checkout / "app/main_test.go").decode("utf-8"), weakened)
+
+        # Legitimate paths keep working: an unchanged baseline and a real edit.
+        self.remove_base_echo_filter(run)
+        self.write(checkout / "app/main_test.go", FILES["app/main_test.go"])
+        sealed = self.assert_ok(self.seal(run=run))
+        self.assertEqual(sealed["changed_paths"], [])
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        sealed = self.assert_ok(self.seal(run=run))
+        self.assertEqual([change["path"] for change in sealed["changed_paths"]], ["app/main.go"])
+
+    def test_checkout_local_attribute_machinery_is_refused_without_a_content_edit(self) -> None:
+        run = self.root / "run-filter-machinery"
+        task = self.task(allowed_paths=["**"])
+        self.assert_ok(self.prepare(task=task, run=run))
+        checkout = self.checkout(run)
+        self.install_base_echo_filter("app/main_test.go", run)
+
+        # Nothing is edited, so only fail-closed machinery detection can refuse this.
+        self.assert_refused(self.seal(run=run), "checkout-local attribute or filter machinery")
+
+        # The attribute file alone is machinery too, even without filter configuration.
+        self.unset_base_echo_filter(run)
+        self.assert_refused(self.seal(run=run), "checkout-local attribute or filter machinery")
+
+        self.remove_base_echo_filter(run)
+        self.assert_ok(self.seal(run=run))
 
     def test_sealed_changed_paths_are_reverified(self) -> None:
         run = self.root / "run-reverify-paths"

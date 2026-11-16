@@ -71,6 +71,39 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertEqual(completed.stderr, "")
         return json.loads(completed.stdout)
 
+    def export_id_less_session(self, path, prompt="synthetic user request"):
+        """Write one ID-less OMP export at path and return the extractor row."""
+        lines = [
+            json.dumps({"type": "message", "timestamp": "2026-11-15T10:00:00Z",
+                        "message": {"role": "user", "content": prompt}}),
+            json.dumps({"type": "message", "timestamp": "2026-11-15T10:00:05Z",
+                        "message": {"role": "assistant", "model": "m",
+                                    "provider": "safe-provider", "api": "safe-api",
+                                    "usage": self.usage()}}),
+        ]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        completed = self.run_arguments(["--session", str(path), "--stage", "implementation",
+                                        "--credential-route", "safe-metadata",
+                                        "--provenance", "synthetic-parser-regression"])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return json.loads(completed.stdout)
+
+    def phases_with(self, *model_rows):
+        """Cover all six stages around the supplied model rows in stage order.
+
+        The second row is imported under the review stage, the exact double-import the
+        finding reproduced: one session charged once per phase.
+        """
+        usage = {"repair_count": 0, "wall_time": 12.0, "phases": [
+            self.non_model_phase("exploration"),
+            model_rows[0],
+            self.non_model_phase("verification"),
+            dict(model_rows[1], stage="review"),
+            self.non_model_phase("repair"),
+            self.non_model_phase("failed_attempt"),
+        ]}
+        return usage
+
     def session_record(self, **overrides):
         record = {"type": "session", "id": "synthetic-session-1",
                   "timestamp": "2026-11-15T10:00:00Z",
@@ -457,7 +490,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         row = json.loads(completed.stdout)
         self.assertTrue(row["session_ref"].startswith("sha256:"))
-        self.assertEqual(row["metadata"]["session_ref_source"], "hashed_path")
+        self.assertEqual(row["metadata"]["session_ref_source"], "source_sha256")
         self.assertIn("session_entry_absent", row["limitations"])
         self.assertIn("session_id_absent", row["limitations"])
         row = self.row([self.session_record(id="session id with spaces/path"),
@@ -465,6 +498,42 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertTrue(row["session_ref"].startswith("sha256:"))
         self.assertEqual(row["metadata"]["session_ref_source"], "hashed_id")
         self.assertIn("session_id_hashed", row["limitations"])
+
+    def test_byte_identical_id_less_exports_share_one_session_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first_path = pathlib.Path(directory) / "first-session.jsonl"
+            second_path = pathlib.Path(directory) / "nested" / "copy-session.jsonl"
+            first = self.export_id_less_session(first_path)
+            second_path.parent.mkdir()
+            second_path.write_bytes(first_path.read_bytes())
+            second = self.export_id_less_session(second_path)
+        self.assertEqual(first["metadata"]["session_ref_source"], "source_sha256")
+        self.assertEqual(second["metadata"]["session_ref_source"], "source_sha256")
+        self.assertEqual(first["metadata"]["source_sha256"], second["metadata"]["source_sha256"])
+        self.assertEqual(first["session_ref"], second["session_ref"])
+
+        # The runner must refuse to count the same evidence twice.
+        module = load_runner_module()
+        usage = self.phases_with(first, second)
+        with self.assertRaises(module.Refused) as refusal:
+            module.validate_usage(json.dumps(usage).encode("utf-8"))
+        self.assertIn("duplicates a model session", str(refusal.exception))
+
+    def test_distinct_id_less_sessions_keep_distinct_identities(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = self.export_id_less_session(pathlib.Path(directory) / "first.jsonl")
+            second = self.export_id_less_session(pathlib.Path(directory) / "second.jsonl",
+                                                 prompt="a genuinely different request")
+        self.assertNotEqual(first["metadata"]["source_sha256"],
+                            second["metadata"]["source_sha256"])
+        self.assertNotEqual(first["session_ref"], second["session_ref"])
+
+        module = load_runner_module()
+        rows, repair_count, task_wall_time = module.validate_usage(
+            json.dumps(self.phases_with(first, second)).encode("utf-8"))
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(repair_count, 0)
+        self.assertEqual(task_wall_time, 12.0)
 
     def test_wall_time_and_prompt_absence_are_limitations_not_values(self):
         records = [self.session_record(timestamp=None),
