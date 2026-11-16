@@ -1,0 +1,1261 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/goal-read.schema.json",
+  "title": "Symmetry Goal Read v1",
+  "description": "Consumed members of the Portal Goal detail read: the existing Goal projection with objective, accepted progress, blockers, the server's own allowed actions, settlement attention, budget reservation and consumption, waiting-external boundaries and the read-only dependency projection. Unconsumed presentation members remain additive; the client never derives a Goal policy member and never offers an action the served allowed_actions does not list.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "project_id",
+    "title",
+    "state",
+    "current_revision",
+    "version",
+    "allowed_actions",
+    "blockers",
+    "blocker_reasons",
+    "completion",
+    "work_items",
+    "graph",
+    "decisions",
+    "accounting"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/definitions/UUID"
+    },
+    "project_id": {
+      "$ref": "common.schema.json#/definitions/UUID"
+    },
+    "project_key": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "project_name": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    },
+    "current_revision": {
+      "$ref": "common.schema.json#/definitions/PositiveInteger"
+    },
+    "version": {
+      "$ref": "common.schema.json#/definitions/SafeInteger",
+      "description": "Goal lock_version: the value every command must carry as expected_version."
+    },
+    "updated_at": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lifecycle": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "revision": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/GoalReadRevision"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/GoalBlocker"
+      }
+    },
+    "blocker_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "settlement_attention": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SettlementAttention"
+      }
+    },
+    "attention_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "completion": {
+      "$ref": "#/definitions/GoalCompletion"
+    },
+    "allowed_actions": {
+      "type": "array",
+      "description": "The server's exact action list for the rendered version/revision. The surface offers this list and nothing else.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "work_items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/GoalReadWorkItem"
+      }
+    },
+    "graph": {
+      "$ref": "#/definitions/GoalReadGraph"
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/GoalReadDecision"
+      }
+    },
+    "accepted_outcomes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/GoalReadOutcome"
+      }
+    },
+    "accounting": {
+      "$ref": "#/definitions/GoalReadAccounting"
+    },
+    "external_waits": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/GoalReadExternalWait"
+      }
+    },
+    "history": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "execution": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "planning": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "GoalReadRevision": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "PortalJSON revision projection: the approved contract members with the revision stamp. The read projection omits the write-side reason/actor_ref and never carries the write schema_version.",
+      "required": [
+        "revision"
+      ],
+      "properties": {
+        "revision": {
+          "$ref": "common.schema.json#/definitions/Revision"
+        },
+        "objective": {
+          "$ref": "common.schema.json#/definitions/LongText"
+        },
+        "non_goals": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/definitions/LongText"
+          }
+        },
+        "acceptance_contract": {
+          "type": "object"
+        },
+        "authority_policy": {
+          "type": "object"
+        },
+        "execution_policy": {
+          "type": "object"
+        },
+        "context_manifest": {
+          "type": "object"
+        },
+        "inserted_at": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "GoalBlocker": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "reason",
+        "count"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "SettlementAttention": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "settlement",
+        "required?"
+      ],
+      "properties": {
+        "event_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "event_sequence": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goal_revision": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "work_item_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required?": {
+          "type": "boolean"
+        },
+        "settlement": {
+          "type": "string"
+        },
+        "reason": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decision_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blocker": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposed_next_action": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposed_next_action_status": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subject_hash": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "GoalCompletion": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "The server's completion projection. ready is the same predicate allowed_actions uses to offer achieve; the surface renders it and never recomputes it.",
+      "required": [
+        "all_required_accepted?",
+        "current_revision?",
+        "no_open_decisions?",
+        "no_nonterminal_tasks?",
+        "ready?",
+        "required_items",
+        "accepted_required_items"
+      ],
+      "properties": {
+        "required_items": {
+          "type": "integer"
+        },
+        "accepted_required_items": {
+          "type": "integer"
+        },
+        "accepted_outcomes": {
+          "type": "integer"
+        },
+        "rejected_outcomes": {
+          "type": "integer"
+        },
+        "all_required_accepted?": {
+          "type": "boolean"
+        },
+        "current_revision?": {
+          "type": "boolean"
+        },
+        "no_open_decisions?": {
+          "type": "boolean"
+        },
+        "no_nonterminal_tasks?": {
+          "type": "boolean"
+        },
+        "ready?": {
+          "type": "boolean"
+        }
+      }
+    },
+    "GoalReadWorkItem": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "title",
+        "status",
+        "required?",
+        "accepted?",
+        "integration"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/definitions/UUID"
+        },
+        "number": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "board_status": {
+          "type": "string"
+        },
+        "priority": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "position": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assignee_type": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assignee_name": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent_profile": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "admitted_revision": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repository_resource_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseline": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "change_target": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accepted_outcome": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/GoalReadOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required?": {
+          "type": "boolean"
+        },
+        "accepted?": {
+          "type": "boolean"
+        },
+        "integration": {
+          "type": "boolean"
+        }
+      }
+    },
+    "GoalReadGraph": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Read-only dependency projection: nodes, dependency edges with their satisfaction, and the server's cycle flag. No write affordance exists on this surface.",
+      "required": [
+        "nodes",
+        "edges",
+        "cycle_detected?"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GoalReadGraphNode"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GoalReadGraphEdge"
+          }
+        },
+        "cycle_detected?": {
+          "type": "boolean"
+        }
+      }
+    },
+    "GoalReadGraphNode": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "title"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/definitions/UUID"
+        },
+        "number": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "board_status": {
+          "type": "string"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required?": {
+          "type": "boolean"
+        },
+        "accepted?": {
+          "type": "boolean"
+        }
+      }
+    },
+    "GoalReadGraphEdge": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "One durable work dependency as served. The dependency row has no single-column identity, so id is served as null; from/to carry the work item ids.",
+      "required": [
+        "id",
+        "from",
+        "to",
+        "satisfied?"
+      ],
+      "properties": {
+        "id": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/definitions/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "work_item_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "depends_on_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "satisfied?": {
+          "type": "boolean"
+        },
+        "blocker": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "GoalReadDecision": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "kind",
+        "state",
+        "open?"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/definitions/UUID"
+        },
+        "goal_revision": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "work_item_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "open?": {
+          "type": "boolean"
+        },
+        "question": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "resolution": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inserted_at": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "GoalReadOutcome": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "disposition"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/definitions/UUID"
+        },
+        "goal_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goal_revision": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "work_item_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "producing_task_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "producing_run_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "producing_result_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validation_task_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidate_subject": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subject_hash": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disposition": {
+          "type": "string"
+        },
+        "reason": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decision_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inserted_at": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "GoalReadAccounting": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Budget reservation and consumption as served: a held reservation is reservation, known cost is consumption, and unknown consumption stays explicitly unknown rather than zero.",
+      "required": [
+        "held_microusd",
+        "unknown_reservation_count",
+        "unknown_usage_count",
+        "usage_cost_unknown?"
+      ],
+      "properties": {
+        "held_microusd": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/definitions/Microusd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unknown_reservation_count": {
+          "type": "integer"
+        },
+        "settled_reservation_count": {
+          "type": "integer"
+        },
+        "released_reservation_count": {
+          "type": "integer"
+        },
+        "usage_records": {
+          "type": "integer"
+        },
+        "usage_leaf_count": {
+          "type": "integer"
+        },
+        "known_usage_cost_microusd": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/definitions/Microusd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage_cost_microusd": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/definitions/Microusd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage_cost_unknown?": {
+          "type": "boolean"
+        },
+        "unknown_usage_count": {
+          "type": "integer"
+        }
+      }
+    },
+    "GoalReadExternalWait": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/definitions/UUID"
+        },
+        "goal_revision": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "work_item_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string"
+        },
+        "reason": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "external_ref": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subject": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_ref": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_check_at": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "check_seq": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receipt_event_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inserted_at": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

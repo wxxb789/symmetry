@@ -15,6 +15,8 @@ interface BrowserLocation {
 
 export interface Application {
   api: Api;
+  /** The same fetch transport the reads use, for the authenticated command POSTs. */
+  fetcher: typeof fetch;
   queryClient: QueryClient;
   auth: {
     getSnapshot: () => boolean;
@@ -25,7 +27,7 @@ export interface Application {
 export function safeReturnTo(href: string): string {
   try {
     const url = new URL(href);
-    if (/^\/portal\/(attention|connections|projects(?:\/[^/]+)?|work\/[^/]+|runtimes)\/?$/.test(url.pathname)) {
+    if (/^\/portal\/(attention|connections|goals\/[^/]+|projects(?:\/[^/]+)?|runtimes|work\/[^/]+)\/?$/.test(url.pathname)) {
       return `${url.pathname}${url.search}`;
     }
   } catch {
@@ -35,7 +37,8 @@ export function safeReturnTo(href: string): string {
 }
 
 export function createApplication(options: { fetcher?: typeof fetch; location?: BrowserLocation } = {}): Application {
-  const api = createApi(options.fetcher);
+  const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
+  const api = createApi(fetcher);
   const location = options.location ?? window.location;
   const listeners = new Set<() => void>();
   let signedOut = false;
@@ -80,6 +83,7 @@ export function createApplication(options: { fetcher?: typeof fetch; location?: 
   });
   return {
     api,
+    fetcher,
     queryClient,
     auth: {
       getSnapshot: () => signedOut,
@@ -106,6 +110,31 @@ export const workspaceOptions = (api: Api, projectId: string | null) => queryOpt
 export const workDetailOptions = (api: Api, workItemId: string) => queryOptions({
   queryKey: ["work-item", { workItemId }],
   queryFn: ({ signal }) => api.workDetail(workItemId, signal),
+});
+
+/**
+ * The attention entry point. The Goal feed is paginated by the server's opaque
+ * cursor and the project blocked items are project-scoped, so each page is its
+ * own query key: an older page never overwrites the newest one.
+ */
+export const attentionOptions = (api: Api, projectId: string | null, cursor: string | null) => queryOptions({
+  queryKey: ["attention", { projectId, cursor }],
+  queryFn: ({ signal }) => api.attention(projectId, cursor, signal),
+});
+
+export const goalOptions = (api: Api, goalId: string) => queryOptions({
+  queryKey: ["goal", { goalId }],
+  queryFn: ({ signal }) => api.goal(goalId, signal),
+});
+
+/**
+ * One page of Goal audit receipts, keyed by the served `after` sequence the
+ * page starts from. `after = 0` is the first page; later pages are separate keys
+ * so an older page never overwrites a newer one.
+ */
+export const goalEventsOptions = (api: Api, goalId: string, after: number) => queryOptions({
+  queryKey: ["goal-events", { goalId, after }],
+  queryFn: ({ signal }) => api.goalEvents(goalId, after, signal),
 });
 
 /**

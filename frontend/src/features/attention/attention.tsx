@@ -1,37 +1,188 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouteContext, useSearch } from "@tanstack/react-router";
-import { AlertCircle } from "lucide-react";
-import { workspaceOptions } from "../../app/application";
+import { AlertCircle, CircleCheck, Plus, Target } from "lucide-react";
+import { useState } from "react";
+import { attentionOptions, sessionOptions, workspaceOptions } from "../../app/application";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
+import { errorMessage, postPortalCommand, type GoalAttentionEntry, type ProjectBlockedEntry } from "../../services/api";
+import { MutationRefused, newMutationId } from "../../services/commands";
 
 export function AttentionPage() {
   const { application } = useRouteContext({ from: "__root__" });
   const search = useSearch({ from: "/attention" });
-  const query = useQuery(workspaceOptions(application.api, search.projectId ?? null));
-  const projectId = search.projectId ?? query.data?.selected_project_id;
-  const projects = query.data?.projects.filter((project) => project.id === projectId);
-  const blocked = projects?.flatMap((project) => project.work_items.filter((item) => item.blocked).map((item) => ({ project, item })));
-  const refresh = () => { if (!query.isFetching) void query.refetch(); };
-  return <>
-    <PageHeading title="Attention" description="Reported blockers in the selected project.">
-      <RefreshButton fetching={query.isFetching} refresh={refresh} />
+  const projectId = search.projectId ?? null;
+  const [cursors, setCursors] = useState<string[]>([]);
+  const workspace = useQuery(workspaceOptions(application.api, projectId ?? null));
+  // One hook for every loaded cursor page: the page count grows as the reader
+  // loads more, and hooks must not be called in a loop over that state.
+  const queries = useQueries({
+    queries: [null, ...cursors].map((cursor) => attentionOptions(application.api, projectId, cursor)),
+  });
+  const first = queries[0];
+  const goalEntries = queries.flatMap((query) => query.data?.goal_attention.entries ?? []);
+  const projectBlocked = first?.data?.project_blocked.entries ?? [];
+  const selectedProjectName = workspace.data?.projects.find((project) => project.id === (projectId ?? first?.data?.selected_project_id))?.name ?? null;
+  const goalUnavailable = first?.data?.goal_attention.unavailable ?? null;
+  const projectUnavailable = first?.data?.project_blocked.unavailable ?? null;
+  const nextCursor = queries[queries.length - 1]?.data?.goal_attention.next_cursor ?? null;
+  const fetching = queries.some((query) => query.isFetching);
+  // The workspace read owns the project scope the picker and this page's
+  // heading describe, so its failure is presented as this surface's failure.
+  const surfaceError = first?.error ?? workspace.error ?? null;
+  // The served feed names its own project; the picker alone does not state the scope.
+  const scopedProject = projectBlocked[0]?.project_name ?? projectBlocked[0]?.project_key ?? selectedProjectName ?? null;
+  const refresh = () => {
+    setCursors([]);
+    if (workspace.isError) void workspace.refetch();
+    for (const query of queries) void query.refetch();
+  };
+
+  return <main className="workspace-content">
+    <PageHeading title="Attention" description="Goal decisions, settlement attention and derived blockers together with the project's blocked work.">
+      <div className="heading-actions">
+        <NewGoalButton projectId={projectId ?? first?.data?.selected_project_id ?? null} />
+        <RefreshButton fetching={fetching} refresh={refresh} />
+      </div>
     </PageHeading>
     {search.unavailable && <section className="notice" role="status"><div><h2>This destination is unavailable</h2><p>The previous portal destination is not included in this workspace. Use Attention or Projects to browse existing work.</p></div></section>}
-    {projects?.[0] && <p className="filter-note">Showing {projects[0].name}. <Link to="/projects">Browse projects</Link></p>}
-    {query.isPending && <LoadingState label="Loading blocked work…" />}
-    {query.isError && <ErrorState error={query.error} retry={refresh} stale={query.data !== undefined} />}
-    {query.data && (projects?.length === 0
-      ? <EmptyState title={search.projectId ? "Project not found" : "No projects yet"}>{search.projectId ? "This project is unavailable or you no longer have access." : "Blocked work will appear here when projects are available."}</EmptyState>
-      : blocked?.length === 0
-        ? <EmptyState title="No blocked work">There are no reported blockers in this project.</EmptyState>
-        : <section aria-labelledby="blocked-heading"><div className="section-heading"><h2 id="blocked-heading">Blocked work <span className="count">{blocked?.length}</span></h2><span className="muted text-small">Read-only</span></div>
-          <ul className="attention-list">{blocked?.map(({ project, item }) => <li className="attention-card" key={`${project.id}/${item.id}`}>
-            <AlertCircle className="attention-icon" size={20} aria-hidden="true" />
-            <div className="attention-main"><div className="attention-context"><Link to="/projects/$projectId" params={{ projectId: project.id }}>{project.name}</Link><span className="item-key">{item.key}</span>{project.status === "archived" && <StatusBadge status="archived" />}</div>
-              <h3>{item.title}</h3><p className="blocker">{item.blocker?.trim() || "Blocking reason unknown"}</p>
-            </div><StatusBadge status={item.status} />
-          </li>)}</ul>
-        </section>)}
-    <p className="sr-only" role="status">{query.isFetching && !query.isPending ? "Refreshing blocked work" : ""}</p>
-  </>;
+    {scopedProject && <p className="filter-note">Showing {scopedProject}. <Link to="/projects" search={{}}>Browse projects</Link></p>}
+    {(first?.isPending || workspace.isPending) && <LoadingState label="Loading blocked work…" />}
+    {surfaceError !== null && <ErrorState error={surfaceError} retry={refresh} stale={first?.data !== undefined} />}
+    {first?.data && <>
+      <GoalAttention entries={goalEntries} unavailable={goalUnavailable} nextCursor={nextCursor} fetching={fetching} onLoadMore={() => nextCursor && setCursors([...cursors, nextCursor])} />
+      <ProjectBlocked entries={projectBlocked} unavailable={projectUnavailable} />
+    </>}
+    <p className="sr-only" role="status">{fetching && !first?.isPending ? "Refreshing attention" : ""}</p>
+  </main>;
+}
+
+function GoalAttention({ entries, unavailable, nextCursor, fetching, onLoadMore }: {
+  entries: GoalAttentionEntry[];
+  unavailable: { code: string; message: string } | null;
+  nextCursor: string | null;
+  fetching: boolean;
+  onLoadMore: () => void;
+}) {
+  return <section aria-labelledby="goal-attention-heading">
+    <div className="section-heading"><h2 id="goal-attention-heading">Goal attention <span className="count">{entries.length}</span></h2><span className="muted text-small">Server-derived</span></div>
+    {unavailable && <section className="notice" role="status"><div>
+      <h2>Goal attention is unavailable on this server</h2>
+      <p>{unavailable.message} <span className="text-small">Code: <code>{unavailable.code}</code></span></p>
+      <p className="text-small muted">The project's blocked work below is unaffected; nothing here is inferred client-side.</p>
+    </div></section>}
+    {!unavailable && entries.length === 0 && <EmptyState title="No Goal needs attention">No Goal currently carries a pending decision, settlement attention, active work or blocker.</EmptyState>}
+    {entries.length > 0 && <ul className="attention-list">{entries.map((entry) => <li className="attention-card" key={entry.goal_id}>
+      <Target className="attention-icon" size={20} aria-hidden="true" />
+      <div className="attention-main">
+        <div className="attention-context"><Link to="/goals/$goalId" params={{ goalId: entry.goal_id }}>{entry.title}</Link><StatusBadge status={entry.state} /><span className="item-key">{entry.goal_id}</span></div>
+        <p className="text-small muted">Revision {entry.current_revision} · {entry.active_tasks ?? 0} active task(s) · {entry.nonterminal_tasks ?? 0} nonterminal</p>
+        {(entry.blocker_reasons?.length ?? 0) > 0 && <p className="blocker">{entry.blocker_reasons?.join(", ")}</p>}
+        {(entry.attention_reasons?.length ?? 0) > 0 && <p className="text-small muted">Settlement attention: {entry.attention_reasons?.join(", ")}</p>}
+        {entry["ready_to_achieve?"] === true && <p className="goal-ready"><CircleCheck size={14} aria-hidden="true" />Ready to achieve on the server</p>}
+      </div>
+    </li>)}</ul>}
+    {nextCursor && <button className="button" type="button" disabled={fetching} onClick={onLoadMore}>{fetching ? "Loading…" : "Load more Goal attention"}</button>}
+  </section>;
+}
+
+function ProjectBlocked({ entries, unavailable }: {
+  entries: ProjectBlockedEntry[];
+  unavailable: { code: string; message: string } | null;
+}) {
+  return <section aria-labelledby="blocked-heading" className="goal-section">
+    <div className="section-heading"><h2 id="blocked-heading">Blocked work <span className="count">{entries.length}</span></h2><span className="muted text-small">Project scope, complete</span></div>
+    {unavailable && <section className="notice" role="status"><div><h2>The project read is unavailable</h2><p>{unavailable.message} <span className="text-small">Code: <code>{unavailable.code}</code></span></p></div></section>}
+    {!unavailable && entries.length === 0 && <EmptyState title="No blocked work">There are no reported blockers in this project.</EmptyState>}
+    {entries.length > 0 && <ul className="attention-list">{entries.map((entry) => <li className="attention-card" key={`${entry.project_id}/${entry.work_item_id}`}>
+      <AlertCircle className="attention-icon" size={20} aria-hidden="true" />
+      <div className="attention-main">
+        <div className="attention-context"><Link to="/projects/$projectId" params={{ projectId: entry.project_id }}>{entry.project_name ?? entry.project_key ?? "Project"}</Link>{entry.work_item_key && <span className="item-key">{entry.work_item_key}</span>}{entry.project_status === "archived" && <StatusBadge status="archived" />}</div>
+        <h3>{entry.title}</h3><p className="blocker">{entry.blocker?.trim() || "Blocking reason unknown"}</p>
+      </div><StatusBadge status={entry.status} />
+    </li>)}</ul>}
+  </section>;
+}
+
+/**
+ * Goal creation is an operator-authored contract posted to the accepted creation
+ * command; the server validates every predicate and returns its own refusal. No
+ * client rule decides whether a Goal may be created, and no capability is
+ * fabricated when the project does not bind a repository resource.
+ */
+function NewGoalButton({ projectId }: { projectId: string | null }) {
+  const { application } = useRouteContext({ from: "__root__" });
+  const queryClient = useQueryClient();
+  const workspace = useQuery({ ...workspaceOptions(application.api, projectId), enabled: projectId !== null });
+  const session = useQuery(sessionOptions(application.api));
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [objective, setObjective] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const project = workspace.data?.projects.find((candidate) => candidate.id === projectId);
+
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!project) throw new Error("Select a project first.");
+      const csrf = session.data?.csrf_token;
+      if (!csrf) throw new Error("The session token is unavailable; refresh the page.");
+      const body = {
+        schema_version: "symmetry.goal_create.v1",
+        mutation_id: newMutationId(),
+        title,
+        initial_revision: {
+          objective,
+          non_goals: [],
+          acceptance_contract: {
+            schema_version: "symmetry.acceptance.v1",
+            description: `Operator verifies ${title}`,
+            predicates: [{ id: "operator", kind: "operator_acceptance" }],
+          },
+          authority_policy: {
+            operator_required_for_scope_change: true,
+            operator_required_for_completion: true,
+            publication_allowed: false,
+            allowed_actions: [],
+          },
+          execution_policy: {
+            automatic_execution: false,
+            max_parallel_tasks: 1,
+            max_task_admissions: 2,
+            max_run_attempts_per_task: 2,
+            budget_limit_microusd: null,
+            per_run_cost_limit_microusd: null,
+            budget_mode: "soft",
+            hard_cost_limit_required: false,
+            allowed_runtime_ids: [],
+            allowed_model_profiles: [],
+            final_acceptance: "operator",
+            allowed_actions: [],
+            allowed_resource_ids: [],
+          },
+          context_manifest: { byte_budget: 32768, required_source_kinds: ["repository"], include_advisory_recall: false },
+          reason: "Initial approved Goal contract from the attention entry point",
+        },
+      };
+      return postPortalCommand(application.fetcher, csrf, `/portal/api/projects/${encodeURIComponent(project.id)}/goals`, body);
+    },
+    onSuccess: async () => {
+      setNotice("The server created the Goal.");
+      await queryClient.invalidateQueries({ queryKey: ["attention"] });
+      setTitle("");
+      setObjective("");
+    },
+  });
+  const failure = create.error;
+
+  return <div className="goal-create">
+    <button className="button" type="button" disabled={!project} onClick={() => { create.reset(); setOpen(!open); setNotice(null); }} aria-expanded={open}><Plus size={16} aria-hidden="true" />New goal</button>
+    {open && <form className="dialog-panel" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}>
+      <h2>Create a Goal</h2>
+      <label className="field">Title<input value={title} onChange={(event) => setTitle(event.currentTarget.value)} required /></label>
+      <label className="field">Objective<input value={objective} onChange={(event) => setObjective(event.currentTarget.value)} required /></label>
+      <p className="text-small muted">The initial revision carries operator final acceptance, the repository context requirement and the soft budget mode. The server validates the contract and returns its own refusal.</p>
+      {failure && <p className="form-error" role="alert">{failure instanceof MutationRefused ? `${failure.message} (${failure.code})` : errorMessage(failure)}</p>}
+      {notice && !failure && <p role="status">{notice}</p>}
+      <button className="button primary" type="submit" disabled={create.isPending || !project}>{create.isPending ? "Creating…" : "Create goal"}</button>
+    </form>}
+  </div>;
 }

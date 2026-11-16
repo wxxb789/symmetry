@@ -2,7 +2,7 @@ defmodule SymmetryControlWeb.PortalSession do
   @moduledoc false
 
   @default_max_age_seconds 8 * 60 * 60
-  @shell_path ~r{\A/portal(?:/(?:attention|connections|runtimes|projects(?:/[A-Za-z0-9_-]+)?|work/[A-Za-z0-9_-]+))?\z}
+  @shell_path ~r{\A/portal(?:/(?:attention|connections|goals/[A-Za-z0-9_-]+|projects(?:/[A-Za-z0-9_-]+)?|runtimes|work/[A-Za-z0-9_-]+))?\z}
   @connection_identifier_param ~r{\AconnectionId=[A-Za-z0-9_-]+\z}
   @classic_identifier_param ~r{\A(?:project_id|run_id)=[A-Za-z0-9_-]+\z}
   # Work-surface search state the shell itself writes into its own URLs: the

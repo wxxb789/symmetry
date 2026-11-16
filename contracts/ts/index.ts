@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import {
   AdapterCapabilitiesSchema,
   AdmissionSchema,
+  AttentionReadSchema,
   ConnectionsReadSchema,
   ContextSnapshotSchema,
   DecisionSchema,
@@ -11,6 +12,7 @@ import {
   EvidenceSchema,
   GoalCommandSchema,
   GoalCreateSchema,
+  GoalReadSchema,
   GoalRevisionSchema,
   PlanProposalSchema,
   TaskResultSchema,
@@ -37,6 +39,7 @@ import { assertUnicode, parsePresentationJson, parseWireJson, WireJsonError } fr
 export {
   AdapterCapabilitiesSchema,
   AdmissionSchema,
+  AttentionReadSchema,
   ConnectionsReadSchema,
   ContextSnapshotSchema,
   DecisionSchema,
@@ -46,6 +49,7 @@ export {
   EvidenceSchema,
   GoalCommandSchema,
   GoalCreateSchema,
+  GoalReadSchema,
   GoalRevisionSchema,
   PlanProposalSchema,
   TaskResultSchema,
@@ -94,6 +98,7 @@ function boundary<A>(
 
 export const AdapterCapabilities = boundary(AdapterCapabilitiesSchema);
 export const Admission = boundary(AdmissionSchema, validateAdmissionSemantics);
+export const AttentionRead = boundary(AttentionReadSchema, undefined, parsePresentationJson);
 export const ConnectionsRead = boundary(ConnectionsReadSchema, undefined, parsePresentationJson);
 export const ContextSnapshot = boundary(ContextSnapshotSchema, validateContextSnapshotSemantics);
 export const Decision = boundary(DecisionSchema, validateDecisionSemantics);
@@ -103,6 +108,7 @@ export const Evidence = boundary(EvidenceSchema, validateEvidenceSemantics);
 export const EvidenceBatch = boundary(EvidenceBatchSchema, validateEvidenceBatchSemantics);
 export const GoalCommand = boundary(GoalCommandSchema, validateGoalCommandSemantics);
 export const GoalCreate = boundary(GoalCreateSchema, validateGoalCreateSemantics);
+export const GoalRead = boundary(GoalReadSchema, undefined, parsePresentationJson);
 export const GoalRevision = boundary(GoalRevisionSchema, validateGoalRevisionSemantics);
 export const PlanProposal = boundary(PlanProposalSchema, validatePlanProposalSemantics);
 export const TaskResult = boundary(TaskResultSchema, validateTaskResultSemantics);

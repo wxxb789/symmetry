@@ -2,6 +2,7 @@ import { createRootRouteWithContext, createRoute, createRouter, Link, redirect }
 import type { Router, RouterHistory } from "@tanstack/react-router";
 import { AttentionPage } from "../features/attention/attention";
 import { ConnectionsPage } from "../features/connections/connections";
+import { GoalDetailPage } from "../features/goals/detail";
 import { workItemSearch, workSearch } from "../features/projects/filters";
 import { ProjectPage, ProjectsPage } from "../features/projects/projects";
 import { RuntimesPage } from "../features/runtimes/runtimes";
@@ -47,7 +48,8 @@ const runtimesRoute = createRoute({
     typeof search["projectId"] === "string" && search["projectId"] ? { projectId: search["projectId"] } : {},
   component: RuntimesPage,
 });
-const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, projectsRoute, projectRoute, workItemRoute, connectionsRoute, runtimesRoute]);
+const goalRoute = createRoute({ getParentRoute: () => rootRoute, path: "/goals/$goalId", component: GoalDetailPage });
+const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, projectsRoute, projectRoute, workItemRoute, connectionsRoute, runtimesRoute, goalRoute]);
 
 export type AppRouter = Router<typeof routeTree, "never", false, RouterHistory>;
 

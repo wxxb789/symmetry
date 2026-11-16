@@ -100,6 +100,126 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
+  @doc """
+  The attention entry point: Goal attention merged with the project blocked items
+  the workspace read already serves.
+
+  `goal_result` is `%{page: Goals attention page, unavailable: reason | nil}`.
+  A Goal read that is unavailable (rollout disabled, refusal, unexpected error)
+  is stated as the mapped protocol error while the real workspace blockers are
+  still served; nothing here invents a Goal entry or hides an authority refusal.
+  """
+  def attention(selected_project_id, goal_result, workspace_result) do
+    goal_page = goal_result.page
+
+    %{
+      selected_project_id: selected_project_id,
+      goal_attention: %{
+        entries: goal_page.entries,
+        next_cursor: goal_page.next_cursor,
+        unavailable: goal_unavailable(goal_result.unavailable)
+      },
+      project_blocked: project_blocked(workspace_result)
+    }
+  end
+
+  defp goal_unavailable(nil), do: nil
+
+  defp goal_unavailable(reason) do
+    {_status, code, message} = Protocol.error_details(reason)
+    %{code: code, message: message}
+  end
+
+  defp project_blocked({:ok, model}) do
+    entries =
+      model.snapshot.projects
+      |> Enum.flat_map(&blocked_work_items/1)
+
+    %{entries: entries, unavailable: nil}
+  end
+
+  defp project_blocked({:error, reason}) do
+    {_status, code, message} = Protocol.error_details(reason)
+    %{entries: [], unavailable: %{code: code, message: message}}
+  end
+
+  # The workspace snapshot hydrates work items for the selected project only, so
+  # an unloaded association means "not read", never "no blocked work".
+  defp blocked_work_items(%{work_items: %Ecto.Association.NotLoaded{}}), do: []
+
+  defp blocked_work_items(%{work_items: work_items} = project) when is_list(work_items) do
+    work_items
+    |> Enum.filter(& &1.blocked)
+    |> Enum.map(&project_blocked_entry(project, &1))
+  end
+
+  defp blocked_work_items(_project), do: []
+
+  defp project_blocked_entry(project, work_item) do
+    %{
+      project_id: project.id,
+      project_key: project.key,
+      project_name: project.name,
+      project_status: project.status,
+      work_item_id: work_item.id,
+      work_item_key: "#{project.key}-#{work_item.number}",
+      title: work_item.title,
+      status: work_item.status,
+      blocked: work_item.blocked,
+      blocker: work_item.blocker,
+      updated_at: iso8601(work_item.updated_at)
+    }
+  end
+
+  defp project_label(nil), do: {nil, nil}
+  defp project_label(project), do: {project.key, project.name}
+
+  @doc """
+  Portal projection of one Goal read.
+
+  Every authority member (allowed_actions, blockers, readiness, decision
+  version) stays exactly what the durable projection serves; this function only
+  adds the project label the surface renders and stamps the served timestamps.
+  """
+  def goal(projection, project \\ nil, decision_versions \\ %{}) do
+    {project_key, project_name} = project_label(project)
+
+    Map.merge(projection, %{
+      project_key: project_key,
+      project_name: project_name,
+      updated_at: iso8601(Map.get(projection, :updated_at)),
+      revision: goal_revision(Map.get(projection, :revision)),
+      decisions:
+        Enum.map(Map.get(projection, :decisions, []), &goal_decision(decision_versions, &1)),
+      accepted_outcomes: Enum.map(Map.get(projection, :accepted_outcomes, []), &goal_outcome/1),
+      external_waits: Enum.map(Map.get(projection, :external_waits, []), &goal_external_wait/1)
+    })
+  end
+
+  defp goal_revision(nil), do: nil
+
+  defp goal_revision(revision),
+    do: %{revision | inserted_at: iso8601(revision.inserted_at)}
+
+  defp goal_decision(decision_versions, decision) do
+    Map.merge(decision, %{
+      version: Map.get(decision_versions, Map.get(decision, :id)),
+      inserted_at: iso8601(Map.get(decision, :inserted_at)),
+      updated_at: iso8601(Map.get(decision, :updated_at)),
+      expires_at: iso8601(Map.get(decision, :expires_at))
+    })
+  end
+
+  defp goal_outcome(outcome), do: %{outcome | inserted_at: iso8601(outcome.inserted_at)}
+
+  defp goal_external_wait(wait),
+    do: %{
+      wait
+      | next_check_at: iso8601(wait.next_check_at),
+        inserted_at: iso8601(wait.inserted_at),
+        updated_at: iso8601(wait.updated_at)
+    }
+
   def work_item(work_item, projections \\ %{}) do
     projection = Map.get(projections, work_item.orchestration_task_id)
     evidence = projection && projection.evidence

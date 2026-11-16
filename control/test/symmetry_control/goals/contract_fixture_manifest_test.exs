@@ -7,6 +7,14 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
   @schema_root Path.expand("../../../../contracts/v1", __DIR__)
   @fixture_root Path.expand("../../../../contracts/fixtures", __DIR__)
   @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
+  # Presentation reads consumed by the portal/daemon boundaries rather than by a
+  # Goals semantic validator: the canonical bundle schema is the expectation.
+  @presentation_reads [
+    "attention-read",
+    "goal-read",
+    "work-detail-read",
+    "work-timeline-read"
+  ]
 
   @validators %{
     "adapter-capabilities" => &ContractValidation.validate_adapter_capabilities/2,
@@ -42,7 +50,7 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     bundle = @schema_bundle |> File.read!() |> Jason.decode!()
 
     read_schemas =
-      Map.new(["work-detail-read", "work-timeline-read"], fn name ->
+      Map.new(@presentation_reads, fn name ->
         schema =
           bundle
           |> Map.fetch!(name <> ".schema.json")
@@ -76,8 +84,7 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     end)
   end
 
-  defp validate_fixture(schema, data, read_schemas)
-       when schema in ["work-detail-read", "work-timeline-read"] do
+  defp validate_fixture(schema, data, read_schemas) when schema in @presentation_reads do
     ExJsonSchema.Validator.validate(Map.fetch!(read_schemas, schema), data)
   end
 

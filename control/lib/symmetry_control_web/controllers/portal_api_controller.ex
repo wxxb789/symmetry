@@ -18,6 +18,117 @@ defmodule SymmetryControlWeb.PortalApiController do
     json(conn, PortalJSON.connections_read(ReadModel.connections()))
   end
 
+  @doc """
+  The attention entry point: the existing Goal attention feed merged with the
+  project-level blocked work items the workspace read already serves.
+
+  Goal rollout is not required for this page: the feed serves the durable Goal
+  projection whether or not admission is enabled. The Goal feed's own admission
+  refusal is the only refusal stated inline under HTTP 200 (the real workspace
+  blockers stay served); caller-input errors keep their protocol status; any
+  other Goal-feed reason is a server fault and surfaces with its real status.
+  When the workspace read is unavailable the Goal entries are still served and
+  the Project feed states the refusal. Nothing here grants or implies Goal
+  authority.
+  """
+  def attention(conn, params) do
+    with {:ok, project_id, goal_options} <- attention_options(conn, params),
+         {:ok, goal_result} <- goal_attention(goal_options) do
+      json(
+        conn,
+        PortalJSON.attention(
+          project_id,
+          goal_result,
+          ReadModel.workspace(project_id)
+        )
+      )
+    else
+      {:error, reason} -> error(conn, reason)
+    end
+  end
+
+  defp goal_attention(goal_options) do
+    case SymmetryControl.Goals.attention(goal_options) do
+      {:ok, page} ->
+        {:ok, %{page: page, unavailable: nil}}
+
+      # The caller's own input is a request error, not an unavailable feed.
+      {:error, reason} when reason in [:invalid_cursor, :invalid_request] ->
+        {:error, reason}
+
+      # The feed's own admission refusal is the one refusal this page states
+      # inline: the page serves the real project blockers and names the refusal.
+      {:error, :goal_admission_disabled} ->
+        {:ok, %{page: empty_attention_page(), unavailable: :goal_admission_disabled}}
+
+      # Anything else is a server fault. It must surface with its real status
+      # instead of being reported as a client error inside a 200 response.
+      {:error, _unexpected} ->
+        {:error, :internal_error}
+    end
+  end
+
+  defp empty_attention_page, do: %{entries: [], next_after: nil, next_cursor: nil}
+
+  defp attention_options(conn, params) when is_map(params) do
+    # The route's own path params are not caller input; every other parameter
+    # must be part of the accepted attention read.
+    with true <- allowed_query_params?(conn, params, ["project_id", "cursor", "limit"]),
+         {:ok, project_id} <- optional_uuid(Map.get(params, "project_id")),
+         {:ok, cursor} <- optional_text(Map.get(params, "cursor")),
+         {:ok, limit} <- optional_positive_integer(Map.get(params, "limit")) do
+      goal_options =
+        [project_id: project_id, cursor: cursor, limit: limit]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+      {:ok, project_id, goal_options}
+    else
+      _ -> error_invalid_request()
+    end
+  end
+
+  defp attention_options(_conn, _params), do: error_invalid_request()
+
+  defp error_invalid_request, do: {:error, :invalid_request}
+
+  defp allowed_query_params?(conn, params, allowed) do
+    path_keys = MapSet.new(Map.keys(conn.path_params))
+
+    params
+    |> Map.keys()
+    |> MapSet.new()
+    |> MapSet.difference(path_keys)
+    |> MapSet.subset?(MapSet.new(allowed))
+  end
+
+  defp optional_uuid(nil), do: {:ok, nil}
+
+  defp optional_uuid(value) when is_binary(value) do
+    case Ecto.UUID.cast(value) do
+      {:ok, cast} -> {:ok, cast}
+      :error -> {:error, :invalid_request}
+    end
+  end
+
+  defp optional_uuid(_value), do: {:error, :invalid_request}
+
+  defp optional_text(nil), do: {:ok, nil}
+  defp optional_text(value) when is_binary(value) and byte_size(value) > 0, do: {:ok, value}
+  defp optional_text(_value), do: {:error, :invalid_request}
+
+  defp optional_positive_integer(nil), do: {:ok, nil}
+
+  defp optional_positive_integer(value) when is_integer(value) and value > 0, do: {:ok, value}
+
+  defp optional_positive_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed > 0 -> {:ok, parsed}
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp optional_positive_integer(_value), do: {:error, :invalid_request}
+
   def create_connection(conn, params) do
     case Integrations.create_connection(params) do
       {:ok, connection} ->

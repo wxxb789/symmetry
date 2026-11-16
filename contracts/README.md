@@ -70,6 +70,24 @@ finite presentation numbers in existing additive metadata; their consumed fields
 still pass the generated schema. UTF-8, duplicate-key and Unicode checks remain
 in force for both policies.
 
+Served-read fixtures are derived from real responses. `attention-read.schema.json`
+and `goal-read.schema.json` describe what the portal projection actually serves,
+so their positive fixtures are sanitized captures of a running server's own
+output (identifiers, labels and timestamps replaced; member names and shapes
+untouched), and their member names are the server's spellings — including the
+suffixed `required?`, `accepted?`, `satisfied?`, `cycle_detected?`,
+`usage_cost_unknown?` and `ready_to_achieve?` booleans. Two gates keep that
+honest: the portal controller test "the real served attention and goal reads
+validate against the contract bundle" builds a real Goal with a dependency
+edge, an integration work item, a settlement receipt and an unknown-cost usage
+leaf, serves it through `PortalJSON.goal/3` and `PortalJSON.attention/3`, and
+validates both documents against this bundle; the Elixir fixture-manifest test
+resolves the positive fixtures through the same bundle. The frontend's
+served-read fixtures import these documents
+(`frontend/src/services/api.fixtures.ts`), so a test override cannot
+reintroduce a member name the server does not send. Update a served-read
+fixture by re-capturing the response, never by editing the expected names.
+
 `goal-create.schema.json`, `goal-command.schema.json`, and
 `plan-proposal.schema.json` are the canonical input authority for the Goal
 operator API. `GoalCommand` is a strict discriminated union. In particular,
