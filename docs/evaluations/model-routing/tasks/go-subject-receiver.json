@@ -1,0 +1,28 @@
+{
+  "task_id": "0008a-go-subject-receiver",
+  "base": "343dea6a62484d73e7b577a0be2683ca233510f6",
+  "language": "go",
+  "risk_class": "bounded-regression",
+  "workflow": "reuse_existing",
+  "outcome": "Add real production Subject decoder regression coverage: rejected decoding preserves an existing Subject receiver byte-for-byte, and successful decoding replaces all Subject fields. Do not change production code or existing tests.",
+  "explanations": [
+    "Explain why assigning the decoded Subject only after validation prevents partial receiver mutation.",
+    "Explain which malformed, incomplete or unknown-field inputs were exercised, and why valid replacement proves the receiver is not merely left untouched for every input."
+  ],
+  "allowed_paths": ["daemon/internal/protocol/goal_subject_receiver_test.go"],
+  "protected_paths": ["daemon/internal/protocol/goal_subject.go"],
+  "gates": [
+    {
+      "id": "protocol-tests",
+      "cwd": "daemon",
+      "argv": ["go", "test", "-json", "-count=1", "./internal/protocol"],
+      "go_tests": ["TestSubjectUnmarshalPreservesReceiverOnFailure", "TestSubjectUnmarshalReplacesReceiverOnSuccess"],
+      "go_package": "github.com/wxxb789/symmetry/daemon/internal/protocol"
+    },
+    {
+      "id": "protocol-vet",
+      "cwd": "daemon",
+      "argv": ["go", "vet", "./internal/protocol"]
+    }
+  ]
+}

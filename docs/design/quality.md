@@ -161,6 +161,10 @@ from demonstrated defects. Do not approve based on model reputation or confidenc
 Goal 0008 produces a small harness-neutral evaluation runner/data format using
 the existing languages/tools, not a new benchmarking service. Tasks come from
 real Go/Elixir/TS changes: ordinary edits plus recovery/authority/contract cases.
+The [evaluation runbook](../evaluations/model-routing/README.md) provides the
+repository-local runner, frozen task examples, worker instructions and independent
+review procedure. Its receipts distinguish behavioral acceptance from incomplete
+billing evidence; they do not promote a routing policy.
 Freeze task specification, base commit and acceptance before either run.
 Use isolated checkouts, the same tool permissions and budgets, and randomized
 order where feasible. A strong-only baseline and mixed workflow both receive

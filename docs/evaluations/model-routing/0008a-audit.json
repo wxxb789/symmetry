@@ -1,0 +1,1034 @@
+{
+  "accounting": {
+    "accounting_complete": false,
+    "all_observed_prefix_and_complete_record_tokens": {
+      "cached": 60935815,
+      "input": 1482259,
+      "output": 710029
+    },
+    "coordinator_private_source_sha256": "sha256:2523f15d65e90f0e52795a045d62671aaab339544cfdad814c2471742e038320",
+    "coordinator_snapshot": {
+      "ended_at": "2026-11-15T16:12:17.832000+00:00",
+      "method": "actual coordinator session start to last complete private harness record at snapshot cutoff",
+      "started_at": "2026-11-15T14:27:41.230000+00:00"
+    },
+    "definition": "All visible completed child sessions charged once; shared workflow construction/coordination allocated to positive, incremental escalation to negative. Known unversioned harness estimates are not provider bills or measured savings.",
+    "estimated_total_cost": null,
+    "known_unversioned_harness_estimate_definition": "sum of observed harness cost.total estimates across the charged completed sessions only; the still-open coordinator prefix estimate is recorded separately, and neither figure is a provider bill, established spend, saving or financial lower bound",
+    "known_unversioned_harness_estimate_subtotal_usd": 1.006311,
+    "negative_model_sessions": 1,
+    "observed_population": {
+      "allocation": "One-time workflow setup and all shared coordination are charged once to positive; negative records incremental escalation only.",
+      "charged_unique_session_count": 8,
+      "charged_unique_session_refs": [
+        "01a1df9b-542e-7455-84d8-9ce0f270d648",
+        "01a1df9c-004a-75ee-87e2-290dfcc59fbf",
+        "01a1df9c-08ca-7568-936d-424210ff8b9d",
+        "01a1dfa1-f723-72a0-9335-801118916013",
+        "01a1dfa2-152a-74e1-9f9a-626a52fa0216",
+        "01a1dfa7-64bf-72e4-bf4b-d093426ea348",
+        "01a1dfc1-6701-7142-b389-867669e079b7",
+        "01a1dfc1-8d1c-73dd-a966-d2244d547b60"
+      ],
+      "known_limits": [
+        "Primary coordinator remains open after the declared snapshot cutoff; complete-session totals stay unknown.",
+        "Provider bills, authoritative price versions and any unreported harness-helper/transport usage remain unknown, never zero."
+      ],
+      "observed_child_delegation_tool_calls": {
+        "01a1df9c-004a-75ee-87e2-290dfcc59fbf": 0,
+        "01a1df9c-08ca-7568-936d-424210ff8b9d": 0,
+        "01a1dfa1-f723-72a0-9335-801118916013": 0,
+        "01a1dfa2-152a-74e1-9f9a-626a52fa0216": 0,
+        "01a1dfa7-64bf-72e4-bf4b-d093426ea348": 0,
+        "01a1dfc1-6701-7142-b389-867669e079b7": 0,
+        "01a1dfc1-8d1c-73dd-a966-d2244d547b60": 0
+      },
+      "observed_child_sessions": {
+        "AcceptanceWorkflowReview.jsonl": "01a1dfc1-8d1c-73dd-a966-d2244d547b60",
+        "EvaluationRunner.jsonl": "01a1dfa1-f723-72a0-9335-801118916013",
+        "LightweightGoSubject.jsonl": "01a1dfa7-64bf-72e4-bf4b-d093426ea348",
+        "RealBoundaryEscalation.jsonl": "01a1dfc1-6701-7142-b389-867669e079b7",
+        "ReviewerRoutePreflight.jsonl": "01a1df9c-08ca-7568-936d-424210ff8b9d",
+        "UsageExtractor.jsonl": "01a1dfa2-152a-74e1-9f9a-626a52fa0216",
+        "WorkerRoutePreflight.jsonl": "01a1df9c-004a-75ee-87e2-290dfcc59fbf"
+      },
+      "primary_session_ref": "01a1df9b-542e-7455-84d8-9ce0f270d648",
+      "schema": "symmetry-evaluation-session-accounting/v1",
+      "unaccounted_observed_sessions": []
+    },
+    "open_prefix_harness_estimate_usd": 7.165963500000001,
+    "positive_model_sessions": 7,
+    "price_versions": [],
+    "repair_count": 13,
+    "repair_events": [
+      {
+        "description": "Remove duplicate assertions/helpers while preserving both names and11negative cases.",
+        "id": "go-test-simplification"
+      },
+      {
+        "description": "Fix initial observed parser/test failures, served identity and followup prompt provenance.",
+        "id": "usage-initial-repair"
+      },
+      {
+        "description": "Supply session_init in the missing-user-prompt fixture without changing assertions.",
+        "id": "usage-fixture-repair"
+      },
+      {
+        "description": "Add required null non_model_reason to model rows and its contract coverage.",
+        "id": "usage-row-integration"
+      },
+      {
+        "description": "Permit exact repository-root gate cwd without relaxing traversal.",
+        "id": "runner-root-cwd"
+      },
+      {
+        "description": "Refuse duplicate/omitted sessions and empty prompt hashes; explicitly record repair count and elapsed time.",
+        "id": "runner-accounting-integrity"
+      },
+      {
+        "description": "Rejected approach changed completeness meaning; pinned assertion failed and the approach was reverted.",
+        "id": "runner-rejected-completeness-fix"
+      },
+      {
+        "description": "Verifier now preserves incomplete/failed classification after gate-time source mutation.",
+        "id": "runner-subject-completeness"
+      },
+      {
+        "description": "Correct coordinator elapsed variable shadowing; keep5-second versus phase-sum assertion.",
+        "id": "runner-wall-time-shadow"
+      },
+      {
+        "description": "Fix no-model vacuous totals; bind tooling versions; reconcile skill pointer/messages and add refusal controls.",
+        "id": "independent-review-repairs"
+      },
+      {
+        "description": "Provide two required gates so partial selection is actually incomplete; retain refusal assertion.",
+        "id": "partial-attempt-fixture"
+      },
+      {
+        "description": "Reject a one-byte extraction that matched its own assistant command; capture actual nonassistant delivered output instead (2902 bytes,20 tests,exit0). This is an evidence-extraction correction, not a gate rerun.",
+        "id": "gate-log-extraction"
+      },
+      {
+        "description": "The initial archival patch was atomically rejected for an unnecessary README context hunk; reread the context, retry without that hunk, and verify5441 unchanged contract bytes.",
+        "id": "archival-context-retry"
+      }
+    ],
+    "reported_total_cost": null,
+    "review_private_source_sha256": "sha256:013673b5a46b98ed842754a1e5e08358105471481ec940d42efb2183e2dfe6dc",
+    "token_total_is_complete": false,
+    "unique_model_sessions": 8,
+    "zero_or_not_billed_established": false
+  },
+  "contract_archive": {
+    "archive_matches_original": true,
+    "bytes": 5441,
+    "canonical_local_links_checked": 5,
+    "exit_code": 0,
+    "original_active_path_absent": true,
+    "original_matches_base_contract": true,
+    "sha256": "sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0",
+    "source": "docs/goals/0008a-auditable-acceptance-workflow.md",
+    "target": "docs/goals/archive/0008a-auditable-acceptance-workflow.md"
+  },
+  "evaluated_subjects": {
+    "negative": {
+      "base": "343dea6a62484d73e7b577a0be2683ca233510f6",
+      "content_revision": "uncommitted:sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+      "head": "343dea6a62484d73e7b577a0be2683ca233510f6",
+      "manifest_digest": "sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+      "subject_hash": "sha256:b8a846985010e1585627382fa713f1f5d6daaed66eb7257a2bb810949cfce3dc"
+    },
+    "positive": {
+      "base": "343dea6a62484d73e7b577a0be2683ca233510f6",
+      "content_revision": "uncommitted:sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+      "head": "343dea6a62484d73e7b577a0be2683ca233510f6",
+      "manifest_digest": "sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+      "subject_hash": "sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81"
+    }
+  },
+  "final_positive_operations": [
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "scripts/ci/model-routing-evaluation.py",
+        "receipt",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\positive",
+        "--usage",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\positive-final-usage.json"
+      ],
+      "exit_code": 0,
+      "operation": "receipt",
+      "stdout_sha256": "sha256:123e144fccb9224196972f4585c72768e5c8e0ef9ca5b5cc6ac1f3f47a5065bf"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "scripts/ci/model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\positive"
+      ],
+      "exit_code": 0,
+      "operation": "accept",
+      "stdout_sha256": "sha256:44f97e94ee7874cb722c9e2c6f8c275e690a37183a7584459b9fb21005f1730f"
+    }
+  ],
+  "frozen_evidence": {
+    "negative": {
+      "check_attempt": {
+        "attempt_id": "attempt-0001",
+        "attempt_sha256": "sha256:c62ca8b839f67b1ed980291e3f6cde22eb4bda14c0b3e4d4869b021d4b062be9",
+        "complete": true,
+        "gates": [
+          {
+            "id": "preserved-protocol-tests",
+            "passed": true,
+            "result_sha256": "sha256:0653676e74bffd76be68c7d2fcd5e5b2d727cdfc34746519e95bd399b03c10c5",
+            "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_sha256": "sha256:47893bf2fd66337e844f7772fcab03bb494a7b6c1c1a70aa36619007c279ee0c",
+            "validator_exit_code": 0,
+            "validator_stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "validator_stdout_sha256": "sha256:17ef5047af6518657a2ef67dc45c06bdd1476067c808eb3d2393d4e9f25e0053"
+          },
+          {
+            "id": "linux-final-scan",
+            "passed": false,
+            "result_sha256": "sha256:0ba6847ed4aad7fb5b605d2578cbb25709f094069fa35ca7a75df3edef12092a",
+            "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_sha256": "sha256:bf52e127c7de7b28678ea021ec2eda0251ee7caadc277988b0c913c2366fc314",
+            "validator_exit_code": 1,
+            "validator_stderr_sha256": "sha256:496d0d7b6cad07d4f2616a77bb16d8f575b4300bc22831a13b94b0108c94d1da",
+            "validator_stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "passed": false,
+        "routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+        "subject_hash": "sha256:b8a846985010e1585627382fa713f1f5d6daaed66eb7257a2bb810949cfce3dc",
+        "task_sha256": "sha256:a797887fd0bd16a5c161611d3ed6378716fdc0a20e7e704c8f2b5806aa290a28"
+      },
+      "frozen_review_sha256": null,
+      "frozen_routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+      "frozen_task_sha256": "sha256:a797887fd0bd16a5c161611d3ed6378716fdc0a20e7e704c8f2b5806aa290a28",
+      "frozen_usage_sha256": "sha256:bf6ba6aad2f2a02d546ef834a4a50504eb921fe21ea4a834a9be9fb4cebbe40f",
+      "tooling_sources": {
+        "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+        "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+        "model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1"
+      }
+    },
+    "positive": {
+      "check_attempt": {
+        "attempt_id": "attempt-0001",
+        "attempt_sha256": "sha256:38ad6dee0ac97f52c2b8a67a7ea41be29ac4d2ee5990be0651e90c846852fb60",
+        "complete": true,
+        "gates": [
+          {
+            "id": "protocol-tests",
+            "passed": true,
+            "result_sha256": "sha256:1746af90ca64b554bf61212882bb5c213b70f1187f601cda98f01c5bf1cfc7fb",
+            "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_sha256": "sha256:58107cf6c5f6bda9b0c9b4101a8815c09a9b0a480f85961a5825d178edc41dd6",
+            "validator_exit_code": 0,
+            "validator_stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "validator_stdout_sha256": "sha256:17ef5047af6518657a2ef67dc45c06bdd1476067c808eb3d2393d4e9f25e0053"
+          },
+          {
+            "id": "protocol-vet",
+            "passed": true,
+            "result_sha256": "sha256:3cc99649f6c9f2559cbf9eb024df974fe31bbec0fbd80c170f7ded2d17924a0a",
+            "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "validator_exit_code": null,
+            "validator_stderr_sha256": null,
+            "validator_stdout_sha256": null
+          }
+        ],
+        "passed": true,
+        "routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+        "subject_hash": "sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81",
+        "task_sha256": "sha256:e9cafd283338ff091f3d865ec480b16b95fa34ac7d30a06422323f05677c6926"
+      },
+      "frozen_review_sha256": "sha256:f60e306144790ff1af843433520b911a09a275c8fa46c6cbc3b67a15b7a2fb26",
+      "frozen_routes_sha256": "sha256:03829f19f1dde773326fb520f9a64c3c3fe4c20ea5b4081d8f14b36142c1fd3e",
+      "frozen_task_sha256": "sha256:e9cafd283338ff091f3d865ec480b16b95fa34ac7d30a06422323f05677c6926",
+      "frozen_usage_sha256": "sha256:b705c4a6b7715ed93b1bd318a94d2436c4df9cec7cb85307d89cd0854d9a2741",
+      "tooling_sources": {
+        "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+        "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+        "model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1"
+      }
+    }
+  },
+  "gate_results": {
+    "go": {
+      "counts": {
+        "all_test_events": {
+          "cont": 11,
+          "output": 8345,
+          "pass": 4071,
+          "pause": 11,
+          "run": 4126,
+          "skip": 55
+        },
+        "failures": [],
+        "packages": {
+          "pass": 21,
+          "skip": 1
+        },
+        "top_level_test_events": {
+          "cont": 11,
+          "output": 3659,
+          "pass": 1732,
+          "pause": 11,
+          "run": 1787,
+          "skip": 55
+        }
+      },
+      "go-test": {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-timeout",
+          "300s",
+          "./..."
+        ],
+        "exit_code": 0,
+        "wall_time": 220.31300000002375
+      },
+      "go-vet": {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "exit_code": 0,
+        "wall_time": 15.39000000001397
+      }
+    },
+    "live_controls": {
+      "all_expected_refusals": true,
+      "cases": 8,
+      "observed_cli_refusals": 9
+    },
+    "omp_usage_parser": {
+      "command": [
+        "python",
+        "scripts/ci/test-model-routing-omp-usage.py"
+      ],
+      "exit_code": 0,
+      "failures": 0,
+      "tests": 25
+    },
+    "reused_source_binder": {
+      "command": [
+        "python",
+        "scripts/ci/test-linux-v2-source-subject.py"
+      ],
+      "exit_code": 0,
+      "failures": 0,
+      "tests": 4
+    },
+    "runner": {
+      "command": [
+        "python",
+        "scripts/ci/test-model-routing-evaluation.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "failures": 0,
+      "output_proof": {
+        "bytes": 2902,
+        "exit_code": 0,
+        "failed": 0,
+        "normalization": "CRLF normalized to LF; extracted only delivered test-result lines, never assistant tool-call source",
+        "output_sha256": "sha256:b3975bd3a26463de5c043dfdc283d3854dd2a8d4b05e07d7c4f62e7a69d79969",
+        "passed": 19,
+        "rejected_extraction": "Initial extractor matched its own assistant command and produced one newline; that artifact was rejected, retained privately, and never used as gate evidence.",
+        "skipped": 1,
+        "source_event_id": "a46b054c",
+        "tests": 20
+      },
+      "passed": 19,
+      "skipped": 1,
+      "tests": 20
+    },
+    "unrun": [
+      "Hosted CI matrix",
+      "Linux/race qualification",
+      "Control gates",
+      "Wire gates",
+      "Browser gates"
+    ]
+  },
+  "independent_review": {
+    "control_plane_achieve_issued": false,
+    "coordinator_corrections": [
+      "The closeout prose called the positive row eight unique sessions. Actual receipt arrays are positive seven plus negative one, eight globally unique; no session is charged twice.",
+      "Repair cardinality is publicly checkable: the final positive row contains all thirteen repair_events in primary phase metadata and repair_count is13. The private ledger is additionally hash-bound.",
+      "Receiver preservation is logical all-or-error behavior of one decode call, not a Go memory-model atomicity or concurrency-safety guarantee."
+    ],
+    "dispositions": [
+      {
+        "id": "W1",
+        "refs": [
+          "task-level wall_time records the coordinator window (positive 6276.602 = 14:27:41-16:12:17 in phase metadata; negative 507.776538 = ledger), not the sum of overlapping phase rows (positive phase rows sum to 14404.82)",
+          "the earlier review-time observation (positive 3919.831 vs phase sum 10393.6) was superseded by the final regenerated row"
+        ],
+        "status": "resolved"
+      },
+      {
+        "id": "W2",
+        "note": "Contract-side closeout is done: positive receipt+usage+review+accept, negative row, escalation handoff, live refusal controls and the session accounting all exist and bind the exact Subject. The documentary remainders (not waivers) are listed under retained_nonblocking_limits.",
+        "refs": [
+          "0008a-positive.json accepted=true with imported review sha256:f60e306144790ff1af843433520b911a09a275c8fa46c6cbc3b67a15b7a2fb26 and usage frozen at sha256:b705c4a6b7715ed93b1bd318a94d2436c4df9cec7cb85307d89cd0854d9a2741",
+          "0008a-negative.json accepted=false",
+          "0008a-escalation.json decision=escalate with preserved_work.manifest_digest 6fc242e1...",
+          "0008a-controls.json",
+          "model-session-audit.json"
+        ],
+        "status": "resolved"
+      },
+      {
+        "id": "W12",
+        "refs": [
+          "0008a-negative.json regenerated 23:31 with wall_time 507.776538 and tooling_sources incl. 1420761..."
+        ],
+        "status": "resolved"
+      },
+      {
+        "id": "W6",
+        "refs": [
+          "test-model-routing-evaluation.py test_later_incomplete_attempt_cannot_reuse_an_earlier_pass (two-gate fixture, complete=false assertion, refusal at accept)"
+        ],
+        "status": "resolved"
+      },
+      {
+        "id": "W4",
+        "note": "Interrupted store stays preserved-but-unreadable with refusal and exportable usage; no 0008a clause requires resumable crash recovery. Optional deletion-on-abort remains optional.",
+        "refs": [
+          "README Explicit local limits lines 143-145"
+        ],
+        "status": "retained_nonblocking"
+      },
+      {
+        "id": "W7",
+        "note": "Abnormal validator termination may refuse with an unreadable record instead of a negative receipt; documented, no validator-crash qualification claimed, cost still countable in the next ledger. Widening the -4096 bound stays optional.",
+        "refs": [
+          "README line 146"
+        ],
+        "status": "retained_nonblocking"
+      },
+      {
+        "id": "W10",
+        "note": "W10a resolved; W10b (pre/post-gate binding only, worker stopped before verification) and W10c (no append-only registry; same-user deletion out of scope) remain as stated limits, not defects.",
+        "refs": [
+          "runner require_current_subject compares all recomputed subject fields incl. file_count",
+          "README lines 141-147"
+        ],
+        "status": "retained_nonblocking"
+      }
+    ],
+    "gate_weakening": false,
+    "model_ids": [
+      {
+        "api": "openai-completions",
+        "assistant_messages": 43,
+        "model": "deepseek-v4.1-flash-fast",
+        "provider": "tencent-litellm"
+      }
+    ],
+    "owner_routing_verdict_issued": false,
+    "post_review_changes": "As of the bound revision c45db2c: only evidence generation, clarified metric labels and unchanged-goal archival/canonical pointers followed the final executable-source review and 20-case suite. The later repair increments recorded in this audit (F1-F3, delivered as 1baf76c; the DeepSeek-review repairs F4-F9, delivered as bdbcdc7; and the PR-review repairs F10-F11) change files under scripts/ci/ and docs/, so that source review does not bind them.",
+    "reviewed_revision": {
+      "scripts/ci/model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1 (unchanged; my prior source review still binds)",
+      "scripts/ci/test-model-routing-evaluation.py": "sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0 (W6 fixture fix only; no production change)"
+    },
+    "reviewer_session_ref": "01a1dfc1-8d1c-73dd-a966-d2244d547b60",
+    "source_verdict": "pass",
+    "witness_clauses_complete": true
+  },
+  "receipt_sha256": {
+    "negative": "sha256:a9b7260635f317f2fa66b57ca4587be4b932c79cfe8eb126dd77caf268d40c52",
+    "positive": "sha256:1fdf4aa86285c79d279657294016a4d01da362c2f8977c09c51b55d203090808"
+  },
+  "repair_increment": {
+    "findings": [
+      {
+        "defect": "a refused usage import published the candidate rows and run record before the refusal, so the previous frozen usage rows and receipt could no longer be verified",
+        "fix": "the candidate row set is derived and validated before anything is published; a refused import now leaves frozen/usage.json, run.json and receipt.json byte-identical",
+        "id": "F1"
+      },
+      {
+        "defect": "a merged or duplicated session export was summed into one usage row and could count one model call twice",
+        "fix": "the extractor refuses a file carrying more than one session id or a repeated entry id; unknown token and cost values still stay null",
+        "id": "F2"
+      },
+      {
+        "defect": "the source manifest recorded .github/workflows/ci.yml from the pre-rebase tree (107098 bytes, sha256:c0a44c5d6538d1dd2fa5ff80bca744d26891b3d086c093efc3dd6cc76e0fe9c4)",
+        "fix": "the whole manifest was recomputed on the bound revision (103330 bytes, sha256:a0ad0020e8e824e18a43b1bb2a319058a21d263f9160176d70d47cb8603f6a4c)",
+        "id": "F3"
+      },
+      {
+        "defect": "seal derived changed_paths from Git cached stat data, so a worker could hide a protected-file or baseline-test modification with assume-unchanged/skip-worktree index flags or a same-size edit with the original mtime restored; the recorded changed_paths was never re-checked afterwards",
+        "fix": "sealing refuses nonstandard index entries, refreshes worktree stat data before diffing, compares symlink targets by blob object id, and check/review/receipt/accept recompute the change set and refuse when it differs from sealed.json; the receipt now carries the sealed changed_paths",
+        "id": "F4"
+      },
+      {
+        "defect": "the named-Go-test gate validated only the captured event stream, so a worker-supplied TestMain that printed fabricated run/pass frames and exited without m.Run() was accepted as named-test execution",
+        "fix": "for go-executable gates that declare go_tests and go_package the runner derives and executes go test -list in the gate directory and refuses unless the package's own test binary lists every named test exactly once; the runbook and review instructions state the residual limit and the reviewer duty",
+        "id": "F5"
+      },
+      {
+        "defect": "the delivered review record (and its embedded copy in the positive receipt) claimed that the object-shape check and the trailing-data guard were pinned by the 11 rejection inputs and that all 11 inputs reach the custom decoder; both claims were false",
+        "fix": "both texts now state which guards the inputs pin and which stay unobservable (non-object and field-missing inputs are subsumed by JSON type errors and Subject.Validate, no input carries trailing data, and the map decode ahead of ensureDecoderEOF already rejects it); review.json was normalized to the repository eol=lf convention (sha256:f60e306144790ff1af843433520b911a09a275c8fa46c6cbc3b67a15b7a2fb26) and the delivered positive receipt rebound (sha256:1fdf4aa86285c79d279657294016a4d01da362c2f8977c09c51b55d203090808, superseding the bound-revision copy 524e3beed5ccf310169400f27b21a6c73ab166814e49e43f7c925a159abceb24)",
+        "id": "F6"
+      },
+      {
+        "defect": "the exporter exported session-controlled record type names verbatim (a type name matching the runner secret-key pattern made the whole usage row unusable with a misleading refusal), asserted usage_includes_all_assistant_attempts unconditionally, and passed path-like session identifiers through raw",
+        "fix": "secret-like type names are counted under a sha256 key with an explicit limitation, the all-attempts claim is conditional on recognized record types and complete assistant identities, and path-like identifiers are hashed with limitation codes; a regression test binds an exported row through the runner six-stage validate_usage",
+        "id": "F7"
+      },
+      {
+        "defect": "runner robustness and accounting gaps: accounting_complete could be true with both cost totals null; deep or non-UTF-8 values raised uncaught tracebacks after validation; junction directories were traversed outside the checkout; slashless protected patterns did not match nested paths; --timeout accepted negatives; docstrings misstated the review binding and the manifest scope",
+        "fix": "explicit unknown-cost reasons per channel, serialization and path-encoding refusals, reparse-point directory refusal, gitignore-style slashless patterns, negative-timeout refusal, and corrected docstrings, each with a regression test",
+        "id": "F8"
+      },
+      {
+        "defect": "audit and document reconciliation gaps: resolved dispositions carried review-time values that contradicted the delivered receipts, a disposition pointed at a non-existent remaining_blockers field, the unversioned-estimate subtotal omitted the open coordinator prefix, the evidence record claimed no commit was performed and no executable source changed after the reviewed 20-case gate, and the review instructions requested a non-schema reviewed-paths field",
+        "fix": "dispositions updated to the final values, references point at retained_nonblocking_limits, the estimate labels separate the completed-session subtotal from the open prefix, the delivery commit and later repair increments are stated explicitly, and the review instructions match the strict record schema",
+        "id": "F9"
+      },
+      {
+        "defect": "seal derived changed_paths from `git diff`, so a worker could hide a modification of a baseline test behind checkout-local Git filter machinery: `.git/info/attributes` (highest attribute precedence, and `.git` is excluded from the Source manifest) assigning `filter=hide` plus a `filter.hide.clean` command that echoes the base bytes made `git diff` report no change while the gates executed the modified file (reproduced: seal exit 0 with changed_paths [] and `t.Skip()` in app/main_test.go)",
+        "fix": "the change set is now derived from bytes no checkout-local filter can influence: base blob contents are read from the object store (`git cat-file --batch`) and worktree files are hashed from disk; symlink targets are compared by blob object id and file modes where the host and Git track them (the untrackable-mode case matches Git's own core.filemode rule, a false positive the private-store control caught); and validate_changes refuses checkout-local attribute or filter machinery outright (a `filter.*` configuration inside the checkout, `.git/info/attributes`, `core.attributesFile`, or a `filter`/`working-tree-encoding` attribute on a bound path) even while the checkout matches. prepare materializes the checkout with `core.autocrlf=false`/`core.eol=lf`, and the change-set re-derivation performs no writes at all",
+        "id": "F10"
+      },
+      {
+        "defect": "an export without a session id got a `session_ref` derived from its filesystem path, so byte-identical copies of one export placed at different paths presented as different sessions; the runner's per-session duplicate refusal could not stop the same tokens and cost from being counted once per phase (reproduced: identical metadata.source_sha256, distinct `hashed_path` refs)",
+        "fix": "the fallback identity is derived from the export's own bytes instead (`session_ref_source: \"source_sha256\"`, a domain-separated hash of metadata.source_sha256), so byte-identical copies collapse onto one `session_ref` and the runner refuses the double import as `duplicates a model session`, while genuinely different exports keep distinct identities",
+        "id": "F11"
+      }
+    ],
+    "frozen_receipt_effect": {
+      "negative_receipt": {
+        "command": [
+          "accept",
+          "--run-dir",
+          "<private coordinator run dir>/negative",
+          "--receipt",
+          "docs/evaluations/model-routing/0008a-negative.json"
+        ],
+        "f4_f9_tooling": {
+          "exit_code": 1,
+          "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256",
+          "note": "the stored gate results predate the F4-F9 go-list result schema, so the repaired tooling refuses the preserved attempt before reaching the tooling-sources comparison; the private store is unchanged"
+        },
+        "f10_f11_tooling": {
+          "exit_code": 1,
+          "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256",
+          "note": "the F10-F11 object-store comparison re-derives the preserved change sets without a false positive and stops at the same preserved-attempt schema refusal; the private store's file listing, sizes and mtimes hash identically before and after the run"
+        },
+        "repaired_tooling": {
+          "exit_code": 1,
+          "refusal": "the submitted receipt does not match the derived evidence at $.evidence.tooling_sources.model-routing-evaluation.py: 'sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1' != 'sha256:c4b3db66375ce0c8da0acccb048e5c6b85521103d2d92a828214c26e811ecafe'"
+        }
+      },
+      "positive_receipt": {
+        "bound_revision_tooling": {
+          "accepted": true,
+          "exit_code": 0,
+          "note": "the delivered copy was corrected and rebound as F6 (sha256:1fdf4aa86285c79d279657294016a4d01da362c2f8977c09c51b55d203090808, normalized review digest f60e3061...); this digest is the bound-revision accepted copy",
+          "receipt_sha256": "sha256:524e3beed5ccf310169400f27b21a6c73ab166814e49e43f7c925a159abceb24"
+        },
+        "command": [
+          "accept",
+          "--run-dir",
+          "<private coordinator run dir>/positive",
+          "--receipt",
+          "docs/evaluations/model-routing/0008a-positive.json"
+        ],
+        "f4_f9_tooling": {
+          "exit_code": 1,
+          "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256",
+          "note": "same schema-refusal as the negative receipt; the corrected delivered review/receipt digests are never reached because the preserved attempts predate the go-list schema"
+        },
+        "f10_f11_tooling": {
+          "exit_code": 1,
+          "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256",
+          "note": "same schema-refusal as the negative receipt under the F10-F11 comparison, which no longer touches the private checkout at all"
+        },
+        "repaired_tooling": {
+          "exit_code": 1,
+          "refusal": "the submitted receipt does not match the derived evidence at $.evidence.tooling_sources.model-routing-evaluation.py: 'sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1' != 'sha256:c4b3db66375ce0c8da0acccb048e5c6b85521103d2d92a828214c26e811ecafe'"
+        }
+      },
+      "private_store": "no frozen task/routes/review/usage byte, run record, attempt record or stored receipt in the coordinator run directory was rewritten; the F4-F9 change-set re-derivation refreshed working-tree mtimes in the private checkouts only (file content bytes unchanged), and the F10-F11 re-derivation performs no writes at all: the store's file listing, sizes and mtimes hash identically before and after both accept controls",
+      "statement": "the published receipts bind the tooling digests of the bound revision; the F1-F3 tooling re-derives them up to the tooling-sources comparison, and the F4-F9 and F10-F11 tooling refuse earlier because the preserved gate results predate the go-list result schema. An evaluated run must be re-derived end to end by reviewed tooling before any published receipt can be accepted (runbook: changing that tooling invalidates an older submitted receipt)."
+    },
+    "gate_results": {
+      "contract_checks": {
+        "active_contract_path_absent": true,
+        "archive_byte_identity": "docs/goals/archive/0008a-auditable-acceptance-workflow.md equals 343dea6a:docs/goals/0008a-auditable-acceptance-workflow.md, 5441 bytes, sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0",
+        "bound_ci_workflow": "git show c45db2c:.github/workflows/ci.yml parses as YAML (12 jobs) and contains the auditable model-routing step, sha256:a0ad0020e8e824e18a43b1bb2a319058a21d263f9160176d70d47cb8603f6a4c",
+        "index_pointer_present": true,
+        "local_link_targets_checked": 59,
+        "local_link_targets_missing": [
+          "docs/goals/README.md line 209 -> 0006h-credentialed-provider-accounting.md (pre-existing at 343dea6a and 4e60b9d; the target lives under archive/ and this increment did not touch that row)"
+        ]
+      },
+      "deepseek_review_repairs": {
+        "contract_manifest_recheck": "all 17 source_manifest files match git show c45db2c:<path> (bytes and sha256); scoped_manifest_sha256 recomputes to sha256:34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d; the archived contract equals 343dea6a:docs/goals/0008a-auditable-acceptance-workflow.md (5441 bytes, sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0)",
+        "evaluation_harness": {
+          "command": [
+            "python",
+            "scripts/ci/test-model-routing-evaluation.py",
+            "-v"
+          ],
+          "exit_code": 0,
+          "failures": 0,
+          "passed": 30,
+          "skip_reasons": [
+            "executable file modes are not tracked on this host",
+            "non-UTF-8 file names are only constructible on POSIX hosts"
+          ],
+          "skipped": 2,
+          "tests": 32,
+          "wall_time": 581.809
+        },
+        "private_store_controls": [
+          {
+            "command": [
+              "accept",
+              "--run-dir",
+              "<private coordinator run dir>/positive",
+              "--receipt",
+              "docs/evaluations/model-routing/0008a-positive.json"
+            ],
+            "exit_code": 1,
+            "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256"
+          },
+          {
+            "command": [
+              "accept",
+              "--run-dir",
+              "<private coordinator run dir>/negative",
+              "--receipt",
+              "docs/evaluations/model-routing/0008a-negative.json"
+            ],
+            "exit_code": 1,
+            "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256"
+          }
+        ],
+        "note": "F4-F9 worktree runs on this host; the F1-F3 re-runs above bind the 1baf76c content. The private-store controls also demonstrate that the F4-F9 change-set re-derivation accepts the preserved sealed changed_paths (the refusal happens later, at the attempt-record schema).",
+        "reused_source_binder": {
+          "command": [
+            "python",
+            "scripts/ci/test-linux-v2-source-subject.py"
+          ],
+          "exit_code": 0,
+          "failures": 0,
+          "tests": 4,
+          "wall_time": 6.952
+        },
+        "usage_harness": {
+          "command": [
+            "python",
+            "scripts/ci/test-model-routing-omp-usage.py",
+            "-v"
+          ],
+          "exit_code": 0,
+          "failures": 0,
+          "tests": 29,
+          "wall_time": 20.167
+        }
+      },
+      "evaluation_harness": {
+        "command": [
+          "python",
+          "scripts/ci/test-model-routing-evaluation.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "failures": 0,
+        "passed": 20,
+        "skip_reason": "executable file modes are not tracked on this host",
+        "skipped": 1,
+        "tests": 21,
+        "wall_time": 805.785
+      },
+      "frozen_protocol_gate": {
+        "cwd": "daemon",
+        "go_test": {
+          "all_test_events": {
+            "output": 926,
+            "pass": 463,
+            "run": 462,
+            "start": 1
+          },
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "-count=1",
+            "./internal/protocol"
+          ],
+          "exit_code": 0
+        },
+        "go_vet": {
+          "command": [
+            "go",
+            "vet",
+            "./internal/protocol"
+          ],
+          "exit_code": 0
+        },
+        "named_test_validator": {
+          "command": [
+            "python",
+            "../scripts/ci/assert-go-test-json.py",
+            "<events>",
+            "--package",
+            "github.com/wxxb789/symmetry/daemon/internal/protocol",
+            "TestSubjectUnmarshalPreservesReceiverOnFailure",
+            "TestSubjectUnmarshalReplacesReceiverOnSuccess"
+          ],
+          "exit_code": 0,
+          "observed": [
+            "TestSubjectUnmarshalPreservesReceiverOnFailure: run=1 pass=1 skip=0",
+            "TestSubjectUnmarshalReplacesReceiverOnSuccess: run=1 pass=1 skip=0"
+          ]
+        }
+      },
+      "pr_review_repairs": {
+        "evaluation_harness": {
+          "command": [
+            "python",
+            "scripts/ci/test-model-routing-evaluation.py",
+            "-v"
+          ],
+          "exit_code": 0,
+          "failures": 0,
+          "passed": 33,
+          "skip_reasons": [
+            "executable file modes are not tracked on this host",
+            "non-UTF-8 file names are only constructible on POSIX hosts"
+          ],
+          "skipped": 2,
+          "tests": 35,
+          "wall_time": 825.832
+        },
+        "go_regression": {
+          "go_test": {
+            "command": [
+              "go",
+              "test",
+              "./..."
+            ],
+            "exit_code": 0,
+            "packages_ok": 21
+          },
+          "go_vet": {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          "note": "contextual regression coverage for unchanged Go sources from daemon/; the re-run overlapped the targeted Python re-checks on this host, so no wall-time figure is recorded."
+        },
+        "note": "F10-F11 worktree runs on this host, after the F4-F9 runs recorded above. The object-store comparison caught a real false positive rather than being signed off from the fixtures alone: on this host the first F10 build reported the private positive checkout's pristine `scripts/audit-no-legacy-routes.sh` as modified (tracked mode 100755, host cannot represent it), and the repaired rule now matches Git's own core.filemode behaviour and re-derives both private checkouts cleanly up to the preserved-attempt schema refusal.",
+        "private_store_controls": [
+          {
+            "command": [
+              "accept",
+              "--run-dir",
+              "<private coordinator run dir>/positive",
+              "--receipt",
+              "docs/evaluations/model-routing/0008a-positive.json"
+            ],
+            "exit_code": 1,
+            "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256"
+          },
+          {
+            "command": [
+              "accept",
+              "--run-dir",
+              "<private coordinator run dir>/negative",
+              "--receipt",
+              "docs/evaluations/model-routing/0008a-negative.json"
+            ],
+            "exit_code": 1,
+            "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256"
+          }
+        ],
+        "red_before_repair": [
+          {
+            "observation": "the pre-F10 seal returned exit 0 with `changed_paths: []` while app/main_test.go carried `t.Skip()` behind a `.git/info/attributes` clean filter that echoed the base bytes; the new regression test failed at its refusal assertion",
+            "test": "scripts/ci/test-model-routing-evaluation.py test_checkout_local_filter_cannot_hide_a_weakened_baseline_test"
+          },
+          {
+            "observation": "two byte-identical ID-less exports copied to different paths produced distinct `hashed_path` session_refs with identical metadata.source_sha256 (sha256:caa5559c... vs sha256:60fa9963... in the recorded probe), so the runner could count the same session and its cost once per phase; the new regression test failed on the shared-identity assertion",
+            "test": "scripts/ci/test-model-routing-omp-usage.py test_byte_identical_id_less_exports_share_one_session_identity"
+          }
+        ],
+        "regression_controls": [
+          {
+            "pre_fix_tooling": {
+              "exit_code": 1,
+              "observation": "the seal returned exit 0 with changed_paths [] and the weakened baseline test still present, so the test failed at assert_refused"
+            },
+            "repaired_tooling": {
+              "exit_code": 0
+            },
+            "test": "scripts/ci/test-model-routing-evaluation.py test_checkout_local_filter_cannot_hide_a_weakened_baseline_test"
+          },
+          {
+            "pre_fix_tooling": {
+              "exit_code": 1,
+              "observation": "identical bytes, distinct path-derived refs; validate_usage accepted the same session under two phases"
+            },
+            "repaired_tooling": {
+              "exit_code": 0
+            },
+            "test": "scripts/ci/test-model-routing-omp-usage.py test_byte_identical_id_less_exports_share_one_session_identity"
+          },
+          {
+            "pre_fix_tooling": {
+              "exit_code": 1,
+              "observation": "a pristine base-tracked 100755 file was reported as modified on a host that cannot represent the executable bit (the private-store control caught this before any fixture test did)"
+            },
+            "repaired_tooling": {
+              "exit_code": 0
+            },
+            "test": "scripts/ci/test-model-routing-evaluation.py test_pristine_tracked_executables_report_no_mode_change"
+          }
+        ],
+        "reused_source_binder": {
+          "command": [
+            "python",
+            "scripts/ci/test-linux-v2-source-subject.py"
+          ],
+          "exit_code": 0,
+          "failures": 0,
+          "tests": 4,
+          "wall_time": 5.569
+        },
+        "store_mutations": "none: the accept controls re-run the change-set derivation only; the private store's file listing, sizes and mtimes hashed identically before and after (the F4-F9 path refreshed worktree mtimes, the F10-F11 path performs no writes at all)",
+        "usage_harness": {
+          "command": [
+            "python",
+            "scripts/ci/test-model-routing-omp-usage.py",
+            "-v"
+          ],
+          "exit_code": 0,
+          "failures": 0,
+          "tests": 31,
+          "wall_time": 14.034
+        }
+      },
+      "recorded_refusal_controls": {
+        "duplicate-session-usage": {
+          "exit_code": 1,
+          "recorded_exit_code": 1,
+          "stderr_matches_recorded": true,
+          "stdout_empty": true,
+          "watched_files_unchanged": true
+        },
+        "note": "the two recorded receipt controls were re-run with the repaired runner against their retained disposable copies; recorded CRLF stderr was normalized to LF before comparison",
+        "omitted-worker-usage": {
+          "exit_code": 1,
+          "recorded_exit_code": 1,
+          "stderr_matches_recorded": true,
+          "stdout_empty": true,
+          "watched_files_unchanged": true
+        }
+      },
+      "regression_controls": [
+        {
+          "bound_revision_tooling": {
+            "exit_code": 1,
+            "observation": "the rejected import had already overwritten frozen/usage.json with the unusable rows before the refusal"
+          },
+          "repaired_tooling": {
+            "exit_code": 0
+          },
+          "test": "scripts/ci/test-model-routing-evaluation.py test_refused_usage_import_preserves_the_frozen_snapshot"
+        },
+        {
+          "bound_revision_tooling": {
+            "exit_code": 1,
+            "observation": "a merged two-session export was accepted; its two assistant records each carrying input=100 were summed into input=200 for one row, so one model call was counted twice"
+          },
+          "repaired_tooling": {
+            "exit_code": 0
+          },
+          "test": "scripts/ci/test-model-routing-omp-usage.py test_merged_exports_and_repeated_entry_ids_are_refused"
+        }
+      ],
+      "reused_source_binder": {
+        "command": [
+          "python",
+          "scripts/ci/test-linux-v2-source-subject.py"
+        ],
+        "exit_code": 0,
+        "failures": 0,
+        "tests": 4
+      },
+      "usage_harness": {
+        "command": [
+          "python",
+          "scripts/ci/test-model-routing-omp-usage.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "failures": 0,
+        "tests": 26
+      }
+    },
+    "paths": {
+      "f1_f3_repairs": {
+        "docs/evaluations/model-routing/README.md": "sha256:6cd4c825b8d19315141f8b9b5ef22be06d065ebccc4220bf2efae3f67f5876fa",
+        "scripts/ci/model-routing-evaluation.py": "sha256:c4b3db66375ce0c8da0acccb048e5c6b85521103d2d92a828214c26e811ecafe",
+        "scripts/ci/model-routing-omp-usage.py": "sha256:c23accb187b7ba33a2eb4040f1fd591b0d302c365bf9d1b715c74d3a4ac81330",
+        "scripts/ci/test-model-routing-evaluation.py": "sha256:2980ff55747fd9575868445acb3016960bcb699145b7b144f7c04b25cf5524bd",
+        "scripts/ci/test-model-routing-omp-usage.py": "sha256:11f496abd4c8c096d91f8644de1f709d0cc3f168a3c1f4136dd53d24e0dbaf1d"
+      },
+      "f4_f9_repairs": {
+        "docs/evaluations/model-routing/README.md": "sha256:ffd76afff5a60bae5a794a3a90ca4f0f06dc7a6a0ba026fc6450a5ab68d8ea18",
+        "docs/evaluations/model-routing/review-instructions.md": "sha256:bb982d3d901fb1974d35880e5675328f196b83a7731d54e68220260f8c6c1680",
+        "scripts/ci/model-routing-evaluation.py": "sha256:3b1017a103c09b7edc8391c110af2b4448f63261b97e2d4ef6e7e890f1536493",
+        "scripts/ci/model-routing-omp-usage.py": "sha256:ffdb47bbc9bda758d670949f02ff50d4349cd810cc1a06c72c7989fef6d764ec",
+        "scripts/ci/test-model-routing-evaluation.py": "sha256:f9f86d6fde7e89f1027efddea9eea3f65a20d23d00454b74e2360e593c0545da",
+        "scripts/ci/test-model-routing-omp-usage.py": "sha256:e9395d36ef7c0ff7e7e4fefd4de9554d1a63815951405053f8246345f9ff8b57"
+      },
+      "f10_f11_repairs": {
+        "docs/evaluations/model-routing/README.md": "sha256:76315b78e129b7916ff489020bad1e15955fd4b918b1f7105cb1ab71a5b75dcd",
+        "scripts/ci/model-routing-evaluation.py": "sha256:5e09165ee5a145f0b78c2f3735edd7a4cc6879c8331054f5dde5364b83b5fc64",
+        "scripts/ci/model-routing-omp-usage.py": "sha256:5d361246ef10e79d72bdbcb3f984564559d55031d4ca04bdfcf7010928b7923d",
+        "scripts/ci/test-model-routing-evaluation.py": "sha256:61061a28df4c6fa074db8ad93f091c9340aeabe86f365e57a60341f86dc70156",
+        "scripts/ci/test-model-routing-omp-usage.py": "sha256:f82a39dcbdd85613006b4b888f2b3dbacf86c595b62c00b397d86be065ae70be"
+      }
+    },
+    "review_status": "no repair increment has an independent review; the source verdict above binds the bound revision only",
+    "state": "F1-F3 were uncommitted worktree edits when the bound-revision gate results were recorded and are delivered as commit 1baf76c; F4-F9 were delivered as commit bdbcdc7; F10-F11 are uncommitted worktree edits after that commit. No repair increment is covered by the source review or by the frozen receipts"
+  },
+  "retained_nonblocking_limits": [
+    "Incomplete provider billing/prices, unreported helpers/transport usage and post-cutoff coordinator tail remain unknown, never zero.",
+    "Separate same-family reviewer invocation is not model-family diversity.",
+    "No OS sandbox, hostile same-user evidence protection, append-only history or transient in-gate edit detection is claimed.",
+    "Interrupted attempt stores and abnormal validator-process records remain fail-closed, preserved and not automatically resumable.",
+    "Executable-mode branch skipped on this host; no Linux native qualification inferred.",
+    "Go full-suite evidence is contextual regression coverage for unchanged Go sources; isolated focused gates carry the exact evaluated-Subject binding.",
+    "Skill execution was explicitly loaded; automatic discovery behavior was not measured.",
+    "Named-test evidence can still be fabricated by a test binary that controls its own stdout and branches on -test.list; the derived go test -list cross-check (F5) raises the cost of silent forgery, and the independent diff review remains the guard.",
+    "Session metadata exports safe-token identifiers verbatim unless they are path-like (then hashed); a secret shaped like an ordinary token is not distinguishable by shape, so operators must never pass credential, prompt or transcript values.",
+    "An export with no assistant messages, no observed prompt hash or no timestamps, or an assistant identity missing provider/api, cannot be imported as a model row and must be recorded as explicit non-model evidence (runbook mapping); the importer is not relaxed to accept these shapes."
+  ],
+  "schema": "symmetry-evaluation-audit/v1",
+  "source_manifest": {
+    "base_commit": "343dea6a62484d73e7b577a0be2683ca233510f6",
+    "base_commit_role": "frozen task-contract base the receipts below ran against; the rebased increment commit's parent is the base branch tip",
+    "bound_revision": {
+      "commit": "c45db2cdaa6ccd47a0b5fc952f874308d3cbe8c0",
+      "method": "git show <bound commit>:<path> for every listed path, recomputed on the rebased feature branch tip; uncommitted worktree edits after this revision are excluded",
+      "tree": "327059d933ea559ffe8a908c7c8784e4fb283c77"
+    },
+    "files": [
+      {
+        "bytes": 2143,
+        "path": ".agents/skills/symmetry-acceptance-workflow/SKILL.md",
+        "sha256": "sha256:0aa869e81a9f65db4dc5a3388311e8b10c2b80945636162c626df296745e3f5d"
+      },
+      {
+        "bytes": 103330,
+        "path": ".github/workflows/ci.yml",
+        "sha256": "sha256:a0ad0020e8e824e18a43b1bb2a319058a21d263f9160176d70d47cb8603f6a4c"
+      },
+      {
+        "bytes": 3533,
+        "path": "AGENTS.md",
+        "sha256": "sha256:735ead629b0ef9786a69a983cb777dc77695b42fcc301d86a877526fcfcc7b6c"
+      },
+      {
+        "bytes": 3443,
+        "path": "daemon/internal/protocol/goal_subject_receiver_test.go",
+        "sha256": "sha256:2e8502be11cdabac670b6da212f41b0542b8a394eb7de383187b90a9d02ae949"
+      },
+      {
+        "bytes": 11800,
+        "path": "docs/design/quality.md",
+        "sha256": "sha256:f939db62a2bd665801383a7d8485716e277df344c55ab40ffeca99d326428fcb"
+      },
+      {
+        "bytes": 11858,
+        "path": "docs/evaluations/model-routing/README.md",
+        "sha256": "sha256:0e20381cd006ce25f66034827d3a5d47a2c05f9f9aaa87a1f57d91d4857d01ee"
+      },
+      {
+        "bytes": 1717,
+        "path": "docs/evaluations/model-routing/review-instructions.md",
+        "sha256": "sha256:97dbba6ceee459ec357c4429b83b99e7c6bb962bacbfbec1e91b35e9e983af34"
+      },
+      {
+        "bytes": 2257,
+        "path": "docs/evaluations/model-routing/task-instructions.md",
+        "sha256": "sha256:eca4c9afc5107aac5eaa8161dc4d9039ef3d377b80f7ac099b457e7d2ed588ff"
+      },
+      {
+        "bytes": 1747,
+        "path": "docs/evaluations/model-routing/tasks/go-linux-final-scan.json",
+        "sha256": "sha256:a797887fd0bd16a5c161611d3ed6378716fdc0a20e7e704c8f2b5806aa290a28"
+      },
+      {
+        "bytes": 1354,
+        "path": "docs/evaluations/model-routing/tasks/go-subject-receiver.json",
+        "sha256": "sha256:e9cafd283338ff091f3d865ec480b16b95fa34ac7d30a06422323f05677c6926"
+      },
+      {
+        "bytes": 16713,
+        "path": "docs/goals/README.md",
+        "sha256": "sha256:aac4ca761087670a20d6832cf1fccc6a90ed9a406f1651f690a8793a72654d86"
+      },
+      {
+        "bytes": 5441,
+        "path": "docs/goals/archive/0008a-auditable-acceptance-workflow.md",
+        "sha256": "sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0"
+      },
+      {
+        "bytes": 12569,
+        "path": "docs/plans/2026-11-15-2232-feat-auditable-acceptance-workflow-plan.md",
+        "sha256": "sha256:2f263f8b3b394bb437252269873c4c3ba44a2bf5b5d21e6c09d9651df7adb228"
+      },
+      {
+        "bytes": 89615,
+        "path": "scripts/ci/model-routing-evaluation.py",
+        "sha256": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1"
+      },
+      {
+        "bytes": 23823,
+        "path": "scripts/ci/model-routing-omp-usage.py",
+        "sha256": "sha256:0fbed87aa43b5de312857c41adff9db78cfb98e3a980b76930713195ba5dfcf2"
+      },
+      {
+        "bytes": 42509,
+        "path": "scripts/ci/test-model-routing-evaluation.py",
+        "sha256": "sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0"
+      },
+      {
+        "bytes": 30069,
+        "path": "scripts/ci/test-model-routing-omp-usage.py",
+        "sha256": "sha256:a39184a9278820cb316cdca9bdd8da059776787d011c51d9f5fceb0f8ea317e1"
+      }
+    ],
+    "removed_active_contract_path": "docs/goals/0008a-auditable-acceptance-workflow.md",
+    "scope": "Explicit changed executable, gate, instruction, plan, index and contract paths. Generated evidence, receipts, private logs and this audit are excluded to avoid self-reference. This is not a fabricated Git tree or commit.",
+    "scoped_manifest_method": "sha256 of the canonical JSON (sorted keys, no whitespace) of the files array as listed",
+    "scoped_manifest_sha256": "sha256:34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d"
+  },
+  "unresolved_acceptance_blockers": []
+}

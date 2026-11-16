@@ -1,0 +1,171 @@
+{
+  "all_expected_refusals": true,
+  "control_count": 8,
+  "observed_cli_refusals": 9,
+  "results": [
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\stale-source"
+      ],
+      "control": "stale-source",
+      "exit_code": 1,
+      "operation": "accept",
+      "stderr": "model-routing-evaluation refused: current source does not match the sealed subject; re-run seal and its checks before continuing\r\n",
+      "stderr_sha256": "sha256:b0c72be952aa41b377ebbf5a43eaa1e30cd938cf4ecc953697438449dec2b2ce",
+      "stdout": "",
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "check",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\missing-gate",
+        "--gate",
+        "protocol-tests"
+      ],
+      "control": "missing-gate",
+      "exit_code": 1,
+      "operation": "check",
+      "stderr": "check attempt attempt-0002 failed; evidence preserved under C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\missing-gate\\checks\\attempt-0002\r\n",
+      "stderr_sha256": "sha256:c12881ae2c75bd3f62c646bef2b7c8cf3e0f415c0fd65f15f4c2b3b96a478a34",
+      "stdout": "{\r\n  \"attempt_id\": \"attempt-0002\",\r\n  \"attempt_sha256\": \"sha256:c1bf2f1ad743666f527ca7c81a7391c8e15002dab477aaac77904a8d22fbc24e\",\r\n  \"complete\": false,\r\n  \"passed\": false,\r\n  \"subject_hash\": \"sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81\"\r\n}\r\n",
+      "stdout_sha256": "sha256:70d7e3042f5be8ea158b21ed17e7f33d534f1d418bb4e17ff792ec74a7972840"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\missing-gate"
+      ],
+      "control": "missing-gate",
+      "exit_code": 1,
+      "operation": "accept",
+      "stderr": "model-routing-evaluation refused: the submitted receipt does not match the derived evidence at $.acceptance_blockers: length 0 != 3\r\n",
+      "stderr_sha256": "sha256:1d4174b9512ba17ebeea5448a32db5539db89d306f1e9b630441290dc2b9bb5e",
+      "stdout": "",
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "seal",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\weakened-baseline-test"
+      ],
+      "control": "weakened-baseline-test",
+      "exit_code": 1,
+      "operation": "seal",
+      "stderr": "model-routing-evaluation refused: seal refused a modification or deletion of the baseline test daemon/internal/protocol/goal_transport_test.go (M)\r\n",
+      "stderr_sha256": "sha256:4b147697270bb1fa83618888f8e493226d7e04f42f5cb0d0261e58907bf7d6f6",
+      "stdout": "",
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\incomplete-receipt",
+        "--receipt",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\incomplete-receipt\\incomplete.json"
+      ],
+      "control": "incomplete-receipt",
+      "exit_code": 1,
+      "operation": "accept",
+      "stderr": "model-routing-evaluation refused: the submitted receipt does not match the derived evidence at $: key sets differ (not expected: environment)\r\n",
+      "stderr_sha256": "sha256:299f0df1d07f292c3dc84a0463d9c5880f5b2c5cb873e1432424a3dedf9fb066",
+      "stdout": "",
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\fabricated-billing",
+        "--receipt",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\fabricated-billing\\fabricated.json"
+      ],
+      "control": "fabricated-billing",
+      "exit_code": 1,
+      "operation": "accept",
+      "stderr": "model-routing-evaluation refused: the submitted receipt does not match the derived evidence at $.cost.reported_cost: 0 != None\r\n",
+      "stderr_sha256": "sha256:067b6abced6c45e0445703609f085370d7cd02cb49ed5ef9ddf84e4564552581",
+      "stdout": "",
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "accept",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\weakened-frozen-contract"
+      ],
+      "control": "weakened-frozen-contract",
+      "exit_code": 1,
+      "operation": "accept",
+      "stderr": "model-routing-evaluation refused: frozen task bytes changed after prepare\r\n",
+      "stderr_sha256": "sha256:3a27d90036dd04495c2b6aee51e0975e4e7dac416b6c7effb8ebbcd5263cc96d",
+      "stdout": "",
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "receipt",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\omitted-worker-usage",
+        "--usage",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\omitted-worker-usage\\omitted-usage.json"
+      ],
+      "control": "omitted-worker-usage",
+      "exit_code": 1,
+      "operation": "receipt",
+      "stderr": "model-routing-evaluation refused: usage phases omit an implementing worker session required by the review\r\n",
+      "stderr_sha256": "sha256:45e63eee04ea0413019647051aa09cce5ad0dbb37021e7760e8188feecef0bf3",
+      "stdout": "",
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "receipt",
+        "--run-dir",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\duplicate-session-usage",
+        "--usage",
+        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\duplicate-session-usage\\duplicate-usage.json"
+      ],
+      "control": "duplicate-session-usage",
+      "exit_code": 1,
+      "operation": "receipt",
+      "stderr": "model-routing-evaluation refused: usage phase #10 duplicates a model session; duplicate model session costs cannot be counted twice\r\n",
+      "stderr_sha256": "sha256:fe5793ef339ac4b7d0df83d573c03ed1e9199a1f8e9ce364e6ca9ddf9bbd42d6",
+      "stdout": "",
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "schema": "symmetry-evaluation-refusal-controls/v1",
+  "scope": "Every control used a disposable copy of the real accepted Go run. No mock provider or fixture-only result replaced the live task. No original source, gate or receipt was weakened.",
+  "source_accept_evidence": "positive-bootstrap-accept.stdout (exit0); original run retained unchanged",
+  "source_accepted_receipt_sha256": "sha256:acb7bd0cf38edbf9939431ce481b74790a4a8d7ccd181067e52006055d492bb2",
+  "source_subject_hash": "sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81",
+  "tooling_sources": {
+    "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+    "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+    "model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1"
+  }
+}

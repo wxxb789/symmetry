@@ -1,0 +1,86 @@
+{
+  "coordinator_disposition": "Keep this run nonaccepted. Preserve correct work and failing evidence. Do not change the frozen gate, accept no-test success, or silently change execution environment. Linux qualification is not claimed.",
+  "decision": "escalate",
+  "explanations": {
+    "Explain why an unproven final descendant scan cannot produce a clean terminal receipt.": "Source reading (not executed on this host) of daemon/internal/platform/process_unix.go:700-719: cleanDescendantTerminalProof returns clean=true only when terminalReason==descendantMonitorTerminalCleanLeaderAbsent AND descendantScanCompleted AND !descendantScanLost AND escapedDescendant==nil; otherwise it returns clean=false with proof details formatted as 'terminal_reason=%s scan_completed=%t scan_lost=%t observed_escape=%t'. The close/receipt path at process_unix.go:1152 and :1194 accepts a clean terminal only when the leader is absent AND this proof is clean; otherwise it sets descendantScanLost=true (irreversible for that authority, declared at process_unix.go:141-143) and returns ErrLinuxDescendantContainmentUnproven ('leader disappeared without a clean descendant terminal proof (\u2026)'). A lost/unproven scan is therefore precisely the state where containment is unproven: the group's fd is retained, closeCompleted stays false and ContainmentCloseRetryable() stays true, so no clean terminal receipt can be issued. The Linux test that asserts this (daemon/internal/platform/process_unix_linux_test.go:2360 TestCleanDescendantTerminalProofReportsUnprovenState) builds descendantScanCompleted=true, descendantScanLost=true with terminalReason=clean-leader-absent and requires clean==false plus details containing 'terminal_reason=leader_absent', 'scan_completed=true', 'scan_lost=true', 'observed_escape=false' (reason string mapping of descendantMonitorTerminalCleanLeaderAbsent -> 'leader_absent' at process_unix.go:275-277). LIMIT: this invariant is established here by reading source and the test body only; the assertion itself did not run on this host (run:0/pass:0/skip:0), so it is not executed qualification.",
+    "Identify the actual platform and whether the required named Linux test ran; preserve the positive sample when escalating.": "Actual platform: win32 / Windows, machine AMD64, per negative/run.json environment {platform: win32, machine: AMD64, git_version: git version 2.56.0.windows.4, python_version: 3.12.10}; the run environment records no Linux execution surface. The required named test did NOT run: process_unix_linux_test.go line 1 is '//go:build linux', so on Windows the file is excluded from the package build, and the gate's native 'go test' returned exit 0 with 'testing: warning: no tests to run' / 'ok \u2026 [no tests to run]'; the named-test validator scripts/ci/assert-go-test-json.py returned exit 1 with TestCleanDescendantTerminalProofReportsUnprovenState run:0,pass:0,skip:0. Per docs/evaluations/model-routing/README.md and task-instructions.md, a Go exit 0 with no matching tests is not qualification, and a Windows no-test run must not be labeled Linux qualification. Positive sample preserved: positive/sealed.json (subject sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81, task 0008a-go-subject-receiver) plus positive-check.stdout (attempt-0001 passed=true) and the identical in-checkout work at negative/checkout/daemon/internal/protocol/goal_subject_receiver_test.go (sha256:2e8502be\u2026); none of it was altered, and the preserved-protocol-tests gate passed run=1/pass=1/skip=0 for both named Subject tests."
+  },
+  "failed_gate": {
+    "argv": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "./internal/platform",
+      "-run",
+      "^TestCleanDescendantTerminalProofReportsUnprovenState$"
+    ],
+    "cwd": "daemon",
+    "named_test_counts": {
+      "pass": 0,
+      "run": 0,
+      "skip": 0
+    },
+    "native_exit_code": 0,
+    "stdout_sha256": "sha256:bf52e127c7de7b28678ea021ec2eda0251ee7caadc277988b0c913c2366fc314",
+    "validator_exit_code": 1,
+    "validator_stderr_sha256": "sha256:496d0d7b6cad07d4f2616a77bb16d8f575b4300bc22831a13b94b0108c94d1da"
+  },
+  "handoff_to": "existing Sol primary coordinator",
+  "limits": [
+    "This records a native Windows execution boundary, not a census of other hosts or WSL.",
+    "Source-described Linux behavior is not executed Linux qualification.",
+    "Separate configured reviewer invocation does not imply a different model family."
+  ],
+  "preserved_work": {
+    "manifest_digest": "sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+    "path": "daemon/internal/protocol/goal_subject_receiver_test.go",
+    "preserved_protocol_gate_passed": true
+  },
+  "schema": "symmetry-evaluation-escalation/v1",
+  "subject": {
+    "base": "343dea6a62484d73e7b577a0be2683ca233510f6",
+    "changed_paths": [
+      {
+        "path": "daemon/internal/protocol/goal_subject_receiver_test.go",
+        "status": "A"
+      }
+    ],
+    "content_revision": "uncommitted:sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+    "file_count": 1094,
+    "head": "343dea6a62484d73e7b577a0be2683ca233510f6",
+    "manifest_digest": "sha256:6fc242e1f52d982d9c8174405616d0230d8d7ceb86a504ffd068bb9c7c10960b",
+    "schema": "symmetry-model-routing-evaluation/v1",
+    "subject_hash": "sha256:b8a846985010e1585627382fa713f1f5d6daaed66eb7257a2bb810949cfce3dc",
+    "task_id": "0008a-go-linux-final-scan-boundary"
+  },
+  "task_id": "0008a-go-linux-final-scan-boundary",
+  "trigger": "required invariant cannot be tested in the frozen native Windows environment",
+  "worker": {
+    "model_ids": [
+      {
+        "api": "openai-completions",
+        "assistant_messages": 21,
+        "model": "deepseek-v4.1-flash-fast",
+        "provider": "tencent-litellm"
+      }
+    ],
+    "private_source_sha256": "sha256:ba605eff944524d39dd31ef3965251e4efeffc1f61d1acf93c3137b0cdcaf0a4",
+    "prompt_hashes": [
+      {
+        "kind": "system_prompt",
+        "sha256": "sha256:b5688ba9fb8d7979fcfa7ea3b9dc2980052854dcc84d9c5ca4efc2ec22ef3ac9"
+      },
+      {
+        "kind": "task",
+        "sha256": "sha256:adb18a737f9cb8f9d2a4380055963f4a8424be0a7363d2a3cdcc501b56041924"
+      },
+      {
+        "index": 0,
+        "kind": "user_message",
+        "sha256": "sha256:abc391a5c7aef186304fd235e341ba0bbbbd8af54fd49ab711e3ee4de9ad5bed"
+      }
+    ],
+    "session_ref": "01a1dfc1-6701-7142-b389-867669e079b7"
+  }
+}
