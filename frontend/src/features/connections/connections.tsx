@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouteContext, useSearch } from "@tanstack/react-router";
 import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { connectionsOptions } from "../../app/application";
 import { useSessionToken } from "../../app/session";
 import {
@@ -101,13 +101,19 @@ interface EditorProps {
   providers: readonly ConnectionProvider[];
   api: Api;
   csrf: string;
-  onSaved: (disposition: string, connectionId: string) => void;
+  editorId: number;
+  onSaved: (disposition: string, connectionId: string, editorId: number) => void;
   onClose: () => void;
 }
 
-function ConnectionEditor({ connection, providers, api, csrf, onSaved, onClose }: EditorProps) {
+function ConnectionEditor({ connection, providers, api, csrf, editorId, onSaved, onClose }: EditorProps) {
   const queryClient = useQueryClient();
   const first = providers[0];
+  // The draft belongs to the editor generation that created it: the update is
+  // submitted against the version it was edited from, so a background refresh
+  // that loads another operator's change cannot turn the stale draft into a
+  // silent overwrite — the server still answers with its own stale refusal.
+  const [editedTarget] = useState(() => connection ? { id: connection.id, version: connection.version } : null);
   const [draft, setDraft] = useState<ConnectionDraft>(() => ({
     provider: connection?.provider ?? first?.id ?? "",
     name: connection?.name ?? "",
@@ -116,10 +122,10 @@ function ConnectionEditor({ connection, providers, api, csrf, onSaved, onClose }
   }));
   const provider = providers.find((candidate) => candidate.id === draft.provider);
   const save = useMutation({
-    mutationFn: (payload: ConnectionDraft) => connection
-      ? api.updateConnection(connection.id, { version: connection.version, name: payload.name, capabilities: [...payload.capabilities] }, csrf, new AbortController().signal)
+    mutationFn: (payload: ConnectionDraft) => editedTarget
+      ? api.updateConnection(editedTarget.id, { version: editedTarget.version, name: payload.name, capabilities: [...payload.capabilities] }, csrf, new AbortController().signal)
       : api.createConnection(payload, csrf, new AbortController().signal),
-    onSuccess: (receipt) => onSaved(receipt.disposition, receipt.connectionId),
+    onSuccess: (receipt) => onSaved(receipt.disposition, receipt.connectionId, editorId),
     // A refused write is never rendered as success: re-read the server's state
     // so the console shows what the server actually holds.
     onError: () => { void queryClient.invalidateQueries({ queryKey: ["connections"] }); },
@@ -286,6 +292,10 @@ export function ConnectionsPage() {
   const query = useQuery(connectionsOptions(application.api));
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Every editor open gets its own identity: a mutation response only closes
+  // and navigates for the editor the operator still has open.
+  const editorSequence = useRef(0);
+  const [openEditorId, setOpenEditorId] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const refresh = () => { if (!query.isFetching) void query.refetch(); };
   const connections = query.data?.connections ?? [];
@@ -294,8 +304,20 @@ export function ConnectionsPage() {
     if (!query.data || !search.connectionId || selected) return;
     void navigate({ to: "/connections", search: {}, replace: true });
   }, [navigate, query.data, search.connectionId, selected]);
-  const closeEditor = () => { setCreating(false); setEditing(false); };
-  const saved = (disposition: string, connectionId: string) => {
+  const openEditor = (kind: "create" | "edit") => {
+    setNotice(null);
+    editorSequence.current += 1;
+    setOpenEditorId(editorSequence.current);
+    if (kind === "create") setCreating(true); else setEditing(true);
+  };
+  const closeEditor = () => { editorSequence.current += 1; setOpenEditorId(0); setCreating(false); setEditing(false); };
+  const saved = (disposition: string, connectionId: string, editor: number) => {
+    if (editor !== editorSequence.current) {
+      // A late response for an editor that has since closed: the write is real,
+      // so re-read the list, but never close or navigate the open editor.
+      void queryClient.invalidateQueries({ queryKey: ["connections"] });
+      return;
+    }
     closeEditor();
     setNotice(disposition === "replayed"
       ? "This connection submission was already applied; the server returned the existing connection."
@@ -307,7 +329,7 @@ export function ConnectionsPage() {
   const attention = connections.filter((connection) => connection.status !== "healthy").length;
   return <>
     <PageHeading title="Connections" description="GitHub and Azure DevOps connections this server authenticates through.">
-      <button className="button" type="button" onClick={() => { setNotice(null); setCreating(true); }}><Plus size={16} aria-hidden="true" />New connection</button>
+      <button className="button" type="button" onClick={() => openEditor("create")}><Plus size={16} aria-hidden="true" />New connection</button>
       <RefreshButton fetching={query.isFetching} refresh={refresh} />
     </PageHeading>
     {notice && <p className="notice" role="status">{notice}<button className="button" type="button" onClick={() => setNotice(null)}>Dismiss</button></p>}
@@ -326,7 +348,7 @@ export function ConnectionsPage() {
             onSelect={() => { setNotice(null); void navigate({ to: "/connections", search: { connectionId: connection.id } }); }} />)}</ul>}
       </section>
       {selected
-        ? <ConnectionDetail connection={selected} api={application.api} csrf={csrf} onEdit={() => { setNotice(null); setEditing(true); }} onNotice={setNotice} />
+        ? <ConnectionDetail connection={selected} api={application.api} csrf={csrf} onEdit={() => openEditor("edit")} onNotice={setNotice} />
         : <aside className="connection-detail" aria-label="Connection detail">
           <Cable size={28} aria-hidden="true" />
           <h2>Select a connection</h2>
@@ -334,7 +356,7 @@ export function ConnectionsPage() {
         </aside>}
       <p className="sr-only" role="status">{query.isFetching && !query.isPending ? "Refreshing connections" : ""}</p>
     </div>}
-    {creating && <ConnectionEditor connection={null} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} onSaved={saved} onClose={closeEditor} />}
-    {editing && selected && <ConnectionEditor connection={selected} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} onSaved={saved} onClose={closeEditor} />}
+    {creating && <ConnectionEditor connection={null} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} onSaved={saved} onClose={closeEditor} />}
+    {editing && selected && <ConnectionEditor connection={selected} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} onSaved={saved} onClose={closeEditor} />}
   </>;
 }

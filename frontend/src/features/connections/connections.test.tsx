@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
+import { createMemoryHistory, RouterProvider, type RouterHistory } from "@tanstack/react-router";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -57,7 +57,9 @@ function connection(overrides: Partial<Connection> = {}): Connection {
 interface Harness {
   application: Application;
   requests: Array<{ method: string; path: string; body: unknown }>;
+  history: RouterHistory;
   setConnections: (value: Connection[]) => void;
+  failReads: (response: () => Response) => void;
 }
 
 const applications: Application[] = [];
@@ -68,6 +70,7 @@ afterEach(() => {
 
 function renderConnections(handler: (request: { method: string; path: string; body: unknown; url: URL }) => Response | Promise<Response>, path = "/portal/connections") {
   let current: Connection[] = [connection()];
+  let readFailure: (() => Response) | null = null;
   const requests: Harness["requests"] = [];
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
@@ -78,6 +81,7 @@ function renderConnections(handler: (request: { method: string; path: string; bo
       return new Response(JSON.stringify({ csrf_token: "session-token" }));
     }
     if (method === "GET" && url.pathname === "/portal/api/connections") {
+      if (readFailure) return readFailure();
       return new Response(JSON.stringify({ providers, connections: current }));
     }
     if (method === "GET" && url.pathname === "/portal/api/workspace") {
@@ -93,7 +97,9 @@ function renderConnections(handler: (request: { method: string; path: string; bo
   return {
     application,
     requests,
+    history,
     setConnections: (value: Connection[]) => { current = value; },
+    failReads: (response: () => Response) => { readFailure = response; },
   };
 }
 
@@ -238,5 +244,146 @@ describe("connection management", () => {
     const resources = within(await screen.findByRole("list", { name: "Bound resources" }));
     expect(resources.getAllByText("Unknown")).toHaveLength(2);
     expect(resources.queryByText("Synced")).toBeNull();
+  });
+
+  it("a late create response never closes or hijacks a newer editor", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method }) =>
+      method === "POST" ? pending : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New connection" }));
+    await user.type(screen.getByLabelText("Name"), "First connection");
+    await user.type(screen.getByLabelText("Account or organization"), "first");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
+
+    // The operator abandons the pending first editor and starts a second one.
+    await user.click(screen.getByRole("button", { name: "Close connection dialog" }));
+    expect(screen.queryByRole("dialog", { name: "New connection" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "New connection" }));
+    await user.type(screen.getByLabelText("Name"), "Second connection");
+    await user.type(screen.getByLabelText("Account or organization"), "second");
+
+    // The first submission lands late: it must not close the second editor or
+    // navigate to the first connection.
+    const firstId = "20000000-0000-4000-8000-000000000009";
+    harness.setConnections([connection({ id: firstId, name: "First connection" })]);
+    await act(async () => {
+      release(new Response(JSON.stringify({ disposition: "created", connection: { id: firstId } }), { status: 201 }));
+      await pending;
+    });
+    expect(screen.getByRole("dialog", { name: "New connection" })).toBeVisible();
+    expect(screen.getByLabelText("Name")).toHaveValue("Second connection");
+    expect(harness.history.location.search).not.toContain(firstId);
+  });
+
+  it("submits a draft against the version it was edited from after a background refresh", async () => {
+    const harness = renderConnections(({ method, body }) => {
+      if (method !== "PATCH") return refusal(404, "not_found", "unexpected request");
+      const version = typeof body === "object" && body !== null && "version" in body ? body.version : undefined;
+      return version === 3
+        ? refusal(409, "stale", "resource changed since it was loaded")
+        : new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4 }) }), { status: 200 });
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
+    await user.click(screen.getByRole("checkbox", { name: "CI" }));
+
+    // A background refresh loads the row another operator already changed while
+    // the editor is open; the draft and its edited-against version must stay put.
+    harness.setConnections([connection({ version: 4, name: "Changed elsewhere" })]);
+    await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["connections"] }); });
+    expect(screen.getByLabelText("Name")).toHaveValue("GitHub engineering");
+    expect(screen.getByRole("checkbox", { name: "CI" })).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(harness.requests.some((request) => request.method === "PATCH")).toBe(true));
+    expect(harness.requests.filter((request) => request.method === "PATCH")[0]?.body).toMatchObject({ version: 3 });
+    expect(await screen.findByRole("alert")).toHaveTextContent("(stale)");
+    expect(screen.getByText(/changed elsewhere; close and reopen/)).toBeVisible();
+  });
+
+  it("keeps provider check, update and removal mutually exclusive while one is pending", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method, path }) =>
+      method === "POST" && path.endsWith("/check")
+        ? pending
+        : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(await screen.findByRole("button", { name: "Test connection" }));
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit capabilities" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+
+    // Forced clicks must not start an editor or a removal while the check runs.
+    screen.getByRole("button", { name: "Edit capabilities" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    screen.getByRole("button", { name: "Remove" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /Remove/ })).toBeNull();
+    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+
+    await act(async () => {
+      release(new Response(JSON.stringify({ disposition: "checked", connection: connection({ version: 4 }) }), { status: 200 }));
+      await pending;
+    });
+    expect(await screen.findByRole("button", { name: "Test connection" })).toBeEnabled();
+    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+  });
+
+  it("keeps keyboard focus on the connection row across a background refresh", async () => {
+    const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    const row = await screen.findByRole("button", { name: /GitHub engineering/ });
+    row.focus();
+    expect(row).toHaveFocus();
+    harness.setConnections([connection()]);
+    await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["connections"] }); });
+    expect(row).toHaveFocus();
+  });
+
+  it("keeps the success notice and surfaces the failure when the refresh after a write fails", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method }) =>
+      method === "PATCH"
+        ? pending
+        : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
+    await user.click(screen.getByRole("checkbox", { name: "CI" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
+
+    // The write lands, but the authoritative re-read fails: the receipt stays
+    // and the failed refresh is reported against the last loaded data.
+    harness.setConnections([connection({ version: 4, capabilities: ["repositories", "work_items", "changes"] })]);
+    harness.failReads(() => refusal(503, "provider_failure", "connections read failed"));
+    await act(async () => {
+      release(new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4 }) }), { status: 200 }));
+      await pending;
+    });
+    expect(await screen.findByText(/Connection capabilities updated/)).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull();
+    // The 503 read is retried twice with backoff before the stale error shows.
+    expect(await screen.findByText("Refresh failed — showing last loaded data", undefined, { timeout: 5_000 })).toBeVisible();
+    expect(screen.getByText(/The server is temporarily unavailable/)).toBeVisible();
+  });
+
+  it("keeps the server's repositories-for-changes coupling observable in the editor", async () => {
+    renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New connection" }));
+    const repositories = screen.getByRole("checkbox", { name: "Repositories" });
+    const changes = screen.getByRole("checkbox", { name: "Changes" });
+    expect(repositories).toBeChecked();
+    expect(changes).toBeChecked();
+
+    await user.click(repositories);
+    expect(repositories).not.toBeChecked();
+    expect(changes).not.toBeChecked();
+    await user.click(changes);
+    expect(changes).toBeChecked();
+    expect(repositories).toBeChecked();
   });
 });

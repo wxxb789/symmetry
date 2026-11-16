@@ -81,15 +81,23 @@ defmodule SymmetryControl.Integrations do
         |> drop_attrs([:status, :status_message, :metadata, :last_checked_at])
         |> put_attr(:auth_type, auth_type)
 
-      case applied_connection(attrs) do
-        {:ok, connection} ->
-          {:replayed, connection}
+      changeset = Connection.changeset(%Connection{}, attrs)
 
-        :error ->
-          %Connection{}
-          |> Connection.changeset(attrs)
-          |> Repo.insert()
-          |> replay_racing_connection(attrs)
+      # A replay repeats exactly a valid submission, so the full input is
+      # validated before the fast path: an invalid payload is refused with the
+      # ordinary field errors instead of being normalized into a match.
+      if changeset.valid? do
+        case applied_connection(attrs) do
+          {:ok, connection} ->
+            {:replayed, connection}
+
+          :error ->
+            changeset
+            |> Repo.insert()
+            |> replay_racing_connection(attrs)
+        end
+      else
+        {:error, changeset}
       end
     end
   end
@@ -1826,9 +1834,12 @@ defmodule SymmetryControl.Integrations do
 
   defp replay_racing_connection(result, _attrs), do: result
 
+  # Ecto attributes a composite unique-constraint error to the first field of
+  # the constraint, so the `[provider, name]` index reports on `:provider`.
+  # The unique-index error is recognized on any field.
   defp duplicate_name?(changeset) do
     Enum.any?(changeset.errors, fn
-      {:name, {_message, options}} -> options[:constraint] == :unique
+      {_field, {_message, options}} -> options[:constraint] == :unique
       _error -> false
     end)
   end

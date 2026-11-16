@@ -1,13 +1,18 @@
 param(
   [string]$PortalUrl = "http://127.0.0.1:4021",
-  [int]$Port = 4021,
-  [string]$OperatorToken = "development-operator-token"
+  [int]$Port = 4021
 )
 
 # Connection-management browser acceptance on the fixed design's
 # /portal/connections surface. Starts the real control plane with the controlled
 # provider fixture transport (no provider host is contacted), runs the real-API
 # Playwright spec, then stops the fixture server and reports the fixture log.
+#
+# The run fails closed before any browser flow: the target must be the loopback
+# port this harness starts its own fixture on, that port must be free, the
+# fixture must publish this run's identity file, and /healthz must report the
+# full topology healthy. The spec itself re-checks the identity file and logs in
+# with this run's operator token before any provider check.
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $controlRoot = Join-Path $repoRoot "control"
@@ -15,6 +20,36 @@ $runRoot = Join-Path $env:TEMP ("symmetry-0007d-connections-" + [guid]::NewGuid(
 New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
 $fixtureLog = Join-Path $runRoot "fixture-calls.jsonl"
 $serverLog = Join-Path $runRoot "control.log"
+$identityFile = Join-Path $runRoot "fixture-identity.json"
+
+$target = [Uri]$PortalUrl
+if ($target.Scheme -ne "http" -or $target.Host -notin @("127.0.0.1", "localhost", "::1")) {
+  throw "PortalUrl must be a loopback http URL, got '$PortalUrl'"
+}
+if ($target.Port -ne $Port) {
+  throw "PortalUrl port ($($target.Port)) disagrees with the fixture port ($Port): refusing to target a process this harness does not own"
+}
+if (@(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue).Count -gt 0) {
+  throw "port $Port is already in use: the fixture cannot be the process answering PortalUrl"
+}
+# Docker forwards host ports without a socket this shell can enumerate, so the
+# port is also probed by connecting: any answer means the fixture cannot become
+# the process answering PortalUrl.
+$probe = New-Object System.Net.Sockets.TcpClient
+try {
+  $attempt = $probe.BeginConnect("127.0.0.1", $Port, $null, $null)
+  if ($attempt.AsyncWaitHandle.WaitOne(1000) -and $probe.Connected) {
+    throw "port $Port already accepts connections: the fixture cannot be the process answering PortalUrl"
+  }
+} finally {
+  $probe.Close()
+}
+
+# Per-run identity and operator token. Only the fixture process started below
+# receives them, so the spec can prove the target is this run's fixture before
+# any provider check and a normal Control instance cannot satisfy the run.
+$operatorToken = [guid]::NewGuid().ToString("N")
+$identity = [guid]::NewGuid().ToString("N")
 
 $env:POSTGRES_HOST = "127.0.0.1"
 $env:POSTGRES_PORT = "55440"
@@ -37,10 +72,16 @@ try {
 }
 
 $server = $null
+$fixturePid = $null
+$specStatus = 1
+$stopFailed = $false
 try {
   # `set "NAME=value"` is the cmd form that does not fold the space before `&&`
   # into the value; plain `set NAME=value && …` would set "4021 " and "… .jsonl ".
   $fixtureCommand = "set `"PHX_SERVER=true`" && set `"PORT=$Port`" && " +
+    "set `"SYMMETRY_OPERATOR_TOKEN=$operatorToken`" && " +
+    "set `"SYMMETRY_FIXTURE_IDENTITY=$identity`" && " +
+    "set `"SYMMETRY_FIXTURE_IDENTITY_FILE=$identityFile`" && " +
     "set `"SYMMETRY_FIXTURE_TRANSPORT_LOG=$fixtureLog`" && " +
     "set `"SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS=expired-fixture`" && " +
     "cd /d `"$controlRoot`" && " +
@@ -48,26 +89,47 @@ try {
   $server = Start-Process -FilePath "cmd.exe" -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError "$serverLog.err" `
     -ArgumentList "/c", $fixtureCommand
 
+  # Readiness: the fixture publishes this run's identity with the port it was
+  # started on, its log carries the transport-install marker, and /healthz
+  # answers ok for the real database, scheduler, reconciler and provider access.
+  # The fixture keeps that topology: nothing here stops application children.
   $ready = $false
+  $lastState = "no identity file yet"
   foreach ($attempt in 1..60) {
     if ($server.HasExited) { throw "fixture control plane exited before it became ready; see $serverLog.err" }
-    try {
-      # The fixture stops the orchestration scheduler and reconciler on purpose,
-      # so /healthz reports those two as down. Readiness here is the endpoint
-      # answering the portal login document.
-      Invoke-WebRequest -UseBasicParsing -Uri "$PortalUrl/portal/login" -TimeoutSec 3 | Out-Null
-      $ready = $true
-      break
-    } catch {
-      Start-Sleep -Seconds 2
+    $identityDocument = $null
+    if (Test-Path $identityFile) {
+      try { $identityDocument = Get-Content -Raw $identityFile | ConvertFrom-Json } catch { $identityDocument = $null }
     }
+    $installed = (Test-Path $serverLog) -and (Select-String -Path $serverLog -SimpleMatch -Quiet "connection fixture transport installed")
+    $identified = (Test-Path $serverLog) -and (Select-String -Path $serverLog -SimpleMatch -Quiet $identity)
+    if ($identityDocument -and $identityDocument.identity -eq $identity -and [string]$identityDocument.port -eq [string]$Port -and $installed -and $identified) {
+      try {
+        $health = Invoke-WebRequest -UseBasicParsing -SkipHttpErrorCheck -Uri "$PortalUrl/healthz" -TimeoutSec 5
+        if ($health.StatusCode -eq 200) { $ready = $true; break }
+        $lastState = "healthz returned $($health.StatusCode)"
+      } catch {
+        $lastState = "healthz not reachable: $($_.Exception.Message)"
+      }
+    } else {
+      $lastState = "identity not published yet (file=$([bool]$identityDocument) installed=$installed identified=$identified)"
+    }
+    Start-Sleep -Seconds 2
   }
-  if (-not $ready) { throw "control plane did not become ready at $PortalUrl/portal/login" }
+  if (-not $ready) { throw "control plane did not become ready at $PortalUrl ($lastState)" }
+
+  # The identity handshake above proves the listener on $Port is this run's
+  # fixture; record its PID so cleanup stops exactly that process tree.
+  $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess -Unique)
+  if ($listeners.Count -ne 1) { throw "expected exactly one listener on port $Port, found $($listeners.Count)" }
+  $fixturePid = $listeners[0]
 
   Push-Location $repoRoot
   try {
     $env:SYMMETRY_PORTAL_URL = $PortalUrl
-    $env:SYMMETRY_OPERATOR_TOKEN = $OperatorToken
+    $env:SYMMETRY_OPERATOR_TOKEN = $operatorToken
+    $env:SYMMETRY_FIXTURE_IDENTITY = $identity
+    $env:SYMMETRY_FIXTURE_IDENTITY_FILE = $identityFile
     # --offline: pnpm verifies the pinned lockfile against the public registry by
     # default, which this host cannot reach; that check then stalls for minutes.
     # Offline it fails in about a second, prints "Lockfile failed supply-chain
@@ -80,16 +142,27 @@ try {
     Pop-Location
   }
 
+  if ($server.HasExited) {
+    Write-Host "fixture control plane exited during the spec run; see $serverLog.err"
+    $specStatus = 1
+  }
+
   # The fixture's provider tokens are canaries: no token value may reach the
   # control plane's log, its error log or the recorded provider-call log. The
-  # browser side (responses, DOM, web storage, console) is asserted by the spec.
+  # browser side (responses, DOM, web storage, cookies through the cookie jar,
+  # request headers and bodies, console) is asserted by the spec. A missing
+  # scan file or an empty provider-call log fails the run instead of passing
+  # the scan without evidence.
   $canaries = @("gho_fixture_connection_token_canary", "fixture-ado-access-token-canary")
   $leaks = @()
   foreach ($file in @($serverLog, "$serverLog.err", $fixtureLog)) {
-    if (-not (Test-Path $file)) { continue }
+    if (-not (Test-Path $file)) { $leaks += "missing scan file: $file"; continue }
     foreach ($canary in $canaries) {
       if (Select-String -Path $file -SimpleMatch -Quiet $canary) { $leaks += "$file contains $canary" }
     }
+  }
+  if ((Test-Path $fixtureLog) -and (Get-Item $fixtureLog).Length -eq 0) {
+    $leaks += "provider-call log $fixtureLog is empty: the canary scan has no recorded evidence"
   }
   if ($leaks.Count -gt 0) {
     Write-Host ("canary scan FAILED: " + ($leaks -join "; "))
@@ -100,21 +173,22 @@ try {
 
   Write-Host "fixture transport log: $fixtureLog"
   Write-Host "control log: $serverLog"
-  exit $specStatus
 } finally {
-  # The fixture runs as cmd.exe → mise → mix → beam. Stopping the cmd.exe wrapper
-  # leaves beam listening on the port, so the whole tree is killed and the port is
-  # then re-checked until the control plane is gone.
+  # Stop only the process tree this harness started (cmd.exe → mise → mix → beam)
+  # and the listener PID recorded while the identity handshake proved it was this
+  # run's fixture. No other process on the port is ever killed: if the port is
+  # still held after that, the run reports it instead of guessing.
   if ($server) { taskkill /PID $server.Id /T /F 2>$null | Out-Null }
+  if ($fixturePid) { taskkill /PID $fixturePid /T /F 2>$null | Out-Null }
   foreach ($attempt in 1..10) {
-    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
-    if ($listeners.Count -eq 0) { break }
-    foreach ($listener in $listeners) {
-      $owner = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
-      if ($owner -and $owner.ProcessName -match "beam|erl|escript|cmd|mise") {
-        taskkill /PID $listener.OwningProcess /T /F 2>$null | Out-Null
-      }
-    }
+    if (@(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue).Count -eq 0) { break }
     Start-Sleep -Milliseconds 500
   }
+  if (@(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue).Count -gt 0) {
+    Write-Host "port $Port is still held after stopping this run's fixture; a process this harness does not own was left alone"
+    $stopFailed = $true
+  }
 }
+
+if ($stopFailed) { exit 1 }
+exit $specStatus

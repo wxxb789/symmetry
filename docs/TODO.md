@@ -88,3 +88,11 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
       on a clean dedicated test database. The browser harness recreates its own database;
       the suite should use the repository default (`symmetry_control_test`).
+
+- [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
+      legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
+      output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
+      toast and "two browser contexts reject a stale project update" hit the 60 s test timeout;
+      both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
+      and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
+      before changing any budget.

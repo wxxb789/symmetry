@@ -43,6 +43,11 @@ end
 defmodule SymmetryControlWeb.PortalIntegrationsTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  import Ecto.Query
+
+  alias Ecto.Adapters.SQL.Sandbox
+  alias SymmetryControl.Integrations
+  alias SymmetryControl.Integrations.Connection
   alias SymmetryControlWeb.PortalSession
 
   @operator_token "test-operator-token"
@@ -176,6 +181,125 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
              api_conn()
              |> post("/portal/api/connections", %{payload | "capabilities" => ["work_items"]})
              |> json_response(422)
+  end
+
+  test "a replay never accepts an invalid payload as a repeat of the applied connection" do
+    payload = %{
+      "provider" => "github",
+      "name" => "Strict replay",
+      "account_ref" => "acme",
+      "capabilities" => ["ci"]
+    }
+
+    assert %{"disposition" => "created"} =
+             api_conn() |> post("/portal/api/connections", payload) |> json_response(201)
+
+    # The invalid payload is not a repeat: the fast path must not normalize the
+    # non-string capability away and answer with the applied connection.
+    assert %{
+             "error" => %{
+               "code" => "validation_failed",
+               "fields" => %{"capabilities" => [_message]}
+             }
+           } =
+             api_conn()
+             |> post("/portal/api/connections", %{payload | "capabilities" => ["ci", 123]})
+             |> json_response(422)
+
+    assert %{"connections" => connections} =
+             api_conn() |> get("/portal/api/connections") |> json_response(200)
+
+    assert Enum.count(connections, &(&1["name"] == "Strict replay")) == 1
+  end
+
+  test "the loser of a concurrent identical create replays instead of refusing" do
+    # Two real, unboxed connections: one holds an uncommitted insert of the same
+    # intent while the other passes the pre-check and blocks on the unique index,
+    # so the constraint path — not the sequential pre-check — answers the loser.
+    name = "Racing connection #{System.unique_integer([:positive])}"
+
+    attrs = %{
+      "provider" => "github",
+      "name" => name,
+      "account_ref" => "acme",
+      "auth_type" => "gh_cli",
+      "capabilities" => ["repositories", "ci"]
+    }
+
+    parent = self()
+
+    cleanup = fn ->
+      Sandbox.unboxed_run(SymmetryControl.Repo, fn ->
+        SymmetryControl.Repo.delete_all(
+          from(connection in Connection, where: connection.name == ^name)
+        )
+      end)
+    end
+
+    try do
+      holder =
+        Task.async(fn ->
+          Sandbox.unboxed_run(SymmetryControl.Repo, fn ->
+            SymmetryControl.Repo.transaction(fn ->
+              SymmetryControl.Repo.insert!(%Connection{} |> Connection.changeset(attrs))
+              send(parent, {:holder_inserted, self()})
+
+              receive do
+                :commit -> :ok
+              end
+            end)
+          end)
+        end)
+
+      assert_receive {:holder_inserted, holder_pid}, 5_000
+
+      loser =
+        Task.async(fn ->
+          Sandbox.unboxed_run(SymmetryControl.Repo, fn ->
+            %{rows: [[backend]]} = SymmetryControl.Repo.query!("SELECT pg_backend_pid()")
+            send(parent, {:loser_backend, backend})
+            Integrations.create_connection(attrs)
+          end)
+        end)
+
+      assert_receive {:loser_backend, backend}, 5_000
+      await_insert_wait(backend)
+
+      send(holder_pid, :commit)
+      assert {:ok, _result} = Task.await(holder, 5_000)
+      assert {:replayed, %Connection{id: id}} = Task.await(loser, 10_000)
+      assert SymmetryControl.Repo.get(Connection, id)
+
+      assert SymmetryControl.Repo.aggregate(
+               from(connection in Connection, where: connection.name == ^name),
+               :count
+             ) == 1
+    after
+      cleanup.()
+    end
+  end
+
+  defp await_insert_wait(backend, attempts \\ 100) do
+    %{rows: rows} =
+      SymmetryControl.Repo.query!(
+        "SELECT wait_event_type, wait_event FROM pg_stat_activity WHERE pid = $1",
+        [backend]
+      )
+
+    case rows do
+      [["Lock", _event]] ->
+        :ok
+
+      [[_type, "SpeculativeInsertionWait"]] ->
+        :ok
+
+      _other when attempts > 0 ->
+        Process.sleep(50)
+        await_insert_wait(backend, attempts - 1)
+
+      other ->
+        flunk("the losing create never waited on the holder's transaction: #{inspect(other)}")
+    end
   end
 
   test "a capability update resets bound resource health in the connection read" do

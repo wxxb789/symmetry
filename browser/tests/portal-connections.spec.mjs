@@ -7,9 +7,37 @@
 // external transport (HTTP client and local CLI session) with canned provider
 // documents. No provider host is contacted. The fixture CLI tokens are canaries:
 // each test asserts that no canary reaches a recorded same-origin response, the
-// DOM, web storage or the console.
+// DOM, web storage, the cookie jar (including HttpOnly cookies), request
+// headers and bodies, or the console.
+//
+// Fixture identity: the harness starts the fixture with a per-run identity, an
+// identity file and a per-run operator token. Every test proves the target is
+// that fixture (identity file matches the run and the portal port) and logs in
+// with the per-run token before any provider check. Without the harness-provided
+// environment this spec fails at collection instead of driving a normal Control
+// instance that would use its real gh/az sessions.
 import fs from "node:fs/promises";
 import { allowBrowserError, expect as baseExpect, test } from "./fixtures.mjs";
+
+function requiredEnvironment(name) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `${name} is required: run browser/scripts/run-connection-fixture-tests.ps1, ` +
+        "which starts the fixture control plane and publishes the run identity"
+    );
+  }
+  return value;
+}
+
+const operatorToken = requiredEnvironment("SYMMETRY_OPERATOR_TOKEN");
+const fixtureIdentity = requiredEnvironment("SYMMETRY_FIXTURE_IDENTITY");
+const fixtureIdentityFile = requiredEnvironment("SYMMETRY_FIXTURE_IDENTITY_FILE");
+const portalUrl = new URL(requiredEnvironment("SYMMETRY_PORTAL_URL"));
+if (!["127.0.0.1", "localhost", "::1"].includes(portalUrl.hostname)) {
+  throw new Error(`SYMMETRY_PORTAL_URL must be loopback for the fixture run, got ${portalUrl.origin}`);
+}
+const portalOrigin = portalUrl.origin;
 
 // The acceptance control plane runs on a loaded developer host: measured reads
 // on this surface are sub-second, but a page that re-reads behind several
@@ -18,14 +46,25 @@ import { allowBrowserError, expect as baseExpect, test } from "./fixtures.mjs";
 const expect = baseExpect.configure({ timeout: 30_000 });
 test.describe.configure({ timeout: 120_000 });
 
-const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
-const portalOrigin = new URL(process.env.SYMMETRY_PORTAL_URL || "http://127.0.0.1:4000").origin;
 const canaries = ["gho_fixture_connection_token_canary", "fixture-ado-access-token-canary"];
 const secretPattern = new RegExp([...canaries, "Bearer ", "ghp_", "github_pat_"].join("|"));
 const suffix = `${Date.now().toString(36)}${Math.round(Math.random() * 1e6).toString(36)}`;
 let projectSequence = 0;
 
+// The identity file is written by the fixture process started for this run, and
+// it names the port that process serves; the target must be that process before
+// any provider check. A normal Control instance cannot satisfy this.
+async function assertFixtureTarget() {
+  const raw = await fs.readFile(fixtureIdentityFile, "utf8").catch((error) => {
+    throw new Error(`fixture identity file ${fixtureIdentityFile} is unreadable: ${error.message}`);
+  });
+  const identity = JSON.parse(raw);
+  expect(identity.identity, "fixture identity file must carry this run's identity").toBe(fixtureIdentity);
+  expect(String(identity.port), "fixture identity file must match the portal target port").toBe(portalUrl.port);
+}
+
 async function login(page) {
+  await assertFixtureTarget();
   await page.goto("/portal/login?return_to=%2Fportal%2Fconnections");
   await page.getByLabel("Operator token").fill(operatorToken);
   await page.getByRole("button", { name: "Open workspace" }).click();
@@ -56,19 +95,40 @@ async function createProject(page) {
 }
 
 function recordApiBodies(page) {
-  const bodies = [];
+  const responses = [];
   const requests = [];
+  const consoleMessages = [];
+  const pageErrors = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (url.origin !== portalOrigin) return;
-    requests.push({ method: request.method(), path: url.pathname, headers: { ...request.headers() }, body: request.postData() ?? "" });
+    requests.push({ method: request.method(), path: url.pathname, request });
   });
   page.on("response", (response) => {
     const url = new URL(response.url());
     if (url.origin !== portalOrigin) return;
-    bodies.push(response.text().then((text) => ({ path: url.pathname, status: response.status(), text })).catch(() => ({ path: url.pathname, status: response.status(), text: "unreadable" })));
+    const status = response.status();
+    if (status >= 300 && status < 400) {
+      // A redirect has no readable body; its Location header is scanned in its
+      // place, and a redirect without one is an evidence failure (304 has no
+      // body by protocol).
+      const location = response.headers()["location"];
+      responses.push(Promise.resolve({
+        path: url.pathname,
+        status,
+        text: location ?? "",
+        unreadable: !location && status !== 304 ? "redirect response without a Location header" : undefined
+      }));
+      return;
+    }
+    responses.push(response.text().then(
+      (text) => ({ path: url.pathname, status: response.status(), text }),
+      (error) => ({ path: url.pathname, status: response.status(), text: null, unreadable: String(error) })
+    ));
   });
-  return { bodies, requests };
+  page.on("console", (message) => consoleMessages.push({ type: message.type(), text: message.text() }));
+  page.on("pageerror", (error) => pageErrors.push(String(error?.stack || error)));
+  return { responses, requests, consoleMessages, pageErrors };
 }
 
 async function assertNoCredentials(page, recorded) {
@@ -81,12 +141,35 @@ async function assertNoCredentials(page, recorded) {
   for (const [where, text] of Object.entries(browserState)) {
     expect(text, `${where} must not contain a provider credential`).not.toMatch(secretPattern);
   }
-  for (const entry of await Promise.all(recorded.bodies)) {
+  // document.cookie cannot see HttpOnly cookies; the cookie jar can, and an
+  // unreadable or empty jar is an evidence failure, not a pass.
+  const jar = await page.context().cookies();
+  expect(jar.length, "the cookie jar must be readable and non-empty for the credential scan").toBeGreaterThan(0);
+  for (const cookie of jar) {
+    expect(`${cookie.name}=${cookie.value}`, `cookie ${cookie.name} must not contain a provider credential`).not.toMatch(secretPattern);
+  }
+  for (const entry of await Promise.all(recorded.responses)) {
+    expect(entry.unreadable, `response ${entry.path} must be readable for the credential scan`).toBeUndefined();
     expect(entry.text, `response ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
   }
-  for (const request of recorded.requests) {
-    expect(JSON.stringify(request.headers), `request headers for ${request.path} must not contain a provider credential`).not.toMatch(secretPattern);
-    expect(request.body, `request body for ${request.path} must not contain a provider credential`).not.toMatch(secretPattern);
+  for (const recordedRequest of recorded.requests) {
+    // allHeaders() includes the browser-managed headers (cookies) that
+    // headers() omits, so the scan sees the full security-relevant header set.
+    const headers = await recordedRequest.request.allHeaders();
+    expect(JSON.stringify(headers), `request headers for ${recordedRequest.path} must not contain a provider credential`).not.toMatch(secretPattern);
+    if (recordedRequest.path.startsWith("/portal/api/")) {
+      expect(headers.cookie, `the cookie header of ${recordedRequest.path} must be visible to the credential scan`).toBeTruthy();
+      if (!["GET", "HEAD"].includes(recordedRequest.method)) {
+        expect(headers["x-csrf-token"], `the CSRF header of ${recordedRequest.path} must be visible to the credential scan`).toBeTruthy();
+      }
+    }
+    expect(recordedRequest.request.postData() ?? "", `request body for ${recordedRequest.path} must not contain a provider credential`).not.toMatch(secretPattern);
+  }
+  for (const message of recorded.consoleMessages) {
+    expect(`${message.type}: ${message.text}`, "console output must not contain a provider credential").not.toMatch(secretPattern);
+  }
+  for (const error of recorded.pageErrors) {
+    expect(error, "page errors must not contain a provider credential").not.toMatch(secretPattern);
   }
 }
 

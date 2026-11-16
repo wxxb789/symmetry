@@ -210,20 +210,26 @@ require Logger
 
 Logger.configure(level: :warning)
 
-# The acceptance run measures the connection surface. The orchestration
-# scheduler and reconciler tick every second with several queries each, and
-# their contention with the flows under test produced multi-second reads, so
-# this fixture stops them explicitly (terminate_child does not restart a
-# permanently supervised child). Provider access stays up: it serves provider
-# actions.
-for child <- [
-      SymmetryControl.Orchestration.Scheduler,
-      SymmetryControl.Orchestration.Reconciler
-    ] do
-  case Supervisor.terminate_child(SymmetryControl.Supervisor, child) do
-    :ok -> Logger.warning("connection fixture stopped background child #{inspect(child)}")
-    {:error, reason} -> Logger.warning("connection fixture could not stop #{inspect(child)}: #{inspect(reason)}")
-  end
+# The fixture keeps the application's real supervision topology: the
+# orchestration scheduler and reconciler stay up, provider access serves the
+# provider actions and /healthz reports all of them. The run identity is
+# written for the harness and the browser spec, which use it to fail closed
+# before any provider check when the target is not this fixture.
+identity = System.get_env("SYMMETRY_FIXTURE_IDENTITY")
+identity_file = System.get_env("SYMMETRY_FIXTURE_IDENTITY_FILE")
+port = System.get_env("PORT")
+
+if identity && identity_file do
+  File.write!(
+    identity_file,
+    Jason.encode!(%{identity: identity, port: port, pid: System.pid()})
+  )
+else
+  Logger.warning(
+    "connection fixture identity is not configured: the browser spec requires " <>
+      "SYMMETRY_FIXTURE_IDENTITY and SYMMETRY_FIXTURE_IDENTITY_FILE from " <>
+      "browser/scripts/run-connection-fixture-tests.ps1 and refuses to run without them"
+  )
 end
 
 if path = System.get_env("SYMMETRY_FIXTURE_TRANSPORT_LOG") do
@@ -232,5 +238,6 @@ end
 
 Logger.warning(
   "connection fixture transport installed: provider HTTP and CLI sessions are canned, " <>
-    "no provider host is contacted, unauthorized accounts=#{inspect(System.get_env("SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS", ""))}"
+    "no provider host is contacted, unauthorized accounts=#{inspect(System.get_env("SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS", ""))}, " <>
+    "identity=#{inspect(identity)}, port=#{inspect(port)}"
 )
