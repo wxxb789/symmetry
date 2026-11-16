@@ -1,5 +1,12 @@
-import { infiniteQueryOptions, MutationCache, QueryCache, QueryClient, queryOptions } from "@tanstack/react-query";
-import { createApi, readRetry, Unauthenticated, type Api } from "../services/api";
+import { infiniteQueryOptions, mutationOptions, MutationCache, QueryCache, QueryClient, queryOptions } from "@tanstack/react-query";
+import {
+  createApi,
+  readRetry,
+  Unauthenticated,
+  type ActionId,
+  type Api,
+  type ExecutionGeneration,
+} from "../services/api";
 
 interface BrowserLocation {
   href: string;
@@ -18,7 +25,7 @@ export interface Application {
 export function safeReturnTo(href: string): string {
   try {
     const url = new URL(href);
-    if (/^\/portal\/(attention|connections|projects(?:\/[^/]+)?|work\/[^/]+)\/?$/.test(url.pathname)) {
+    if (/^\/portal\/(attention|connections|projects(?:\/[^/]+)?|work\/[^/]+|runtimes)\/?$/.test(url.pathname)) {
       return `${url.pathname}${url.search}`;
     }
   } catch {
@@ -119,4 +126,47 @@ export const workTimelineOptions = (api: Api, workItemId: string, cursor: string
 export const connectionsOptions = (api: Api) => queryOptions({
   queryKey: ["connections"],
   queryFn: ({ signal }) => api.connections(signal),
+});
+
+/**
+ * Runtime and machine rows for `/portal/runtimes`. The workspace read already
+ * carries both runtime projections, so this reuses the shell's own query key
+ * for the selected project and adds no request when that workspace is warm.
+ * The rows are the runtimes this deployment would accept work for, which is
+ * what the unselected read's compatibility filter means.
+ */
+export const runtimesOptions = (api: Api, projectId: string | null) => workspaceOptions(api, projectId);
+
+/**
+ * Execution controls. One attempt per call: Effect performs one HTTP attempt and
+ * these options disable retries, so a mutation is never silently re-sent. A
+ * caller that must try again passes the same action id.
+ */
+export const startWorkMutation = (api: Api) => mutationOptions({
+  mutationKey: ["work-control", "start"],
+  mutationFn: ({ workItemId, actionId, csrf }: { workItemId: string; actionId: ActionId; csrf: string }) =>
+    api.startWork(workItemId, actionId, csrf, new AbortController().signal),
+});
+
+export const cancelWorkMutation = (api: Api) => mutationOptions({
+  mutationKey: ["work-control", "cancel"],
+  mutationFn: ({ workItemId, generation, actionId, csrf }: { workItemId: string; generation: ExecutionGeneration; actionId: ActionId; csrf: string }) =>
+    api.cancelWork(workItemId, generation, actionId, csrf, new AbortController().signal),
+});
+
+export const retryWorkMutation = (api: Api) => mutationOptions({
+  mutationKey: ["work-control", "retry"],
+  mutationFn: ({ workItemId, generation, actionId, csrf }: { workItemId: string; generation: ExecutionGeneration; actionId: ActionId; csrf: string }) =>
+    api.retryWork(workItemId, generation, actionId, csrf, new AbortController().signal),
+});
+
+export const provideInputMutation = (api: Api) => mutationOptions({
+  mutationKey: ["work-control", "input"],
+  mutationFn: ({ workItemId, input, waitingTransitionId, actionId, csrf }: {
+    workItemId: string;
+    input: Record<string, unknown>;
+    waitingTransitionId: string;
+    actionId: ActionId;
+    csrf: string;
+  }) => api.provideInput(workItemId, input, waitingTransitionId, actionId, csrf, new AbortController().signal),
 });

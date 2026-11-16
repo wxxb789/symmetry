@@ -3,22 +3,22 @@
 package contracts
 
 type SymmetryAdapterCapabilitiesV1 struct {
-	Adapter            *Adapter `json:"adapter,omitempty"`
-	Interactive        *bool    `json:"interactive,omitempty"`
-	ProviderAccess     *bool    `json:"provider_access,omitempty"`
-	StructuredInput    *bool    `json:"structured_input,omitempty"`
-	SupervisoryControl *bool    `json:"supervisory_control,omitempty"`
+	Adapter            *SymmetryAdapterCapabilitiesV1Adapter `json:"adapter,omitempty"`
+	Interactive        *bool                                 `json:"interactive,omitempty"`
+	ProviderAccess     *bool                                 `json:"provider_access,omitempty"`
+	StructuredInput    *bool                                 `json:"structured_input,omitempty"`
+	SupervisoryControl *bool                                 `json:"supervisory_control,omitempty"`
 }
 
-type Adapter struct {
-	ImplementationVersion string            `json:"implementation_version"`
-	Kind                  string            `json:"kind"`
-	NativeVersion         string            `json:"native_version"`
-	Operations            AdapterOperations `json:"operations"`
-	ProtocolVersion       int64             `json:"protocol_version"`
+type SymmetryAdapterCapabilitiesV1Adapter struct {
+	ImplementationVersion string                  `json:"implementation_version"`
+	Kind                  string                  `json:"kind"`
+	NativeVersion         string                  `json:"native_version"`
+	Operations            PurpleAdapterOperations `json:"operations"`
+	ProtocolVersion       int64                   `json:"protocol_version"`
 }
 
-type AdapterOperations struct {
+type PurpleAdapterOperations struct {
 	ApprovalResponse bool      `json:"approval_response"`
 	Cancel           bool      `json:"cancel"`
 	Events           bool      `json:"events"`
@@ -1028,6 +1028,7 @@ type SymmetryWorkDetailReadV1WorkItem struct {
 	Description  *string                  `json:"description"`
 	Execution    *PurpleWorkItemExecution `json:"execution"`
 	External     *PurpleWorkItemExternal  `json:"external"`
+	GoalID       *string                  `json:"goal_id"`
 	// True only when the all-or-nothing Goal membership (goal_id, admitted_revision,
 	// acceptance_contract) is set; served so a client can present no writable path for a
 	// Goal-managed item.
@@ -1138,6 +1139,7 @@ type FluffyTimelineData struct {
 type SymmetryWorkspaceReadV1 struct {
 	Projects           []WorkspaceProject  `json:"projects"`
 	RegisteredRuntimes []RegisteredRuntime `json:"registered_runtimes,omitempty"`
+	Runtimes           []RuntimeSnapshot   `json:"runtimes,omitempty"`
 	SelectedProjectID  *string             `json:"selected_project_id"`
 }
 
@@ -1199,6 +1201,7 @@ type WorkItemElement struct {
 	Description  *string                  `json:"description"`
 	Execution    *FluffyWorkItemExecution `json:"execution"`
 	External     *FluffyWorkItemExternal  `json:"external"`
+	GoalID       *string                  `json:"goal_id"`
 	// True only when the all-or-nothing Goal membership (goal_id, admitted_revision,
 	// acceptance_contract) is set; served so a client can present no writable path for a
 	// Goal-managed item.
@@ -1342,6 +1345,72 @@ type RegisteredRuntime struct {
 	RuntimeID    *string `json:"runtime_id,omitempty"`
 	RuntimeName  *string `json:"runtime_name,omitempty"`
 	Workspace    *string `json:"workspace"`
+}
+
+// Protocol.runtime/1 as served in the workspace runtimes arrays: the runtime's own
+// advertised record with its harness identity, repository affinity, capability map and
+// current runs. Only the identity fields and the capability map are required, because a
+// runtime row keeps accepting older partial projections, while a production server serves
+// every member.
+type RuntimeSnapshot struct {
+	ActiveRuns           []RuntimeActiveRun  `json:"active_runs,omitempty"`
+	AgentProfile         *string             `json:"agent_profile,omitempty"`
+	Capabilities         RuntimeCapabilities `json:"capabilities"`
+	Capacity             *int64              `json:"capacity,omitempty"`
+	ConnectionEpoch      *int64              `json:"connection_epoch,omitempty"`
+	LastHeartbeatAt      *string             `json:"last_heartbeat_at"`
+	MachineID            string              `json:"machine_id"`
+	MachineName          string              `json:"machine_name"`
+	RepositoryResourceID *string             `json:"repository_resource_id"`
+	ReservedCapacity     *int64              `json:"reserved_capacity,omitempty"`
+	RuntimeID            string              `json:"runtime_id"`
+	RuntimeKey           string              `json:"runtime_key"`
+	RuntimeName          string              `json:"runtime_name"`
+	Status               string              `json:"status"`
+	Workspace            *string             `json:"workspace,omitempty"`
+}
+
+// Protocol.runtime/1's active-run projection: the run identity and recorded state that
+// currently occupy the runtime's capacity.
+type RuntimeActiveRun struct {
+	Generation int64  `json:"generation"`
+	RecordedAt string `json:"recorded_at"`
+	RunID      string `json:"run_id"`
+	State      string `json:"state"`
+	TaskID     string `json:"task_id"`
+}
+
+// Protocol.runtime/1's registered capability map served verbatim. An adapter-capable
+// registration carries the common Adapter declaration and its per-operation support
+// entries; a legacy registration without adapter metadata serves only the boolean subset,
+// so every member stays optional.
+type RuntimeCapabilities struct {
+	Adapter            *CapabilitiesAdapter `json:"adapter,omitempty"`
+	Interactive        *bool                `json:"interactive,omitempty"`
+	ProviderAccess     *bool                `json:"provider_access,omitempty"`
+	StructuredInput    *bool                `json:"structured_input,omitempty"`
+	SupervisoryControl *bool                `json:"supervisory_control,omitempty"`
+}
+
+type CapabilitiesAdapter struct {
+	ImplementationVersion string                  `json:"implementation_version"`
+	Kind                  string                  `json:"kind"`
+	NativeVersion         string                  `json:"native_version"`
+	Operations            FluffyAdapterOperations `json:"operations"`
+	ProtocolVersion       int64                   `json:"protocol_version"`
+}
+
+type FluffyAdapterOperations struct {
+	ApprovalResponse bool      `json:"approval_response"`
+	Cancel           bool      `json:"cancel"`
+	Events           bool      `json:"events"`
+	Guidance         Guidance  `json:"guidance"`
+	Handoff          bool      `json:"handoff"`
+	HardCostLimit    bool      `json:"hard_cost_limit"`
+	Pause            PauseEnum `json:"pause"`
+	Resume           bool      `json:"resume"`
+	Start            bool      `json:"start"`
+	Usage            Usage     `json:"usage"`
 }
 
 type Guidance string

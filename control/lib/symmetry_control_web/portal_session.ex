@@ -2,7 +2,7 @@ defmodule SymmetryControlWeb.PortalSession do
   @moduledoc false
 
   @default_max_age_seconds 8 * 60 * 60
-  @shell_path ~r{\A/portal(?:/(?:attention|connections|projects(?:/[A-Za-z0-9_-]+)?|work/[A-Za-z0-9_-]+))?\z}
+  @shell_path ~r{\A/portal(?:/(?:attention|connections|runtimes|projects(?:/[A-Za-z0-9_-]+)?|work/[A-Za-z0-9_-]+))?\z}
   @connection_identifier_param ~r{\AconnectionId=[A-Za-z0-9_-]+\z}
   @classic_identifier_param ~r{\A(?:project_id|run_id)=[A-Za-z0-9_-]+\z}
   # Work-surface search state the shell itself writes into its own URLs: the
@@ -44,6 +44,12 @@ defmodule SymmetryControlWeb.PortalSession do
 
   defp shell_query?("/portal/connections", query),
     do: Regex.match?(@connection_identifier_param, query)
+
+  # The shell's runtimes navigation carries the same project scope as the work
+  # surface; without this clause a session expiry collapses a project-scoped
+  # runtimes page to /portal.
+  defp shell_query?("/portal/runtimes", query),
+    do: Regex.match?(@work_project_param, query)
 
   defp shell_query?("/portal/projects/" <> _project_id, query),
     do: work_query?(query, @work_search_params)

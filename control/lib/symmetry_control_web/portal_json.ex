@@ -110,6 +110,7 @@ defmodule SymmetryControlWeb.PortalJSON do
       id: work_item.id,
       key: "#{work_item.project.key}-#{work_item.number}",
       project_id: work_item.project_id,
+      goal_id: work_item.goal_id,
       title: work_item.title,
       description: work_item.description,
       status: work_item.status,

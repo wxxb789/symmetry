@@ -111,6 +111,7 @@ const executionStates = [
   "assigned",
   "claimed",
   "running",
+  "cancelling",
   "paused",
   "waiting_for_input",
   "completed",

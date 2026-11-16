@@ -58,7 +58,8 @@ defmodule SymmetryControlWeb.PortalControllerTest do
           "/portal/connections",
           "/portal/projects",
           "/portal/projects/project-123",
-          "/portal/work/work-123"
+          "/portal/work/work-123",
+          "/portal/runtimes"
         ] do
       page = api_conn() |> put_req_header("accept", "text/html") |> get(path)
       body = html_response(page, 200)
@@ -138,6 +139,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
           "/portal/projects/project-123/not-a-route",
           "/portal/work",
           "/portal/work/work-123/not-a-route",
+          "/portal/runtimes/not-a-route",
           "/portal/classic/not-a-route",
           "/portal/index.html"
         ] do
@@ -243,6 +245,9 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     assert Enum.map(workspace_project["resources"], & &1["id"]) == [repository["id"]]
     assert Enum.map(workspace_project["work_items"], & &1["id"]) == [item["id"]]
     assert Enum.map(workspace_project["work_items"], & &1["goal_managed"]) == [false]
+    assert [%{"id" => work_item_id, "goal_id" => goal_id}] = workspace_project["work_items"]
+    assert work_item_id == item["id"]
+    assert goal_id == nil
     assert health["connections"] == "healthy"
     assert health["runtimes"] == "offline"
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApi, Forbidden, Network, readRetry, UnexpectedResponse, Validation } from "./api";
+import { createApi, Forbidden, Network, readRetry, ServerRefusal, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
 import { readWorkDetail } from "./api.fixtures";
 
 const workspace = {
@@ -181,5 +181,46 @@ describe("work-item receipts", () => {
     const api = createApi(fetcher);
     const receipt = await api.updateWorkItem(workItemId, { version: 2, title: "Edited" }, "csrf", new AbortController().signal);
     expect(receipt).toEqual({ id: workItemId, disposition: "" });
+  });
+});
+
+describe("control command boundary", () => {
+  const execution = { task_id: "55555555-5555-4555-8555-555555555555", run_id: null, generation: 2, state: "queued" };
+  const command = { command_id: "77777777-7777-4777-8777-777777777777", task_id: execution.task_id, kind: "cancel", state: "pending", acknowledgement_outcome: null };
+  const actionId = "action-1" as ActionId;
+  const generation = 2 as ExecutionGeneration;
+  const calls: readonly { name: string; segment: string; answer: Record<string, unknown>; send: (api: Api, csrf: string, signal: AbortSignal) => Promise<unknown> }[] = [
+    { name: "start", segment: "run", answer: { disposition: "created", execution }, send: (api, csrf, signal) => api.startWork(workItemId, actionId, csrf, signal) },
+    { name: "cancel", segment: "cancel", answer: { disposition: "created", command, execution }, send: (api, csrf, signal) => api.cancelWork(workItemId, generation, actionId, csrf, signal) },
+    { name: "retry", segment: "retry", answer: { disposition: "replayed", command, work_item: { id: workItemId }, execution }, send: (api, csrf, signal) => api.retryWork(workItemId, generation, actionId, csrf, signal) },
+    { name: "waiting input", segment: "input", answer: { disposition: "created", command, execution }, send: (api, csrf, signal) => api.provideInput(workItemId, { answer: "continue" }, "transition-1", actionId, csrf, signal) },
+  ];
+
+  it.each(calls)("sends the $name control with the caller's live CSRF token", async ({ segment, answer, send }) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(answer), { status: 202 }));
+    await send(createApi(fetcher), "rotated-token", new AbortController().signal);
+    const [path, init] = fetcher.mock.calls[0] ?? [];
+    expect(path).toBe(`/portal/api/work-items/${workItemId}/${segment}`);
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toMatchObject({ "x-csrf-token": "rotated-token" });
+  });
+
+  it("decodes the server's typed refusal for a refused control command", async () => {
+    const refusal = { error: { code: "stale_generation", message: "The attempt has already moved on." } };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(refusal), { status: 409 }));
+    const failure = await createApi(fetcher)
+      .cancelWork(workItemId, generation, actionId, "csrf", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(ServerRefusal);
+    expect(failure).toMatchObject({ status: 409, code: "stale_generation", message: "The attempt has already moved on." });
+  });
+
+  it("keeps an undescribed control refusal a session-protection 403, not a role denial", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 403 }));
+    const failure = await createApi(fetcher)
+      .startWork(workItemId, actionId, "csrf", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Forbidden);
+    expect(failure).toMatchObject({ message: "This change was refused. If you signed in elsewhere, refresh the page and try again." });
   });
 });

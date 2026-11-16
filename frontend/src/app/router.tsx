@@ -4,6 +4,7 @@ import { AttentionPage } from "../features/attention/attention";
 import { ConnectionsPage } from "../features/connections/connections";
 import { workItemSearch, workSearch } from "../features/projects/filters";
 import { ProjectPage, ProjectsPage } from "../features/projects/projects";
+import { RuntimesPage } from "../features/runtimes/runtimes";
 import { WorkDetailPage } from "../features/work/detail";
 import type { Application } from "./application";
 import { WorkspaceRoot } from "./shell";
@@ -37,7 +38,16 @@ const connectionsRoute = createRoute({
   }),
   component: ConnectionsPage,
 });
-const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, projectsRoute, projectRoute, workItemRoute, connectionsRoute]);
+const runtimesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/runtimes",
+  // The selected project is view state, like the Attention scope: it selects
+  // which runtimes are compatible with the work this deployment holds.
+  validateSearch: (search: Record<string, unknown>): { projectId?: string } =>
+    typeof search["projectId"] === "string" && search["projectId"] ? { projectId: search["projectId"] } : {},
+  component: RuntimesPage,
+});
+const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, projectsRoute, projectRoute, workItemRoute, connectionsRoute, runtimesRoute]);
 
 export type AppRouter = Router<typeof routeTree, "never", false, RouterHistory>;
 

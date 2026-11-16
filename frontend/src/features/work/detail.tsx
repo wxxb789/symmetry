@@ -12,6 +12,7 @@ import { OwnershipChip, ProjectWorkSurface, type WorkSurfaceNavigation } from ".
 import { WorkItemEditor } from "../planning/editors";
 import { hasServedRevision, isGoalManaged, workItemEditable } from "../planning/write-policy";
 import { AssignmentSection } from "./assignment";
+import { WorkControlSurface, WorkControls, WorkReceipts, WorkWaitingInput } from "./control";
 import { WorkHistory } from "./history";
 import {
   acceptanceLabel,
@@ -285,7 +286,7 @@ function WorkDetailSections({ detail, api }: { detail: WorkDetail; api: Api }) {
   const runId = execution?.run_id ?? null;
   const goalManaged = isGoalManaged(item);
   const providerOwned = item.external?.provider_owned_fields ?? [];
-  return <>
+  return <WorkControlSurface detail={detail} cursor={detail.raw.next_before}>
     <p className="detail-chips">
       <StatusBadge status={item.status} />
       <OwnershipChip item={item} />
@@ -296,6 +297,8 @@ function WorkDetailSections({ detail, api }: { detail: WorkDetail; api: Api }) {
     </p>
     {goalManaged && <p className="notice" role="status">This work item is managed by a Goal. Its run, retry and move paths go through Goal admission; this surface records its current state and offers no writable path for it.</p>}
     {!goalManaged && providerOwned.length > 0 && <p className="notice" role="status">The external work tracker owns {providerOwned.join(", ")} on this item; those fields are read-only here and its state column is not movable from this board.</p>}
+    <WorkControls detail={detail} />
+    <WorkWaitingInput detail={detail} />
 
     <section className="detail-section" aria-labelledby="outcome-section">
       <h2 id="outcome-section">Outcome</h2>
@@ -378,13 +381,13 @@ function WorkDetailSections({ detail, api }: { detail: WorkDetail; api: Api }) {
 
     <section className="detail-section" aria-labelledby="history-section">
       <h2 id="history-section">Execution history</h2>
+      <WorkReceipts firstPage={detail.raw.timeline} />
       <WorkHistory workItemId={item.id} firstPage={detail.raw.timeline} cursor={detail.raw.next_before} />
     </section>
-
     {/* Last, so the read-only sections keep their order: the 0007b acceptance
         pins the first five detail sections, and this surface adds a section. */}
     <AssignmentSection api={api} item={item} />
-  </>;
+  </WorkControlSurface>;
 }
 
 function EvidenceList({ title, rows }: { title: string; rows: EvidenceRow[] }) {

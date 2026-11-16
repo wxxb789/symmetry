@@ -45,7 +45,11 @@ export function RefreshButton({ fetching, refresh }: { fetching: boolean; refres
   </button>;
 }
 
-const knownStatuses = new Set(["active", "archived", "backlog", "ready", "in_progress", "in_review", "review", "done", "cancelled", "blocked", "todo"]);
+const knownStatuses = new Set([
+  "active", "archived", "backlog", "ready", "in_progress", "in_review", "review", "done", "cancelled", "blocked", "todo",
+  // Runtime lifecycle states (the orchestration check constraint allows exactly these two).
+  "online", "offline"
+]);
 
 export function statusLabel(status: string): string {
   return knownStatuses.has(status) ? status.replaceAll("_", " ") : `Unknown status${status ? `: ${status}` : ""}`;

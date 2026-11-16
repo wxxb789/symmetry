@@ -14,7 +14,8 @@
     "registered_runtimes": {
       "type": "array",
       "items": {"$ref": "#/definitions/RegisteredRuntime"}
-    }
+    },
+    "runtimes": {"type": "array", "items": {"$ref": "#/definitions/RuntimeSnapshot"}}
   },
   "definitions": {
     "WorkspaceProject": {
@@ -91,6 +92,66 @@
         "workspace": {"oneOf": [{"type": "string"}, {"type": "null"}]}
       }
     },
+    "RuntimeSnapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Protocol.runtime/1 as served in the workspace runtimes arrays: the runtime's own advertised record with its harness identity, repository affinity, capability map and current runs. Only the identity fields and the capability map are required, because a runtime row keeps accepting older partial projections, while a production server serves every member.",
+      "required": [
+        "machine_id",
+        "machine_name",
+        "runtime_id",
+        "runtime_key",
+        "runtime_name",
+        "status",
+        "capabilities"
+      ],
+      "properties": {
+        "machine_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "machine_name": {"type": "string"},
+        "runtime_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "runtime_key": {"type": "string"},
+        "runtime_name": {"type": "string"},
+        "status": {"type": "string"},
+        "last_heartbeat_at": {
+          "oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]
+        },
+        "connection_epoch": {"type": "integer"},
+        "capacity": {"type": "integer"},
+        "reserved_capacity": {"type": "integer"},
+        "agent_profile": {"type": "string"},
+        "workspace": {"type": "string"},
+        "repository_resource_id": {
+          "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        },
+        "capabilities": {"$ref": "#/definitions/RuntimeCapabilities"},
+        "active_runs": {"type": "array", "items": {"$ref": "#/definitions/RuntimeActiveRun"}}
+      }
+    },
+    "RuntimeCapabilities": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Protocol.runtime/1's registered capability map served verbatim. An adapter-capable registration carries the common Adapter declaration and its per-operation support entries; a legacy registration without adapter metadata serves only the boolean subset, so every member stays optional.",
+      "properties": {
+        "adapter": {"$ref": "common.schema.json#/definitions/Adapter"},
+        "structured_input": {"type": "boolean"},
+        "provider_access": {"type": "boolean"},
+        "interactive": {"type": "boolean"},
+        "supervisory_control": {"type": "boolean"}
+      }
+    },
+    "RuntimeActiveRun": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Protocol.runtime/1's active-run projection: the run identity and recorded state that currently occupy the runtime's capacity.",
+      "required": ["run_id", "task_id", "generation", "state", "recorded_at"],
+      "properties": {
+        "run_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "task_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "generation": {"type": "integer"},
+        "state": {"type": "string"},
+        "recorded_at": {"type": "string", "format": "date-time"}
+      }
+    },
     "WorkspaceWorkItem": {
       "type": "object",
       "additionalProperties": true,
@@ -100,6 +161,7 @@
         "id": {"$ref": "common.schema.json#/definitions/UUID"},
         "key": {"type": "string"},
         "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "goal_id": {"oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]},
         "title": {"type": "string"},
         "description": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "status": {"type": "string"},

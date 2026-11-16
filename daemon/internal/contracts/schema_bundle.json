@@ -31480,6 +31480,16 @@
               }
             ]
           },
+          "goal_id": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "goal_managed": {
             "description": "True only when the all-or-nothing Goal membership (goal_id, admitted_revision, acceptance_contract) is set; served so a client can present no writable path for a Goal-managed item.",
             "type": "boolean"
@@ -35258,6 +35268,137 @@
         "minimum": 1,
         "type": "integer"
       },
+      "RuntimeActiveRun": {
+        "additionalProperties": true,
+        "description": "Protocol.runtime/1's active-run projection: the run identity and recorded state that currently occupy the runtime's capacity.",
+        "properties": {
+          "generation": {
+            "type": "integer"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "run_id": {
+            "$ref": "#/definitions/UUID"
+          },
+          "state": {
+            "type": "string"
+          },
+          "task_id": {
+            "$ref": "#/definitions/UUID"
+          }
+        },
+        "required": [
+          "run_id",
+          "task_id",
+          "generation",
+          "state",
+          "recorded_at"
+        ],
+        "type": "object"
+      },
+      "RuntimeCapabilities": {
+        "additionalProperties": true,
+        "description": "Protocol.runtime/1's registered capability map served verbatim. An adapter-capable registration carries the common Adapter declaration and its per-operation support entries; a legacy registration without adapter metadata serves only the boolean subset, so every member stays optional.",
+        "properties": {
+          "adapter": {
+            "$ref": "#/definitions/Adapter"
+          },
+          "interactive": {
+            "type": "boolean"
+          },
+          "provider_access": {
+            "type": "boolean"
+          },
+          "structured_input": {
+            "type": "boolean"
+          },
+          "supervisory_control": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "RuntimeSnapshot": {
+        "additionalProperties": true,
+        "description": "Protocol.runtime/1 as served in the workspace runtimes arrays: the runtime's own advertised record with its harness identity, repository affinity, capability map and current runs. Only the identity fields and the capability map are required, because a runtime row keeps accepting older partial projections, while a production server serves every member.",
+        "properties": {
+          "active_runs": {
+            "items": {
+              "$ref": "#/definitions/RuntimeActiveRun"
+            },
+            "type": "array"
+          },
+          "agent_profile": {
+            "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/definitions/RuntimeCapabilities"
+          },
+          "capacity": {
+            "type": "integer"
+          },
+          "connection_epoch": {
+            "type": "integer"
+          },
+          "last_heartbeat_at": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "machine_id": {
+            "$ref": "#/definitions/UUID"
+          },
+          "machine_name": {
+            "type": "string"
+          },
+          "repository_resource_id": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reserved_capacity": {
+            "type": "integer"
+          },
+          "runtime_id": {
+            "$ref": "#/definitions/UUID"
+          },
+          "runtime_key": {
+            "type": "string"
+          },
+          "runtime_name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "machine_id",
+          "machine_name",
+          "runtime_id",
+          "runtime_key",
+          "runtime_name",
+          "status",
+          "capabilities"
+        ],
+        "type": "object"
+      },
       "SafeInteger": {
         "maximum": 9007199254740991,
         "minimum": 0,
@@ -36284,6 +36425,16 @@
               }
             ]
           },
+          "goal_id": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "goal_managed": {
             "description": "True only when the all-or-nothing Goal membership (goal_id, admitted_revision, acceptance_contract) is set; served so a client can present no writable path for a Goal-managed item.",
             "type": "boolean"
@@ -36396,6 +36547,12 @@
       "registered_runtimes": {
         "items": {
           "$ref": "#/definitions/RegisteredRuntime"
+        },
+        "type": "array"
+      },
+      "runtimes": {
+        "items": {
+          "$ref": "#/definitions/RuntimeSnapshot"
         },
         "type": "array"
       },

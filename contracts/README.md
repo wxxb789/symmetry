@@ -21,6 +21,17 @@ JSON Schema to TypeScript modules and the quicktype Go output may still restate
 the same shape per root. Fields added to
 the consumed workspace row are optional because the row keeps accepting older
 partial projections, while a production server serves them all.
+The workspace read also consumes the served `runtimes` rows: `Protocol.runtime/1`
+identity, status, capacity, repository affinity and the runtime's own
+`capabilities` map, whose `adapter` member reuses the `Adapter` definition
+(`adapter-capabilities.schema.json` / `common.schema.json`) so the runtime page
+renders the advertised harness identity, version and all ten per-operation
+values — including explicit `false`, `unsupported` and `unknown` — without a
+hand-written parallel type. The work row's `goal_id` is the Goal-ownership
+signal the work detail uses to route Goal-managed work to its Goal instead of
+the legacy control paths; the server enforces that routing independently
+(`Workspaces.ensure_legacy_work_item/1`), and a null `goal_id` keeps the legacy
+control surface.
 The detail read carries `outcome.summary` and `outcome.tests` verbatim from the
 reported task result or its evidence fallback, so those two fields require
 presence without constraining their JSON value shape.

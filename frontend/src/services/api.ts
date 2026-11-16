@@ -110,6 +110,18 @@ export interface AssignmentReceipt {
 export type WorkDetail = SymmetryWorkDetailReadV1;
 export type WorkTimeline = SymmetryWorkTimelineReadV1;
 export type TimelineItem = WorkTimeline["items"][number];
+export type Execution = NonNullable<WorkItem["execution"]>;
+export type ExecutionReceipt = Execution["latest_command"];
+export type WaitingInput = NonNullable<Execution["waiting"]>;
+export type Runtime = NonNullable<Workspace["runtimes"]>[number];
+
+/** A caller-minted idempotency identity. One value per proposed operation. */
+export type ActionId = string & { readonly ActionId: unique symbol };
+
+/** The exact attempt generation a control request is aimed at. */
+export type ExecutionGeneration = number & { readonly ExecutionGeneration: unique symbol };
+
+export type MutationDisposition = "created" | "replayed";
 
 /** A project creation submission: exactly the fields the server's create changeset casts. */
 export interface ProjectDraft {
@@ -246,6 +258,81 @@ interface RequestInit {
 }
 const runtime = ManagedRuntime.make(Layer.empty);
 
+// Control responses carry the same PortalJSON projections the read schemas
+// describe, but a control response is a narrower projection than a workspace
+// read and does not guarantee every execution member. These structs decode the
+// members the surface renders; every other served member stays additive.
+const ControlExecution = Schema.Struct({
+  task_id: Schema.String,
+  run_id: Schema.NullOr(Schema.String),
+  generation: Schema.Number,
+  state: Schema.String,
+  waiting: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  latest_command: Schema.optional(Schema.NullOr(Schema.Unknown)),
+});
+const ControlCommand = Schema.Struct({
+  command_id: Schema.String,
+  task_id: Schema.String,
+  kind: Schema.String,
+  state: Schema.String,
+  payload: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+  issued_at: Schema.optional(Schema.NullOr(Schema.String)),
+  applied_at: Schema.optional(Schema.NullOr(Schema.String)),
+  acknowledgement_id: Schema.optional(Schema.NullOr(Schema.String)),
+  acknowledgement_outcome: Schema.NullOr(Schema.String),
+  acknowledged_at: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const CancelResponse = Schema.Struct({
+  disposition: Schema.Literal("created", "replayed"),
+  command: ControlCommand,
+  execution: ControlExecution,
+});
+const RetryResponse = Schema.Struct({
+  disposition: Schema.Literal("created", "replayed"),
+  command: ControlCommand,
+  work_item: Schema.Struct({ id: Schema.String }),
+  execution: ControlExecution,
+});
+const StartResponse = Schema.Struct({
+  disposition: Schema.Literal("created", "replayed"),
+  execution: ControlExecution,
+});
+const InputResponse = Schema.Struct({
+  disposition: Schema.Literal("created", "replayed"),
+  command: ControlCommand,
+  execution: ControlExecution,
+});
+
+type ControlExecutionValue = typeof ControlExecution.Type;
+type ControlCommandValue = typeof ControlCommand.Type;
+
+export type ControlExecution = Omit<ControlExecutionValue, "waiting" | "latest_command">;
+export type ControlReceipt = ControlCommandValue;
+
+export interface StartOutcome {
+  disposition: MutationDisposition;
+  execution: ControlExecution;
+}
+
+export interface CancelOutcome {
+  disposition: MutationDisposition;
+  execution: ControlExecution;
+  command: ControlReceipt;
+}
+
+export interface RetryOutcome {
+  disposition: MutationDisposition;
+  execution: ControlExecution;
+  command: ControlReceipt;
+  workItemId: string;
+}
+
+export interface InputOutcome {
+  disposition: MutationDisposition;
+  execution: ControlExecution;
+  command: ControlReceipt;
+}
+
 export interface Api {
   workspace: (projectId: string | null, signal: AbortSignal) => Promise<Workspace>;
   workDetail: (workItemId: string, signal: AbortSignal) => Promise<WorkDetail>;
@@ -272,6 +359,17 @@ export interface Api {
   deleteResource: (resourceId: string, version: number, csrf: string, signal: AbortSignal) => Promise<{ deletedResourceId: string }>;
   syncResource: (resourceId: string, csrf: string, signal: AbortSignal) => Promise<ResourceReceipt>;
   syncProject: (projectId: string, csrf: string, signal: AbortSignal) => Promise<{ syncedResourceIds: readonly string[] }>;
+  startWork: (workItemId: string, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<StartOutcome>;
+  cancelWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<CancelOutcome>;
+  retryWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<RetryOutcome>;
+  provideInput: (
+    workItemId: string,
+    input: Record<string, unknown>,
+    waitingTransitionId: string,
+    actionId: ActionId,
+    csrf: string,
+    signal: AbortSignal,
+  ) => Promise<InputOutcome>;
 }
 
 // Strict byte-level decoding keeps invalid UTF-8 visible to the schema boundary;
@@ -401,7 +499,29 @@ const assignmentReceipt = (body: Uint8Array) =>
     Effect.map((value) => ({ workItemId: value.work_item.id, version: value.work_item.version })),
   );
 
-export function createApi(fetcher: typeof fetch = globalThis.fetch.bind(globalThis)): Api {
+const startResponse = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(StartResponse))(text)),
+  );
+
+const cancelResponse = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(CancelResponse))(text)),
+  );
+
+const retryResponse = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(RetryResponse))(text)),
+  );
+
+const inputResponse = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(InputResponse))(text)),
+  );
+
+export function createApi(
+  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+): Api {
   return {
     workspace(projectId: string | null, signal: AbortSignal): Promise<Workspace> {
       const query = projectId === null ? "" : `?${new URLSearchParams({ project_id: projectId })}`;
@@ -484,6 +604,69 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch.bind(globalTh
         { method: "POST", csrf },
         (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(ProjectSyncBody))(text))),
       ).pipe(Effect.map((value) => ({ syncedResourceIds: value.synced_resource_ids }))), signal);
+    },
+    /**
+     * The four control attempts. Each carries the session read's live CSRF
+     * token from its caller and runs through the shared request boundary, so a
+     * control-plane refusal arrives as the server's typed `ServerRefusal` — the
+     * same contract every other write surface consumes — and a 401 flows to the
+     * session-expiry owner like every read.
+     */
+    startWork(workItemId: string, actionId: ActionId, csrf: string, signal: AbortSignal): Promise<StartOutcome> {
+      return run(
+        request(
+          fetcher,
+          `/portal/api/work-items/${encodeURIComponent(workItemId)}/run`,
+          { method: "POST", body: { action_id: actionId }, csrf },
+          startResponse,
+        ),
+        signal,
+      );
+    },
+    cancelWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal): Promise<CancelOutcome> {
+      return run(
+        request(
+          fetcher,
+          `/portal/api/work-items/${encodeURIComponent(workItemId)}/cancel`,
+          { method: "POST", body: { action_id: actionId, generation }, csrf },
+          cancelResponse,
+        ),
+        signal,
+      );
+    },
+    retryWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal): Promise<RetryOutcome> {
+      return run(
+        request(
+          fetcher,
+          `/portal/api/work-items/${encodeURIComponent(workItemId)}/retry`,
+          { method: "POST", body: { action_id: actionId, generation }, csrf },
+          retryResponse,
+        ),
+        signal,
+      ).then((outcome) => ({
+        disposition: outcome.disposition,
+        execution: outcome.execution,
+        command: outcome.command,
+        workItemId: outcome.work_item.id,
+      }));
+    },
+    provideInput(
+      workItemId: string,
+      input: Record<string, unknown>,
+      waitingTransitionId: string,
+      actionId: ActionId,
+      csrf: string,
+      signal: AbortSignal,
+    ): Promise<InputOutcome> {
+      return run(
+        request(
+          fetcher,
+          `/portal/api/work-items/${encodeURIComponent(workItemId)}/input`,
+          { method: "POST", body: { input, action_id: actionId, waiting_transition_id: waitingTransitionId }, csrf },
+          inputResponse,
+        ),
+        signal,
+      );
     },
   };
 }
