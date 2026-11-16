@@ -26,9 +26,10 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     :ok
   end
 
-  test "attention merges Goal attention with the project blocked items the workspace read serves", %{
-    conn: conn
-  } do
+  test "attention merges Goal attention with the project blocked items the workspace read serves",
+       %{
+         conn: conn
+       } do
     project = create_project()
     blocked = create_blocked_work_item(project)
     goal_id = create_goal(conn, project)
@@ -73,7 +74,12 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
 
   test "attention serves the real Goal feed while Goal admission is disabled", %{conn: conn} do
     goals_config = Application.fetch_env!(:symmetry_control, :goals)
-    Application.put_env(:symmetry_control, :goals, Keyword.put(goals_config, :rollout_enabled, false))
+
+    Application.put_env(
+      :symmetry_control,
+      :goals,
+      Keyword.put(goals_config, :rollout_enabled, false)
+    )
 
     project = create_project()
     create_blocked_work_item(project)
@@ -121,7 +127,9 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     # only that the cursor advances and never repeats an entry.
     second_page =
       portal_conn()
-      |> get("/portal/api/attention?project_id=#{project.id}&limit=1&cursor=#{URI.encode_www_form(cursor)}")
+      |> get(
+        "/portal/api/attention?project_id=#{project.id}&limit=1&cursor=#{URI.encode_www_form(cursor)}"
+      )
       |> json_response(200)
 
     assert %{"goal_attention" => %{"entries" => remaining}} = second_page
@@ -182,7 +190,15 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       name: "Selected",
       status: "active",
       work_items: [
-        %{id: Ecto.UUID.generate(), number: 3, title: "Blocked selected item", status: "ready", blocked: true, blocker: "Operator review required", updated_at: nil}
+        %{
+          id: Ecto.UUID.generate(),
+          number: 3,
+          title: "Blocked selected item",
+          status: "ready",
+          blocked: true,
+          blocker: "Operator review required",
+          updated_at: nil
+        }
       ]
     }
 
@@ -191,7 +207,11 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       key: "OTH",
       name: "Other",
       status: "active",
-      work_items: %Ecto.Association.NotLoaded{__field__: :work_items, __owner__: SymmetryControl.Workspaces.Project, __cardinality__: :many}
+      work_items: %Ecto.Association.NotLoaded{
+        __field__: :work_items,
+        __owner__: SymmetryControl.Workspaces.Project,
+        __cardinality__: :many
+      }
     }
 
     projection =
@@ -208,12 +228,21 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   end
 
   test "the attention projection states a Goal-feed refusal and still serves the project blockers" do
-    selected = %{id: Ecto.UUID.generate(), key: "SEL", name: "Selected", status: "active", work_items: []}
+    selected = %{
+      id: Ecto.UUID.generate(),
+      key: "SEL",
+      name: "Selected",
+      status: "active",
+      work_items: []
+    }
 
     projection =
       SymmetryControlWeb.PortalJSON.attention(
         selected.id,
-        %{page: %{entries: [], next_after: nil, next_cursor: nil}, unavailable: :goal_admission_disabled},
+        %{
+          page: %{entries: [], next_after: nil, next_cursor: nil},
+          unavailable: :goal_admission_disabled
+        },
         {:ok, %{snapshot: %{projects: [selected], selected_project: selected}}}
       )
 
