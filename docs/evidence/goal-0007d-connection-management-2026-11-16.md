@@ -1,21 +1,23 @@
 # 0007d connection management — evidence receipt
 
 Status: **produced and awaiting the owner's verdict**. Every number below names the subject it was
-measured on; no commit, push or history rewrite was performed, and the tree is left for
-verification. Owner acceptance — the owner reviewing the rendered connection flows on real data
+measured on. The increments are committed as `86b368a`, `bbc9b6f`, `e67a925`, `43c1004`, `fc3cf8c`
+and `0b868fb` and pushed to the PR branch, so CI and the PR bot review those bytes; earlier
+revisions of this receipt described an uncommitted tree. Owner acceptance — the owner reviewing the rendered connection flows on real data
 plus this boundary statement against the fixed design's connection page and truthful-status rules —
 is explicitly after this run and not part of the goal's Done when, so this receipt states the result
 as produced and does not rate its own rendering or sign for the owner.
 
-Binding for this round (fixing the PR-bot round on top of the round-3 fix): base
+Binding for round 4 (the residuals from the scoped confirmation, on top of the PR-bot round): base
 `259ea7de7c2c040dd60507f511c03f26ed6452ef`; the increment is committed as `86b368a` (feature) with
-fix rounds `bbc9b6fe876e145b5a434ebcad8ad783428d81a7`, `e67a925b030c470c1fa832b2553bef296136e56e`
-and `43c10042261f12b6c9ad3706c4357b752bd0f9eb` (the round-3 fix) on top; this round's changes are
-the working tree on top of `43c1004` — 22 modified paths (`git status --porcelain -uall`, counting
-this receipt; all modified, no untracked files). **Source subject for this round**:
-`sha256 0f09025f2cf6c1b84cfda41c95c4f11712e1a994202458515731116082afa4e3`, computed over the same
-1009 tracked and untracked non-ignored repository paths with `docs/**` excluded, so a receipt edit
-cannot invalidate its own binding:
+fix rounds `bbc9b6fe876e145b5a434ebcad8ad783428d81a7`, `e67a925b030c470c1fa832b2553bef296136e56e`,
+`43c10042261f12b6c9ad3706c4357b752bd0f9eb` (round 3), `fc3cf8cd65f6dee8da92599d113a17667aed80f2`
+(the PR-bot round) and `0b868fbcadfc32b5a7031a20041ffbefd8343c4f` (round 4, this round — the seven
+committed paths named in §8) on top. **Source subject for round 4**:
+`sha256 fbebda1e2106010966fd18190c0cd09d01fdd60dc7f7cc4d7bc0d15e773c3112`, computed over the same
+kind of path set — 1010 tracked and untracked non-ignored repository paths with `docs/**` excluded
+(1009 in the PR-bot round; the new `browser/scripts/connection-spec-env.test.mjs` is the extra path),
+so a receipt edit cannot invalidate its own binding:
 
 ```sh
 git ls-files --cached --others --exclude-standard -z | grep -zv '^docs/' | sort -z | xargs -0 sha256sum | sha256sum
@@ -78,7 +80,7 @@ round* were not re-measured and keep the revision named in the row. Earlier numb
 | `pnpm --offline contracts:typecheck` (root) | 0 | *This round*: `tsc --project contracts/tsconfig.json`, clean (regenerated `Revision` alias included; `.tmp/evidence/contracts-typecheck-fix2.txt`). |
 | `pnpm --offline --filter @symmetry/frontend typecheck` | 0 | *This round*: `tsc --noEmit`, clean (`.tmp/evidence/frontend-typecheck-fix2.txt`). |
 | `pnpm --offline --filter @symmetry/frontend lint` | 0 | *This round*: `eslint . --max-warnings 0`, clean (`.tmp/evidence/frontend-lint-fix2.txt`). |
-| `pnpm --offline --filter @symmetry/frontend test` | 0 | *This round*: `Test Files 5 passed (5)`, `Tests 66 passed (66)` — was 61 at `43c1004`. Five tests were added; four of them failed on the pre-fix sources (`1 failed / 5 passed` for the mutation-401 expiry, `.tmp/evidence/red-p2a-mutation-expiry.txt`; `3 failed / 28 passed` for the catalog gate, the removed-while-editing editor and the name-only notice, `.tmp/evidence/red-frontend-still-open.txt`) and pass here (`.tmp/evidence/green-frontend-full-fix2.txt`); the fifth (the replayed-create notice) covers an existing branch and passes both sides. |
+| `pnpm --offline --filter @symmetry/frontend test` | 0 | *PR-bot round `fc3cf8c`; superseded by round 4 — see §8*: `Test Files 5 passed (5)`, `Tests 66 passed (66)` — was 61 at `43c1004`. Five tests were added; four of them failed on the pre-fix sources (`1 failed / 5 passed` for the mutation-401 expiry, `.tmp/evidence/red-p2a-mutation-expiry.txt`; `3 failed / 28 passed` for the catalog gate, the removed-while-editing editor and the name-only notice, `.tmp/evidence/red-frontend-still-open.txt`) and pass here (`.tmp/evidence/green-frontend-full-fix2.txt`); the fifth (the replayed-create notice) covers an existing branch and passes both sides. |
 | `pnpm --offline --filter @symmetry/frontend build` | 0 | *This round*: `vite build` + `scripts/stage-assets.mjs` into `control/priv/static/portal`; run before the browser runs, and again after the regenerated contract graph. |
 | `go vet ./...` / `go test ./...` (`daemon/`) | 0 / 0 | *This round*: all packages `ok`; `internal/contracts` adds the connections-read version-bound rejection (it failed with the pre-change schema, `.tmp/evidence/red-go-version-bound.txt`) and `internal/protocol` decodes the connections fixtures into the generated DTO and asserts the nullable fields (`.tmp/evidence/green-go-protocol-dto.txt`). Log `.tmp/evidence/go-gates-fix.txt`. |
 | `pwsh -NoProfile -File browser/scripts/run-connection-fixture-tests.ps1` | 0 | *This round*: `10 passed (45.8 s)` = 5 tests × desktop-chromium + mobile-chromium on the new route with the real topology and the identity handshake; canary scan clean; the harness's own spec-summary assertion reported `10 passed` and no skips; the fixture started with `--no-start` (transports installed before the application boots); its own process tree stopped and port 4021 free afterwards; the recorded run has 30 provider calls (10 `api.github.com`, 4 `dev.azure.com`, 12 `gh`, 4 `az`), a 36-line control log and a 0-byte error log. Log `.tmp/evidence/harness-run-fix3.txt`, provider-call and spec logs `.tmp/evidence/harness-run-fix3/`. Negative evidence this round: the transport bearer/method sensitivity run (`4 passed` → exit 1, `.tmp/evidence/red-transport-bearer-sensitivity.txt`; the fixture-call log carries the `fixture_unexpected_request` rejections, `.tmp/evidence/harness-red-transport-sensitivity/fixture-calls.jsonl`), plus the collection and summary guards in §4. From the first fix round, each failing closed and not re-run this round: a fabricated identity file plus a live foreign target refuses the login before any provider check (exit 1); a `-PortalUrl`/`-Port` mismatch refuses immediately (exit 1); an occupied Docker-forwarded port refuses immediately (exit 1). The three canary-proof runs for the response-header and transient-HttpOnly-cookie scans are in §4. |
@@ -299,3 +301,27 @@ that surface and the measurement showed the table does re-render behind a backgr
 - **Measurement claims**: latency numbers quoted here are single observations on a loaded development
   host (the API answers were measured at 0.36–0.48 s per request over curl); they are context for the
   fixture changes, not a performance claim.
+
+## 8. Round 4 — the residuals from the scoped confirmation
+
+Three residuals were fixed in `0b868fb` (seven committed paths: `browser/README.md`,
+`browser/package.json`, `browser/scripts/connection-spec-env.test.mjs` (new),
+`browser/tests/portal-connections.spec.mjs`, `docs/plans/2026-11-16-0007d-connection-management-plan.md`,
+`frontend/src/features/connections/connections.tsx` and `…connections.test.tsx`).
+
+| Residual (reviewer's finding) | Fix | Evidence |
+| --- | --- | --- |
+| the browser collection treated any partial environment as an error, so the README-documented `SYMMETRY_PORTAL_URL` + `SYMMETRY_OPERATOR_TOKEN` override — a normal custom target — failed the repository-wide suite at collection | the spec classifies its own environment: an absent fixture identity *or* the documented override collects the suite and skips the ten fixture tests, a half-configured fixture identity fails at collection, and the complete identity collects them | `node --test browser/scripts/connection-spec-env.test.mjs` → `tests 4, pass 4, fail 0`; it drives the real Playwright CLI and asserts `10 skipped` for both the override and the absent environment, status 1 with `SYMMETRY_PORTAL_URL must be set together` for the partial identity, and `Total: 10 tests in 1 file` for the complete one. Independent re-runs on `0b868fb`: `--list` with no fixture environment → rc 0, `Total: 90 tests in 9 files`; with the documented override → rc 0, `Total: 90 tests in 9 files`. |
+| after a successful DELETE the focus fallback died with the detail: focus returned to `BODY` although the list's New connection button was available | the delete-success path restores focus to a control that survives the detail unmount | the new frontend test failed on the pre-fix `connections.tsx` (`.tmp/evidence/red-frontend-removal-focus.txt`) and passes here (`.tmp/evidence/green-frontend-removal-focus.txt`). |
+| the plan's mapping table still promised `reset_resource_ids` while §3/§10.8 record the projection decision | the plan now matches the decision | `docs/plans/2026-11-16-0007d-connection-management-plan.md`; documentation only, no behaviour change. |
+
+Re-measured on `0b868fb` by the verifying owner rather than the producing run: frontend
+`Test Files 5 passed (5)` / `Tests 67 passed (67)` in 21.35 s (67 agrees with the run's own number;
+66 was `fc3cf8c`), `tsc --noEmit` and `eslint . --max-warnings 0` exit 0, `node --test
+browser/scripts/connection-spec-env.test.mjs` `4/4`, and the fixture harness in its round-4 row
+`10 passed (1.1 m)` — that row records `45.8 s` for `fc3cf8c`, superseded by this measurement — with
+the canary scan clean and rc 0. The frontend gates print `pnpm`'s "the install that runs before
+scripts failed" warning because the public registry is unreachable on this host (`--offline`);
+`node_modules` matches this lockfile, unchanged from the base. Control and contract packages are not
+touched by the PR-bot round or round 4, so the `845/846` control number and the contract counts keep
+the revisions named in their rows.
