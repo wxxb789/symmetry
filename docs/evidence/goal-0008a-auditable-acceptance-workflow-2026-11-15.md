@@ -4,7 +4,7 @@
 
 The binding contract is [`docs/goals/archive/0008a-auditable-acceptance-workflow.md`](../goals/archive/0008a-auditable-acceptance-workflow.md), including its standalone Done-when.
 Implementation started from commit `343dea6a62484d73e7b577a0be2683ca233510f6` on the existing feature branch with an initially clean working tree.
-No commit, push or history rewrite is authorized or performed.
+No commit, push or history rewrite was performed during the evaluated run; the increment was later delivered as commit `c45db2c`, rebased onto `4e60b9d`, with the repair increments recorded in the audit's `repair_increment` section (F1-F3 delivered as `1baf76c`; F4-F9 uncommitted).
 Consequently base/head commit IDs remain genuine Git provenance; uncommitted content is bound separately by the evaluation Subject rather than a fabricated head commit.
 
 Shape reference: executable-evidence increment `8ded77150ec0ae49d52355670fdad78a348bf1d5` (OmO native witness, Python unittest refusal controls and its exact-Subject evidence convention).
@@ -46,7 +46,7 @@ python scripts/ci/linux-v2-source-subject.py ISOLATED_CHECKOUT 343dea6a62484d73e
 
 Exit 0; protocol tree digest `sha256:035087b99858427f7fbe43364d2ee5d9378091601d524e86f14b2598a504d99a`.
 The worker added only `daemon/internal/protocol/goal_subject_receiver_test.go`, exercising the actual production `Subject.UnmarshalJSON` through `json.Unmarshal` without a mock.
-The two named tests cover 11 rejected-input cases plus valid replacement of all three identity fields.
+The two named tests cover 11 rejected-input cases (nine reach the custom decoder; the empty and truncated inputs are rejected by `encoding/json`'s syntax check first) plus valid replacement of all three identity fields.
 The production decoder and every existing test remain unchanged.
 The coordinator simplified the initial test delivery before verification by requesting removal of duplicate canonical/hash and fixture-premise assertions; both frozen test names and all 11 rejection cases were preserved.
 The resulting file has 63 lines and was integrated into the canonical working tree.
@@ -108,7 +108,7 @@ The frozen task bytes predate worker execution; the runner reused those same byt
 The namespace includes the task identity, so identical source bytes under different frozen tasks have different evaluation Subject hashes.
 Neither identity is a Control resource or an `achieve` authorization.
 
-The positive review import is bound by digest `sha256:1f38f35d4ad56a727bb9392d4d80ffe132107e1372557160d0a3c3130f77cf3f`.
+The positive review import is bound by digest `sha256:f60e306144790ff1af843433520b911a09a275c8fa46c6cbc3b67a15b7a2fb26` (the delivered review record after the F6 claim correction, normalized to the repository's `eol=lf` line endings so the digest reproduces on any checkout; the run-time frozen copy retained in the private store still carries the pre-correction text, so the delivered receipt copy was rebound the same way).
 The first fully derived positive receipt was actually accepted (both `receipt` and `accept` exit 0), with `accepted=true`, `accounting_complete=false`, and receipt digest `sha256:acb7bd0cf38edbf9939431ce481b74790a4a8d7ccd181067e52006055d492bb2`.
 That bootstrap receipt and its private frozen usage remain the source of the disposable refusal controls; final accounting uses a later explicitly marked coordinator snapshot, not invented final billing.
 
@@ -203,18 +203,18 @@ The rejected one-byte extractor artifact was retained privately and never used a
 
 The local data audit supplies the final receipt/ledger/review digests, explicit source-file manifest, session-accounting population and closeout dispositions.
 Generated evidence and receipts are excluded from that source manifest to avoid a self-referential digest; all changed executable, gate, instruction and contract paths are included.
-No new executable source or acceptance rule changed after the final 20-case gate and independent source review; subsequent changes are evidence generation, clarified metric labels and unchanged-contract archival/pointers.
-The current checkout is left uncommitted and unpublished for verification.
+As of the bound revision `c45db2c`: no new executable source or acceptance rule changed after the final 20-case gate and independent source review; subsequent changes at that revision were evidence generation, clarified metric labels and unchanged-contract archival/pointers. The repair increments recorded in the audit (F1-F3, and the DeepSeek-review repairs F4-F9) do change files under `scripts/ci/` and docs, so the source review binds only the bound revision.
+The checkout was left uncommitted and unpublished at run time; the delivered state is commit `1baf76c` plus the uncommitted repair increments F4-F9 recorded in the audit.
 
 ## Final frozen audit
 
 [`0008a-audit.json`](../evaluations/model-routing/0008a-audit.json) is the final machine-readable audit: 17 scoped source files, eight unique charged model sessions, 13 explicitly listed corrective/rework batches and no unresolved acceptance blocker.
-Its SHA-256 is `d94a68ac6cb8b29360181396477a8530c2de103957f4ba9847e32255faad3c0e`; the scoped source-manifest digest is `34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d`.
-The manifest was recomputed on the frozen HEAD after the rebase and the audit also records a post-revision repair increment (F1 refused-import snapshot preservation, F2 merged/duplicate session refusal, F3 manifest rebinding) with its repaired path digests, re-run gate results and the tooling-revision effect on the receipts below; that increment is uncommitted and not independently reviewed.
-The final positive receipt digest is `524e3beed5ccf310169400f27b21a6c73ab166814e49e43f7c925a159abceb24` (`receipt` exit 0, `accept` exit 0); the final negative digest is `a9b7260635f317f2fa66b57ca4587be4b932c79cfe8eb126dd77caf268d40c52` (`receipt` exit 0, `accept` exit 1).
+Its SHA-256 is `caf45cf35a1664809479d4e3ec8e471c1c02211682986f8623c50680a2bda2b9`; the scoped source-manifest digest is `34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d`.
+The manifest was recomputed on the frozen HEAD after the rebase and the audit records two post-revision repair increments with their repaired path digests, re-run gate results and the tooling-revision effect on the receipts below: F1-F3 (refused-import snapshot preservation, merged/duplicate session refusal, manifest rebinding), delivered as commit `1baf76c`, and the DeepSeek-review repairs F4-F9 (F4 content-derived change sets with re-verified `changed_paths`, F5 derived `go test -list` execution cross-check, F6 corrected review-record claims and rebound review/receipt digests, F7 exporter redaction and claim scoping, F8 runner accounting/serialization/path-pattern robustness, F9 audit/document reconciliation), which remain uncommitted. Neither increment is covered by the independent source review.
+The final positive receipt digest is `1fdf4aa86285c79d279657294016a4d01da362c2f8977c09c51b55d203090808` (`receipt` exit 0, `accept` exit 0; the F6 record correction rebinds the delivered copy from the earlier `524e3bee...`); the final negative digest is `a9b7260635f317f2fa66b57ca4587be4b932c79cfe8eb126dd77caf268d40c52` (`receipt` exit 0, `accept` exit 1).
 Review/attempt/ledger/tooling digests are retained in each row's `evidence` block and in the audit.
 
 The observed complete-record-plus-primary-prefix usage is 1,482,259 input, 710,029 output and 60,935,815 cached tokens; these are not asserted as complete-session totals.
-The sum of available unversioned harness estimates is USD `1.006311`, not a provider bill, established spend, saving or financial lower bound.
+The sum of available unversioned harness estimates across the charged completed sessions is USD `1.006311`; the still-open coordinator prefix carries a separately observed harness estimate of USD `7.165963500000001` whose completeness is unknown, so the combined USD `8.1722745` is not a complete total. None of these figures is a provider bill, established spend, saving or financial lower bound.
 Reported and total-estimated cost remain null, all authoritative price versions remain unknown, and `accounting_complete=false`.
 The final snapshot includes the independent closeout call; the remaining coordinator/report tail is explicitly unknown rather than recorded as zero.

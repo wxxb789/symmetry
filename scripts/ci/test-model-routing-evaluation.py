@@ -36,15 +36,31 @@ EMIT_SKIP = (
     "):\n"
     "    print(json.dumps(event))\n"
 )
+EMIT_SKIPPED_DESCENDANT = (
+    "import json\n"
+    "for event in (\n"
+    "    {'Action': 'run', 'Package': 'example/app', 'Test': 'TestWitness'},\n"
+    "    {'Action': 'pass', 'Package': 'example/app', 'Test': 'TestWitness'},\n"
+    "    {'Action': 'skip', 'Package': 'example/app', 'Test': 'TestWitness/sub'},\n"
+    "):\n"
+    "    print(json.dumps(event))\n"
+)
 EXIT_THREE = EMIT_PASS + "raise SystemExit(3)\n"
 WRITE_DURING_GATE = "open('wrote_during_gate.txt', 'w').write('x')\n"
 
 FILES = {
     "app/main.go": "package app\n\nfunc Main() int { return 1 }\n",
     "app/main_test.go": "package app\n\nimport \"testing\"\n\nfunc TestBaseline(t *testing.T) {}\n",
+    "app/app.go": "package app\n",
+    "app/check_test.py": "def test_placeholder():\n    assert True\n",
+    "web/thing.test.ts": "export const thing = 1;\n",
+    "tests/sample.txt": "sample\n",
+    "go.mod": "module example.com/fixture\n\ngo 1.21\n",
     ".github/workflows/ci.yml": "name: ci\n",
     "contracts/schema.json": "{}\n",
+    "contracts/other.json": "{}\n",
     "AGENTS.md": "# Fixture instructions\n",
+    "CLAUDE.md": "# Fixture instructions\n",
     ".agents/skills/demo/SKILL.md": "# Fixture skill\n",
     "docs/notes.md": "notes\n",
     "source.txt": "protected source\n",
@@ -165,6 +181,21 @@ class EvaluationTests(unittest.TestCase):
 
     def edit(self, relative: str, content: str, run: pathlib.Path | None = None) -> None:
         self.write(self.checkout(run) / relative, content)
+
+    def stage_stale_mtime(self, relative: str, run: pathlib.Path | None = None) -> None:
+        """Record an old mtime for a clean file so a later same-size edit hides from git.
+
+        Refreshing the index while the content still matches stores the old mtime as
+        cached stat data, which makes a same-size edit with a restored mtime invisible
+        to plain `git diff` until the worktree mtimes are refreshed.
+        """
+        target = self.checkout(run) / relative
+        os.utime(target, (1577836800, 1577836800))
+        # An adversary with write access to the isolated checkout can disable Git's
+        # ctime check, and the mtime-only bypass must reproduce on hosts that track
+        # ctime, so this pins the same configuration the real bypass uses.
+        self.git("config", "core.trustctime", "false", cwd=self.checkout(run))
+        self.git("update-index", "--refresh", cwd=self.checkout(run))
 
     def seal(self, run: pathlib.Path | None = None) -> subprocess.CompletedProcess:
         return self.cli("seal", "--run-dir", str(run or self.run_dir()))
@@ -324,6 +355,11 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(receipt["repair_count"], 0)
         self.assertEqual(receipt["explanations"], ["explain fixture one", "explain fixture two"])
         self.assertEqual(sorted(receipt["reviewed_explanations"]), sorted(receipt["explanations"]))
+        self.assertEqual(
+            receipt["reviewed_explanations"]["explain fixture one"],
+            "attested explanation for: explain fixture one",
+        )
+        self.assertEqual(receipt["subject"]["changed_paths"], sealed["changed_paths"])
         self.assertEqual(receipt["checks"][0]["exit_code"], 0)
         self.assertEqual(receipt["review"]["verdict"], "pass")
         self.assert_ok(self.accept())
@@ -365,7 +401,12 @@ class EvaluationTests(unittest.TestCase):
         self.assertTrue((self.checkout(run) / "app/late.go").exists())
 
     def test_go_event_gate_rejects_missing_pass_skips_and_failures(self) -> None:
-        for label, code in (("missing-pass", EMIT_RUN_ONLY), ("skipped", EMIT_SKIP), ("nonzero", EXIT_THREE)):
+        for label, code in (
+            ("missing-pass", EMIT_RUN_ONLY),
+            ("skipped", EMIT_SKIP),
+            ("skipped-descendant", EMIT_SKIPPED_DESCENDANT),
+            ("nonzero", EXIT_THREE),
+        ):
             with self.subTest(gate=label):
                 run = self.root / ("run-" + label)
                 task = self.task(gates=[self.gate_events(code=code)])
@@ -423,8 +464,13 @@ class EvaluationTests(unittest.TestCase):
             (".github/workflows/ci.yml", "name: weakened\n", "protected asset"),
             (".github/workflows/extra.yml", "name: extra\n", "protected asset"),
             ("AGENTS.md", "# weakened\n", "protected asset"),
+            ("CLAUDE.md", "# weakened\n", "protected asset"),
+            ("contracts/other.json", '{"weakened": true}\n', "protected asset"),
             (".agents/skills/demo/SKILL.md", "# weakened\n", "protected asset"),
             ("source.txt", "weakened\n", "protected asset"),
+            ("app/check_test.py", "def test_placeholder():\n    assert False\n", "baseline test"),
+            ("web/thing.test.ts", "export const thing = 2;\n", "baseline test"),
+            ("tests/sample.txt", "weakened\n", "baseline test"),
         )
         for relative, content, needle in cases:
             with self.subTest(path=relative):
@@ -825,6 +871,306 @@ class EvaluationTests(unittest.TestCase):
         os.chmod(self.checkout(run) / "app/main.go", 0o755)
         second = self.assert_ok(self.seal(run=run))
         self.assertNotEqual(first["subject_hash"], second["subject_hash"])
+
+    def test_content_derived_change_detection_hides_nothing(self) -> None:
+        run = self.root / "run-content-derived"
+        task = self.task(allowed_paths=["**"])
+        self.assert_ok(self.prepare(task=task, run=run))
+        checkout = self.checkout(run)
+
+        # Case A: an assume-unchanged index entry hides a protected edit from git diff.
+        self.edit("source.txt", "weakened source\n", run=run)
+        self.git("update-index", "--assume-unchanged", "source.txt", cwd=checkout)
+        self.assert_refused(self.seal(run=run), "assume-unchanged")
+        self.git("update-index", "--no-assume-unchanged", "source.txt", cwd=checkout)
+        self.write(checkout / "source.txt", FILES["source.txt"])
+        self.git("update-index", "--refresh", cwd=checkout)
+
+        # Case B: a same-size protected edit with a restored timestamp is invisible to
+        # plain git diff until the runner refreshes the worktree mtimes.
+        self.stage_stale_mtime("source.txt", run)
+        self.write(checkout / "source.txt", "tampered content\n")
+        os.utime(checkout / "source.txt", (1577836800, 1577836800))
+        self.assertEqual(self.git_text("diff", "--name-status", cwd=checkout), "")
+        self.assert_refused(self.seal(run=run), "protected asset")
+        self.write(checkout / "source.txt", FILES["source.txt"])
+        os.utime(checkout / "source.txt", (1577836800, 1577836800))
+        self.git("update-index", "--refresh", cwd=checkout)
+
+        # Case C: the same trick on an allowed file must still be reported.
+        self.stage_stale_mtime("app/main.go", run)
+        self.write(checkout / "app/main.go", "package app\n\nfunc Main() int { return 2 }\n")
+        os.utime(checkout / "app/main.go", (1577836800, 1577836800))
+        self.assertEqual(self.git_text("diff", "--name-status", cwd=checkout), "")
+        sealed = self.assert_ok(self.seal(run=run))
+        self.assertEqual([change["path"] for change in sealed["changed_paths"]], ["app/main.go"])
+
+    def test_sealed_changed_paths_are_reverified(self) -> None:
+        run = self.root / "run-reverify-paths"
+        self.accepted_run(run=run)
+        sealed_path = run / "sealed.json"
+        sealed = json.loads(sealed_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [change["path"] for change in sealed["changed_paths"]],
+            ["app/main.go", "app/new_test.go"],
+        )
+        sealed["changed_paths"].append({"path": "docs/notes.md", "status": "M"})
+        sealed_path.write_bytes((json.dumps(sealed, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "changed paths")
+        self.assert_refused(self.accept(run=run), "changed paths")
+
+        sealed["changed_paths"].pop()
+        sealed_path.write_bytes((json.dumps(sealed, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        self.assert_ok(self.accept(run=run))
+
+    def test_go_event_gate_requires_the_package_to_list_named_tests(self) -> None:
+        if shutil.which("go") is None:
+            self.skipTest("the Go toolchain is unavailable")
+        forged = (
+            "package app\n\n"
+            "import (\n"
+            "\t\"fmt\"\n"
+            "\t\"os\"\n"
+            "\t\"testing\"\n"
+            ")\n\n"
+            "func TestMain(m *testing.M) {\n"
+            "\tfmt.Println(\"=== RUN   TestWitnessGo\")\n"
+            "\tfmt.Println(\"--- PASS: TestWitnessGo (0.00s)\")\n"
+            "\tos.Exit(0)\n"
+            "}\n\n"
+            "func TestWitnessGo(t *testing.T) { t.Fatal(\"must not run\") }\n"
+        )
+        honest = "package app\n\nimport \"testing\"\n\nfunc TestWitnessGo(t *testing.T) {}\n"
+        task = self.task(
+            allowed_paths=["app/gate_test.go"],
+            gates=[{
+                "id": "go-gate",
+                "cwd": ".",
+                "argv": ["go", "test", "-json", "-count=1", "./app"],
+                "go_tests": ["TestWitnessGo"],
+                "go_package": "example.com/fixture/app",
+            }],
+        )
+
+        run = self.root / "run-go-forged"
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("app/gate_test.go", forged, run=run)
+        self.assert_ok(self.seal(run=run))
+        checked = self.check(run=run)
+        self.assertNotEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        summary = json.loads(checked.stdout)
+        self.assertFalse(summary["passed"])
+        result = json.loads(
+            (run / "checks" / summary["attempt_id"] / "go-gate" / "result.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("did not list the named Go tests", result["error"])
+        receipt_summary = self.assert_ok(self.receipt(self.usage_rows(), run=run))
+        self.assertFalse(receipt_summary["accepted"])
+        self.assertTrue(
+            any("did not list the named Go tests" in blocker for blocker in receipt_summary["acceptance_blockers"]),
+            receipt_summary["acceptance_blockers"],
+        )
+
+        run = self.root / "run-go-honest"
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("app/gate_test.go", honest, run=run)
+        self.assert_ok(self.seal(run=run))
+        self.assert_ok(self.check(run=run))
+
+    def test_go_list_gate_that_writes_during_execution_stays_verifiable(self) -> None:
+        if shutil.which("go") is None:
+            self.skipTest("the Go toolchain is unavailable")
+        writer = (
+            "package app\n\n"
+            "import (\n"
+            "\t\"os\"\n"
+            "\t\"testing\"\n"
+            ")\n\n"
+            "func TestWitnessGo(t *testing.T) {\n"
+            "\tif err := os.WriteFile(\"wrote_during_gate.txt\", []byte(\"x\"), 0o644); err != nil {\n"
+            "\t\tt.Fatal(err)\n"
+            "\t}\n"
+            "}\n"
+        )
+        task = self.task(
+            allowed_paths=["app/gate_test.go"],
+            gates=[{
+                "id": "go-gate",
+                "cwd": ".",
+                "argv": ["go", "test", "-json", "-count=1", "./app"],
+                "go_tests": ["TestWitnessGo"],
+                "go_package": "example.com/fixture/app",
+            }],
+        )
+        run = self.root / "run-go-writer"
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("app/gate_test.go", writer, run=run)
+        self.assert_ok(self.seal(run=run))
+
+        checked = self.check(run=run)
+        self.assertNotEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        summary = json.loads(checked.stdout)
+        self.assertFalse(summary["passed"])
+        written = self.checkout(run) / "app" / "wrote_during_gate.txt"
+        self.assertTrue(written.exists(), "fixture premise: the gate wrote into the checkout")
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "does not match the sealed subject")
+
+        written.unlink()
+        receipt_summary = self.assert_ok(self.receipt(self.usage_rows(), run=run))
+        self.assertFalse(receipt_summary["accepted"])
+        self.assertTrue(
+            any("not bound to the sealed subject" in blocker for blocker in receipt_summary["acceptance_blockers"]),
+            receipt_summary["acceptance_blockers"],
+        )
+        self.assert_refused(self.accept(run=run), "nonaccepted row")
+
+    def test_mixed_known_and_unknown_costs_keep_totals_null(self) -> None:
+        run = self.root / "run-mixed-costs"
+        usage = self.usage_rows()
+        usage["phases"][1].update(estimated_cost=None, reported_cost=None)
+        usage["phases"][3].update(estimated_cost=None, reported_cost=None)
+        self.accepted_run(run=run, usage=usage)
+        cost = self.stored_receipt(run)["cost"]
+        self.assertIsNone(cost["estimated_cost"])
+        self.assertEqual(cost["known_estimated_cost_subtotal"], 1.5)
+        self.assertIsNone(cost["reported_cost"])
+        self.assertEqual(cost["known_reported_cost_subtotal"], 0)
+        self.assertFalse(cost["accounting_complete"])
+        self.assertEqual(
+            [reason for reason in cost["incomplete_reasons"] if "estimated cost" in reason],
+            ["unknown estimated cost in 2 model phase(s)"],
+        )
+        self.assertTrue(any("no provider-reported cost" in reason for reason in cost["incomplete_reasons"]))
+
+        run = self.root / "run-known-subtotal"
+        usage = self.usage_rows()
+        usage["phases"][3].update(estimated_cost=None, reported_cost=None)
+        self.accepted_run(run=run, usage=usage)
+        cost = self.stored_receipt(run)["cost"]
+        self.assertEqual(cost["known_estimated_cost_subtotal"], 3.0)
+        self.assertIsNone(cost["estimated_cost"])
+        self.assertFalse(cost["accounting_complete"])
+        self.assertIn("unknown estimated cost in 1 model phase(s)", cost["incomplete_reasons"])
+
+        run = self.root / "run-channel-mixed"
+        usage = self.usage_rows()
+        phases = usage["phases"]
+        phases[0].update(reported_cost=1.0, estimated_cost=None)
+        phases[1].update(reported_cost=None, estimated_cost=2.0)
+        for row in (phases[0], phases[1], phases[3]):
+            row["price_version"] = "fixture-price-v1"
+        self.accepted_run(run=run, usage=usage)
+        cost = self.stored_receipt(run)["cost"]
+        self.assertIsNone(cost["reported_cost"])
+        self.assertIsNone(cost["estimated_cost"])
+        self.assertFalse(cost["accounting_complete"])
+        self.assertIn("no provider-reported cost in 2 model phase(s)", cost["incomplete_reasons"])
+        self.assertIn("unknown estimated cost in 1 model phase(s)", cost["incomplete_reasons"])
+
+    def test_usage_requires_the_review_record_identity(self) -> None:
+        run = self.root / "run-review-identity"
+        self.accepted_run(run=run)
+
+        variant = self.usage_rows()
+        variant["phases"][3]["session_ref"] = "other-review-session"
+        variant["phases"][3]["model_ids"][0]["model"] = "other-reviewer-model"
+        self.assert_refused(
+            self.receipt(variant, run=run),
+            "usage review phases do not include the independent review session and reviewer model",
+        )
+
+        variant = self.usage_rows()
+        variant["phases"][1]["session_ref"] = "reviewer-session-1"
+        self.assert_refused(self.receipt(variant, run=run))
+
+    def test_frozen_inputs_are_byte_bound(self) -> None:
+        run = self.root / "run-frozen-bytes"
+        self.accepted_run(run=run)
+        frozen = run / "frozen"
+        for name, needle, command in (
+            ("task.json", "frozen task bytes changed after prepare", "seal"),
+            ("routes.json", "frozen routes bytes changed after prepare", "seal"),
+            ("review.json", "frozen review record changed after it was imported", "receipt"),
+            ("usage.json", "frozen usage rows changed after they were imported", "receipt"),
+        ):
+            with self.subTest(frozen=name):
+                path = frozen / name
+                original = self.read(path)
+                path.write_bytes(b"{}")
+                if command == "seal":
+                    refused = self.seal(run=run)
+                else:
+                    refused = self.receipt(self.usage_rows(), run=run)
+                path.write_bytes(original)
+                self.assertEqual(self.read(path), original)
+                self.assert_refused(refused, needle)
+        self.assert_ok(self.accept(run=run))
+
+    def test_protected_classes_cover_both_directions(self) -> None:
+        run = self.root / "run-protected-slashless"
+        task = self.task(allowed_paths=["docs/notes.md"], protected_paths=["notes.md"])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("docs/notes.md", "changed notes\n", run=run)
+        self.assert_refused(self.seal(run=run), "protected asset")
+        self.assertEqual(self.read(self.checkout(run) / "docs/notes.md").decode("utf-8"), "changed notes\n")
+
+        run = self.root / "run-allowed-slashless"
+        task = self.task(allowed_paths=["notes.md"], protected_paths=[])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("docs/notes.md", "changed notes\n", run=run)
+        sealed = self.assert_ok(self.seal(run=run))
+        self.assertEqual([change["path"] for change in sealed["changed_paths"]], ["docs/notes.md"])
+
+    def test_serialization_refusals_are_not_tracebacks(self) -> None:
+        run = self.root / "run-serialization"
+        self.accepted_run(run=run)
+
+        usage = self.usage_rows()
+        usage["phases"][0]["metadata"] = {"note": "\ud800"}
+        surrogate = self.root / "inputs" / "surrogate-usage.json"
+        surrogate.write_bytes((json.dumps(usage, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(surrogate))
+        self.assert_refused(refused, "refused")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        refused = self.check("--timeout", "-1", run=run)
+        self.assert_refused(refused, "--timeout")
+
+    def test_non_utf8_checkout_paths_are_refused(self) -> None:
+        if os.name != "posix":
+            self.skipTest("non-UTF-8 file names are only constructible on POSIX hosts")
+        run = self.root / "run-non-utf8-path"
+        self.assert_ok(self.prepare(run=run))
+        raw_target = os.path.join(os.fsencode(self.checkout(run)), b"bad-\xff-name.txt")
+        try:
+            with open(raw_target, "wb") as stream:
+                stream.write(b"x\n")
+        except OSError as error:
+            self.skipTest(f"cannot create a non-UTF-8 path name: {error}")
+        self.assert_refused(self.seal(run=run), "not valid UTF-8")
+
+    def test_reparse_point_directories_are_refused(self) -> None:
+        if os.name != "nt":
+            self.skipTest("directory junctions are a Windows construction")
+        run = self.root / "run-reparse"
+        self.assert_ok(self.prepare(run=run))
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "thing.txt").write_bytes(b"outside\n")
+        junction = self.checkout(run) / "linked"
+        created = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+            capture_output=True, text=True, check=False,
+        )
+        if created.returncode != 0:
+            self.skipTest(f"cannot create a directory junction: {created.stdout}{created.stderr}")
+        try:
+            self.assert_refused(self.seal(run=run), "reparse")
+        finally:
+            try:
+                os.rmdir(junction)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

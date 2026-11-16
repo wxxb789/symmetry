@@ -27,6 +27,8 @@ The [positive task](tasks/go-subject-receiver.json) and [escalation task](tasks/
 Task JSON declares base commit, outcome, required explanations, allowed paths, protected paths and exact argv gates.
 The runner uses no shell command interpolation.
 Existing tests, acceptance assets and declared guards remain protected; a new task contract is required for a legitimate protected-asset change.
+Sealing derives the change set from file content instead of Git's cached stat data and refuses a checkout whose index carries assume-unchanged, skip-worktree or other nonstandard entries; symlink targets are compared by object id, and every later step re-verifies the sealed `changed_paths`.
+Protected-asset detection covers `.github/`, `contracts/`, `.agents/skills/`, any `AGENTS.md` or `CLAUDE.md` basename, filenames matching `_test.go`, `test_*.py`, `_test.py`, `test_*.exs`, `_test.exs`, `*.test.*` or `*.spec.*`, and any path under a `test`, `tests` or `__tests__` directory segment. Other test-shaped assets (for example `conftest.py`, `testutil.go`, `testdata/**` or golden files) are protected only when the task lists them in `protected_paths`.
 
 An evaluation Subject includes actual base/head Git commit IDs and a deterministic source-manifest digest, including tracked, untracked and ignored files, with executable modes bound where the host/Git represent them.
 The manifest distinguishes uncommitted content revisions even when base and head commit IDs are identical.
@@ -38,6 +40,7 @@ Any accepted source edit requires fresh sealing, checks and review; older eviden
 
 `scripts/ci/linux-v2-source-subject.py` qualifies the clean base.
 `scripts/ci/assert-go-test-json.py` requires each named Go test to run once and pass once without skipped descendants.
+For a gate that declares both `go_tests` and `go_package` and runs the `go` executable, the runner additionally derives and executes `go test -list` in the gate directory (top-level test names only) and refuses the gate unless the package's own test binary lists every named test exactly once, so a `TestMain` that prints fabricated events and exits without `m.Run()` is refused.
 A Go command returning exit 0 with no matching tests is not qualification.
 Do not run the evaluation/measurement workflow concurrently with a full test suite on the same host.
 
@@ -88,6 +91,7 @@ python scripts/ci/model-routing-omp-usage.py --session "$PRIVATE_SESSION" --stag
 ```
 
 Append the exported row to the phase array and account for the remaining phases, including coordinator overhead and failed attempts.
+An exported session with no assistant messages, no observed prompt hash or no timestamps, or an assistant identity missing `provider`/`api`, produces a row the receipt validator refuses; record that phase as explicit non-model evidence (non-model reason, empty model/prompt arrays, null tokens and costs) instead of importing the export.
 `receipt` also emits nonaccepted rows for failed-gate runs; `accept` never turns them into success.
 A refused usage import is derived and validated before anything is published, so it leaves the previously frozen usage rows, run record and receipt byte-identical.
 For an escalation, retain the exact failed gate, source Subject, preserved files and handoff instead of changing the task or rerunning a weaker command.
@@ -102,6 +106,7 @@ Receipts also record the runner and reused helper source digests; changing that 
 Account for exploration, implementation, verification, independent review, repair and failed attempts.
 An unperformed model phase is explicit `non_model` evidence, not a zero-dollar model call.
 Unknown tokens, prices and billing stay null with a reason.
+`cached` is `cacheRead` + `cacheWrite` for the same records and is counted separately from `input`; it is not a subset of the input total.
 Keep known subtotals separate from unknown totals, including costs from failed or rejected attempts.
 `review_time` is the recorded reviewer-session elapsed window, including parked coordination intervals, not a claim about active reasoning time.
 An empty `later_defects` array means none recorded through the observation window, not a zero-defect guarantee.
@@ -149,3 +154,5 @@ A process interruption before `attempt.json` is written leaves preserved but unr
 Model usage can still be exported and charged to a subsequent coordinator ledger; the interrupted store is not advertised as automatically resumable.
 Abnormal validator-process termination may also make its record unreadable instead of producing a negative receipt; no validator-crash qualification is claimed.
 Source binding observes the checkout before and after each gate, not transient edits restored inside one gate; stop the worker before handing off to coordinator verification.
+The derived `go test -list` cross-check raises the cost of silent test forgery but cannot defeat a test binary that controls its own stdout and branches on `-test.list`; named-test evidence still depends on the independent review reading the diff of changed test files.
+Session metadata exports safe-token identifiers verbatim unless they are path-like, in which case they are hashed; a secret shaped like an ordinary token cannot be detected by shape, so callers must never pass credential values, prompts or transcripts through these arguments.

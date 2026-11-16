@@ -4,13 +4,18 @@
 Operations:
   prepare  fresh isolated clone of --source at the frozen task base, then freeze
            the exact task and routes bytes in an external run directory
-  seal     bind the checkout (actual base/head plus a deterministic manifest of
-           tracked and nonignored untracked bytes) into an evaluation Subject
+  seal     refuse a checkout whose Git index carries assume-unchanged,
+           skip-worktree or other nonstandard entries, then bind the checkout
+           (actual base/head plus a deterministic manifest) into an evaluation
+           Subject from a content-derived comparison against the frozen base tree
   check    execute every frozen gate argv without a shell, capture outputs, bind
            the Subject before and after, and require named Go tests through the
-           existing assert-go-test-json.py event gate
+           existing assert-go-test-json.py event gate plus a derived
+           `go test -list` run that proves the named package really lists them
   review   import the coordinator's independent review record for the sealed
-           Subject and the latest passing check attempt
+           Subject and the latest sealed-subject check attempt; that attempt must
+           be complete and passing, and a later failing or incomplete attempt
+           supersedes an earlier pass
   receipt  derive the task receipt (accepted or explicitly nonaccepted) from the
            stored evidence, frozen inputs and the submitted phase usage rows
   accept   recompute the expected receipt from stored evidence and refuse any
@@ -27,6 +32,12 @@ foo.local.go that Go still compiles) cannot mutate without invalidating
 evidence. Build outputs must stay outside the checkout or be cleaned before
 seal; Elixir _build or other ignored artifact directories are deliberately not
 exempted.
+
+Change detection: the sealed change set is derived from content, never from
+cached Git stat data. seal refuses assume-unchanged, skip-worktree and other
+nonstandard index entries, refreshes every worktree mtime so Git must re-hash
+content, compares symlink targets and file modes by blob object id, and
+re-derives the changed path list whenever it re-verifies a sealed Subject.
 """
 
 from __future__ import annotations
@@ -62,6 +73,8 @@ MAX_RECEIPT_BYTES = 16 << 20
 MAX_RESULT_BYTES = 16 << 20
 MAX_CAPTURE_BYTES = 256 << 20
 DEFAULT_TIMEOUT = 1800.0
+GO_LIST_FAILURE_PREFIX = "the package test binary did not list the named Go tests: "
+SOURCE_CHANGED_SUFFIX = "source changed while executing this gate"
 
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -133,6 +146,8 @@ ATTEMPT_ENTRY_KEYS = {
 RESULT_KEYS = {
     "gate_id", "cwd", "argv", "go_tests", "go_package", "exit_code", "timed_out",
     "error", "stdout_sha256", "stderr_sha256", "stdout_bytes", "stderr_bytes",
+    "go_list_argv", "go_list_exit_code", "go_list_stdout_sha256", "go_list_stderr_sha256",
+    "go_list_stdout_bytes", "go_list_stderr_bytes",
     "validator", "subject_hash_before", "subject_hash_after", "passed",
 }
 VALIDATOR_KEYS = {"argv", "exit_code", "stdout_sha256", "stderr_sha256", "stdout_bytes", "stderr_bytes"}
@@ -192,7 +207,16 @@ def strict_json(raw: bytes, source: str, limit: int) -> Any:
 
 
 def canonical_json(value: Any) -> bytes:
-    return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False).encode("utf-8") + b"\n"
+    try:
+        text = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False)
+    except RecursionError:
+        raise Refused("value nests too deeply to serialize")
+    except UnicodeEncodeError:
+        raise Refused("value contains text that is not valid UTF-8")
+    try:
+        return text.encode("utf-8") + b"\n"
+    except UnicodeEncodeError:
+        raise Refused("value contains text that is not valid UTF-8")
 
 
 def read_bytes(path: pathlib.Path, limit: int, source: str) -> bytes:
@@ -387,10 +411,23 @@ def segments_match(pattern: tuple[str, ...], parts: tuple[str, ...]) -> bool:
 
 
 class PathMatcher:
-    """Match exact relative paths or gitignore-style globs with '**' support."""
+    """Match gitignore-style patterns against forward-slash relative paths.
+
+    A pattern is matched segment by segment: an exact segment matches itself and
+    each segment supports the ``*``/``?``/``[..]`` fnmatch wildcards, while ``**``
+    matches any number of segments at any depth (including none). A pattern that
+    contains a ``/`` is anchored at the checkout root; a pattern without a ``/``
+    matches the basename at any depth, so ``notes.md`` matches both ``notes.md``
+    and ``docs/notes.md``.
+    """
 
     def __init__(self, patterns: Iterable[str]):
-        self.patterns = [tuple(pattern.split("/")) for pattern in patterns]
+        self.patterns = []
+        for pattern in patterns:
+            parts = tuple(pattern.split("/"))
+            if "/" not in pattern:
+                parts = ("**",) + parts
+            self.patterns.append(parts)
 
     def matches(self, path: str) -> bool:
         parts = tuple(path.split("/"))
@@ -440,6 +477,14 @@ def decode_path(raw: bytes) -> str:
         raise Refused("the checkout contains a path that is not valid UTF-8")
 
 
+def utf8_path_key(path: str) -> bytes:
+    """Byte sort key for a checkout path; refuse paths that are not valid UTF-8."""
+    try:
+        return path.encode("utf-8")
+    except UnicodeEncodeError:
+        raise Refused("the checkout contains a path that is not valid UTF-8")
+
+
 def git_config_bool(checkout: pathlib.Path, key: str) -> bool:
     command = ["git", "-c", f"safe.directory={checkout}", "-C", str(checkout), "config", "--bool", key]
     try:
@@ -463,11 +508,21 @@ def iter_source_paths(checkout: pathlib.Path) -> list[str]:
             if candidate.is_symlink():
                 dirnames.remove(dirname)
                 paths.append(candidate.relative_to(checkout).as_posix())
+                continue
+            try:
+                info = candidate.lstat()
+            except OSError as error:
+                raise Refused(f"cannot read source entry {candidate.relative_to(checkout).as_posix()}: {error}")
+            if getattr(info, "st_reparse_tag", 0):
+                raise Refused(
+                    "unsupported reparse-point directory in the checkout: "
+                    + candidate.relative_to(checkout).as_posix()
+                )
         for name in filenames:
             if name == ".git":
                 continue
             paths.append(pathlib.Path(root, name).relative_to(checkout).as_posix())
-    return sorted(paths, key=lambda value: value.encode("utf-8"))
+    return sorted(paths, key=utf8_path_key)
 
 
 def read_worktree_entries(checkout: pathlib.Path) -> dict[str, tuple[str, str, str]]:
@@ -510,25 +565,88 @@ def read_worktree_entries(checkout: pathlib.Path) -> dict[str, tuple[str, str, s
 
 def manifest_digest(entries: dict[str, tuple[str, str, str]]) -> tuple[str, int]:
     hasher = hashlib.sha256()
-    for path in sorted(entries, key=lambda value: value.encode("utf-8")):
+    for path in sorted(entries, key=utf8_path_key):
         mode, kind, digest = entries[path]
         hasher.update(mode.encode("ascii") + b"\0" + kind.encode("ascii") + b"\0")
-        hasher.update(path.encode("utf-8") + b"\0" + digest.encode("ascii") + b"\0")
+        hasher.update(utf8_path_key(path) + b"\0" + digest.encode("ascii") + b"\0")
     return "sha256:" + hasher.hexdigest(), len(entries)
 
 
-def list_base_paths(checkout: pathlib.Path, base: str) -> set[str]:
-    paths: set[str] = set()
+def read_base_tree(checkout: pathlib.Path, base: str) -> dict[str, tuple[str, str]]:
+    """Base commit blob entries: path -> (mode, object id)."""
+    entries: dict[str, tuple[str, str]] = {}
     for record in git_output(str(checkout), "ls-tree", "--full-tree", "-r", "-z", base).split(b"\0"):
         if not record:
             continue
         header, path_bytes = record.split(b"\t", 1)
-        _mode, kind, _object = header.split(b" ", 2)
+        fields = header.split(b" ", 2)
+        if len(fields) != 3:
+            raise Refused("unexpected git ls-tree output")
+        mode, kind, object_id = fields
         path = decode_path(path_bytes)
         if kind != b"blob":
             raise Refused(f"the base tree contains a non-blob or submodule entry: {path}")
-        paths.add(path)
-    return paths
+        try:
+            mode_text = mode.decode("ascii")
+            object_text = object_id.decode("ascii")
+        except UnicodeDecodeError:
+            raise Refused(f"unexpected git ls-tree output for {path}")
+        if not re.fullmatch(r"[0-7]{6}", mode_text) or not re.fullmatch(r"[0-9a-f]{40,64}", object_text):
+            raise Refused(f"unexpected git ls-tree output for {path}")
+        entries[path] = (mode_text, object_text)
+    return entries
+
+
+def list_base_paths(checkout: pathlib.Path, base: str) -> set[str]:
+    return set(read_base_tree(checkout, base))
+
+
+def refuse_index_hacks(checkout: pathlib.Path) -> None:
+    """Refuse index entries whose flags can hide worktree content from git diff."""
+    suspect: list[str] = []
+    for record in git_output(str(checkout), "ls-files", "-v", "-z").split(b"\0"):
+        if not record:
+            continue
+        if record[:1] == b"H":
+            continue
+        suspect.append(decode_path(record[2:] if record[1:2] == b" " else record[1:]))
+    if suspect:
+        raise Refused(
+            "seal refuses a checkout whose Git index carries assume-unchanged, skip-worktree or other "
+            "nonstandard entries; re-create the isolated checkout: " + ", ".join(suspect[:5])
+        )
+
+
+def refresh_worktree_mtimes(checkout: pathlib.Path) -> None:
+    """Touch every worktree file so Git re-hashes content instead of trusting stat."""
+    for path in iter_source_paths(checkout):
+        target = pathlib.Path(checkout, *path.split("/"))
+        try:
+            info = target.lstat()
+        except OSError as error:
+            raise Refused(f"cannot read source entry {path}: {error}")
+        if stat.S_ISLNK(info.st_mode):
+            continue
+        try:
+            os.utime(target, None)
+        except OSError as error:
+            raise Refused(f"cannot refresh the worktree mtime for {path}: {error}")
+
+
+def blob_object_id(payload: bytes, object_format: str) -> str:
+    hasher = hashlib.new(object_format)
+    hasher.update(b"blob " + str(len(payload)).encode("ascii") + b"\0")
+    hasher.update(payload)
+    return hasher.hexdigest()
+
+
+def symlink_blob_entry(path: str, target: pathlib.Path, object_format: str) -> tuple[str, str]:
+    """Blob (mode, object id) of one worktree symlink, for hidden target-swap checks."""
+    try:
+        payload = os.fsencode(os.readlink(target))
+    except OSError as error:
+        raise Refused(f"cannot read symlink {path}: {error}")
+    return "120000", blob_object_id(payload, object_format)
 
 
 def verify_base_commit(checkout: pathlib.Path, base: str) -> None:
@@ -557,6 +675,9 @@ def compute_subject(checkout: pathlib.Path, task_id: str, base: str, head: str) 
 
 
 def collect_changes(checkout: pathlib.Path, base: str) -> dict[str, set[str]]:
+    refuse_index_hacks(checkout)
+    base_tree = read_base_tree(checkout, base)
+    refresh_worktree_mtimes(checkout)
     changes: dict[str, set[str]] = {}
     for arguments in (
         ("diff", "--no-renames", "--name-status", "-z", base, "--"),
@@ -569,12 +690,32 @@ def collect_changes(checkout: pathlib.Path, base: str) -> dict[str, set[str]]:
             changes.setdefault(decode_path(tokens[index + 1]), set()).add(
                 tokens[index].decode("ascii", "replace")[:1]
             )
-    base_paths = list_base_paths(checkout, base)
+    base_paths = set(base_tree)
     worktree_paths = set(iter_source_paths(checkout))
     for path in worktree_paths - base_paths:
         changes.setdefault(path, set()).add("A")
     for path in base_paths - worktree_paths:
         changes.setdefault(path, set()).add("D")
+    # The mtime refresh cannot cover symlinks and git diff cannot be trusted for file
+    # type changes, so those entries are compared explicitly by blob object id.
+    object_format = git_text(str(checkout), "rev-parse", "--show-object-format")
+    if object_format not in ("sha1", "sha256"):
+        raise Refused(f"unsupported Git repository object format: {object_format}")
+    for path in sorted(base_tree, key=utf8_path_key):
+        base_mode, base_object = base_tree[path]
+        target = pathlib.Path(checkout, *path.split("/"))
+        try:
+            info = target.lstat()
+        except OSError:
+            continue  # a missing entry is already reported by the D name-set difference
+        base_is_symlink = base_mode == "120000"
+        worktree_is_symlink = stat.S_ISLNK(info.st_mode)
+        if not base_is_symlink and not worktree_is_symlink:
+            continue
+        if base_is_symlink != worktree_is_symlink:
+            changes.setdefault(path, set()).add("M")
+        elif symlink_blob_entry(path, target, object_format) != (base_mode, base_object):
+            changes.setdefault(path, set()).add("M")
     return changes
 
 
@@ -584,7 +725,7 @@ def validate_changes(
     allowed = PathMatcher(task["allowed_paths"])
     protected = PathMatcher(task["protected_paths"])
     sealed_changes: list[dict[str, str]] = []
-    for path in sorted(changes, key=lambda value: value.encode("utf-8")):
+    for path in sorted(changes, key=utf8_path_key):
         status = "".join(sorted(changes[path]))
         baseline = path in base_files
         if is_protected_asset(path) or protected.matches(path):
@@ -614,6 +755,10 @@ def require_current_subject(
         raise Refused(
             "current source does not match the sealed subject; re-run seal and its checks before continuing"
         )
+    checkout = run_dir / "checkout"
+    recomputed = validate_changes(task, list_base_paths(checkout, task["base"]), collect_changes(checkout, task["base"]))
+    if recomputed != sealed["changed_paths"]:
+        raise Refused("the sealed changed paths no longer match the checkout changes; re-run seal")
     return subject
 
 
@@ -883,6 +1028,34 @@ def review_semantic_blockers(
 # Gate execution and stored evidence verification
 
 
+def go_list_argv(gate: dict[str, Any]) -> list[str] | None:
+    """Derive the `go test -list` cross-check argv for a named-Go-test gate, if any."""
+    if not gate["go_tests"] or not gate["go_package"]:
+        return None
+    if pathlib.PurePath(gate["argv"][0]).name.lower() not in ("go", "go.exe"):
+        return None
+    if any("/" in name for name in gate["go_tests"]):
+        return None
+    pattern = "^(" + "|".join(re.escape(name) for name in gate["go_tests"]) + ")$"
+    return ["go", "test", "-list", pattern, gate["go_package"]]
+
+
+def go_list_detail(expected: list[str], exit_code: int | None, stdout_raw: bytes) -> str | None:
+    """First missing or duplicated expected test name in `go test -list` stdout."""
+    if exit_code is None:
+        return "the list command timed out"
+    if exit_code != 0:
+        return f"the list command exited with {exit_code}"
+    lines = [line.strip() for line in stdout_raw.decode("utf-8", "replace").splitlines()]
+    for name in expected:
+        count = lines.count(name)
+        if count == 0:
+            return f"missing {name}"
+        if count > 1:
+            return f"{name} was listed {count} times"
+    return None
+
+
 def validator_argv(gate_dir: pathlib.Path, gate: dict[str, Any]) -> list[str]:
     argv = [sys.executable, str(VALIDATOR_SCRIPT), str(gate_dir / "stdout.bin")]
     if gate["go_package"]:
@@ -937,6 +1110,30 @@ def execute_gate(
             error = f"could not execute gate argv: {failure}"
     write_bytes(gate_dir / "stdout.bin", stdout_raw)
     write_bytes(gate_dir / "stderr.bin", stderr_raw)
+    list_argv = go_list_argv(gate)
+    list_ran = list_argv is not None and error is None and not timed_out and exit_code == 0
+    list_exit_code: int | None = None
+    list_stdout_raw = b""
+    list_stderr_raw = b""
+    if list_ran:
+        # The event stream alone is not execution-bound: a worker-supplied TestMain can
+        # print fake pass frames and exit without running anything. The package binary
+        # must also list every named test when asked for it.
+        try:
+            listed = subprocess.run(list_argv, cwd=str(cwd), capture_output=True, timeout=timeout, check=False)
+            list_exit_code = listed.returncode
+            list_stdout_raw = listed.stdout
+            list_stderr_raw = listed.stderr
+        except subprocess.TimeoutExpired as expired:
+            list_stdout_raw = expired.stdout or b""
+            list_stderr_raw = expired.stderr or b""
+        except OSError as failure:
+            raise Refused(f"could not run the Go package test list for gate {gate['id']}: {failure}")
+        write_bytes(gate_dir / "go-list.stdout.bin", list_stdout_raw)
+        write_bytes(gate_dir / "go-list.stderr.bin", list_stderr_raw)
+        list_detail = go_list_detail(gate["go_tests"], list_exit_code, list_stdout_raw)
+        if list_detail is not None:
+            error = (error + "; " if error else "") + GO_LIST_FAILURE_PREFIX + list_detail
     if gate["go_tests"] is not None:
         validator = run_validator(gate_dir, gate)
     else:
@@ -960,6 +1157,12 @@ def execute_gate(
         "stderr_sha256": sha256_hex(stderr_raw),
         "stdout_bytes": len(stdout_raw),
         "stderr_bytes": len(stderr_raw),
+        "go_list_argv": list_argv,
+        "go_list_exit_code": list_exit_code if list_ran else None,
+        "go_list_stdout_sha256": sha256_hex(list_stdout_raw) if list_ran else None,
+        "go_list_stderr_sha256": sha256_hex(list_stderr_raw) if list_ran else None,
+        "go_list_stdout_bytes": len(list_stdout_raw) if list_ran else None,
+        "go_list_stderr_bytes": len(list_stderr_raw) if list_ran else None,
         "validator": validator,
         "subject_hash_before": None,
         "subject_hash_after": None,
@@ -968,12 +1171,6 @@ def execute_gate(
 
 
 def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: str) -> dict[str, Any]:
-    expected_files = {"result.json", "stdout.bin", "stderr.bin"}
-    if gate["go_tests"] is not None:
-        expected_files |= {"validator.stdout.bin", "validator.stderr.bin"}
-    actual_files = sorted(entry.name for entry in gate_dir.iterdir())
-    if actual_files != sorted(expected_files):
-        raise Refused(f"the stored evidence for gate {gate['id']} contains unexpected files")
     result_raw = read_bytes(gate_dir / "result.json", MAX_RESULT_BYTES, "gate result")
     result = strict_json(result_raw, "gate result", MAX_RESULT_BYTES)
     require_object(result, "gate result", RESULT_KEYS, RESULT_KEYS)
@@ -986,6 +1183,36 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
     ):
         if result[key] != expected:
             raise Refused(f"the stored result for gate {gate['id']} does not match the frozen gate {key}")
+    exit_code = result["exit_code"]
+    if exit_code is not None and (isinstance(exit_code, bool) or not isinstance(exit_code, int)):
+        raise Refused(f"the stored exit code for gate {gate['id']} is invalid")
+    timed_out = require_bool(result["timed_out"], f"gate {gate['id']} timed_out")
+    error = require_optional_text(result["error"], f"gate {gate['id']} error", max_length=2000)
+    list_argv = go_list_argv(gate)
+    if result["go_list_argv"] != list_argv:
+        raise Refused(f"the stored result for gate {gate['id']} does not match the derived Go test list command")
+    # The derived list run happens exactly when the gate command itself ran and exited 0.
+    # The stored error conflates the gate command error, a reported list failure and the
+    # post-execution "source changed" note, so peel those off before deciding. The note is
+    # appended bare when the gate command itself reported no error.
+    gate_command_error = error
+    if gate_command_error is not None:
+        without_note = gate_command_error
+        if without_note.endswith(SOURCE_CHANGED_SUFFIX):
+            without_note = without_note[: -len(SOURCE_CHANGED_SUFFIX)]
+            if without_note.endswith("; "):
+                without_note = without_note[:-2]
+        if not without_note or without_note.startswith(GO_LIST_FAILURE_PREFIX):
+            gate_command_error = None
+    list_expected = list_argv is not None and exit_code == 0 and gate_command_error is None and not timed_out
+    expected_files = {"result.json", "stdout.bin", "stderr.bin"}
+    if gate["go_tests"] is not None:
+        expected_files |= {"validator.stdout.bin", "validator.stderr.bin"}
+    if list_expected:
+        expected_files |= {"go-list.stdout.bin", "go-list.stderr.bin"}
+    actual_files = sorted(entry.name for entry in gate_dir.iterdir())
+    if actual_files != sorted(expected_files):
+        raise Refused(f"the stored evidence for gate {gate['id']} contains unexpected files")
     subject_bound = (
         result["subject_hash_before"] == sealed_hash and result["subject_hash_after"] == sealed_hash
     )
@@ -995,11 +1222,6 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         raise Refused(f"the stored stdout for gate {gate['id']} changed after it was captured")
     if result["stderr_bytes"] != len(stderr_raw) or result["stderr_sha256"] != sha256_hex(stderr_raw):
         raise Refused(f"the stored stderr for gate {gate['id']} changed after it was captured")
-    exit_code = result["exit_code"]
-    if exit_code is not None and (isinstance(exit_code, bool) or not isinstance(exit_code, int)):
-        raise Refused(f"the stored exit code for gate {gate['id']} is invalid")
-    timed_out = require_bool(result["timed_out"], f"gate {gate['id']} timed_out")
-    error = require_optional_text(result["error"], f"gate {gate['id']} error", max_length=2000)
     passed = subject_bound and error is None and not timed_out and exit_code == 0
     validator_exit: int | None = None
     validator_stdout: str | None = None
@@ -1031,6 +1253,46 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         validator_stderr = validator["stderr_sha256"]
     elif result["validator"] is not None:
         raise Refused(f"gate {gate['id']} stores Go event validation without go_tests")
+    if list_expected:
+        list_exit_code = require_optional_integer(
+            result["go_list_exit_code"], f"gate {gate['id']} go_list_exit_code", -4096
+        )
+        list_stdout_raw = read_bytes(
+            gate_dir / "go-list.stdout.bin", MAX_CAPTURE_BYTES, f"gate {gate['id']} Go test list stdout"
+        )
+        list_stderr_raw = read_bytes(
+            gate_dir / "go-list.stderr.bin", MAX_CAPTURE_BYTES, f"gate {gate['id']} Go test list stderr"
+        )
+        if (
+            result["go_list_stdout_sha256"] is None
+            or result["go_list_stdout_bytes"] is None
+            or result["go_list_stderr_sha256"] is None
+            or result["go_list_stderr_bytes"] is None
+        ):
+            raise Refused(f"gate {gate['id']} does not record the executed Go test list output")
+        if (
+            require_digest(result["go_list_stdout_sha256"], f"gate {gate['id']} go_list_stdout_sha256")
+            != sha256_hex(list_stdout_raw)
+            or require_integer(result["go_list_stdout_bytes"], f"gate {gate['id']} go_list_stdout_bytes")
+            != len(list_stdout_raw)
+            or require_digest(result["go_list_stderr_sha256"], f"gate {gate['id']} go_list_stderr_sha256")
+            != sha256_hex(list_stderr_raw)
+            or require_integer(result["go_list_stderr_bytes"], f"gate {gate['id']} go_list_stderr_bytes")
+            != len(list_stderr_raw)
+        ):
+            raise Refused(f"the stored Go test list output for gate {gate['id']} changed after it was captured")
+        if go_list_detail(gate["go_tests"], list_exit_code, list_stdout_raw) is not None:
+            passed = False
+    else:
+        for key in (
+            "go_list_exit_code",
+            "go_list_stdout_sha256",
+            "go_list_stderr_sha256",
+            "go_list_stdout_bytes",
+            "go_list_stderr_bytes",
+        ):
+            if result[key] is not None:
+                raise Refused(f"gate {gate['id']} records Go test list evidence without an executed list run")
     if result["passed"] is not passed:
         raise Refused(f"the stored result for gate {gate['id']} claims passed={result['passed']} but its evidence says {passed}")
     return {
@@ -1365,9 +1627,8 @@ def build_receipt(
     estimated_values = [row["estimated_cost"] for row in model_rows]
     reported_total = None if not model_rows or any(value is None for value in reported_values) else sum(reported_values)
     estimated_total = None if not model_rows or any(value is None for value in estimated_values) else sum(estimated_values)
-    unknown_cost_rows = sum(
-        1 for row in model_rows if row["reported_cost"] is None and row["estimated_cost"] is None
-    )
+    unknown_reported_rows = sum(1 for row in model_rows if row["reported_cost"] is None)
+    unknown_estimated_rows = sum(1 for row in model_rows if row["estimated_cost"] is None)
     unknown_price_rows = sum(1 for row in model_rows if row["price_version"] is None)
     unknown_provenance_rows = sum(1 for row in model_rows if row["cost_provenance"] is None)
     reasons: list[str] = []
@@ -1379,8 +1640,10 @@ def build_receipt(
         reasons.append(f"missing cost provenance in {unknown_provenance_rows} model phase(s)")
     if unknown_price_rows:
         reasons.append(f"missing price version in {unknown_price_rows} model phase(s)")
-    if unknown_cost_rows:
-        reasons.append(f"unknown cost in {unknown_cost_rows} model phase(s)")
+    if unknown_reported_rows:
+        reasons.append(f"no provider-reported cost in {unknown_reported_rows} model phase(s)")
+    if unknown_estimated_rows:
+        reasons.append(f"unknown estimated cost in {unknown_estimated_rows} model phase(s)")
     findings: list[dict[str, str]] = []
     reviewed_explanations = None
     review_block = None
@@ -1487,6 +1750,7 @@ def build_receipt(
             "manifest_digest": sealed["manifest_digest"],
             "content_revision": sealed["content_revision"],
             "subject_hash": sealed["subject_hash"],
+            "changed_paths": [dict(change) for change in sealed["changed_paths"]],
         },
         "subject_hash": sealed["subject_hash"],
         "review": review_block,
@@ -1569,6 +1833,13 @@ def derive_receipt(run_dir: pathlib.Path, candidate_usage: bytes | None = None) 
         if sha256_hex(usage_raw) != run["usage_sha256"]:
             raise Refused("the frozen usage rows changed after they were imported")
     else:
+        if "usage_sha256" in run:
+            # The candidate may replace the frozen rows, but only after the previously
+            # frozen usage bytes are verified: a tampered snapshot must never be
+            # overwritten and silently accepted as a new import.
+            previous = read_bytes(run_dir / "frozen" / "usage.json", MAX_USAGE_BYTES, "frozen usage JSON")
+            if sha256_hex(previous) != run["usage_sha256"]:
+                raise Refused("the frozen usage rows changed after they were imported")
         usage_raw = candidate_usage
         run = dict(run, usage_sha256=sha256_hex(candidate_usage))
     rows, repair_count, wall_time = validate_usage(usage_raw)
@@ -1691,6 +1962,9 @@ def command_seal(arguments: argparse.Namespace) -> int:
     run_dir = pathlib.Path(arguments.run_dir)
     run = load_run(run_dir)
     task = load_frozen_task(run_dir, run)
+    # Both frozen inputs are bound before anything is sealed: a tampered routes file
+    # must be refused here, not only when a receipt is derived.
+    load_frozen_routes(run_dir, run)
     checkout = run_dir / "checkout"
     verify_base_commit(checkout, task["base"])
     head = require_commit(git_text(str(checkout), "rev-parse", "HEAD"), "checkout HEAD")
@@ -1717,6 +1991,8 @@ def command_seal(arguments: argparse.Namespace) -> int:
 
 
 def command_check(arguments: argparse.Namespace) -> int:
+    if arguments.timeout < 0:
+        raise Refused("--timeout must be >= 0; 0 disables the per-gate timeout")
     run_dir = pathlib.Path(arguments.run_dir)
     run = load_run(run_dir)
     task = load_frozen_task(run_dir, run)
@@ -1744,7 +2020,7 @@ def command_check(arguments: argparse.Namespace) -> int:
         if after != sealed["subject_hash"]:
             result["passed"] = False
             result["error"] = (result["error"] + "; " if result["error"] else "") + \
-                "source changed while executing this gate"
+                SOURCE_CHANGED_SUFFIX
             stopped_early = True
         result_raw = write_json(attempt_dir / gate["id"] / "result.json", result)
         verified.append({
@@ -1939,6 +2215,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except OSError as error:
         print(f"model-routing-evaluation refused: filesystem error: {error}", file=sys.stderr)
+        return 1
+    except (RecursionError, UnicodeError) as error:
+        print(f"model-routing-evaluation refused: {type(error).__name__}: {error}", file=sys.stderr)
         return 1
 
 

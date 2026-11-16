@@ -7,6 +7,7 @@ evidence, not live acceptance evidence for any real session or route.
 """
 
 import hashlib
+import importlib.util
 import json
 import pathlib
 import subprocess
@@ -21,10 +22,28 @@ COST_PROVENANCE = "observed_omp_session_harness_cost_total_sum_estimate_no_provi
 ROW_FIELDS = {"stage", "session_ref", "non_model_reason", "model_ids", "prompt_hashes",
               "tokens", "reported_cost", "estimated_cost", "cost_provenance",
               "price_version", "wall_time", "metadata", "limitations", "known_subtotals"}
+METADATA_FIELDS = frozenset({
+    "source_format", "source_sha256", "credential_route", "routing_provenance",
+    "accounting_complete", "session_ref_source", "records", "session_records",
+    "session_init_records", "session_init", "resolved_model_identity", "model_changes",
+    "thinking_level_changes", "fallback_records", "entry_types", "assistant_messages",
+    "assistant_messages_with_usage", "assistant_messages_with_cost_total",
+    "assistant_messages_without_model_identity", "user_messages", "custom_messages",
+    "usage_includes_all_assistant_attempts", "served_model_differs_from_resolved_model",
+})
 
 
 def prompt_hash(text):
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_runner_module():
+    """Import the acceptance runner so exported rows can be validated in-process."""
+    path = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
+    spec = importlib.util.spec_from_file_location("model_routing_evaluation", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class OmpUsageExtractionTest(unittest.TestCase):
@@ -117,6 +136,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertIsNone(row["price_version"])
         self.assertEqual(row["wall_time"], 5.0)
         metadata = row["metadata"]
+        self.assertEqual(set(metadata), METADATA_FIELDS)
         self.assertEqual(metadata["source_format"], "omp-session-jsonl")
         self.assertEqual(metadata["credential_route"], "safe-metadata")
         self.assertEqual(metadata["routing_provenance"], "synthetic-parser-regression")
@@ -561,6 +581,130 @@ class OmpUsageExtractionTest(unittest.TestCase):
                          "sha256:" + hashlib.sha256(raw).hexdigest())
         self.assertNotIn(str(session), completed.stdout)
         self.assertNotIn("session.jsonl", completed.stdout)
+
+    def non_model_phase(self, stage):
+        return {
+            "stage": stage,
+            "session_ref": None,
+            "non_model_reason": "synthetic parser-regression phase without a model session",
+            "model_ids": [],
+            "prompt_hashes": [],
+            "tokens": {"input": None, "output": None, "cached": None},
+            "reported_cost": None,
+            "estimated_cost": None,
+            "cost_provenance": "not-applicable",
+            "price_version": None,
+            "wall_time": 1.0,
+        }
+
+    def test_secret_like_entry_type_names_are_redacted_and_still_valid(self):
+        records = [
+            self.session_record(),
+            self.init_record(),
+            self.user_record("request with secret-like record types"),
+            self.assistant_record(),
+            {"type": "token_usage", "timestamp": "2026-11-15T10:00:06Z", "input": 1},
+            {"type": CANARY, "timestamp": "2026-11-15T10:00:07Z"},
+        ]
+        completed = self.run_cli(records)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("token_usage", completed.stdout)
+        self.assertNotIn(CANARY, completed.stdout)
+        self.assertNotIn(CANARY, completed.stderr)
+        row = json.loads(completed.stdout)
+
+        def digest(name):
+            return "sha256:" + hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()
+
+        self.assertEqual(row["metadata"]["entry_types"],
+                         {digest(CANARY): 1, digest("token_usage"): 1,
+                          "message": 2, "session": 1, "session_init": 1})
+        self.assertIn("secret_like_entry_type_redacted", row["limitations"])
+
+        # The runner refuses secret-like keys anywhere in a usage row; the exported
+        # row must still pass its own validator unchanged.
+        usage = {"repair_count": 0, "wall_time": 12.0, "phases": [
+            self.non_model_phase("exploration"),
+            row,
+            self.non_model_phase("verification"),
+            self.non_model_phase("review"),
+            self.non_model_phase("repair"),
+            self.non_model_phase("failed_attempt"),
+        ]}
+        module = load_runner_module()
+        rows, repair_count, task_wall_time = module.validate_usage(
+            json.dumps(usage).encode("utf-8"))
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(repair_count, 0)
+        self.assertEqual(task_wall_time, 12.0)
+
+    def test_unrecognized_record_types_make_the_all_attempts_claim_false(self):
+        records = [
+            self.session_record(),
+            self.init_record(),
+            self.assistant_record(),
+            {"type": "model_usage", "timestamp": "2026-11-15T10:00:06Z", "model": "m"},
+        ]
+        row = self.row(records)
+        self.assertFalse(row["metadata"]["usage_includes_all_assistant_attempts"])
+        self.assertIn("unrecognized_record_types", row["limitations"])
+        self.assertEqual(row["metadata"]["entry_types"]["model_usage"], 1)
+        complete = self.row([self.session_record(), self.init_record(), self.assistant_record()])
+        self.assertTrue(complete["metadata"]["usage_includes_all_assistant_attempts"])
+
+    def test_path_like_session_identifiers_are_hashed(self):
+        def digest(value):
+            return "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+
+        agent = "C:/Users/alice/private-project/notes"
+        resolved = "D:/models/weights-v3"
+        records = [
+            self.session_record(),
+            self.init_record(agent=agent, resolvedModel=resolved),
+            self.assistant_record(),
+            {"type": "model_change", "timestamp": "2026-11-15T10:00:06Z",
+             "model": "C:/models/x"},
+        ]
+        completed = self.run_cli(records)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        for value in (agent, resolved, "C:/models/x"):
+            self.assertNotIn(value, completed.stdout)
+            self.assertNotIn(value, completed.stderr)
+        row = json.loads(completed.stdout)
+        self.assertEqual(row["metadata"]["session_init"],
+                         {"agent": digest(agent), "model_role": "lightweight",
+                          "resolved_model": digest(resolved), "read_only": True})
+        self.assertEqual(row["metadata"]["model_changes"],
+                         [{"record": 3, "model": digest("C:/models/x")}])
+        self.assertIsNone(row["metadata"]["resolved_model_identity"])
+        self.assertIsNone(row["metadata"]["served_model_differs_from_resolved_model"])
+        self.assertIn("session_init_identifier_redacted", row["limitations"])
+        self.assertIn("model_identity_redacted", row["limitations"])
+
+        provider_qualified = self.row([
+            self.session_record(),
+            self.init_record(resolvedModel="tencent-litellm/deepseek-v4.1-flash-fast:high"),
+            self.assistant_record(),
+        ])
+        self.assertEqual(provider_qualified["metadata"]["session_init"]["resolved_model"],
+                         "tencent-litellm/deepseek-v4.1-flash-fast:high")
+        self.assertEqual(provider_qualified["metadata"]["resolved_model_identity"],
+                         {"provider": "tencent-litellm", "model": "deepseek-v4.1-flash-fast"})
+        self.assertNotIn("session_init_identifier_redacted", provider_qualified["limitations"])
+
+        served_path = "E:/private/model-weights"
+        completed = self.run_cli([
+            self.session_record(),
+            self.init_record(),
+            self.assistant_record(model=served_path, provider="safe-provider", api="safe-api"),
+        ])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn(served_path, completed.stdout)
+        row = json.loads(completed.stdout)
+        self.assertEqual(row["model_ids"], [{
+            "model": digest(served_path), "provider": "safe-provider",
+            "api": "safe-api", "assistant_messages": 1}])
+        self.assertIn("model_identity_redacted", row["limitations"])
 
 
 if __name__ == "__main__":

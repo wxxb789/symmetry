@@ -13,6 +13,9 @@ the harness's own estimate, never provider billing: reported_cost is always
 null and estimated_cost is only the sum of observed harness cost totals, or
 null when any assistant record lacks one. Missing evidence is never zero.
 
+`cached` totals are cacheRead + cacheWrite for the same records and are counted
+separately from `input` (cached is not a subset of input).
+
 Every instruction-bearing input is bound by a SHA-256 digest without exporting
 its text: the session_init system prompt and task, user messages and
 custom_message instructions. metadata.source_sha256 additionally binds the
@@ -40,6 +43,15 @@ STAGES = ("exploration", "implementation", "verification", "review", "repair", "
 # transcript values through these arguments.
 SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/@~-]{0,127}$")
+
+# Secret-like key detector copied verbatim from scripts/ci/model-routing-evaluation.py
+# (SECRET_KEY_PATTERN) and must stay in sync with it: a session-controlled record
+# type name the runner's secret-key scan would refuse must never be exported raw.
+SECRET_KEY_PATTERN = re.compile(
+    r"(^|[^a-z0-9])(api[_-]?key|apikey|secret|password|passwd|token|bearer"
+    r"|private[_-]?key|access[_-]?key)([^a-z0-9]|$)",
+    re.IGNORECASE,
+)
 
 # Thinking-level suffixes a configured resolved model may carry as
 # `provider/model:effort`. Only these known suffixes are stripped when the
@@ -94,6 +106,25 @@ def safe_token(value):
 
 def safe_label(value):
     return isinstance(value, str) and SAFE_LABEL_RE.match(value) is not None
+
+
+def export_session_identifier(value, message, code, note):
+    """Validate one session-derived identifier and hash path-like values.
+
+    Values that fail safe_token() keep the caller's refusal message, so an
+    unsafe value is still refused rather than partially leaked. Values that fit
+    safe_token() but look like filesystem paths -- backslash-separated,
+    absolute POSIX, or a Windows drive prefix -- are exported as a digest and
+    recorded as a limitation, so a private location never leaves this tool. A
+    provider-qualified model may contain `/` and stays raw: only a leading
+    slash counts as path-like.
+    """
+    refuse(safe_token(value), message)
+    if "\\" in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value) is not None:
+        note(code)
+        digest = "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+        return digest, True
+    return value, False
 
 
 def observed_number(value):
@@ -153,20 +184,33 @@ def resolved_model_identity(resolved_model):
     return {"provider": provider, "model": model}
 
 
-def session_init_metadata(record):
+def recognized_record_type(record_type):
+    """Whether extract_usage consumes this type, exactly as its branches do."""
+    if record_type in ("session", "session_init", "model_change", "message", "custom_message"):
+        return True
+    if "thinking" in record_type and ("level" in record_type or "change" in record_type):
+        return True
+    return "fallback" in record_type
+
+
+def session_init_metadata(record, note):
     values = {}
+    resolved_model_redacted = False
     for source, target in (("agent", "agent"), ("modelRole", "model_role"),
                            ("resolvedModel", "resolved_model")):
         value = record.get(source)
         if value is None:
             continue
-        refuse(safe_token(value), "session_init record has an unsafe value")
-        values[target] = value
+        values[target], redacted = export_session_identifier(
+            value, "session_init record has an unsafe value",
+            "session_init_identifier_redacted", note)
+        if target == "resolved_model" and redacted:
+            resolved_model_redacted = True
     if "readOnly" in record:
         value = record["readOnly"]
         refuse(isinstance(value, bool), "session_init record has an unsafe readOnly value")
         values["read_only"] = value
-    return values
+    return values, resolved_model_redacted
 
 
 def extract_usage(path, stage, credential_route, provenance, price_version):
@@ -181,6 +225,8 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
     session_start = None
     session_records = 0
     session_inits = []
+    resolved_model_redacted = False
+    unrecognized_record_types = False
     prompt_hashes = []
     user_messages = 0
     custom_messages = 0
@@ -223,7 +269,18 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
             refuse(isinstance(record, dict), "session record is not a JSON object")
             record_type = record.get("type")
             refuse(safe_token(record_type), "session record has a missing or unsafe type")
-            entry_types[record_type] = entry_types.get(record_type, 0) + 1
+            if not recognized_record_type(record_type):
+                unrecognized_record_types = True
+                note("unrecognized_record_types")
+            if SECRET_KEY_PATTERN.search(record_type):
+                # A session-controlled type name the runner's secret-key scan would
+                # refuse must never be exported raw; count a digest instead.
+                note("secret_like_entry_type_redacted")
+                entry_type = "sha256:" + hashlib.sha256(
+                    record_type.encode("utf-8", "surrogatepass")).hexdigest()
+            else:
+                entry_type = record_type
+            entry_types[entry_type] = entry_types.get(entry_type, 0) + 1
             entry_id = record.get("id")
             if isinstance(entry_id, str) and entry_id:
                 # Digesting keeps the guard bounded for any id shape; the id itself is
@@ -249,12 +306,13 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                 if session_start is None and timestamp is not None:
                     session_start = timestamp
             elif record_type == "session_init":
-                init_metadata = session_init_metadata(record)
+                init_metadata, init_resolved_model_redacted = session_init_metadata(record, note)
                 if not init_metadata:
                     note("session_init_fields_absent")
                 if session_inits:
                     note("session_init_repeated")
                 else:
+                    resolved_model_redacted = init_resolved_model_redacted
                     prompts = (("systemPrompt", "system_prompt", "system_prompt_absent"),
                                ("task", "task", "task_prompt_absent"))
                     for key, kind, absent in prompts:
@@ -271,8 +329,9 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                     value = record.get(source)
                     if value is None:
                         continue
-                    refuse(safe_token(value), "session model change has an unsafe value")
-                    item[target] = value
+                    item[target], _ = export_session_identifier(
+                        value, "session model change has an unsafe value",
+                        "model_identity_redacted", note)
                 if len(item) > 1:
                     model_changes.append(item)
                 else:
@@ -301,8 +360,9 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                     value = record.get(source)
                     if value is None:
                         continue
-                    refuse(safe_token(value), "session fallback record has an unsafe identity")
-                    item[target] = value
+                    item[target], _ = export_session_identifier(
+                        value, "session fallback record has an unsafe identity",
+                        "model_identity_redacted", note)
                 if len(item) > 1:
                     fallback_records.append(item)
                 else:
@@ -317,15 +377,20 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                     model = payload.get("model")
                     provider = payload.get("provider")
                     api = payload.get("api")
-                    for value in (model, provider, api):
-                        if value is not None:
-                            refuse(safe_token(value),
-                                   "session assistant record has an unsafe model identity")
+                    served_identity = {}
+                    for name, value in (("model", model), ("provider", provider), ("api", api)):
+                        if value is None:
+                            continue
+                        served_identity[name], _ = export_session_identifier(
+                            value, "session assistant record has an unsafe model identity",
+                            "model_identity_redacted", note)
                     if model is None:
                         assistant_without_model += 1
                         note("assistant_model_identity_missing")
                     else:
-                        identity = (model, provider, api)
+                        identity = (served_identity["model"],
+                                    served_identity.get("provider"),
+                                    served_identity.get("api"))
                         served[identity] = served.get(identity, 0) + 1
 
                     usage = payload.get("usage")
@@ -338,6 +403,8 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                             if field in usage:
                                 observed[field] = observed_number(usage[field])
                         if "cacheRead" in observed and "cacheWrite" in observed:
+                            # cached = cacheRead + cacheWrite for the same records; it is
+                            # counted separately from input and is not a subset of input.
                             observed["cached"] = observed["cacheRead"] + observed["cacheWrite"]
                         cost = usage.get("cost")
                         refuse(cost is None or isinstance(cost, dict),
@@ -439,6 +506,10 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
 
     first_init = session_inits[0] if session_inits else None
     resolved_model = first_init.get("resolved_model") if first_init else None
+    if resolved_model_redacted:
+        # The configured identity was a path and was hashed; it must not be
+        # compared or reported as an identity derived from the digest.
+        resolved_model = None
     served_models = [
         {"model": key[0], "provider": key[1], "api": key[2], "assistant_messages": count}
         for key, count in sorted(served.items(), key=lambda item: tuple(part or "" for part in item[0]))
@@ -478,7 +549,9 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
         "assistant_messages_without_model_identity": assistant_without_model,
         "user_messages": user_messages,
         "custom_messages": custom_messages,
-        "usage_includes_all_assistant_attempts": True,
+        "usage_includes_all_assistant_attempts": (
+            assistant_without_model == 0 and not unrecognized_record_types
+        ),
         "served_model_differs_from_resolved_model": served_model_differs,
     }
 
