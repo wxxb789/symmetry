@@ -26,6 +26,24 @@ Billing and price versions remain unknown, with actual model identities, usage
 and explicit partial-coordinator accounting retained; no routing policy,
 model-family independence, native capability or owner `achieve` is promoted.
 
+Goal [0008b](archive/0008b-go-model-routing.md) produced its per-class routing
+evidence and is archived with its contract bytes unchanged. Two frozen Go classes
+(`go-bounded-regression` and `go-native-ownership-settlement`) each ran once per
+workflow arm on the Windows surface: identical frozen tasks, allowed and protected
+paths, gate argv, budgets and packet text, with the strong route reviewing in a
+separate invocation. Both `go-bounded-regression` arms were accepted; both
+`go-native-ownership-settlement` arms ended a single bounded repair round on one
+open medium finding in the same non-durable supervisor `Close` branch, so that
+class stays unresolved instead of recommended. The candidate policy record
+(`promote-lightweight` for the bounded-regression class, `insufficient evidence`
+for the ownership class), the four receipts with their review records, the refusal
+controls and the closure record live under
+[`docs/evaluations/model-routing/`](../evaluations/model-routing/README.md) and
+[`docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`](../evidence/goal-0008b-go-model-routing-2026-11-17.md).
+Billing and price versions remain unknown, single-sample comparisons are reported
+as such, and the result is **produced and awaiting the owner's verdict**: no model
+signs for the owner, and no routing policy is promoted here.
+
 Goal [0006-final](archive/0006-final.md) completed its documentation-only review
 recording on 2026-11-15 and is archived with its text unchanged and its five
 relative link targets rebased for the archive directory; **full-series acceptance
@@ -243,7 +261,7 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 | Goal | Desired outcome |
 | --- | --- |
 | [0008a](archive/0008a-auditable-acceptance-workflow.md) | Auditable model-independent acceptance workflow |
-| [0008b](0008b-go-model-routing.md) | Evidence-based Go model routing |
+| [0008b](archive/0008b-go-model-routing.md) | Archived per-class Go routing evidence; produced and awaiting the owner's verdict |
 | [0008c](0008c-elixir-model-routing.md) | Evidence-based Elixir model routing |
 | [0008d](0008d-typescript-model-routing.md) | TypeScript model routing and the 0008 series release receipt |
 

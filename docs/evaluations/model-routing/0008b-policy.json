@@ -1,0 +1,746 @@
+{
+  "classes": [
+    {
+      "arms": {
+        "mixed": {
+          "acceptance_blockers": [],
+          "accepted": true,
+          "accounting_complete": false,
+          "accounting_incomplete_reasons": [
+            "missing price version in 3 model phase(s)",
+            "no provider-reported cost in 3 model phase(s)"
+          ],
+          "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "check_attempt_id": "attempt-0001",
+          "checks": [
+            {
+              "argv": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "./internal/protocol"
+              ],
+              "cwd": "daemon",
+              "exit_code": 0,
+              "id": "protocol-tests",
+              "passed": true,
+              "validator_exit_code": 0
+            },
+            {
+              "argv": [
+                "go",
+                "vet",
+                "./internal/protocol"
+              ],
+              "cwd": "daemon",
+              "exit_code": 0,
+              "id": "protocol-vet",
+              "passed": true,
+              "validator_exit_code": null
+            }
+          ],
+          "cost_estimated_usd": 0.5885838000000001,
+          "cost_reported_usd": null,
+          "frozen_input_digests": {
+            "review_sha256": "sha256:514dae992eab10f113daca7971cf3be7810b88454cf2eca5d1f9e4c4798af566",
+            "routes_sha256": "sha256:8dae684d23ab045e0708ef1e6238d17c46ed8ba274d563023df72486e2c3d9bf",
+            "task_sha256": "sha256:d3422209a7ece34e235e0d28a52d4dd0af17037b96513bd86d64385190d99d86",
+            "usage_sha256": "sha256:f6361a6bc7898249bd2c042656ccca6c77a088e1e9addca48b272f4e8b27967f"
+          },
+          "gate_weakening": false,
+          "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "model_ids": [
+            {
+              "api": "openai-completions",
+              "model": "deepseek-v4.1-flash-fast",
+              "provider": "tencent-litellm"
+            },
+            {
+              "api": "openai-responses",
+              "model": "gpt-6.1-sol",
+              "provider": "ghc"
+            }
+          ],
+          "model_sessions": [
+            {
+              "cached_tokens": 1118336,
+              "credential_route": "omp-tencent-configured",
+              "estimated_usd": 0.038419800000000004,
+              "input_tokens": 16322,
+              "model_ids": [
+                "deepseek-v4.1-flash-fast"
+              ],
+              "output_tokens": 27936,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.flash_max",
+              "reported_usd": null,
+              "session_ref": "01a1e5fc-e5a5-7058-a4d8-9f5b1ef2f33b",
+              "stage": "implementation",
+              "wall_time_seconds": 190.948
+            },
+            {
+              "cached_tokens": 583049,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.27224570000000003,
+              "input_tokens": 36,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 8202,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e609-3fce-7508-b9a0-f58599717e66",
+              "stage": "review",
+              "wall_time_seconds": 241.852
+            },
+            {
+              "cached_tokens": 634535,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.27791830000000006,
+              "input_tokens": 39,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 7253,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e601-18e1-77bb-a9c0-bf7ed6a27e37",
+              "stage": "failed_attempt",
+              "wall_time_seconds": 513.366
+            }
+          ],
+          "price_versions": [],
+          "prompt_hashes": [
+            {
+              "kind": "custom_message",
+              "sha256": "sha256:5765ab1c09df9feed0d1af66d3cf09c98d5dcb914f829af42cef9c76c6783334"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:17747ad04177d41190a33b867c9d45ac3b4ddd96ec8266d7b9342c69d100ef00"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:47447193c304e16515fcad08b5a5bd6e125fc9141033572a797d0d8455e2fd37"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:93ab5240b7c69c686ef5032ad3d8bd67a2744c310050510c625440df9d6b5614"
+            }
+          ],
+          "receipt_sha256": "sha256:ffe5a86e8355decf17c2714e35baf42f2848d8120a54ca18bd116de50a60d101",
+          "repair_count": 1,
+          "review_attempts_ref": "docs/evaluations/model-routing/0008b-go-bounded-regression-mixed.review-attempts.json",
+          "review_attempts_sha256": "sha256:3ecae2f3b28c7df4bf9d3d30ba168f0874616ecdeb6906a09b3ee89fdd33a789",
+          "review_time_seconds": 241.852,
+          "review_verdict": "pass",
+          "reviewer_findings": [],
+          "reviewer_findings_count": 0,
+          "reviewer_model_id": "gpt-6.1-sol",
+          "reviewer_session_ref": "01a1e609-3fce-7508-b9a0-f58599717e66",
+          "routes": {
+            "reviewer": {
+              "authorization_ref": "0008b reuse_existing authorization: existing configured strong route for independent verification/review; invocation separation recorded, not model-family diversity",
+              "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+              "model_id": "gpt-6.1-sol",
+              "provenance": "omp headless independent reviewer invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; separate invocation and context from the worker"
+            },
+            "worker": {
+              "authorization_ref": "0008b reuse_existing authorization: existing configured lightweight worker route, no new profile, spend cap or credential",
+              "credential_route": "Existing configured tencent-litellm provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+              "model_id": "deepseek-v4.1-flash-fast",
+              "provenance": "omp headless worker invocation with configured role @flash_max (modelRoles.flash_max = tencent-litellm/deepseek-v4.1-flash-fast:max); provider tencent-litellm; api openai-completions; no per-call model override"
+            }
+          },
+          "subject_hash": "sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f",
+          "tokens": {
+            "cached": 2335920,
+            "input": 16397,
+            "output": 43391
+          },
+          "wall_time_seconds": 1090.0
+        },
+        "strong": {
+          "acceptance_blockers": [],
+          "accepted": true,
+          "accounting_complete": false,
+          "accounting_incomplete_reasons": [
+            "missing price version in 2 model phase(s)",
+            "no provider-reported cost in 2 model phase(s)"
+          ],
+          "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "check_attempt_id": "attempt-0001",
+          "checks": [
+            {
+              "argv": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "./internal/protocol"
+              ],
+              "cwd": "daemon",
+              "exit_code": 0,
+              "id": "protocol-tests",
+              "passed": true,
+              "validator_exit_code": 0
+            },
+            {
+              "argv": [
+                "go",
+                "vet",
+                "./internal/protocol"
+              ],
+              "cwd": "daemon",
+              "exit_code": 0,
+              "id": "protocol-vet",
+              "passed": true,
+              "validator_exit_code": null
+            }
+          ],
+          "cost_estimated_usd": 0.5011912000000001,
+          "cost_reported_usd": null,
+          "frozen_input_digests": {
+            "review_sha256": "sha256:03281581db766c5821c3fb0aa11bb8b21107b44e5bcdf0a96c130e2669b49cf0",
+            "routes_sha256": "sha256:c4c2d8452b725cc0b782035a30130aafb4b01291cc280043365434b2006959b9",
+            "task_sha256": "sha256:d3422209a7ece34e235e0d28a52d4dd0af17037b96513bd86d64385190d99d86",
+            "usage_sha256": "sha256:84d7d16ac94a6c30bda6f94fe538a66fc8f7b1cbe66f4db62b85d0ed9947bffe"
+          },
+          "gate_weakening": false,
+          "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "model_ids": [
+            {
+              "api": "openai-responses",
+              "model": "gpt-6.1-sol",
+              "provider": "ghc"
+            }
+          ],
+          "model_sessions": [
+            {
+              "cached_tokens": 484760,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.22456560000000003,
+              "input_tokens": 39,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 5983,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e60e-04c7-75ca-a1ec-c28c180f1501",
+              "stage": "implementation",
+              "wall_time_seconds": 138.562
+            },
+            {
+              "cached_tokens": 615740,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.2766256,
+              "input_tokens": 36,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 7811,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e611-3cdf-7460-8213-d55370063a4e",
+              "stage": "review",
+              "wall_time_seconds": 224.874
+            }
+          ],
+          "price_versions": [],
+          "prompt_hashes": [
+            {
+              "kind": "user_message",
+              "sha256": "sha256:4c3ea58ed3a42208c16899324354576cd300de3b4261d376d45ab8c70544f4dd"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:791e0a1aff952be706dd1ca4b9840f9d4dd6a8b29e3f3a4110e0d90798f42f9d"
+            }
+          ],
+          "receipt_sha256": "sha256:75dd8e15eac13bf484db1d4144d3cb5ff77158e8d5935a5057ee62a97b379698",
+          "repair_count": 0,
+          "review_time_seconds": 224.874,
+          "review_verdict": "pass",
+          "reviewer_findings": [],
+          "reviewer_findings_count": 0,
+          "reviewer_model_id": "gpt-6.1-sol",
+          "reviewer_session_ref": "01a1e611-3cdf-7460-8213-d55370063a4e",
+          "routes": {
+            "reviewer": {
+              "authorization_ref": "0008b reuse_existing authorization: same configured strong route in a separate reviewer invocation; recorded as invocation separation, not model-family diversity",
+              "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+              "model_id": "gpt-6.1-sol",
+              "provenance": "omp headless independent reviewer invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; separate invocation and context from the strong-only worker"
+            },
+            "worker": {
+              "authorization_ref": "0008b reuse_existing authorization: existing configured strong route used for the strong-only baseline arm, no new profile, spend cap or credential",
+              "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+              "model_id": "gpt-6.1-sol",
+              "provenance": "omp headless strong-only worker invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; no per-call model override"
+            }
+          },
+          "subject_hash": "sha256:9301f14f2a6f1f51541a4bd3f730eed4a5773a5b22d02a2d9130a1052f278824",
+          "tokens": {
+            "cached": 1100500,
+            "input": 75,
+            "output": 13794
+          },
+          "wall_time_seconds": 470.0
+        }
+      },
+      "class": "go-bounded-regression",
+      "decision": "promote-lightweight",
+      "decision_basis": "Both arms delivered the same frozen task to an accepted result: the same frozen gates passed on the first gate execution (validator exit 0 for both named tests in both arms) and a separate strong-route reviewer returned verdict pass with no findings for each exact sealed subject, so acceptance did not regress. On equal treatment, the mixed arm's accepted work was cheaper: implementation 0.038420 USD versus 0.224566 USD and total 0.310666 USD versus 0.501191 USD, with essentially equal review cost (0.272246 USD versus 0.276626 USD). Cache-neutral sensitivity, computed from the same recorded phases by summing only the input and output cost subtotals (`known_subtotals.cost.input.sum + known_subtotals.cost.output.sum`, dropping cached-token charges): implementation 0.038420 USD versus 0.059908 USD (as-run margin 0.186146 USD, cache-neutral margin 0.021488 USD) and equal-treatment total 0.120512 USD versus 0.138090 USD (as-run margin 0.190526 USD, cache-neutral margin 0.017578 USD); the direction is unchanged, but the as-run margin is dominated by the strong route's cache charges against a lightweight route that prices cached tokens at zero (see the price-table limitation). The promotion is stated for the tested shape only (an established-pattern regression-coverage edit inside one small pure package) and keeps the strong independent review phase: in both arms review cost exceeded implementation cost, so the workflow that is promoted is mixed-with-strong-review, not lightweight-only. This decision is still awaiting the owner's verdict.",
+      "evidence": [
+        "docs/evaluations/model-routing/0008b-go-bounded-regression-mixed.json (accepted receipt, subject sha256:b10945d7…) and its .review.json",
+        "docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json (accepted receipt, subject sha256:9301f14f…) and its .review.json",
+        "docs/evaluations/model-routing/0008b-controls.json: the unchanged base revision fails the same gates because the required names are absent, and a skipped required test is refused by the named-test validator"
+      ],
+      "frozen_task_sha256": "sha256:d3422209a7ece34e235e0d28a52d4dd0af17037b96513bd86d64385190d99d86",
+      "task_id": "0008b-go-boundary-validator-coverage",
+      "tested_surface": "win32 10.0.26300 / amd64, go1.27.4 windows/amd64"
+    },
+    {
+      "arms": {
+        "mixed": {
+          "acceptance_blockers": [
+            "no independent review record was imported",
+            "task explanations are not attested by an independent review"
+          ],
+          "accepted": false,
+          "accounting_complete": false,
+          "accounting_incomplete_reasons": [
+            "missing price version in 4 model phase(s)",
+            "no provider-reported cost in 4 model phase(s)"
+          ],
+          "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "check_attempt_id": null,
+          "checks": [
+            {
+              "argv": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "./internal/platform"
+              ],
+              "cwd": "daemon",
+              "exit_code": 0,
+              "id": "platform-tests",
+              "passed": true,
+              "validator_exit_code": 0
+            },
+            {
+              "argv": [
+                "go",
+                "vet",
+                "./internal/platform"
+              ],
+              "cwd": "daemon",
+              "exit_code": 0,
+              "id": "platform-vet",
+              "passed": true,
+              "validator_exit_code": null
+            }
+          ],
+          "cost_estimated_usd": 1.3038045,
+          "cost_reported_usd": null,
+          "final_check_attempt_id": "attempt-0002",
+          "frozen_input_digests": {
+            "review_sha256": null,
+            "routes_sha256": "sha256:8dae684d23ab045e0708ef1e6238d17c46ed8ba274d563023df72486e2c3d9bf",
+            "task_sha256": "sha256:287d0ab9769001a058f599e0aeeef20e4fbb3bbe1ea0036e489d67938827773f",
+            "usage_sha256": "sha256:34d484bf6a9b3429d3946a19e8b88418aacb673254d5c092570aeb116ea97d23"
+          },
+          "gate_weakening": null,
+          "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "model_ids": [
+            {
+              "api": "openai-completions",
+              "model": "deepseek-v4.1-flash-fast",
+              "provider": "tencent-litellm"
+            },
+            {
+              "api": "openai-responses",
+              "model": "gpt-6.1-sol",
+              "provider": "ghc"
+            }
+          ],
+          "model_sessions": [
+            {
+              "cached_tokens": 9606656,
+              "credential_route": "omp-tencent-configured",
+              "estimated_usd": 0.3103850999999999,
+              "input_tokens": 419277,
+              "model_ids": [
+                "deepseek-v4.1-flash-fast"
+              ],
+              "output_tokens": 153835,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.flash_max",
+              "reported_usd": null,
+              "session_ref": "01a1e615-e46a-700a-a4c5-c2f08451c83a",
+              "stage": "implementation",
+              "wall_time_seconds": 1151.006
+            },
+            {
+              "cached_tokens": 2182208,
+              "credential_route": "omp-tencent-configured",
+              "estimated_usd": 0.19245389999999996,
+              "input_tokens": 241205,
+              "model_ids": [
+                "deepseek-v4.1-flash-fast"
+              ],
+              "output_tokens": 100077,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.flash_max",
+              "reported_usd": null,
+              "session_ref": "01a1e62f-efca-76b6-bc95-9d7a535d7363",
+              "stage": "repair",
+              "wall_time_seconds": 537.854
+            },
+            {
+              "cached_tokens": 811946,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.38095819999999997,
+              "input_tokens": 39,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 9456,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e628-8c7b-7170-8c36-2adccee0f6fb",
+              "stage": "review",
+              "wall_time_seconds": 459.547
+            },
+            {
+              "cached_tokens": 1052385,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.4200073000000001,
+              "input_tokens": 45,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 11173,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e639-b6d1-7234-9401-2736546ff3b2",
+              "stage": "review",
+              "wall_time_seconds": 366.81
+            }
+          ],
+          "open_findings_count": 1,
+          "price_versions": [],
+          "prompt_hashes": [
+            {
+              "kind": "user_message",
+              "sha256": "sha256:0eedcf66327db4d5a03e6e6a4fc63f99bcc7e4738acf8b24a81ac24fa64df6f6"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:396ffc4e583b3d2f46d404011b1742d5dd46453735ab8677e2fecb6295a34e85"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:526686324e037db60a68750128f96d35df8138a8f039449df37e9bed8a45858f"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:f0ff1d29213d8db3f005abd0fd73840ace6b9fa5387f52b35f62f72dbccecf57"
+            }
+          ],
+          "receipt_sha256": "sha256:7d075a2de40ef3153b680f603ff644a430505621ea1bb2820c46d6b50789aae2",
+          "repair_count": 1,
+          "review_attempts_ref": "docs/evaluations/model-routing/0008b-go-native-ownership-settlement-mixed.review-attempts.json",
+          "review_attempts_sha256": "sha256:21968c119f52bee2581b6d22f6ff6683b8420249c81da81e013ab1ba7ea22ded",
+          "review_time_seconds": 826.357,
+          "review_verdict": null,
+          "reviewer_findings": [],
+          "reviewer_findings_count": 0,
+          "reviewer_model_id": null,
+          "reviewer_session_ref": null,
+          "routes": {
+            "reviewer": {
+              "authorization_ref": "0008b reuse_existing authorization: existing configured strong route for independent verification/review; invocation separation recorded, not model-family diversity",
+              "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+              "model_id": "gpt-6.1-sol",
+              "provenance": "omp headless independent reviewer invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; separate invocation and context from the worker"
+            },
+            "worker": {
+              "authorization_ref": "0008b reuse_existing authorization: existing configured lightweight worker route, no new profile, spend cap or credential",
+              "credential_route": "Existing configured tencent-litellm provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+              "model_id": "deepseek-v4.1-flash-fast",
+              "provenance": "omp headless worker invocation with configured role @flash_max (modelRoles.flash_max = tencent-litellm/deepseek-v4.1-flash-fast:max); provider tencent-litellm; api openai-completions; no per-call model override"
+            }
+          },
+          "subject_hash": "sha256:1ce76d473dc5c7e0f9eb63d0786fa25140c1a8b0426041a5963e039ec9f6c23f",
+          "tokens": {
+            "cached": 13653195,
+            "input": 660566,
+            "output": 274541
+          },
+          "wall_time_seconds": 2734.0
+        },
+        "strong": {
+          "acceptance_blockers": [
+            "no independent review record was imported",
+            "task explanations are not attested by an independent review"
+          ],
+          "accepted": false,
+          "accounting_complete": false,
+          "accounting_incomplete_reasons": [
+            "missing price version in 4 model phase(s)",
+            "no provider-reported cost in 4 model phase(s)"
+          ],
+          "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "check_attempt_id": null,
+          "checks": [
+            {
+              "argv": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "./internal/platform"
+              ],
+              "cwd": "daemon",
+              "exit_code": 0,
+              "id": "platform-tests",
+              "passed": true,
+              "validator_exit_code": 0
+            },
+            {
+              "argv": [
+                "go",
+                "vet",
+                "./internal/platform"
+              ],
+              "cwd": "daemon",
+              "exit_code": 0,
+              "id": "platform-vet",
+              "passed": true,
+              "validator_exit_code": null
+            }
+          ],
+          "cost_estimated_usd": 2.0244585,
+          "cost_reported_usd": null,
+          "final_check_attempt_id": "attempt-0002",
+          "frozen_input_digests": {
+            "review_sha256": null,
+            "routes_sha256": "sha256:c4c2d8452b725cc0b782035a30130aafb4b01291cc280043365434b2006959b9",
+            "task_sha256": "sha256:287d0ab9769001a058f599e0aeeef20e4fbb3bbe1ea0036e489d67938827773f",
+            "usage_sha256": "sha256:ab630cae96978b59d4339500fc5020a9ef646e3114cff48118a82d293fec8b08"
+          },
+          "gate_weakening": null,
+          "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "model_ids": [
+            {
+              "api": "openai-responses",
+              "model": "gpt-6.1-sol",
+              "provider": "ghc"
+            }
+          ],
+          "model_sessions": [
+            {
+              "cached_tokens": 2279462,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.7911402,
+              "input_tokens": 84,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 29131,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e640-09ff-7767-8985-d0e4a12289d5",
+              "stage": "implementation",
+              "wall_time_seconds": 746.039
+            },
+            {
+              "cached_tokens": 705831,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.28857109999999997,
+              "input_tokens": 39,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 8357,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e655-51e9-728f-b085-6cac217619cf",
+              "stage": "repair",
+              "wall_time_seconds": 194.366
+            },
+            {
+              "cached_tokens": 1478518,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.5554874,
+              "input_tokens": 57,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 15526,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e64c-5aab-72fc-a182-fbf6f6b30375",
+              "stage": "review",
+              "wall_time_seconds": 580.779
+            },
+            {
+              "cached_tokens": 1196646,
+              "credential_route": "omp-ghc-configured",
+              "estimated_usd": 0.38925980000000004,
+              "input_tokens": 54,
+              "model_ids": [
+                "gpt-6.1-sol"
+              ],
+              "output_tokens": 8978,
+              "price_version": null,
+              "provenance": "omp.headless.modelRole.sol_high",
+              "reported_usd": null,
+              "session_ref": "01a1e658-fa2c-72a7-8b6e-25d79279c4cf",
+              "stage": "review",
+              "wall_time_seconds": 505.058
+            }
+          ],
+          "open_findings_count": 1,
+          "price_versions": [],
+          "prompt_hashes": [
+            {
+              "kind": "custom_message",
+              "sha256": "sha256:22b9ffac4223f1730799b2239c82421d03996c2bb6f018067b9c6311e71da434"
+            },
+            {
+              "kind": "custom_message",
+              "sha256": "sha256:e900001f4cc31a434cd1b8d5e5787e055e7e1e7d6b15d2d43fe405d9753ec04f"
+            },
+            {
+              "kind": "custom_message",
+              "sha256": "sha256:fa003d62cace6da844da303259986dc91983e0639d1ec5643ca1fb459f09eba3"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:4b8985f0f037d852959d018bacca7642d0b2d2aed0272cc6a42905d42ba4b773"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:a392c21641c124040547f947383d92f745609dd5087a62ac1bb09d23a7dc5a53"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:b2c4492d6ca7180d95cfe6faa800130cc2fb3caf7b679ec9159d85d13609f1f6"
+            },
+            {
+              "kind": "user_message",
+              "sha256": "sha256:d5677a6f3af1304a98460bdf7919b2f282ac3b4bcf68fba819cd960539433c01"
+            }
+          ],
+          "receipt_sha256": "sha256:51ec30dc1f1f2b2b19ef413709290f9a56a29d843a6780f5e1bdae29417deb5e",
+          "repair_count": 1,
+          "review_attempts_ref": "docs/evaluations/model-routing/0008b-go-native-ownership-settlement-strong.review-attempts.json",
+          "review_attempts_sha256": "sha256:38a81c6f5406f85a3b06f6870aafa11ec637d9be86a2aa35dac192bb73801ac8",
+          "review_time_seconds": 1085.837,
+          "review_verdict": null,
+          "reviewer_findings": [],
+          "reviewer_findings_count": 0,
+          "reviewer_model_id": null,
+          "reviewer_session_ref": null,
+          "routes": {
+            "reviewer": {
+              "authorization_ref": "0008b reuse_existing authorization: same configured strong route in a separate reviewer invocation; recorded as invocation separation, not model-family diversity",
+              "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+              "model_id": "gpt-6.1-sol",
+              "provenance": "omp headless independent reviewer invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; separate invocation and context from the strong-only worker"
+            },
+            "worker": {
+              "authorization_ref": "0008b reuse_existing authorization: existing configured strong route used for the strong-only baseline arm, no new profile, spend cap or credential",
+              "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+              "model_id": "gpt-6.1-sol",
+              "provenance": "omp headless strong-only worker invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; no per-call model override"
+            }
+          },
+          "subject_hash": "sha256:d44e99a19199073398dc4c388a2401e1049e9c6f55133075262890a194178065",
+          "tokens": {
+            "cached": 5660457,
+            "input": 234,
+            "output": 61992
+          },
+          "wall_time_seconds": 2154.0
+        }
+      },
+      "class": "go-native-ownership-settlement",
+      "decision": "insufficient-evidence",
+      "decision_basis": "Neither arm produced an accepted result for this class, so no promotion is evidenced in either direction. The mixed arm's first revision passed the frozen gates but the separate strong-route reviewer returned verdict fail with three open findings (two high, one medium); after the arm's single bounded repair round the repaired revision again passed the frozen gates and the reviewer resolved all three previous findings but returned verdict fail with one new medium finding. The strong-only arm's first revision also passed the frozen gates and its reviewer returned verdict fail with one open medium finding; after its single bounded repair round the repaired revision passed the frozen gates, the previous finding was resolved, and the reviewer again returned verdict fail with one new medium finding in the same non-durable supervisor Close branch. Both receipts therefore carry accepted=false; the class stays unresolved for both workflows rather than being recommended, and the observed severity difference between the two first revisions (two high findings for the lightweight route, one medium finding for the strong route) is recorded as a signal for the owner, not as a policy. As-run estimated cost was lower for the mixed arm (1.303805 USD versus 2.024459 USD) but that arm produced no accepted result, so no cost-based routing claim follows from it.",
+      "evidence": [
+        "docs/evaluations/model-routing/0008b-go-native-ownership-settlement-mixed.json (nonaccepted receipt, final subject sha256:1ce76d47…) and its .review-attempts.json",
+        "docs/evaluations/model-routing/0008b-go-native-ownership-settlement-strong.json (nonaccepted receipt, final subject sha256:d44e99a1…) and its .review-attempts.json",
+        "docs/evaluations/model-routing/0008b-controls.json: the unchanged base revision fails the same gates because the required names are absent"
+      ],
+      "frozen_task_sha256": "sha256:287d0ab9769001a058f599e0aeeef20e4fbb3bbe1ea0036e489d67938827773f",
+      "task_id": "0008b-go-close-owned-settle",
+      "tested_surface": "win32 10.0.26300 / amd64, go1.27.4 windows/amd64"
+    }
+  ],
+  "frozen_classes": {
+    "arms": [
+      "mixed: lightweight worker + strong verification/review",
+      "strong-only: strong worker + strong verification/review"
+    ],
+    "classes": [
+      {
+        "class": "go-bounded-regression",
+        "surface": "Windows 10.0.26300 / amd64, go1.27.4 windows/amd64",
+        "task": {
+          "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "bytes": 1660,
+          "sha256": "sha256:d3422209a7ece34e235e0d28a52d4dd0af17037b96513bd86d64385190d99d86",
+          "task_id": "0008b-go-boundary-validator-coverage"
+        }
+      },
+      {
+        "class": "go-native-ownership-settlement",
+        "surface": "Windows 10.0.26300 / amd64, go1.27.4 windows/amd64",
+        "task": {
+          "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+          "bytes": 2822,
+          "sha256": "sha256:287d0ab9769001a058f599e0aeeef20e4fbb3bbe1ea0036e489d67938827773f",
+          "task_id": "0008b-go-close-owned-settle"
+        }
+      }
+    ],
+    "note": "Frozen before either arm ran. Class list fixed 2026-11-17."
+  },
+  "limitations": [
+    "Only the Windows surface was exercised; no cross-platform or cross-host inference is made.",
+    "The strong-only arm's reviewer is a separate invocation of the same model family as its worker: that is invocation separation, not model-family diversity or immunity to correlated mistakes.",
+    "Costs are unversioned harness estimates over observed session usage; provider billing, price versions and post-run coordinator usage are unknown, so `accounting_complete` is false in every receipt.",
+    "Cross-provider price tables differ and are recovered from the recorded per-category subtotals: the lightweight route was priced at 0.30 USD/M input, 1.20 USD/M output and 0.00 USD/M cached tokens (cache-read and cache-write both recorded at cost 0), while the strong route was priced at 2.00 USD/M input, 10.00 USD/M output, 0.10 USD/M cache-read and 2.50 USD/M cache-write. As-run margins therefore include a cache-pricing asymmetry; the cache-neutral sensitivity carried in the `go-bounded-regression` decision basis preserves the direction with a smaller magnitude, and no saving percentage is claimed.",
+    "Prompt identity is bound per arm: worker packets differ only in the workspace path line, and reviewer packets embed each arm's own sealed subject, checkpoint and gate evidence, so prompt hashes are not comparable across arms.",
+    "The local coordinator store is not an adversarial append-only audit store; same-user tampering with coordinator-owned evidence is outside the mechanism's guarantee.",
+    "No owner verdict exists yet: this record states the result as produced and awaiting the owner's review."
+  ],
+  "negative_findings": [
+    "Class `go-bounded-regression` is not cheaper as run: the mixed arm's as-run estimated total is 0.588584 USD against 0.501191 USD for strong-only, because the coordinator's first review packet omitted the repository artifact-language rule and one extra reviewer invocation (0.277918 USD) was charged to the mixed arm. The equal-treatment total (0.310666 USD) excludes that coordinator-caused redo; the promotion decision above rests on the equal-treatment comparison, and the owner must weigh this. The cache-neutral sensitivity in the class decision basis keeps the mixed arm lower on either measure (0.120512 USD versus 0.138090 USD excluding cached-token charges), so the direction does not depend on the free-versus-billed cache accounting.",
+    "Class `go-bounded-regression` cost evidence is estimated, never billed: no provider-reported cost and no price version were observed, so no measured saving exists for either arm.",
+    "Class `go-native-ownership-settlement` regressed or failed acceptance in both arms: the lightweight route's first revision drew two high-severity and one medium open findings and its repaired revision still failed review, while the strong route's first revision and repaired revision each drew one medium open finding in the same non-durable supervisor Close branch. No accepted result exists for this class in this run.",
+    "Class `go-native-ownership-settlement` was also not cheaper for the arm that looked cheaper: the mixed arm's 1.303805 USD as-run estimate bought no accepted result, and the strong-only arm's 2.024459 USD likewise bought none, so neither figure supports a cost claim.",
+    "Both classes are single samples per arm on one host surface. No significance threshold is claimed, and run-order or host-load effects are not separated from model effects.",
+    "The motivating recorded failure for `go-native-ownership-settlement` (`TestCloseStopsOwnedChildAfterLeaderExit`, observed intermittently on hosted CI) was not reproduced locally (10 consecutive passes before the runs); neither arm claims to have fixed it, and class B's gate result therefore does not measure that flake.",
+    "Linux-specific, race, Control, wire-contract and browser gates were not run for this goal; they remain pending with their missing environments and are not replaced by any result here."
+  ],
+  "schema": "symmetry-model-routing-candidate-policy/v1",
+  "scope_statement": "This candidate policy covers only the two frozen Go task classes it measured, on the Windows host surface actually used (win32 10.0.26300, amd64, go1.27.4 windows/amd64): `go-bounded-regression` (established-pattern boundary-validator regression coverage in daemon/internal/protocol) and `go-native-ownership-settlement` (Windows containment ownership settlement in daemon/internal/platform). It makes no claim about untested Go work in this repository, about any Elixir (control/) or TypeScript (browser/, frontend/) work, about other hosts or platforms, or about general quality equality between the two workflow arms. No savings percentage is claimed, and each per-class decision is a statement about the tested task shape only.",
+  "status": "produced and awaiting the owner's verdict"
+}

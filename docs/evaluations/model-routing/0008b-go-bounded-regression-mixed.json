@@ -1,0 +1,671 @@
+{
+  "acceptance_blockers": [],
+  "accepted": true,
+  "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "checks": [
+    {
+      "argv": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "./internal/protocol"
+      ],
+      "cwd": "daemon",
+      "exit_code": 0,
+      "go_package": "github.com/wxxb789/symmetry/daemon/internal/protocol",
+      "go_tests": [
+        "TestValidateMicroUSDEnforcesWireMonetaryContract",
+        "TestValidateCommitPathRejectsUnnormalizedPaths"
+      ],
+      "id": "protocol-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": 0
+    },
+    {
+      "argv": [
+        "go",
+        "vet",
+        "./internal/protocol"
+      ],
+      "cwd": "daemon",
+      "exit_code": 0,
+      "go_package": null,
+      "go_tests": null,
+      "id": "protocol-vet",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    }
+  ],
+  "cost": {
+    "accounting_complete": false,
+    "estimated_cost": 0.5885838000000001,
+    "incomplete_reasons": [
+      "missing price version in 3 model phase(s)",
+      "no provider-reported cost in 3 model phase(s)"
+    ],
+    "known_estimated_cost_subtotal": 0.5885838000000001,
+    "known_reported_cost_subtotal": 0,
+    "price_versions": [],
+    "reported_cost": null
+  },
+  "environment": {
+    "git_version": "git version 2.56.0.windows.4",
+    "machine": "AMD64",
+    "platform": "win32",
+    "python_version": "3.12.10"
+  },
+  "evidence": {
+    "check_attempt": {
+      "attempt_id": "attempt-0001",
+      "attempt_sha256": "sha256:d3609e302d68334dfe8c5fb9548a626d088b3650aec4bce6141677f464045e34",
+      "complete": true,
+      "gates": [
+        {
+          "id": "protocol-tests",
+          "passed": true,
+          "result_sha256": "sha256:75809c8b1fe62a8495ef30f0391e316e62155ae6732a7a286055e3ad0bf9b8aa",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:15ba106e556bd13a17823ab9e5f67c9dc22ba1e9937d0cbf3e17bed9200dd360",
+          "validator_exit_code": 0,
+          "validator_stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_stdout_sha256": "sha256:c15598b7234d3356033b4c7ed86b356ba7d54826c5d83e69b8dcf4eb5e5981ee"
+        },
+        {
+          "id": "protocol-vet",
+          "passed": true,
+          "result_sha256": "sha256:4750f3ec05461a07e63ebeb8f8b746901c65bee145029c90f312e7861eb7faa9",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        }
+      ],
+      "passed": true,
+      "routes_sha256": "sha256:8dae684d23ab045e0708ef1e6238d17c46ed8ba274d563023df72486e2c3d9bf",
+      "subject_hash": "sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f",
+      "task_sha256": "sha256:d3422209a7ece34e235e0d28a52d4dd0af17037b96513bd86d64385190d99d86"
+    },
+    "frozen_review_sha256": "sha256:514dae992eab10f113daca7971cf3be7810b88454cf2eca5d1f9e4c4798af566",
+    "frozen_routes_sha256": "sha256:8dae684d23ab045e0708ef1e6238d17c46ed8ba274d563023df72486e2c3d9bf",
+    "frozen_task_sha256": "sha256:d3422209a7ece34e235e0d28a52d4dd0af17037b96513bd86d64385190d99d86",
+    "frozen_usage_sha256": "sha256:f6361a6bc7898249bd2c042656ccca6c77a088e1e9addca48b272f4e8b27967f",
+    "tooling_sources": {
+      "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+      "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+      "model-routing-evaluation.py": "sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56"
+    }
+  },
+  "explanations": [
+    "Explain which accepted and rejected wire-monetary values the assertions pin, and why the signed-bigint bound is a transport requirement rather than a formatting preference.",
+    "Explain why each rejected commit path is not a normalized relative commit path, and which normalization rule each case would violate."
+  ],
+  "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "language": "go",
+  "later_defects": [],
+  "model_ids": [
+    {
+      "api": "openai-completions",
+      "model": "deepseek-v4.1-flash-fast",
+      "provider": "tencent-litellm"
+    },
+    {
+      "api": "openai-responses",
+      "model": "gpt-6.1-sol",
+      "provider": "ghc"
+    }
+  ],
+  "outcome": "Add real production boundary-validator regression coverage in daemon/internal/protocol: pin the documented wire-monetary contract of ValidateMicroUSD and the documented rejection set of validateCommitPath. Do not change production code, existing tests or gate configuration. The new coverage must call the actual production functions; a test that reimplements their logic, asserts on a copy, or only pins text is not coverage.",
+  "phases": [
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.038419800000000004,
+      "known_subtotals": {
+        "assistant_messages": 32,
+        "assistant_messages_with_cost_total": 32,
+        "assistant_messages_with_usage": 32,
+        "cacheRead": {
+          "messages": 32,
+          "sum": 1118336
+        },
+        "cacheWrite": {
+          "messages": 32,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 32,
+          "sum": 1118336
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 32,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 32,
+            "sum": 0
+          },
+          "input": {
+            "messages": 32,
+            "sum": 0.0048966
+          },
+          "output": {
+            "messages": 32,
+            "sum": 0.0335232
+          },
+          "total": {
+            "messages": 32,
+            "sum": 0.038419800000000004
+          }
+        },
+        "input": {
+          "messages": 32,
+          "sum": 16322
+        },
+        "output": {
+          "messages": 32,
+          "sum": 27936
+        },
+        "reasoningTokens": {
+          "messages": 28,
+          "sum": 19994
+        },
+        "totalTokens": {
+          "messages": 32,
+          "sum": 1162594
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 32,
+        "assistant_messages_with_cost_total": 32,
+        "assistant_messages_with_usage": 32,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-tencent-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 42,
+          "message": 72,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          },
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 3
+          }
+        ],
+        "records": 119,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.flash_max",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:c992d57e48dd9fbd9480f02e2eda6292b63270b2ae3738e78ee2152c1d506240",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 32,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:47447193c304e16515fcad08b5a5bd6e125fc9141033572a797d0d8455e2fd37"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e5fc-e5a5-7058-a4d8-9f5b1ef2f33b",
+      "stage": "implementation",
+      "tokens": {
+        "cached": 1118336,
+        "input": 16322,
+        "output": 27936
+      },
+      "wall_time": 190.948
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.27224570000000003,
+      "known_subtotals": {
+        "assistant_messages": 12,
+        "assistant_messages_with_cost_total": 12,
+        "assistant_messages_with_usage": 12,
+        "cacheRead": {
+          "messages": 12,
+          "sum": 528112
+        },
+        "cacheWrite": {
+          "messages": 12,
+          "sum": 54937
+        },
+        "cached": {
+          "messages": 12,
+          "sum": 583049
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 12,
+            "sum": 0.0528112
+          },
+          "cacheWrite": {
+            "messages": 12,
+            "sum": 0.1373425
+          },
+          "input": {
+            "messages": 12,
+            "sum": 7.199999999999999e-05
+          },
+          "output": {
+            "messages": 12,
+            "sum": 0.08202
+          },
+          "total": {
+            "messages": 12,
+            "sum": 0.27224570000000003
+          }
+        },
+        "input": {
+          "messages": 12,
+          "sum": 36
+        },
+        "output": {
+          "messages": 12,
+          "sum": 8202
+        },
+        "reasoningTokens": {
+          "messages": 10,
+          "sum": 2982
+        },
+        "totalTokens": {
+          "messages": 12,
+          "sum": 591287
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 12,
+        "assistant_messages_with_cost_total": 12,
+        "assistant_messages_with_usage": 12,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-ghc-configured",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 50,
+          "message": 60,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          },
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 3
+          }
+        ],
+        "records": 115,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:5be0a7cd3ad1c80e528ba1c78c453480cbdab7c440f381972afa3992c6018153",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 12,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:93ab5240b7c69c686ef5032ad3d8bd67a2744c310050510c625440df9d6b5614"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e609-3fce-7508-b9a0-f58599717e66",
+      "stage": "review",
+      "tokens": {
+        "cached": 583049,
+        "input": 36,
+        "output": 8202
+      },
+      "wall_time": 241.852
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.27791830000000006,
+      "known_subtotals": {
+        "assistant_messages": 13,
+        "assistant_messages_with_cost_total": 13,
+        "assistant_messages_with_usage": 13,
+        "cacheRead": {
+          "messages": 13,
+          "sum": 575428
+        },
+        "cacheWrite": {
+          "messages": 13,
+          "sum": 59107
+        },
+        "cached": {
+          "messages": 13,
+          "sum": 634535
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 13,
+            "sum": 0.057542800000000005
+          },
+          "cacheWrite": {
+            "messages": 13,
+            "sum": 0.1477675
+          },
+          "input": {
+            "messages": 13,
+            "sum": 7.799999999999999e-05
+          },
+          "output": {
+            "messages": 13,
+            "sum": 0.07253000000000001
+          },
+          "total": {
+            "messages": 13,
+            "sum": 0.27791830000000006
+          }
+        },
+        "input": {
+          "messages": 13,
+          "sum": 39
+        },
+        "output": {
+          "messages": 13,
+          "sum": 7253
+        },
+        "reasoningTokens": {
+          "messages": 10,
+          "sum": 2949
+        },
+        "totalTokens": {
+          "messages": 13,
+          "sum": 641827
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 13,
+        "assistant_messages_with_cost_total": 13,
+        "assistant_messages_with_usage": 13,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-ghc-configured",
+        "custom_messages": 1,
+        "entry_types": {
+          "custom": 45,
+          "custom_message": 1,
+          "message": 56,
+          "model_change": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          },
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 3
+          }
+        ],
+        "records": 107,
+        "resolved_model_identity": null,
+        "routing_provenance": "omp.headless.modelRole.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:0883235e69c2d0f1526a6c0038d971b4b1ab2c73b01de7784a390e7beabcca29",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 4
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 13,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:17747ad04177d41190a33b867c9d45ac3b4ddd96ec8266d7b9342c69d100ef00"
+        },
+        {
+          "index": 0,
+          "kind": "custom_message",
+          "sha256": "sha256:5765ab1c09df9feed0d1af66d3cf09c98d5dcb914f829af42cef9c76c6783334"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e601-18e1-77bb-a9c0-bf7ed6a27e37",
+      "stage": "failed_attempt",
+      "tokens": {
+        "cached": 634535,
+        "input": 39,
+        "output": 7253
+      },
+      "wall_time": 513.366
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "Scoped code exploration happened inside the single charged worker session recorded in the implementation phase; no separate exploration model call was made.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "exploration",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0.0
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "Frozen gates were executed by the coordinator runner in the sealed checkout (scripts/ci/model-routing-evaluation.py check); the phase seconds are the recorded gate wall window.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "verification",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 24.0
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "R1 corrective batch: the separate reviewer was re-invoked under the artifact-language rule; that work is charged through the failed_attempt and review model rows, so no separate repair model call exists.",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "repair",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0.0
+    }
+  ],
+  "prompt_hashes": [
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:5765ab1c09df9feed0d1af66d3cf09c98d5dcb914f829af42cef9c76c6783334"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:17747ad04177d41190a33b867c9d45ac3b4ddd96ec8266d7b9342c69d100ef00"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:47447193c304e16515fcad08b5a5bd6e125fc9141033572a797d0d8455e2fd37"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:93ab5240b7c69c686ef5032ad3d8bd67a2744c310050510c625440df9d6b5614"
+    }
+  ],
+  "repair_count": 1,
+  "review": {
+    "check_attempt_id": "attempt-0001",
+    "evidence_sha256": "sha256:514dae992eab10f113daca7971cf3be7810b88454cf2eca5d1f9e4c4798af566",
+    "gate_weakening": false,
+    "model_id": "gpt-6.1-sol",
+    "routes_sha256": "sha256:8dae684d23ab045e0708ef1e6238d17c46ed8ba274d563023df72486e2c3d9bf",
+    "session_ref": "01a1e609-3fce-7508-b9a0-f58599717e66",
+    "subject_hash": "sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f",
+    "verdict": "pass"
+  },
+  "review_time": 241.852,
+  "reviewed_explanations": {
+    "Explain which accepted and rejected wire-monetary values the assertions pin, and why the signed-bigint bound is a transport requirement rather than a formatting preference.": "Satisfied. In daemon/internal/protocol/goal_boundary_validator_test.go, TestValidateMicroUSDEnforcesWireMonetaryContract directly calls production ValidateMicroUSD and fails on any accept/reject mismatch. It accepts '0', '1', '9200000000000000000', and '9223372036854775807'; rejects the empty string, '00', '01', '-1', '+1', ' 1', '1 ', '1.0', '1e6', fullwidth digits U+FF11/U+FF12/U+FF13, '10000000000000000000', '9223372036854775808', and '9999999999999999999'. These assertions pin canonical nonnegative ASCII decimal strings, no leading zero except zero itself, at most 19 digits, and the inclusive MaxInt64 ceiling. Evidence: contracts/v1/common.schema.json definitions.Microusd, docs/design/protocol.md, the MaxInt64 usage fixture, and goal_validation.go's ValidateMicroUSD, including strconv.ParseUint(value, 10, 63). PostgreSQL signed bigint cannot store larger amounts; decimal-string transport avoids JSON numeric precision loss but does not expand the storage range. Overflow rejection is therefore an interoperability requirement, not a formatting preference. Coordinator attempt-0001 records go test -json -count=1 ./internal/protocol and go vet ./internal/protocol exiting 0; raw test events and validator output show both required tests ran once, passed once, and were not skipped. Read-only require_current_subject verification reproduced the sealed subject and manifest digests and confirmed the sole change is the allowed added test file.",
+    "Explain why each rejected commit path is not a normalized relative commit path, and which normalization rule each case would violate.": "Satisfied. TestValidateCommitPathRejectsUnnormalizedPaths directly calls production validateCommitPath and asserts each result. '/etc/passwd' violates the no-leading-slash relative-path rule; '//etc/passwd' violates that rule and the no-double-separator rule; 'dir//file.go' contains an empty interior segment. 'dir\\file.go' and '\\dir\\file.go' contain forbidden backslashes rather than normalized forward-slash separators. The NUL-bearing 'dir/\\x00file.go' violates the NUL exclusion. '..', '../secret.go', 'dir/../file.go', and 'dir/..' contain an exact parent-traversal segment, respectively alone, first, interior, and last. The empty string violates minLength 1; 1025 ASCII 'a' characters violate the 1024-code-point maximum. The path containing byte 0xff violates production's UTF-8 well-formedness precondition, not a separate regex normalization rule. Positive controls accept 'file.go', 'dir/sub/file.go', 'dir/..hidden/file.go', 'src/文件.go', and 1024 ASCII 'a' characters, preventing blanket rejection and distinguishing '..hidden' from '..'. Evidence: the complete added test, contracts/v1/common.schema.json definitions.CommitPath, and goal_validation.go's UTF-8, rune-length, separator, NUL, and segment checks. The unchanged goal_validation_test.go additionally distinguishes multibyte rune length from byte length. Recorded attempt-0001 events show all added subtests ran and passed; assertions neither copy validator logic nor depend on error wording."
+  },
+  "reviewer_findings": [],
+  "risk_class": "bounded-regression",
+  "routes": {
+    "reviewer": {
+      "authorization_ref": "0008b reuse_existing authorization: existing configured strong route for independent verification/review; invocation separation recorded, not model-family diversity",
+      "credential_route": "Existing configured ghc provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+      "model_id": "gpt-6.1-sol",
+      "provenance": "omp headless independent reviewer invocation with configured role @sol_high (modelRoles.sol_high = ghc/gpt-6.1-sol:high); provider ghc; api openai-responses; separate invocation and context from the worker"
+    },
+    "worker": {
+      "authorization_ref": "0008b reuse_existing authorization: existing configured lightweight worker route, no new profile, spend cap or credential",
+      "credential_route": "Existing configured tencent-litellm provider route observed through authenticated requests on this host; credential metadata only, no credential value exported",
+      "model_id": "deepseek-v4.1-flash-fast",
+      "provenance": "omp headless worker invocation with configured role @flash_max (modelRoles.flash_max = tencent-litellm/deepseek-v4.1-flash-fast:max); provider tencent-litellm; api openai-completions; no per-call model override"
+    }
+  },
+  "schema": "symmetry-model-routing-evaluation/v1",
+  "subject": {
+    "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+    "changed_paths": [
+      {
+        "path": "daemon/internal/protocol/goal_boundary_validator_test.go",
+        "status": "A"
+      }
+    ],
+    "content_revision": "uncommitted:sha256:aa8bedad56a6e1a248d07bb314903d991e342bd3f662c82b81643a92165fe9b0",
+    "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+    "manifest_digest": "sha256:aa8bedad56a6e1a248d07bb314903d991e342bd3f662c82b81643a92165fe9b0",
+    "subject_hash": "sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f"
+  },
+  "subject_hash": "sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f",
+  "task_id": "0008b-go-boundary-validator-coverage",
+  "tokens": {
+    "cached": 2335920,
+    "input": 16397,
+    "known_cached_subtotal": 2335920,
+    "known_input_subtotal": 16397,
+    "known_output_subtotal": 43391,
+    "output": 43391
+  },
+  "wall_time": 1090.0,
+  "workflow": "reuse_existing"
+}

@@ -53,6 +53,16 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
       green in run 43715830442 and on rerun job 132834151127. Revalidate the close/settle
       window; keep the survived-child assertion.
+- [ ] Investigate the load-sensitive omp harness failure
+      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
+      `daemon/internal/harness/omp` (`adapter_final_message_test.go:44`,
+      `context deadline exceeded` after 1.38 s). Observed once during goal 0008b's
+      repository-wide `go test ./...` run (1,797 top-level tests: 1,740 pass,
+      56 skip, 1 fail) while that package alone then reported `ok` at 4.631 s,
+      and not reproduced in isolation: `-count=3` passed on the unchanged base
+      clone `5c2e0ada` and on the working tree. Revalidate the deadline budget
+      under load; keep the assertion.
+
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
       `control/test/symmetry_control/integrations_test.exs:1161` (`assert
@@ -231,3 +241,41 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       Two smaller residuals from the same review live here too: the rollout-off browser case skips in hosted
       CI because it needs `SYMMETRY_GOALS_OFF_URL`, and the retained `:goal_admission_disabled` inline branch
       is unreachable in production because the attention read is not admission-gated.
+
+## Open findings from the 0008b model-routing review
+
+- [ ] Revalidate the open class B finding against
+      `daemon/internal/platform/process_windows.go`: the non-durable
+      `containmentSupervisorStopLease` branch of `Close` caches only the handle
+      release, so after a settlement failure a repeated `Close` can return nil
+      without the proof (HEAD `:535-539`; the sibling `!durableAuthority` branch
+      sits at `:506`). Observed at medium severity as `open` in both 0008b class B
+      reviews (`0008b-go-native-ownership-settlement-{mixed,strong}.review-attempts.json`,
+      findings F4/F2, repaired-revision coordinates `:601-605`/`:524-526` and
+      `:607-612`/`:509-511`) and in the candidate policy's negative findings. The
+      branch predates the 0008b revision; it is reachable through the native
+      Go-test-binary `AttachProcess` route, which returns
+      `noopContainmentSupervisorLease` (`containment_supervisor_windows.go:934`),
+      and the production daemon's durable-authority path is not affected. Keep the
+      finding visible; fix or re-scope in a separate maintenance change.
+
+## Record and documentation hygiene
+
+- [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
+      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
+      instead of rewriting history:
+      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
+      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
+      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
+      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
+      records with that helper and records the rendering in the record
+      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
+      record's quoted digest consistent when the older records are re-published.
+
+- [ ] Revalidate the stale 0008-series prerequisite text:
+      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
+      and 0008c results" while the 0008b candidate policy is produced and awaiting
+      the owner's verdict. Pre-existing and not introduced by the 0008b evidence
+      change; correct the wording once the 0008b verdict lands. (The `0006h`
+      index-row dead link above is the same class of stale documentation and is
+      already tracked.)
