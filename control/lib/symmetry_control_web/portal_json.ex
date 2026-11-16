@@ -189,10 +189,10 @@ defmodule SymmetryControlWeb.PortalJSON do
       project_name: project_name,
       updated_at: iso8601(Map.get(projection, :updated_at)),
       revision: goal_revision(Map.get(projection, :revision)),
-      decisions: Enum.map(Map.get(projection, :decisions, []), &goal_decision(decision_versions, &1)),
+      decisions:
+        Enum.map(Map.get(projection, :decisions, []), &goal_decision(decision_versions, &1)),
       accepted_outcomes: Enum.map(Map.get(projection, :accepted_outcomes, []), &goal_outcome/1),
-      external_waits:
-        Enum.map(Map.get(projection, :external_waits, []), &goal_external_wait/1)
+      external_waits: Enum.map(Map.get(projection, :external_waits, []), &goal_external_wait/1)
     })
   end
 

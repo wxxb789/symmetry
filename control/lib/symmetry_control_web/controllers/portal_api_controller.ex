@@ -49,16 +49,22 @@ defmodule SymmetryControlWeb.PortalApiController do
 
   defp goal_attention(goal_options) do
     case SymmetryControl.Goals.attention(goal_options) do
-      {:ok, page} -> {:ok, %{page: page, unavailable: nil}}
+      {:ok, page} ->
+        {:ok, %{page: page, unavailable: nil}}
+
       # The caller's own input is a request error, not an unavailable feed.
-      {:error, reason} when reason in [:invalid_cursor, :invalid_request] -> {:error, reason}
+      {:error, reason} when reason in [:invalid_cursor, :invalid_request] ->
+        {:error, reason}
+
       # The feed's own admission refusal is the one refusal this page states
       # inline: the page serves the real project blockers and names the refusal.
       {:error, :goal_admission_disabled} ->
         {:ok, %{page: empty_attention_page(), unavailable: :goal_admission_disabled}}
+
       # Anything else is a server fault. It must surface with its real status
       # instead of being reported as a client error inside a 200 response.
-      {:error, _unexpected} -> {:error, :internal_error}
+      {:error, _unexpected} ->
+        {:error, :internal_error}
     end
   end
 
