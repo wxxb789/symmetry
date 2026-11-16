@@ -1,23 +1,27 @@
 # 0007d connection management — evidence receipt
 
 Status: **produced and awaiting the owner's verdict**. Every number below names the subject it was
-measured on. The increments are committed as `86b368a`, `bbc9b6f`, `e67a925`, `43c1004`, `fc3cf8c`
-and `0b868fb` and pushed to the PR branch, so CI and the PR bot review those bytes; earlier
+measured on. The increments are committed and pushed to the PR branch — pre-rebase `86b368a`,
+`bbc9b6f`, `e67a925`, `43c1004`, `fc3cf8c`, `0b868fb`, `0f854fd`, rebased onto `7a92ca4` as
+`0b2e16f`, `28997fb`, `4c0b0f0`, `381775c`, `3d10b91`, `1974260`, `1250976` (§9) — so CI and the PR bot review those bytes; earlier
 revisions of this receipt described an uncommitted tree. Owner acceptance — the owner reviewing the rendered connection flows on real data
 plus this boundary statement against the fixed design's connection page and truthful-status rules —
 is explicitly after this run and not part of the goal's Done when, so this receipt states the result
 as produced and does not rate its own rendering or sign for the owner.
 
-Binding for round 4 (the residuals from the scoped confirmation, on top of the PR-bot round): base
+Binding for round 5 (the rebase onto main, where the merged 0007b met this branch — see §9): base
 `259ea7de7c2c040dd60507f511c03f26ed6452ef`; the increment is committed as `86b368a` (feature) with
 fix rounds `bbc9b6fe876e145b5a434ebcad8ad783428d81a7`, `e67a925b030c470c1fa832b2553bef296136e56e`,
 `43c10042261f12b6c9ad3706c4357b752bd0f9eb` (round 3), `fc3cf8cd65f6dee8da92599d113a17667aed80f2`
-(the PR-bot round) and `0b868fbcadfc32b5a7031a20041ffbefd8343c4f` (round 4, this round — the seven
-committed paths named in §8) on top. **Source subject for round 4**:
-`sha256 fbebda1e2106010966fd18190c0cd09d01fdd60dc7f7cc4d7bc0d15e773c3112`, computed over the same
-kind of path set — 1010 tracked and untracked non-ignored repository paths with `docs/**` excluded
-(1009 in the PR-bot round; the new `browser/scripts/connection-spec-env.test.mjs` is the extra path),
-so a receipt edit cannot invalidate its own binding:
+(the PR-bot round), `0b868fbcadfc32b5a7031a20041ffbefd8343c4f` and
+`0f854fd720b3f1278944182687a08926831b46af` (rounds 4 and 4-b) on top, all rebased onto `7a92ca4`.
+**Source subject for round 5**:
+`sha256 f0681b1873616e2bb8bdb14a6c271342023e6037a74818e35a8cf01fc659d5e4`, computed over the same
+kind of path set — 1049 tracked and untracked non-ignored repository paths with `docs/**` excluded
+(the union adds 0007b's files to round 4's 1010; round 4 measured
+`sha256 fbebda1e2106010966fd18190c0cd09d01fdd60dc7f7cc4d7bc0d15e773c3112` on 1010 paths and round 3
+`0f09025f2cf6c1b84cfda41c95c4f11712e1a994202458515731116082afa4e3` on 1009, kept as historical), so a
+receipt edit cannot invalidate its own binding:
 
 ```sh
 git ls-files --cached --others --exclude-standard -z | grep -zv '^docs/' | sort -z | xargs -0 sha256sum | sha256sum
@@ -325,3 +329,53 @@ scripts failed" warning because the public registry is unreachable on this host 
 `node_modules` matches this lockfile, unchanged from the base. Control and contract packages are not
 touched by the PR-bot round or round 4, so the `845/846` control number and the contract counts keep
 the revisions named in their rows.
+
+## 9. Round 5 — the rebase onto main (union with the merged 0007b)
+
+Merging 0007b (`7a92ca4`) left this PR conflicted: GitHub reported `DIRTY/CONFLICTING` and ran no checks,
+because the branch's own base (`259ea7d`) no longer fast-forwards. The seven commits were therefore
+rebased onto `7a92ca4` (`86b368a→0b2e16f`, `bbc9b6f→28997fb`, `e67a925→4c0b0f0`, `43c1004→381775c`,
+`fc3cf8c→3d10b91`, `0b868fb→1974260`, `0f854fd→1250976`; subjects unchanged, no squash, no reword).
+Fourteen files conflicted and were resolved as the **union** of the two features — no entry, schema,
+fixture, route, allowlist case or test from either side was dropped:
+
+| File | Resolution |
+| --- | --- |
+| `browser/README.md` | both acceptance sections kept (0007b's read views, then 0007d's connections) |
+| `contracts/README.md` | both prose blocks, with the read-projection sentence naming all four decoders and the numeric-lexeme sentence covering the union |
+| `contracts/fixtures/manifest.json` | union corpus: 0007b's 219 entries plus the five `connections-read` fixtures |
+| `contracts/scripts/check.mjs`, `check-effect.mjs`, `generate.mjs` | one four-member read-projection set (`workspace-read`, `work-detail-read`, `work-timeline-read`, `connections-read`); schema count 18 on both sides of the check |
+| `control/lib/symmetry_control_web/portal_session.ex` | shell-path alternation union (`attention\|connections\|projects\|work`), 0007d's `connectionId` param rule, and a `shell_query?("/portal/connections", …)` clause inside 0007b's delegated allowlist |
+| `daemon/internal/contracts/schema.go`, `schema_test.go` | `presentationEnvelopes` extended to all four read projections; the superseded single-projection helper deleted; compiled-schema expectation 18 |
+| `daemon/internal/protocol/goal_contract_fixture_test.go` | union switch: 0007d's connections case plus 0007b's combined workspace/work-detail/work-timeline presentation case |
+| `frontend/src/app/application.ts`, `router.tsx`, `shell.tsx` | allowlist union, both routes in one tree, and the union of both sides' imports and query-option helpers |
+| `frontend/src/services/api.ts` | contract type union **plus the one non-marker repair**: the auto-merged `workDetail`/`workTimeline` calls still used the 3-argument `request(...)` against 0007d's 4-argument helper, so both now pass `{ method: "GET" }` — caught by `tsc --noEmit` |
+
+That last row is the only place where a textually clean merge was not semantically clean; the clean
+typecheck and the 116-test frontend suite are the evidence that nothing else of that kind survived.
+
+Verified on the rebased head `1250976` (integrator-run, after rebuilding the frontend bundle that the
+browser run needs):
+
+| Command | Exit | Observed |
+| --- | ---: | --- |
+| `node contracts/scripts/check.mjs` | 0 | `Validated 18 Draft 7 schemas and 224 fixtures` (the union of 0007b's 17/219 and 0007d's connections schemas/fixtures, against ≥ both) |
+| `node contracts/scripts/check-effect.mjs` | 0 | 224 raw fixtures decoded, 220 reached schema validation |
+| `pnpm --offline --pm-on-fail=ignore --filter @symmetry/frontend typecheck` | 0 | `tsc --noEmit`, clean |
+| `pnpm --offline --pm-on-fail=ignore --filter @symmetry/frontend test` | 0 | `Test Files 8 passed (8)`, `Tests 116 passed (116)` — the union of both sides' suites, nothing skipped or conditional |
+| `go test ./internal/contracts ./internal/protocol` (`daemon/`) | 0 | `ok …/internal/contracts 3.973s`, `ok …/internal/protocol 8.168s` |
+| `mix format --check-formatted` / `mix compile --warnings-as-errors` (`control/`) | 0 / 0 | run through `mise exec elixir@1.20.4-otp-29 erlang@29.1.2 --` because the bare shim reports `no version is set`; one file compiled, no warnings |
+| `pwsh -NoProfile -File browser/scripts/run-connection-fixture-tests.ps1` (after `pnpm --filter @symmetry/frontend build`) | 0 | `10 passed (1.5 m)`, five tests × desktop-chromium and mobile-chromium on the new route through the real API, canary scan clean, port released |
+
+Named limits after the union: the work-views browser suites (`portal-work-views`, `workspace-shell`,
+both widths) were last run at 0007b's own merged revision and were **not** re-run after the union;
+live-daemon, compose/restart and the legacy shell specs were not re-run; the Elixir side was exercised
+through `mise exec` for the touched web layer (202 passed in `test/symmetry_control_web`) plus the two
+focused files, not the whole control suite.
+
+Two residual risks the resolving pass recorded and this receipt keeps open rather than smoothing over:
+the `api.ts` arity break shows that a textually clean merge can still be semantically wrong, so any
+later conflict should be re-verified by typecheck and tests rather than by markers; and the frontend
+`safeReturnTo` allowlist is looser than the server's per-path query rules on `/portal/connections`
+(the server stays the authority, so the worst case is a deep link falling back to `/portal`), now
+tracked in `docs/TODO.md` rather than duplicated into the client.

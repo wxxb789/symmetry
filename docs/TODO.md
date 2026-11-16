@@ -53,6 +53,15 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
       green in run 43715830442 and on rerun job 132834151127. Revalidate the close/settle
       window; keep the survived-child assertion.
+- [ ] Investigate the intermittent Control failure `reversed import and delivery updates
+      lock WorkItems in UUID order without deadlocking` in
+      `control/test/symmetry_control/integrations_test.exs:1161` (`assert
+      String.contains?(query, "\"work_items\"")` inside `assert_sync_waiting_on_work_item/3`,
+      with Postgrex connections disconnecting in the same log). Observed in run 43891279765
+      job 133383740181 on the 0008a PR (`839/840 passed, 21 skipped`), green on rerun of the
+      same job (that run then completed successfully). Revalidate whether the captured SQL can
+      be asserted before the sync query is issued; keep the assertion itself and leave the fix
+      to separate maintenance.
 - [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
       `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
       states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
@@ -68,6 +77,17 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
       constraint and labels, and decide in a separate maintenance change whether the states
       need a writer or the vocabulary needs a migration.
+
+- [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
+      the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
+      query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
+      the project id, while `control/lib/symmetry_control_web/portal_session.ex` validates each
+      path's query against `projectId`, `connectionId` or the work-search patterns and narrows a
+      project id to `[A-Za-z0-9_-]+`. The server stays the authority, so the worst case is a deep
+      link falling back to `/portal` rather than an open redirect; observed while completing the
+      0007d rebase union (0007b's client filter and 0007d's server rule met for the first time).
+      Decide whether the client should narrow its filter or the server should accept the extra
+      params, and if the client is narrowed, add a test that keeps the two lists aligned.
 
 - [ ] Investigate the intermittent browser failure `project, resource, work-item,
       filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
