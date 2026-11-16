@@ -15,7 +15,10 @@ defmodule CredentialedProviderWitness do
   alias SymmetryControl.Workspaces.ProjectResource
   alias SymmetryControl.Workspaces.WorkItem
 
-  @fixture "wxxb789/symmetry-0006h-provider-fixture"
+  # Renamed from wxxb789/symmetry-0006h-provider-fixture on 2026-11-16; a GitHub rename keeps the
+  # repository id and node id below, but changes every URL the API returns, so the comparisons in this
+  # file must name the current repository.
+  @fixture "wxxb789/symmetry-provider-sandbox"
   @repository_id 1_457_073_269
   @node_id "R_kgDOVtksdQ"
   @secret ~r/(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]+|Bearer\s+[A-Za-z0-9._~+\/-]{12,})/i
@@ -1151,7 +1154,7 @@ defmodule CredentialedProviderWitness do
 
         "change.update" ->
           url = intent.input["pull_request_url"]
-          ensure!(is_binary(url) and Regex.match?(~r/\Ahttps:\/\/github\.com\/wxxb789\/symmetry-0006h-provider-fixture\/pull\/[1-9][0-9]*\z/, url), "outbound_target_mismatch")
+          ensure!(is_binary(url) and Regex.match?(~r/\Ahttps:\/\/github\.com\/wxxb789\/symmetry-provider-sandbox\/pull\/[1-9][0-9]*\z/, url), "outbound_target_mismatch")
           Map.put(authorization["input"], "pull_request_url", url)
       end
 
@@ -1570,7 +1573,7 @@ defmodule CredentialedProviderWitness do
 end
 
 defmodule CredentialedProviderWitness.HTTP do
-  @root "/repos/wxxb789/symmetry-0006h-provider-fixture"
+  @root "/repos/wxxb789/symmetry-provider-sandbox"
 
   def request(method, url, headers, body \\ nil) do
     uri = URI.parse(url)
@@ -1634,7 +1637,7 @@ defmodule CredentialedProviderWitness.HTTP do
               "change.upsert" -> true
               "change.update" ->
                 uri.path == String.replace(binding["input"]["pull_request_url"],
-                  "https://github.com/wxxb789/symmetry-0006h-provider-fixture/pull/",
+                  "https://github.com/wxxb789/symmetry-provider-sandbox/pull/",
                   @root <> "/pulls/")
               _ -> false
             end
@@ -1658,7 +1661,7 @@ defmodule CredentialedProviderWitness.HTTP do
       List.wrap(body)
       |> Enum.filter(fn pr ->
         is_map(pr) and is_integer(pr["number"]) and pr["number"] > 0 and
-          pr["html_url"] == "https://github.com/wxxb789/symmetry-0006h-provider-fixture/pull/#{pr["number"]}" and
+          pr["html_url"] == "https://github.com/wxxb789/symmetry-provider-sandbox/pull/#{pr["number"]}" and
           get_in(pr, ["head", "sha"]) == binding["subject"]["commit"] and
           get_in(pr, ["head", "ref"]) == binding["target"]["source_branch"] and
           get_in(pr, ["base", "ref"]) == binding["target"]["target_branch"] and
