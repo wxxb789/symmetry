@@ -4,6 +4,10 @@ defmodule SymmetryControl.Integrations do
 
   Provider authorization comes from local CLI sessions and is never persisted
   or included in daemon protocol messages.
+
+  In-flight synchronization markers are presentation only, not ownership or
+  recovery authority. A crashed check may leave one behind; a later check can
+  overwrite it without a timeout or reaper.
   """
 
   import Ecto.Query
@@ -658,6 +662,64 @@ defmodule SymmetryControl.Integrations do
   def execute_accepted_resource_sync(_, _), do: {:error, :invalid_request}
 
   defp sync_connected_resource(resource) do
+    with {:ok, {previous, syncing}} <- mark_resource_syncing(resource) do
+      case sync_marked_resource(syncing) do
+        {:error, :state_conflict} ->
+          case update_sync_marker(syncing,
+                 sync_status: previous.sync_status,
+                 last_checked_at: previous.last_checked_at
+               ) do
+            {:ok, _restored} -> {:error, :state_conflict}
+            {:error, reason} -> {:error, reason}
+          end
+
+        result ->
+          result
+      end
+    end
+  end
+
+  defp mark_resource_syncing(resource) do
+    Repo.transaction(fn ->
+      project =
+        Repo.one(
+          from project in Project,
+            where: project.id == ^resource.project_id,
+            lock: "FOR SHARE"
+        )
+
+      with :ok <- require_active_project(project),
+           locked <-
+             Repo.one(
+               from current in ProjectResource,
+                 where: current.id == ^resource.id,
+                 lock: "FOR UPDATE"
+             ),
+           :ok <- matches_version(locked, resource.lock_version),
+           {:ok, syncing} <-
+             update_sync_marker(locked, sync_status: "syncing", last_checked_at: now()) do
+        {locked, syncing}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp update_sync_marker(resource, attrs) do
+    query =
+      from current in ProjectResource,
+        where: current.id == ^resource.id and current.lock_version == ^resource.lock_version
+
+    # Commit only presentation fields without consuming the edit/finalization
+    # version. The CAS still prevents a marker or rollback from overwriting a
+    # newer edit or finalized check, and provider calls run after this commit.
+    case Repo.update_all(query, set: attrs) do
+      {1, _} -> {:ok, struct(resource, attrs)}
+      {0, _} -> {:error, :stale}
+    end
+  end
+
+  defp sync_marked_resource(resource) do
     with true <- is_binary(resource.connection_id) || {:error, :not_connected},
          connection <- Repo.get!(Connection, resource.connection_id),
          :ok <- require_capability(connection, resource.kind),
@@ -1609,7 +1671,7 @@ defmodule SymmetryControl.Integrations do
                   resource
                   |> ProjectResource.sync_changeset(%{
                     status: "degraded",
-                    sync_status: "failed",
+                    sync_status: if(code == :not_found, do: "stale", else: "failed"),
                     status_message: message,
                     last_checked_at: now()
                   })

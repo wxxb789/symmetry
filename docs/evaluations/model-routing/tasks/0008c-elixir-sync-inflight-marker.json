@@ -1,0 +1,87 @@
+{
+  "task_id": "0008c-elixir-sync-inflight-marker",
+  "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "language": "elixir",
+  "risk_class": "db-concurrency-authority",
+  "workflow": "reuse_existing",
+  "outcome": "A resource synchronization must commit an in-flight marker - sync_status \"syncing\" with last_checked_at updated on the locked resource - before any provider network call for that resource, and then finalize exactly once: \"synced\" on success and the existing failure classification (\"failed\", or \"stale\" only if that classification already exists at the frozen base) on failure. The provider call must stay outside every database transaction, and the marker must be explicitly non-authoritative: no reaper or timeout is added, any later finalization overwrites it, and a run that dies after the marker leaves no authority behind. If a finalization is refused because the project is no longer active (the existing :state_conflict path), the resource must not be left advertising the in-flight marker: that refused sync rolls the marker back to the resource's own pre-sync sync_status and last_checked_at under the same optimistic-lock/CAS rules, without touching any other resource field, so the existing protected archive-race test keeps passing unchanged. Two concurrent synchronizations of the same resource must produce exactly one winner: the loser either observes the newer lock version or fails with {:error, :stale}, and a losing writer must not overwrite the winner's sync_status, status, status_message, metadata, last_checked_at or last_synced_at. The periodic SymmetryControl.Integrations.Syncer must notify completion exactly once per run, only after the run's work has finished. Existing tests, error codes, gates and the named project_resources_sync_status_check constraint stay intact. The five tests must be declared at module level, outside any `describe` block, because the frozen named-test acceptance binds their printed ExUnit descriptions exactly.",
+  "explanations": [
+    "Explain why the in-flight marker is committed before any provider network call, why it must not be authoritative, and how the refused-finalization path rolls it back without weakening the lock/CAS guarantees.",
+    "Explain exactly how a losing concurrent writer is prevented from overwriting the winner, naming the lock/CAS mechanism and the code path that maps its failure to {:error, :stale}."
+  ],
+  "allowed_paths": [
+    "control/lib/symmetry_control/integrations.ex",
+    "control/test/symmetry_control/resource_sync_inflight_marker_test.exs",
+    "control/priv/static/portal/**"
+  ],
+  "protected_paths": [
+    "control/lib/symmetry_control/workspaces/schemas.ex",
+    "control/lib/symmetry_control/integrations/syncer.ex",
+    "control/mix.exs",
+    "control/config/**",
+    "control/priv/repo/migrations/**",
+    "control/test/support/**",
+    "control/test/symmetry_control/integrations_test.exs",
+    "control/test/symmetry_control/integrations/syncer_test.exs",
+    "daemon/**",
+    "contracts/**"
+  ],
+  "gates": [
+    {
+      "id": "goal-receipt-e2e",
+      "cwd": "control",
+      "argv": [
+        "mix",
+        "test",
+        "test/symmetry_control_web/controllers/goal_machine_controller_test.exs",
+        "--only",
+        "goal_receipt_e2e"
+      ],
+      "env": {
+        "POSTGRES_DB": "symmetry_receipt_e2e_bb0f28ec0b9c18de666d9a8ac1def52f",
+        "SYMMETRY_GOAL_RECEIPT_E2E": "1"
+      }
+    },
+    {
+      "id": "format",
+      "cwd": "control",
+      "argv": ["mix", "format", "--check-formatted"]
+    },
+    {
+      "id": "compile",
+      "cwd": "control",
+      "argv": ["mix", "compile", "--warnings-as-errors"]
+    },
+    {
+      "id": "focused-tests",
+      "cwd": "control",
+      "argv": ["mix", "test", "test/symmetry_control/resource_sync_inflight_marker_test.exs"],
+      "exunit_files": ["test/symmetry_control/resource_sync_inflight_marker_test.exs"],
+      "exunit_tests": [
+        "a synchronization commits a syncing marker before the provider call and finalizes once",
+        "concurrent synchronizations produce a single winner and a stale loser that cannot overwrite it",
+        "a failed provider call replaces the in-flight marker with failed synchronization",
+        "an archived project rolls the in-flight marker back to the resource's previous state",
+        "the periodic syncer notifies completion once after the in-flight marker finalizes"
+      ]
+    },
+    {
+      "id": "provider-broker-e2e",
+      "cwd": "control",
+      "argv": ["mix", "test", "test/symmetry_control/provider_broker_e2e_test.exs"],
+      "env": {"SYMMETRY_PROVIDER_BROKER_E2E": "1"},
+      "exunit_files": ["test/symmetry_control/provider_broker_e2e_test.exs"],
+      "exunit_tests": [
+        "GitHub Issue reaches GitHub pull request, review, and Actions projection",
+        "Azure Boards work item reaches GitHub changes and Azure Pipelines projection",
+        "Azure Boards work item reaches Azure Repos, review, and Pipelines projection",
+        "artifact-only Goal validation uses the fixed Git object without a native session"
+      ]
+    },
+    {
+      "id": "full-suite",
+      "cwd": "control",
+      "argv": ["mix", "test"]
+    }
+  ]
+}

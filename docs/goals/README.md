@@ -244,7 +244,7 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 | --- | --- |
 | [0008a](archive/0008a-auditable-acceptance-workflow.md) | Auditable model-independent acceptance workflow |
 | [0008b](0008b-go-model-routing.md) | Evidence-based Go model routing |
-| [0008c](0008c-elixir-model-routing.md) | Evidence-based Elixir model routing |
+| [0008c](archive/0008c-elixir-model-routing.md) | Evidence-based Elixir model routing |
 | [0008d](0008d-typescript-model-routing.md) | TypeScript model routing and the 0008 series release receipt |
 
 ## Achieve-contract amendments
