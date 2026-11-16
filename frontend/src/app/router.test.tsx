@@ -847,4 +847,51 @@ describe("execution history boundaries", () => {
     expect(await screen.findByText("refreshed entry")).toBeVisible();
     expect(reads.timelineBefore).toEqual(["cursor-1", "cursor-2"]);
   });
+
+  it("re-renders the cached older pages when the detail is reopened inside the freshness window", async () => {
+    const user = userEvent.setup();
+    const reads = { details: 0, timelineBefore: [] as string[] };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const requestPath = input instanceof Request ? input.url : String(input);
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.includes("/portal/api/work-items/")) {
+        const url = new URL(requestPath, "http://localhost");
+        if (url.pathname.endsWith("/timeline")) {
+          reads.timelineBefore.push(url.searchParams.get("before") ?? "");
+          return Promise.resolve(new Response(JSON.stringify({ items: [olderEntry], next_before: null })));
+        }
+        reads.details += 1;
+        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
+          id: subjectId,
+          projectId: firstProjectId,
+          title: subjectTitle,
+          nextBefore: "cursor-1",
+        }))));
+      }
+      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
+      return Promise.resolve(new Response(JSON.stringify({
+        selected_project_id: null,
+        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
+        health: { status: "unknown" },
+      })));
+    });
+    renderWorkspace(`/portal/work/${subjectId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: subjectTitle });
+
+    await user.click(screen.getByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("older entry")).toBeVisible();
+    expect(screen.getByText("No older history recorded.")).toBeVisible();
+    expect(reads.details).toBe(1);
+
+    // Return to the project and reopen the same item inside the freshness window:
+    // the detail is served from cache (no new read), and the cached timeline
+    // pages must render again instead of starting from an empty local copy.
+    await user.click(screen.getByRole("button", { name: "Close work detail" }));
+    const list = await screen.findByRole("list", { name: "Work items" });
+    await user.click(within(list).getByRole("link", { name: subjectTitle }));
+    await screen.findByRole("heading", { level: 1, name: subjectTitle });
+    expect(reads.details).toBe(1);
+    expect(await screen.findByText("older entry")).toBeVisible();
+    expect(screen.getByText("No older history recorded.")).toBeVisible();
+  });
 });

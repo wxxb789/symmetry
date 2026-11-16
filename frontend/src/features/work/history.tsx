@@ -26,7 +26,13 @@ function mergeOlderEntries(fetched: readonly TimelineItem[], retained: readonly 
 export function WorkHistory({ workItemId, firstPage, cursor }: { workItemId: string; firstPage: readonly TimelineItem[]; cursor: string | null }) {
   const { application } = useRouteContext({ from: "__root__" });
   const query = useInfiniteQuery(workTimelineOptions(application.api, workItemId, cursor));
-  const [older, setOlder] = useState<{ workItemId: string; entries: readonly TimelineItem[] }>({ workItemId, entries: [] });
+  // Reopening the detail inside the freshness window remounts this component
+  // while the disabled query still holds the pages the reader expanded. The
+  // retained list starts from those cached pages, so the reader's history
+  // survives the remount and a later re-keyed refresh alike.
+  const [older, setOlder] = useState<{ workItemId: string; entries: readonly TimelineItem[] }>(
+    () => ({ workItemId, entries: query.data?.pages.flatMap((page) => page.items) ?? [] }),
+  );
   // Every older page is served by a reader action, so the merge runs when that
   // fetch resolves; a refresh that re-keys the query keeps the expanded entries.
   const retainPages = (data: { readonly pages: readonly WorkTimeline[] } | undefined) => {
