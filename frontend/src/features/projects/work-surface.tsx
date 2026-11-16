@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { AlertCircle } from "lucide-react";
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Project, WorkItem } from "../../services/api";
 import { EmptyState, StatusBadge, statusLabel } from "../../components/workspace";
 import { acceptanceLabel, ciLabel, ciResourcesOf, costHint, costLabel, noBlocker, noReportedResult, ownerKeyLabel, ownerLabel, priorityLabel, reportedResult, type CiResourceLike } from "../work/presentation";
@@ -41,6 +41,53 @@ export interface ViewLinkOptions {
  */
 function focusWorkControl(id: string) {
   document.getElementById(id)?.focus();
+}
+
+/**
+ * A refresh can move the work item the operator is on: the board regroups cards
+ * by state and the list re-sorts, and a re-parented node is removed and
+ * re-inserted, which drops the focused link to `body` even though the same item
+ * stays rendered. The work item id — not the node — is the identity that
+ * survives the regroup: track the work link that holds focus and, when a commit
+ * detaches it without another control taking focus, put focus back on the same
+ * work item's link.
+ */
+function useWorkFocusRestore<T extends HTMLElement>() {
+  const workRoot = useRef<T | null>(null);
+  useLayoutEffect(() => {
+    const root = workRoot.current;
+    if (root === null) return;
+    let focusedWork: { itemId: string; node: HTMLElement } | null = null;
+    const track = (event: FocusEvent) => {
+      const link = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-work-item]") : null;
+      focusedWork = link !== null && root.contains(link) ? { itemId: link.dataset["workItem"] ?? "", node: link } : null;
+    };
+    // The restore keys on the focused node itself being detached, so a commit
+    // that only re-renders the surface never moves focus.
+    const observer = new MutationObserver((records) => {
+      const previous = focusedWork;
+      if (previous === null) return;
+      const detached = records.some((record) =>
+        Array.from(record.removedNodes).some((node) => node === previous.node || node.contains(previous.node)));
+      if (!detached) return;
+      focusedWork = null;
+      const active = document.activeElement;
+      // A control that took focus in this commit (the content heading on a route
+      // change, a dialog, a filter) keeps it; only a detached focus target that
+      // fell back to the document is restored.
+      if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement && active.isConnected) return;
+      for (const link of root.querySelectorAll<HTMLElement>("[data-work-item]")) {
+        if (link.dataset["workItem"] === previous.itemId) {
+          link.focus();
+          return;
+        }
+      }
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    root.addEventListener("focusin", track);
+    return () => { observer.disconnect(); root.removeEventListener("focusin", track); };
+  }, []);
+  return workRoot;
 }
 
 /** Saved list/board projection of one project's work, shared by the project route and the work-detail background. */
@@ -128,9 +175,10 @@ function WorkToolbar({ project, navigation }: { project: Project; navigation: Wo
 }
 
 function WorkRows({ items, search, resources }: { items: readonly WorkItem[]; search: WorkItemSearch; resources: ReadonlyMap<string, CiResourceLike> }) {
-  return <ul className="work-list" aria-label="Work items">
+  const workRoot = useWorkFocusRestore<HTMLUListElement>();
+  return <ul className="work-list" aria-label="Work items" ref={workRoot}>
     {items.map((item) => <li key={item.id} className="work-row">
-      <Link className="work-row-link" to="/work/$workItemId" params={{ workItemId: item.id }} search={search} aria-label={item.title}>
+      <Link className="work-row-link" to="/work/$workItemId" params={{ workItemId: item.id }} search={search} aria-label={item.title} data-work-item={item.id}>
         <WorkRowIdentity item={item} />
         <StatusBadge status={item.status} />
         <WorkRowResult item={item} />
@@ -143,14 +191,15 @@ function WorkRows({ items, search, resources }: { items: readonly WorkItem[]; se
 }
 
 function WorkBoard({ items, search, resources }: { items: readonly WorkItem[]; search: WorkItemSearch; resources: ReadonlyMap<string, CiResourceLike> }) {
-  return <section className="work-board" aria-label="Work board" onKeyDown={moveBoardFocus}>
+  const workRoot = useWorkFocusRestore<HTMLElement>();
+  return <section className="work-board" aria-label="Work board" onKeyDown={moveBoardFocus} ref={workRoot}>
     {boardColumns(items).map((column) => {
       const headingId = `board-column-${column.state.replaceAll("_", "-")}`;
       return <section className="board-column" key={column.state} aria-labelledby={headingId}>
         <div className="board-heading"><h2 id={headingId}>{statusLabel(column.state)}</h2><span className="count">{column.items.length}</span></div>
         <ul className="board-cards">
           {column.items.map((item, index) => <li key={item.id} data-board-card="" data-board-column={column.state} data-board-index={index}>
-            <Link className="board-card" to="/work/$workItemId" params={{ workItemId: item.id }} search={search} aria-label={item.title}>
+            <Link className="board-card" to="/work/$workItemId" params={{ workItemId: item.id }} search={search} aria-label={item.title} data-work-item={item.id}>
               <span className="item-key">{item.key}</span>
               <span className="work-title">{item.title}</span>
               <span className="board-meta">{ownerLabel(item.assignee)}{priorityLabel(item.priority) === null ? "" : ` · ${priorityLabel(item.priority)}`}</span>

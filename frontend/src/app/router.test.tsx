@@ -352,6 +352,33 @@ function workReadFetcher({ detail, holdDetail }: { detail: Record<string, unknow
 
 const subjectDetail = () => readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle });
 
+/**
+ * Serves the two-item project snapshot plus the real work-detail envelope. The
+ * subject's status is read through `subjectStatus`, so a refetch can regroup the
+ * board (and reorder the list) the way a workspace refresh does.
+ */
+function movableSubjectFetcher(subjectStatus: () => string) {
+  return vi.fn<typeof fetch>().mockImplementation((input) => {
+    const requestPath = input instanceof Request ? input.url : String(input);
+    if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+    if (requestPath.includes("/portal/api/work-items/")) {
+      return Promise.resolve(new Response(requestPath.endsWith("/timeline")
+        ? JSON.stringify({ items: [], next_before: null })
+        : JSON.stringify(subjectDetail())));
+    }
+    const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
+    return Promise.resolve(new Response(JSON.stringify({
+      selected_project_id: null,
+      projects: [{ id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active",
+        work_items: projectId === firstProjectId ? [
+          { id: subjectId, key: "ONE-9", title: subjectTitle, status: subjectStatus(), blocked: false, blocker: null },
+          { id: siblingId, key: "ONE-10", title: siblingTitle, status: "backlog", blocked: false, blocker: null },
+        ] : [] }],
+      health: { status: "unknown" },
+    })));
+  });
+}
+
 describe("readable work views", () => {
   it("mounts the desktop drawer while the detail is pending and renders no unverified project background", async () => {
     const release = Promise.withResolvers<void>();
@@ -494,6 +521,53 @@ describe("readable work views", () => {
     expect(savedViews).toHaveFocus();
     const stored = JSON.parse(localStorage.getItem(savedViewStorageKey) ?? "{}") as { projects: Record<string, unknown[]> };
     expect(stored.projects[firstProjectId]).toEqual([]);
+  });
+
+  it("keeps keyboard focus on the board card when a refresh moves it to another column", async () => {
+    const user = userEvent.setup();
+    let subjectStatus = "ready";
+    const { application } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board`, movableSubjectFetcher(() => subjectStatus));
+    const board = await screen.findByRole("region", { name: "Work board" });
+    const card = within(board).getByRole("link", { name: subjectTitle });
+    const siblingCard = within(board).getByRole("link", { name: siblingTitle });
+    card.focus();
+    expect(card).toHaveFocus();
+    // The refresh regroups by state: the element that held focus is unmounted and
+    // a new card is mounted for the same work item in the destination column.
+    subjectStatus = "done";
+    await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["workspace", { projectId: firstProjectId }], exact: true }); });
+    // The regroup lands on the tick after the refetch resolves, not inside it.
+    const moved = await waitFor(() => {
+      const link = within(board).getByRole("link", { name: subjectTitle });
+      expect(link).not.toBe(card);
+      return link;
+    });
+    expect(moved.closest("[data-board-column]")).toHaveAttribute("data-board-column", "done");
+    expect(moved).toHaveFocus();
+    // Arrow keys still act on the moved work item, and Enter still opens it.
+    await user.keyboard("{ArrowLeft}");
+    expect(siblingCard).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+    expect(moved).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog", { name: subjectTitle })).toBeVisible();
+  });
+
+  it("does not move focus to a moved card while the operator is in the work filter", async () => {
+    const user = userEvent.setup();
+    let subjectStatus = "ready";
+    const { application } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board`, movableSubjectFetcher(() => subjectStatus));
+    const board = await screen.findByRole("region", { name: "Work board" });
+    within(board).getByRole("link", { name: subjectTitle }).focus();
+    // The operator's focus left the card for the filter before the refresh landed:
+    // the regroup must not pull focus back out of the field being used.
+    const filter = screen.getByLabelText("Filter work items");
+    await user.click(filter);
+    expect(filter).toHaveFocus();
+    subjectStatus = "done";
+    await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["workspace", { projectId: firstProjectId }], exact: true }); });
+    await waitFor(() => expect(within(board).getByRole("link", { name: subjectTitle }).closest("[data-board-column]")).toHaveAttribute("data-board-column", "done"));
+    expect(filter).toHaveFocus();
   });
 
   it("renders a row's object result summary as its JSON text and marks a task-less row unreported", async () => {

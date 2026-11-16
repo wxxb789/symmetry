@@ -374,6 +374,9 @@ test.describe("Readable work views", () => {
     const navigation = page.getByRole("navigation", { name: ui.viewNav });
     await navigation.getByRole("link", { name: ui.board }).click();
     await expect(page).toHaveURL(/view=board/);
+    // A list/board switch is a same-pathname search update: the activated view
+    // link stays mounted and keeps focus instead of the heading taking it.
+    await expect(navigation.getByRole("link", { name: ui.board })).toBeFocused();
     const board = page.getByRole("region", { name: ui.boardRegion });
     await expect(board).toBeVisible();
     for (const column of ["backlog", "ready", "in progress", "review", "done"]) {
@@ -418,6 +421,31 @@ test.describe("Readable work views", () => {
       servedReadyOrder: servedReady,
       url: page.url()
     });
+
+    // A refresh that moves the focused card to another column re-parents it:
+    // the focused element is unmounted and re-mounted for the same work item, so
+    // focus must follow the work item instead of falling to `body`. The refresh
+    // control is activated through its own handler without a pointer press, so
+    // the focused card stays focused while the regroup lands.
+    const inReviewColumn = board.locator(".board-column").filter({
+      has: page.getByRole("heading", { name: "review", exact: true })
+    });
+    const inDoneColumn = board.locator(".board-column").filter({
+      has: page.getByRole("heading", { name: "done", exact: true })
+    });
+    const reviewCard = inReviewColumn.getByRole("link", { name: titles.review });
+    await reviewCard.focus();
+    await expect(reviewCard).toBeFocused();
+    const reviewItem = await projectItem(page, project.id, titles.review);
+    await moveWorkItem(page, reviewItem.id, { version: reviewItem.version, status: "done" });
+    await page.getByRole("button", { name: ui.refresh }).evaluate((button) => button.click());
+    const movedCard = inDoneColumn.getByRole("link", { name: titles.review });
+    await expect(movedCard).toBeVisible();
+    await expect(movedCard).toBeFocused();
+    // Arrow keys still act on the moved card: left lands on the nearest card of
+    // the neighbouring column, never on `body`.
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(() => focusedCard(page)).toEqual({ label: titles.progress, column: "in progress" });
 
     await navigation.getByRole("link", { name: ui.list }).click();
     await expect(page.getByRole("list", { name: ui.workItems })).toBeVisible();
