@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { booleanCapability, capacityLabel, guidanceCapability, operationRows, pauseCapability, usageCapability } from "./presentation";
+import { booleanCapability, capacityLabel, guidanceCapability, operationRows, pauseCapability, runtimesEmptyState, usageCapability } from "./presentation";
 
 describe("boolean capability values", () => {
   it("renders true as Supported and false as Not supported", () => {
@@ -126,5 +126,38 @@ describe("capacity label", () => {
   it("never substitutes a number for a capacity member the record does not carry", () => {
     expect(capacityLabel(undefined, 8)).toBe("Not recorded");
     expect(capacityLabel(2, undefined)).toBe("Not recorded");
+  });
+});
+
+describe("runtimes empty state", () => {
+  it("names the compatibility filter instead of claiming the registry is empty", () => {
+    const scoped = runtimesEmptyState({ scoped: true, selectedProjectId: "project-1", registeredCount: 3 });
+    expect(scoped.title).toBe("No compatible runtimes");
+    expect(scoped.body).toContain("3 runtimes are registered with this deployment");
+    expect(scoped.body).toContain("none is bound to this project");
+    const scopedBody = scoped.body;
+    expect(scopedBody).not.toContain("No runtime is registered");
+  });
+
+  it("says the registry is empty only when the served registered count is zero", () => {
+    const empty = runtimesEmptyState({ scoped: true, selectedProjectId: "project-1", registeredCount: 0 });
+    expect(empty.title).toBe("No compatible runtimes");
+    expect(empty.body).toContain("No runtime is registered with this deployment");
+  });
+
+  it("counts the registry for the unscoped read of the server-selected project", () => {
+    const unscoped = runtimesEmptyState({ scoped: false, selectedProjectId: "project-1", registeredCount: 1 });
+    expect(unscoped.title).toBe("No compatible runtimes");
+    expect(unscoped.body).toContain("1 runtime is registered with this deployment");
+    expect(unscoped.body).toContain("none is bound to the selected project");
+  });
+
+  it("states that no project scope exists when the read selects no project", () => {
+    const noProject = runtimesEmptyState({ scoped: false, selectedProjectId: null, registeredCount: 2 });
+    expect(noProject.title).toBe("No project selected");
+    expect(noProject.body).toContain("2 runtimes are registered with this deployment");
+    const none = runtimesEmptyState({ scoped: false, selectedProjectId: null, registeredCount: 0 });
+    expect(none.title).toBe("No project selected");
+    expect(none.body).toContain("no runtime is registered");
   });
 });

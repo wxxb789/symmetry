@@ -190,3 +190,28 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       `frontend/src` found these two unreferenced already at `7a92ca4` (untouched by the 0007b,
       0007c and 0007d work), so they are pre-existing dead weight rather than a merge artifact.
       Revalidate before deleting and leave removal to separate maintenance.
+
+## Deferred review findings (0007f)
+
+- [ ] Give the focused render gate's `browser/tests/portal-goal-managed.spec.mjs` case its fixture
+      environment in CI. The case writes its real Goal-managed row through
+      `scripts/ci/portal-planning-fixture.exs`, so it needs `POSTGRES_*` naming the database the
+      release serves plus the Elixir toolchain; `.github/workflows/ci.yml`'s render job has neither,
+      so the case reports an environment-named skip there. Either add the setup-beam and
+      `mix deps.get`/compile steps to that job, or run the case from a harness job that owns them.
+      The local focused-gate run in the 0007f review round executes it for real.
+
+- [ ] Revalidate the `/portal/connections?projectId=…` session return target.
+      `control/lib/symmetry_control_web/portal_session.ex` accepts only `connectionId=…` for the
+      connections shell path while the shell's own navigation writes `?projectId=…`, so a session
+      expiry collapses that page to `/portal`. The identical gap on `/portal/runtimes?projectId=…`
+      was fixed by the 0007f review round (`shell_query?("/portal/runtimes", …)`); extend the
+      connections clause and its accept/reject tests in a separate change.
+
+- [ ] Revalidate the pre-existing capability-vs-state cancel/retry policy in
+      `control/lib/symmetry_control_web/portal_json.ex` (`execution_summary/1`): `can_cancel` and
+      `can_retry` are derived from task state only, while adapters advertise per-operation support,
+      so a runtime advertising `cancel: false` still shows a live Cancel control until the server
+      refuses it. Either bind the projection to the advertised support or record the state-only
+      policy as intended. Named as a limitation by the 0007f review round; out of that diff's
+      scope.

@@ -10,7 +10,7 @@ import { runtimesOptions } from "../../app/application";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
 import type { Runtime } from "../../services/api";
 import { timestamp } from "../work/presentation";
-import { capacityLabel, operationRows } from "./presentation";
+import { capacityLabel, operationRows, runtimesEmptyState } from "./presentation";
 
 function RuntimeCard({ runtime }: { runtime: Runtime }) {
   const adapter = runtime.capabilities.adapter;
@@ -72,12 +72,18 @@ export function RuntimesPage() {
   // The project scope selects which runtimes are compatible with this
   // deployment's work; the shell carries it in the URL the same way Attention
   // does, and the read falls back to the server-selected project without it.
-  // A registered runtime that no project binds is therefore not listed here;
-  // that registry set stays available through the classic Resources view.
+  // A registered runtime that no project binds is therefore not listed here,
+  // and the empty state cites the served registered count instead of claiming
+  // the deployment's registry is empty.
   const { projectId } = route.useSearch();
   const query = useQuery({ ...runtimesOptions(application.api, projectId ?? null) });
   const refresh = () => { if (!query.isFetching) void query.refetch(); };
   const runtimes = query.data?.runtimes ?? [];
+  const empty = runtimesEmptyState({
+    scoped: projectId !== undefined,
+    selectedProjectId: query.data?.selected_project_id ?? null,
+    registeredCount: query.data?.registered_runtimes?.length ?? 0,
+  });
   return <>
     <PageHeading title="Runtimes" description="Machine status and each runtime's own advertised capability record, shown as advertised rather than verified by this surface.">
       <RefreshButton fetching={query.isFetching} refresh={refresh} />
@@ -85,7 +91,7 @@ export function RuntimesPage() {
     {query.isPending && <LoadingState label="Loading runtimes…" />}
     {query.isError && <ErrorState error={query.error} retry={refresh} stale={query.data !== undefined} />}
     {query.data && (runtimes.length === 0
-      ? <EmptyState title="No runtimes registered">Queued work waits for a compatible runtime to register; capability rows appear only for verified runtimes.</EmptyState>
+      ? <EmptyState title={empty.title}>{empty.body}</EmptyState>
       : <div className="runtime-list">{runtimes.map((runtime) => <RuntimeCard key={runtime.runtime_id} runtime={runtime} />)}</div>)}
     <p className="sr-only" role="status">{query.isFetching && !query.isPending ? "Refreshing runtimes" : ""}</p>
   </>;

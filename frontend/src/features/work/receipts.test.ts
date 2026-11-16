@@ -67,6 +67,9 @@ describe("receipt outcomes", () => {
     expect(receiptLabel("deferred")).toBe("Queued for the runtime");
     expect(receiptLabel("cancelled")).toBe("Cancelled");
     expect(receiptLabel("unknown")).toBe("Outcome unknown");
+    // A control-plane refusal is the server's own decision; it is never
+    // rendered with the runtime's rejection text.
+    expect(receiptLabel("refused")).toBe("Refused by the server");
   });
 });
 
@@ -173,18 +176,22 @@ describe("local attempt receipts", () => {
   });
 
   it("keeps a definitive server refusal after a refresh", () => {
-    const attempt: ControlAttempt = { ...baseAttempt, kind: "retry", refusal: { outcome: "rejected", message: "The workspace changed. Refresh to load its current state." } };
+    const attempt: ControlAttempt = { ...baseAttempt, kind: "retry", refusal: { outcome: "refused", message: "The attempt has already moved on." } };
     const view = attemptReceiptView(attempt, { ...baseContext, snapshotVersion: 9 });
-    expect(view?.outcome).toBe("rejected");
-    expect(view?.headline).toBe("Rejected by the runtime");
-    expect(view?.message).toContain("workspace changed");
+    expect(view?.outcome).toBe("refused");
+    expect(view?.headline).toBe("Refused by the server");
+    expect(view?.message).toContain("already moved on");
   });
 
   it("reports an accepted start while no runtime has claimed the run and drops it once the run moves on", () => {
     const attempt: ControlAttempt = { ...baseAttempt, kind: "start", scope: "initial", executionTaskId: "task-1", generation: 1, responseState: "queued" };
     const queued = attemptReceiptView(attempt, { ...baseContext, snapshotVersion: 5, execution: { task_id: "task-1", generation: 1, state: "queued" } });
     expect(queued?.outcome).toBe("queued");
-    expect(queued?.headline).toBe("Awaiting agent acknowledgement");
+    // The run is recorded and no runtime has claimed it: the headline names
+    // that pre-runtime state instead of a command acknowledgement that cannot
+    // exist yet.
+    expect(queued?.headline).toBe("Awaiting a runtime");
+    expect(queued?.headline).not.toBe(receiptLabel("queued"));
     expect(attemptReceiptView(attempt, { ...baseContext, snapshotVersion: 5, execution: { task_id: "task-1", generation: 1, state: "running" } })).toBeNull();
     const lostRun = attemptReceiptView(attempt, { ...baseContext, snapshotVersion: 5 });
     expect(lostRun?.outcome).toBe("unknown");

@@ -8,24 +8,37 @@ new-route resource flows in `tests/portal-connections.spec.mjs`, 0007e); project
 and work-item planning moved to the planning suite below (0007c).
 The 0007f execution-control and runtime checks that the new
 `/portal/work/:workItemId` and `/portal/runtimes` surfaces replace — the
-classic work-detail control walk (queued run with a live timer, Cancel run ->
-Cancelled, Retry availability, retry hidden after reassignment) and the classic
-drawer draft/focus refresh case — are retired from the classic suite and
-covered by `tests/portal-execution-control.spec.mjs` (real API, no daemon),
-`tests/portal-goal-managed.spec.mjs` (Goal-managed items present no legacy
-control path) and `tests/portal-live-daemon.spec.mjs` (real daemons). The
-migratable half of the classic draft/focus case moved; the classic
-raw-execution expander has no equivalent on the new surface and is recorded as
-retired, not migrated, in the goal receipt. The classic Resources view and its
-registered-runtime reference selection stay classic-owned under goal 0007e.
+classic work-detail control walk (Cancel run -> Cancelled, Retry availability,
+retry hidden after reassignment) and the classic drawer draft/focus refresh
+case — are retired from the classic suite and covered by
+`tests/portal-execution-control.spec.mjs` (real API, no daemon),
+`tests/portal-goal-managed.spec.mjs` (a real Goal-managed row prepared by
+`scripts/ci/portal-planning-fixture.exs` presents no legacy control path) and
+`tests/portal-live-daemon.spec.mjs` (real daemons). The classic walk's live
+timer and its Activity-row `Execution stopped` assertion are retired, not
+migrated: the new surface renders the served execution state and no
+client-side elapsed time, and the migrated check asserts the served state chip
+instead. Retired with the live-daemon rewrite, each with its successor named:
+the classic forged-runtime-reference refusal walk (server enforcement in
+`control/test/symmetry_control_web/controllers/portal_workflow_test.exs`
+"resource APIs expose and enforce registered runtime identities", form
+field-error rendering in `connections.test.tsx`) and the obsolete-response
+phases of the classic cursored history case (its obsolete older response has
+the daemon-free synthetic guard in `tests/portal-work-views.spec.mjs`; the real
+cursor load and exhaustion stay in the live suite). The migratable half of the
+classic draft/focus case moved; the classic raw-execution expander has no
+equivalent on the new surface and is recorded as retired, not migrated, in the
+goal receipt. The classic Resources view and its registered-runtime reference
+selection stay classic-owned under goal 0007e.
 The 0007b list, board, detail and history read checks that the new
 `/portal/projects/:projectId` and `/portal/work/:workItemId` surfaces replace -
 including the classic detail-security probe and the delayed-detail,
 older-history and delayed-workspace races - are retired from the classic suite
 and covered by `tests/portal-work-views.spec.mjs` (races replay held real
-responses; the older-history failure race uses a real daemon cursor in
+responses; the older-history failure's obsolete-response guard is daemon-free
+and synthetic, and the real cursored history load runs in
 `tests/portal-live-daemon.spec.mjs`). No resource or control coverage was
-removed.
+removed without a named successor.
 
 ```sh
 mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile
@@ -52,6 +65,7 @@ The focused release-shell gate (also what CI runs against the release) is:
 
 ```sh
 SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55442 POSTGRES_DB=symmetry_control_dev \
 mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test \
   tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs \
   tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs
@@ -65,9 +79,14 @@ On the same release it also drives the execution-control surface end to end:
 start, a live queued state, cancel, the server-gated retry control, a rejection
 answered by the real server, an in-flight request held past the rendered receipt
 (never rendered as applied) and a refused control request rendered as an unknown
-outcome with the same attempt replayed once; plus the Goal-managed detail, which
-replays a captured real detail response with the served `goal_id` folded in and
-proves no legacy run/retry/move path or control is rendered for it.
+outcome with the same attempt replayed once; the runtimes list's scoped and
+unscoped empty states; plus the Goal-managed detail, whose row is written by
+`scripts/ci/portal-planning-fixture.exs` through Control's own changesets — the
+`POSTGRES_*` variables above must name the database the release serves, and
+without them that case skips with its missing environment named instead of
+passing. That case asserts the served `goal_id`, no run/cancel/retry control,
+the 403 `goal_authority_required` refusals of the legacy paths and a sibling
+legacy item that keeps its control.
 The expiry URL must serve the same release and fixture database with
 `SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2`; without it the true-TTL expiry cases
 are explicitly skipped, not passed. The focused suite also checks Attention

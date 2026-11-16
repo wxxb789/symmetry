@@ -34,9 +34,8 @@ export function safeReturnTo(href: string): string {
   return "/portal/attention";
 }
 
-export function createApplication(options: { fetcher?: typeof fetch; location?: BrowserLocation; csrfToken?: () => string } = {}): Application {
-  const csrfToken = options.csrfToken ?? (() => document.querySelector<HTMLMetaElement>("meta[name='csrf-token']")?.content ?? "");
-  const api = createApi(options.fetcher, csrfToken);
+export function createApplication(options: { fetcher?: typeof fetch; location?: BrowserLocation } = {}): Application {
+  const api = createApi(options.fetcher);
   const location = options.location ?? window.location;
   const listeners = new Set<() => void>();
   let signedOut = false;
@@ -145,28 +144,29 @@ export const runtimesOptions = (api: Api, projectId: string | null) => workspace
  */
 export const startWorkMutation = (api: Api) => mutationOptions({
   mutationKey: ["work-control", "start"],
-  mutationFn: ({ workItemId, actionId }: { workItemId: string; actionId: ActionId }) =>
-    api.startWork(workItemId, actionId, new AbortController().signal),
+  mutationFn: ({ workItemId, actionId, csrf }: { workItemId: string; actionId: ActionId; csrf: string }) =>
+    api.startWork(workItemId, actionId, csrf, new AbortController().signal),
 });
 
 export const cancelWorkMutation = (api: Api) => mutationOptions({
   mutationKey: ["work-control", "cancel"],
-  mutationFn: ({ workItemId, generation, actionId }: { workItemId: string; generation: ExecutionGeneration; actionId: ActionId }) =>
-    api.cancelWork(workItemId, generation, actionId, new AbortController().signal),
+  mutationFn: ({ workItemId, generation, actionId, csrf }: { workItemId: string; generation: ExecutionGeneration; actionId: ActionId; csrf: string }) =>
+    api.cancelWork(workItemId, generation, actionId, csrf, new AbortController().signal),
 });
 
 export const retryWorkMutation = (api: Api) => mutationOptions({
   mutationKey: ["work-control", "retry"],
-  mutationFn: ({ workItemId, generation, actionId }: { workItemId: string; generation: ExecutionGeneration; actionId: ActionId }) =>
-    api.retryWork(workItemId, generation, actionId, new AbortController().signal),
+  mutationFn: ({ workItemId, generation, actionId, csrf }: { workItemId: string; generation: ExecutionGeneration; actionId: ActionId; csrf: string }) =>
+    api.retryWork(workItemId, generation, actionId, csrf, new AbortController().signal),
 });
 
 export const provideInputMutation = (api: Api) => mutationOptions({
   mutationKey: ["work-control", "input"],
-  mutationFn: ({ workItemId, input, waitingTransitionId, actionId }: {
+  mutationFn: ({ workItemId, input, waitingTransitionId, actionId, csrf }: {
     workItemId: string;
     input: Record<string, unknown>;
     waitingTransitionId: string;
     actionId: ActionId;
-  }) => api.provideInput(workItemId, input, waitingTransitionId, actionId, new AbortController().signal),
+    csrf: string;
+  }) => api.provideInput(workItemId, input, waitingTransitionId, actionId, csrf, new AbortController().signal),
 });

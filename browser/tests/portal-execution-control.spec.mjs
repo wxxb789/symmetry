@@ -1,11 +1,15 @@
-// Goal 0007f — execution control on the readable work detail (/portal/work/:workItemId).
+// Goal 0007f — execution control on the readable work detail
+// (/portal/work/:workItemId), plus the runtime list's empty state on
+// /portal/runtimes.
 //
 // Real-API acceptance: projects and work items are created through the
 // authenticated Portal API, and every rendered control state is decoded from
 // the running control plane. This surface is the migration target for the
 // classic work-detail control assertions retired in the same change: a queued
-// run with a live timer, cancel -> cancelled, retry availability, retry hidden
-// after reassignment, and an idempotent replay of an unconfirmed attempt.
+// run's served state (the classic live timer and Activity-row assertion are
+// retired, not migrated — this surface renders no client-side elapsed time),
+// cancel -> cancelled, retry availability, retry hidden after reassignment, and
+// an idempotent replay of an unconfirmed attempt.
 //
 // Network interception appears in two places only, each named in the case that
 // uses it and each explicitly separated from real-data acceptance:
@@ -24,7 +28,7 @@ const ui = {
   stateQueued: "Queued",
   stateCancelled: "Cancelled",
   receiptRequested: "Request sent",
-  receiptQueued: "Awaiting agent acknowledgement",
+  receiptAwaitingRuntime: "Awaiting a runtime",
   receiptDeferred: "Queued for the runtime",
   receiptApplied: "Applied",
   receiptFailed: "Failed",
@@ -78,9 +82,15 @@ test.describe("Execution control", () => {
     await expect(page.locator(".receipt").first()).not.toContainText(ui.receiptApplied);
     await expect.poll(() => executionOf(page, item.id), { timeout: 20_000 }).toMatchObject({ state: "queued", generation: 1 });
 
-    // The queued execution renders its served state and a live timer.
+    // The queued execution renders the served state in the control bar and in
+    // the chips. The classic live-timer and Activity-row assertions are retired
+    // (recorded in the goal receipt): this surface renders no client-side
+    // elapsed time, so the migrated check asserts the served state instead of a
+    // timestamp that a run-less detail also carries.
+    const served = await executionOf(page, item.id);
+    expect(served.state).toBe("queued");
+    await expect(page.locator(".control-bar .chip")).toHaveText(ui.stateQueued);
     await expect(page.getByText(ui.stateQueued, { exact: true }).first()).toBeVisible();
-    await expect(page.locator(".detail-section time[datetime]").first()).toBeVisible();
 
     await page.getByRole("button", { name: ui.cancel }).click();
     await expect(page.getByText(ui.stateCancelled, { exact: true }).first()).toBeVisible({ timeout: 20_000 });
@@ -138,7 +148,7 @@ test.describe("Execution control", () => {
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await expect(page.locator(".receipt").first()).not.toContainText(ui.receiptApplied);
     release();
-    await expect(page.locator(".receipt").first()).toContainText(ui.receiptQueued, { timeout: 20_000 });
+    await expect(page.locator(".receipt").first()).toContainText(ui.receiptAwaitingRuntime, { timeout: 20_000 });
     await page.unroute(`**/portal/api/work-items/${item.id}/run`);
 
     const lost = await queuedAgentWork(page, "EL");
@@ -276,6 +286,57 @@ test.describe("Execution control", () => {
     await expect(answer).toBeFocused();
     expect(await answer.evaluate((input) => input.selectionStart)).toBe(7);
     await page.unroute(`**/portal/api/work-items/${item.id}`);
+  });
+});
+
+test.describe("Runtime visibility", () => {
+  test("the runtimes list names its compatibility filter instead of claiming an empty registry", async ({ page }) => {
+    await login(page);
+    const key = uniqueKey("RT");
+    // The unique default profile/workspace cannot match any registered runtime,
+    // so this project's compatibility set is empty by construction and the
+    // scoped read below is the oracle for the page.
+    const created = await api(page, "POST", "/portal/api/projects", {
+      key,
+      name: `Runtime scope ${key}`,
+      default_agent_profile: `unbound-${key.toLowerCase()}`,
+      default_workspace: `unbound-${key.toLowerCase()}`
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const projectId = created.body.project.id;
+
+    const scopedRead = await api(page, "GET", `/portal/api/workspace?project_id=${projectId}`);
+    expect(scopedRead.status).toBe(200);
+    expect(scopedRead.body.runtimes, "a fresh project binds no runtime").toHaveLength(0);
+    const registered = scopedRead.body.registered_runtimes ?? [];
+    await page.goto(`/portal/runtimes?projectId=${projectId}`);
+    await expect(page.locator("h1")).toHaveText("Runtimes");
+    await expect(page.locator("article.runtime-card")).toHaveCount(0);
+    // The empty state names the filter it read and cites the served registered
+    // count; it never claims the deployment's registry itself is empty.
+    await expect(page.locator(".empty-state h2")).toHaveText("No compatible runtimes");
+    const registryPhrase = registered.length === 0
+      ? "No runtime is registered with this deployment"
+      : `${registered.length} runtimes are registered with this deployment`;
+    await expect(page.getByText(registryPhrase)).toBeVisible();
+    await expect(page.getByText("No runtimes registered")).toHaveCount(0);
+
+    // The unscoped URL reads the same compatibility filter for the
+    // server-selected project; the page must agree with that read.
+    const unscopedRead = await api(page, "GET", "/portal/api/workspace");
+    expect(unscopedRead.status).toBe(200);
+    const compatible = unscopedRead.body.runtimes ?? [];
+    await page.goto("/portal/runtimes");
+    await expect(page.locator("h1")).toHaveText("Runtimes");
+    await expect(page.locator("article.runtime-card")).toHaveCount(compatible.length);
+    if (compatible.length === 0) {
+      // The served read selects a project unless the deployment has none, and
+      // the empty title must follow that read rather than report an empty
+      // registry the read may not have served.
+      const emptyTitle = unscopedRead.body.selected_project_id === null ? "No project selected" : "No compatible runtimes";
+      await expect(page.locator(".empty-state h2")).toHaveText(emptyTitle);
+      await expect(page.getByText("No runtimes registered")).toHaveCount(0);
+    }
   });
 });
 

@@ -34,7 +34,6 @@ export class ServerRefusal extends Data.TaggedError("ServerRefusal")<{
 
 export type ReadError = Unauthenticated | Forbidden | Conflict | Validation | Unsupported | Network | UnexpectedResponse;
 export type ApiError = ReadError | ServerRefusal;
-export type ControlError = ReadError;
 export type Workspace = SymmetryWorkspaceReadV1;
 export type Project = Workspace["projects"][number];
 export type WorkItem = Project["work_items"][number];
@@ -360,14 +359,15 @@ export interface Api {
   deleteResource: (resourceId: string, version: number, csrf: string, signal: AbortSignal) => Promise<{ deletedResourceId: string }>;
   syncResource: (resourceId: string, csrf: string, signal: AbortSignal) => Promise<ResourceReceipt>;
   syncProject: (projectId: string, csrf: string, signal: AbortSignal) => Promise<{ syncedResourceIds: readonly string[] }>;
-  startWork: (workItemId: string, actionId: ActionId, signal: AbortSignal) => Promise<StartOutcome>;
-  cancelWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, signal: AbortSignal) => Promise<CancelOutcome>;
-  retryWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, signal: AbortSignal) => Promise<RetryOutcome>;
+  startWork: (workItemId: string, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<StartOutcome>;
+  cancelWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<CancelOutcome>;
+  retryWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<RetryOutcome>;
   provideInput: (
     workItemId: string,
     input: Record<string, unknown>,
     waitingTransitionId: string,
     actionId: ActionId,
+    csrf: string,
     signal: AbortSignal,
   ) => Promise<InputOutcome>;
 }
@@ -499,57 +499,28 @@ const assignmentReceipt = (body: Uint8Array) =>
     Effect.map((value) => ({ workItemId: value.work_item.id, version: value.work_item.version })),
   );
 
-/**
- * One control attempt. The CSRF token comes from the session read the shell
- * already holds, so a control request never adds a bootstrap round trip; a 401
- * flows to the same session-expiry owner as every read.
- */
-function mutate<A>(
-  fetcher: typeof fetch,
-  csrfToken: () => string,
-  path: string,
-  body: Record<string, unknown>,
-  decode: (body: unknown) => Effect.Effect<A, unknown>,
-): Effect.Effect<A, ReadError> {
-  return Effect.gen(function* () {
-    const token = csrfToken();
-    if (token === "") {
-      return yield* Effect.fail(new Unauthenticated({ message: "Your session has ended. Sign in to continue." }));
-    }
-    const { response, payload } = yield* Effect.tryPromise({
-      try: async (signal) => {
-        const response = await fetcher(path, {
-          method: "POST",
-          credentials: "same-origin",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            "x-csrf-token": token,
-          },
-          body: JSON.stringify(body),
-          redirect: "manual",
-          signal,
-        });
-        const payload: unknown = response.ok ? await response.json() : null;
-        return { response, payload };
-      },
-      catch: () => new Network({ message: "Cannot reach the server. Check your connection and try again." }),
-    });
-    if (response.type === "opaqueredirect" || response.status === 302 || response.status === 303) {
-      return yield* Effect.fail(statusError(401));
-    }
-    if (!response.ok) return yield* Effect.fail(statusError(response.status));
-    return yield* decode(payload).pipe(Effect.mapError(() => new UnexpectedResponse({
-      message: "The server response could not be read safely. Refresh or contact your operator.",
-      status: response.status,
-      transient: false,
-    })));
-  });
-}
+const startResponse = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(StartResponse))(text)),
+  );
+
+const cancelResponse = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(CancelResponse))(text)),
+  );
+
+const retryResponse = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(RetryResponse))(text)),
+  );
+
+const inputResponse = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(InputResponse))(text)),
+  );
 
 export function createApi(
   fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
-  readCsrfToken: () => string = () => document.querySelector<HTMLMetaElement>("meta[name='csrf-token']")?.content ?? "",
 ): Api {
   return {
     workspace(projectId: string | null, signal: AbortSignal): Promise<Workspace> {
@@ -634,38 +605,42 @@ export function createApi(
         (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(ProjectSyncBody))(text))),
       ).pipe(Effect.map((value) => ({ syncedResourceIds: value.synced_resource_ids }))), signal);
     },
-    startWork(workItemId: string, actionId: ActionId, signal: AbortSignal): Promise<StartOutcome> {
+    /**
+     * The four control attempts. Each carries the session read's live CSRF
+     * token from its caller and runs through the shared request boundary, so a
+     * control-plane refusal arrives as the server's typed `ServerRefusal` — the
+     * same contract every other write surface consumes — and a 401 flows to the
+     * session-expiry owner like every read.
+     */
+    startWork(workItemId: string, actionId: ActionId, csrf: string, signal: AbortSignal): Promise<StartOutcome> {
       return run(
-        mutate(
+        request(
           fetcher,
-          readCsrfToken,
           `/portal/api/work-items/${encodeURIComponent(workItemId)}/run`,
-          { action_id: actionId },
-          (payload) => Schema.decodeUnknown(StartResponse)(payload),
+          { method: "POST", body: { action_id: actionId }, csrf },
+          startResponse,
         ),
         signal,
       );
     },
-    cancelWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, signal: AbortSignal): Promise<CancelOutcome> {
+    cancelWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal): Promise<CancelOutcome> {
       return run(
-        mutate(
+        request(
           fetcher,
-          readCsrfToken,
           `/portal/api/work-items/${encodeURIComponent(workItemId)}/cancel`,
-          { action_id: actionId, generation },
-          (payload) => Schema.decodeUnknown(CancelResponse)(payload),
+          { method: "POST", body: { action_id: actionId, generation }, csrf },
+          cancelResponse,
         ),
         signal,
       );
     },
-    retryWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, signal: AbortSignal): Promise<RetryOutcome> {
+    retryWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal): Promise<RetryOutcome> {
       return run(
-        mutate(
+        request(
           fetcher,
-          readCsrfToken,
           `/portal/api/work-items/${encodeURIComponent(workItemId)}/retry`,
-          { action_id: actionId, generation },
-          (payload) => Schema.decodeUnknown(RetryResponse)(payload),
+          { method: "POST", body: { action_id: actionId, generation }, csrf },
+          retryResponse,
         ),
         signal,
       ).then((outcome) => ({
@@ -680,15 +655,15 @@ export function createApi(
       input: Record<string, unknown>,
       waitingTransitionId: string,
       actionId: ActionId,
+      csrf: string,
       signal: AbortSignal,
     ): Promise<InputOutcome> {
       return run(
-        mutate(
+        request(
           fetcher,
-          readCsrfToken,
           `/portal/api/work-items/${encodeURIComponent(workItemId)}/input`,
-          { input, action_id: actionId, waiting_transition_id: waitingTransitionId },
-          (payload) => Schema.decodeUnknown(InputResponse)(payload),
+          { method: "POST", body: { input, action_id: actionId, waiting_transition_id: waitingTransitionId }, csrf },
+          inputResponse,
         ),
         signal,
       );

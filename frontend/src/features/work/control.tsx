@@ -10,26 +10,30 @@
  * snapshot proves. Guidance, safe-boundary pause and resume are dispatched from
  * Chat; this surface renders their receipts and no control for them. Work items
  * the server marks Goal-managed render no legacy control at all — the Goal is
- * stated as the authority instead.
+ * stated as the authority instead. A refusal from the control plane renders as
+ * the server's own typed refusal, never as the runtime's rejection.
  */
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { cancelWorkMutation, provideInputMutation, retryWorkMutation, startWorkMutation, workTimelineOptions } from "../../app/application";
+import { cancelWorkMutation, provideInputMutation, retryWorkMutation, startWorkMutation } from "../../app/application";
+import { useSessionToken } from "../../app/session";
 import { clearActionId, readActionId, readOrMintActionId, type ActionKind } from "../../services/control-actions";
 import {
   Conflict,
   Forbidden,
-  Network,
+  ServerRefusal,
   Unsupported,
   Validation,
   errorMessage,
   type ActionId,
   type ControlReceipt,
   type ExecutionGeneration,
+  type TimelineItem,
   type WorkDetail,
+  type WorkTimeline,
 } from "../../services/api";
-import { asRecord, asText, executionStateLabel, timestamp, type TimelineItemLike } from "./presentation";
+import { asRecord, asText, executionStateLabel, timelineItemKey, timestamp, type TimelineItemLike } from "./presentation";
 import {
   attemptReceiptView,
   receiptLabel,
@@ -61,6 +65,9 @@ interface ControlSurfaceValue {
   readonly latestCommandId: string | null;
   readonly execution: AttemptExecution | null;
   readonly pending: Record<ActionKind, PendingState>;
+  /** The older timeline entries the reader expanded, shared by the history and the receipt list. */
+  readonly olderEntries: readonly TimelineItem[];
+  readonly retainTimelinePages: (data: { readonly pages: readonly WorkTimeline[] } | undefined) => void;
   readonly start: () => void;
   readonly cancel: (generation: ExecutionGeneration) => void;
   readonly retry: (generation: ExecutionGeneration) => void;
@@ -69,7 +76,8 @@ interface ControlSurfaceValue {
 
 const ControlSurfaceContext = createContext<ControlSurfaceValue | null>(null);
 
-function useControlSurface(): ControlSurfaceValue {
+/** The detail's control state; the history section reads it for the retained older pages. */
+export function useControlSurface(): ControlSurfaceValue {
   const value = useContext(ControlSurfaceContext);
   if (value === null) throw new Error("The work control surface must wrap its controls");
   return value;
@@ -78,11 +86,15 @@ function useControlSurface(): ControlSurfaceValue {
 /**
  * Owns the control attempts and the served snapshot for every control mount on
  * the detail, because the control bar, the waiting form and the receipt list
- * are separate mount points that must agree about one attempt's state.
+ * are separate mount points that must agree about one attempt's state, and the
+ * receipt list also renders the older timeline pages the history section
+ * expanded. A detail refresh re-keys the disabled timeline query, so those
+ * pages are retained here rather than read from the current key's data.
  */
-export function WorkControlSurface({ detail, children }: { detail: WorkDetail; children: ReactNode }) {
+export function WorkControlSurface({ detail, cursor, children }: { detail: WorkDetail; cursor: string | null; children: ReactNode }) {
   const { application } = useRouteContext({ from: "__root__" });
   const queryClient = useQueryClient();
+  const csrf = useSessionToken();
   const item = detail.work_item;
   const workItemId = item.id;
   const executionRow = item.execution ?? null;
@@ -90,6 +102,24 @@ export function WorkControlSurface({ detail, children }: { detail: WorkDetail; c
 
   const snapshotVersion = () => queryClient.getQueryState(["work-item", { workItemId }])?.dataUpdatedAt ?? 0;
   const [attempts, setAttempts] = useState<ControlAttempt[]>(() => (goalManaged ? [] : mountAttempts(item, snapshotVersion())));
+  // Reopening the detail inside the freshness window remounts this component
+  // while the disabled query still holds the pages the reader expanded.
+  const [older, setOlder] = useState<{ workItemId: string; entries: readonly TimelineItem[] }>(() => ({
+    workItemId,
+    entries: queryClient.getQueryData<{ pages: readonly WorkTimeline[] }>(["work-item-timeline", { workItemId, cursor }])?.pages.flatMap((page) => page.items) ?? [],
+  }));
+  // Every older page is served by a reader action, so the merge runs when that
+  // fetch resolves; a refresh that re-keys the query keeps the expanded entries.
+  const retainTimelinePages = (data: { readonly pages: readonly WorkTimeline[] } | undefined) => {
+    const fetched = data?.pages.flatMap((page) => page.items) ?? [];
+    if (fetched.length === 0) return;
+    setOlder((previous) => {
+      const retained = previous.workItemId === workItemId ? previous.entries : [];
+      const entries = mergeOlderEntries(fetched, retained);
+      return entries === retained && previous.workItemId === workItemId ? previous : { workItemId, entries };
+    });
+  };
+  const olderEntries = older.workItemId === workItemId ? older.entries : [];
 
   const replace = (kind: ActionKind, attempt: ControlAttempt) => {
     setAttempts((previous) => [...previous.filter((candidate) => candidate.kind !== kind), attempt]);
@@ -132,7 +162,7 @@ export function WorkControlSurface({ detail, children }: { detail: WorkDetail; c
   const start = () => {
     const actionId = track("start", "initial", null);
     if (actionId === null) return;
-    startMutation.mutate({ workItemId, actionId }, {
+    startMutation.mutate({ workItemId, actionId, csrf }, {
       onSuccess: (outcome) => {
         // The accepted start's execution is the only durable evidence it has;
         // its receipt renders that run, never an acknowledgement it did not get.
@@ -157,7 +187,7 @@ export function WorkControlSurface({ detail, children }: { detail: WorkDetail; c
     const scope = String(generation);
     const actionId = track("cancel", scope, generation);
     if (actionId === null) return;
-    cancelMutation.mutate({ workItemId, generation, actionId }, {
+    cancelMutation.mutate({ workItemId, generation, actionId, csrf }, {
       onSuccess: (outcome) => {
         settle("cancel", (attempt) => ({ ...attempt, baseline: snapshotVersion(), commandId: outcome.command.command_id, command: commandRecord(outcome.command) }));
         clearActionId("cancel", workItemId, scope);
@@ -174,7 +204,7 @@ export function WorkControlSurface({ detail, children }: { detail: WorkDetail; c
     const scope = String(generation);
     const actionId = track("retry", scope, generation);
     if (actionId === null) return;
-    retryMutation.mutate({ workItemId, generation, actionId }, {
+    retryMutation.mutate({ workItemId, generation, actionId, csrf }, {
       onSuccess: (outcome) => {
         settle("retry", (attempt) => ({ ...attempt, baseline: snapshotVersion(), commandId: outcome.command.command_id, command: commandRecord(outcome.command) }));
         clearActionId("retry", workItemId, scope);
@@ -190,7 +220,7 @@ export function WorkControlSurface({ detail, children }: { detail: WorkDetail; c
   const submitInput = (waitingTransitionId: string, answer: string, onConfirmed: () => void) => {
     const actionId = track("input", waitingTransitionId, null);
     if (actionId === null) return;
-    inputMutation.mutate({ workItemId, input: { answer }, waitingTransitionId, actionId }, {
+    inputMutation.mutate({ workItemId, input: { answer }, waitingTransitionId, actionId, csrf }, {
       onSuccess: (outcome) => {
         settle("input", (attempt) => ({ ...attempt, baseline: snapshotVersion(), commandId: outcome.command.command_id, command: commandRecord(outcome.command) }));
         clearActionId("input", workItemId, waitingTransitionId);
@@ -232,6 +262,8 @@ export function WorkControlSurface({ detail, children }: { detail: WorkDetail; c
     latestCommandId: executionRow?.latest_command?.command_id ?? null,
     execution: executionRow === null ? null : { task_id: executionRow.task_id, generation: executionRow.generation, state: executionRow.state },
     pending,
+    olderEntries,
+    retainTimelinePages,
     start,
     cancel,
     retry,
@@ -294,13 +326,12 @@ export function WorkWaitingInput({ detail }: { detail: WorkDetail }) {
 }
 
 /** The receipt list beside the execution history. */
-export function WorkReceipts({ firstPage, cursor }: { firstPage: readonly TimelineItemLike[]; cursor: string | null }) {
-  const { application } = useRouteContext({ from: "__root__" });
+export function WorkReceipts({ firstPage }: { firstPage: readonly TimelineItemLike[] }) {
   const surface = useControlSurface();
-  // The same disabled timeline query the history section reads, so pages the
-  // reader expands there also feed the receipts, and neither issues a request.
-  const timeline = useInfiniteQuery(workTimelineOptions(application.api, surface.workItemId, cursor));
-  const olderPages = timeline.data?.pages.map((page) => page.items) ?? [];
+  // The history section owns the timeline query and the pages the reader
+  // expanded; the receipt list renders that same retained state, so a refresh
+  // that re-keys the disabled query cannot silently drop their rows.
+  const olderPages = surface.olderEntries.length === 0 ? [] : [surface.olderEntries];
   const carried = new Set<string>();
   for (const entry of [...firstPage, ...olderPages.flat()]) {
     if (entry.source !== "command") continue;
@@ -365,6 +396,17 @@ function emptyAttempt(kind: ActionKind, actionId: string, scope: string, generat
 }
 
 /**
+ * Merges newly served older pages into the entries already expanded: a page
+ * re-served for the same entry replaces its own text while everything the
+ * reader already expanded stays rendered.
+ */
+function mergeOlderEntries(fetched: readonly TimelineItem[], retained: readonly TimelineItem[]): readonly TimelineItem[] {
+  const fetchedKeys = new Set(fetched.map(timelineItemKey));
+  const merged = [...fetched, ...retained.filter((item) => !fetchedKeys.has(timelineItemKey(item)))];
+  return merged.length === retained.length && merged.every((item, index) => item === retained[index]) ? retained : merged;
+}
+
+/**
  * Reconstructs the attempts a reload kept: an action id still in session
  * storage marks a request this surface sent and never saw confirmed, and the
  * operation's own served signal must still offer it.
@@ -399,15 +441,19 @@ function commandRecord(command: ControlReceipt): ReceiptCommand {
   };
 }
 
-/** A definitive server refusal: it is a rejection receipt and its attempt id is dead. */
+/** A definitive server refusal: it is a refusal receipt and its attempt id is dead. */
 function definitiveRefusal(error: unknown): boolean {
-  return error instanceof Conflict || error instanceof Validation || error instanceof Forbidden || error instanceof Unsupported;
+  return error instanceof Conflict || error instanceof Validation || error instanceof Forbidden || error instanceof Unsupported ||
+    (error instanceof ServerRefusal && error.status >= 400 && error.status < 500);
 }
 
 function failurePatch(error: unknown): Pick<ControlAttempt, "refusal" | "unconfirmed"> {
   const message = errorMessage(error);
-  if (definitiveRefusal(error)) return { refusal: { outcome: "rejected", message }, unconfirmed: null };
-  if (error instanceof Network) return { refusal: null, unconfirmed: { outcome: "failed", message } };
+  // A control-plane refusal is the server's own decision: it renders as a
+  // refusal, never as the runtime's rejection or as a local failure.
+  if (definitiveRefusal(error)) return { refusal: { outcome: "refused", message }, unconfirmed: null };
+  // A lost response or an unproven fault: the request may have been applied, so
+  // it stays unknown until the server's own records place it.
   return { refusal: null, unconfirmed: { outcome: "unknown", message } };
 }
 

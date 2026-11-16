@@ -45,6 +45,12 @@ defmodule SymmetryControlWeb.PortalSession do
   defp shell_query?("/portal/connections", query),
     do: Regex.match?(@connection_identifier_param, query)
 
+  # The shell's runtimes navigation carries the same project scope as the work
+  # surface; without this clause a session expiry collapses a project-scoped
+  # runtimes page to /portal.
+  defp shell_query?("/portal/runtimes", query),
+    do: Regex.match?(@work_project_param, query)
+
   defp shell_query?("/portal/projects/" <> _project_id, query),
     do: work_query?(query, @work_search_params)
 

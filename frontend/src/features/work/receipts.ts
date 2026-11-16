@@ -17,8 +17,11 @@ import { asRecord, asText, timelineItemKey, type TimelineItemLike } from "./pres
  * into a new queued generation) but that no runtime has acknowledged — it is
  * never rendered as `applied`, and it is distinct from `queued`, which awaits
  * the runtime's acknowledgement of a command that was delivered to it.
+ * `refused` is the control plane's own typed refusal of a local attempt; the
+ * runtime's rejection of a delivered command stays `rejected` with its own
+ * text, so a control-plane decision is never attributed to the runtime.
  */
-export type ReceiptOutcome = "applied" | "rejected" | "failed" | "queued" | "deferred" | "cancelled" | "unknown";
+export type ReceiptOutcome = "applied" | "rejected" | "refused" | "failed" | "queued" | "deferred" | "cancelled" | "unknown";
 
 /** What a receipt card renders: a durable outcome, or `requested` while an attempt is unconfirmed. */
 export type ReceiptViewOutcome = ReceiptOutcome | "requested";
@@ -67,6 +70,7 @@ export function receiptOutcome(command: ReceiptCommand | null): ReceiptOutcome {
 const receiptLabels: Record<ReceiptOutcome, string> = {
   applied: "Applied",
   rejected: "Rejected by the runtime",
+  refused: "Refused by the server",
   failed: "Failed",
   queued: "Awaiting agent acknowledgement",
   deferred: "Queued for the runtime",
@@ -205,6 +209,12 @@ const preRuntimeStates: Record<string, true> = { queued: true, assigned: true };
 const durableAuthorityNote = "Durable execution history is the authority for this attempt; it does not record a confirmation.";
 const pendingNote = "The server has not confirmed this request yet.";
 const queuedRunNote = "The run is recorded; no runtime has claimed it yet.";
+/**
+ * A recorded run no runtime has claimed is not a command awaiting an
+ * acknowledgement: the pre-runtime view carries its own headline, distinct
+ * from `requested` and from a runtime acknowledgement that cannot exist yet.
+ */
+const queuedRunLabel = "Awaiting a runtime";
 
 const unknownView = (message: string | null): AttemptView => ({
   outcome: "unknown",
@@ -215,7 +225,7 @@ const unknownView = (message: string | null): AttemptView => ({
 
 const queuedRunView: AttemptView = {
   outcome: "queued",
-  headline: receiptLabel("queued"),
+  headline: queuedRunLabel,
   message: null,
   note: queuedRunNote,
 };

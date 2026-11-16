@@ -11,6 +11,16 @@
 // Network interception appears in one place only: holding a control POST so an
 // unconfirmed attempt survives a reload. It is named in the case that uses it
 // and is separated from the durable-record assertions around it.
+//
+// Retired with this rewrite, recorded in the goal receipt and browser/README
+// rather than silently dropped: the classic suite's forged-runtime-reference
+// refusal walk (its server enforcement is portal_workflow_test.exs "resource
+// APIs expose and enforce registered runtime identities", and the new resource
+// form's field-error rendering is covered by connections.test.tsx) and the
+// obsolete-response phases of the classic cursored history case (whose
+// obsolete-response half has the daemon-free synthetic guard in
+// portal-work-views.spec.mjs). The real cursor load, exhaustion and the
+// corrected-intent retry below stay live.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -241,6 +251,10 @@ test.describe("Goal 2 live daemon acceptance", () => {
 
     const retriedDetail = await detailOf(page, retried.id);
     const retriedTimeline = retriedDetail.raw.timeline;
+    // The corrected intent is copied into the second durable generation: the
+    // retry re-admits the task from the current work-item text, not from the
+    // failed attempt's frozen goal.
+    expect(retriedDetail.outcome.goal).toContain("Corrected intent for the retry attempt.");
     const generations = new Set(retriedTimeline.map((entry) => entry.generation).filter((value) => value !== null));
     expect(generations, "both attempts stay distinguishable").toEqual(new Set([1, 2]));
     const kindsByGeneration = new Map();

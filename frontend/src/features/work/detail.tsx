@@ -286,7 +286,7 @@ function WorkDetailSections({ detail, api }: { detail: WorkDetail; api: Api }) {
   const runId = execution?.run_id ?? null;
   const goalManaged = isGoalManaged(item);
   const providerOwned = item.external?.provider_owned_fields ?? [];
-  return <WorkControlSurface detail={detail}>
+  return <WorkControlSurface detail={detail} cursor={detail.raw.next_before}>
     <p className="detail-chips">
       <StatusBadge status={item.status} />
       <OwnershipChip item={item} />
@@ -381,7 +381,7 @@ function WorkDetailSections({ detail, api }: { detail: WorkDetail; api: Api }) {
 
     <section className="detail-section" aria-labelledby="history-section">
       <h2 id="history-section">Execution history</h2>
-      <WorkReceipts firstPage={detail.raw.timeline} cursor={detail.raw.next_before} />
+      <WorkReceipts firstPage={detail.raw.timeline} />
       <WorkHistory workItemId={item.id} firstPage={detail.raw.timeline} cursor={detail.raw.next_before} />
     </section>
     {/* Last, so the read-only sections keep their order: the 0007b acceptance

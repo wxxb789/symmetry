@@ -1,50 +1,23 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
-import { useState } from "react";
-import { UnexpectedResponse, type TimelineItem, type WorkTimeline } from "../../services/api";
+import { UnexpectedResponse, type TimelineItem } from "../../services/api";
 import { workTimelineOptions } from "../../app/application";
+import { useControlSurface } from "./control";
 import { timelineItemKey, timelineItemView, timestamp } from "./presentation";
-
-/**
- * Merges newly served older pages into the entries already expanded. A detail
- * refresh re-issues the served cursor, so the query restarts from the refreshed
- * boundary: the fetched pages replace their own entries (same identity, newest
- * served text) while everything the reader already expanded stays rendered
- * instead of silently collapsing to the newest first page.
- */
-function mergeOlderEntries(fetched: readonly TimelineItem[], retained: readonly TimelineItem[]): readonly TimelineItem[] {
-  const fetchedKeys = new Set(fetched.map(timelineItemKey));
-  const merged = [...fetched, ...retained.filter((item) => !fetchedKeys.has(timelineItemKey(item)))];
-  return merged.length === retained.length && merged.every((item, index) => item === retained[index]) ? retained : merged;
-}
 
 /**
  * Execution history for one work item. The newest page arrives with the detail
  * read; older pages load on demand through the served `before` cursor only, and
  * the loaded pages belong to the reader rather than to one cursor generation.
+ * The control surface owns that retained state, because the receipt list beside
+ * this section renders the same pages; the disabled timeline query re-keys on
+ * every refresh, so a page is never read back from its current key's data.
  */
 export function WorkHistory({ workItemId, firstPage, cursor }: { workItemId: string; firstPage: readonly TimelineItem[]; cursor: string | null }) {
   const { application } = useRouteContext({ from: "__root__" });
+  const surface = useControlSurface();
   const query = useInfiniteQuery(workTimelineOptions(application.api, workItemId, cursor));
-  // Reopening the detail inside the freshness window remounts this component
-  // while the disabled query still holds the pages the reader expanded. The
-  // retained list starts from those cached pages, so the reader's history
-  // survives the remount and a later re-keyed refresh alike.
-  const [older, setOlder] = useState<{ workItemId: string; entries: readonly TimelineItem[] }>(
-    () => ({ workItemId, entries: query.data?.pages.flatMap((page) => page.items) ?? [] }),
-  );
-  // Every older page is served by a reader action, so the merge runs when that
-  // fetch resolves; a refresh that re-keys the query keeps the expanded entries.
-  const retainPages = (data: { readonly pages: readonly WorkTimeline[] } | undefined) => {
-    const fetched = data?.pages.flatMap((page) => page.items) ?? [];
-    if (fetched.length === 0) return;
-    setOlder((previous) => {
-      const retained = previous.workItemId === workItemId ? previous.entries : [];
-      const entries = mergeOlderEntries(fetched, retained);
-      return entries === retained && previous.workItemId === workItemId ? previous : { workItemId, entries };
-    });
-  };
-  const retained = older.workItemId === workItemId ? older.entries : [];
+  const retained = surface.olderEntries;
   // A refreshed first page can re-serve an entry the retained pages already
   // hold; the newest page owns it then, so no entry renders twice.
   const firstPageKeys = new Set(firstPage.map(timelineItemKey));
@@ -68,13 +41,13 @@ export function WorkHistory({ workItemId, firstPage, cursor }: { workItemId: str
               void application.queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId }] });
               return;
             }
-            void query.refetch().then((result) => { retainPages(result.data); });
+            void query.refetch().then((result) => { surface.retainTimelinePages(result.data); });
           }}>Retry history</button>
         </div>
       </div>
       : exhausted
         ? <p className="muted">No older history recorded.</p>
-        : <button className="button" type="button" disabled={query.isFetchingNextPage} onClick={() => { void query.fetchNextPage().then((result) => { retainPages(result.data); }); }}>
+        : <button className="button" type="button" disabled={query.isFetchingNextPage} onClick={() => { void query.fetchNextPage().then((result) => { surface.retainTimelinePages(result.data); }); }}>
           {query.isFetchingNextPage ? "Loading history…" : "Load older history"}
         </button>}
   </>;
