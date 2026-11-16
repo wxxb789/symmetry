@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
+    "test:connection-env": "node --test scripts/connection-spec-env.test.mjs",
     "test:compose": "playwright test tests/portal-compose-daemon.spec.mjs --project=desktop-chromium",
     "test:compose:read": "playwright test tests/portal-compose-restart.spec.mjs --project=desktop-chromium",
     "test:live": "playwright test tests/portal-live-daemon.spec.mjs --project=desktop-chromium",

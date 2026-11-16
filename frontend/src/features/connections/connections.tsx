@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useRouteContext, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouteContext, useRouterState, useSearch } from "@tanstack/react-router";
 import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { connectionsOptions } from "../../app/application";
@@ -378,6 +378,13 @@ export function ConnectionsPage() {
   // The control the dialogs fall back to when their invoking control is
   // disabled by the pending write (see restoreFocus).
   const detailCloseRef = useRef<HTMLButtonElement | null>(null);
+  // A settled removal clears the selection; the detail unmounts with the next
+  // render and takes any focus inside it — the pending-close handoff targets
+  // the detail's own close control — so the page-level control that survives
+  // the detail takes that focus instead of leaving the keyboard without a
+  // surviving position.
+  const newConnectionRef = useRef<HTMLButtonElement | null>(null);
+  const removalFocusPending = useRef(false);
   // Every editor open gets its own identity: a mutation response only closes
   // and navigates for the editor the operator still has open.
   const editorSequence = useRef(0);
@@ -407,6 +414,18 @@ export function ConnectionsPage() {
     if (!query.data || !search.connectionId || selected) return;
     void navigate({ to: "/connections", search: {}, replace: true });
   }, [navigate, query.data, search.connectionId, selected]);
+  // The removal continuation outranks the shell's navigation focus (which moves
+  // the page heading when clearing the selection changes the URL): the operator
+  // was working in the removed detail, so the surviving page control takes the
+  // focus. Both effects wait for the same idle navigation, and this passive
+  // effect runs after the shell's heading layout effect, so the handoff is the
+  // last word of the settled transition.
+  const navigationStatus = useRouterState({ select: (state) => state.status });
+  useEffect(() => {
+    if (selected !== undefined || navigationStatus !== "idle" || !removalFocusPending.current) return;
+    removalFocusPending.current = false;
+    newConnectionRef.current?.focus();
+  }, [selected, navigationStatus]);
   const openEditor = (kind: "create" | "edit", connectionId: string | null) => {
     setNotice(null);
     editorSequence.current += 1;
@@ -432,7 +451,9 @@ export function ConnectionsPage() {
     if (mounted.current && selectionRef.current === connectionId) setNotice(notice);
   };
   const clearSelectionFor = (connectionId: string) => {
-    if (mounted.current && selectionRef.current === connectionId) void navigate({ to: "/connections", search: {} });
+    if (!mounted.current || selectionRef.current !== connectionId) return;
+    removalFocusPending.current = true;
+    void navigate({ to: "/connections", search: {} });
   };
   const saved = (disposition: string, connectionId: string, editor: number, capabilitiesChanged: boolean) => {
     if (editor !== editorSequence.current) {
@@ -467,7 +488,7 @@ export function ConnectionsPage() {
     <PageHeading title="Connections" description="GitHub and Azure DevOps connections this server authenticates through.">
       {/* The provider catalog arrives with this query: until it is loaded the
           create draft would have no provider to choose or submit. */}
-      <button className="button" type="button" disabled={query.data === undefined} onClick={() => openEditor("create", null)}><Plus size={16} aria-hidden="true" />New connection</button>
+      <button ref={newConnectionRef} className="button" type="button" disabled={query.data === undefined} onClick={() => openEditor("create", null)}><Plus size={16} aria-hidden="true" />New connection</button>
       <RefreshButton fetching={query.isFetching} refresh={refresh} />
     </PageHeading>
     {notice && <p className="notice" role="status">{notice}<button className="button" type="button" onClick={() => setNotice(null)}>Dismiss</button></p>}

@@ -124,12 +124,21 @@ unreadable capture fails the test instead of passing the scan.
 The spec runs only against this fixture. The harness starts the control plane
 with a per-run identity, an identity file and a per-run operator token; the spec
 proves the identity file carries the run's identity for the portal port and logs
-in with the per-run token before any provider check. Without those values it
-skips at collection — and the harness fails a run that reports a skip — instead
-of driving a normal Control instance that would use its real `gh`/`az` sessions.
-The fixture keeps the application's real supervision topology — scheduler,
-reconciler and provider access stay up — and readiness requires `/healthz` to
-answer `ok`. The harness refuses a `-PortalUrl` whose port
+in with the per-run token before any provider check. That fixture identity
+decides the collection contract: without `SYMMETRY_FIXTURE_IDENTITY` /
+`SYMMETRY_FIXTURE_IDENTITY_FILE` the spec cannot prove its target and skips at
+collection, so the default target and the `SYMMETRY_PORTAL_URL` /
+`SYMMETRY_OPERATOR_TOKEN` override above stay loadable custom-target runs instead
+of driving a normal Control instance that would use its real `gh`/`az` sessions;
+a run that carries part of the identity (a half-configured harness) fails at
+collection instead. The harness itself fails a run that reports a skip. That
+contract is exercised by
+`pnpm --filter symmetry-browser-acceptance test:connection-env`
+(`browser/scripts/connection-spec-env.test.mjs`), which drives the Playwright CLI
+for the absent, documented-override, partial-identity and complete-fixture
+environments. The fixture keeps the application's real supervision topology —
+scheduler, reconciler and provider access stay up — and readiness requires
+`/healthz` to answer `ok`. The harness refuses a `-PortalUrl` whose port
 is not the one it starts the fixture on, refuses an occupied port, and stops only
 the process tree it started plus the listener PID recorded after the identity
 handshake.

@@ -23,7 +23,7 @@ browser flows, focused browser gate, docs closure.
 | stale updates | existing optimistic lock → 409 `stale`; SPA renders the server's current row | browser flow: mutate behind the page, then submit stale PATCH |
 | concurrent deletion | existing ver→409/404; SPA shows removed/refused state | browser flow: delete twice (two contexts) |
 | actionable redacted reasons | `status_message` + `error.message` from `failure/1`; `secret_data?` rejection; fixture tokens are canaries | rendered text + recorded page responses/DOM/storage + server log scan for the canary |
-| capability update resets dependent health/sync | existing transactional reset + `reset_resource_ids` in the update receipt | API response + SQL observation of `project_resources` after the update |
+| capability update resets dependent health/sync | existing transactional reset; the update receipt repeats the connection read projection, whose resource entries carry the reset `status`/`sync_status`/`last_synced_at` (no `reset_resource_ids`; §3 and §10.8) | API response + SQL observation of `project_resources` after the update |
 | unverified reported | receipt limitations list | receipt |
 | pre-existing coverage passes on the new route, classic checks retired | new-route spec replaces classic connection checks | executed suites + removed check list with counts/exit codes |
 
@@ -215,5 +215,5 @@ Measured during the browser gate; each note names the evidence, not a preference
    implementation never returned that list: the PATCH receipt repeats the connection read
    projection, whose resource entries carry the reset `status`/`sync_status`/`last_synced_at`
    (observed in the receipt's §5), and no contract clause or client consumed an id list. The
-   promise is corrected in §3 instead of implemented; an id list would add wire surface with no
+   promise is corrected in §2/§3 instead of implemented; an id list would add wire surface with no
    consumer.

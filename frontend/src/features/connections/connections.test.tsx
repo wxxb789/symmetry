@@ -711,6 +711,36 @@ describe("connection management", () => {
     });
   });
 
+  it("hands focus to the surviving page control when a settled removal unmounts the detail", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method }) => method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: "Remove connection" }));
+
+    // The operator closes the confirmation while the removal is still pending:
+    // focus hands off to the detail's own close control, which is the only
+    // control the pending write cannot disable.
+    await user.click(screen.getByRole("button", { name: "Close removal dialog" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull());
+    expect(screen.getByRole("button", { name: "Close connection detail" })).toHaveFocus();
+
+    // The removal settles and the refetched list drops the connection: the
+    // detail unmounts with the focused control, so the page-level control that
+    // survives the detail takes the focus instead of the document body.
+    harness.setConnections([]);
+    await act(async () => {
+      release(new Response(JSON.stringify({ disposition: "deleted", deleted_connection_id: connectionId }), { status: 200 }));
+      await pending;
+    });
+    // The detail's own close control is the focused element that dies with the
+    // unmount; the empty-state aside that replaces it carries the same label.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Close connection detail" })).toBeNull());
+    expect(document.activeElement).not.toBe(document.body);
+    expect(screen.getByRole("button", { name: "New connection" })).toHaveFocus();
+  });
+
   it("keeps keyboard focus on the connection row across a background refresh", async () => {
     const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"));
     const row = await screen.findByRole("button", { name: /GitHub engineering/ });

@@ -15,11 +15,18 @@
 // Fixture identity: the harness starts the fixture with a per-run identity, an
 // identity file and a per-run operator token. Every test proves the target is
 // that fixture (identity file matches the run and the portal port) and logs in
-// with the per-run token before any provider check. Without the harness-provided
-// environment the file skips at collection instead of driving a normal Control
-// instance that would use its real gh/az sessions, so the repository-wide
-// `pnpm test` commands still collect it; the harness treats a skip as a failed
-// acceptance run and a partially configured environment still fails.
+// with the per-run token before any provider check.
+//
+// Collection contract (browser/scripts/connection-spec-env.test.mjs drives it):
+// without the fixture identity the file cannot prove its target is the fixture,
+// so it skips at collection instead of driving a normal Control instance that
+// would use its real gh/az sessions — the default target and the README's
+// documented `SYMMETRY_PORTAL_URL` / `SYMMETRY_OPERATOR_TOKEN` override are
+// normal custom targets, and the repository-wide `pnpm test` commands still
+// collect the file. A run that carries part of the fixture identity, however, is
+// trying to be the fixture run: an incomplete set is a half-configured harness
+// and fails at collection instead of running against an unproven target. The
+// harness itself treats a skip as a failed acceptance run.
 import fs from "node:fs/promises";
 import { allowBrowserError, expect as baseExpect, test } from "./fixtures.mjs";
 
@@ -29,20 +36,24 @@ const fixtureVariables = [
   "SYMMETRY_FIXTURE_IDENTITY_FILE",
   "SYMMETRY_PORTAL_URL",
 ];
+const fixtureIdentityVariables = ["SYMMETRY_FIXTURE_IDENTITY", "SYMMETRY_FIXTURE_IDENTITY_FILE"];
+const isFixtureRun = fixtureIdentityVariables.some((name) => process.env[name]);
 const missingVariables = fixtureVariables.filter((name) => !process.env[name]);
-if (missingVariables.length > 0 && missingVariables.length < fixtureVariables.length) {
+if (isFixtureRun && missingVariables.length > 0) {
   throw new Error(
     `${missingVariables.join(", ")} must be set together: run browser/scripts/run-connection-fixture-tests.ps1, ` +
       "which starts the fixture control plane and publishes the run identity",
   );
 }
-test.skip(missingVariables.length > 0, "run browser/scripts/run-connection-fixture-tests.ps1 to publish the fixture identity");
-// The placeholders exist only for the skipped, environment-less collection; a
-// run with the harness always carries all four values.
+test.skip(!isFixtureRun, "run browser/scripts/run-connection-fixture-tests.ps1 to publish the fixture identity");
+// The placeholders exist only for the skipped collection of a non-fixture run;
+// a run with the harness always carries all four values.
 const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN ?? "";
 const fixtureIdentity = process.env.SYMMETRY_FIXTURE_IDENTITY ?? "";
 const fixtureIdentityFile = process.env.SYMMETRY_FIXTURE_IDENTITY_FILE ?? "";
-const portalUrl = new URL(process.env.SYMMETRY_PORTAL_URL ?? "http://127.0.0.1:4021");
+// Only a fixture run consumes the target; a skipped collection keeps the
+// loopback placeholder, so a custom target string is never parsed here.
+const portalUrl = new URL((isFixtureRun && process.env.SYMMETRY_PORTAL_URL) || "http://127.0.0.1:4021");
 if (!["127.0.0.1", "localhost", "::1"].includes(portalUrl.hostname)) {
   throw new Error(`SYMMETRY_PORTAL_URL must be loopback for the fixture run, got ${portalUrl.origin}`);
 }
@@ -269,6 +280,9 @@ test("a connection is created, inspected, tested and removed through the real AP
   // accessibility tree, so a role-based count can pass while the row persists).
   await expect(page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) })).toBeHidden();
   await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(0);
+  // The detail unmounted with the removal; the page-level control that survives
+  // it holds the keyboard instead of the document body.
+  await expect(page.getByRole("button", { name: "New connection" })).toBeFocused();
   const list = await api(page, "/portal/api/connections", { method: "GET" });
   expect(list.status).toBe(200);
   expect(list.body.connections.filter((connection) => connection.name === name)).toEqual([]);
