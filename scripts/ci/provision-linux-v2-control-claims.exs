@@ -101,13 +101,19 @@ defmodule LinuxV2ControlClaimFixture do
         default_workspace: "native"
       })
 
-    {:ok, connection} =
-      Integrations.create_connection(%{
-        provider: "github",
-        name: "linux-v2-owner-witness-#{suffix}",
-        account_ref: repository_owner,
-        capabilities: ["repositories"]
-      })
+    # The per-run suffix keeps the natural key unique, so this always inserts;
+    # the replayed shape is part of the create contract and is consumed the same
+    # way instead of raising a MatchError if that ever changes.
+    connection =
+      case Integrations.create_connection(%{
+             provider: "github",
+             name: "linux-v2-owner-witness-#{suffix}",
+             account_ref: repository_owner,
+             capabilities: ["repositories"]
+           }) do
+        {:ok, connection} -> connection
+        {:replayed, connection} -> connection
+      end
 
     {:ok, pi_repository} =
       Workspaces.create_resource(project.id, %{

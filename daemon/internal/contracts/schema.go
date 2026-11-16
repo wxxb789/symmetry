@@ -26,6 +26,7 @@ type Envelope string
 const (
 	EnvelopeAdapterCapabilities          Envelope = "adapter-capabilities"
 	EnvelopeAdmission                    Envelope = "admission"
+	EnvelopeConnectionsRead              Envelope = "connections-read"
 	EnvelopeContextSnapshot              Envelope = "context-snapshot"
 	EnvelopeDecision                     Envelope = "decision"
 	EnvelopeEvidence                     Envelope = "evidence"
@@ -43,6 +44,17 @@ const (
 	EnvelopeWorkspaceRead                Envelope = "workspace-read"
 )
 
+// presentationEnvelopes admit finite presentation numbers (read projections)
+// instead of canonical command-envelope number lexemes.
+var presentationEnvelopes = map[Envelope]bool{
+	EnvelopeConnectionsRead:  true,
+	EnvelopeWorkDetailRead:   true,
+	EnvelopeWorkTimelineRead: true,
+	EnvelopeWorkspaceRead:    true,
+}
+
+func admitsPresentationNumbers(envelope Envelope) bool { return presentationEnvelopes[envelope] }
+
 //go:embed schema_bundle.json
 var schemaBundle []byte
 
@@ -57,7 +69,7 @@ var (
 // unmarshalling it into a generated DTO. Protocol owns all cross-field and
 // envelope semantics. Presentation reads admit finite presentation numbers.
 func DecodeSchema(envelope Envelope, data []byte, target any) error {
-	if _, err := decodeRawJSON(data, presentationRead(envelope)); err != nil {
+	if _, err := decodeRawJSON(data, admitsPresentationNumbers(envelope)); err != nil {
 		return fmt.Errorf("decode %s JSON: %w", envelope, err)
 	}
 	if err := ValidateSchema(envelope, data); err != nil {
@@ -77,7 +89,7 @@ func ValidateSchema(envelope Envelope, data []byte) error {
 		return err
 	}
 
-	instance, err := decodeSchemaJSON(data, presentationRead(envelope))
+	instance, err := decodeSchemaJSON(data, admitsPresentationNumbers(envelope))
 	if err != nil {
 		return fmt.Errorf("decode %s JSON: %w", envelope, err)
 	}
@@ -96,10 +108,6 @@ func ValidateSchema(envelope Envelope, data []byte) error {
 		}
 	}
 	return nil
-}
-
-func presentationRead(envelope Envelope) bool {
-	return envelope == EnvelopeWorkspaceRead || envelope == EnvelopeWorkDetailRead || envelope == EnvelopeWorkTimelineRead
 }
 
 // TaskResultSchema returns a fresh copy of the canonical embedded output
@@ -157,10 +165,11 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		}
 	}
 
-	compiled := make(map[Envelope]*jsonschema.Schema, 17)
+	compiled := make(map[Envelope]*jsonschema.Schema, 18)
 	for _, envelope := range []Envelope{
 		EnvelopeAdapterCapabilities,
 		EnvelopeAdmission,
+		EnvelopeConnectionsRead,
 		EnvelopeContextSnapshot,
 		EnvelopeDecision,
 		EnvelopeEvidence,

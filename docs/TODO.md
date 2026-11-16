@@ -35,6 +35,13 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       (`.tmp/0009/control-full.log`). Preserve the runtime fixture behavior and
       leave cleanup and verification to separate maintenance.
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
+
+- [ ] Revalidate and remove the unused `Connection.statuses/0` accessor at
+      `control/lib/symmetry_control/integrations/schemas.ex:92`. A scoped search for
+      `Connection.statuses` and `Integrations.Connection.statuses` in `control/lib` and
+      `control/test` found no caller; the changesets read the `@statuses` module attribute
+      directly. Observed while fixing goal 0007d. Leave removal and verification to separate
+      maintenance.
 - [ ] Investigate the intermittent Linux failure `TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`
       in `daemon/internal/platform` (`containment_supervisor_linux_test.go:1128: decode
       wrong-session helper witness: unexpected end of JSON input`). Observed in run
@@ -46,8 +53,74 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
       green in run 43715830442 and on rerun job 132834151127. Revalidate the close/settle
       window; keep the survived-child assertion.
+- [ ] Investigate the intermittent Control failure `reversed import and delivery updates
+      lock WorkItems in UUID order without deadlocking` in
+      `control/test/symmetry_control/integrations_test.exs:1161` (`assert
+      String.contains?(query, "\"work_items\"")` inside `assert_sync_waiting_on_work_item/3`,
+      with Postgrex connections disconnecting in the same log). Observed in run 43891279765
+      job 133383740181 on the 0008a PR (`839/840 passed, 21 skipped`), green on rerun of the
+      same job (that run then completed successfully). Revalidate whether the captured SQL can
+      be asserted before the sync query is issued; keep the assertion itself and leave the fix
+      to separate maintenance.
 - [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
       `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
       states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
       classifier's skip list against the jobs that actually ran before treating the trim as
       fully accepted.
+
+- [ ] Revalidate the unreachable resource synchronization states. `project_resources` has a
+      `project_resources_sync_status_check` constraint admitting `syncing` and `stale`, and
+      `SymmetryControl.Workspaces.ReadModel` maps them to `syncing`/`attention` labels, but no
+      writer sets either value (`Integrations.persist_sync/4`,
+      `Integrations.record_resource_failure/3` and the connection/capability resets in
+      `Integrations.update_connection/2` and `Workspaces.update_resource/2` only write
+      `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
+      constraint and labels, and decide in a separate maintenance change whether the states
+      need a writer or the vocabulary needs a migration.
+
+- [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
+      the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
+      query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
+      the project id, while `control/lib/symmetry_control_web/portal_session.ex` validates each
+      path's query against `projectId`, `connectionId` or the work-search patterns and narrows a
+      project id to `[A-Za-z0-9_-]+`. The server stays the authority, so the worst case is a deep
+      link falling back to `/portal` rather than an open redirect; observed while completing the
+      0007d rebase union (0007b's client filter and 0007d's server rule met for the first time).
+      Decide whether the client should narrow its filter or the server should accept the extra
+      params, and if the client is narrowed, add a test that keeps the two lists aligned.
+
+- [ ] Investigate the intermittent browser failure `project, resource, work-item,
+      filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
+      detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
+      detached" (desktop-chromium). Observed once while implementing goal 0007d
+      (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
+      9 skipped) with two Control compiles running on the same host; the same test passed
+      twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
+      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
+      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
+
+- [ ] Investigate the environment-limited Windows command test. `CommandTest` "provider
+      token commands can keep stderr diagnostics out of stdout" fails with
+      `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
+      (observed while implementing goal 0007d: the full control suite reported 828/829
+      passed, 21 skipped, 1 failed on a clean dedicated test database; the current tree
+      (control identical to `bbc9b6f`) reports 844/845 passed with the same single failure).
+      `System.find_executable("pwsh")` returns `nil` here while `powershell.exe` resolves,
+      and putting the `WindowsApps` store alias on PATH makes two cases in that file fail
+      instead of one. `Command.run/3` and the test itself are untouched by 0007d.
+      Revalidate the Windows shell resolution; keep the assertion.
+
+- [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
+      the 0007d fixture database, 10 control tests fail because committed fixture rows are
+      visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
+      controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
+      on a clean dedicated test database. The browser harness recreates its own database;
+      the suite should use the repository default (`symmetry_control_test`).
+
+- [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
+      legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
+      output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
+      toast and "two browser contexts reject a stale project update" hit the 60 s test timeout;
+      both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
+      and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
+      before changing any budget.

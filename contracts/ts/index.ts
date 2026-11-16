@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import {
   AdapterCapabilitiesSchema,
   AdmissionSchema,
+  ConnectionsReadSchema,
   ContextSnapshotSchema,
   DecisionSchema,
   EvidenceBatchConflictDetailsSchema,
@@ -36,6 +37,7 @@ import { assertUnicode, parsePresentationJson, parseWireJson, WireJsonError } fr
 export {
   AdapterCapabilitiesSchema,
   AdmissionSchema,
+  ConnectionsReadSchema,
   ContextSnapshotSchema,
   DecisionSchema,
   EvidenceBatchConflictDetailsSchema,
@@ -92,6 +94,7 @@ function boundary<A>(
 
 export const AdapterCapabilities = boundary(AdapterCapabilitiesSchema);
 export const Admission = boundary(AdmissionSchema, validateAdmissionSemantics);
+export const ConnectionsRead = boundary(ConnectionsReadSchema, undefined, parsePresentationJson);
 export const ContextSnapshot = boundary(ContextSnapshotSchema, validateContextSnapshotSemantics);
 export const Decision = boundary(DecisionSchema, validateDecisionSemantics);
 export const EvidenceBatchConflictDetails = boundary(EvidenceBatchConflictDetailsSchema);

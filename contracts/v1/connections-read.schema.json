@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/connections-read.schema.json",
+  "title": "Symmetry Connections Read v1",
+  "description": "Consumed fields of the existing portal connection read and its mutation projections. Presentation values stay open strings so an unknown status, capability or auth type remains renderable; unconsumed presentation fields remain additive.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["providers", "connections"],
+  "properties": {
+    "providers": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/ConnectionProvider"}
+    },
+    "connections": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/Connection"}
+    }
+  },
+  "definitions": {
+    "ConnectionProvider": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "auth_type", "capabilities"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "auth_type": {"type": "string", "minLength": 1},
+        "capabilities": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "Connection": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "provider",
+        "name",
+        "account_ref",
+        "auth_type",
+        "capabilities",
+        "status",
+        "status_message",
+        "metadata",
+        "last_checked_at",
+        "version",
+        "resources"
+      ],
+      "properties": {
+        "id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "provider": {"type": "string", "minLength": 1},
+        "name": {"type": "string"},
+        "account_ref": {"type": "string"},
+        "auth_type": {"type": "string", "minLength": 1},
+        "capabilities": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "status": {"type": "string"},
+        "status_message": {
+          "oneOf": [{"type": "string"}, {"type": "null"}]
+        },
+        "metadata": {"type": "object"},
+        "last_checked_at": {
+          "oneOf": [
+            {"$ref": "common.schema.json#/definitions/UtcTimestamp"},
+            {"type": "null"}
+          ]
+        },
+        "version": {"$ref": "common.schema.json#/definitions/Revision"},
+        "resources": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/ConnectionResource"}
+        }
+      }
+    },
+    "ConnectionResource": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "project_id",
+        "project_key",
+        "project_name",
+        "project_status",
+        "kind",
+        "name",
+        "provider",
+        "external_ref",
+        "url",
+        "status",
+        "sync_status",
+        "status_message",
+        "metadata",
+        "last_checked_at",
+        "last_synced_at",
+        "version"
+      ],
+      "properties": {
+        "id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "project_key": {"type": "string"},
+        "project_name": {"type": "string"},
+        "project_status": {"type": "string"},
+        "kind": {"type": "string", "minLength": 1},
+        "name": {"type": "string"},
+        "provider": {
+          "oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+        },
+        "external_ref": {
+          "oneOf": [{"type": "string"}, {"type": "null"}]
+        },
+        "url": {
+          "oneOf": [{"type": "string"}, {"type": "null"}]
+        },
+        "status": {"type": "string"},
+        "sync_status": {"type": "string"},
+        "status_message": {
+          "oneOf": [{"type": "string"}, {"type": "null"}]
+        },
+        "metadata": {"type": "object"},
+        "last_checked_at": {
+          "oneOf": [
+            {"$ref": "common.schema.json#/definitions/UtcTimestamp"},
+            {"type": "null"}
+          ]
+        },
+        "last_synced_at": {
+          "oneOf": [
+            {"$ref": "common.schema.json#/definitions/UtcTimestamp"},
+            {"type": "null"}
+          ]
+        },
+        "version": {"$ref": "common.schema.json#/definitions/Revision"}
+      }
+    }
+  }
+}

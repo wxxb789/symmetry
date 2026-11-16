@@ -29,6 +29,50 @@ defmodule SymmetryControl.Integrations do
     Repo.all(from connection in Connection, order_by: [asc: connection.name, asc: connection.id])
   end
 
+  @doc """
+  Supported provider catalog for the connection surfaces.
+
+  The allowed auth type and capability ids come from the connection schema, so
+  the browser never restates provider policy.
+  """
+  def connection_providers do
+    Enum.map(Connection.providers(), fn provider ->
+      [auth_type] = Connection.auth_types(provider)
+
+      %{
+        id: provider,
+        auth_type: auth_type,
+        capabilities: Connection.capabilities()
+      }
+    end)
+  end
+
+  @doc """
+  Bound resources grouped by connection, used by the connection reads.
+
+  Pass `:all` for every connection or a list of connection ids to scope the
+  read. Each returned resource carries its `project` association.
+  """
+  def list_bound_resources(connection_ids \\ :all) do
+    query =
+      from resource in ProjectResource,
+        join: project in Project,
+        on: project.id == resource.project_id,
+        where: not is_nil(resource.connection_id),
+        order_by: [asc: project.key, asc: resource.kind, asc: resource.name, asc: resource.id],
+        preload: [project: project]
+
+    query =
+      case connection_ids do
+        :all -> query
+        ids -> from resource in query, where: resource.connection_id in ^ids
+      end
+
+    query
+    |> Repo.all()
+    |> Enum.group_by(& &1.connection_id)
+  end
+
   def create_connection(attrs) when is_map(attrs) do
     with :ok <- reject_secret_attrs(attrs),
          {:ok, auth_type} <- auth_type_for(attr_value(attrs, :provider)) do
@@ -37,9 +81,24 @@ defmodule SymmetryControl.Integrations do
         |> drop_attrs([:status, :status_message, :metadata, :last_checked_at])
         |> put_attr(:auth_type, auth_type)
 
-      %Connection{}
-      |> Connection.changeset(attrs)
-      |> Repo.insert()
+      changeset = Connection.changeset(%Connection{}, attrs)
+
+      # A replay repeats exactly a valid submission, so the full input is
+      # validated before the fast path: an invalid payload is refused with the
+      # ordinary field errors instead of being normalized into a match.
+      if changeset.valid? do
+        case applied_connection(changeset) do
+          {:ok, connection} ->
+            {:replayed, connection}
+
+          :error ->
+            changeset
+            |> Repo.insert()
+            |> replay_racing_connection()
+        end
+      else
+        {:error, changeset}
+      end
     end
   end
 
@@ -1740,6 +1799,58 @@ defmodule SymmetryControl.Integrations do
     if secret_data?(attrs),
       do: {:error, :invalid_request},
       else: :ok
+  end
+
+  # An identical connection submission is the same intent: `[provider, name]` is
+  # the natural key, so a repeat (double submit, retry after an unknown outcome)
+  # returns the applied row instead of creating a second one or a duplicate-name
+  # error. The comparison uses the values this submission would store
+  # (`apply_changes/1`: a create that omits capabilities stores the schema
+  # default), so an omitted optional field is the same intent as its default
+  # instead of an unmatchable `nil`. A different payload keeps the ordinary
+  # validation error. The natural key is renamable: if the applied row was
+  # renamed or removed before the retry, the retry is a new submission.
+  defp applied_connection(%Ecto.Changeset{} = changeset) do
+    applied = Ecto.Changeset.apply_changes(changeset)
+
+    with %Connection{} = connection <-
+           Repo.get_by(Connection, provider: applied.provider, name: applied.name),
+         true <- equivalent_intent?(connection, applied) do
+      {:ok, connection}
+    else
+      _value -> :error
+    end
+  end
+
+  defp equivalent_intent?(connection, applied) do
+    connection.account_ref == applied.account_ref and
+      normalized_capabilities(connection.capabilities) ==
+        normalized_capabilities(applied.capabilities)
+  end
+
+  defp replay_racing_connection({:error, %Ecto.Changeset{} = changeset}) do
+    with true <- duplicate_name?(changeset),
+         {:ok, connection} <- applied_connection(changeset) do
+      {:replayed, connection}
+    else
+      _value -> {:error, changeset}
+    end
+  end
+
+  defp replay_racing_connection(result), do: result
+
+  # Ecto attributes a composite unique-constraint error to the first field of
+  # the constraint, so the `[provider, name]` index reports on `:provider`.
+  # The unique-index error is recognized on any field.
+  defp duplicate_name?(changeset) do
+    Enum.any?(changeset.errors, fn
+      {_field, {_message, options}} -> options[:constraint] == :unique
+      _error -> false
+    end)
+  end
+
+  defp normalized_capabilities(value) when is_list(value) do
+    value |> Enum.filter(&is_binary/1) |> Enum.uniq() |> Enum.sort()
   end
 
   defp auth_type_for("github"), do: {:ok, "gh_cli"}

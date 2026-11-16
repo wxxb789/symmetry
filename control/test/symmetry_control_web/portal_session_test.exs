@@ -135,6 +135,8 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal?project_id=project-123",
           "/portal/attention",
           "/portal/attention?projectId=project-123",
+          "/portal/connections",
+          "/portal/connections?connectionId=20000000-0000-4000-8000-000000000001",
           "/portal/projects",
           "/portal/projects/project-123",
           "/portal/projects/project-123?view=board&q=keeper",
@@ -149,7 +151,9 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/classic"
         ] do
       redirect_response = conn |> get(path)
-      assert get_resp_header(redirect_response, "cache-control") == ["no-store"]
+
+      assert get_resp_header(redirect_response, "cache-control") == ["no-store"],
+             "unauthorized deep link #{path} must not be cacheable"
 
       login_page = conn |> enforce_csrf() |> get(redirected_to(redirect_response, 302))
       login_html = html_response(login_page, 200)
@@ -231,6 +235,10 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/not-a-route",
           "/portal/projects/../login",
           "/portal/projects/%2e%2e",
+          "/portal/connections/extra",
+          "/portal/connections?connectionId=//example.com",
+          "/portal/connections?return_to=//example.com",
+          "/portal/connections#not-a-view",
           "/portal/projects/project-123?return_to=//example.com",
           "/portal?return_to=//example.com",
           "/portal?project_id=//example.com",

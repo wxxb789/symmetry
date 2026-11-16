@@ -55,6 +55,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     for path <- [
           "/portal",
           "/portal/attention",
+          "/portal/connections",
           "/portal/projects",
           "/portal/projects/project-123",
           "/portal/work/work-123"

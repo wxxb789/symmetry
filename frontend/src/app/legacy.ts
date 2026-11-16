@@ -1,7 +1,13 @@
 export function legacyDestination(hash: string, search = ""): string | null {
   if (!hash || hash === "#") return null;
   const fragment = hash.slice(1);
-  if (["chat", "connections", "board", "resources", "activity", "health"].includes(fragment)) {
+  if (fragment === "connections") {
+    const connectionId = new URLSearchParams(search).get("connectionId");
+    return connectionId
+      ? `/portal/connections?${new URLSearchParams({ connectionId })}`
+      : "/portal/connections";
+  }
+  if (["chat", "board", "resources", "activity", "health"].includes(fragment)) {
     return `/portal/classic${search}#${fragment}`;
   }
   const projectId = new URLSearchParams(search).get("project_id");

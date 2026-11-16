@@ -1,4 +1,4 @@
-import { infiniteQueryOptions, QueryCache, QueryClient, queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, MutationCache, QueryCache, QueryClient, queryOptions } from "@tanstack/react-query";
 import { createApi, readRetry, Unauthenticated, type Api } from "../services/api";
 
 interface BrowserLocation {
@@ -18,7 +18,7 @@ export interface Application {
 export function safeReturnTo(href: string): string {
   try {
     const url = new URL(href);
-    if (/^\/portal\/(attention|projects(?:\/[^/]+)?|work\/[^/]+)\/?$/.test(url.pathname)) {
+    if (/^\/portal\/(attention|connections|projects(?:\/[^/]+)?|work\/[^/]+)\/?$/.test(url.pathname)) {
       return `${url.pathname}${url.search}`;
     }
   } catch {
@@ -32,16 +32,29 @@ export function createApplication(options: { fetcher?: typeof fetch; location?: 
   const location = options.location ?? window.location;
   const listeners = new Set<() => void>();
   let signedOut = false;
+  // Session expiry is one recovery for reads and for commands: cancel in-flight
+  // work, drop private cache, then return to the login page with a safe path.
+  const expireSession = () => {
+    if (signedOut) return;
+    signedOut = true;
+    for (const listener of listeners) listener();
+    void queryClient.cancelQueries().then(() => {
+      queryClient.clear();
+      location.replace(`/portal/login?return_to=${encodeURIComponent(safeReturnTo(location.href))}`);
+    });
+  };
   const queryClient = new QueryClient({
     queryCache: new QueryCache({
       onError: (error) => {
-        if (!(error instanceof Unauthenticated) || signedOut) return;
-        signedOut = true;
-        for (const listener of listeners) listener();
-        void queryClient.cancelQueries().then(() => {
-          queryClient.clear();
-          location.replace(`/portal/login?return_to=${encodeURIComponent(safeReturnTo(location.href))}`);
-        });
+        if (error instanceof Unauthenticated) expireSession();
+      },
+    }),
+    // The cache-level handler runs for every mutation, including the ones that
+    // supply their own onError: a command refusal must expire the session even
+    // when its mutation also re-reads an inactive query.
+    mutationCache: new MutationCache({
+      onError: (error) => {
+        if (error instanceof Unauthenticated) expireSession();
       },
     }),
     defaultOptions: {
@@ -50,6 +63,11 @@ export function createApplication(options: { fetcher?: typeof fetch; location?: 
         retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 2_000),
         staleTime: 15_000,
         refetchOnWindowFocus: true,
+      },
+      mutations: {
+        // Mutation retries default off; an intentional retry reuses the same
+        // normalized payload, and 401/403/409/422 are never retried.
+        retry: false,
       },
     },
   });
@@ -96,4 +114,9 @@ export const workTimelineOptions = (api: Api, workItemId: string, cursor: string
   initialPageParam: cursor,
   getNextPageParam: (lastPage) => lastPage.next_before,
   enabled: false,
+});
+
+export const connectionsOptions = (api: Api) => queryOptions({
+  queryKey: ["connections"],
+  queryFn: ({ signal }) => api.connections(signal),
 });

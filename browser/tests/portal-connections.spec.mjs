@@ -1,1447 +1,495 @@
-import { allowBrowserError, expect, test } from "./fixtures.mjs";
+// Connection-management acceptance on the fixed design's /portal/connections
+// surface. Every flow below drives the real Portal API, the real PostgreSQL
+// state and the real GitHub/Azure DevOps provider modules through a browser.
+//
+// Provider boundary: the control process under test is started with
+// scripts/ci/portal-connection-fixture.exs, which replaces each provider's
+// external transport (HTTP client and local CLI session) with canned provider
+// documents. No provider host is contacted. The fixture CLI tokens are canaries:
+// each test asserts that no canary reaches a recorded same-origin response
+// (body and every header, including each Set-Cookie), the DOM, web storage, the
+// cookie jar (document.cookie cannot see HttpOnly cookies; the jar is sampled
+// at every same-origin response and once more at the end), request headers and
+// bodies, or the console.
+//
+// Fixture identity: the harness starts the fixture with a per-run identity, an
+// identity file and a per-run operator token. Every test proves the target is
+// that fixture (identity file matches the run and the portal port) and logs in
+// with the per-run token before any provider check.
+//
+// Collection contract (browser/scripts/connection-spec-env.test.mjs drives it):
+// without the fixture identity the file cannot prove its target is the fixture,
+// so it skips at collection instead of driving a normal Control instance that
+// would use its real gh/az sessions — the default target and the README's
+// documented `SYMMETRY_PORTAL_URL` / `SYMMETRY_OPERATOR_TOKEN` override are
+// normal custom targets, and the repository-wide `pnpm test` commands still
+// collect the file. A run that carries part of the fixture identity, however, is
+// trying to be the fixture run: an incomplete set is a half-configured harness
+// and fails at collection instead of running against an unproven target. The
+// harness itself treats a skip as a failed acceptance run.
+import fs from "node:fs/promises";
+import { allowBrowserError, expect as baseExpect, test } from "./fixtures.mjs";
 
-const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
+const fixtureVariables = [
+  "SYMMETRY_OPERATOR_TOKEN",
+  "SYMMETRY_FIXTURE_IDENTITY",
+  "SYMMETRY_FIXTURE_IDENTITY_FILE",
+  "SYMMETRY_PORTAL_URL",
+];
+const fixtureIdentityVariables = ["SYMMETRY_FIXTURE_IDENTITY", "SYMMETRY_FIXTURE_IDENTITY_FILE"];
+const isFixtureRun = fixtureIdentityVariables.some((name) => process.env[name]);
+const missingVariables = fixtureVariables.filter((name) => !process.env[name]);
+if (isFixtureRun && missingVariables.length > 0) {
+  throw new Error(
+    `${missingVariables.join(", ")} must be set together: run browser/scripts/run-connection-fixture-tests.ps1, ` +
+      "which starts the fixture control plane and publishes the run identity",
+  );
+}
+test.skip(!isFixtureRun, "run browser/scripts/run-connection-fixture-tests.ps1 to publish the fixture identity");
+// The placeholders exist only for the skipped collection of a non-fixture run;
+// a run with the harness always carries all four values.
+const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN ?? "";
+const fixtureIdentity = process.env.SYMMETRY_FIXTURE_IDENTITY ?? "";
+const fixtureIdentityFile = process.env.SYMMETRY_FIXTURE_IDENTITY_FILE ?? "";
+// Only a fixture run consumes the target; a skipped collection keeps the
+// loopback placeholder, so a custom target string is never parsed here.
+const portalUrl = new URL((isFixtureRun && process.env.SYMMETRY_PORTAL_URL) || "http://127.0.0.1:4021");
+if (!["127.0.0.1", "localhost", "::1"].includes(portalUrl.hostname)) {
+  throw new Error(`SYMMETRY_PORTAL_URL must be loopback for the fixture run, got ${portalUrl.origin}`);
+}
+const portalOrigin = portalUrl.origin;
+
+// The acceptance control plane runs on a loaded developer host: measured reads
+// on this surface are sub-second, but a page that re-reads behind several
+// mutations can take seconds, so this file's assertions get a wider budget than
+// the shared 10s default. Server-side latency is measured separately.
+const expect = baseExpect.configure({ timeout: 30_000 });
+test.describe.configure({ timeout: 120_000 });
+
+const canaries = ["gho_fixture_connection_token_canary", "fixture-ado-access-token-canary"];
+const secretPattern = new RegExp([...canaries, "Bearer ", "ghp_", "github_pat_"].join("|"));
+const suffix = `${Date.now().toString(36)}${Math.round(Math.random() * 1e6).toString(36)}`;
+let projectSequence = 0;
+
+// The identity file is written by the fixture process started for this run, and
+// it names the port that process serves; the target must be that process before
+// any provider check. A normal Control instance cannot satisfy this.
+async function assertFixtureTarget() {
+  const raw = await fs.readFile(fixtureIdentityFile, "utf8").catch((error) => {
+    throw new Error(`fixture identity file ${fixtureIdentityFile} is unreadable: ${error.message}`);
+  });
+  const identity = JSON.parse(raw);
+  expect(identity.identity, "fixture identity file must carry this run's identity").toBe(fixtureIdentity);
+  expect(String(identity.port), "fixture identity file must match the portal target port").toBe(portalUrl.port);
+}
 
 async function login(page) {
-  await page.goto("/portal/login?return_to=%2Fportal%2Fclassic");
+  await assertFixtureTarget();
+  await page.goto("/portal/login?return_to=%2Fportal%2Fconnections");
   await page.getByLabel("Operator token").fill(operatorToken);
-  await Promise.all([
-    page.waitForURL(/\/portal\/classic(?:\?|#|$)/),
-    page.getByRole("button", { name: "Open workspace" }).click()
-  ]);
+  await page.getByRole("button", { name: "Open workspace" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
 }
 
-test("a connected provider can be inspected, bound, synchronized, and assigned", async ({ page }) => {
-  const project = {
-    id: "10000000-0000-0000-0000-000000000001",
-    key: "EXT",
-    name: "Connected engineering",
-    description: "",
-    status: "active",
-    version: 1,
-    default_agent_profile: "codex",
-    default_workspace: "primary",
-    resources: [],
-    work_items: []
-  };
-  const workspace = {
-    selected_project_id: project.id,
-    projects: [project],
-    connections: [],
-    runtimes: [],
-    registered_runtimes: [],
-    activity: [],
-    health: {
-      connections: "unknown",
-      runtimes: "offline",
-      executions: "idle",
-      synchronization: "unknown"
-    }
-  };
+async function api(page, path, { method = "POST", body } = {}) {
+  return page.evaluate(async ({ path, method, body }) => {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+    const headers = method === "GET" ? { accept: "application/json" } : { "content-type": "application/json", "x-csrf-token": csrf };
+    const response = await fetch(path, {
+      method,
+      credentials: "same-origin",
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    });
+    const text = await response.text();
+    return { status: response.status, contentType: response.headers.get("content-type"), text, body: text ? JSON.parse(text) : null };
+  }, { path, method, body });
+}
 
-  await page.route("**/portal/api/**", async (route) => {
-    const request = route.request();
+async function createProject(page) {
+  // Project keys are ^[A-Z][A-Z0-9]{1,7}$; the sequence keeps runs distinct.
+  const key = `C${projectSequence += 1}${suffix}`.toUpperCase().slice(0, 8);
+  const response = await api(page, "/portal/api/projects", { body: { key, name: `Connection acceptance ${key}`, description: "Real Phoenix connection fixture" } });
+  expect(response.status).toBe(201);
+  return response.body.project.id;
+}
+
+function recordApiBodies(page) {
+  const responses = [];
+  const requests = [];
+  const consoleMessages = [];
+  const pageErrors = [];
+  const cookieJarSamples = [];
+  page.on("request", (request) => {
     const url = new URL(request.url());
-    const payload = request.postDataJSON?.() || {};
-
-    if (request.method() === "GET" && url.pathname === "/portal/api/workspace") {
-      await route.fulfill({ status: 200, json: workspace });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname === "/portal/api/connections") {
-      expect(payload.auth_type).toBe("gh_cli");
-      expect(payload).not.toHaveProperty("credential");
-      expect(payload.capabilities).toEqual(["repositories", "work_items", "changes", "ci"]);
-      const connection = {
-        id: "20000000-0000-0000-0000-000000000001",
-        provider: "github",
-        name: payload.name,
-        account_ref: payload.account_ref,
-        auth_type: payload.auth_type,
-        capabilities: payload.capabilities,
-        status: "unknown",
-        status_message: null,
-        metadata: {},
-        last_checked_at: null,
-        version: 1
-      };
-      workspace.connections = [connection];
-      await route.fulfill({ status: 201, json: { connection } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.endsWith("/check")) {
-      const connection = {
-        ...workspace.connections[0],
-        status: "healthy",
-        last_checked_at: "2026-09-05T10:00:00Z",
-        version: 2
-      };
-      workspace.connections = [connection];
-      workspace.health.connections = "healthy";
-      await route.fulfill({ status: 200, json: { connection } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.endsWith("/resources")) {
-      expect(payload.connection_id).toBe(workspace.connections[0].id);
-      const resource = {
-        id: payload.kind === "repository"
-          ? "30000000-0000-0000-0000-000000000001"
-          : "30000000-0000-0000-0000-000000000002",
-        project_id: project.id,
-        connection_id: workspace.connections[0].id,
-        kind: payload.kind,
-        name: payload.name,
-        provider: "github",
-        external_ref: payload.external_ref,
-        url: null,
-        status: "unknown",
-        sync_status: "unknown",
-        status_message: null,
-        metadata: {},
-        last_checked_at: null,
-        last_synced_at: null,
-        version: 1
-      };
-      project.resources.push(resource);
-      await route.fulfill({ status: 201, json: { resource } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.endsWith("/sync")) {
-      const resourceId = url.pathname.split("/").at(-2);
-      const index = project.resources.findIndex((resource) => resource.id === resourceId);
-      project.resources[index] = {
-        ...project.resources[index],
-        url: "https://github.com/acme/symmetry/issues",
-        status: "healthy",
-        sync_status: "synced",
-        last_checked_at: "2026-09-05T10:05:00Z",
-        last_synced_at: "2026-09-05T10:05:00Z",
-        version: 2
-      };
-      if (project.resources[index].kind === "work_tracking") {
-        project.work_items = [externalWorkItem(project, project.resources[index])];
-      } else if (project.resources[index].kind === "repository" && project.work_items[0]) {
-        const item = project.work_items[0];
-        item.pull_request_url = "https://github.com/acme/symmetry/pull/42";
-        item.ci_status = "passed";
-        item.review_status = "approved";
-        item.delivery = {
-          pull_request: {
-            value: item.pull_request_url,
-            url: item.pull_request_url,
-            status: "open",
-            source: "provider",
-            provider: "github",
-            generation: null
-          },
-          ci: {
-            value: "passed",
-            url: null,
-            status: "passed",
-            source: "provider",
-            provider: "github",
-            generation: null
-          },
-          review: {
-            value: "approved",
-            url: null,
-            status: "approved",
-            source: "provider",
-            provider: "github",
-            generation: null
-          }
+    if (url.origin !== portalOrigin) return;
+    requests.push({ method: request.method(), path: url.pathname, request });
+  });
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (url.origin !== portalOrigin) return;
+    // The full header list is recorded when the response arrives: response
+    // headers are the surface that introduces an HttpOnly cookie (page scripts
+    // can neither write nor read HttpOnly state), and this record still holds
+    // the evidence after a transient cookie has been cleared.
+    responses.push((async () => {
+      const headers = (await response.headersArray()).map(({ name, value }) => `${name}: ${value}`);
+      const status = response.status();
+      if (status >= 300 && status < 400) {
+        // A redirect has no readable body; its Location header is scanned in
+        // its place, and a redirect without one is an evidence failure (304
+        // has no body by protocol).
+        const location = response.headers()["location"];
+        return {
+          path: url.pathname,
+          status,
+          headers,
+          text: location ?? "",
+          unreadable: !location && status !== 304 ? "redirect response without a Location header" : undefined
         };
       }
-      workspace.health.synchronization = "synced";
-      await route.fulfill({ status: 200, json: { resource: project.resources[index] } });
-      return;
-    }
-
-    if (request.method() === "PATCH" && url.pathname.includes("/work-items/")) {
-      const item = project.work_items[0];
-      Object.assign(item, {
-        repository_resource_id: payload.repository_resource_id || null,
-        repository: project.resources.find((resource) => resource.id === payload.repository_resource_id)?.external_ref || null,
-        ci_resource_id: payload.ci_resource_id || null,
-        ci_resource: null,
-        assignee: {
-          type: payload.assignee_type,
-          name: payload.assignee_name || null,
-          agent_profile: payload.agent_profile || null
-        },
-        workspace: payload.workspace || null,
-        branch: payload.branch || null,
-        pull_request_url: payload.pull_request_url || null,
-        can_start: payload.assignee_type === "agent",
-        version: item.version + 1
-      });
-      await route.fulfill({ status: 200, json: { work_item: item } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.endsWith("/run")) {
-      const item = project.work_items[0];
-      item.can_start = false;
-      item.execution = {
-        state: "queued",
-        generation: 1,
-        can_cancel: true,
-        can_retry: false,
-        intent_locked: true,
-        waiting: null
-      };
-      await route.fulfill({ status: 202, json: { work_item: item, execution: item.execution } });
-      return;
-    }
-
-    if (request.method() === "GET" && url.pathname.includes("/work-items/")) {
-      const item = project.work_items[0];
-      await route.fulfill({
-        status: 200,
-        json: {
-          work_item: item,
-          outcome: {
-            phase: "not_started",
-            summary: null,
-            owner: item.assignee,
-            blocker: null,
-            findings: [],
-            changed_artifacts: [],
-            tests: [],
-            result: null,
-            failure: null
-          },
-          timeline: [],
-          raw: { task: null, timeline: [], next_before: null }
-        }
-      });
-      return;
-    }
-
-    await route.fulfill({ status: 404, json: { error: { code: "not_found", message: "not found" } } });
+      try {
+        const text = await response.text();
+        return { path: url.pathname, status, headers, text };
+      } catch (error) {
+        return { path: url.pathname, status, headers, text: null, unreadable: String(error) };
+      }
+    })());
+    // The jar is sampled while the run is in flight, not only at the end, so a
+    // cookie that exists for part of the run is still scanned.
+    cookieJarSamples.push(page.context().cookies());
   });
+  page.on("console", (message) => consoleMessages.push({ type: message.type(), text: message.text() }));
+  page.on("pageerror", (error) => pageErrors.push(String(error?.stack || error)));
+  return { responses, requests, consoleMessages, pageErrors, cookieJarSamples };
+}
 
-  await login(page);
-  await page.getByRole("link", { name: "Connections" }).click();
-  await page.getByRole("button", { name: "New connection" }).click();
-
-  const connectionDialog = page.locator("#connection-dialog");
-  await expect(page.getByRole("dialog", { name: "New connection" })).toBeVisible();
-  await connectionDialog.getByLabel("Provider").selectOption("github");
-  await connectionDialog.getByLabel("Name").fill("GitHub engineering");
-  await connectionDialog.getByLabel("Account or organization").fill("acme");
-  const repositoriesCapability = connectionDialog.getByLabel("Repositories");
-  const changesCapability = connectionDialog.getByLabel("Changes");
-
-  await changesCapability.check();
-  await expect(repositoriesCapability).toBeChecked();
-  await repositoriesCapability.uncheck();
-  await expect(changesCapability).not.toBeChecked();
-  await changesCapability.check();
-  await expect(repositoriesCapability).toBeChecked();
-  await connectionDialog.getByLabel("Work items").check();
-  await connectionDialog.getByLabel("CI").check();
-  await connectionDialog.getByRole("button", { name: "Connect" }).click();
-
-  await expect(page.locator("#connection-table")).toContainText("GitHub engineering");
-  await expect(page.locator("#connection-table")).toContainText("GitHub CLI · HTTPS");
-  await expect(connectionDialog.getByLabel("Credential")).toHaveCount(0);
-
-  workspace.connections[0].capabilities = ["changes"];
-  await page.reload();
-  await page.getByRole("link", { name: "Connections" }).click();
-  await page.locator(".connection-primary").click();
-  await expect(page.getByRole("dialog", { name: "Connection settings" })).toBeVisible();
-  await expect(connectionDialog.getByLabel("Changes")).toBeChecked();
-  await expect(connectionDialog.getByLabel("Repositories")).toBeChecked();
-  await connectionDialog.getByLabel("Repositories").uncheck();
-  await expect(connectionDialog.getByLabel("Changes")).not.toBeChecked();
-  await connectionDialog.getByLabel("Changes").check();
-  await expect(connectionDialog.getByLabel("Repositories")).toBeChecked();
-  const currentConnection = workspace.connections[0];
-  workspace.connections = [];
-  const removedConnectionRefresh = page.waitForResponse((response) =>
-    response.request().method() === "GET" && new URL(response.url()).pathname === "/portal/api/workspace"
-  );
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-  await removedConnectionRefresh;
-  await expect(connectionDialog.getByRole("button", { name: "Save" })).toBeDisabled();
-  await expect(connectionDialog.locator("[data-form-error]")).toContainText("changed while the editor was open");
-  await connectionDialog.getByRole("button", { name: "Cancel" }).click();
-  workspace.connections = [currentConnection];
-  await page.getByRole("button", { name: "Refresh workspace" }).click();
-  workspace.connections[0].capabilities = ["repositories", "work_items", "changes", "ci"];
-
-  await page.getByRole("button", { name: "Check GitHub engineering" }).click();
-  await expect(page.locator("#connection-table")).toContainText("Healthy");
-
-  await page.getByRole("link", { name: "Resources" }).click();
-  await page.getByRole("button", { name: "Attach resource" }).click();
-  const resourceDialog = page.locator("#resource-dialog");
-  await resourceDialog.getByLabel("Type").selectOption("repository");
-  await resourceDialog.getByLabel("Provider connection").selectOption(workspace.connections[0].id);
-  await resourceDialog.getByLabel("Name").fill("symmetry");
-  await resourceDialog.getByLabel("Reference", { exact: true }).fill("acme/symmetry");
-  await resourceDialog.getByRole("button", { name: "Attach" }).click();
-
-  await page.getByRole("button", { name: "Attach resource" }).click();
-  await resourceDialog.getByLabel("Type").selectOption("work_tracking");
-  await resourceDialog.getByLabel("Provider connection").selectOption(workspace.connections[0].id);
-  await resourceDialog.getByLabel("Name").fill("GitHub Issues");
-  await resourceDialog.getByLabel("Reference", { exact: true }).fill("acme/symmetry");
-  await resourceDialog.getByRole("button", { name: "Attach" }).click();
-
-  await page.getByRole("button", { name: "Sync GitHub Issues" }).click();
-  await expect(page.locator("#resource-table")).toContainText("Synced");
-
-  await page.getByRole("link", { name: "Board" }).click();
-  const card = page.locator(".work-card", { hasText: "External work stays authoritative" });
-  await expect(card).toContainText("GitHub #101");
-  await card.click();
-  await expect(page.locator("#detail-content")).toContainText("Ada Lovelace");
-  await expect(page.locator("#detail-priority-select")).toBeDisabled();
-  await page.getByRole("button", { name: "Edit" }).click();
-  const workItemDialog = page.locator("#work-item-dialog");
-  await expect(workItemDialog.getByLabel("Title")).toBeDisabled();
-  await expect(workItemDialog.getByLabel("Description")).toBeDisabled();
-  await expect(workItemDialog.getByLabel("Priority")).toBeDisabled();
-  await expect(workItemDialog.getByLabel("Owner type")).toBeEnabled();
-  await workItemDialog.getByLabel("Owner type").selectOption("agent");
-  await workItemDialog.getByLabel("Owner", { exact: true }).fill("Codex");
-  await workItemDialog.getByLabel("Agent profile").fill("codex");
-  await workItemDialog.getByLabel("Workspace").fill("primary");
-  await workItemDialog.locator('select[name="repository_resource_id"]').selectOption({ label: "symmetry" });
-  await workItemDialog.getByLabel("Branch").fill("codex/external-101");
-  await workItemDialog.getByLabel("Pull request URL").fill("https://github.com/acme/symmetry/pull/42");
-  await workItemDialog.getByRole("button", { name: "Save" }).click();
-
-  await page.getByRole("button", { name: "Close details" }).click();
-  await page.getByRole("link", { name: "Resources" }).click();
-  await page.getByRole("button", { name: "Sync symmetry" }).click();
-  await page.getByRole("link", { name: "Board" }).click();
-  await card.click();
-  await expect(page.locator("#detail-content")).toContainText("Open PR");
-  await expect(page.locator("#detail-content")).toContainText("Open");
-  await expect(page.locator("#detail-content")).toContainText("Passed");
-  await expect(page.locator("#detail-content")).toContainText("Approved");
-  await expect(page.locator("#detail-content .source-label")).toHaveText(["GitHub", "GitHub", "GitHub"]);
-
-  project.work_items[0].external.available = false;
-  project.work_items[0].can_start = false;
-  await page.reload();
-  await page.getByRole("link", { name: "Board" }).click();
-  await card.click();
-  await expect(page.locator("#detail-content")).toContainText("Unavailable in provider");
-  await expect(page.getByRole("button", { name: "Start run" })).toHaveCount(0);
-
-  project.work_items[0].external.available = true;
-  project.work_items[0].can_start = true;
-  await page.reload();
-  await page.getByRole("link", { name: "Board" }).click();
-  await card.click();
-  await expect(page.getByRole("button", { name: "Start run" })).toBeVisible();
-  await page.getByRole("button", { name: "Start run" }).click();
-  await expect(page.locator("#toast")).toContainText("Agent run queued");
-
-  const dimensions = await page.evaluate(() => ({
-    clientWidth: document.documentElement.clientWidth,
-    scrollWidth: document.documentElement.scrollWidth
+async function assertNoCredentials(page, recorded) {
+  const browserState = await page.evaluate(() => ({
+    html: document.documentElement.outerHTML,
+    localStorage: JSON.stringify(window.localStorage),
+    sessionStorage: JSON.stringify(window.sessionStorage),
+    cookies: document.cookie
   }));
-  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
-});
-
-test("form generations and connection deletion remain single-flight", async ({ page }) => {
-  const project = {
-    id: "10000000-0000-0000-0000-000000000001",
-    key: "LOCK",
-    name: "Lock testing",
-    description: "",
-    status: "active",
-    version: 1,
-    default_agent_profile: "codex",
-    default_workspace: "primary",
-    resources: [],
-    work_items: []
-  };
-  const workspace = {
-    selected_project_id: project.id,
-    projects: [project],
-    connections: [],
-    runtimes: [],
-    registered_runtimes: [],
-    activity: [],
-    health: { connections: "unknown", runtimes: "offline", executions: "idle", synchronization: "unknown" }
-  };
-  const createGates = [deferred(), deferred()];
-  const updateGate = deferred();
-  const deleteGate = deferred();
-  const calls = { create: 0, update: 0, delete: 0, check: 0 };
-
-  await page.route("**/portal/api/**", async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-
-    if (request.method() === "GET" && url.pathname === "/portal/api/workspace") {
-      await route.fulfill({ status: 200, json: workspace });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname === "/portal/api/connections") {
-      const index = calls.create;
-      calls.create += 1;
-      const payload = request.postDataJSON();
-      await createGates[index].promise;
-      const connection = {
-        id: `20000000-0000-0000-0000-00000000000${index + 1}`,
-        provider: "github",
-        name: payload.name,
-        account_ref: payload.account_ref,
-        auth_type: "gh_cli",
-        capabilities: payload.capabilities,
-        status: "unknown",
-        status_message: null,
-        metadata: {},
-        last_checked_at: null,
-        version: 1
-      };
-      workspace.connections.push(connection);
-      await route.fulfill({ status: 201, json: { connection } });
-      return;
-    }
-
-    if (request.method() === "PATCH" && url.pathname.includes("/connections/")) {
-      calls.update += 1;
-      const connection = workspace.connections.find((candidate) => url.pathname.endsWith(candidate.id));
-      const payload = request.postDataJSON();
-      await updateGate.promise;
-      Object.assign(connection, { name: payload.name, version: connection.version + 1 });
-      await route.fulfill({ status: 200, json: { connection } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.endsWith("/check")) {
-      calls.check += 1;
-      await route.fulfill({ status: 200, json: { connection: workspace.connections[0] } });
-      return;
-    }
-
-    if (request.method() === "DELETE" && url.pathname.includes("/connections/")) {
-      calls.delete += 1;
-      const connectionId = url.pathname.split("/").at(-1);
-      await deleteGate.promise;
-      workspace.connections = workspace.connections.filter((connection) => connection.id !== connectionId);
-      await route.fulfill({ status: 204, body: "" });
-      return;
-    }
-
-    await route.fulfill({ status: 404, json: { error: { code: "not_found", message: "not found" } } });
-  });
-
-  await login(page);
-  await page.getByRole("link", { name: "Connections" }).click();
-  const dialog = page.locator("#connection-dialog");
-
-  await page.getByRole("button", { name: "New connection" }).click();
-  await dialog.getByLabel("Name").fill("First connection");
-  await dialog.getByLabel("Account or organization").fill("first");
-  await dialog.getByLabel("Repositories").check();
-  await dialog.getByRole("button", { name: "Connect" }).click();
-  await expect.poll(() => calls.create).toBe(1);
-  await dialog.getByRole("button", { name: "Close" }).click();
-
-  await page.getByRole("button", { name: "New connection" }).click();
-  await dialog.getByLabel("Name").fill("Second connection");
-  await dialog.getByLabel("Account or organization").fill("second");
-  await dialog.getByLabel("Repositories").check();
-  await dialog.getByRole("button", { name: "Connect" }).click();
-  await expect.poll(() => calls.create).toBe(2);
-  const secondSubmit = dialog.getByRole("button", { name: "Connect" });
-  await expect(secondSubmit).toBeDisabled();
-
-  const firstCreateCompleted = page.waitForResponse((response) =>
-    response.request().method() === "POST" && new URL(response.url()).pathname === "/portal/api/connections"
-  );
-  createGates[0].resolve();
-  await firstCreateCompleted;
-  await expect(secondSubmit).toBeDisabled();
-  await dialog.locator("form").evaluate((form) => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-  expect(calls.create).toBe(2);
-
-  createGates[1].resolve();
-  await expect(dialog).not.toHaveJSProperty("open", true);
-  const secondConnection = workspace.connections.find((connection) => connection.name === "Second connection");
-  const secondConnectionRow = page.locator(`[data-connection-id="${secondConnection.id}"]`);
-  const secondConnectionCheck = page.locator(`[data-check-connection-id="${secondConnection.id}"]`);
-  await secondConnectionRow.click();
-  await dialog.getByLabel("Name").fill("Updated connection");
-  await dialog.getByRole("button", { name: "Save" }).click();
-  await expect.poll(() => calls.update).toBe(1);
-  await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
-  await expect(dialog.getByRole("button", { name: "Delete" })).toBeDisabled();
-  await expect(secondConnectionCheck).toBeDisabled();
-  await dialog.locator("form").evaluate((form) => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-  await dialog.getByRole("button", { name: "Delete" }).evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  await secondConnectionCheck.evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  expect(calls).toMatchObject({ update: 1, delete: 0, check: 0 });
-  updateGate.resolve();
-  await expect(dialog).not.toHaveJSProperty("open", true);
-  await expect(secondConnectionRow).toContainText("Updated connection");
-
-  await secondConnectionRow.click();
-  await dialog.getByRole("button", { name: "Delete" }).click();
-  await expect(dialog.getByLabel("Name")).toBeDisabled();
-  await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
-  await expect(dialog.getByRole("button", { name: "Delete" })).toBeDisabled();
-  await dialog.getByRole("button", { name: "Delete" }).evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  await expect(page.locator("#confirm-dialog")).toHaveJSProperty("open", true);
-  await page.locator("#confirm-action-button").click();
-  await expect.poll(() => calls.delete).toBe(1);
-  await dialog.getByRole("button", { name: "Delete" }).evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  expect(calls.delete).toBe(1);
-  await expect(page.locator("#confirm-dialog")).not.toHaveJSProperty("open", true);
-  deleteGate.resolve();
-  await expect(dialog).not.toHaveJSProperty("open", true);
-  await expect(page.locator(`[data-connection-id="${secondConnection.id}"]`)).toHaveCount(0);
-});
-
-test("provider operations remain single-flight across rerenders and respect dialog ownership", async ({ page }) => {
-  const connection = {
-    id: "20000000-0000-0000-0000-000000000001",
-    provider: "github",
-    name: "GitHub engineering",
-    account_ref: "acme",
-    auth_type: "gh_cli",
-    capabilities: ["repositories", "work_items", "changes", "ci"],
-    status: "healthy",
-    status_message: null,
-    metadata: {},
-    last_checked_at: null,
-    version: 1
-  };
-  const resources = [
-    connectedResource("30000000-0000-0000-0000-000000000001", "symmetry", "repository", connection.id),
-    connectedResource("30000000-0000-0000-0000-000000000002", "GitHub Issues", "work_tracking", connection.id)
-  ];
-  const project = {
-    id: "10000000-0000-0000-0000-000000000001",
-    key: "EXT",
-    name: "Connected engineering",
-    description: "",
-    status: "active",
-    version: 1,
-    default_agent_profile: "codex",
-    default_workspace: "primary",
-    resources,
-    work_items: []
-  };
-  const otherProject = {
-    ...project,
-    id: "10000000-0000-0000-0000-000000000002",
-    key: "TWO",
-    name: "Second project",
-    resources: [],
-    work_items: []
-  };
-  const workspace = {
-    selected_project_id: project.id,
-    projects: [project, otherProject],
-    connections: [connection],
-    runtimes: [],
-    registered_runtimes: [],
-    activity: [],
-    health: { connections: "healthy", runtimes: "offline", executions: "idle", synchronization: "unknown" }
-  };
-  let checkGate = deferred();
-  const resourceGates = [deferred(), deferred()];
-  let projectGate = deferred();
-  let projectFailure = null;
-  let workspaceFailure = null;
-  let delayedWorkspaceFailure = null;
-  const calls = { check: 0, resource: 0, project: 0 };
-
-  await page.route("**/portal/api/**", async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-
-    if (request.method() === "GET" && url.pathname === "/portal/api/workspace") {
-      if (delayedWorkspaceFailure?.armed) {
-        const failure = delayedWorkspaceFailure;
-        delayedWorkspaceFailure = null;
-        failure.started.resolve();
-        await failure.release.promise;
-        await route.fulfill({
-          status: 503,
-          json: { error: { code: "provider_failure", message: "Old project refresh failed" } }
-        });
-        return;
-      }
-      if (workspaceFailure) {
-        const failure = workspaceFailure;
-        workspaceFailure = null;
-        await route.fulfill(failure);
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        json: { ...workspace, selected_project_id: url.searchParams.get("project_id") || workspace.selected_project_id }
-      });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.endsWith("/check")) {
-      calls.check += 1;
-      await checkGate.promise;
-      await route.fulfill({ status: 200, json: { connection } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.includes("/resources/") && url.pathname.endsWith("/sync")) {
-      const gate = resourceGates[calls.resource];
-      calls.resource += 1;
-      await gate.promise;
-      await route.fulfill({ status: 200, json: { resource: resources[0] } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.includes("/projects/") && url.pathname.endsWith("/sync")) {
-      calls.project += 1;
-      if (projectFailure) {
-        await route.fulfill({ status: 422, json: projectFailure });
-        return;
-      }
-      await projectGate.promise;
-      if (delayedWorkspaceFailure) delayedWorkspaceFailure.armed = true;
-      await route.fulfill({ status: 200, json: { resources } });
-      return;
-    }
-
-    await route.fulfill({ status: 404, json: { error: { code: "not_found", message: "not found" } } });
-  });
-
-  await login(page);
-  await page.getByRole("link", { name: "Connections" }).click();
-  await page.getByRole("button", { name: "Check GitHub engineering" }).click();
-  await expect.poll(() => calls.check).toBe(1);
-  const connectionRow = page.locator(`[data-connection-id="${connection.id}"]`);
-  await expect(connectionRow).toBeDisabled();
-  await connectionRow.evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  await expect(page.locator("#connection-dialog")).not.toHaveJSProperty("open", true);
-  await page.getByRole("button", { name: "Refresh workspace" }).click();
-  const checkButton = page.getByRole("button", { name: "Check GitHub engineering" });
-  await expect(checkButton).toBeDisabled();
-  await checkButton.evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  expect(calls.check).toBe(1);
-  checkGate.resolve();
-  await expect(checkButton).toBeEnabled();
-  const connectionRefresh = page.waitForResponse((response) =>
-    response.request().method() === "GET" && new URL(response.url()).pathname === "/portal/api/workspace"
-  );
-  await connectionRow.focus();
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-  await connectionRefresh;
-  await expect(connectionRow).toBeFocused();
-
-  allowBrowserError(page, /status of 503/);
-  workspaceFailure = {
-    status: 503,
-    json: { error: { code: "provider_failure", message: "Workspace refresh failed" } }
-  };
-  await checkButton.click();
-  await expect(page.locator("#toast")).toContainText("Connection checked, but refreshing the workspace failed: Workspace refresh failed");
-  await expect(page.locator("#toast")).toContainText("The change was saved");
-  await expect(checkButton).toBeEnabled();
-  await expect(connectionRow).toBeDisabled();
-  await page.getByRole("button", { name: "Refresh workspace" }).click();
-  await expect(connectionRow).toBeEnabled();
-
-  checkGate = deferred();
-  await checkButton.click();
-  await expect.poll(() => calls.check).toBe(3);
-  const checkedWorkspace = page.waitForResponse((response) =>
-    response.request().method() === "GET" && new URL(response.url()).pathname === "/portal/api/workspace"
-  );
-  checkGate.resolve();
-  await checkedWorkspace;
-  await expect(checkButton).toBeFocused();
-
-  await page.getByRole("link", { name: "Resources" }).click();
-  await page.evaluate(() => {
-    window.hiddenConnectionMutations = 0;
-    window.hiddenConnectionObserver = new MutationObserver((mutations) => {
-      window.hiddenConnectionMutations += mutations.length;
-    });
-    window.hiddenConnectionObserver.observe(document.querySelector("#connection-table"), {
-      attributes: true,
-      characterData: true,
-      childList: true,
-      subtree: true
-    });
-  });
-  connection.status = "degraded";
-  workspace.health.connections = "degraded";
-  await page.getByRole("button", { name: "Refresh workspace" }).click();
-  await expect(page.locator("#health-grid")).toContainText("Degraded");
-  expect(await page.evaluate(() => window.hiddenConnectionMutations)).toBe(0);
-  await page.getByRole("link", { name: "Connections" }).click();
-  await expect(page.locator("#connection-table")).toContainText("Degraded");
-  await page.evaluate(() => window.hiddenConnectionObserver.disconnect());
-  await page.getByRole("link", { name: "Resources" }).click();
-
-  await page.getByRole("button", { name: "Sync symmetry" }).click();
-  await expect.poll(() => calls.resource).toBe(1);
-  await expect(page.locator(`[data-resource-id="${resources[0].id}"]`)).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Sync project resources" })).toBeDisabled();
-  await page.getByRole("button", { name: "Sync project resources" }).evaluate((button) => button.click());
-  expect(calls.project).toBe(0);
-  await page.getByRole("button", { name: "Refresh workspace" }).click();
-  const rowSyncButton = page.getByRole("button", { name: "Sync symmetry" });
-  await expect(rowSyncButton).toBeDisabled();
-  await rowSyncButton.evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  expect(calls.resource).toBe(1);
-  await page.locator(`[data-resource-id="${resources[1].id}"]`).click();
-  const resourceDialog = page.locator("#resource-dialog");
-  resourceGates[0].resolve();
-  await expect(resourceDialog).toHaveJSProperty("open", true);
-  await expect(resourceDialog.getByLabel("Name")).toHaveValue("GitHub Issues");
-
-  await resourceDialog.getByRole("button", { name: "Close" }).click();
-  await page.locator(`[data-resource-id="${resources[0].id}"]`).click();
-  await resourceDialog.getByRole("button", { name: "Sync", exact: true }).click();
-  await expect.poll(() => calls.resource).toBe(2);
-  await expect(resourceDialog.getByLabel("Name")).toBeDisabled();
-  await expect(resourceDialog.getByRole("button", { name: "Update" })).toBeDisabled();
-  await expect(resourceDialog.getByRole("button", { name: "Detach" })).toBeDisabled();
-  await resourceDialog.getByRole("button", { name: "Close" }).click();
-  await page.locator(`[data-resource-id="${resources[1].id}"]`).click();
-  resourceGates[1].resolve();
-  await expect(resourceDialog).toHaveJSProperty("open", true);
-  await expect(resourceDialog.getByLabel("Name")).toHaveValue("GitHub Issues");
-  await resourceDialog.getByRole("button", { name: "Close" }).click();
-
-  await page.getByRole("button", { name: "Sync project resources" }).click();
-  await expect.poll(() => calls.project).toBe(1);
-  await expect(page.locator(`[data-resource-id="${resources[0].id}"]`)).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Sync symmetry" })).toBeDisabled();
-  await page.getByRole("button", { name: "Sync symmetry" }).evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  expect(calls.resource).toBe(2);
-  await page.getByRole("button", { name: "Refresh workspace" }).click();
-  const projectSyncButton = page.getByRole("button", { name: "Sync project resources" });
-  await expect(projectSyncButton).toBeDisabled();
-  await projectSyncButton.evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-  expect(calls.project).toBe(1);
-  projectGate.resolve();
-  await expect(projectSyncButton).toBeEnabled();
-
-  projectFailure = {
-    error: {
-      code: "multiple_failures",
-      message: "resources failed to synchronize for multiple reasons",
-      causes: [
-        { code: "forbidden", count: 1, http_status: 403 },
-        { code: "provider_unauthorized", count: 1, http_status: 502 }
-      ]
-    },
-    results: [
-      {
-        resource_id: resources[0].id,
-        status: "failed",
-        reason: "provider_unauthorized",
-        error: { code: "provider_unauthorized", message: "sensitive provider response body", http_status: 502 }
-      }
-    ]
-  };
-  allowBrowserError(page, /status of 422/);
-  await projectSyncButton.click();
-  await expect(page.locator("#toast")).toHaveText(
-    "Project sync failed: permission denied, authentication required. Grant the required provider permissions. Reauthenticate the provider connection."
-  );
-  await expect(page.locator("#toast")).not.toContainText("sensitive provider response body");
-
-  projectFailure = null;
-  projectGate = deferred();
-  delayedWorkspaceFailure = { armed: false, started: deferred(), release: deferred() };
-  const delayedFailure = delayedWorkspaceFailure;
-  await page.locator("#toast").evaluate((toast) => { toast.hidden = true; });
-  await projectSyncButton.click();
-  await expect.poll(() => calls.project).toBe(3);
-  projectGate.resolve();
-  await delayedFailure.started.promise;
-  await page.locator("#project-switcher").selectOption(otherProject.id);
-  await expect(page.locator("#project-title")).toHaveText("Second project");
-  const oldRefreshResponse = page.waitForResponse((response) =>
-    response.status() === 503 && new URL(response.url()).pathname === "/portal/api/workspace"
-  );
-  delayedFailure.release.resolve();
-  await oldRefreshResponse;
-  await expect(page.getByRole("button", { name: "Sync project resources" })).toBeEnabled();
-  await expect(page.locator("#toast")).toBeHidden();
-  await page.locator("#project-switcher").selectOption(project.id);
-  await expect(page.locator("#project-title")).toHaveText("Connected engineering");
-
-  project.status = "archived";
-  await page.getByRole("button", { name: "Refresh workspace" }).click();
-  await expect(page.getByRole("button", { name: "Sync project resources" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Sync symmetry" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Sync GitHub Issues" })).toBeDisabled();
-});
-
-test("resource mutations, refreshes, and project switches preserve one coherent UI owner", async ({ page }) => {
-  const connection = {
-    id: "20000000-0000-0000-0000-000000000021",
-    provider: "github",
-    name: "GitHub engineering",
-    account_ref: "acme",
-    auth_type: "gh_cli",
-    capabilities: ["repositories", "changes"],
-    status: "healthy",
-    status_message: null,
-    metadata: {},
-    last_checked_at: null,
-    version: 1
-  };
-  const resource = connectedResource(
-    "30000000-0000-0000-0000-000000000021",
-    "symmetry",
-    "repository",
-    connection.id
-  );
-  const project = {
-    id: resource.project_id,
-    key: "RACE",
-    name: "Resource races",
-    description: "",
-    status: "active",
-    version: 1,
-    default_agent_profile: "codex",
-    default_workspace: "primary",
-    resources: [resource],
-    work_items: []
-  };
-  const otherProject = {
-    ...project,
-    id: "10000000-0000-0000-0000-000000000022",
-    key: "OTHER",
-    name: "Other project",
-    resources: [],
-    work_items: []
-  };
-  const workspace = {
-    selected_project_id: project.id,
-    projects: [project, otherProject],
-    connections: [connection],
-    runtimes: [],
-    registered_runtimes: [],
-    activity: [],
-    health: { connections: "healthy", runtimes: "offline", executions: "idle", synchronization: "unknown" }
-  };
-  const updateGate = deferred();
-  let failNextWorkspace = false;
-  let blockWorkspaceRefresh = false;
-  let switchFailure = null;
-  let resourceSyncGate = null;
-  let staleUpdate = null;
-  const calls = { workspace: 0, workspaceProjects: [], update: 0, delete: 0, resourceSync: 0, projectSync: 0 };
-
-  await page.route("**/portal/api/**", async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-
-    if (request.method() === "GET" && url.pathname === "/portal/api/workspace") {
-      calls.workspace += 1;
-      calls.workspaceProjects.push(url.searchParams.get("project_id") || project.id);
-      if (switchFailure && url.searchParams.get("project_id") === otherProject.id) {
-        const failure = switchFailure;
-        switchFailure = null;
-        failure.started.resolve();
-        await failure.release.promise;
-        if (failure.fail) {
-          await route.fulfill({ status: 503, json: { error: { code: "provider_failure", message: "Project switch failed" } } });
-        } else {
-          await route.fulfill({ status: 200, json: { ...workspace, selected_project_id: otherProject.id } });
-        }
-        return;
-      }
-      if (blockWorkspaceRefresh) {
-        await route.fulfill({ status: 503, json: { error: { code: "provider_failure", message: "Workspace refresh failed" } } });
-        return;
-      }
-      if (failNextWorkspace) {
-        failNextWorkspace = false;
-        await route.fulfill({ status: 503, json: { error: { code: "provider_failure", message: "Workspace refresh failed" } } });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        json: { ...workspace, selected_project_id: url.searchParams.get("project_id") || project.id }
-      });
-      return;
-    }
-
-    if (request.method() === "PATCH" && url.pathname === `/portal/api/resources/${resource.id}`) {
-      calls.update += 1;
-      if (staleUpdate) {
-        const failure = staleUpdate;
-        staleUpdate = false;
-        failure.started.resolve();
-        await failure.release.promise;
-        blockWorkspaceRefresh = true;
-        await route.fulfill({ status: 409, json: { error: { code: "stale", message: "Resource changed" } } });
-        return;
-      }
-      const payload = request.postDataJSON();
-      await updateGate.promise;
-      Object.assign(resource, { name: payload.name, version: resource.version + 1 });
-      failNextWorkspace = true;
-      await route.fulfill({ status: 200, json: { resource } });
-      return;
-    }
-
-    if (request.method() === "DELETE" && url.pathname === `/portal/api/resources/${resource.id}`) {
-      calls.delete += 1;
-      await route.fulfill({ status: 200, json: { deleted_resource_id: resource.id } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname === `/portal/api/resources/${resource.id}/sync`) {
-      calls.resourceSync += 1;
-      if (resourceSyncGate) {
-        const gate = resourceSyncGate;
-        gate.started.resolve();
-        await gate.release.promise;
-        resourceSyncGate = null;
-      }
-      await route.fulfill({ status: 200, json: { resource } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname === `/portal/api/projects/${project.id}/sync`) {
-      calls.projectSync += 1;
-      await route.fulfill({ status: 200, json: { resources: [resource] } });
-      return;
-    }
-
-    await route.fulfill({ status: 404, json: { error: { code: "not_found", message: "not found" } } });
-  });
-
-  allowBrowserError(page, /status of (409|503)/);
-  await login(page);
-  await page.getByRole("link", { name: "Resources" }).click();
-
-  const resourceRow = page.locator(`[data-resource-id="${resource.id}"]`);
-  await resourceRow.click();
-  const resourceDialog = page.locator("#resource-dialog");
-  const resourceName = resourceDialog.getByLabel("Name");
-  await resourceName.fill("local draft");
-  resource.name = "server update";
-  resource.version = 2;
-  const staleRefresh = calls.workspace;
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-  await expect.poll(() => calls.workspace).toBeGreaterThan(staleRefresh);
-  await expect(resourceName).toHaveValue("local draft");
-  await expect(resourceDialog.locator('input[name="version"]')).toHaveValue("1");
-  await expect(resourceDialog.getByRole("button", { name: "Update" })).toBeDisabled();
-  await expect(resourceDialog.locator("[data-form-error]")).toContainText("changed while the editor was open");
-  await resourceDialog.getByRole("button", { name: "Close" }).click();
-  await expect(resourceRow).toContainText("server update");
-  await expect(resourceRow).toBeEnabled();
-
-  const resourceSync = page.getByRole("button", { name: "Sync server update" });
-  await resourceSync.focus();
-  const focusRefresh = calls.workspace;
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-  await expect.poll(() => calls.workspace).toBeGreaterThan(focusRefresh);
-  await expect(resourceSync).toBeFocused();
-
-  await resourceRow.click();
-  await resourceName.fill("saved update");
-  await resourceDialog.getByRole("button", { name: "Update" }).click();
-  await expect.poll(() => calls.update).toBe(1);
-  await expect(resourceDialog.getByRole("button", { name: "Update" })).toBeDisabled();
-  await expect(resourceDialog.getByRole("button", { name: "Detach" })).toBeDisabled();
-  await expect(resourceDialog.getByRole("button", { name: "Sync", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Sync project resources" })).toBeDisabled();
-  await resourceDialog.getByRole("button", { name: "Update" }).evaluate((button) => button.dispatchEvent(new Event("click", { bubbles: true })));
-  await resourceDialog.getByRole("button", { name: "Detach" }).evaluate((button) => button.dispatchEvent(new Event("click", { bubbles: true })));
-  await resourceDialog.getByRole("button", { name: "Sync", exact: true }).evaluate((button) => button.dispatchEvent(new Event("click", { bubbles: true })));
-  await page.getByRole("button", { name: "Sync project resources" }).evaluate((button) => button.dispatchEvent(new Event("click", { bubbles: true })));
-  expect(calls).toMatchObject({ update: 1, delete: 0, resourceSync: 0, projectSync: 0 });
-
-  await resourceDialog.getByRole("button", { name: "Close" }).click();
-  await expect(resourceDialog).not.toHaveJSProperty("open", true);
-  updateGate.resolve();
-  await expect(page.locator("#toast")).toContainText("Resource updated, but refreshing the workspace failed: Workspace refresh failed");
-  await expect(page.locator("#toast")).toContainText("The change was saved");
-  await expect(resourceRow).toBeDisabled();
-  await expect(page.locator("#resource-table")).toContainText("server update");
-
-  await page.getByRole("button", { name: "Refresh workspace" }).click();
-  await expect(page.locator("#resource-table")).toContainText("saved update");
-  await expect(resourceRow).toBeEnabled();
-
-  const savedResourceSync = page.getByRole("button", { name: "Sync saved update" });
-  await savedResourceSync.click();
-  await expect.poll(() => calls.resourceSync).toBe(1);
-  await expect(savedResourceSync).toBeFocused();
-
-  resourceSyncGate = { started: deferred(), release: deferred() };
-  const delayedResourceSync = resourceSyncGate;
-  await savedResourceSync.click();
-  await delayedResourceSync.started.promise;
-  switchFailure = { started: deferred(), release: deferred(), fail: false };
-  const successfulSwitch = switchFailure;
-  await page.locator("#project-switcher").selectOption(otherProject.id);
-  await successfulSwitch.started.promise;
-  const oldProjectRefreshes = calls.workspaceProjects.filter((id) => id === project.id).length;
-  const resourceSyncResponse = page.waitForResponse((response) =>
-    response.request().method() === "POST" && new URL(response.url()).pathname === `/portal/api/resources/${resource.id}/sync`
-  );
-  delayedResourceSync.release.resolve();
-  await resourceSyncResponse;
-  await expect(savedResourceSync).toBeEnabled();
-  expect(calls.workspaceProjects.filter((id) => id === project.id)).toHaveLength(oldProjectRefreshes);
-  successfulSwitch.release.resolve();
-  await expect(page.locator("#project-title")).toHaveText(otherProject.name);
-  await page.locator("#project-switcher").selectOption(project.id);
-  await expect(page.locator("#project-title")).toHaveText(project.name);
-
-  await resourceRow.click();
-  switchFailure = { started: deferred(), release: deferred(), fail: true };
-  const failedSwitch = switchFailure;
-  await page.locator("#project-switcher").evaluate((select, projectId) => {
-    select.value = projectId;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  }, otherProject.id);
-  await failedSwitch.started.promise;
-  await expect(resourceDialog).not.toHaveJSProperty("open", true);
-  await expect(page.locator(".workspace-content")).toHaveAttribute("inert", "");
-  await expect(page.locator("#new-item-button")).toBeDisabled();
-  await expect(page.locator("#new-project-button")).toBeDisabled();
-  await expect(page.locator("#project-settings-button")).toBeDisabled();
-  await page.locator("#new-project-button").evaluate((button) => button.click());
-  await expect(page.locator("#project-dialog")).not.toHaveJSProperty("open", true);
-  await resourceRow.click({ force: true });
-  await expect(resourceDialog).not.toHaveJSProperty("open", true);
-  failedSwitch.release.resolve();
-  await expect(page.locator("#toast")).toHaveText("Project switch failed");
-  await expect(page.locator("#project-switcher")).toHaveValue(project.id);
-  await expect(page.locator("#project-title")).toHaveText(project.name);
-  await expect(page).toHaveURL(new RegExp(`project_id=${project.id}.*#resources`));
-  await expect(page.locator(".workspace-content")).not.toHaveAttribute("inert", "");
-  await expect(resourceRow).toBeEnabled();
-
-  staleUpdate = { started: deferred(), release: deferred() };
-  const staleResourceUpdate = staleUpdate;
-  await resourceRow.click();
-  await resourceDialog.getByLabel("Name").fill("stale write");
-  await resourceDialog.getByRole("button", { name: "Update" }).click();
-  await staleResourceUpdate.started.promise;
-  await resourceDialog.getByRole("button", { name: "Close" }).click();
-  staleResourceUpdate.release.resolve();
-  await expect(page.locator("#toast")).toContainText("current data could not be reloaded: Workspace refresh failed");
-  await expect(page.locator("#toast")).not.toContainText("Current data was reloaded");
-  await expect(resourceDialog).not.toHaveJSProperty("open", true);
-  await expect(resourceRow).toBeDisabled();
-  await resourceRow.click({ force: true });
-  await expect(resourceDialog).not.toHaveJSProperty("open", true);
-  blockWorkspaceRefresh = false;
-  await page.getByRole("button", { name: "Refresh workspace" }).click();
-  await expect(resourceRow).toBeEnabled();
-});
-
-test("Azure DevOps uses Entra ID and normalizes Boards, Repos, and Pipelines", async ({ page }) => {
-  const project = {
-    id: "10000000-0000-0000-0000-000000000010",
-    key: "AZDO",
-    name: "Azure delivery",
-    description: "",
-    status: "active",
-    version: 1,
-    default_agent_profile: "codex",
-    default_workspace: "primary",
-    resources: [],
-    work_items: []
-  };
-  const workspace = {
-    selected_project_id: project.id,
-    projects: [project],
-    connections: [],
-    runtimes: [],
-    registered_runtimes: [],
-    activity: [],
-    health: { connections: "unknown", runtimes: "offline", executions: "idle", synchronization: "unknown" }
-  };
-  const resourceIds = {
-    repository: "30000000-0000-0000-0000-000000000010",
-    work_tracking: "30000000-0000-0000-0000-000000000011",
-    ci: "30000000-0000-0000-0000-000000000012"
-  };
-  const expectedReferences = {
-    repository: "Platform/symmetry",
-    work_tracking: "Platform",
-    ci: "Platform/pipeline/42"
-  };
-  let checkFailure = false;
-
-  await page.route("**/portal/api/**", async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    const payload = request.postDataJSON?.() || {};
-
-    if (request.method() === "GET" && url.pathname === "/portal/api/workspace") {
-      await route.fulfill({ status: 200, json: workspace });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname === "/portal/api/connections") {
-      expect(payload.provider).toBe("azure_devops");
-      expect(payload.auth_type).toBe("entra_id");
-      expect(payload.capabilities.sort()).toEqual(["changes", "ci", "repositories", "work_items"]);
-      expect(payload).not.toHaveProperty("credential");
-      expect(payload).not.toHaveProperty("token");
-      expect(payload).not.toHaveProperty("pat");
-      const connection = {
-        id: "20000000-0000-0000-0000-000000000010",
-        provider: "azure_devops",
-        name: payload.name,
-        account_ref: payload.account_ref,
-        auth_type: payload.auth_type,
-        capabilities: payload.capabilities,
-        status: "unknown",
-        status_message: null,
-        metadata: {},
-        last_checked_at: null,
-        version: 1
-      };
-      workspace.connections = [connection];
-      await route.fulfill({ status: 201, json: { connection } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.endsWith("/check")) {
-      const connection = workspace.connections[0];
-      if (checkFailure) {
-        Object.assign(connection, {
-          status: "degraded",
-          status_message: "Microsoft Entra ID authentication failed. Run az login again.",
-          version: connection.version + 1
-        });
-        workspace.health.connections = "degraded";
-        await route.fulfill({
-          status: 502,
-          json: {
-            error: { code: "provider_unauthorized", message: "Provider authentication failed. Reauthenticate the connection." },
-            connection
-          }
-        });
-      } else {
-        Object.assign(connection, {
-          status: "healthy",
-          status_message: null,
-          last_checked_at: "2026-09-06T08:00:00Z",
-          version: connection.version + 1
-        });
-        workspace.health.connections = "healthy";
-        await route.fulfill({ status: 200, json: { connection } });
-      }
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.endsWith("/resources")) {
-      expect(payload.connection_id).toBe(workspace.connections[0].id);
-      expect(payload.external_ref).toBe(expectedReferences[payload.kind]);
-      const resource = {
-        id: resourceIds[payload.kind],
-        project_id: project.id,
-        connection_id: payload.connection_id,
-        kind: payload.kind,
-        name: payload.name,
-        provider: "azure_devops",
-        external_ref: payload.external_ref,
-        url: null,
-        status: "unknown",
-        sync_status: "unknown",
-        status_message: null,
-        metadata: {},
-        last_checked_at: null,
-        last_synced_at: null,
-        version: 1
-      };
-      project.resources.push(resource);
-      await route.fulfill({ status: 201, json: { resource } });
-      return;
-    }
-
-    if (request.method() === "POST" && url.pathname.includes("/resources/") && url.pathname.endsWith("/sync")) {
-      const resourceId = url.pathname.split("/").at(-2);
-      const resource = project.resources.find((candidate) => candidate.id === resourceId);
-      Object.assign(resource, {
-        status: "healthy",
-        sync_status: "synced",
-        last_checked_at: "2026-09-06T08:05:00Z",
-        last_synced_at: "2026-09-06T08:05:00Z",
-        version: resource.version + 1
-      });
-      if (resource.kind === "work_tracking") {
-        project.work_items = [azureExternalWorkItem(project, resource)];
-      } else if (resource.kind === "repository" && project.work_items[0]) {
-        const item = project.work_items[0];
-        item.pull_request_url = "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/42";
-        item.review_status = "approved";
-        item.delivery.pull_request = {
-          value: item.pull_request_url,
-          url: item.pull_request_url,
-          status: "open",
-          source: "provider",
-          provider: "azure_devops",
-          generation: null
-        };
-        item.delivery.review = {
-          value: "approved",
-          url: item.pull_request_url,
-          status: "approved",
-          source: "provider",
-          provider: "azure_devops",
-          generation: null
-        };
-      } else if (resource.kind === "ci" && project.work_items[0]) {
-        const item = project.work_items[0];
-        item.ci_status = "passed";
-        item.delivery.ci = {
-          value: "passed",
-          url: "https://dev.azure.com/acme/Platform/_build/results?buildId=42",
-          status: "passed",
-          source: "provider",
-          provider: "azure_devops",
-          generation: null
-        };
-      }
-      workspace.health.synchronization = "synced";
-      await route.fulfill({ status: 200, json: { resource } });
-      return;
-    }
-
-    if (request.method() === "PATCH" && url.pathname.includes("/work-items/")) {
-      const item = project.work_items[0];
-      expect(payload.repository_resource_id).toBe(resourceIds.repository);
-      expect(payload.ci_resource_id).toBe(resourceIds.ci);
-      Object.assign(item, {
-        repository_resource_id: payload.repository_resource_id,
-        repository: "Platform/symmetry",
-        ci_resource_id: payload.ci_resource_id,
-        ci_resource: "Azure Pipelines",
-        assignee: {
-          type: payload.assignee_type,
-          name: payload.assignee_name || null,
-          agent_profile: payload.agent_profile || null
-        },
-        workspace: payload.workspace || null,
-        branch: payload.branch || null,
-        can_start: payload.assignee_type === "agent",
-        version: item.version + 1
-      });
-      await route.fulfill({ status: 200, json: { work_item: item } });
-      return;
-    }
-
-    if (request.method() === "GET" && url.pathname.includes("/work-items/")) {
-      const item = project.work_items[0];
-      await route.fulfill({
-        status: 200,
-        json: {
-          work_item: item,
-          outcome: {
-            phase: "not_started",
-            summary: null,
-            owner: item.assignee,
-            blocker: null,
-            findings: [],
-            changed_artifacts: [],
-            tests: [],
-            result: null,
-            failure: null
-          },
-          timeline: [],
-          raw: { task: null, timeline: [], next_before: null }
-        }
-      });
-      return;
-    }
-
-    await route.fulfill({ status: 404, json: { error: { code: "not_found", message: "not found" } } });
-  });
-
-  await login(page);
-  await page.getByRole("link", { name: "Connections" }).click();
-  await page.getByRole("button", { name: "New connection" }).click();
-  const connectionDialog = page.locator("#connection-dialog");
-  await connectionDialog.getByLabel("Provider").selectOption("azure_devops");
-  await expect(connectionDialog.locator("#connection-auth-label")).toHaveText("Microsoft Entra ID");
-  await expect(connectionDialog.locator('input[name="credential"], input[name="token"], input[name="pat"]')).toHaveCount(0);
-  await connectionDialog.getByLabel("Name").fill("Azure engineering");
-  await connectionDialog.getByLabel("Account or organization").fill("acme");
-  await connectionDialog.getByLabel("Repositories").check();
-  await connectionDialog.getByLabel("Work items").check();
-  await connectionDialog.getByLabel("Changes").check();
-  await connectionDialog.getByLabel("CI").check();
-  await connectionDialog.getByRole("button", { name: "Connect" }).click();
-  await expect(page.locator("#connection-table")).toContainText("Azure DevOps");
-  await expect(page.locator("#connection-table")).toContainText("Microsoft Entra ID");
-
-  await page.getByRole("button", { name: "Check Azure engineering" }).click();
-  await expect(page.locator("#connection-table")).toContainText("Healthy");
-  await expect(page.locator("#health-grid")).toContainText("ConnectionsHealthy");
-
-  await page.getByRole("link", { name: "Resources" }).click();
-  const resourceDialog = page.locator("#resource-dialog");
-  for (const resource of [
-    { kind: "repository", name: "Azure Repo", reference: expectedReferences.repository },
-    { kind: "work_tracking", name: "Azure Boards", reference: expectedReferences.work_tracking },
-    { kind: "ci", name: "Azure Pipelines", reference: expectedReferences.ci }
-  ]) {
-    await page.getByRole("button", { name: "Attach resource" }).click();
-    await resourceDialog.getByLabel("Type").selectOption(resource.kind);
-    await resourceDialog.getByLabel("Provider connection").selectOption(workspace.connections[0].id);
-    await resourceDialog.getByLabel("Name").fill(resource.name);
-    await resourceDialog.getByLabel("Reference", { exact: true }).fill(resource.reference);
-    await resourceDialog.getByRole("button", { name: "Attach" }).click();
+  for (const [where, text] of Object.entries(browserState)) {
+    expect(text, `${where} must not contain a provider credential`).not.toMatch(secretPattern);
   }
+  // document.cookie cannot see HttpOnly cookies; the Playwright cookie jar
+  // can. It is sampled at every same-origin response and once more here, so a
+  // cookie that was set and later cleared is still scanned, and the final
+  // sample must be readable and non-empty as evidence the jar was observable.
+  const jar = await page.context().cookies();
+  expect(jar.length, "the cookie jar must be readable and non-empty for the credential scan").toBeGreaterThan(0);
+  expect(recorded.cookieJarSamples.length, "the jar must have been sampled during the run, not only at the end").toBeGreaterThan(0);
+  for (const cookie of [...jar, ...(await Promise.all(recorded.cookieJarSamples)).flat()]) {
+    expect(`${cookie.name}=${cookie.value}`, `cookie ${cookie.name} from a jar sample must not contain a provider credential`).not.toMatch(secretPattern);
+  }
+  expect(recorded.responses.length, "same-origin responses must be recorded for the credential scan").toBeGreaterThan(0);
+  for (const entry of await Promise.all(recorded.responses)) {
+    expect(entry.unreadable, `response ${entry.path} must be readable for the credential scan`).toBeUndefined();
+    expect(entry.headers.length, `response ${entry.path} must have headers for the credential scan`).toBeGreaterThan(0);
+    expect(entry.text, `response ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
+    expect(entry.headers.join("\n"), `response headers for ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
+  }
+  for (const recordedRequest of recorded.requests) {
+    // allHeaders() includes the browser-managed headers (cookies) that
+    // headers() omits, so the scan sees the full security-relevant header set.
+    const headers = await recordedRequest.request.allHeaders();
+    expect(JSON.stringify(headers), `request headers for ${recordedRequest.path} must not contain a provider credential`).not.toMatch(secretPattern);
+    if (recordedRequest.path.startsWith("/portal/api/")) {
+      expect(headers.cookie, `the cookie header of ${recordedRequest.path} must be visible to the credential scan`).toBeTruthy();
+      if (!["GET", "HEAD"].includes(recordedRequest.method)) {
+        expect(headers["x-csrf-token"], `the CSRF header of ${recordedRequest.path} must be visible to the credential scan`).toBeTruthy();
+      }
+    }
+    expect(recordedRequest.request.postData() ?? "", `request body for ${recordedRequest.path} must not contain a provider credential`).not.toMatch(secretPattern);
+  }
+  for (const message of recorded.consoleMessages) {
+    expect(`${message.type}: ${message.text}`, "console output must not contain a provider credential").not.toMatch(secretPattern);
+  }
+  for (const error of recorded.pageErrors) {
+    expect(error, "page errors must not contain a provider credential").not.toMatch(secretPattern);
+  }
+}
 
-  await page.getByRole("button", { name: "Sync Azure Boards" }).click();
-  await page.getByRole("link", { name: "Board" }).click();
-  const card = page.locator(".work-card", { hasText: "Azure work stays authoritative" });
-  await expect(card).toContainText("Azure DevOps #101");
-  await card.click();
-  await expect(page.locator("#detail-content")).toContainText("Ada Lovelace");
-  await expect(page.locator("#detail-content")).toContainText("Azure DevOps");
-  await expect(page.locator("#detail-content")).toContainText("Available");
-  await expect(page.locator("#detail-priority-select")).toBeDisabled();
-  await page.getByRole("button", { name: "Edit" }).click();
-  const workItemDialog = page.locator("#work-item-dialog");
-  await expect(workItemDialog.getByLabel("Title")).toBeDisabled();
-  await expect(workItemDialog.getByLabel("Description")).toBeDisabled();
-  await workItemDialog.getByLabel("Owner type").selectOption("agent");
-  await workItemDialog.getByLabel("Owner", { exact: true }).fill("Codex");
-  await workItemDialog.getByLabel("Agent profile").fill("codex");
-  await workItemDialog.getByLabel("Workspace").fill("primary");
-  await workItemDialog.getByLabel("Repository").selectOption(resourceIds.repository);
-  await workItemDialog.getByLabel("CI resource").selectOption(resourceIds.ci);
-  await workItemDialog.getByLabel("Branch").fill("codex/azure-101");
-  await workItemDialog.getByRole("button", { name: "Save" }).click();
+async function capture(page, testInfo, name, observations) {
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const image = testInfo.outputPath(`${name}.png`);
+  await page.screenshot({ path: image, fullPage: true });
+  await testInfo.attach(name, { path: image, contentType: "image/png" });
+  await fs.writeFile(testInfo.outputPath(`${name}.json`), JSON.stringify({
+    url: page.url(), viewport: page.viewportSize(), observations
+  }, null, 2));
+}
 
-  await page.getByRole("button", { name: "Close details" }).click();
-  await page.getByRole("link", { name: "Resources" }).click();
-  await page.getByRole("button", { name: "Sync Azure Repo" }).click();
-  await page.getByRole("button", { name: "Sync Azure Pipelines" }).click();
-  await expect(page.locator("#resource-table")).toContainText("Synced");
-  await expect(page.locator("#health-grid")).toContainText("SyncSynced");
+async function createThroughConsole(page, { provider, name, account, capabilities }) {
+  await page.getByRole("button", { name: "New connection", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New connection" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Credential", { exact: false })).toHaveCount(0);
+  if (provider) await dialog.getByLabel("Provider").selectOption(provider);
+  await dialog.getByLabel("Name").fill(name);
+  await dialog.getByLabel("Account or organization").fill(account);
+  for (const capability of ["Repositories", "Work items", "Changes", "CI"]) {
+    const box = dialog.getByLabel(capability, { exact: true });
+    if (await box.isChecked()) await box.uncheck();
+  }
+  for (const capability of capabilities) await dialog.getByLabel(capability, { exact: true }).check();
+  await dialog.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(dialog).toBeHidden();
+}
 
-  await page.getByRole("link", { name: "Board" }).click();
-  await card.click();
-  await expect(page.locator("#detail-content")).toContainText("Platform/symmetry");
-  await expect(page.locator("#detail-content")).toContainText("Azure Pipelines");
-  await expect(page.locator("#detail-content")).toContainText("Open PR");
-  await expect(page.locator("#detail-content")).toContainText("Passed");
-  await expect(page.locator("#detail-content")).toContainText("Approved");
-  await expect(page.locator("#detail-content .source-label")).toHaveText(["Azure DevOps", "Azure DevOps", "Azure DevOps"]);
+test("a connection is created, inspected, tested and removed through the real API", async ({ page }, testInfo) => {
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const name = `GitHub fixture ${suffix}`;
 
-  await page.getByRole("button", { name: "Close details" }).click();
-  await page.getByRole("link", { name: "Connections" }).click();
-  checkFailure = true;
-  allowBrowserError(page, /status of 502/);
-  await page.getByRole("button", { name: "Check Azure engineering" }).click();
-  await expect(page.locator("#toast")).toHaveText("Provider authentication failed. Reauthenticate the connection.");
-  await expect(page.locator("#connection-table")).toContainText("Degraded");
-  await expect(page.locator("#connection-table")).toContainText("Microsoft Entra ID authentication failed. Run az login again.");
-  await expect(page.locator("#health-grid")).toContainText("ConnectionsDegraded");
-  await expect(page).toHaveURL(/\/portal/);
+  await createThroughConsole(page, { provider: "github", name, account: "acme-fixture", capabilities: ["Work items", "CI"] });
+  const row = page.getByRole("button", { name: new RegExp(name) });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("acme-fixture · GitHub CLI · HTTPS");
+  await expect(row).toContainText("Never checked");
+  await expect(row).toContainText("0 bound · 0 needing attention");
+
+  await row.click();
+  const detail = page.getByRole("complementary", { name: "Connection detail" });
+  await expect(detail).toContainText("GitHub");
+  await expect(detail).toContainText("GitHub CLI · HTTPS");
+  await capture(page, testInfo, "created", "created connection rendered from the real read projection");
+
+  await detail.getByRole("button", { name: "Test connection", exact: true }).click();
+  await expect(detail.getByText("Healthy", { exact: true })).toBeVisible();
+  await expect(detail).toContainText(/Last checked\s*\d{4}-\d{2}-\d{2}T/);
+  await capture(page, testInfo, "checked", "healthy provider check from controlled fixture transport");
+
+  await detail.getByRole("button", { name: "Edit capabilities", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Connection settings" });
+  await settings.getByLabel("CI", { exact: true }).uncheck();
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(settings).toBeHidden();
+  await expect(page.getByRole("status").first()).toContainText("Connection capabilities updated");
+  await expect(page.getByRole("button", { name: new RegExp(name) })).not.toContainText("CI");
+  await expect(page.getByRole("button", { name: new RegExp(name) })).toContainText("Work items");
+  await expect(detail).toContainText("Capabilities: Work items");
+
+  await page.getByRole("button", { name: new RegExp(name) }).click();
+  await page.getByRole("complementary", { name: "Connection detail" }).getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) }).getByRole("button", { name: "Remove connection", exact: true }).click();
+  // The removal receipt closes the dialog when the write settles; only then is
+  // the row count meaningful (an open modal hides the list from the
+  // accessibility tree, so a role-based count can pass while the row persists).
+  await expect(page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) })).toBeHidden();
+  await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(0);
+  // The detail unmounted with the removal; the page-level control that survives
+  // it holds the keyboard instead of the document body.
+  await expect(page.getByRole("button", { name: "New connection" })).toBeFocused();
+  const list = await api(page, "/portal/api/connections", { method: "GET" });
+  expect(list.status).toBe(200);
+  expect(list.body.connections.filter((connection) => connection.name === name)).toEqual([]);
+  expect(list.body.providers.map((provider) => provider.id).sort()).toEqual(["azure_devops", "github"]);
+
+  await assertNoCredentials(page, recorded);
+  await capture(page, testInfo, "removed", "removal reconciled against the real connection read");
 });
 
-function deferred() {
-  let resolve;
-  const promise = new Promise((done) => { resolve = done; });
-  return { promise, resolve };
-}
+test("an expired provider session, a repeated submission and a refused submission stay actionable", async ({ page }, testInfo) => {
+  allowBrowserError(page, /status of (401|422|502)/);
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const name = `Expired fixture ${suffix}`;
 
-function connectedResource(id, name, kind, connectionId) {
-  return {
-    id,
-    project_id: "10000000-0000-0000-0000-000000000001",
-    connection_id: connectionId,
-    kind,
-    name,
-    provider: "github",
-    external_ref: "acme/symmetry",
-    url: null,
-    status: "healthy",
-    sync_status: "unknown",
-    status_message: null,
-    metadata: {},
-    last_checked_at: null,
-    last_synced_at: null,
-    version: 1
-  };
-}
+  await createThroughConsole(page, { provider: "github", name, account: "expired-fixture", capabilities: ["CI"] });
+  const row = page.getByRole("button", { name: new RegExp(name) });
+  await row.click();
+  const detail = page.getByRole("complementary", { name: "Connection detail" });
+  await detail.getByRole("button", { name: "Test connection", exact: true }).click();
+  await expect(page.getByRole("status").first()).toContainText("external provider authentication failed (provider_unauthorized)");
+  await expect(page.getByRole("status").first()).toContainText("Reauthenticate the provider session");
+  await expect(detail.getByText("Degraded", { exact: true })).toBeVisible();
+  await expect(detail).toContainText("Provider authentication failed");
+  await capture(page, testInfo, "expired-session", "expired provider session rendered as an actionable, redacted reason");
 
-function azureExternalWorkItem(project, resource) {
-  const item = externalWorkItem(project, resource);
-  return {
-    ...item,
-    title: "Azure work stays authoritative",
-    description: "Imported from Azure Boards.",
-    external: {
-      ...item.external,
-      provider: "azure_devops",
-      url: "https://dev.azure.com/acme/Platform/_workitems/edit/101"
-    }
-  };
-}
+  // The same normalized submission is the same intent: the server replays the
+  // applied connection instead of creating a second row.
+  const repeated = await api(page, "/portal/api/connections", { body: { provider: "github", name, account_ref: "expired-fixture", capabilities: ["ci"] } });
+  expect(repeated.status).toBe(200);
+  expect(repeated.body.disposition).toBe("replayed");
+  const conflicting = await api(page, "/portal/api/connections", { body: { provider: "github", name, account_ref: "expired-fixture", capabilities: ["repositories"] } });
+  expect(conflicting.status).toBe(422);
+  expect(conflicting.body.error.fields.provider.join(" ")).toContain("already has a connection with this name");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(1);
+  const list = await api(page, "/portal/api/connections", { method: "GET" });
+  expect(list.body.connections.filter((connection) => connection.name === name)).toHaveLength(1);
 
-function externalWorkItem(project, resource) {
-  return {
-    id: "40000000-0000-0000-0000-000000000001",
-    key: `${project.key}-1`,
-    project_id: project.id,
-    title: "External work stays authoritative",
-    description: "Imported from GitHub.",
-    status: "ready",
-    priority: "high",
-    position: 0,
-    assignee: { type: "unassigned", name: null, agent_profile: null },
-    workspace: null,
-    blocked: false,
-    blocker: null,
-    repository_resource_id: null,
-    repository: null,
-    ci_resource_id: null,
-    ci_resource: null,
-    branch: null,
-    pull_request_url: null,
-    ci_status: "unknown",
-    review_status: "none",
-    delivery: {
-      pull_request: { value: null, url: null, status: null, source: "none", generation: null },
-      ci: { value: "unknown", url: null, status: "unknown", source: "none", generation: null },
-      review: { value: "none", url: null, status: "none", source: "none", generation: null }
-    },
-    external: {
-      provider: "github",
-      id: "101",
-      url: "https://github.com/acme/symmetry/issues/101",
-      state: "open",
-      available: true,
-      assignee: "Ada Lovelace",
-      labels: ["agent-ready", "priority:high"],
-      updated_at: "2026-09-05T10:05:00Z",
-      resource_id: resource.id,
-      provider_owned_fields: ["title", "description", "priority", "state", "labels", "assignee"]
-    },
-    version: 1,
-    can_start: false,
-    execution: null,
-    updated_at: "2026-09-05T10:05:00Z"
-  };
-}
+  // The console refuses the conflicting submission with the server's own reason
+  // and field error instead of inventing a client-side rule.
+  await page.getByRole("button", { name: "New connection", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New connection" });
+  await dialog.getByLabel("Name").fill(name);
+  await dialog.getByLabel("Account or organization").fill("expired-fixture");
+  await dialog.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(dialog.getByText("already has a connection with this name")).toBeVisible();
+  await expect(dialog.getByText(/validation_failed/).first()).toBeVisible();
+  await capture(page, testInfo, "refused-submission", "server field error rendered on the conflicting submission");
+  // A refused submission adds field and refusal notices. The dialog scrolls
+  // internally, and once the browser brings the action row into view it must sit
+  // fully inside the viewport: a fixed-position dialog whose own box runs past the
+  // viewport bottom cannot satisfy that, which is what made Cancel unclickable.
+  const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+  await cancel.scrollIntoViewIfNeeded();
+  await expect(cancel).toBeInViewport({ ratio: 1 });
+  await cancel.click();
+
+  await assertNoCredentials(page, recorded);
+});
+
+test("stale updates and concurrent deletion reconcile to the server's current state", async ({ page }, testInfo) => {
+  allowBrowserError(page, /status of (404|409)/);
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const name = `Stale fixture ${suffix}`;
+
+  await createThroughConsole(page, { provider: "github", name, account: "acme-fixture", capabilities: ["Repositories"] });
+  const listed = await api(page, "/portal/api/connections", { method: "GET" });
+  const created = listed.body.connections.find((connection) => connection.name === name);
+  expect(created).toBeTruthy();
+
+  // Another operator changes the connection while this page is open.
+  const renamed = `${name} renamed`;
+  const external = await api(page, `/portal/api/connections/${created.id}`, { method: "PATCH", body: { version: created.version, name: renamed } });
+  expect(external.status).toBe(200);
+
+  await page.getByRole("button", { name: new RegExp(name) }).click();
+  await page.getByRole("complementary", { name: "Connection detail" }).getByRole("button", { name: "Edit capabilities", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Connection settings" });
+  await settings.getByLabel("Work items", { exact: true }).check();
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(settings.getByRole("alert")).toContainText("(stale)");
+  await expect(settings.getByLabel("Name")).toBeDisabled();
+  await capture(page, testInfo, "stale-update", "server refused a stale write with its own code");
+  await settings.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("button", { name: new RegExp(renamed) })).toBeVisible();
+
+  // A concurrent removal wins: the second delete is refused and the console
+  // reconciles to the server's state instead of reporting success.
+  const current = await api(page, "/portal/api/connections", { method: "GET" });
+  const target = current.body.connections.find((connection) => connection.name === renamed);
+  const removedElsewhere = await api(page, `/portal/api/connections/${target.id}?version=${target.version}`, { method: "DELETE" });
+  expect(removedElsewhere.status).toBe(200);
+  await page.getByRole("button", { name: new RegExp(renamed) }).click();
+  await page.getByRole("complementary", { name: "Connection detail" }).getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByRole("dialog", { name: new RegExp(`Remove ${renamed}`) }).getByRole("button", { name: "Remove connection", exact: true }).click();
+  await expect(page.getByRole("status").first()).toContainText("(not_found)");
+  await expect(page.getByRole("status").first()).toContainText("The server's current state is shown instead.");
+  await expect(page.getByRole("button", { name: new RegExp(renamed) })).toHaveCount(0);
+  await capture(page, testInfo, "concurrent-delete", "concurrent removal refused and reconciled");
+
+  await assertNoCredentials(page, recorded);
+});
+
+test("a capability update visibly resets dependent resource health and sync state", async ({ page }, testInfo) => {
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const projectId = await createProject(page);
+  const name = `Bound fixture ${suffix}`;
+
+  await createThroughConsole(page, { provider: "github", name, account: "acme-fixture", capabilities: ["Repositories", "Changes", "CI"] });
+  const listed = await api(page, "/portal/api/connections", { method: "GET" });
+  const connection = listed.body.connections.find((candidate) => candidate.name === name);
+  // A provider resource must be owned by the connection's account: the GitHub
+  // module refuses a reference whose owner is not the connection's account_ref.
+  const attached = await api(page, `/portal/api/projects/${projectId}/resources`, { body: {
+    kind: "repository", name: "symmetry", external_ref: "acme-fixture/symmetry", connection_id: connection.id
+  } });
+  expect(attached.status).toBe(201);
+  const resourceId = attached.body.resource.id;
+
+  const synced = await api(page, `/portal/api/resources/${resourceId}/sync`, {});
+  expect(synced.status).toBe(200);
+  expect(synced.body.resource.status).toBe("healthy");
+  expect(synced.body.resource.sync_status).toBe("synced");
+
+  // The binding and the sync above went through the API directly, so the page
+  // re-reads the authoritative projection before the detail is inspected.
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.getByRole("button", { name: new RegExp(name) }).click();
+  const detail = page.getByRole("complementary", { name: "Connection detail" });
+  await expect(detail).toContainText("Bound resources 1");
+  await expect(detail).toContainText("symmetry");
+  await expect(detail.getByText("Synced", { exact: true })).toBeVisible();
+  await capture(page, testInfo, "bound-synced", "bound resource synchronized through the real provider fixture boundary");
+
+  await detail.getByRole("button", { name: "Edit capabilities", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Connection settings" });
+  await settings.getByLabel("CI", { exact: true }).uncheck();
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(settings).toBeHidden();
+  await expect(page.getByRole("status").first()).toContainText("Bound resource health and sync state was reset");
+
+  const after = await api(page, "/portal/api/connections", { method: "GET" });
+  const reset = after.body.connections.find((candidate) => candidate.name === name);
+  expect(reset.resources).toHaveLength(1);
+  expect(reset.resources[0].status).toBe("unknown");
+  expect(reset.resources[0].sync_status).toBe("unknown");
+  expect(reset.resources[0].last_synced_at).toBeNull();
+
+  await page.getByRole("button", { name: new RegExp(name) }).click();
+  const refreshed = page.getByRole("complementary", { name: "Connection detail" });
+  await expect(refreshed.getByText("Synced", { exact: true })).toHaveCount(0);
+  // The capability change resets the connection's own check state and the bound
+  // resource's health and sync state in the same transaction: three "Unknown".
+  await expect(refreshed.getByText("Unknown", { exact: true })).toHaveCount(3);
+  await capture(page, testInfo, "capability-reset", "capability change visibly reset bound resource health and sync state");
+
+  await assertNoCredentials(page, recorded);
+});
+
+test("Azure DevOps connection management runs on the new route", async ({ page }, testInfo) => {
+  allowBrowserError(page, /status of (401|502)/);
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const name = `Azure fixture ${suffix}`;
+
+  await createThroughConsole(page, { provider: "azure_devops", name, account: "acme-fixture", capabilities: ["Work items"] });
+  const row = page.getByRole("button", { name: new RegExp(name) });
+  await expect(row).toContainText("Azure DevOps");
+  await expect(row).toContainText("Microsoft Entra ID");
+  await row.click();
+  const detail = page.getByRole("complementary", { name: "Connection detail" });
+  await expect(detail).toContainText("Microsoft Entra ID");
+  await detail.getByRole("button", { name: "Test connection", exact: true }).click();
+  await expect(detail.getByText("Healthy", { exact: true })).toBeVisible();
+
+  // Update and remove run through the same console for the second provider.
+  await detail.getByRole("button", { name: "Edit capabilities", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Connection settings" });
+  await settings.getByLabel("Repositories", { exact: true }).check();
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(settings).toBeHidden();
+  await expect(page.getByRole("status").first()).toContainText("Connection capabilities updated");
+  await expect(page.getByRole("button", { name: new RegExp(name) })).toContainText("Repositories");
+
+  await page.getByRole("button", { name: new RegExp(name) }).click();
+  await page.getByRole("complementary", { name: "Connection detail" }).getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) }).getByRole("button", { name: "Remove connection", exact: true }).click();
+  // The removal receipt closes the dialog when the write settles; only then is
+  // the row count meaningful (an open modal hides the list from the
+  // accessibility tree, so a role-based count can pass while the row persists).
+  await expect(page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) })).toBeHidden();
+  await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(0);
+  const removed = await api(page, "/portal/api/connections", { method: "GET" });
+  expect(removed.status).toBe(200);
+  expect(removed.body.connections.filter((connection) => connection.name === name)).toEqual([]);
+
+  const expiredName = `Azure expired ${suffix}`;
+  await createThroughConsole(page, { provider: "azure_devops", name: expiredName, account: "expired-fixture", capabilities: ["Work items"] });
+  await page.getByRole("button", { name: new RegExp(expiredName) }).click();
+  const expiredDetail = page.getByRole("complementary", { name: "Connection detail" });
+  await expiredDetail.getByRole("button", { name: "Test connection", exact: true }).click();
+  await expect(expiredDetail.getByText("Degraded", { exact: true })).toBeVisible();
+  await expect(expiredDetail).toContainText("Provider authentication failed");
+  await capture(page, testInfo, "azure", "Azure DevOps connection created, tested and refused on the new route");
+
+  await assertNoCredentials(page, recorded);
+});

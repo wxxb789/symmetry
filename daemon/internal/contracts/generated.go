@@ -62,6 +62,55 @@ type SymmetryAdmissionV1Subject struct {
 	TreeDigest string `json:"tree_digest"`
 }
 
+// Consumed fields of the existing portal connection read and its mutation projections.
+// Presentation values stay open strings so an unknown status, capability or auth type
+// remains renderable; unconsumed presentation fields remain additive.
+type SymmetryConnectionsReadV1 struct {
+	Connections []Connection         `json:"connections"`
+	Providers   []ConnectionProvider `json:"providers"`
+}
+
+type Connection struct {
+	AccountRef    string                 `json:"account_ref"`
+	AuthType      string                 `json:"auth_type"`
+	Capabilities  []string               `json:"capabilities"`
+	ID            string                 `json:"id"`
+	LastCheckedAt *string                `json:"last_checked_at"`
+	Metadata      map[string]interface{} `json:"metadata"`
+	Name          string                 `json:"name"`
+	Provider      string                 `json:"provider"`
+	Resources     []ConnectionResource   `json:"resources"`
+	Status        string                 `json:"status"`
+	StatusMessage *string                `json:"status_message"`
+	Version       int64                  `json:"version"`
+}
+
+type ConnectionResource struct {
+	ExternalRef   *string                `json:"external_ref"`
+	ID            string                 `json:"id"`
+	Kind          string                 `json:"kind"`
+	LastCheckedAt *string                `json:"last_checked_at"`
+	LastSyncedAt  *string                `json:"last_synced_at"`
+	Metadata      map[string]interface{} `json:"metadata"`
+	Name          string                 `json:"name"`
+	ProjectID     string                 `json:"project_id"`
+	ProjectKey    string                 `json:"project_key"`
+	ProjectName   string                 `json:"project_name"`
+	ProjectStatus string                 `json:"project_status"`
+	Provider      *string                `json:"provider"`
+	Status        string                 `json:"status"`
+	StatusMessage *string                `json:"status_message"`
+	SyncStatus    string                 `json:"sync_status"`
+	URL           *string                `json:"url"`
+	Version       int64                  `json:"version"`
+}
+
+type ConnectionProvider struct {
+	AuthType     string   `json:"auth_type"`
+	Capabilities []string `json:"capabilities"`
+	ID           string   `json:"id"`
+}
+
 type SymmetryContextSnapshotV1 struct {
 	AdvisoryRecall    []ContextSource                        `json:"advisory_recall"`
 	ApprovedGoal      ApprovedGoal                           `json:"approved_goal"`

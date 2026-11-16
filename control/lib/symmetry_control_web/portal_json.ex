@@ -11,7 +11,7 @@ defmodule SymmetryControlWeb.PortalJSON do
     %{
       selected_project_id: snapshot.selected_project && snapshot.selected_project.id,
       projects: Enum.map(snapshot.projects, &project(&1, model.projections)),
-      connections: Enum.map(model.connections, &connection/1),
+      connections: connections(model),
       runtimes: Enum.map(model.runtimes, &Protocol.runtime/1),
       registered_runtimes: Enum.map(model.registered_runtimes, &Protocol.runtime/1),
       activity: Enum.map(model.activity, &activity_entry/1),
@@ -19,7 +19,18 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
-  def connection(connection) do
+  def connections(model) do
+    Enum.map(model.connections, &connection(&1, Map.get(model.bound_resources, &1.id, [])))
+  end
+
+  def connections_read(model) do
+    %{
+      providers: Enum.map(model.providers, &provider/1),
+      connections: connections(model)
+    }
+  end
+
+  def connection(connection, bound_resources) do
     %{
       id: connection.id,
       provider: connection.provider,
@@ -31,7 +42,26 @@ defmodule SymmetryControlWeb.PortalJSON do
       status_message: connection.status_message,
       metadata: connection.metadata,
       last_checked_at: iso8601(connection.last_checked_at),
-      version: connection.lock_version
+      version: connection.lock_version,
+      resources: Enum.map(bound_resources, &connection_resource/1)
+    }
+  end
+
+  def connection_resource(%ProjectResource{} = resource) do
+    resource
+    |> resource()
+    |> Map.merge(%{
+      project_key: resource.project.key,
+      project_name: resource.project.name,
+      project_status: resource.project.status
+    })
+  end
+
+  defp provider(provider) do
+    %{
+      id: provider.id,
+      auth_type: provider.auth_type,
+      capabilities: provider.capabilities
     }
   end
 

@@ -36,6 +36,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
        %{
          snapshot: snapshot,
          connections: connections,
+         bound_resources: Integrations.list_bound_resources(),
          runtimes: compatible_runtimes,
          registered_runtimes: runtimes,
          projections: projections,
@@ -43,6 +44,14 @@ defmodule SymmetryControl.Workspaces.ReadModel do
          health: health(project, connections, projections, compatible_runtimes)
        }}
     end
+  end
+
+  def connections do
+    %{
+      providers: Integrations.connection_providers(),
+      connections: Integrations.list_connections(),
+      bound_resources: Integrations.list_bound_resources()
+    }
   end
 
   def projections(work_items) do

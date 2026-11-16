@@ -1,0 +1,7 @@
+{
+  "providers": [
+    {"id": "github", "auth_type": "gh_cli", "capabilities": ["repositories", "work_items", "changes", "ci"]},
+    {"id": "azure_devops", "auth_type": "entra_id", "capabilities": ["repositories", "work_items", "changes", "ci"]}
+  ],
+  "connections": []
+}

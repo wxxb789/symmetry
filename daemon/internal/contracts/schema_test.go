@@ -15,8 +15,8 @@ func TestAllGoalSchemasCompileAndGeneratedTimestampsStayStrings(t *testing.T) {
 	if err := ensureSchemas(); err != nil {
 		t.Fatalf("schemas did not compile: %v", err)
 	}
-	if len(schemas) != 17 {
-		t.Fatalf("compiled schemas = %d, want 17", len(schemas))
+	if len(schemas) != 18 {
+		t.Fatalf("compiled schemas = %d, want 18", len(schemas))
 	}
 	if commitPath == nil || commitPath.MatchTimeout != 10*time.Millisecond {
 		t.Fatalf("CommitPath regex timeout = %v, want %v", commitPath.MatchTimeout, 10*time.Millisecond)
@@ -207,6 +207,27 @@ func TestWorkspaceReadAcceptsFractionalMetadataWithoutRelaxingCommands(t *testin
 	invalid := strings.Replace(string(data), `"blocked": false`, `"blocked": 0.5`, 1)
 	if err := ValidateSchema(EnvelopeWorkspaceRead, []byte(invalid)); err == nil {
 		t.Fatal("presentation schema accepted a fractional blocked flag")
+	}
+}
+
+func TestConnectionsReadRejectsVersionBeyondTheSafeIntegerBound(t *testing.T) {
+	data := strings.Replace(
+		string(readContractFixture(t, "valid/connections-read.basic.json")),
+		"\"version\": 3,\n      \"resources\"",
+		"\"version\": 9007199254740992,\n      \"resources\"",
+		1,
+	)
+	if !strings.Contains(data, "9007199254740992") {
+		t.Fatal("the fixture edit did not apply")
+	}
+	// The read projection admits finite presentation numbers, so the bound —
+	// not the raw-number policy — has to answer this version.
+	err := ValidateSchema(EnvelopeConnectionsRead, []byte(data))
+	if err == nil {
+		t.Fatal("presentation schema accepted a version beyond the safe-integer bound")
+	}
+	if !strings.Contains(err.Error(), "/connections/0/version") || !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("rejection does not point at the version bound: %v", err)
 	}
 }
 

@@ -52,6 +52,7 @@ defmodule SymmetryControlWeb.Router do
 
     get "/session", PortalSessionController, :show
     get "/workspace", PortalApiController, :workspace
+    get "/connections", PortalApiController, :connections
     get "/chat", ChatController, :index
     post "/chat/messages", ChatController, :create
     post "/connections", PortalApiController, :create_connection
@@ -88,6 +89,7 @@ defmodule SymmetryControlWeb.Router do
 
     get "/", PortalController, :index
     get "/attention", PortalController, :index
+    get "/connections", PortalController, :index
     get "/projects", PortalController, :index
     get "/projects/:project_id", PortalController, :index
     get "/work/:work_item_id", PortalController, :index

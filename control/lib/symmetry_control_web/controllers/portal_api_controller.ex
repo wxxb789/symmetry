@@ -14,12 +14,17 @@ defmodule SymmetryControlWeb.PortalApiController do
     end
   end
 
+  def connections(conn, _params) do
+    json(conn, PortalJSON.connections_read(ReadModel.connections()))
+  end
+
   def create_connection(conn, params) do
     case Integrations.create_connection(params) do
       {:ok, connection} ->
-        conn
-        |> put_status(:created)
-        |> json(%{connection: PortalJSON.connection(connection)})
+        connection_receipt(conn, :created, connection, :created)
+
+      {:replayed, connection} ->
+        connection_receipt(conn, :ok, connection, :replayed)
 
       {:error, reason} ->
         error(conn, reason)
@@ -30,7 +35,7 @@ defmodule SymmetryControlWeb.PortalApiController do
     connection_id = Map.fetch!(conn.path_params, "connection_id")
 
     case Integrations.update_connection(connection_id, Map.delete(params, "connection_id")) do
-      {:ok, connection} -> json(conn, %{connection: PortalJSON.connection(connection)})
+      {:ok, connection} -> connection_receipt(conn, :ok, connection, :updated)
       {:error, reason} -> error(conn, reason)
     end
   end
@@ -40,7 +45,7 @@ defmodule SymmetryControlWeb.PortalApiController do
 
     with {:ok, version} <- version_param(params),
          {:ok, connection} <- Integrations.delete_connection(connection_id, version) do
-      json(conn, %{deleted_connection_id: connection.id})
+      json(conn, %{disposition: "deleted", deleted_connection_id: connection.id})
     else
       {:error, reason} -> error(conn, reason)
     end
@@ -51,10 +56,18 @@ defmodule SymmetryControlWeb.PortalApiController do
 
     case Integrations.check_connection(connection_id) do
       {:ok, connection} ->
-        json(conn, %{connection: PortalJSON.connection(connection)})
+        connection_receipt(conn, :ok, connection, :checked)
 
       {:error, reason, connection} ->
-        projected_error(conn, reason, :connection, PortalJSON.connection(connection))
+        {status, code, message} = Protocol.error_details(reason)
+
+        conn
+        |> put_status(status)
+        |> json(%{
+          disposition: "checked",
+          connection: connection_projection(connection),
+          error: %{code: code, message: message}
+        })
 
       {:error, reason} ->
         error(conn, reason)
@@ -331,6 +344,25 @@ defmodule SymmetryControlWeb.PortalApiController do
         :ci_resource,
         :external_work_item_resource
       ])
+
+  defp connection_receipt(conn, status, connection, disposition) do
+    conn
+    |> put_status(status)
+    |> json(%{
+      disposition: Atom.to_string(disposition),
+      connection: connection_projection(connection)
+    })
+  end
+
+  defp connection_projection(connection) do
+    bound_resources =
+      connection.id
+      |> List.wrap()
+      |> Integrations.list_bound_resources()
+      |> Map.get(connection.id, [])
+
+    PortalJSON.connection(connection, bound_resources)
+  end
 
   defp work_item_json(work_item) do
     work_item = hydrate_work_item(work_item)

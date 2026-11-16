@@ -1,11 +1,12 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useMatch, useNavigate, useRouteContext, useRouterState } from "@tanstack/react-router";
-import { Command, Folder, Inbox, LogOut, Menu, Search, X } from "lucide-react";
+import { Cable, Command, Folder, Inbox, LogOut, Menu, Search, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { errorMessage } from "../services/api";
 import { ErrorState, LoadingState } from "../components/workspace";
 import { sessionOptions, workDetailOptions, workspaceOptions, type Application } from "./application";
+import { SessionTokenProvider } from "./session";
 
 function focusContent() {
   requestAnimationFrame(() => { document.getElementById("content-heading")?.focus({ preventScroll: true }); });
@@ -36,6 +37,7 @@ function NavigationLinks({ onNavigate }: { onNavigate?: () => void }) {
   return <nav aria-label="Workspace navigation" className="nav-links">
     <Link to="/attention" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Inbox size={18} aria-hidden="true" />Attention</Link>
     <Link to="/projects" onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Folder size={18} aria-hidden="true" />Projects</Link>
+    <Link to="/connections" search={{}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Cable size={18} aria-hidden="true" />Connections</Link>
   </nav>;
 }
 
@@ -96,14 +98,15 @@ function CommandPalette() {
         else if (previousFocus.current) { event.preventDefault(); previousFocus.current.focus(); }
       }}>
         <div className="dialog-heading"><Dialog.Title>Command palette</Dialog.Title><Dialog.Close asChild><button className="icon-button" type="button" aria-label="Close command palette"><X size={20} aria-hidden="true" /></button></Dialog.Close></div>
-        <Dialog.Description className="muted">Navigate this read-only workspace. Use Tab to select a result and Enter to open it.</Dialog.Description>
+        <Dialog.Description className="muted">Navigate this workspace. Use Tab to select a result and Enter to open it.</Dialog.Description>
         <label className="sr-only" htmlFor="command-search">Search destinations</label>
         <input id="command-search" className="command-input" type="search" placeholder="Search projects and pages…" value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
         <div className="command-results">
           {(!filter || "attention".includes(filter)) && <Link className="command-result" to="/attention" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><Inbox size={18} aria-hidden="true" />Attention</Link>}
           {(!filter || "projects".includes(filter)) && <Link className="command-result" to="/projects" onClick={closeForNavigation}><Folder size={18} aria-hidden="true" />All projects</Link>}
+          {(!filter || "connections".includes(filter)) && <Link className="command-result" to="/connections" search={{}} onClick={closeForNavigation}><Cable size={18} aria-hidden="true" />Connections</Link>}
           {projects.map((project) => <Link className="command-result" key={project.id} to="/projects/$projectId" params={{ projectId: project.id }} onClick={closeForNavigation}><Folder size={18} aria-hidden="true" /><span>{project.name}<span className="item-key"> {project.key}</span></span></Link>)}
-          {filter && projects.length === 0 && !"attention".includes(filter) && !"projects".includes(filter) && <p className="muted" role="status">No matching destinations.</p>}
+          {filter && projects.length === 0 && !"attention".includes(filter) && !"projects".includes(filter) && !"connections".includes(filter) && <p className="muted" role="status">No matching destinations.</p>}
           {query.isError && <p className="muted">Project search is unavailable. You can still navigate to Attention or Projects.</p>}
         </div>
       </Dialog.Content>
@@ -152,10 +155,10 @@ export function WorkspaceRoot() {
   return <>
     <a className="skip-link" href="#content-heading">Skip to content</a>
     <div className="workspace-shell">
-      <aside className="sidebar"><Link className="brand" to="/attention" search={{}}><span className="brand-mark" aria-hidden="true">S</span>Symmetry</Link><p className="sidebar-label">Workspace</p><NavigationLinks /><div className="sidebar-footer"><span className="read-only-dot" aria-hidden="true" />Read-only workspace</div></aside>
+      <aside className="sidebar"><Link className="brand" to="/attention" search={{}}><span className="brand-mark" aria-hidden="true">S</span>Symmetry</Link><p className="sidebar-label">Workspace</p><NavigationLinks /><div className="sidebar-footer"><span className="state-dot" aria-hidden="true" />State applied by the server</div></aside>
       <div className="workspace-body"><header className="topbar"><div className="topbar-start"><MobileNavigation /><ProjectPicker /></div><div className="topbar-actions"><CommandPalette /><LogoutForm application={application} cachedToken={csrf ?? ""} /></div></header>
-        <main id="main-content" className="workspace-content"><Outlet /></main>
-        <footer className="content-footer">Workspace reads reflect server state. No changes can be made from this shell. <a href="/portal/classic">Classic workspace</a></footer>
+        <main id="main-content" className="workspace-content"><SessionTokenProvider token={csrf ?? ""}><Outlet /></SessionTokenProvider></main>
+        <footer className="content-footer">Reads and applied changes come from the server; a refused change shows the server's current state. <a href="/portal/classic">Classic workspace</a></footer>
       </div>
     </div>
   </>;

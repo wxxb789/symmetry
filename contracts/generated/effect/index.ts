@@ -7,6 +7,7 @@ import { allOf, arrayConstraints, conditionalObject, exactOneOf, notSchema, numb
 import type {
   SymmetryAdapterCapabilitiesV1,
   SymmetryAdmissionV1,
+  SymmetryConnectionsReadV1,
   SymmetryContextSnapshotV1,
   SymmetryDecisionV1,
   SymmetryEvidenceBatchConflictDetailsV1,
@@ -521,6 +522,47 @@ export const DefinitionAdapterGraph = S.suspend(() => withObjectPropertyBounds(s
   "protocol_version": DefinitionPositiveIntegerGraph
 })), undefined, undefined));
 
+export const DefinitionConnectionProviderGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "auth_type": stringConstraints(S.String, 1, undefined, undefined),
+  "capabilities": arrayConstraints(S.Array(stringConstraints(S.String, 1, undefined, undefined)), undefined, undefined, undefined),
+  "id": stringConstraints(S.String, 1, undefined, undefined)
+})), undefined, undefined));
+
+export const DefinitionConnectionGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "account_ref": stringConstraints(S.String, undefined, undefined, undefined),
+  "auth_type": stringConstraints(S.String, 1, undefined, undefined),
+  "capabilities": arrayConstraints(S.Array(stringConstraints(S.String, 1, undefined, undefined)), undefined, undefined, undefined),
+  "id": DefinitionUUIDGraph,
+  "last_checked_at": exactOneOf(S.Union(DefinitionUtcTimestampGraph, S.Null), DefinitionUtcTimestampGraph, S.Null),
+  "metadata": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "name": stringConstraints(S.String, undefined, undefined, undefined),
+  "provider": stringConstraints(S.String, 1, undefined, undefined),
+  "resources": arrayConstraints(S.Array(DefinitionConnectionResourceGraph), undefined, undefined, undefined),
+  "status": stringConstraints(S.String, undefined, undefined, undefined),
+  "status_message": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "version": DefinitionRevisionGraph
+})), undefined, undefined));
+
+export const DefinitionConnectionResourceGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "external_ref": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "id": DefinitionUUIDGraph,
+  "kind": stringConstraints(S.String, 1, undefined, undefined),
+  "last_checked_at": exactOneOf(S.Union(DefinitionUtcTimestampGraph, S.Null), DefinitionUtcTimestampGraph, S.Null),
+  "last_synced_at": exactOneOf(S.Union(DefinitionUtcTimestampGraph, S.Null), DefinitionUtcTimestampGraph, S.Null),
+  "metadata": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "name": stringConstraints(S.String, undefined, undefined, undefined),
+  "project_id": DefinitionUUIDGraph,
+  "project_key": stringConstraints(S.String, undefined, undefined, undefined),
+  "project_name": stringConstraints(S.String, undefined, undefined, undefined),
+  "project_status": stringConstraints(S.String, undefined, undefined, undefined),
+  "provider": exactOneOf(S.Union(stringConstraints(S.String, 1, undefined, undefined), S.Null), stringConstraints(S.String, 1, undefined, undefined), S.Null),
+  "status": stringConstraints(S.String, undefined, undefined, undefined),
+  "status_message": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "sync_status": stringConstraints(S.String, undefined, undefined, undefined),
+  "url": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "version": DefinitionRevisionGraph
+})), undefined, undefined));
+
 export const DefinitionConflictItemGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
   "disposition": S.Literal("conflict"),
   "evidence_key": DefinitionShortIdentifierGraph,
@@ -936,6 +978,15 @@ export const AdmissionGraph = S.suspend(() => allOf(withObjectPropertyBounds(str
 const matchesAdmission = S.is(AdmissionGraph, strictOptions);
 export const isAdmission = (value: unknown): value is SymmetryAdmissionV1 => matchesAdmission(value);
 export const AdmissionSchema: S.Schema<SymmetryAdmissionV1, unknown> = S.Unknown.pipe(S.filter(isAdmission));
+
+export const ConnectionsReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "connections": arrayConstraints(S.Array(DefinitionConnectionGraph), undefined, undefined, undefined),
+  "providers": arrayConstraints(S.Array(DefinitionConnectionProviderGraph), undefined, undefined, undefined)
+})), undefined, undefined));
+
+const matchesConnectionsRead = S.is(ConnectionsReadGraph, strictOptions);
+export const isConnectionsRead = (value: unknown): value is SymmetryConnectionsReadV1 => matchesConnectionsRead(value);
+export const ConnectionsReadSchema: S.Schema<SymmetryConnectionsReadV1, unknown> = S.Unknown.pipe(S.filter(isConnectionsRead));
 
 export const ContextSnapshotGraph = S.suspend(() => allOf(withObjectPropertyBounds(strictObject(S.Struct({
   "advisory_recall": arrayConstraints(S.Array(DefinitionContextSourceGraph), undefined, 256, undefined),

@@ -205,13 +205,18 @@ defmodule CredentialedProviderWitness do
         default_workspace: "primary"
       })
 
-    {:ok, connection} =
-      Integrations.create_connection(%{
-        provider: "github",
-        name: config["namespace"],
-        account_ref: "wxxb789",
-        capabilities: ["repositories", "changes"]
-      })
+    # A retry after a partial run finds the same submission already applied and
+    # answers with the replayed row; both shapes carry the connection.
+    connection =
+      case Integrations.create_connection(%{
+             provider: "github",
+             name: config["namespace"],
+             account_ref: "wxxb789",
+             capabilities: ["repositories", "changes"]
+           }) do
+        {:ok, connection} -> connection
+        {:replayed, connection} -> connection
+      end
 
     resource =
       %ProjectResource{id: config["resource_id"]}
