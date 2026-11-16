@@ -1,0 +1,149 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/attention-read.schema.json",
+  "title": "Symmetry Attention Read v1",
+  "description": "Consumed members of the Portal attention read: the existing server-side Goal attention feed merged with the project-level blocked work items the workspace read already serves. Unconsumed presentation members remain additive, and every policy member (attention reasons, blockers, readiness) is the server's own projection, never a client derivation.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["goal_attention", "project_blocked"],
+  "properties": {
+    "selected_project_id": {
+      "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+    },
+    "goal_attention": {"$ref": "#/definitions/GoalAttentionFeed"},
+    "project_blocked": {"$ref": "#/definitions/ProjectBlockedFeed"},
+    "projects": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/AttentionProjectOption"}
+    }
+  },
+  "definitions": {
+    "GoalAttentionFeed": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["entries", "unavailable"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/GoalAttentionEntry"}
+        },
+        "next_cursor": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "unavailable": {
+          "oneOf": [{"$ref": "#/definitions/ReadUnavailable"}, {"type": "null"}]
+        }
+      }
+    },
+    "GoalAttentionEntry": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Goals.ReadModel.attention/1 entry as served; the goal surface re-reads the full projection for detail.",
+      "required": ["goal_id", "title", "state", "current_revision", "blocker_reasons"],
+      "properties": {
+        "goal_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "title": {"type": "string"},
+        "state": {"type": "string"},
+        "current_revision": {"$ref": "common.schema.json#/definitions/PositiveInteger"},
+        "blockers": {"type": "array", "items": {"$ref": "#/definitions/GoalBlocker"}},
+        "blocker_reasons": {"type": "array", "items": {"type": "string"}},
+        "settlement_attention": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/SettlementAttention"}
+        },
+        "attention_reasons": {"type": "array", "items": {"type": "string"}},
+        "active_tasks": {"type": "integer"},
+        "nonterminal_tasks": {"type": "integer"},
+        "ready_to_achieve": {"type": "boolean"},
+        "updated_at": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "ProjectBlockedFeed": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["entries", "unavailable"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/ProjectBlockedEntry"}
+        },
+        "unavailable": {
+          "oneOf": [{"$ref": "#/definitions/ReadUnavailable"}, {"type": "null"}]
+        }
+      }
+    },
+    "ProjectBlockedEntry": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "The shell's existing project-level blocked item, plus the project identity needed to render it beside Goal attention.",
+      "required": ["project_id", "work_item_id", "title", "status", "blocked"],
+      "properties": {
+        "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "project_key": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "project_name": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "project_status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "work_item_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "work_item_key": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "title": {"type": "string"},
+        "status": {"type": "string"},
+        "blocked": {"type": "boolean"},
+        "blocker": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "updated_at": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "AttentionProjectOption": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "key", "name", "status"],
+      "properties": {
+        "id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "key": {"type": "string"},
+        "name": {"type": "string"},
+        "status": {"type": "string"}
+      }
+    },
+    "GoalBlocker": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["reason", "count"],
+      "properties": {
+        "reason": {"type": "string"},
+        "count": {"type": "integer"},
+        "ids": {"type": "array", "items": {"type": "string"}},
+        "details": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "SettlementAttention": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["settlement"],
+      "properties": {
+        "event_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "event_sequence": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+        "goal_revision": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+        "work_item_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "task_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "run_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "generation": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+        "required": {"type": "boolean"},
+        "settlement": {"type": "string"},
+        "reason": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "decision_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "blocker": {"oneOf": [{"type": "object"}, {"type": "null"}]},
+        "proposed_next_action": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "proposed_next_action_status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "subject_hash": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "evidence_refs": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "ReadUnavailable": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Set when one feed could not be read. The page still serves the other feed with HTTP 200; the code is the server's mapped error code, never a fabricated reason.",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    }
+  }
+}

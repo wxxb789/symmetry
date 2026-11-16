@@ -1,0 +1,24 @@
+{
+  "selected_project_id": null,
+  "goal_attention": {
+    "entries": [{
+      "goal_id": "33333333-3333-4333-8333-333333333333",
+      "title": "Deliver the attention entry point",
+      "state": "active",
+      "current_revision": 2,
+      "blocker_reasons": ["waiting_dependency"]
+    }, {
+      "goal_id": 33333333,
+      "title": "Deliver the attention entry point",
+      "state": "active",
+      "current_revision": 2,
+      "blocker_reasons": []
+    }],
+    "next_cursor": null,
+    "unavailable": null
+  },
+  "project_blocked": {
+    "entries": [],
+    "unavailable": null
+  }
+}

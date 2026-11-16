@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { savedViewStorageKey } from "../features/projects/saved-views";
 import type { Project } from "../services/api";
-import { readWorkDetail, readWorkItem } from "../services/api.fixtures";
+import { readAttention, readWorkDetail, readWorkItem } from "../services/api.fixtures";
 import { createApplication, type Application } from "./application";
 import { createAppRouter } from "./router";
 
@@ -22,7 +22,16 @@ afterEach(() => { for (const app of applications) app.queryClient.clear(); appli
 
 function renderWorkspace(path: string, fetcher: typeof fetch = vi.fn<typeof fetch>().mockImplementation((input) => {
   const requestPath = input instanceof Request ? input.url : String(input);
-  const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id") ?? firstProjectId;
+  const url = new URL(requestPath, "http://localhost");
+  const projectId = url.searchParams.get("project_id") ?? firstProjectId;
+  if (url.pathname === "/portal/api/attention") {
+    const scoped = url.searchParams.get("project_id") ?? firstProjectId;
+    const project = projects.find((candidate) => candidate.id === scoped);
+    return Promise.resolve(new Response(JSON.stringify(readAttention({
+      selectedProjectId: scoped,
+      blocked: (project?.work_items ?? []).filter((item) => item.blocked).map((item) => ({ projectId: scoped, projectName: project?.name ?? null, workItemId: item.id, key: item.key, title: item.title, status: item.status, blocker: item.blocker })),
+    }))));
+  }
   return Promise.resolve(new Response(JSON.stringify(requestPath.endsWith("/session")
     ? { csrf_token: "session-token" }
     : { selected_project_id: projectId, projects: projects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })) })));

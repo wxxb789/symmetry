@@ -1,13 +1,18 @@
 import {
+  AttentionRead as AttentionReadBoundary,
   ConnectionsRead,
+  GoalRead as GoalReadBoundary,
   WorkDetailRead,
   WorkTimelineRead,
   WorkspaceRead,
+  type SymmetryAttentionReadV1,
   type SymmetryConnectionsReadV1,
+  type SymmetryGoalReadV1,
   type SymmetryWorkDetailReadV1,
   type SymmetryWorkTimelineReadV1,
   type SymmetryWorkspaceReadV1,
 } from "@symmetry/contracts";
+import { MutationRefused } from "./commands";
 import { Data, Effect, Either, Layer, ManagedRuntime, Schema } from "effect";
 
 export class Unauthenticated extends Data.TaggedError("Unauthenticated")<{ message: string }> {}
@@ -122,6 +127,15 @@ export type ActionId = string & { readonly ActionId: unique symbol };
 export type ExecutionGeneration = number & { readonly ExecutionGeneration: unique symbol };
 
 export type MutationDisposition = "created" | "replayed";
+
+export type Attention = SymmetryAttentionReadV1;
+export type GoalAttentionEntry = Attention["goal_attention"]["entries"][number];
+export type ProjectBlockedEntry = Attention["project_blocked"]["entries"][number];
+export type GoalProjection = SymmetryGoalReadV1;
+export type GoalWorkItem = GoalProjection["work_items"][number];
+export type GoalDecision = GoalProjection["decisions"][number];
+export type GoalGraph = GoalProjection["graph"];
+export type GoalContext = { snapshot_id?: string; [member: string]: unknown };
 
 /** A project creation submission: exactly the fields the server's create changeset casts. */
 export interface ProjectDraft {
@@ -256,6 +270,23 @@ interface RequestInit {
   body?: unknown;
   csrf?: string;
 }
+const GoalEventShape = Schema.Struct({
+  id: Schema.optional(Schema.String),
+  sequence: Schema.Number,
+  kind: Schema.String,
+  actor_ref: Schema.optional(Schema.NullOr(Schema.String)),
+  revision: Schema.optional(Schema.NullOr(Schema.Number)),
+  payload: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+  response: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+  inserted_at: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const GoalEventsShape = Schema.Struct({
+  entries: Schema.Array(GoalEventShape),
+  next_after: Schema.NullOr(Schema.Number),
+});
+export type GoalEvent = typeof GoalEventShape.Type;
+export type GoalEvents = typeof GoalEventsShape.Type;
+const GoalContextShape = Schema.Record({ key: Schema.String, value: Schema.Unknown });
 const runtime = ManagedRuntime.make(Layer.empty);
 
 // Control responses carry the same PortalJSON projections the read schemas
@@ -337,6 +368,10 @@ export interface Api {
   workspace: (projectId: string | null, signal: AbortSignal) => Promise<Workspace>;
   workDetail: (workItemId: string, signal: AbortSignal) => Promise<WorkDetail>;
   workTimeline: (workItemId: string, before: string | null, signal: AbortSignal) => Promise<WorkTimeline>;
+  attention: (projectId: string | null, cursor: string | null, signal: AbortSignal) => Promise<Attention>;
+  goal: (goalId: string, signal: AbortSignal) => Promise<GoalProjection>;
+  goalEvents: (goalId: string, after: number, signal: AbortSignal) => Promise<GoalEvents>;
+  goalContext: (goalId: string, snapshotId: string, signal: AbortSignal) => Promise<GoalContext>;
   session: (signal: AbortSignal) => Promise<Session>;
   connections: (signal: AbortSignal) => Promise<ConnectionsReadModel>;
   createConnection: (draft: ConnectionDraft, csrf: string, signal: AbortSignal) => Promise<ConnectionReceipt>;
@@ -535,6 +570,23 @@ export function createApi(
       const query = before === null ? "" : `?${new URLSearchParams({ before })}`;
       return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}/timeline${query}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkTimelineRead.decodeJson(text)))), signal);
     },
+    attention(projectId: string | null, cursor: string | null, signal: AbortSignal): Promise<Attention> {
+      const query = new URLSearchParams();
+      if (projectId !== null) query.set("project_id", projectId);
+      if (cursor !== null) query.set("cursor", cursor);
+      const suffix = query.size === 0 ? "" : `?${query}`;
+      return run(request(fetcher, `/portal/api/attention${suffix}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => AttentionReadBoundary.decodeJson(text)))), signal);
+    },
+    goal(goalId: string, signal: AbortSignal): Promise<GoalProjection> {
+      return run(request(fetcher, `/portal/api/goals/${encodeURIComponent(goalId)}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => GoalReadBoundary.decodeJson(text)))), signal);
+    },
+    goalEvents(goalId: string, after: number, signal: AbortSignal): Promise<GoalEvents> {
+      const query = `?${new URLSearchParams({ after: String(after) })}`;
+      return run(request(fetcher, `/portal/api/goals/${encodeURIComponent(goalId)}/events${query}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(GoalEventsShape))(text)))), signal);
+    },
+    goalContext(goalId: string, snapshotId: string, signal: AbortSignal): Promise<GoalContext> {
+      return run(request(fetcher, `/portal/api/goals/${encodeURIComponent(goalId)}/contexts/${encodeURIComponent(snapshotId)}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(GoalContextShape))(text)))), signal);
+    },
     session(signal: AbortSignal): Promise<Session> {
       return run(request(fetcher, "/portal/api/session", { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(Session))(text)))), signal);
     },
@@ -690,6 +742,79 @@ const resourceReceipt = (body: Uint8Array) =>
       version: value.resource.version,
     })),
   );
+
+const CommandErrorBody = Schema.Struct({
+  error: Schema.Struct({
+    code: Schema.String,
+    message: Schema.String,
+    current_version: Schema.optional(Schema.Number),
+    current_revision: Schema.optional(Schema.Number),
+    allowed_actions: Schema.optional(Schema.Array(Schema.String)),
+    details: Schema.optional(Schema.Unknown),
+  }),
+});
+
+/**
+ * One Goal command, authenticated by the portal session's CSRF token. Every
+ * refusal is returned as `MutationRefused` carrying exactly the members the
+ * server sent, so the surface renders the conflict instead of guessing it; a
+ * transport or session failure keeps its own read error.
+ */
+export async function postGoalCommand(
+  fetcher: typeof fetch,
+  csrfToken: string,
+  goalId: string,
+  envelope: unknown,
+): Promise<unknown> {
+  return postPortalCommand(fetcher, csrfToken, `/portal/api/goals/${encodeURIComponent(goalId)}/commands`, envelope);
+}
+
+/** One authenticated portal command POST with the shared refusal decoding. */
+export async function postPortalCommand(
+  fetcher: typeof fetch,
+  csrfToken: string,
+  path: string,
+  body: unknown,
+): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetcher(path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "content-type": "application/json",
+        "x-csrf-token": csrfToken,
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+      redirect: "manual",
+    });
+  } catch {
+    throw new Network({ message: "Cannot reach the server. Check your connection and try again." });
+  }
+  if (response.type === "opaqueredirect" || response.status === 302 || response.status === 303) {
+    throw new Unauthenticated({ message: "Your session has ended. Sign in to continue." });
+  }
+  const document = Schema.decodeUnknownOption(Schema.parseJson(Schema.Unknown))(await response.text());
+  const payload = document._tag === "Some" ? document.value : null;
+  if (response.ok) return payload;
+  throw refusal(response.status, payload);
+}
+
+function refusal(status: number, document: unknown): ReadError | MutationRefused {
+  const parsed = Schema.decodeUnknownOption(CommandErrorBody)(document);
+  if (parsed._tag === "Some") {
+    const { code, message, current_version, current_revision, allowed_actions, details } = parsed.value.error;
+    return new MutationRefused(status, code, message, {
+      ...(current_version === undefined ? {} : { current_version }),
+      ...(current_revision === undefined ? {} : { current_revision }),
+      ...(allowed_actions === undefined ? {} : { allowed_actions }),
+      ...(details === undefined ? {} : { details }),
+    });
+  }
+  return statusError(status);
+}
 
 export function readRetry(failureCount: number, error: unknown): boolean {
   return failureCount < 2 && (error instanceof Network || (error instanceof UnexpectedResponse && error.transient));

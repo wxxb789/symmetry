@@ -26,6 +26,7 @@ type Envelope string
 const (
 	EnvelopeAdapterCapabilities          Envelope = "adapter-capabilities"
 	EnvelopeAdmission                    Envelope = "admission"
+	EnvelopeAttentionRead                Envelope = "attention-read"
 	EnvelopeConnectionsRead              Envelope = "connections-read"
 	EnvelopeContextSnapshot              Envelope = "context-snapshot"
 	EnvelopeDecision                     Envelope = "decision"
@@ -35,6 +36,7 @@ const (
 	EnvelopeEvidenceBatchResponse        Envelope = "evidence-batch-response"
 	EnvelopeGoalCommand                  Envelope = "goal-command"
 	EnvelopeGoalCreate                   Envelope = "goal-create"
+	EnvelopeGoalRead                     Envelope = "goal-read"
 	EnvelopeGoalRevision                 Envelope = "goal-revision"
 	EnvelopePlanProposal                 Envelope = "plan-proposal"
 	EnvelopeTaskResult                   Envelope = "task-result"
@@ -47,7 +49,9 @@ const (
 // presentationEnvelopes admit finite presentation numbers (read projections)
 // instead of canonical command-envelope number lexemes.
 var presentationEnvelopes = map[Envelope]bool{
+	EnvelopeAttentionRead:    true,
 	EnvelopeConnectionsRead:  true,
+	EnvelopeGoalRead:         true,
 	EnvelopeWorkDetailRead:   true,
 	EnvelopeWorkTimelineRead: true,
 	EnvelopeWorkspaceRead:    true,
@@ -165,7 +169,7 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		}
 	}
 
-	compiled := make(map[Envelope]*jsonschema.Schema, 18)
+	compiled := make(map[Envelope]*jsonschema.Schema, 20)
 	for _, envelope := range []Envelope{
 		EnvelopeAdapterCapabilities,
 		EnvelopeAdmission,
@@ -176,8 +180,10 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		EnvelopeEvidenceBatch,
 		EnvelopeEvidenceBatchConflictDetails,
 		EnvelopeEvidenceBatchResponse,
+		EnvelopeAttentionRead,
 		EnvelopeGoalCommand,
 		EnvelopeGoalCreate,
+		EnvelopeGoalRead,
 		EnvelopeGoalRevision,
 		EnvelopePlanProposal,
 		EnvelopeTaskResult,

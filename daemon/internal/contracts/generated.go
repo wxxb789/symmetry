@@ -62,6 +62,102 @@ type SymmetryAdmissionV1Subject struct {
 	TreeDigest string `json:"tree_digest"`
 }
 
+// Consumed members of the Portal attention read: the existing server-side Goal attention
+// feed merged with the project-level blocked work items the workspace read already serves.
+// Unconsumed presentation members remain additive, and every policy member (attention
+// reasons, blockers, readiness) is the server's own projection, never a client derivation.
+type SymmetryAttentionReadV1 struct {
+	GoalAttention     GoalAttentionFeed        `json:"goal_attention"`
+	ProjectBlocked    ProjectBlockedFeed       `json:"project_blocked"`
+	Projects          []AttentionProjectOption `json:"projects,omitempty"`
+	SelectedProjectID *string                  `json:"selected_project_id"`
+}
+
+type GoalAttentionFeed struct {
+	Entries     []GoalAttentionEntry `json:"entries"`
+	NextCursor  *string              `json:"next_cursor"`
+	Unavailable *ReadUnavailable     `json:"unavailable"`
+}
+
+// Goals.ReadModel.attention/1 entry as served; the goal surface re-reads the full
+// projection for detail.
+type GoalAttentionEntry struct {
+	ActiveTasks         *int64                     `json:"active_tasks,omitempty"`
+	AttentionReasons    []string                   `json:"attention_reasons,omitempty"`
+	BlockerReasons      []string                   `json:"blocker_reasons"`
+	Blockers            []EntryBlocker             `json:"blockers,omitempty"`
+	CurrentRevision     int64                      `json:"current_revision"`
+	GoalID              string                     `json:"goal_id"`
+	NonterminalTasks    *int64                     `json:"nonterminal_tasks,omitempty"`
+	ProjectID           *string                    `json:"project_id,omitempty"`
+	ReadyToAchieve      *bool                      `json:"ready_to_achieve,omitempty"`
+	SettlementAttention []EntrySettlementAttention `json:"settlement_attention,omitempty"`
+	State               string                     `json:"state"`
+	Title               string                     `json:"title"`
+	UpdatedAt           *string                    `json:"updated_at"`
+}
+
+type EntryBlocker struct {
+	Count   int64                    `json:"count"`
+	Details []map[string]interface{} `json:"details,omitempty"`
+	IDS     []string                 `json:"ids,omitempty"`
+	Reason  string                   `json:"reason"`
+}
+
+type EntrySettlementAttention struct {
+	Blocker                  map[string]interface{}   `json:"blocker"`
+	DecisionID               *string                  `json:"decision_id"`
+	EventID                  *string                  `json:"event_id"`
+	EventSequence            *int64                   `json:"event_sequence"`
+	EvidenceRefs             []map[string]interface{} `json:"evidence_refs,omitempty"`
+	Generation               *int64                   `json:"generation"`
+	GoalRevision             *int64                   `json:"goal_revision"`
+	ProposedNextAction       *string                  `json:"proposed_next_action"`
+	ProposedNextActionStatus *string                  `json:"proposed_next_action_status"`
+	Reason                   *string                  `json:"reason"`
+	Required                 *bool                    `json:"required,omitempty"`
+	RunID                    *string                  `json:"run_id"`
+	Settlement               string                   `json:"settlement"`
+	SubjectHash              *string                  `json:"subject_hash"`
+	TaskID                   *string                  `json:"task_id"`
+	WorkItemID               *string                  `json:"work_item_id"`
+}
+
+// Set when one feed could not be read. The page still serves the other feed with HTTP 200;
+// the code is the server's mapped error code, never a fabricated reason.
+type ReadUnavailable struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type ProjectBlockedFeed struct {
+	Entries     []ProjectBlockedEntry `json:"entries"`
+	Unavailable *ReadUnavailable      `json:"unavailable"`
+}
+
+// The shell's existing project-level blocked item, plus the project identity needed to
+// render it beside Goal attention.
+type ProjectBlockedEntry struct {
+	Blocked       bool    `json:"blocked"`
+	Blocker       *string `json:"blocker"`
+	ProjectID     string  `json:"project_id"`
+	ProjectKey    *string `json:"project_key"`
+	ProjectName   *string `json:"project_name"`
+	ProjectStatus *string `json:"project_status"`
+	Status        string  `json:"status"`
+	Title         string  `json:"title"`
+	UpdatedAt     *string `json:"updated_at"`
+	WorkItemID    string  `json:"work_item_id"`
+	WorkItemKey   *string `json:"work_item_key"`
+}
+
+type AttentionProjectOption struct {
+	ID     string `json:"id"`
+	Key    string `json:"key"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
 // Consumed fields of the existing portal connection read and its mutation projections.
 // Presentation values stay open strings so an unknown status, capability or auth type
 // remains renderable; unconsumed presentation fields remain additive.
@@ -598,6 +694,221 @@ type InitialRevisionExecutionPolicy struct {
 	MaxRunAttemptsPerTask   int64           `json:"max_run_attempts_per_task"`
 	MaxTaskAdmissions       int64           `json:"max_task_admissions"`
 	PerRunCostLimitMicrousd *string         `json:"per_run_cost_limit_microusd"`
+}
+
+// Consumed members of the Portal Goal detail read: the existing Goal projection with
+// objective, accepted progress, blockers, the server's own allowed actions, settlement
+// attention, budget reservation and consumption, waiting-external boundaries and the
+// read-only dependency projection. Unconsumed presentation members remain additive; the
+// client never derives a Goal policy member and never offers an action the served
+// allowed_actions does not list.
+type SymmetryGoalReadV1 struct {
+	AcceptedOutcomes []GoalReadOutcome  `json:"accepted_outcomes,omitempty"`
+	Accounting       GoalReadAccounting `json:"accounting"`
+	// The server's exact action list for the rendered version/revision. The surface offers this
+	// list and nothing else.
+	AllowedActions      []string                                `json:"allowed_actions"`
+	AttentionReasons    []string                                `json:"attention_reasons,omitempty"`
+	BlockerReasons      []string                                `json:"blocker_reasons"`
+	Blockers            []SymmetryGoalReadV1Blocker             `json:"blockers"`
+	Completion          GoalCompletion                          `json:"completion"`
+	CurrentRevision     int64                                   `json:"current_revision"`
+	Decisions           []GoalReadDecision                      `json:"decisions"`
+	Execution           map[string]interface{}                  `json:"execution"`
+	ExternalWaits       []GoalReadExternalWait                  `json:"external_waits,omitempty"`
+	Graph               GoalReadGraph                           `json:"graph"`
+	History             map[string]interface{}                  `json:"history"`
+	ID                  string                                  `json:"id"`
+	Lifecycle           map[string]interface{}                  `json:"lifecycle"`
+	Planning            map[string]interface{}                  `json:"planning"`
+	ProjectID           string                                  `json:"project_id"`
+	ProjectKey          *string                                 `json:"project_key"`
+	ProjectName         *string                                 `json:"project_name"`
+	Revision            *GoalReadRevision                       `json:"revision"`
+	SettlementAttention []SymmetryGoalReadV1SettlementAttention `json:"settlement_attention,omitempty"`
+	State               string                                  `json:"state"`
+	Title               string                                  `json:"title"`
+	UpdatedAt           *string                                 `json:"updated_at"`
+	// Goal lock_version: the value every command must carry as expected_version.
+	Version   int64              `json:"version"`
+	WorkItems []GoalReadWorkItem `json:"work_items"`
+}
+
+type GoalReadOutcome struct {
+	CandidateSubject  map[string]interface{} `json:"candidate_subject"`
+	DecisionID        *string                `json:"decision_id"`
+	Disposition       string                 `json:"disposition"`
+	EvidenceIDS       []string               `json:"evidence_ids,omitempty"`
+	GoalID            *string                `json:"goal_id"`
+	GoalRevision      *int64                 `json:"goal_revision"`
+	ID                string                 `json:"id"`
+	InsertedAt        *string                `json:"inserted_at"`
+	ProducingResultID *string                `json:"producing_result_id"`
+	ProducingRunID    *string                `json:"producing_run_id"`
+	ProducingTaskID   *string                `json:"producing_task_id"`
+	Reason            *string                `json:"reason"`
+	SubjectHash       *string                `json:"subject_hash"`
+	ValidationTaskID  *string                `json:"validation_task_id"`
+	WorkItemID        *string                `json:"work_item_id"`
+}
+
+// Budget reservation and consumption as served: a held reservation is reservation, known
+// cost is consumption, and unknown consumption stays explicitly unknown rather than zero.
+type GoalReadAccounting struct {
+	HeldMicrousd             *string `json:"held_microusd"`
+	KnownUsageCostMicrousd   *string `json:"known_usage_cost_microusd"`
+	ReleasedReservationCount *int64  `json:"released_reservation_count,omitempty"`
+	SettledReservationCount  *int64  `json:"settled_reservation_count,omitempty"`
+	UnknownReservationCount  int64   `json:"unknown_reservation_count"`
+	UnknownUsageCount        int64   `json:"unknown_usage_count"`
+	UsageCostMicrousd        *string `json:"usage_cost_microusd"`
+	UsageCostUnknown         *bool   `json:"usage_cost_unknown,omitempty"`
+	UsageLeafCount           *int64  `json:"usage_leaf_count,omitempty"`
+	UsageRecords             *int64  `json:"usage_records,omitempty"`
+}
+
+type SymmetryGoalReadV1Blocker struct {
+	Count   int64                    `json:"count"`
+	Details []map[string]interface{} `json:"details,omitempty"`
+	IDS     []string                 `json:"ids,omitempty"`
+	Reason  string                   `json:"reason"`
+}
+
+// The server's completion projection. ready is the same predicate allowed_actions uses to
+// offer achieve; the surface renders it and never recomputes it.
+type GoalCompletion struct {
+	AcceptedOutcomes      *int64 `json:"accepted_outcomes,omitempty"`
+	AcceptedRequiredItems int64  `json:"accepted_required_items"`
+	AllRequiredAccepted   *bool  `json:"all_required_accepted?,omitempty"`
+	CurrentRevision       *bool  `json:"current_revision?,omitempty"`
+	NoNonterminalTasks    *bool  `json:"no_nonterminal_tasks?,omitempty"`
+	NoOpenDecisions       *bool  `json:"no_open_decisions?,omitempty"`
+	Ready                 *bool  `json:"ready?,omitempty"`
+	RejectedOutcomes      *int64 `json:"rejected_outcomes,omitempty"`
+	RequiredItems         int64  `json:"required_items"`
+}
+
+type GoalReadDecision struct {
+	ExpiresAt    *string                  `json:"expires_at"`
+	GoalRevision *int64                   `json:"goal_revision"`
+	ID           string                   `json:"id"`
+	InsertedAt   *string                  `json:"inserted_at"`
+	Kind         string                   `json:"kind"`
+	Open         bool                     `json:"open?"`
+	Options      []map[string]interface{} `json:"options,omitempty"`
+	Question     *string                  `json:"question"`
+	Resolution   map[string]interface{}   `json:"resolution"`
+	State        string                   `json:"state"`
+	UpdatedAt    *string                  `json:"updated_at"`
+	WorkItemID   *string                  `json:"work_item_id"`
+}
+
+type GoalReadExternalWait struct {
+	CheckSeq       *int64                 `json:"check_seq"`
+	ExternalRef    *string                `json:"external_ref"`
+	Generation     *int64                 `json:"generation"`
+	GoalRevision   *int64                 `json:"goal_revision"`
+	ID             string                 `json:"id"`
+	InsertedAt     *string                `json:"inserted_at"`
+	NextCheckAt    *string                `json:"next_check_at"`
+	Reason         *string                `json:"reason"`
+	ReceiptEventID *string                `json:"receipt_event_id"`
+	ResourceID     *string                `json:"resource_id"`
+	ResultID       *string                `json:"result_id"`
+	RunID          *string                `json:"run_id"`
+	SourceRef      map[string]interface{} `json:"source_ref"`
+	State          string                 `json:"state"`
+	Subject        map[string]interface{} `json:"subject"`
+	TaskID         *string                `json:"task_id"`
+	UpdatedAt      *string                `json:"updated_at"`
+	WorkItemID     *string                `json:"work_item_id"`
+}
+
+// Read-only dependency projection: nodes, dependency edges with their satisfaction, and the
+// server's cycle flag. No write affordance exists on this surface.
+type GoalReadGraph struct {
+	CycleDetected *bool               `json:"cycle_detected,omitempty"`
+	Edges         []GoalReadGraphEdge `json:"edges"`
+	Nodes         []GoalReadGraphNode `json:"nodes"`
+}
+
+type GoalReadGraphEdge struct {
+	Blocker     *string `json:"blocker"`
+	DependsOnID *string `json:"depends_on_id"`
+	From        string  `json:"from"`
+	ID          string  `json:"id"`
+	Revision    *int64  `json:"revision"`
+	Satisfied   bool    `json:"satisfied"`
+	To          string  `json:"to"`
+	WorkItemID  *string `json:"work_item_id"`
+}
+
+type GoalReadGraphNode struct {
+	Accepted    *bool    `json:"accepted?,omitempty"`
+	Blockers    []string `json:"blockers,omitempty"`
+	BoardStatus *string  `json:"board_status,omitempty"`
+	ID          string   `json:"id"`
+	Number      *int64   `json:"number"`
+	Required    *bool    `json:"required?,omitempty"`
+	Title       string   `json:"title"`
+}
+
+// PortalJSON revision projection: the approved contract members with the revision stamp.
+// The read projection omits the write-side reason/actor_ref and never carries the write
+// schema_version.
+type GoalReadRevision struct {
+	AcceptanceContract map[string]interface{} `json:"acceptance_contract,omitempty"`
+	AuthorityPolicy    map[string]interface{} `json:"authority_policy,omitempty"`
+	ContextManifest    map[string]interface{} `json:"context_manifest,omitempty"`
+	ExecutionPolicy    map[string]interface{} `json:"execution_policy,omitempty"`
+	InsertedAt         *string                `json:"inserted_at"`
+	NonGoals           []string               `json:"non_goals,omitempty"`
+	Objective          *string                `json:"objective,omitempty"`
+	Revision           int64                  `json:"revision"`
+}
+
+type SymmetryGoalReadV1SettlementAttention struct {
+	Blocker                  map[string]interface{}   `json:"blocker"`
+	DecisionID               *string                  `json:"decision_id"`
+	EventID                  *string                  `json:"event_id"`
+	EventSequence            *int64                   `json:"event_sequence"`
+	EvidenceRefs             []map[string]interface{} `json:"evidence_refs,omitempty"`
+	Generation               *int64                   `json:"generation"`
+	GoalRevision             *int64                   `json:"goal_revision"`
+	ProposedNextAction       *string                  `json:"proposed_next_action"`
+	ProposedNextActionStatus *string                  `json:"proposed_next_action_status"`
+	Reason                   *string                  `json:"reason"`
+	Required                 *bool                    `json:"required,omitempty"`
+	RunID                    *string                  `json:"run_id"`
+	Settlement               string                   `json:"settlement"`
+	SubjectHash              *string                  `json:"subject_hash"`
+	TaskID                   *string                  `json:"task_id"`
+	WorkItemID               *string                  `json:"work_item_id"`
+}
+
+type GoalReadWorkItem struct {
+	Accepted             bool                   `json:"accepted?"`
+	AcceptedOutcome      *GoalReadOutcome       `json:"accepted_outcome"`
+	AdmittedRevision     *int64                 `json:"admitted_revision"`
+	AgentProfile         *string                `json:"agent_profile"`
+	AssigneeName         *string                `json:"assignee_name"`
+	AssigneeType         *string                `json:"assignee_type"`
+	Baseline             map[string]interface{} `json:"baseline"`
+	Blockers             []string               `json:"blockers,omitempty"`
+	BoardStatus          *string                `json:"board_status,omitempty"`
+	ChangeTarget         map[string]interface{} `json:"change_target"`
+	Description          *string                `json:"description"`
+	Execution            map[string]interface{} `json:"execution"`
+	ID                   string                 `json:"id"`
+	Integration          *bool                  `json:"integration?,omitempty"`
+	Number               *int64                 `json:"number"`
+	Position             *int64                 `json:"position"`
+	Priority             *string                `json:"priority"`
+	RepositoryResourceID *string                `json:"repository_resource_id"`
+	Required             bool                   `json:"required?"`
+	Status               string                 `json:"status"`
+	Title                string                 `json:"title"`
+	Workspace            *string                `json:"workspace"`
 }
 
 type SymmetryGoalRevisionV1 struct {

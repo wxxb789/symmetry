@@ -39,6 +39,13 @@ responses; the older-history failure's obsolete-response guard is daemon-free
 and synthetic, and the real cursored history load runs in
 `tests/portal-live-daemon.spec.mjs`). No resource or control coverage was
 removed without a named successor.
+The 0007h attention and Goal-detail checks are retired from the classic suite the
+same way: the classic `#attention-list` keyboard walk
+(`portal.spec.mjs`, keyboard case), the "Attention filtering is read on the new
+routes" comment in the feature case and the retired classic detail/
+board read surfaces already replaced by 0007b. They are covered by
+`tests/portal-goal-attention.spec.mjs` on `/portal/attention` and
+`/portal/goals/:goalId`. No editing, resource or control coverage was removed.
 
 ```sh
 mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile

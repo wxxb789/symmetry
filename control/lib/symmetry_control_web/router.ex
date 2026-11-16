@@ -68,12 +68,14 @@ defmodule SymmetryControlWeb.Router do
     post "/resources/:resource_id/sync", PortalApiController, :sync_resource
     post "/projects/:project_id/work-items", PortalApiController, :create_work_item
     post "/projects/:project_id/goals", GoalController, :create
+    # Declared before `/goals/:goal_id`: Phoenix matches in declaration order,
+    # so `/portal/api/attention` must not be captured as a goal id.
+    get "/attention", PortalApiController, :attention
     get "/goals/:goal_id", GoalController, :show
     post "/goals/:goal_id/commands", GoalController, :command
     get "/goals/:goal_id/events", GoalController, :events
     get "/goals/:goal_id/graph", GoalController, :graph
     get "/goals/:goal_id/contexts/:snapshot_id", GoalController, :context
-    get "/attention", GoalController, :attention
     get "/work-items/:work_item_id", PortalApiController, :show_work_item
     get "/work-items/:work_item_id/timeline", PortalApiController, :work_item_timeline
     patch "/work-items/:work_item_id", PortalApiController, :update_work_item
@@ -94,6 +96,7 @@ defmodule SymmetryControlWeb.Router do
     get "/projects/:project_id", PortalController, :index
     get "/work/:work_item_id", PortalController, :index
     get "/runtimes", PortalController, :index
+    get "/goals/:goal_id", PortalController, :index
     get "/classic", PortalController, :classic
   end
 

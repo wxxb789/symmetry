@@ -1,0 +1,114 @@
+{
+  "id": "33333333-3333-4333-8333-333333333333",
+  "project_id": "11111111-1111-4111-8111-111111111111",
+  "project_key": "SHELL",
+  "project_name": "Workspace fixture",
+  "title": "Validate durable Goal API",
+  "state": "draft",
+  "current_revision": 1,
+  "version": 1,
+  "updated_at": "2026-11-16T10:00:00Z",
+  "lifecycle": {
+    "state": "draft",
+    "terminal?": false,
+    "scheduling_paused?": true,
+    "immutable?": false
+  },
+  "revision": {
+    "revision": 1,
+    "objective": "Expose the durable Goal API through authenticated operator routes.",
+    "non_goals": [],
+    "acceptance_contract": {
+      "schema_version": "symmetry.acceptance.v1",
+      "description": "Operator verifies the Goal API boundary.",
+      "predicates": [
+        {
+          "id": "operator",
+          "kind": "operator_acceptance"
+        }
+      ]
+    },
+    "authority_policy": {
+      "operator_required_for_scope_change": true,
+      "operator_required_for_completion": true,
+      "publication_allowed": false,
+      "allowed_actions": []
+    },
+    "execution_policy": {
+      "automatic_execution": false,
+      "max_parallel_tasks": 1,
+      "max_task_admissions": 2,
+      "max_run_attempts_per_task": 2,
+      "budget_limit_microusd": null,
+      "per_run_cost_limit_microusd": null,
+      "budget_mode": "soft",
+      "hard_cost_limit_required": false,
+      "allowed_runtime_ids": [],
+      "allowed_model_profiles": [],
+      "final_acceptance": "operator",
+      "allowed_actions": [],
+      "allowed_resource_ids": []
+    },
+    "context_manifest": {
+      "byte_budget": 32768,
+      "required_source_kinds": [
+        "repository"
+      ],
+      "include_advisory_recall": false
+    },
+    "inserted_at": "2026-11-16T09:00:00Z"
+  },
+  "blockers": [],
+  "blocker_reasons": [],
+  "settlement_attention": [],
+  "attention_reasons": [],
+  "completion": {
+    "required_items": 0,
+    "accepted_required_items": 0,
+    "accepted_outcomes": 0,
+    "rejected_outcomes": 0,
+    "all_required_accepted?": true,
+    "current_revision?": true,
+    "no_open_decisions?": true,
+    "no_nonterminal_tasks?": true,
+    "ready?": false
+  },
+  "allowed_actions": [
+    "request_plan",
+    "amend",
+    "cancel"
+  ],
+  "work_items": [],
+  "graph": {
+    "nodes": [],
+    "edges": [],
+    "cycle_detected": false
+  },
+  "decisions": [],
+  "accepted_outcomes": [],
+  "accounting": {
+    "held_microusd": null,
+    "unknown_reservation_count": 0,
+    "settled_reservation_count": 0,
+    "released_reservation_count": 0,
+    "usage_records": 0,
+    "usage_leaf_count": 0,
+    "known_usage_cost_microusd": null,
+    "usage_cost_microusd": null,
+    "usage_cost_unknown": false,
+    "unknown_usage_count": 0
+  },
+  "external_waits": [],
+  "history": {
+    "work_items": [],
+    "dependencies": [],
+    "outcomes": [],
+    "external_waits": []
+  },
+  "execution": {
+    "active_task_count": 0,
+    "nonterminal_task_count": 0,
+    "terminal_task_count": 0
+  },
+  "planning": null
+}

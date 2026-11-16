@@ -7,6 +7,8 @@ import { parsePresentationJson, parseWireJson, WireJsonError } from "../ts/wire-
 
 const fixtureRoot = new URL("../fixtures/", import.meta.url);
 const presentationReadSchemas = new Set([
+  "attention-read",
+  "goal-read",
   "work-detail-read",
   "work-timeline-read",
   "workspace-read",
@@ -15,6 +17,7 @@ const presentationReadSchemas = new Set([
 const decoders = {
   "adapter-capabilities": Contracts.AdapterCapabilities,
   admission: Contracts.Admission,
+  "attention-read": Contracts.AttentionRead,
   "connections-read": Contracts.ConnectionsRead,
   "context-snapshot": Contracts.ContextSnapshot,
   decision: Contracts.Decision,
@@ -24,6 +27,7 @@ const decoders = {
   evidence: Contracts.Evidence,
   "goal-command": Contracts.GoalCommand,
   "goal-create": Contracts.GoalCreate,
+  "goal-read": Contracts.GoalRead,
   "goal-revision": Contracts.GoalRevision,
   "plan-proposal": Contracts.PlanProposal,
   "task-result": Contracts.TaskResult,
@@ -35,6 +39,7 @@ const decoders = {
 const schemas = {
   "adapter-capabilities": Contracts.AdapterCapabilitiesSchema,
   admission: Contracts.AdmissionSchema,
+  "attention-read": Contracts.AttentionReadSchema,
   "connections-read": Contracts.ConnectionsReadSchema,
   "context-snapshot": Contracts.ContextSnapshotSchema,
   decision: Contracts.DecisionSchema,
@@ -44,6 +49,7 @@ const schemas = {
   evidence: Contracts.EvidenceSchema,
   "goal-command": Contracts.GoalCommandSchema,
   "goal-create": Contracts.GoalCreateSchema,
+  "goal-read": Contracts.GoalReadSchema,
   "goal-revision": Contracts.GoalRevisionSchema,
   "plan-proposal": Contracts.PlanProposalSchema,
   "task-result": Contracts.TaskResultSchema,

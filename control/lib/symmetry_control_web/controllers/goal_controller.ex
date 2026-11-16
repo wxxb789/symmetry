@@ -1,8 +1,13 @@
 defmodule SymmetryControlWeb.GoalController do
   use SymmetryControlWeb, :controller
 
+  import Ecto.Query
+
   alias SymmetryControl.Goals
+  alias SymmetryControl.Repo
+  alias SymmetryControl.Workspaces.Project
   alias SymmetryControlWeb.Protocol
+  alias SymmetryControlWeb.PortalJSON
 
   @max_bigint 9_223_372_036_854_775_807
 
@@ -20,7 +25,7 @@ defmodule SymmetryControlWeb.GoalController do
     goal_id = Map.fetch!(conn.path_params, "goal_id")
 
     case Goals.fetch_goal(goal_id) do
-      {:ok, projection} -> json(conn, projection)
+      {:ok, projection} -> json(conn, portal_goal(conn, projection))
       {:error, reason} -> Protocol.error(conn, reason)
     end
   end
@@ -37,7 +42,7 @@ defmodule SymmetryControlWeb.GoalController do
   def events(conn, params) do
     goal_id = Map.fetch!(conn.path_params, "goal_id")
 
-    with {:ok, options} <- event_options(params),
+    with {:ok, options} <- event_options(conn, params),
          {:ok, page} <- Goals.list_events(goal_id, options) do
       json(conn, page)
     else
@@ -81,19 +86,63 @@ defmodule SymmetryControlWeb.GoalController do
     end
   end
 
+  # The portal read adds the project label the surface renders and the durable
+  # decision lock version that `resolve_decision` requires as
+  # `expected_decision_version`. Every authority member (allowed_actions,
+  # blockers, readiness) stays exactly what the durable projection served, and
+  # the operator API projection is untouched.
+  defp portal_goal(conn, projection) do
+    if String.starts_with?(conn.request_path, "/portal/") do
+      PortalJSON.goal(projection, project(projection), decision_versions(projection))
+    else
+      projection
+    end
+  end
+
+  defp project(projection), do: Repo.get(Project, projection.project_id)
+
+  defp decision_versions(%{decisions: []}), do: %{}
+
+  defp decision_versions(%{decisions: decisions}) do
+    ids = Enum.map(decisions, & &1.id)
+
+    Repo.all(
+      from decision in SymmetryControl.Goals.GoalDecision, where: decision.id in ^ids
+    )
+    |> Map.new(&{&1.id, &1.lock_version})
+  end
+
+  # The router's own path params travel with the query params in `conn.params`,
+  # so a read's allowlist only governs the parameters a caller actually added.
+  defp allowed_query_params?(conn, params, allowed) do
+    path_keys = MapSet.new(Map.keys(conn.path_params))
+
+    params
+    |> Map.keys()
+    |> MapSet.new()
+    |> MapSet.difference(path_keys)
+    |> MapSet.subset?(MapSet.new(allowed))
+  end
+
   defp body_params(conn) when is_map(conn.body_params), do: conn.body_params
   defp body_params(_conn), do: %{}
 
-  defp event_options(params) when is_map(params) do
-    with false <- Map.has_key?(params, "limit"),
-         {:ok, after_sequence} <- nonnegative_integer(Map.get(params, "after")) do
-      {:ok, maybe_put([], :after, after_sequence)}
+  defp event_options(conn, params) when is_map(params) do
+    # The router's own path params travel with the query params; every other
+    # parameter must be part of the accepted event read.
+    # `after` is the goal audit sequence the reader has already rendered and
+    # `limit` is the served page size, capped at the read model's own maximum.
+    with true <- allowed_query_params?(conn, params, ["after", "limit"]),
+         {:ok, after_sequence} <- nonnegative_integer(Map.get(params, "after")),
+         {:ok, limit} <- positive_integer(Map.get(params, "limit")),
+         true <- is_nil(limit) or limit <= 100 do
+      {:ok, [] |> maybe_put(:after, after_sequence) |> maybe_put(:limit, limit)}
     else
       _ -> {:error, :invalid_request}
     end
   end
 
-  defp event_options(_params), do: {:error, :invalid_request}
+  defp event_options(_conn, _params), do: {:error, :invalid_request}
 
   defp attention_options(params) when is_map(params) do
     with true <- MapSet.subset?(MapSet.new(Map.keys(params)), MapSet.new(["cursor", "limit"])),
