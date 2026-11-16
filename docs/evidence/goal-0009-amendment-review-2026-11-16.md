@@ -90,9 +90,9 @@ group stop into a successful stop.
 - The valid helper control uses the existing one-blob README fixture. Its
   independent digest assertion already fails if that fixture's content shape
   drifts; no extra fixture-count assertion was added.
-- The existing trace-start cancellation test has a timing window if its small
-  digest completes before cancellation. It was retained, not weakened or
-  rewritten to obtain a pass; its observed executions and this residual test
+- The new trace-start cancellation test has a timing window if its small
+  digest completes before cancellation. It was kept as-is rather than weakened
+  or rewritten to obtain a pass; its observed executions and this residual test
   limitation remain explicit.
 - Desynchronization conservatively retains the unresolved-process fence and
   Linux clone scratch even when the direct child has been reaped. This is the

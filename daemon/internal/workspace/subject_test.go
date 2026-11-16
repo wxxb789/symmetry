@@ -554,6 +554,9 @@ func TestMaterializeSubjectHashesEveryBlobInOneBatchStream(t *testing.T) {
 	repository := newSubjectRepository(t)
 	writeSubjectDigestFixture(t, repository)
 	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+	if got := subjectTreeBlobCount(t, repository, commit); got != subjectDigestFixtureBlobs {
+		t.Fatalf("subject digest fixture commit has %d committed tree records, want %d", got, subjectDigestFixtureBlobs)
+	}
 	expected := subjectManifestDigest(t, repository, commit)
 
 	tracePath := filepath.Join(t.TempDir(), "git-trace2-events.json")
@@ -664,6 +667,9 @@ func TestMaterializeSubjectCancellationStopsBatchStream(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("MaterializeSubject did not stop after context cancellation")
+	}
+	if got := gitTrace2StartCount(gitTrace2Starts(t, tracePath), "cat-file"); got != 1 {
+		t.Fatalf("cancelled Subject computation for %d blobs started %d git cat-file processes, want exactly one persistent batch stream", subjectDigestManyBlobs, got)
 	}
 	assertNoOwnedGitChildProcesses(t)
 }

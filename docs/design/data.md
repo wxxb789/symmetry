@@ -30,6 +30,12 @@ their rows, and a stored designation that selects an optional item is refused, n
 ignored, reinterpreted or rewritten. No column or caller-controlled count field is
 added for this rule. Goal-less items leave these fields null and `integration` false.
 
+Read-model `work_items[].integration` reports this stored column verbatim; it is
+not the effective designation. Clients apply the required-count contract
+themselves: with exactly one required WorkItem that item is the integration item
+even when the projected flag is false, and a projected true flag on any other
+item of such a revision is the refused conflict, not a role.
+
 Every Goal WorkItem pins exactly one automatic baseline source: a complete
 `baseline_subject` whose resource matches the WorkItem repository, or a
 `baseline_dependency_id` referencing one explicit same-goal, same-revision

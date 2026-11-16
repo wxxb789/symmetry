@@ -11,6 +11,13 @@ The supplied baseline is `343dea6a62484d73e7b577a0be2683ca233510f6`.
 This increment is an uncommitted working-tree change; no commit, push or history
 rewrite is authorized or performed.
 
+The increment was later captured for review as the frozen commit
+`8168badf818b4ef3e4cba2f86eaac1ec0e04ce18`, whose only successor
+`bcd7216633466b9797bc446601f83b6d83501116` is a test-only handshake determinism
+fix. Capture-time statements such as the sentence above and the
+`working_tree_committed: false` field in the source-identity record describe the
+moment of capture and are preserved unchanged.
+
 The separate
 [`independent amendment review`](goal-0009-amendment-review-2026-11-16.md)
 records reviewer scope, findings, repairs and retained trade-offs. It is not the
@@ -340,10 +347,10 @@ parallelism. Receipt E2E used
 | `SYMMETRY_GOAL_RECEIPT_E2E=1 mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e --seed 0` | 1 passed, 10 excluded | 0 |
 | `MIX_ENV=prod mix release --overwrite` | Production release assembled | 0 |
 | `node contracts/scripts/generate.mjs` | Generated Go/TS/Effect artifacts | 0 |
-| Local `tsc --project contracts/tsconfig.json` | Contract TypeScript check | 0 |
-| `node --test contracts/scripts/*.test.mjs` | 31 passed, 0 failed/skipped | 0 |
-| `node contracts/scripts/check.mjs` | 15 schemas, 196 fixtures | 0 |
-| `node contracts/scripts/check-effect.mjs` | 196 raw fixtures, 192 parsed Effect cases; generated files current | 0 |
+| Local `tsc --project contracts/tsconfig.json` | Contract TypeScript check; source-verified, raw output not retained under `.tmp/0009/` | 0 |
+| `node --test contracts/scripts/*.test.mjs` | 31 passed, 0 failed/skipped; source-verified, raw output not retained under `.tmp/0009/` | 0 |
+| `node contracts/scripts/check.mjs` | 15 schemas, 196 fixtures; generated contract DTOs up to date; reviewer-rerun identical on the frozen revision | 0 |
+| `node contracts/scripts/check-effect.mjs` | 196 raw fixtures, 192 parsed Effect cases | 0 |
 | `python3 scripts/ci/test-linux-v2-source-subject.py` | 4 passed, unprivileged user | 0 |
 | `python3 scripts/ci/test-linux-v2-go-events.py` | 6 passed, unprivileged user | 0 |
 | `python3 scripts/ci/test-linux-v2-evidence.py` | 27 passed, unprivileged user | 0 |

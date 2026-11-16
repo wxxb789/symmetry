@@ -15,7 +15,7 @@ origin: docs/goals/archive/0009-achieve-contract-amendments.md
 - Objective: operators can achieve an eligible Goal without approving their own completion decision, and a single required item needs no repeated integration selection.
 - Means: amend existing Control transitions and projections, retain additive protocol v1, and replace per-blob Subject reads with one batch stream (KTD1–KTD3).
 - Authority: the unchanged Goal 0009 contract governs this plan; PostgreSQL remains the durable authority.
-- Execution profile: one independently reviewable increment, left uncommitted on the current branch; no push or history rewrite.
+- Execution profile: one independently reviewable increment, left uncommitted on the current branch at capture; later frozen for review as commit `8168badf818b4ef3e4cba2f86eaac1ec0e04ce18` with the test-only successor `bcd7216633466b9797bc446601f83b6d83501116`; no push or history rewrite.
 - Completion owner: the parent implements/integrates and runs verification; an independent read-only reviewer reviews the amendment; the owner supplies only the subsequent owner verdict.
 - Stop conditions: missing approved local repository/resource identity, a necessary widening of A/B, a changed digest wire format, or rewriting completed 0006 history.
 

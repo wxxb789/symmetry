@@ -1692,18 +1692,30 @@ defmodule SymmetryControl.Goals.ReadModel do
         reason: "integration_outcome_required",
         count: max(length(integration_item_ids), 1),
         ids: integration_item_ids,
-        details:
-          case integration_item_ids do
-            [] ->
-              [%{reason: "no_integration_work_item"}]
-
-            _ ->
-              Enum.map(integration_item_ids, fn work_item_id ->
-                %{work_item_id: work_item_id, reason: "accepted_outcome_required"}
-              end)
-          end
+        details: integration_outcome_required_details(work_items, integration_item_ids)
       }
     end
+  end
+
+  # An empty usable-integration set with stored markers means the revision's
+  # stored designation contradicts the completion contract: that refusal is a
+  # conflict, not a missing integration item.
+  defp integration_outcome_required_details(work_items, [] = _integration_item_ids) do
+    case marked_integration_item_ids(work_items) do
+      [] ->
+        [%{reason: "no_integration_work_item"}]
+
+      conflicting_ids ->
+        Enum.map(conflicting_ids, fn work_item_id ->
+          %{work_item_id: work_item_id, reason: "conflicting_integration_designation"}
+        end)
+    end
+  end
+
+  defp integration_outcome_required_details(_work_items, integration_item_ids) do
+    Enum.map(integration_item_ids, fn work_item_id ->
+      %{work_item_id: work_item_id, reason: "accepted_outcome_required"}
+    end)
   end
 
   defp completion_readiness_gate?(goal, work_items, accepted, decisions, tasks, current_revision) do

@@ -146,6 +146,11 @@ Automatic execution of a dependency baseline waits for that exact dependency's
 current-revision accepted WorkOutcome and uses its candidate Subject verbatim.
 No provider metadata, filesystem path, current branch or board state is a baseline.
 
+Read projections expose the stored `integration` boolean, not the effective
+designation: a single-required-item revision reads as the integration item even
+when the projected flag is `false`, and a projected `true` on another item of
+that revision is the refused conflict above.
+
 `change_target` is required but nullable. `null` authorizes no provider change
 and may derive only a `resource.sync` scope. A branches target contains already
 normalized, distinct legal Git branch names and authorizes `change.upsert` (plus

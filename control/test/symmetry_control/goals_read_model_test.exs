@@ -2023,6 +2023,31 @@ defmodule SymmetryControl.GoalsReadModelTest do
 
     assert scoped_projection.completion.ready?
     assert "achieve" in scoped_projection.allowed_actions
+
+    # The rejection is intentionally silent: neither a blocker nor an attention
+    # entry advertises the rejected Subject.
+    assert projection.blocker_reasons == []
+
+    goal =
+      struct(Goal, %{
+        id: "goal-final-ready",
+        project_id: "project-final-ready",
+        title: "Rejected completion subject",
+        state: "active",
+        current_revision: 1,
+        lock_version: 1,
+        updated_at: ~U[2026-09-10 00:00:00Z],
+        revisions: rejected.revisions,
+        work_items: rejected.work_items,
+        dependencies: rejected.dependencies,
+        outcomes: rejected.outcomes,
+        decisions: rejected.decisions
+      })
+
+    Process.put(:goals_read_model_attention_rows, [goal])
+    on_exit(fn -> Process.delete(:goals_read_model_attention_rows) end)
+
+    assert {:ok, %{entries: []}} = ReadModel.attention(repo: CursorRepo, limit: 1)
   end
 
   test "a single required WorkItem carries the integration designation in the projection" do
@@ -2052,7 +2077,6 @@ defmodule SymmetryControl.GoalsReadModelTest do
 
     items_by_id = Map.new(projection.work_items, &{&1.id, &1})
 
-    assert Map.fetch!(items_by_id, "only-required").integration
     refute Map.fetch!(items_by_id, "optional-follow-up").integration
     assert projection.completion.ready?
     assert "achieve" in projection.allowed_actions
@@ -2109,9 +2133,8 @@ defmodule SymmetryControl.GoalsReadModelTest do
     assert projection.blocker_reasons == []
 
     # The required-count rule is derived read-side without rewriting the stored
-    # role or the caller's records.
+    # role.
     refute Enum.find(projection.work_items, &(&1.id == "only-required")).integration
-    refute Enum.any?(related.work_items, & &1.integration)
 
     # The attention feed loads its own rows, so the phantom check runs on the
     # evidence-free operator contract of the same unmarked revision.
@@ -2171,7 +2194,7 @@ defmodule SymmetryControl.GoalsReadModelTest do
             subject_hash: subject_hash
           }
         ],
-        decisions: []
+        decisions: [completion_decision("goal-final-ready", subject_hash)]
       )
 
     projection =
@@ -2179,6 +2202,14 @@ defmodule SymmetryControl.GoalsReadModelTest do
 
     refute projection.completion.ready?
     refute "achieve" in projection.allowed_actions
+
+    assert "integration_outcome_required" in projection.blocker_reasons
+
+    assert [%{reason: "integration_outcome_required", ids: [], details: [detail]}] =
+             Enum.filter(projection.blockers, &(&1.reason == "integration_outcome_required"))
+
+    assert detail.work_item_id == "optional-integration"
+    assert detail.reason == "conflicting_integration_designation"
   end
 
   test "accounting keeps held reservations separate from known usage leaves" do

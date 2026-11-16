@@ -2660,6 +2660,15 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, %{"settlement" => "accepted", "reason" => "validation_passed"}} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
+    refute Repo.exists?(
+             from(decision in SymmetryControl.Goals.GoalDecision,
+               where:
+                 decision.goal_id == ^goal.id and
+                   decision.goal_revision == ^goal.current_revision and
+                   decision.kind == "completion"
+             )
+           )
+
     pre_achieve = fetch_goal!(goal.id)
 
     assert pre_achieve.completion.ready?
@@ -2723,6 +2732,11 @@ defmodule SymmetryControl.GoalsTest do
     refute projection.completion.ready?
     refute "achieve" in projection.allowed_actions
 
+    assert projection.blocker_reasons == []
+
+    assert {:ok, %{entries: entries}} = ReadModel.attention(limit: 5)
+    refute Enum.any?(entries, &(&1.goal_id == goal.id))
+
     achieve_payload = %{
       subject: evidence.subject,
       integration_work_item_id: item.id,
@@ -2738,6 +2752,193 @@ defmodule SymmetryControl.GoalsTest do
 
     assert {:error, :invalid_decision} =
              command_current(goal.id, "achieve", Map.put(achieve_payload, :decision_id, nil))
+  end
+
+  test "an amendment releases a rejected completion Subject for the revised revision" do
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
+     validation_fence, candidate_subject} =
+      independent_validation_attempt_fixture(check_contract(), %{
+        acceptance_contract: check_and_operator_acceptance_contract()
+      })
+
+    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
+
+    assert {:ok, %{evidence: _stored_evidence}, :created} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               evidence,
+               now: @now
+             )
+
+    assert {:ok, %{"settlement" => "accepted"}} =
+             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    assert {:ok, completion_request, :created} =
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               subject_hash: evidence.subject_hash
+             })
+
+    rejected_decision_id = completion_request.response["decision"]["id"]
+
+    assert {:ok, _resolved, :created} =
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: rejected_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, rejected_decision_id).lock_version,
+               option_id: "reject"
+             })
+
+    resource_id = item_repository_resource_id(item)
+
+    revision_contract =
+      goal_attrs()
+      |> Map.fetch!(:initial_revision)
+      |> Map.drop([:reason])
+      |> Map.put(:objective, "Re-admit the rejected Subject under a revised revision.")
+      |> Map.put(:acceptance_contract, check_and_operator_acceptance_contract())
+      |> Map.update!(:execution_policy, fn policy ->
+        Map.merge(policy, %{
+          "max_task_admissions" => 8,
+          "budget_limit_microusd" => "42",
+          "allowed_resource_ids" => [resource_id],
+          "allowed_model_profiles" => ["codex"]
+        })
+      end)
+
+    assert {:ok, amended, :created} =
+             command_current(goal.id, "amend", %{
+               revision_contract: revision_contract,
+               reason: "The prior rejection is bound to the prior revision."
+             })
+
+    assert amended.goal.state == "paused"
+    assert amended.goal.current_revision == 2
+
+    proposal = %{
+      schema_version: "symmetry.plan.v1",
+      proposal_id: Ecto.UUID.generate(),
+      goal_id: amended.goal.id,
+      expected_revision: amended.goal.current_revision,
+      items: [
+        %{
+          key: "revised-work",
+          title: "Revised work",
+          description: "Re-admits the same Subject under revision 2.",
+          required: true,
+          integration: true,
+          repository_resource_id: resource_id,
+          acceptance: check_contract(),
+          depends_on_keys: [],
+          model_profile: "codex",
+          change_target: nil,
+          baseline: baseline_subject(resource_id)
+        }
+      ]
+    }
+
+    accept_plan!(goal.id, proposal)
+
+    [revised_item] = fetch_goal!(goal.id).work_items
+
+    assert {:ok, _resumed, :created} =
+             command_current(goal.id, "resume", %{reason: "Revised work is approved."})
+
+    assert {:ok, admitted, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(revised_item, %{reserved_microusd: 42}),
+               rollout_enabled: true
+             )
+
+    revised_producer = Repo.get!(Task, admitted.response["task"]["id"])
+
+    {revised_producer_run, _revised_fence} =
+      completed_goal_run_fixture(revised_producer, runtime_fixture(), candidate_subject)
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(revised_producer.id, revised_producer_run.id, 1, now: @now)
+
+    assert {:ok, revised_validation, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(revised_item, %{
+                 purpose: "validate",
+                 validation_of_task_id: revised_producer.id,
+                 reserved_microusd: 0
+               })
+               |> Map.delete(:subject),
+               rollout_enabled: true
+             )
+
+    revised_validation_task = Repo.get!(Task, revised_validation.response["task"]["id"])
+    revised_validation_runtime = runtime_fixture(@validation_runtime_id)
+
+    {revised_validation_run, revised_validation_fence} =
+      completed_goal_run_fixture(
+        revised_validation_task,
+        revised_validation_runtime,
+        candidate_subject
+      )
+
+    revised_evidence = evidence_attrs(revised_validation_run.id, revised_item, candidate_subject)
+
+    assert {:ok, %{evidence: revised_stored_evidence}, :created} =
+             Goals.append_evidence(
+               revised_validation_runtime.machine_id,
+               revised_validation_run.id,
+               revised_validation_fence,
+               revised_evidence,
+               now: @now
+             )
+
+    assert {:ok, %{"settlement" => "accepted"}} =
+             Goals.settle_task(
+               revised_validation_task.id,
+               revised_validation_run.id,
+               1,
+               now: @now
+             )
+
+    assert {:ok, accept_request, :created} =
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               subject_hash: revised_evidence.subject_hash
+             })
+
+    accept_decision_id = accept_request.response["decision"]["id"]
+
+    assert {:ok, _resolved, :created} =
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: accept_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, accept_decision_id).lock_version,
+               option_id: "accept"
+             })
+
+    projection = fetch_goal!(goal.id)
+
+    assert projection.completion.ready?
+    assert "achieve" in projection.allowed_actions
+
+    assert {:ok, achieved, :created} =
+             Goals.command(
+               goal.id,
+               command(fetch_goal!(goal.id), "achieve", %{
+                 subject: revised_evidence.subject,
+                 evidence_ids: [revised_stored_evidence.id],
+                 decision_id: nil
+               }),
+               "operator:test",
+               now: @now,
+               validation_profiles: validation_profiles()
+             )
+
+    assert achieved.goal.state == "achieved"
   end
 
   test "a single-required plan admitted without an integration designation achieves without the payload field" do
@@ -2758,6 +2959,15 @@ defmodule SymmetryControl.GoalsTest do
 
     assert {:ok, %{"settlement" => "accepted"}} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    refute Repo.exists?(
+             from(decision in SymmetryControl.Goals.GoalDecision,
+               where:
+                 decision.goal_id == ^goal.id and
+                   decision.goal_revision == ^goal.current_revision and
+                   decision.kind == "completion"
+             )
+           )
 
     projection = fetch_goal!(goal.id)
 
@@ -2833,22 +3043,97 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, %{"settlement" => "accepted"}} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
-    _conflicting =
+    conflicting =
       optional_goal_work_item!(goal, item, "Conflicting integration candidate", true)
+
+    assert {:ok, conflicting_admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(conflicting, %{reserved_microusd: 42}),
+               rollout_enabled: true
+             )
+
+    conflicting_producer = Repo.get!(Task, conflicting_admission.response["task"]["id"])
+
+    {conflicting_run, _conflicting_fence} =
+      completed_goal_run_fixture(conflicting_producer, runtime_fixture(), candidate_subject)
+
+    # A storage-marker implementation would accept this conflicting item as the
+    # integration role and find this accepted outcome, turning the achieve below
+    # into a success instead of the deterministic contract refusal.
+    %SymmetryControl.Goals.WorkOutcome{}
+    |> SymmetryControl.Goals.WorkOutcome.changeset(%{
+      goal_id: goal.id,
+      goal_revision: goal.current_revision,
+      work_item_id: conflicting.id,
+      producing_task_id: conflicting_producer.id,
+      producing_run_id: conflicting_run.id,
+      validation_task_id: nil,
+      candidate_subject: candidate_subject,
+      subject_hash: SymmetryControl.RequestHash.canonical(candidate_subject),
+      producing_result_id: conflicting_run.result["task_result"]["result_id"],
+      evidence_ids: [stored_evidence.id],
+      disposition: "accepted",
+      reason: "validation_passed",
+      decision_id: nil
+    })
+    |> Repo.insert!()
 
     projection = fetch_goal!(goal.id)
 
     refute projection.completion.ready?
     refute "achieve" in projection.allowed_actions
 
-    assert {:error, reason} =
+    assert {:error, :invalid_plan} =
              command_current(goal.id, "achieve", %{
                subject: evidence.subject,
                evidence_ids: [stored_evidence.id],
                decision_id: nil
              })
+  end
 
-    assert reason in [:integration_outcome_required, :invalid_plan]
+  test "a legacy unmarked single-required plan achieves without the payload field" do
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
+     validation_fence, candidate_subject} =
+      legacy_unmarked_validation_attempt_fixture()
+
+    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
+
+    assert {:ok, %{evidence: stored_evidence}, :created} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               evidence,
+               now: @now
+             )
+
+    assert {:ok, %{"settlement" => "accepted"}} =
+             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    projection = fetch_goal!(goal.id)
+
+    # The required-count rule is derived; the legacy row keeps its false marker.
+    refute Enum.find(projection.work_items, &(&1.id == item.id)).integration
+    assert projection.completion.ready?
+    assert "achieve" in projection.allowed_actions
+
+    assert {:ok, achieved, :created} =
+             Goals.command(
+               goal.id,
+               command(fetch_goal!(goal.id), "achieve", %{
+                 subject: evidence.subject,
+                 evidence_ids: [stored_evidence.id],
+                 decision_id: nil
+               }),
+               "operator:test",
+               now: @now,
+               validation_profiles: validation_profiles()
+             )
+
+    assert achieved.goal.state == "achieved"
+    refute Repo.get!(WorkItem, item.id).integration
   end
 
   test "a multi-required plan keeps its explicit integration marker and payload obligations" do
@@ -2868,14 +3153,12 @@ defmodule SymmetryControl.GoalsTest do
       "tree_digest" => "sha256:" <> String.duplicate("d", 64)
     }
 
-    assert {:error, reason} =
+    assert {:error, :invalid_request} =
              command_current(goal.id, "achieve", %{
                subject: subject,
                evidence_ids: [],
                decision_id: nil
              })
-
-    assert reason in [:invalid_request, :integration_outcome_required]
 
     assert {:error, :integration_outcome_required} =
              command_current(goal.id, "achieve", %{
@@ -7928,6 +8211,39 @@ defmodule SymmetryControl.GoalsTest do
     |> Repo.insert!()
   end
 
+  # Simulates a required membership row admitted before amendment B derived the
+  # integration role: the stored marker stays false, exactly as the column
+  # default left pre-amendment rows, and the identity guard freezes it.
+  defp legacy_unmarked_work_item!(project, repository, goal, title) do
+    %WorkItem{id: Ecto.UUID.generate()}
+    |> WorkItem.changeset(%{
+      project_id: project.id,
+      repository_resource_id: repository.id,
+      title: title,
+      description: "Required work admitted before the integration derivation.",
+      status: "backlog",
+      priority: "no_priority",
+      position: 0,
+      assignee_type: "agent",
+      assignee_name: "codex",
+      agent_profile: "codex",
+      workspace: project.default_workspace,
+      blocked: false
+    })
+    |> Ecto.Changeset.apply_changes()
+    |> WorkItem.goal_membership_changeset(%{
+      goal_id: goal.id,
+      admitted_revision: goal.current_revision,
+      required: true,
+      integration: false,
+      acceptance_contract: check_contract(),
+      baseline_subject: baseline_subject(repository.id).subject,
+      baseline_dependency_id: nil,
+      change_target: nil
+    })
+    |> Repo.insert!()
+  end
+
   defp put_goal_acceptance_contract(attrs, nil), do: attrs
 
   defp put_goal_acceptance_contract(attrs, contract),
@@ -8284,6 +8600,81 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, validation_admission, :created} =
              command_current(
                goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 purpose: "validate",
+                 validation_of_task_id: producer.id,
+                 reserved_microusd: 0
+               })
+               |> Map.delete(:subject),
+               rollout_enabled: true
+             )
+
+    validation = Repo.get!(Task, validation_admission.response["task"]["id"])
+    validation_runtime = runtime_fixture(@validation_runtime_id)
+
+    {validation_run, validation_fence} =
+      completed_goal_run_fixture(validation, validation_runtime, candidate_subject)
+
+    {goal, item, producer, producer_run, validation, validation_run, validation_runtime,
+     validation_fence, candidate_subject}
+  end
+
+  # A goal whose single required membership row was inserted directly, without
+  # the plan admission that derives the integration role, so the stored marker
+  # stays false. The deferred revision-level integration guard is not rechecked
+  # because the test sandbox transaction never commits.
+  defp legacy_unmarked_validation_attempt_fixture do
+    project = project_fixture()
+    repository = repository_fixture(project)
+
+    execution_policy = %{
+      "max_task_admissions" => 4,
+      "budget_limit_microusd" => 42,
+      "allowed_resource_ids" => [repository.id],
+      "allowed_model_profiles" => ["codex"]
+    }
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(
+               project.id,
+               goal_attrs(nil, execution_policy),
+               "operator:test",
+               now: @now
+             )
+
+    item = legacy_unmarked_work_item!(project, repository, created.goal, "Legacy required work")
+
+    assert {:ok, _active, :created} =
+             command_current(created.goal.id, "activate", %{approved_revision: 1})
+
+    {:ok, goal} = Goals.fetch_goal(created.goal.id)
+
+    assert {:ok, admitted, :created} =
+             command_current(
+               created.goal.id,
+               "admit_task",
+               admission_payload(item, %{reserved_microusd: 42}),
+               rollout_enabled: true
+             )
+
+    producer = Repo.get!(Task, admitted.response["task"]["id"])
+
+    candidate_subject = %{
+      "resource_id" => repository.id,
+      "commit" => String.duplicate("c", 40),
+      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
+    }
+
+    {producer_run, _producer_fence} =
+      completed_goal_run_fixture(producer, runtime_fixture(), candidate_subject)
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(producer.id, producer_run.id, 1, now: @now)
+
+    assert {:ok, validation_admission, :created} =
+             command_current(
+               created.goal.id,
                "admit_task",
                admission_payload(item, %{
                  purpose: "validate",
