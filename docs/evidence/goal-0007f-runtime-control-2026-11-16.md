@@ -27,9 +27,10 @@ hashed again:
 | Revision | Identity |
 | --- | --- |
 | Union head | `6996740` — "feat(0007f): runtime visibility and trustworthy execution control from the work detail" |
-| This delivery (source) | `sha256:a5160334d61f3d3536cbaaab827ab2924f46d19860e3d8beaf2cec213f1fc8e8` — the union head plus this round's working-tree changes |
+| This delivery (source) | `sha256:cafbdc5495cf6ac2de4347339b0e0e104107609213e2bc9de29d1019fc2d32c6` — the delivered commit `1d9ed56` plus the integration delta it was merged with (one added resource-form field-error case and these receipt corrections), computed over the current 44-path manifest with the procedure below |
+| Historical, superseded | `sha256:a5160334d61f3d3536cbaaab827ab2924f46d19860e3d8beaf2cec213f1fc8e8` — recorded by the fix round for `1d9ed56` over a 43-path manifest, and independently reproduced by the reviewer against that manifest; the current manifest carries one more path, so the value is kept as a historical fact rather than the current binding |
 | Historical, superseded | `sha256:569875d4e8c751d76c14b6a4ee34dce7a5a11cbfd069d7e921f8510df564305e` — reproduces only at the pre-rebase commit `3e353ea` over that revision's 40-path manifest; it is **not** valid for the union head, and no check in this file was run against it |
-| This delivery (tree) | union head plus the working-tree changes listed under "Files written"; no commit was made |
+| This delivery (tree) | delivered as the commit `1d9ed56` plus this integration delta; the current source digest is computed from the tree's content over the 44-path manifest, so a receipt edit (docs are excluded from the manifest) cannot invalidate it |
 
 Reproduction (PowerShell 7, repository root):
 
@@ -192,8 +193,7 @@ each with its successor named (also in `browser/README.md`):
 ## Checks executed
 
 Recorded as executed on this host, with the exit code and count each command
-printed. Revision: the union head plus the working-tree changes above (no
-commit). Postgres for the Elixir runs is the local container on port 55442
+printed. Revision: the delivered commit `1d9ed56`. Postgres for the Elixir runs is the local container on port 55442
 (`symmetry_control_dev` for the browser gates, `symmetry_control_test` for the
 ExUnit runs); the Control dev server for browser work is the working tree on
 port 4010.

@@ -971,6 +971,30 @@ describe("project resources", () => {
     expect(screen.getByRole("button", { name: "Synchronize project" })).toBeEnabled();
   });
 
+  it("renders the resource form's own field error from the server's refusal", async () => {
+    const harness = renderConnections(({ method }) => method === "POST"
+      ? refusal(422, "validation_failed", "request contains invalid fields", { external_ref: ["must reference a registered runtime"] })
+      : refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+      connections: [connection()],
+      projects: [projectFixture()],
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Bind resource" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
+    await user.type(dialog.getByLabelText("Name"), "checkout service");
+    await user.type(dialog.getByLabelText("Reference"), "acme/checkout");
+    await user.click(dialog.getByRole("button", { name: "Bind" }));
+    // The refused bind keeps the dialog open and shows the server's per-field
+    // reason on the resource form itself, not only on the connection form: the
+    // field error and the refusal notice are two separate alerts.
+    const fieldError = await dialog.findByText("must reference a registered runtime");
+    expect(fieldError).toBeVisible();
+    expect(fieldError).toHaveClass("field-error");
+    expect(fieldError).toHaveAttribute("role", "alert");
+    expect(dialog.getByText(/request contains invalid fields \(validation_failed\)/)).toBeVisible();
+    expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
+  });
+
   it("takes a local resource's reference from the workspace's registered runtimes", async () => {
     const harness = renderConnections(({ method }) => method === "POST"
       ? new Response(JSON.stringify({ resource: resourceFixture({ kind: "runtime", name: "review runner" }) }), { status: 201 })
