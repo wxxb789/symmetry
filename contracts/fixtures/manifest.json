@@ -25,6 +25,13 @@
       "tags": ["read-projection", "additive-fields", "metadata-path"]
     },
     {
+      "id": "workspace-read.resource-rows",
+      "schema": "workspace-read",
+      "path": "valid/workspace-read.resource-rows.json",
+      "valid": true,
+      "tags": ["read-projection", "resource-row", "registered-runtime", "nullable"]
+    },
+    {
       "id": "workspace-read.empty",
       "schema": "workspace-read",
       "path": "valid/workspace-read.empty.json",
@@ -79,6 +86,13 @@
       "path": "invalid/workspace-read.invalid-execution.json",
       "valid": false,
       "tags": ["read-projection", "wrong-type"]
+    },
+    {
+      "id": "workspace-read.invalid-resource-version",
+      "schema": "workspace-read",
+      "path": "invalid/workspace-read.invalid-resource-version.json",
+      "valid": false,
+      "tags": ["read-projection", "resource-row", "wrong-type"]
     },
     {
       "id": "connections-read.basic",

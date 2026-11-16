@@ -6,11 +6,12 @@ import { useEffect, useState } from "react";
 import { useSessionToken } from "../../app/session";
 import { workDetailOptions, workspaceOptions } from "../../app/application";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
-import { errorMessage, type Project, type WorkDetail } from "../../services/api";
+import { errorMessage, type Api, type Project, type WorkDetail } from "../../services/api";
 import { workSearch, type WorkSearch } from "../projects/filters";
 import { OwnershipChip, ProjectWorkSurface, type WorkSurfaceNavigation } from "../projects/work-surface";
 import { WorkItemEditor } from "../planning/editors";
 import { hasServedRevision, isGoalManaged, workItemEditable } from "../planning/write-policy";
+import { AssignmentSection } from "./assignment";
 import { WorkHistory } from "./history";
 import {
   acceptanceLabel,
@@ -250,11 +251,11 @@ function WorkDetailBody({ workItemId, scopedProjectId, backSearch, editable, ope
       : <p className="notice notice-error" role="alert">{notice.text}</p>)}
     {query.isPending && <LoadingState label="Loading work item…" />}
     {query.isError && <ErrorState error={query.error} retry={refresh} stale={detail !== undefined} />}
-    {detail && item && <WorkDetailSections detail={detail} />}
+    {detail && item && <WorkDetailSections detail={detail} api={application.api} />}
   </>;
 }
 
-function WorkDetailSections({ detail }: { detail: WorkDetail }) {
+function WorkDetailSections({ detail, api }: { detail: WorkDetail; api: Api }) {
   const item = detail.work_item;
   const outcome = detail.outcome;
   const execution = item.execution;
@@ -335,7 +336,7 @@ function WorkDetailSections({ detail }: { detail: WorkDetail }) {
           <dt>{row.label}</dt>
           <dd>
             <span className={row.label === "CI" ? `chip chip-${ci.tone}` : "chip"}>{row.value}</span>
-            <span className="muted text-small">source: {row.source}{row.recordedAt === null ? "" : ` · recorded ${timestamp(row.recordedAt)?.readable ?? row.recordedAt}`}</span>
+            <span className="muted text-small">source: {row.source}{row.provider === null ? "" : ` · ${row.provider}`}{row.recordedAt === null ? "" : ` · recorded ${timestamp(row.recordedAt)?.readable ?? row.recordedAt}`}</span>
             {row.url !== null && <a href={row.url} rel="noreferrer noopener" target="_blank">Open</a>}
           </dd>
         </div>)}
@@ -379,6 +380,10 @@ function WorkDetailSections({ detail }: { detail: WorkDetail }) {
       <h2 id="history-section">Execution history</h2>
       <WorkHistory workItemId={item.id} firstPage={detail.raw.timeline} cursor={detail.raw.next_before} />
     </section>
+
+    {/* Last, so the read-only sections keep their order: the 0007b acceptance
+        pins the first five detail sections, and this surface adds a section. */}
+    <AssignmentSection api={api} item={item} />
   </>;
 }
 

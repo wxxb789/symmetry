@@ -136,8 +136,16 @@
   .bound-resource-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--color-line); }
   .bound-resource-main { min-width: 0; overflow-wrap: anywhere; display: grid; gap: 4px; }
   .bound-resource-state { display: grid; gap: 6px; justify-items: end; }
-  .connection-form { display: grid; gap: 8px; margin-top: 16px; }
-  .connection-form label { font-size: 12px; color: var(--color-muted); }
+  .project-resources { margin-top: 32px; }
+  .heading-title { display: flex; align-items: baseline; }
+  .resource-list { display: grid; gap: 12px; }
+  .resource-row { display: flex; align-items: flex-start; gap: 16px; padding: 16px 20px; border: 1px solid var(--color-line); border-radius: 8px; background: var(--color-surface); }
+  .resource-main { min-width: 0; flex: 1; display: grid; gap: 4px; overflow-wrap: anywhere; }
+  .resource-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .resource-state { display: grid; gap: 6px; justify-items: end; }
+  .resource-actions { display: flex; flex-direction: column; gap: 8px; }
+  .connection-form, .assignment-form { display: grid; gap: 8px; margin-top: 16px; }
+  .connection-form label, .assignment-form label { font-size: 12px; color: var(--color-muted); }
   .capability-fieldset { display: grid; gap: 8px; border: 1px solid var(--color-line); border-radius: 8px; padding: 12px; margin: 8px 0 0; }
   .capability-fieldset legend { font-size: 12px; color: var(--color-muted); padding: 0 4px; }
   .capability-option { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-ink); }
@@ -147,7 +155,7 @@
      offset: with a fixed 100dvh - 64px the action buttons ended up below the
      viewport on a 915px-tall mobile viewport once the field and refusal notices
      were rendered, leaving Cancel unclickable. */
-  .connection-dialog { max-height: calc(100dvh - min(18vh, 120px) - 24px); overflow-y: auto; }
+  .connection-dialog, .assignment-dialog { max-height: calc(100dvh - min(18vh, 120px) - 24px); overflow-y: auto; }
   .loading-icon { animation: spin 1s linear infinite; }
 }
 
@@ -213,6 +221,7 @@
   .detail-facts > div, .delivery-list > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; align-items: baseline; }
   .detail-facts dt, .delivery-list dt { color: var(--color-muted); font-size: 12px; }
   .detail-facts dd, .delivery-list dd { margin: 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .assignment-actions { margin-top: 12px; }
   .delivery-list dd span { min-width: 0; }
   .evidence-group ul { display: grid; gap: 4px; }
   .evidence-group li { overflow-wrap: anywhere; }
@@ -233,6 +242,10 @@
 @media (max-width: 900px) {
   .topbar { padding: 16px 24px; }
   .connection-layout { grid-template-columns: minmax(0, 1fr); }
+  .resource-row { flex-wrap: wrap; }
+  .resource-main { flex: 1 0 100%; }
+  .resource-state { justify-items: start; }
+  .resource-actions { flex-direction: row; flex-wrap: wrap; }
   .command-trigger > span, .command-trigger > kbd { display: none; }
   .workspace-content { padding: 28px 24px 40px; }
   .content-footer { padding-inline: 24px; }

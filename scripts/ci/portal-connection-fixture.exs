@@ -4,10 +4,21 @@
 #
 # The browser suite drives the real Portal API, the real PostgreSQL state and
 # the real GitHub/Azure DevOps provider modules. Only each provider's external
-# transport is replaced here: the HTTP client answers canned provider documents
-# and the CLI runner answers the local-session probes. Nothing in this file
-# contacts a provider host, and every fixture call is appended to the JSONL log
-# named by SYMMETRY_FIXTURE_TRANSPORT_LOG so a receipt can show what ran.
+# transport is replaced here: the HTTP client answers the canned provider
+# documents the connection, resource-binding and sync flows read (accounts,
+# repository documents, issues, workflow runs, pull requests, projects,
+# repositories, work items and builds) and the CLI runner answers the
+# local-session probes. Any other provider path or method is refused, never
+# answered by a blanket document. Nothing in this file contacts a provider host,
+# and every fixture call is appended to the JSONL log named by
+# SYMMETRY_FIXTURE_TRANSPORT_LOG so a receipt can show what ran.
+#
+# SYMMETRY_FIXTURE_STATE_FILE optionally steers individual provider visits:
+# `fail`/`transport_fail` inject a definitive HTTP 500 or an unknown
+# (transport) outcome, `issues`/`work_items` choose the reported work items,
+# `repository` overrides a document, and `hold` blocks a read until the state
+# file releases it. The file is re-read on every request; absent, unreadable or
+# invalid is the empty state. See browser/README.md for the schema.
 #
 # Accounts listed in SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS answer 401, which is
 # the expired-authentication fixture. The CLI tokens below are canaries: the
@@ -59,50 +70,114 @@ end
 defmodule PortalConnectionFixture.Transport do
   @moduledoc false
 
+  # Fixed provider timestamps keep a run's canned documents reproducible: the
+  # provider modules parse them as DateTimes, and nothing treats their value as
+  # evidence.
+  @fixture_timestamp "2026-11-17T00:00:00Z"
+  @fixture_finish_time "2026-11-17T00:15:00Z"
+
+  # A reference listed in `hold` blocks its provider read until the state file
+  # releases it, so a browser flow can keep a sync in flight and still act; the
+  # cap keeps a forgotten hold from parking a portal request forever.
+  @hold_attempts 300
+  @hold_poll_ms 100
+
   def request(method, url, headers, _body \\ nil) do
     uri = URI.parse(url)
     unauthorized = unauthorized_accounts()
     authorization = authorization_shape(headers)
 
-    # Only the fixture's own provider calls are answered: a GET to one of the
-    # two provider hosts carrying that provider's fixture token. A dropped or
-    # mismatched bearer, or a changed method, fails the run instead of being
-    # answered by a blanket canned document.
+    # Only the fixture's own provider calls are answered: a GET to either
+    # provider host, or a POST to Azure DevOps (which reads work items with
+    # POST), each carrying that provider's fixture token. A dropped or
+    # mismatched bearer, or a method the contract does not accept, fails the
+    # run instead of being answered by a blanket canned document.
     expected = expected_authorization(method, uri)
 
-    result =
+    {result, steered} =
       if expected == authorization do
-        respond(method, uri, unauthorized)
+        visit(method, uri, unauthorized)
       else
-        {:error, {:fixture_unexpected_request, uri.host, to_string(method), authorization, expected}}
+        {{:error,
+          {:fixture_unexpected_request, uri.host, to_string(method), authorization, expected}}, nil}
       end
 
+    PortalConnectionFixture.Log.append(log_entry(uri, method, authorization, result, steered))
+
     case result do
-      {:ok, status, document} ->
-        PortalConnectionFixture.Log.append(%{
-          kind: "http",
-          method: to_string(method),
-          host: uri.host,
-          path: uri.path,
-          status: status,
-          authorization: authorization
-        })
-
-        {:ok, status, %{}, document}
-
-      {:error, reason} ->
-        PortalConnectionFixture.Log.append(%{
-          kind: "http",
-          method: to_string(method),
-          host: uri.host,
-          path: uri.path,
-          status: "rejected",
-          reason: inspect(reason),
-          authorization: authorization
-        })
-
-        {:error, reason}
+      {:ok, status, document} -> {:ok, status, %{}, document}
+      {:error, reason} -> {:error, reason}
     end
+  end
+
+  # `await_release/2` returns immediately when the reference is not held, so a
+  # normal visit reads the state once here; a released hold re-reads it, so the
+  # answer comes from the state as of release (`hold` plus `fail` yields the
+  # late failure). Both steering and holding read the file on every request.
+  defp visit(method, uri, unauthorized) do
+    case await_release(uri) do
+      :released -> respond_from_state(method, uri, unauthorized)
+      :hold_timeout -> {{:error, {:transport, "fixture hold timed out"}}, :hold_timeout}
+    end
+  end
+
+  defp respond_from_state(method, uri, unauthorized) do
+    state = state()
+
+    case steered_outcome(state, uri) do
+      :transport_fail ->
+        {{:error, {:transport, "fixture transport failure"}}, :transport_fail}
+
+      :fail ->
+        {{:ok, 500, %{"message" => "Fixture injected provider failure"}}, :fail}
+
+      nil ->
+        {respond(method, uri, unauthorized, state), nil}
+    end
+  end
+
+  defp await_release(uri, attempts \\ @hold_attempts) do
+    if held?(state(), uri) do
+      if attempts > 1 do
+        Process.sleep(@hold_poll_ms)
+        await_release(uri, attempts - 1)
+      else
+        :hold_timeout
+      end
+    else
+      :released
+    end
+  end
+
+  # No token value is ever logged; only the bearer's shape, plus the steering
+  # marker when a visit was injected, so the log proves which provider read
+  # failed and how without recording a credential.
+  defp log_entry(uri, method, authorization, result, steered) do
+    entry =
+      case result do
+        {:ok, status, _document} ->
+          %{
+            kind: "http",
+            method: to_string(method),
+            host: uri.host,
+            path: uri.path,
+            status: status,
+            authorization: authorization
+          }
+
+        {:error, reason} ->
+          %{
+            kind: "http",
+            method: to_string(method),
+            host: uri.host,
+            path: uri.path,
+            status: "rejected",
+            reason: inspect(reason),
+            authorization: authorization
+          }
+      end
+
+    if steered, do: Map.put(entry, :steered, to_string(steered)), else: entry
   end
 
   # The fixture's provider modules authenticate with their own fixture tokens;
@@ -111,8 +186,13 @@ defmodule PortalConnectionFixture.Transport do
   # change has to update them in the same edit.
   # `SymmetryControl.Integrations.HTTP.request/4` takes the method as a
   # lowercase atom (`:get`/`:post`/`:patch`/`:put`), which `to_string/1` logs.
+  # Azure DevOps is the only provider whose reads use POST (`/_apis/wit/wiql`
+  # and `/_apis/wit/workitemsbatch`); GitHub stays GET-only.
   defp expected_authorization(:get, %URI{host: "api.github.com"}), do: "bearer:github-fixture"
-  defp expected_authorization(:get, %URI{host: "dev.azure.com"}), do: "bearer:azure-fixture"
+
+  defp expected_authorization(method, %URI{host: "dev.azure.com"}) when method in [:get, :post],
+    do: "bearer:azure-fixture"
+
   defp expected_authorization(_method, _uri), do: :unexpected
 
   # No status field is logged for the bearer header; only its shape, so the log
@@ -138,10 +218,21 @@ defmodule PortalConnectionFixture.Transport do
     end
   end
 
-  defp respond(_method, %URI{host: "api.github.com", path: "/user"}, _unauthorized),
-    do: {:ok, 200, %{"login" => "fixture-actor", "html_url" => "https://github.com/fixture-actor", "type" => "User"}}
+  defp respond(_method, %URI{host: "api.github.com", path: "/user"}, _unauthorized, _state),
+    do:
+      {:ok, 200,
+       %{
+         "login" => "fixture-actor",
+         "html_url" => "https://github.com/fixture-actor",
+         "type" => "User"
+       }}
 
-  defp respond(_method, %URI{host: "api.github.com", path: "/user/memberships/orgs/" <> account}, unauthorized) do
+  defp respond(
+         _method,
+         %URI{host: "api.github.com", path: "/user/memberships/orgs/" <> account},
+         unauthorized,
+         _state
+       ) do
     account = URI.decode(account)
 
     if account in unauthorized do
@@ -159,49 +250,372 @@ defmodule PortalConnectionFixture.Transport do
     end
   end
 
-  defp respond(_method, %URI{host: "api.github.com", path: "/repos/" <> reference}, unauthorized) do
-    with {:ok, {owner, repository}} <- repository_parts(reference),
+  defp respond(
+         _method,
+         %URI{host: "api.github.com", path: "/repos/" <> reference},
+         unauthorized,
+         state
+       ) do
+    with {:ok, {owner, repository, tail}} <- repository_path(reference),
          :ok <- authorize(owner, unauthorized) do
-      {:ok, 200,
-       %{
-         "id" => 1_457_073_269,
-         "node_id" => "R_fixture_repository",
-         "html_url" => "https://github.com/#{owner}/#{repository}",
-         "default_branch" => "main",
-         "visibility" => "private",
-         "archived" => false
-       }}
+      github_document(owner, repository, tail, state)
     else
       :unauthorized -> {:ok, 401, %{"message" => "Bad credentials"}}
-      _error -> {:ok, 404, %{"message" => "Not Found"}}
+      _invalid -> {:error, {:fixture_no_route, "api.github.com"}}
     end
   end
 
-  defp respond(_method, %URI{host: "dev.azure.com", path: path}, unauthorized) do
-    case path do
-      "/" <> rest ->
-        [organization | _tail] = String.split(rest, "/")
+  defp respond(method, %URI{host: "dev.azure.com", path: path, query: query}, unauthorized, state) do
+    with {:ok, {organization, remainder}} <- dev_azure_scope(path),
+         :ok <- authorize(organization, unauthorized) do
+      dev_azure_document(method, organization, remainder, query, state)
+    else
+      :unauthorized -> {:ok, 401, %{"message" => "The access token expired"}}
+      _invalid -> {:error, {:fixture_no_route, "dev.azure.com"}}
+    end
+  end
 
-        if organization in unauthorized do
-          {:ok, 401, %{"message" => "The access token expired"}}
-        else
-          {:ok, 200, %{"count" => 1, "value" => [%{"id" => "fixture-project", "name" => "Fixture project"}]}}
-        end
+  # An authenticated fixture request for a provider path the contract does not
+  # define is refused, never answered by a blanket document.
+  defp respond(_method, %URI{host: host}, _unauthorized, _state),
+    do: {:error, {:fixture_no_route, host}}
+
+  defp github_document(owner, repository, [], state),
+    do: {:ok, 200, github_repository(owner, repository, state)}
+
+  defp github_document(owner, repository, ["issues"], state) do
+    numbers = github_issue_numbers(owner, repository, state)
+    {:ok, 200, Enum.map(numbers, &github_issue(owner, repository, &1))}
+  end
+
+  defp github_document(owner, repository, ["actions", "runs"], _state),
+    do: {:ok, 200, %{"workflow_runs" => [github_workflow_run(owner, repository)]}}
+
+  defp github_document(owner, repository, ["pulls"], _state),
+    do: {:ok, 200, [github_pull_request(owner, repository)]}
+
+  defp github_document(owner, repository, ["pulls", _number], _state),
+    do: {:ok, 200, github_pull_request(owner, repository)}
+
+  defp github_document(_owner, _repository, ["pulls", _number, "reviews"], _state),
+    do: {:ok, 200, [%{"user" => %{"login" => "fixture-reviewer"}, "state" => "APPROVED"}]}
+
+  defp github_document(_owner, _repository, _tail, _state),
+    do: {:error, {:fixture_no_route, "api.github.com"}}
+
+  defp github_repository(owner, repository, state) do
+    defaults = %{
+      "id" => 1_457_073_269,
+      "node_id" => "R_fixture_repository",
+      "html_url" => "https://github.com/#{owner}/#{repository}",
+      "default_branch" => "main",
+      "visibility" => "private",
+      "archived" => false
+    }
+
+    overrides =
+      case get_in(provider_state(state, "github"), ["repository", "#{owner}/#{repository}"]) do
+        value when is_map(value) ->
+          Map.take(value, ["archived", "html_url", "default_branch", "visibility"])
+
+        _unset ->
+          %{}
+      end
+
+    Map.merge(defaults, overrides)
+  end
+
+  defp github_issue_numbers(owner, repository, state) do
+    case get_in(provider_state(state, "github"), ["issues", "#{owner}/#{repository}"]) do
+      numbers when is_list(numbers) -> numbers
+      _unset -> [101, 102]
+    end
+  end
+
+  # 101 is the open fixture issue; 102 (and any other configured number) is
+  # closed. An empty list makes a previously imported issue absent from the
+  # readback.
+  defp github_issue(owner, repository, number) do
+    %{
+      "number" => number,
+      "html_url" => "https://github.com/#{owner}/#{repository}/issues/#{number}",
+      "state" => if(number == 101, do: "open", else: "closed"),
+      "updated_at" => @fixture_timestamp,
+      "assignee" => %{"login" => "fixture-assignee"},
+      "labels" => [%{"name" => "priority: high"}],
+      "title" => "Fixture issue #{number}",
+      "body" => "Imported from the fixture transport."
+    }
+  end
+
+  defp github_workflow_run(owner, repository) do
+    %{
+      "id" => 1,
+      "name" => "CI",
+      "workflow_id" => 7,
+      "status" => "completed",
+      "conclusion" => "success",
+      "html_url" => "https://github.com/#{owner}/#{repository}/actions/runs/1",
+      "head_branch" => "main",
+      "head_sha" => "fixture-head-sha"
+    }
+  end
+
+  defp github_pull_request(owner, repository) do
+    %{
+      "number" => 42,
+      "html_url" => "https://github.com/#{owner}/#{repository}/pull/42",
+      "state" => "open",
+      "merged_at" => nil,
+      "title" => "Fixture pull request",
+      "head" => %{"sha" => "fixture-head-sha", "ref" => "fixture-head"},
+      "base" => %{"ref" => "main"},
+      "user" => %{"login" => "fixture-actor"}
+    }
+  end
+
+  defp dev_azure_document(method, organization, remainder, query, state) do
+    case {method, String.split(remainder, "/")} do
+      {:get, ["_apis", "projects"]} ->
+        {:ok, 200,
+         %{"count" => 1, "value" => [%{"id" => "fixture-project", "name" => "Fixture project"}]}}
+
+      {:get, [project, "_apis", "git", "repositories", repository]} ->
+        {:ok, 200, dev_azure_repository(organization, project, repository, state)}
+
+      {:post, [project, "_apis", "wit", "wiql"]} ->
+        ids = dev_azure_work_item_ids(organization, project, state)
+        {:ok, 200, %{"workItems" => Enum.map(ids, &%{"id" => &1})}}
+
+      {:post, [project, "_apis", "wit", "workitemsbatch"]} ->
+        items =
+          organization
+          |> dev_azure_work_item_ids(project, state)
+          |> Enum.map(&dev_azure_work_item(organization, project, &1))
+
+        {:ok, 200, %{"count" => length(items), "value" => items}}
+
+      {:get, [project, "_apis", "build", "definitions", definition_id]} ->
+        dev_azure_build_definition(organization, project, definition_id)
+
+      {:get, [project, "_apis", "build", "builds"]} ->
+        {:ok, 200, dev_azure_builds(organization, project, query)}
 
       _other ->
-        {:ok, 404, %{"message" => "Not Found"}}
+        {:error, {:fixture_no_route, "dev.azure.com"}}
     end
   end
 
-  defp respond(_method, %URI{host: host}, _unauthorized), do: {:error, {:fixture_no_route, host}}
+  defp dev_azure_repository(organization, project, repository, state) do
+    defaults = %{
+      "id" => "fixture-repository",
+      "name" => repository,
+      "webUrl" => "https://dev.azure.com/#{organization}/#{project}/_git/#{repository}",
+      "defaultBranch" => "refs/heads/main"
+    }
+
+    overrides =
+      case get_in(provider_state(state, "azure_devops"), [
+             "repository",
+             "#{organization}/#{project}/#{repository}"
+           ]) do
+        value when is_map(value) -> Map.take(value, ["webUrl", "defaultBranch"])
+        _unset -> %{}
+      end
+
+    Map.merge(defaults, overrides)
+  end
+
+  defp dev_azure_work_item_ids(organization, project, state) do
+    case get_in(provider_state(state, "azure_devops"), ["work_items", "#{organization}/#{project}"]) do
+      ids when is_list(ids) -> ids
+      _unset -> [101]
+    end
+  end
+
+  defp dev_azure_work_item(organization, project, id) do
+    %{
+      "id" => id,
+      "rev" => 1,
+      "url" => "https://dev.azure.com/#{organization}/#{project}/_apis/wit/workItems/#{id}",
+      "_links" => %{
+        "html" => %{
+          "href" => "https://dev.azure.com/#{organization}/#{project}/_workitems/edit/#{id}"
+        }
+      },
+      "fields" => %{
+        "System.Id" => id,
+        "System.Title" => "Fixture work item #{id}",
+        "System.Description" => "Imported from the fixture transport.",
+        "System.State" => "Active",
+        "System.Tags" => "priority: high",
+        "System.AssignedTo" => %{"displayName" => "Fixture Assignee"},
+        "System.ChangedDate" => @fixture_timestamp,
+        "System.WorkItemType" => "Bug"
+      }
+    }
+  end
+
+  defp dev_azure_build_definition(organization, project, definition_id) do
+    case Integer.parse(definition_id) do
+      {id, ""} when id > 0 ->
+        {:ok, 200,
+         %{
+           "id" => id,
+           "name" => "Fixture pipeline #{id}",
+           "url" => "https://dev.azure.com/#{organization}/#{project}/_apis/build/definitions/#{id}"
+         }}
+
+      _invalid ->
+        {:error, {:fixture_no_route, "dev.azure.com"}}
+    end
+  end
+
+  defp dev_azure_builds(organization, project, query) do
+    %{
+      "count" => 1,
+      "value" => [
+        %{
+          "id" => 42,
+          "buildNumber" => "20261117.1",
+          "status" => "completed",
+          "result" => "succeeded",
+          "sourceBranch" => "refs/heads/main",
+          "sourceVersion" => "fixture-head-sha",
+          "definition" => %{"id" => requested_definition_id(query)},
+          "_links" => %{
+            "web" => %{
+              "href" => "https://dev.azure.com/#{organization}/#{project}/_build/results?buildId=42"
+            }
+          },
+          "finishTime" => @fixture_finish_time,
+          "queueTime" => @fixture_timestamp
+        }
+      ]
+    }
+  end
+
+  # The pipeline-form CI read filters builds by definition, so the canned build
+  # names the requested definition when the query carries one; the
+  # repository-form read has no such filter and gets a fixed id.
+  defp requested_definition_id(query) when is_binary(query) do
+    case URI.decode_query(query) do
+      %{"definitions" => value} ->
+        case Integer.parse(value) do
+          {id, ""} when id > 0 -> id
+          _invalid -> 1
+        end
+
+      _unfiltered ->
+        1
+    end
+  end
+
+  defp requested_definition_id(_query), do: 1
+
+  defp dev_azure_scope("/" <> rest) do
+    case String.split(rest, "/", parts: 2) do
+      [organization, remainder] when organization != "" and remainder != "" ->
+        {:ok, {organization, remainder}}
+
+      _other ->
+        :invalid
+    end
+  end
+
+  defp dev_azure_scope(_path), do: :invalid
+
+  # The steering reference is `owner/repo` for every GitHub repository path and
+  # `org/project` for every Azure DevOps project path. Provider paths without a
+  # project scope (the GitHub account reads, the Azure DevOps projects read) are
+  # never steered.
+  defp provider_reference(%URI{host: "api.github.com", path: "/repos/" <> reference}) do
+    case repository_path(reference) do
+      {:ok, {owner, repository, _tail}} -> {:github, "#{owner}/#{repository}"}
+      _invalid -> nil
+    end
+  end
+
+  defp provider_reference(%URI{host: "dev.azure.com", path: "/" <> rest}) do
+    case String.split(rest, "/", parts: 2) do
+      [_organization, "_apis/" <> _tail] ->
+        nil
+
+      [organization, remainder] ->
+        [project | _tail] = String.split(remainder, "/", parts: 2)
+        {:azure_devops, "#{organization}/#{project}"}
+
+      _other ->
+        nil
+    end
+  end
+
+  defp provider_reference(_uri), do: nil
+
+  defp steered_outcome(state, uri) do
+    case provider_reference(uri) do
+      {:github, reference} -> steer(provider_state(state, "github"), reference)
+      {:azure_devops, reference} -> steer(provider_state(state, "azure_devops"), reference)
+      nil -> nil
+    end
+  end
+
+  defp held?(state, uri) do
+    case provider_reference(uri) do
+      {:github, reference} ->
+        reference in reference_list(get_in(provider_state(state, "github"), ["hold"]))
+
+      {:azure_devops, reference} ->
+        reference in reference_list(get_in(provider_state(state, "azure_devops"), ["hold"]))
+
+      nil ->
+        false
+    end
+  end
+
+  # A reference in both lists answers the transport failure: the unknown
+  # outcome is the stronger statement.
+  defp steer(section, reference) do
+    cond do
+      reference in reference_list(section["transport_fail"]) -> :transport_fail
+      reference in reference_list(section["fail"]) -> :fail
+      true -> nil
+    end
+  end
+
+  # SYMMETRY_FIXTURE_STATE_FILE is optional and re-read on every request; an
+  # absent, unreadable or invalid document is the empty state, so a missing
+  # steering file never fabricates a document or a failure.
+  defp state do
+    with path when is_binary(path) <- System.get_env("SYMMETRY_FIXTURE_STATE_FILE"),
+         {:ok, raw} <- File.read(path),
+         {:ok, decoded} when is_map(decoded) <- Jason.decode(raw) do
+      decoded
+    else
+      _absent_or_invalid -> %{}
+    end
+  end
+
+  defp provider_state(state, provider) do
+    case state[provider] do
+      section when is_map(section) -> section
+      _other -> %{}
+    end
+  end
+
+  defp reference_list(value) when is_list(value), do: value
+  defp reference_list(_value), do: []
 
   defp authorize(owner, unauthorized) do
     if owner in unauthorized, do: :unauthorized, else: :ok
   end
 
-  defp repository_parts(reference) do
-    case String.split(reference, "/") do
-      [owner, repository] -> {:ok, {owner, repository}}
+  # The GitHub reference is split into owner, repository and the remaining path
+  # segments so one parse serves both steering and document routing.
+  defp repository_path(reference) do
+    case String.split(reference, "/", parts: 3) do
+      [owner, repository] -> {:ok, {owner, repository, []}}
+      [owner, repository, tail] -> {:ok, {owner, repository, String.split(tail, "/")}}
       _other -> {:error, :invalid_repository_reference}
     end
   end

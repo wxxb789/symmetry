@@ -60,6 +60,53 @@ export interface ConnectionReceipt {
   connectionId: string;
 }
 
+// A project resource mutation returns the served resource projection. The
+// console steers from the authoritative project read, so the receipt carries
+// the identity and the served state a continuation compares against.
+export interface ResourceDraft {
+  kind: string;
+  connection_id: string | null;
+  name: string;
+  external_ref: string | null;
+}
+
+export interface ResourceUpdate {
+  version: number;
+  name: string;
+  connection_id: string | null;
+  external_ref: string | null;
+}
+
+export interface ResourceReceipt {
+  resourceId: string;
+  provider: string | null;
+  status: string;
+  syncStatus: string;
+  syncStatusMessage: string | null;
+  lastSyncedAt: string | null;
+  version: number;
+}
+
+export interface WorkItemAssignment {
+  version: number;
+  assignee_type: string;
+  assignee_name: string | null;
+  agent_profile: string | null;
+  workspace: string | null;
+  repository_resource_id: string | null;
+  ci_resource_id: string | null;
+}
+
+/**
+ * The assignment write's receipt. The assignment editor steers from the served
+ * identity and the version it re-reads from, so this receipt carries the version
+ * the server accepted rather than the creation disposition of a field edit.
+ */
+export interface AssignmentReceipt {
+  workItemId: string;
+  version: number;
+}
+
 export type WorkDetail = SymmetryWorkDetailReadV1;
 export type WorkTimeline = SymmetryWorkTimelineReadV1;
 export type TimelineItem = WorkTimeline["items"][number];
@@ -162,6 +209,35 @@ const WorkItemReceiptBody = Schema.Struct({
   disposition: Schema.optional(Schema.NonEmptyString),
   work_item: Schema.Struct({ id: Schema.NonEmptyString }),
 });
+// Every resource mutation answers with the served projection; the fields below
+// are the ones a continuation reads. A failed sync answers 502 with the same
+// projection plus `error`, which `parseRefusal` carries as the server's reason.
+const ResourceReceiptBody = Schema.Struct({
+  resource: Schema.Struct({
+    id: Schema.NonEmptyString,
+    provider: Schema.NullOr(Schema.String),
+    status: Schema.NonEmptyString,
+    sync_status: Schema.NonEmptyString,
+    status_message: Schema.NullOr(Schema.String),
+    last_synced_at: Schema.NullOr(Schema.String),
+    version: Schema.Number,
+  }),
+});
+const DeletedResourceBody = Schema.Struct({
+  deleted_resource_id: Schema.NonEmptyString,
+});
+const ProjectSyncBody = Schema.Struct({
+  synced_resource_ids: Schema.Array(Schema.String),
+});
+// The assignment write answers with the served work-item projection too, but its
+// continuation compares the version it re-reads from, so the version is required
+// here rather than optional as in the create receipt.
+const AssignmentReceiptBody = Schema.Struct({
+  work_item: Schema.Struct({
+    id: Schema.NonEmptyString,
+    version: Schema.Number,
+  }),
+});
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 interface RequestInit {
   method: Method;
@@ -184,7 +260,18 @@ export interface Api {
   updateProject: (projectId: string, changes: ProjectChanges, csrf: string, signal: AbortSignal) => Promise<WriteReceipt>;
   createWorkItem: (projectId: string, draft: WorkItemDraft, csrf: string, signal: AbortSignal) => Promise<WorkItemReceipt>;
   updateWorkItem: (workItemId: string, changes: WorkItemChanges, csrf: string, signal: AbortSignal) => Promise<WorkItemReceipt>;
+  /**
+   * The assignment write, on the same work-item endpoint as `updateWorkItem`:
+   * the body is the version-fenced assignment and the answer is read as the
+   * served identity and version rather than a creation disposition.
+   */
+  assignWorkItem: (workItemId: string, assignment: WorkItemAssignment, csrf: string, signal: AbortSignal) => Promise<AssignmentReceipt>;
   moveWorkItem: (workItemId: string, intent: MoveIntent, csrf: string, signal: AbortSignal) => Promise<WorkItemReceipt>;
+  createResource: (projectId: string, draft: ResourceDraft, csrf: string, signal: AbortSignal) => Promise<ResourceReceipt>;
+  updateResource: (resourceId: string, update: ResourceUpdate, csrf: string, signal: AbortSignal) => Promise<ResourceReceipt>;
+  deleteResource: (resourceId: string, version: number, csrf: string, signal: AbortSignal) => Promise<{ deletedResourceId: string }>;
+  syncResource: (resourceId: string, csrf: string, signal: AbortSignal) => Promise<ResourceReceipt>;
+  syncProject: (projectId: string, csrf: string, signal: AbortSignal) => Promise<{ syncedResourceIds: readonly string[] }>;
 }
 
 // Strict byte-level decoding keeps invalid UTF-8 visible to the schema boundary;
@@ -308,6 +395,12 @@ const workItemReceipt = (body: Uint8Array) =>
     Effect.map((value) => ({ id: value.work_item.id, disposition: value.disposition ?? "" })),
   );
 
+const assignmentReceipt = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(AssignmentReceiptBody))(text)),
+    Effect.map((value) => ({ workItemId: value.work_item.id, version: value.work_item.version })),
+  );
+
 export function createApi(fetcher: typeof fetch = globalThis.fetch.bind(globalThis)): Api {
   return {
     workspace(projectId: string | null, signal: AbortSignal): Promise<Workspace> {
@@ -357,12 +450,40 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch.bind(globalTh
     updateWorkItem(workItemId: string, changes: WorkItemChanges, csrf: string, signal: AbortSignal): Promise<WorkItemReceipt> {
       return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, { method: "PATCH", body: changes, csrf }, workItemReceipt), signal);
     },
+    assignWorkItem(workItemId: string, assignment: WorkItemAssignment, csrf: string, signal: AbortSignal): Promise<AssignmentReceipt> {
+      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, { method: "PATCH", body: assignment, csrf }, assignmentReceipt), signal);
+    },
     moveWorkItem(workItemId: string, intent: MoveIntent, csrf: string, signal: AbortSignal): Promise<WorkItemReceipt> {
       return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}/move`, {
         method: "PATCH",
         body: { version: intent.version, status: intent.status, before_id: intent.beforeId },
         csrf,
       }, workItemReceipt), signal);
+    },
+    createResource(projectId: string, draft: ResourceDraft, csrf: string, signal: AbortSignal): Promise<ResourceReceipt> {
+      return run(request(fetcher, `/portal/api/projects/${encodeURIComponent(projectId)}/resources`, { method: "POST", body: draft, csrf }, resourceReceipt), signal);
+    },
+    updateResource(resourceId: string, update: ResourceUpdate, csrf: string, signal: AbortSignal): Promise<ResourceReceipt> {
+      return run(request(fetcher, `/portal/api/resources/${encodeURIComponent(resourceId)}`, { method: "PATCH", body: update, csrf }, resourceReceipt), signal);
+    },
+    deleteResource(resourceId: string, version: number, csrf: string, signal: AbortSignal): Promise<{ deletedResourceId: string }> {
+      return run(request(
+        fetcher,
+        `/portal/api/resources/${encodeURIComponent(resourceId)}?${new URLSearchParams({ version: String(version) })}`,
+        { method: "DELETE", csrf },
+        (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(DeletedResourceBody))(text))),
+      ).pipe(Effect.map((value) => ({ deletedResourceId: value.deleted_resource_id }))), signal);
+    },
+    syncResource(resourceId: string, csrf: string, signal: AbortSignal): Promise<ResourceReceipt> {
+      return run(request(fetcher, `/portal/api/resources/${encodeURIComponent(resourceId)}/sync`, { method: "POST", csrf }, resourceReceipt), signal);
+    },
+    syncProject(projectId: string, csrf: string, signal: AbortSignal): Promise<{ syncedResourceIds: readonly string[] }> {
+      return run(request(
+        fetcher,
+        `/portal/api/projects/${encodeURIComponent(projectId)}/sync`,
+        { method: "POST", csrf },
+        (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(ProjectSyncBody))(text))),
+      ).pipe(Effect.map((value) => ({ syncedResourceIds: value.synced_resource_ids }))), signal);
     },
   };
 }
@@ -371,6 +492,20 @@ const receipt = (body: Uint8Array) =>
   decodeBody(body).pipe(
     Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(ConnectionReceiptBody))(text)),
     Effect.map((value) => ({ disposition: value.disposition, connectionId: value.connection.id })),
+  );
+
+const resourceReceipt = (body: Uint8Array) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(ResourceReceiptBody))(text)),
+    Effect.map((value) => ({
+      resourceId: value.resource.id,
+      provider: value.resource.provider,
+      status: value.resource.status,
+      syncStatus: value.resource.sync_status,
+      syncStatusMessage: value.resource.status_message,
+      lastSyncedAt: value.resource.last_synced_at,
+      version: value.resource.version,
+    })),
   );
 
 export function readRetry(failureCount: number, error: unknown): boolean {

@@ -1136,8 +1136,9 @@ type FluffyTimelineData struct {
 // Consumed fields of the existing PortalJSON.workspace read projection. Unconsumed
 // presentation fields remain additive.
 type SymmetryWorkspaceReadV1 struct {
-	Projects          []WorkspaceProject `json:"projects"`
-	SelectedProjectID *string            `json:"selected_project_id"`
+	Projects           []WorkspaceProject  `json:"projects"`
+	RegisteredRuntimes []RegisteredRuntime `json:"registered_runtimes,omitempty"`
+	SelectedProjectID  *string             `json:"selected_project_id"`
 }
 
 type WorkspaceProject struct {
@@ -1156,20 +1157,29 @@ type WorkspaceProject struct {
 	WorkItems []WorkItemElement `json:"work_items"`
 }
 
-// PortalJSON.resource/1 as served inside workspace projects. The CI chip reads the identity
-// and the bound-resource signals; every other served member stays additive. All members
-// stay optional because a project row keeps accepting older partial projections, while a
-// production server serves them all.
+// PortalJSON.resource/1 as served inside workspace projects. The project-resource surface
+// and the assignment editor consume the identity, the project and connection binding, the
+// served reference, the sync state and the version; every other served member stays
+// additive. All members stay optional because a project row keeps accepting older partial
+// projections, while a production server serves them all.
 type WorkspaceResource struct {
-	ID *string `json:"id,omitempty"`
+	ConnectionID *string `json:"connection_id"`
+	ExternalRef  *string `json:"external_ref"`
+	ID           *string `json:"id,omitempty"`
 	// Resource kind; the editor's repository and CI resource selects read it to label bindable
 	// resources.
-	Kind *string `json:"kind,omitempty"`
+	Kind         *string `json:"kind,omitempty"`
+	LastSyncedAt *string `json:"last_synced_at"`
 	// Resource name; the editor's repository and CI resource selects read it to label bindable
 	// resources.
-	Name       *string `json:"name,omitempty"`
-	Status     *string `json:"status"`
-	SyncStatus *string `json:"sync_status"`
+	Name          *string `json:"name,omitempty"`
+	ProjectID     *string `json:"project_id,omitempty"`
+	Provider      *string `json:"provider"`
+	Status        *string `json:"status"`
+	StatusMessage *string `json:"status_message"`
+	SyncStatus    *string `json:"sync_status"`
+	URL           *string `json:"url"`
+	Version       *int64  `json:"version,omitempty"`
 }
 
 // PortalJSON.work_item/2 as served in workspace rows and work detail reads. The definition
@@ -1321,6 +1331,17 @@ type FluffyWorkItemExternal struct {
 	State               *string  `json:"state"`
 	UpdatedAt           *string  `json:"updated_at"`
 	URL                 *string  `json:"url"`
+}
+
+// PortalJSON.runtime/1 entries of the workspace read's registered_runtimes: the bind dialog
+// offers a local agent or runtime resource by these members, and the rest of the served
+// runtime stays additive. All members stay optional because the read keeps accepting older
+// partial projections, while a production server serves them all.
+type RegisteredRuntime struct {
+	AgentProfile *string `json:"agent_profile"`
+	RuntimeID    *string `json:"runtime_id,omitempty"`
+	RuntimeName  *string `json:"runtime_name,omitempty"`
+	Workspace    *string `json:"workspace"`
 }
 
 type Guidance string
