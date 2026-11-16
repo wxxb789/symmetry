@@ -215,3 +215,19 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       refuses it. Either bind the projection to the advertised support or record the state-only
       policy as intended. Named as a limitation by the 0007f review round; out of that diff's
       scope.
+
+## Deferred review findings (0007h)
+
+- [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate
+      silently. The 0007h review confirmed these names are correct today but that the schemas leave them
+      optional while the client reads them: `accounting.known_usage_cost_microusd`
+      (`frontend/src/features/goals/detail.tsx:491`, served unconditionally at
+      `control/lib/symmetry_control/goals/read_model.ex:2539`), `settlement_attention[].proposed_next_action`
+      and `proposed_next_action_status` (`detail.tsx:245`), `external_waits[].external_ref`, `next_check_at`
+      and `check_seq` (`detail.tsx:508`), the attention `attention_reasons`/`active_tasks`/`nonterminal_tasks`
+      sets (`frontend/src/features/attention/attention.tsx:80`), and `accepted_outcomes[].candidate_subject`
+      and `subject_hash` (`detail.tsx:417`). Marking them `required` — as `integration`, `satisfied?` and the
+      unknown-cost member now are — would close the class; additive members staying unvalidated is intended.
+      Two smaller residuals from the same review live here too: the rollout-off browser case skips in hosted
+      CI because it needs `SYMMETRY_GOALS_OFF_URL`, and the retained `:goal_admission_disabled` inline branch
+      is unreachable in production because the attention read is not admission-gated.
