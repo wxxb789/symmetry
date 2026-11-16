@@ -10,7 +10,11 @@
     "selected_project_id": {
       "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
     },
-    "projects": {"type": "array", "items": {"$ref": "#/definitions/WorkspaceProject"}}
+    "projects": {"type": "array", "items": {"$ref": "#/definitions/WorkspaceProject"}},
+    "registered_runtimes": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/RegisteredRuntime"}
+    }
   },
   "definitions": {
     "WorkspaceProject": {
@@ -45,19 +49,46 @@
     "WorkspaceResource": {
       "type": "object",
       "additionalProperties": true,
-      "description": "PortalJSON.resource/1 as served inside workspace projects. The CI chip reads the identity and the bound-resource signals; every other served member stays additive. All members stay optional because a project row keeps accepting older partial projections, while a production server serves them all.",
+      "description": "PortalJSON.resource/1 as served inside workspace projects. The project-resource surface and the assignment editor consume the identity, the project and connection binding, the served reference, the sync state and the version; every other served member stays additive. All members stay optional because a project row keeps accepting older partial projections, while a production server serves them all.",
       "properties": {
         "id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "connection_id": {
+          "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+        },
         "kind": {
           "type": "string",
+          "minLength": 1,
           "description": "Resource kind; the editor's repository and CI resource selects read it to label bindable resources."
         },
         "name": {
           "type": "string",
           "description": "Resource name; the editor's repository and CI resource selects read it to label bindable resources."
         },
+        "provider": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+        "external_ref": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "url": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
-        "sync_status": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+        "sync_status": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "status_message": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "last_synced_at": {
+          "oneOf": [
+            {"$ref": "common.schema.json#/definitions/UtcTimestamp"},
+            {"type": "null"}
+          ]
+        },
+        "version": {"$ref": "common.schema.json#/definitions/Revision"}
+      }
+    },
+    "RegisteredRuntime": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "PortalJSON.runtime/1 entries of the workspace read's registered_runtimes: the bind dialog offers a local agent or runtime resource by these members, and the rest of the served runtime stays additive. All members stay optional because the read keeps accepting older partial projections, while a production server serves them all.",
+      "properties": {
+        "runtime_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "runtime_name": {"type": "string"},
+        "agent_profile": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "workspace": {"oneOf": [{"type": "string"}, {"type": "null"}]}
       }
     },
     "WorkspaceWorkItem": {

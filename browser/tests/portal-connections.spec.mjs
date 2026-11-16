@@ -317,9 +317,11 @@ async function assertNoCredentials(page, recorded) {
     if (entry.unreadable !== undefined) {
       // The protocol cannot serve the body of a response whose read the page
       // aborted or navigated away from. That is only allowed for a request that
-      // failed (nothing was delivered to the page); its headers were scanned
-      // above, and every completed response is still scanned below.
+      // failed (nothing was delivered to the page) and, like every other
+      // aborted same-origin request below, it must be a read; its headers were
+      // scanned above, and every completed response is still scanned below.
       expect(entry.request?.failure(), `response ${entry.path} must be readable unless its request was aborted`).toBeTruthy();
+      expect(["GET", "HEAD"], `an unreadable response must belong to an aborted read: ${entry.request?.method()} ${entry.path}`).toContain(entry.request?.method());
       continue;
     }
     expect(entry.text, `response ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
@@ -776,7 +778,10 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   const connectionId = await createConnectionThroughApi(page, {
     name: connectionName,
     account: "acme-fixture",
-    capabilities: ["repositories", "work_items", "changes"]
+    // `ci` makes the repository sync's delivery read also answer the CI status
+    // for the pull request's head sha, so all three delivery rows are
+    // provider-owned here (the retired classic assertion pinned all three).
+    capabilities: ["repositories", "work_items", "changes", "ci"]
   });
   const issuesReference = `acme-fixture/issues-${suffix}`;
   const repositoryReference = `acme-fixture/repository-${suffix}`;
@@ -927,6 +932,15 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   expect(providerDelivery.review.value).toBe("approved");
   expect(providerDelivery.review.status).toBe("approved");
   expect(providerDelivery.review.generation).toBeNull();
+  // The CI half of the same provider read: the actions run for the pull
+  // request's head sha owns the third delivery row (the retired classic
+  // assertion pinned all three rendered source labels).
+  expect(providerDelivery.ci.source).toBe("provider");
+  expect(providerDelivery.ci.provider).toBe("github");
+  expect(providerDelivery.ci.value).toBe("passed");
+  expect(providerDelivery.ci.status).toBe("passed");
+  expect(providerDelivery.ci.generation).toBeNull();
+  expect(typeof providerDelivery.ci.recorded_at).toBe("string");
 
   // Wait for the connections surface to finish its reads before the document
   // navigation: a response body that is still in flight when the page navigates
@@ -937,6 +951,7 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   await expect(deliveryDetail.getByRole("heading", { level: 1, name: deliveryTitle })).toBeVisible();
   const deliveryRows = deliveryDetail.locator(".delivery-list > div");
   const deliveryPullRequestRow = deliveryRows.filter({ hasText: "Pull request" });
+  const deliveryCiRow = deliveryRows.filter({ hasText: "CI" });
   const deliveryReviewRow = deliveryRows.filter({ hasText: "Review" });
   await expect(deliveryPullRequestRow.locator("dd .chip")).toHaveText("open");
   // The rendered source is the delivery's own provenance ("provider") plus the
@@ -946,6 +961,9 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
     .toHaveAttribute("href", deliveryPullRequestUrl);
   await expect(deliveryReviewRow.locator("dd .chip")).toHaveText("approved");
   await expect(deliveryReviewRow.locator("dd")).toContainText("source: provider · github");
+  // Every provider-owned row carries its attribution, the CI row included.
+  await expect(deliveryCiRow.locator("dd .chip")).toContainText("passed");
+  await expect(deliveryCiRow.locator("dd")).toContainText("source: provider · github");
   await capture(page, testInfo, "delivery-evidence", {
     workItemId: deliveryWorkItemId,
     pullRequestUrl: deliveryPullRequestUrl,
@@ -954,6 +972,7 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
       status: providerDelivery.pull_request.status,
       source: providerDelivery.pull_request.source,
       provider: providerDelivery.pull_request.provider,
+      ci: providerDelivery.ci,
       review: providerDelivery.review
     }
   });
@@ -1280,6 +1299,16 @@ test("external work items keep their identity, their provider-owned lock and the
   expect(refusedTitle.body.error.code).toBe("provider_owned");
   expect(await detail.getByRole("textbox", { name: /title/i }).count()).toBe(0);
 
+  // The read-only `/portal/work/:id` detail renders no execution control for
+  // any item, so the "no execution entry point" clause is asserted on the
+  // classic surface — the same gate the retired classic assertion pinned —
+  // which does render `Start run` for this item while it is available. Before
+  // the readback omits it:
+  await page.goto(`/portal/classic?project_id=${projectId}#board`);
+  await page.locator(".work-card", { hasText: subject.title }).click();
+  await expect(page.getByRole("button", { name: "Start run" })).toBeVisible();
+  await page.getByRole("button", { name: "Close details" }).click();
+
   // A readback that omits the item marks it unavailable: the detail renders it
   // unavailable, no run or retry control exists, and the readback refuses it.
   await writeFixtureState({ github: { issues: { [issuesReference]: [102] } } });
@@ -1290,7 +1319,9 @@ test("external work items keep their identity, their provider-owned lock and the
   expect(unavailable.body.work_item.can_start).toBe(false);
   const stillAvailable = await api(page, `/portal/api/work-items/${closed.id}`, { method: "GET" });
   expect(stillAvailable.body.work_item.external.available).toBe(true);
-  await page.reload();
+  // Back on the read-only detail (the clause check above left the classic
+  // surface open), the served readback renders it unavailable.
+  await page.goto(`/portal/work/${subject.id}`);
   const reloaded = isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: subject.title });
   await expect(reloaded.getByText(/unavailable/i).first()).toBeVisible();
   await expect(reloaded.getByRole("button", { name: /^(start run|run|retry)$/i })).toHaveCount(0);
@@ -1301,6 +1332,15 @@ test("external work items keep their identity, their provider-owned lock and the
     retained: `issue 102 stayed available: ${stillAvailable.body.work_item.external.available}`,
     executionControl: "none rendered"
   });
+
+  // The same classic surface now hides its execution entry point for the item
+  // the readback omitted — the assertion the tautological new-route check
+  // cannot make.
+  await page.goto(`/portal/classic?project_id=${projectId}#board`);
+  await page.locator(".work-card", { hasText: subject.title }).click();
+  await expect(page.locator("#detail-content")).toContainText("Unavailable in provider");
+  await expect(page.getByRole("button", { name: "Start run" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Close details" }).click();
 
   await resetFixtureState();
   await assertNoCredentials(page, recorded);
@@ -1386,6 +1426,56 @@ test("Azure DevOps repository, board and pipeline resources bind and sync agains
     importedExternalId: imported[0].external.id,
     importedExternalUrl: imported[0].external.url
   });
+
+  await assertNoCredentials(page, recorded);
+});
+
+test("a failed workspace re-read after a write surfaces the failure instead of the stale rows", async ({ page }, testInfo) => {
+  // The aborted workspace read is this flow's injected failure: the browser
+  // reports it as a console error like any failed subresource.
+  allowBrowserError(page, /net::ERR_INTERNET_DISCONNECTED/);
+  const recorded = recordApiBodies(page);
+  await login(page);
+  const projectId = await createProject(page);
+  const connectionId = await createConnectionThroughApi(page, {
+    name: `Re-read failure ${suffix}`,
+    account: "acme-fixture",
+    capabilities: ["work_items"]
+  });
+  const issuesReference = `acme-fixture/re-read-issues-${suffix}`;
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.waitForLoadState("networkidle");
+  await page.getByLabel("Project", { exact: true }).selectOption(projectId);
+
+  // A real write through the console, with its receipt and the post-write row
+  // on screen.
+  await bindResourceThroughConsole(page, { kind: "work_tracking", name: "Re-read Issues", reference: issuesReference, connectionId });
+  const written = resourceRow(page, "Re-read Issues");
+  await expect(written).toContainText(issuesReference);
+  await expect(page.getByRole("status").filter({ hasText: "Resource attached — Re-read Issues." })).toBeVisible();
+
+  // The next read fails at the network layer: that one read is aborted for the
+  // duration of the refresh, so the failure is a real fetch error — no response
+  // is substituted and the API and database stay real (an offline emulation
+  // would only pause React Query's reads instead of failing them).
+  await page.route(/\/portal\/api\/workspace(\?|$)/, (route) => route.abort("internetdisconnected"));
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  const resources = page.getByRole("region", { name: "Project resources" });
+  await expect(resources.getByText("Refresh failed — showing last loaded data")).toBeVisible();
+  // The last loaded rows stay visible, and the failed read is the surface's
+  // only claim about freshness: the write receipt never stands in for it.
+  await expect(resources.getByRole("list", { name: "Project resources" }).getByRole("listitem").filter({ hasText: issuesReference })).toBeVisible();
+  await capture(page, testInfo, "failed-re-read", {
+    projectId,
+    injected: "GET /portal/api/workspace was aborted at the browser's network layer during the refresh; no response was substituted",
+    shown: "the failed-refresh state with the last loaded rows"
+  });
+
+  // The retry re-reads the real API and the failure clears.
+  await page.unroute(/\/portal\/api\/workspace(\?|$)/);
+  await resources.getByRole("button", { name: "Try again" }).click();
+  await expect(resources.getByText("Refresh failed — showing last loaded data")).toHaveCount(0);
+  await expect(written).toContainText(issuesReference);
 
   await assertNoCredentials(page, recorded);
 });

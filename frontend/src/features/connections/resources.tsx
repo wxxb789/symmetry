@@ -84,14 +84,17 @@ export function refusalNotice(error: unknown): string {
 }
 
 const asText = (value: unknown): string | null => typeof value === "string" && value !== "" ? value : null;
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-  typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
-const asRecords = (value: unknown): Record<string, unknown>[] =>
-  Array.isArray(value) ? value.flatMap((entry) => { const record = asRecord(entry); return record === null ? [] : [record]; }) : [];
 const asVersion = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? value : 0;
 
-// The served project row (PortalJSON.resource/1) with the fields this surface
-// renders. Unconsumed served members stay additive; nothing here is invented.
+// The served rows this surface reads, typed from the generated workspace-read
+// DTO: every consumed member is declared in workspace-read.schema.json, stays
+// optional (a project row keeps accepting older partial projections) and is
+// value-checked here, so a row that omits or malforms a member degrades instead
+// of inventing one. Unconsumed served members stay additive.
+type ServedProjectRow = Workspace["projects"][number];
+type ServedResourceRow = NonNullable<ServedProjectRow["resources"]>[number];
+
+// The decoded row the surface renders; nothing here is invented.
 interface ResourceRow {
   id: string;
   kind: string;
@@ -110,23 +113,23 @@ interface ResourceRow {
 interface ProjectRow { id: string; key: string; name: string; status: string; resources: ResourceRow[] }
 interface RegisteredRuntime { id: string; name: string; profile: string | null; workspace: string | null }
 
-function decodeResources(value: unknown): ResourceRow[] {
-  return asRecords(value).flatMap((record) => {
-    const id = asText(record["id"]);
+function decodeResources(resources: readonly ServedResourceRow[] | undefined): ResourceRow[] {
+  return (resources ?? []).flatMap((resource) => {
+    const id = asText(resource.id);
     if (id === null) return [];
     return [{
       id,
-      kind: asText(record["kind"]) ?? "",
-      name: asText(record["name"]) ?? id,
-      connectionId: asText(record["connection_id"]),
-      provider: asText(record["provider"]),
-      externalRef: asText(record["external_ref"]),
-      url: asText(record["url"]),
-      status: asText(record["status"]) ?? "unknown",
-      syncStatus: asText(record["sync_status"]) ?? "unknown",
-      statusMessage: asText(record["status_message"]),
-      lastSyncedAt: asText(record["last_synced_at"]),
-      version: asVersion(record["version"]),
+      kind: asText(resource.kind) ?? "",
+      name: asText(resource.name) ?? id,
+      connectionId: asText(resource.connection_id),
+      provider: asText(resource.provider),
+      externalRef: asText(resource.external_ref),
+      url: asText(resource.url),
+      status: asText(resource.status) ?? "unknown",
+      syncStatus: asText(resource.sync_status) ?? "unknown",
+      statusMessage: asText(resource.status_message),
+      lastSyncedAt: asText(resource.last_synced_at),
+      version: asVersion(resource.version),
     }];
   });
 }
@@ -146,11 +149,11 @@ function decodeProjects(workspace: Workspace | undefined): ProjectRow[] {
 }
 
 function decodeRuntimes(workspace: Workspace | undefined): RegisteredRuntime[] {
-  return asRecords(workspace?.["registered_runtimes"]).flatMap((record) => {
-    const id = asText(record["runtime_id"]);
-    const name = asText(record["runtime_name"]);
+  return (workspace?.registered_runtimes ?? []).flatMap((runtime) => {
+    const id = asText(runtime.runtime_id);
+    const name = asText(runtime.runtime_name);
     if (id === null || name === null) return [];
-    return [{ id, name, profile: asText(record["agent_profile"]), workspace: asText(record["workspace"]) }];
+    return [{ id, name, profile: asText(runtime.agent_profile), workspace: asText(runtime.workspace) }];
   });
 }
 
@@ -550,7 +553,10 @@ export function ProjectResources(props: ProjectResourcesProps) {
         <ProjectResourcesHeading count={0} headingRef={headingRef} />
         {props.workspace === undefined && props.workspacePending && <LoadingState label="Loading project resources…" />}
         {props.workspace === undefined && !props.workspacePending && <ErrorState error={props.workspaceError} retry={props.onRefreshProject} />}
-        {props.workspace !== undefined && <EmptyState title="Project not found">This project is unavailable or you no longer have access.</EmptyState>}
+        {props.workspace !== undefined && props.workspaceError !== null && props.workspaceError !== undefined &&
+          <ErrorState error={props.workspaceError} retry={props.onRefreshProject} stale />}
+        {props.workspace !== undefined && (props.workspaceError === null || props.workspaceError === undefined) &&
+          <EmptyState title="Project not found">This project is unavailable or you no longer have access.</EmptyState>}
       </>
       // The surface belongs to one project instance: a switch remounts it, so an
       // open dialog, a pending draft and a notice never leak into another project.
@@ -558,7 +564,7 @@ export function ProjectResources(props: ProjectResourcesProps) {
   </section>;
 }
 
-function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, connections, writePending, pendingSubjects, projectRef, onRefreshProject, onWriteStart, onWriteSettled, onSubjectPending }: ProjectResourcesProps & { project: ProjectRow; headingRef: RefObject<HTMLHeadingElement | null> }) {
+function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, workspaceError, connections, writePending, pendingSubjects, projectRef, onRefreshProject, onWriteStart, onWriteSettled, onSubjectPending }: ProjectResourcesProps & { project: ProjectRow; headingRef: RefObject<HTMLHeadingElement | null> }) {
   const projectId = project.id;
   const rows = project.resources;
   const runtimes = decodeRuntimes(workspace);
@@ -651,6 +657,9 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, conn
         <button className="button" type="button" disabled={blocked} aria-busy={projectSyncPending} onClick={() => syncProject.mutate()}>Synchronize project</button>
       </div>
     </ProjectResourcesHeading>
+    {/* A failed re-read with cached rows present is shown as a failed refresh:
+        the rows below are the last loaded data, never presented as current. */}
+    {workspaceError !== null && workspaceError !== undefined && <ErrorState error={workspaceError} retry={onRefreshProject} stale />}
     <p className="filter-note">Showing {project.name} <span className="item-key">{project.key}</span>.</p>
     {archived && <p className="filter-note">This project is archived, so binding, updating, unbinding and synchronizing its resources are disabled.</p>}
     {editorSubjectRemoved && <p className="notice notice-error" role="status">The resource being edited was removed elsewhere before the change was saved; the unsaved draft was discarded.</p>}

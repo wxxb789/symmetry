@@ -171,12 +171,12 @@ try {
   # The spec skips itself when the harness environment is absent (so the
   # repository-wide commands still collect it); a skipped run exits 0, so the
   # acceptance gate reads the summary instead of trusting the exit code.
-  # 20 = the file's 10 flows on the desktop and mobile projects.
+  # 22 = the file's 11 flows on the desktop and mobile projects.
   $summary = Select-String -Path $specLog -Pattern "(\d+) passed" -ErrorAction SilentlyContinue | Select-Object -Last 1
   $passed = if ($summary) { [int]$summary.Matches[0].Groups[1].Value } else { 0 }
   $skipped = [bool](Select-String -Path $specLog -Quiet -Pattern "\d+ skipped" -ErrorAction SilentlyContinue)
-  if ($passed -ne 20 -or $skipped) {
-    Write-Host "spec summary reports $passed passed (skipped=$skipped); expected 20 passed and no skips: see $specLog"
+  if ($passed -ne 22 -or $skipped) {
+    Write-Host "spec summary reports $passed passed (skipped=$skipped); expected 22 passed and no skips: see $specLog"
     $specStatus = 1
   }
 

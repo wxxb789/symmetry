@@ -977,8 +977,8 @@ describe("project resources", () => {
       : refusal(404, "not_found", "unexpected request"), "/portal/connections", {
       projects: [projectFixture()],
       registeredRuntimes: [
-        { runtime_id: "runtime-1", runtime_name: "builder-a", agent_profile: "oss-default", workspace: "/work/alpha" },
-        { runtime_id: "runtime-2", runtime_name: "builder-b", agent_profile: "review", workspace: "/work/beta" },
+        { runtime_id: "77777777-7777-4777-8777-777777777771", runtime_name: "builder-a", agent_profile: "oss-default", workspace: "/work/alpha" },
+        { runtime_id: "77777777-7777-4777-8777-777777777772", runtime_name: "builder-b", agent_profile: "review", workspace: "/work/beta" },
       ],
     });
     const user = userEvent.setup();
@@ -998,14 +998,14 @@ describe("project resources", () => {
       "builder-a · oss-default · /work/alpha",
       "builder-b · review · /work/beta",
     ]);
-    expect(dialog.getByLabelText("Reference")).toHaveValue("runtime-1");
-    await user.selectOptions(dialog.getByLabelText("Reference"), "runtime-2");
-    expect(dialog.getByLabelText("Reference")).toHaveValue("runtime-2");
+    expect(dialog.getByLabelText("Reference")).toHaveValue("77777777-7777-4777-8777-777777777771");
+    await user.selectOptions(dialog.getByLabelText("Reference"), "77777777-7777-4777-8777-777777777772");
+    expect(dialog.getByLabelText("Reference")).toHaveValue("77777777-7777-4777-8777-777777777772");
     await user.type(dialog.getByLabelText("Name"), "review runner");
     await user.click(dialog.getByRole("button", { name: "Bind" }));
     await waitFor(() => expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1));
     expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
-      kind: "runtime", connection_id: null, name: "review runner", external_ref: "runtime-2",
+      kind: "runtime", connection_id: null, name: "review runner", external_ref: "77777777-7777-4777-8777-777777777772",
     });
   });
 

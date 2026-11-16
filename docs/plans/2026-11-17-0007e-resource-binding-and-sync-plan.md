@@ -118,6 +118,9 @@ the 0007d `refusalNotice`/`refusalGuidance` helpers (extended with the resource 
   the `Last synced` value stays whatever the server holds (proof that freshness is not assumed).
 - The unfiltered "Never synced" case (`last_synced_at === null`) stays distinct from "Failed".
 - An archived project disables every mutation control; the note says why.
+- A failed re-read of the workspace read — the reconciliation a settled write triggers or a manual
+  refresh — renders the failed-refresh error state with the last loaded rows still shown and marked
+  as such; a stale read is never presented as the current one.
 
 ### 4.4 Concurrency and project switching
 
@@ -204,9 +207,11 @@ keeps its five connection flows and adds:
 | 8 | project switching + concurrent operations: a sync and a project sync in flight across a switch, a late failure for the old project discarded, rows of the new project intact (two contexts) | real API, real DB; fixture documents |
 | 9 | work assignment on the real API: external work item identity/provider-owned refusal/availability, assignment option sets limited to the item's project, save, and the cross-project refusal | real API, real DB; fixture issues document |
 | 10 | Azure DevOps binding + sync for repository, work-tracking and CI references (`project/repository`, `project`, `project/pipeline/<id>`) with the reference normalization the classic test pinned | real API, real DB; fixture ADO documents |
+| 11 | a real console write, then a refresh whose workspace re-read is aborted at the browser's network layer (a real fetch failure, no response substituted): the failed-refresh error state renders with the last loaded rows still shown, and the retry re-reads the real API and clears it | real API, real DB; one read aborted at the browser's network layer, every other request served by the real app |
 
 Retired in the same PR: `browser/tests/portal-classic-resources.spec.mjs` in full (4 tests, 8 runs).
-Its intent moves as follows — no assertion is dropped without a replacement:
+Its intent moves as follows — no assertion is dropped without either a replacement or an explicit,
+recorded non-replacement (§6's ADO delivery row):
 
 | Retired classic assertion (spec lines) | Replacement |
 | --- | --- |
@@ -217,9 +222,10 @@ Its intent moves as follows — no assertion is dropped without a replacement:
 | late-response/dialog ownership (`:448-451`, `:733-734`) | frontend component tests (deferred gates) + test 8's discarded late failure |
 | editor stale/draft/refresh rules (`:672-679`, `:692-712`) | frontend component tests + test 6's version-fenced update/unbind refusals |
 | project switch/rollback/archived read-only (`:499-518`, `:736-738`, `:748-763`) | test 8 (switch + late response) and the archived-project controls test |
-| external identity/provider attribution (`:235-238`, `:988-993`, `:1016-1021`) | test 9 (exact `external.id`/`url`/`available`, delivery source) |
+| external identity/provider attribution, GitHub arm (`:235-238`, `:988-993`) | test 9 (exact `external.id`/`url`/`available`) + test 7 (rendered `source: provider · github` on the pull-request, CI and review delivery rows) |
+| ADO delivery rows (`:1016-1021`) | **not replaced** — no work item is bound in test 10 and the fixture serves no ADO pull/review documents; recorded as a limitation in the receipt §6 |
 | provider-owned locking (`:241-243`, `:996-997`) | test 9 (the surface has no such control; the API refuses `title` with `provider_owned`) |
-| unavailable item + no execution entry (`:270-271`, `:278-280`) | test 9 (rendered unavailable, no run/retry control, `can_start: false` in the readback) |
+| unavailable item + no execution entry (`:270-271`, `:278-280`) | test 9 (rendered unavailable; the read-only detail's absent run/retry control plus the classic-surface check that `Start run` is shown while available and hidden after the readback omits the item; `can_start: false` in the readback) |
 | assignment (`:129-149`, `:244-252`, `:900-916`) | test 9 (console-driven assignment with project-scoped option sets) |
 | layout/no-overflow (`:286`) | every new test keeps the `capture()` overflow assertion |
 | Azure resource kinds (`:784-1024`) | test 10 |
@@ -259,8 +265,10 @@ database), `pwsh -NoProfile -File browser/scripts/run-connection-fixture-tests.p
 suite on both Playwright projects), `pnpm --offline --filter symmetry-browser-acceptance test --list`
 (collection shape), `pnpm --offline --filter @symmetry/frontend {typecheck,lint,test,build}`,
 `node --test browser/scripts/connection-spec-env.test.mjs`, `pnpm --offline contracts:check`,
-`go vet ./...` and `go test ./...` (daemon, contracts bundle unchanged but re-run), plus the
-work-detail spec file (`portal-work-views.spec.mjs`) for the surfaces this increment touches.
+`go vet ./...` and `go test ./...` (daemon; the fix round regenerates the contracts bundle, so these
+run against it), the goals contract-fixture manifest test (the fix round's fixtures run through the
+control validator), plus the work-detail spec file (`portal-work-views.spec.mjs`) for the surfaces
+this increment touches.
 
 ## 10. Out of scope (with reasons)
 
@@ -269,15 +277,19 @@ work-detail spec file (`portal-work-views.spec.mjs`) for the surfaces this incre
 - **A provider catalogue or discovery API**: no such endpoint is invented; the connection list and
   the workspace's registered runtimes are the only sources of selectable values.
 - **Runtime control (run/cancel/retry controls, 0007f)**: this surface renders no execution control;
-  the availability clause is evidenced by the served projection plus the absence of a control here.
+  the availability clause is evidenced by the served projection (`external.available`, `can_start`)
+  plus the classic surface's own execution control, shown while the item is available and hidden
+  once the readback omits it (§6).
 - **Full work-item planning editor (0007c)**: this increment adds the assignment editor only,
   because the contract's assignment clause names the editing surface and 0007c is not merged; no
   create/move/status/priority editing is added.
 - **Classic workspace removal (0007i)**: classic keeps working; only this surface's classic *checks*
   are retired.
-- **New wire schemas**: every operation is an existing endpoint; the contracts package is untouched,
-  so no fixture/manifest churn is needed. If implementation finds a clause that cannot be expressed
-  with the existing endpoints, it stops and reports instead of inventing wire surface.
+- **New wire schemas**: every operation is an existing endpoint. The fix round's contract edit only
+  declares already-served workspace-read members as optional typed properties, with the two new
+  fixtures and the regenerated DTO/Effect/Go artifacts; it adds no endpoint and changes no served
+  answer. If implementation finds a clause that cannot be expressed with the existing endpoints, it
+  stops and reports instead of inventing wire surface.
 
 ## 11. Implementation notes (recorded while executing this plan)
 
@@ -314,17 +326,22 @@ work-detail spec file (`portal-work-views.spec.mjs`) for the surfaces this incre
    an input this goal does not touch, so the test pins the pre-existing shape instead
    (`portal_resources_test.exs`, "…refuse stale versions, referenced identities and unknown ids").
 
-4. **The project-resource surface steers from the workspace read.** `workspace-read.schema.json`
-   declares a project resource's non-CI members (`kind`, `name`, `external_ref`, `connection_id`,
-   `url`, `status_message`, `last_synced_at`, `version`) as additive-untyped
-   (`additionalProperties: true`, `WorkspaceResource` types only `id`/`status`/`sync_status`), and the
-   root schema does not declare `registered_runtimes` at all. The generated Effect decoder preserves
-   excess properties (`openObject` → `preserveExcessPropertyOptions`), so the surface reads those
-   served members through one local, explicitly typed reader (`resources.tsx`,
-   `assignment.tsx`) instead of extending the wire schema — that would have been a contract change
-   with fixture/DTO churn for members the server already serves. The alternative (reading the fully
-   typed `connections-read` projection) was rejected: those rows are connection-scoped, and the
-   contract binds resources to a project while the assignment rule scopes to the work item's project.
+4. **The project-resource surface steers from the workspace read.** The milestone review found the
+   surface consuming workspace-read members no contract declared, so `workspace-read.schema.json`
+   now declares every consumed member as an optional typed property: on `WorkspaceResource` the
+   identity and binding members (`project_id`, `connection_id`, `kind`, `name`, `provider`,
+   `external_ref`, `url`, `status_message`, `last_synced_at`, `version`), on `WorkspaceProject` the
+   assignment defaults (`default_agent_profile`, `default_workspace`), and the root's
+   `registered_runtimes` entries (`runtime_id`, `runtime_name`, `agent_profile`, `workspace`) that
+   supply a local resource's references. All stay optional because a project row keeps accepting
+   older partial projections, while a production server serves them all; a wrong type now fails the
+   generated Effect decode instead of passing through `additionalProperties`. The surface still reads
+   the served values through one local, defensive reader in `resources.tsx`/`assignment.tsx` that
+   degrades on a missing member rather than inventing one. The alternative (reading the fully typed
+   `connections-read` projection) stays rejected, but its reason is narrower: those rows can be
+   filtered by their served `project_id`/`project_key`/`project_status`, and the rejection is only
+   that they exist for connection-bound rows — a local resource (`connection_id == null`, the
+   `agent`/`runtime` kinds) is served by the workspace read alone and by no connection.
 
 5. **The fixture gained one primitive beyond the plan's §5 list: `hold`.** Proving "a sync in flight
    across a project switch" against the real API needs a provider read that stays unanswered while
@@ -351,3 +368,13 @@ work-detail spec file (`portal-work-views.spec.mjs`) for the surfaces this incre
    the project facts; the first legacy run caught the shifted order on both widths (§8 #7 of the
    receipt). §2's "project resources" section of this plan settles the binding surface, not the
    detail section order, so no planned behavior changed.
+
+9. **The independent milestone review of this PR (head `38d19ce`) produced a fix round, and four
+   plan-visible statements changed with it.** The consumed workspace-read members are now declared
+   optional typed in the schema and the `connections-read` rejection reason is corrected (§11.4);
+   the resource surface renders the failed-refresh error state with the last loaded rows when a
+   re-read fails (§4.3); the browser acceptance adds flow 11 (the failed re-read after a write), the
+   classic-surface execution check in flow 9, and the CI delivery row's provider attribution in
+   flow 7; and the credential scan's aborted-read handling is a stated, `GET`/`HEAD`-narrowed
+   reduction of the pre-existing readability assertion. The evidence, the unchanged limitations and
+   the red-before/green-after records are in the receipt (§7/§8).

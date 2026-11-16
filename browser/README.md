@@ -114,11 +114,15 @@ detail and the filtered board from a signed-out context and reload them.
 Portal API and PostgreSQL: create, inspect, test, update, remove, repeated
 submission, stale update, concurrent removal, refused submissions and the
 capability reset of bound resource health, plus the resource surface: binding,
-updating, unbinding and synchronizing repository, work-tracking and CI resources
-for both provider kinds (including the Azure DevOps `project/repository`,
-`project` and `project/pipeline/<definitionId>` references), injected provider
-failures, the unknown-outcome readback, project switching under a sync in flight,
-and work assignment scoped to the item's project. Provider calls go through the
+updating, unbinding and synchronizing resources of both provider kinds — the
+version-fenced update, identity reset and unbind are exercised for the GitHub
+repository kind, while the Azure DevOps kinds (`project/repository`, `project`
+and `project/pipeline/<definitionId>`) and the work-tracking/CI kinds are bound
+and synchronized only; their update and unbind are covered by the routed API
+suite (`portal_resources_test.exs`) — plus injected provider failures, the
+unknown-outcome readback, the failed re-read after a write rendering the stale
+rows as a failed refresh, project switching under a sync in flight, and work
+assignment scoped to the item's project. Provider calls go through the
 controlled fixture transport in `scripts/ci/portal-connection-fixture.exs`, which
 replaces the provider HTTP client and the local CLI session; no provider host is
 contacted and every fixture call is appended to the JSONL log below. The fixture
@@ -127,8 +131,12 @@ bodies and response headers, the rendered HTML, web storage, the cookie jar
 (sampled during the run, so a cookie that was set and cleared — HttpOnly
 included — is still visible), request headers and bodies, and every console
 message and page error the page produced during the run. Response records,
-header lists and jar samples must be non-empty and readable, so a missing or
-unreadable capture fails the test instead of passing the scan.
+header lists and jar samples must be non-empty, so a missing capture fails the
+test instead of passing the scan. Every completed response body must be
+readable; the one bounded exception is a response whose read the page aborted
+(a project switch or a document navigation cancelled the request), which is
+allowed only when the request is a failed `GET`/`HEAD` — headers are still
+scanned, and a write can never take that branch.
 
 ### Fixture provider documents and the steering file
 
@@ -256,7 +264,7 @@ SYMMETRY_PORTAL_URL=http://127.0.0.1:4021 SYMMETRY_OPERATOR_TOKEN=<run token> \
 command — creates the per-run steering file, recreates and migrates the fixture
 database in this worktree's own container (other portal specs leave projects,
 work items and resources behind in it), starts the fixture control plane, waits
-for the identity file and a healthy `/healthz`, runs the spec (its 20 tests must
+for the identity file and a healthy `/healthz`, runs the spec (its 22 tests must
 pass on the desktop and mobile projects; a skip or a different count fails the
 run), scans the control logs and the provider-call log for the fixture canaries
 (a missing scan file or an empty provider-call log fails the run), and stops its
@@ -278,12 +286,15 @@ success. Nothing else about the application is reconfigured.
 The classic resource checks are retired in the same change:
 `tests/portal-classic-resources.spec.mjs` (four tests, eight runs across the
 desktop and mobile projects) no longer runs, and its intent moved to the
-new-route flows above — binding, update and unbind for both provider kinds
-including the version-fenced `stale` refusals, per-resource sync and the
-`Synced` row, project sync and its failure notice, single-flight across a
-project switch, the discarded late response, exact external identity with
+new-route flows above — binding for both provider kinds, update and unbind with
+the version-fenced `stale` refusals (GitHub repository kind; the routed API
+suite covers the other kinds × providers), per-resource sync and the `Synced`
+row, project sync and its failure notice, single-flight across a project
+switch, the discarded late response, exact external identity with
 provider-owned fields locked and availability rendered, and assignment scoped
-to the item's project on the work detail. Assertions that only ever depended on
+to the item's project on the work detail. The retired ADO delivery-row render
+assertions have no replacement here and are listed as a limitation in the
+0007e receipt §6. Assertions that only ever depended on
 synthetic browser mocks (held responses, injected failures, hand-written
 provider payloads) moved to frontend component tests with deferred response
 gates. Connection management itself is asserted on the new route above.

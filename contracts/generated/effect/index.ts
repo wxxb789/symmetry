@@ -874,11 +874,26 @@ export const DefinitionWorkspaceProjectGraph = S.suspend(() => withObjectPropert
 })), undefined, undefined));
 
 export const DefinitionWorkspaceResourceGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "connection_id": S.optionalWith(exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null), { exact: true }),
+  "external_ref": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
-  "kind": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "kind": S.optionalWith(stringConstraints(S.String, 1, undefined, undefined), { exact: true }),
+  "last_synced_at": S.optionalWith(exactOneOf(S.Union(DefinitionUtcTimestampGraph, S.Null), DefinitionUtcTimestampGraph, S.Null), { exact: true }),
   "name": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "project_id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
+  "provider": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, 1, undefined, undefined), S.Null), stringConstraints(S.String, 1, undefined, undefined), S.Null), { exact: true }),
   "status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "sync_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
+  "status_message": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "sync_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "url": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "version": S.optionalWith(DefinitionRevisionGraph, { exact: true })
+})), undefined, undefined));
+
+export const DefinitionRegisteredRuntimeGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "agent_profile": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "runtime_id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
+  "runtime_name": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
+  "workspace": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
 })), undefined, undefined));
 
 export const AdapterCapabilitiesGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
@@ -1825,6 +1840,7 @@ export const WorkTimelineReadSchema: S.Schema<SymmetryWorkTimelineReadV1, unknow
 
 export const WorkspaceReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "projects": arrayConstraints(S.Array(DefinitionWorkspaceProjectGraph), undefined, undefined, undefined),
+  "registered_runtimes": S.optionalWith(arrayConstraints(S.Array(DefinitionRegisteredRuntimeGraph), undefined, undefined, undefined), { exact: true }),
   "selected_project_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null)
 })), undefined, undefined));
 

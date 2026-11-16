@@ -35151,6 +35151,39 @@
           }
         ]
       },
+      "RegisteredRuntime": {
+        "additionalProperties": true,
+        "description": "PortalJSON.runtime/1 entries of the workspace read's registered_runtimes: the bind dialog offers a local agent or runtime resource by these members, and the rest of the served runtime stays additive. All members stay optional because the read keeps accepting older partial projections, while a production server serves them all.",
+        "properties": {
+          "agent_profile": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runtime_id": {
+            "$ref": "#/definitions/UUID"
+          },
+          "runtime_name": {
+            "type": "string"
+          },
+          "workspace": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ReviewFinding": {
         "additionalProperties": false,
         "properties": {
@@ -36051,20 +36084,75 @@
       },
       "WorkspaceResource": {
         "additionalProperties": true,
-        "description": "PortalJSON.resource/1 as served inside workspace projects. The CI chip reads the identity and the bound-resource signals; every other served member stays additive. All members stay optional because a project row keeps accepting older partial projections, while a production server serves them all.",
+        "description": "PortalJSON.resource/1 as served inside workspace projects. The project-resource surface and the assignment editor consume the identity, the project and connection binding, the served reference, the sync state and the version; every other served member stays additive. All members stay optional because a project row keeps accepting older partial projections, while a production server serves them all.",
         "properties": {
+          "connection_id": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "external_ref": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "$ref": "#/definitions/UUID"
           },
           "kind": {
             "description": "Resource kind; the editor's repository and CI resource selects read it to label bindable resources.",
+            "minLength": 1,
             "type": "string"
+          },
+          "last_synced_at": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/UtcTimestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "name": {
             "description": "Resource name; the editor's repository and CI resource selects read it to label bindable resources.",
             "type": "string"
           },
+          "project_id": {
+            "$ref": "#/definitions/UUID"
+          },
+          "provider": {
+            "oneOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status_message": {
             "oneOf": [
               {
                 "type": "string"
@@ -36083,6 +36171,19 @@
                 "type": "null"
               }
             ]
+          },
+          "url": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "$ref": "#/definitions/Revision"
           }
         },
         "type": "object"
@@ -36289,6 +36390,12 @@
       "projects": {
         "items": {
           "$ref": "#/definitions/WorkspaceProject"
+        },
+        "type": "array"
+      },
+      "registered_runtimes": {
+        "items": {
+          "$ref": "#/definitions/RegisteredRuntime"
         },
         "type": "array"
       },

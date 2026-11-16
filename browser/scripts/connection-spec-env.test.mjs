@@ -52,13 +52,13 @@ test("the documented custom-target override collects the suite and skips the fix
     SYMMETRY_OPERATOR_TOKEN: "documented-override-token",
   });
   assert.equal(run.status, 0, run.output);
-  assert.match(run.output, /20 skipped\b/);
+  assert.match(run.output, /22 skipped\b/);
 });
 
 test("an absent fixture environment skips at collection instead of failing the suite", () => {
   const run = playwright([], {});
   assert.equal(run.status, 0, run.output);
-  assert.match(run.output, /20 skipped\b/);
+  assert.match(run.output, /22 skipped\b/);
 });
 
 test("a partial fixture identity fails at collection instead of running an unproven target", () => {
@@ -70,7 +70,7 @@ test("a partial fixture identity fails at collection instead of running an unpro
   assert.match(run.output, /SYMMETRY_PORTAL_URL, SYMMETRY_FIXTURE_STATE_FILE must be set together/);
 });
 
-test("the complete fixture environment collects the twenty fixture tests", () => {
+test("the complete fixture environment collects the twenty-two fixture tests", () => {
   const run = playwright(["--list"], {
     ...fixtureIdentity,
     SYMMETRY_OPERATOR_TOKEN: "test-run-operator-token",
@@ -78,5 +78,5 @@ test("the complete fixture environment collects the twenty fixture tests", () =>
     SYMMETRY_PORTAL_URL: "http://127.0.0.1:4021",
   });
   assert.equal(run.status, 0, run.output);
-  assert.match(run.output, /Total: 20 tests in 1 file/);
+  assert.match(run.output, /Total: 22 tests in 1 file/);
 });
