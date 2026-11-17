@@ -1265,7 +1265,12 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
-      - run: go test -count=1 -timeout 180s ./...
+      # Aggregate pass over the whole daemon tree: the budget is a hang guard, not a
+      # performance assertion. A loaded Windows runner timed out at 180s inside
+      # internal/app (panic: test timed out after 3m0s) on a head whose content could not
+      # affect that package, while the same package passes on Linux. Single named tests
+      # below keep their tight budgets because a hang there is a real signal.
+      - run: go test -count=1 -timeout 600s ./...
       - run: go build ./cmd/symmetry-daemon ./cmd/symmetry-fake-agent
       - name: Run production Windows containment witness
         env:
