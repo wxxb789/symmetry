@@ -438,7 +438,21 @@ export function ChatPage() {
       className="chat-scroll"
       ref={scrollRef}
       onScroll={(event) => {
-        const shown = event.currentTarget.scrollTop;
+        const node = event.currentTarget;
+        const shown = node.scrollTop;
+        // A transcript that replaced this pane's own pins `scrollTop` at the
+        // pane's maximum, and that pinning fires a scroll event exactly like a
+        // reader's move. A pane pinned at its own maximum, below an offset it
+        // cannot hold, was clamped rather than scrolled: the offset stays this
+        // scope's and the restore stays owed, so the next commit re-asserts it
+        // once the layout can hold it. A reader's own move inside such a pane
+        // sits below that maximum and is still theirs.
+        const range = node.scrollHeight - node.clientHeight;
+        const wanted = Math.max(scrollOffsetOf(key), owedScroll ?? 0);
+        if (shown < wanted && range < wanted && shown === Math.max(0, range)) {
+          markScrollRestore(key, wanted);
+          return;
+        }
         recordScrollOffset(key, shown);
         // A live position that is not the owed offset is the reader taking over.
         if (owedScroll !== null && shown !== owedScroll) settleScrollRestore(key);

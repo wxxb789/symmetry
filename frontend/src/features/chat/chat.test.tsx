@@ -501,6 +501,89 @@ describe("sending", () => {
     expect(node.scrollTop).toBe(40);
   });
 
+  it("keeps a scope's offset when the browser pins the pane under a replaced transcript", async () => {
+    const user = userEvent.setup();
+    renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
+      conversation: (url) => new Response(JSON.stringify(url.searchParams.get("scope") === "project"
+        ? conversationBody({ scope: "project", projectId, messages: [message(2, { content: "project history" })] })
+        : conversationBody({ scope: "workspace", messages: [message(1, { content: "workspace history" })] }))),
+    });
+    await openChat();
+    await screen.findByText("workspace history");
+
+    // Model Chromium: a pane holds what it is given while its own transcript is
+    // rendered, and is pinned at its own maximum when that transcript is
+    // replaced by one the pane cannot hold. That pinning raises a scroll event
+    // exactly like a reader's own move.
+    const node = scrollNode();
+    let pane = 0;
+    let replaced = false;
+    Object.defineProperty(node, "scrollTop", {
+      configurable: true,
+      get: () => (replaced ? 0 : pane),
+      set: (value: number) => { pane = replaced ? 0 : value; },
+    });
+    Object.defineProperty(node, "scrollHeight", { configurable: true, get: () => (replaced ? 96 : 320) });
+    Object.defineProperty(node, "clientHeight", { configurable: true, get: () => 160 });
+    setScroll(40);
+    expect(node.scrollTop).toBe(40);
+
+    // The browser pins the pane at its own maximum when the transcript is
+    // replaced under it, and that pinning raises a scroll event exactly like a
+    // reader's own move.
+    replaced = true;
+    fireEvent.scroll(node, { target: { scrollTop: 0 } });
+    replaced = false;
+
+    // The pinning was not a reader's move: the offset stays this scope's, and a
+    // later commit re-asserts it because the pane still owes it.
+    fireEvent.change(contentField(), { target: { value: "a draft that forces a commit" } });
+    expect(node.scrollTop).toBe(40);
+
+    // The scope carries the same offset across a switch, exactly as the
+    // round-trip walk does.
+    await user.selectOptions(scopeSelect(), "project");
+    await screen.findByText("project history");
+    await user.selectOptions(scopeSelect(), "workspace");
+    await screen.findByText("workspace history");
+    expect(node.scrollTop).toBe(40);
+  });
+
+  it("still records a reader's own move inside a pane too short for the scope's offset", async () => {
+    const user = userEvent.setup();
+    renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
+      conversation: (url) => new Response(JSON.stringify(url.searchParams.get("scope") === "project"
+        ? conversationBody({ scope: "project", projectId, messages: [message(2, { content: "project history" })] })
+        : conversationBody({ scope: "workspace", messages: [message(1, { content: "workspace history" })] }))),
+    });
+    await openChat();
+    await screen.findByText("workspace history");
+
+    const node = scrollNode();
+    let pane = 0;
+    let content = 320;
+    Object.defineProperty(node, "scrollTop", {
+      configurable: true,
+      get: () => pane,
+      set: (value: number) => { pane = Math.min(value, Math.max(0, content - 160)); },
+    });
+    Object.defineProperty(node, "scrollHeight", { configurable: true, get: () => content });
+    Object.defineProperty(node, "clientHeight", { configurable: true, get: () => 160 });
+    setScroll(120);
+    expect(node.scrollTop).toBe(120);
+
+    // The transcript shrinks so the pane can no longer hold 120 px. A move the
+    // reader makes inside that pane sits below the pane's maximum, so it is
+    // still the reader's own position — never read as the browser's pinning.
+    content = 200;
+    fireEvent.scroll(node, { target: { scrollTop: 10 } });
+    await user.selectOptions(scopeSelect(), "project");
+    await screen.findByText("project history");
+    await user.selectOptions(scopeSelect(), "workspace");
+    await screen.findByText("workspace history");
+    expect(node.scrollTop).toBe(10);
+  });
+
   it("keeps the composer focused with its caret selection across a background refresh", async () => {
     const { application } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
       conversation: () => new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [message(1, { content: "history" })] }))),
