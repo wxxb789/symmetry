@@ -867,6 +867,84 @@ func TestCloseRetriesHandleReleaseWithoutReplayingStop(t *testing.T) {
 	}
 }
 
+// The native Go-test-binary AttachProcess route returns
+// noopContainmentSupervisorLease: it carries the stop/release capability but no
+// durable authority, so Close cannot bind success to a stop receipt. Its
+// failure path must therefore retain the failed stop proof itself, because the
+// daemon-side Job handle is released best-effort and the proof cannot be
+// re-derived afterwards. A repeated Close that only retries the handle release
+// must never turn an unproven stop into a reported success.
+func TestNonDurableStopLeaseCloseRetainsFailedStopProof(t *testing.T) {
+	if DurableSupervisorHandoffAvailable() {
+		t.Fatal("native test binary can dispatch the durable supervisor; the non-durable stop lease route is not exercised")
+	}
+	command := exec.Command("cmd", "/c", "ping", "-t", "127.0.0.1")
+	if err := ConfigureProcess(command); err != nil {
+		t.Fatalf("ConfigureProcess() error = %v", err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatalf("start owned child: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+	})
+
+	containment, identity, err := AttachProcess(command.Process)
+	if err != nil {
+		t.Fatalf("AttachProcess() error = %v", err)
+	}
+	if identity == "" {
+		t.Fatal("AttachProcess() returned an empty identity")
+	}
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = containment.Close()
+		}
+	})
+
+	job, ok := containment.(*jobContainment)
+	if !ok {
+		t.Fatalf("AttachProcess() returned %T, want *jobContainment", containment)
+	}
+	if _, stopLease := job.supervisor.(containmentSupervisorStopLease); !stopLease {
+		t.Fatalf("test-binary supervisor %T lacks the stop/release capability; the non-durable stop lease route is not exercised", job.supervisor)
+	}
+	if _, durable := job.supervisor.(containmentSupervisorAuthorityProvider); durable {
+		t.Fatalf("test-binary supervisor %T exposes durable authority; the non-durable stop lease route is not exercised", job.supervisor)
+	}
+
+	settlementFailure := errors.New("job object remained non-empty after containment close deadline")
+	waits := 0
+	previousWait := waitForEmptyJob
+	waitForEmptyJob = func(syscall.Handle, time.Time, func(syscall.Handle) (uint32, error)) error {
+		waits++
+		return settlementFailure
+	}
+	t.Cleanup(func() { waitForEmptyJob = previousWait })
+
+	first := containment.Close()
+	if !errors.Is(first, settlementFailure) {
+		t.Fatalf("first Close() = %v, want the forced settlement failure %v", first, settlementFailure)
+	}
+	if waits == 0 {
+		t.Fatal("first Close() reported the forced settlement failure without probing the Job")
+	}
+
+	second := containment.Close()
+	if second == nil {
+		t.Fatal("repeated Close() reported success without the containment stop proof")
+	}
+	if !errors.Is(second, settlementFailure) {
+		t.Fatalf("repeated Close() = %v, want the retained settlement failure %v", second, settlementFailure)
+	}
+	if third := containment.Close(); third == nil {
+		t.Fatal("third Close() reported success without the containment stop proof")
+	}
+	closed = true
+}
+
 func TestWaitForJobToEmptyFailsClosed(t *testing.T) {
 	want := errors.New("query failed")
 	if err := waitForJobToEmpty(1234, time.Now(), func(syscall.Handle) (uint32, error) {

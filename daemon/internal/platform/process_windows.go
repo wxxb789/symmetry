@@ -552,10 +552,16 @@ func (job *jobContainment) Close() error {
 	var supervisorErr error
 	if supervisor, ok := job.supervisor.(containmentSupervisorStopLease); ok {
 		if _, durableAuthority := job.supervisor.(containmentSupervisorAuthorityProvider); !durableAuthority {
+			// This lease has no authority that could witness a stop, so no
+			// stored receipt can answer for the physical proof on a later
+			// call. Latch the failed proof in the cached terminal error: the
+			// daemon-side Job handle is released here (or by the retry that
+			// consumes this error), and the proof cannot be re-derived after
+			// that.
 			supervisorErr = job.supervisor.close(deadline)
 			if supervisorErr == nil {
-				job.closeErr = job.releaseHandleLocked()
-				return errors.Join(stopErr, supervisorErr, job.closeErr)
+				job.closeErr = errors.Join(stopErr, job.releaseHandleLocked())
+				return job.closeErr
 			}
 			job.closeErr = errors.Join(stopErr, supervisorErr)
 			return job.closeErr

@@ -571,6 +571,55 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       `noopContainmentSupervisorLease` (`containment_supervisor_windows.go:934`),
       and the production daemon's durable-authority path is not affected. Keep the
       finding visible; fix or re-scope in a separate maintenance change.
+      **Fixed** (branch `fix/non-durable-close-proof`). `jobContainment.Close`
+      now latches the failed physical stop proof into `job.closeErr` in the
+      non-durable `containmentSupervisorStopLease` branch
+      (`process_windows.go:554-568`; the `errors.Join(stopErr, ...)` at `:563`)
+      instead of caching only the daemon-side handle release, so a repeated
+      `Close` through the `!durableAuthority` retry branch (`:497-500`) reports
+      the failure instead of returning nil after releasing the Job handle. A
+      lease with stop/release capability but no authority keeps no receipt that
+      could answer for the proof on a later call, and the proof cannot be
+      re-derived once that handle is closed, so latching follows the fail-closed
+      convention the sibling `!durableAuthority` branch (`:577-579`) already
+      applies to the no-supervisor and non-stop-lease paths. The
+      durable-authority path (`:531-537`, `:581-591`) and the partial/legacy
+      paths (`:602-613`) are unchanged. A scan of every `job.closeErr`
+      assignment in the file found this as its only instance of the class: the
+      other sites either join `stopErr` (`:577-579`), latch a supervisor failure
+      for a Job that has no handle to prove (`:526-542`), or release the handle
+      only with / after a durable receipt (`:581-591`).
+      Reproduced through the route this entry names — the native Go-test-binary
+      `AttachProcess` route, whose supervisor is the stop/release-capable
+      `noopContainmentSupervisorLease` with no durable authority — by
+      `TestNonDurableStopLeaseCloseRetainsFailedStopProof`
+      (`process_windows_test.go:870-946`): it asserts the no-durable-handoff
+      precondition and the capability shape, forces the settlement failure
+      through the `waitForEmptyJob` seam, then requires the first, second and
+      third `Close()` to report it. Red on the unpatched product (`go test
+      -count=1 -run '^TestNonDurableStopLeaseCloseRetainsFailedStopProof$'
+      ./internal/platform` → exit 1, `repeated Close() reported success without
+      the containment stop proof`, `process_windows_test.go:937`), green with
+      the fix (exit 0), and the deliberately re-broken branch fails the same
+      assertion at the same line. Final-revision gates: `gofmt -l .` → no
+      output (exit 0), `go vet ./...` → exit 0, `go test -count=1
+      ./internal/platform` → exit 0 (`ok ... 10.606s`).
+      **Still open, deliberately unchanged.** (a) The wider settlement contract
+      in the `daemon/internal/platform` flake-class entry above keeps the
+      load-sensitive Windows owned-child close window; this change only removes
+      the false-success reporting. (b) A first settlement failure on the
+      non-durable route is terminal for that containment owner: `Close` and
+      `Terminate` keep reporting the latched error and no path re-derives a stop
+      it cannot demonstrate, because the Job handle a re-proof would need is
+      released best-effort here (retaining it across calls is a different
+      design, not this fix). (c) Two adjacent behaviours stay as recorded
+      rather than altered: the daemon handle is retained for the retrying call
+      when the non-durable lease close itself fails, and the retry branch
+      ignores the local handle-release retry result, so a stale local-cleanup
+      error is still reported after a successful release — fail-closed polarity
+      that can never report success without the proof, the same convention
+      `TestCloseRetriesHandleReleaseWithoutReplayingStop` pins for the sibling
+      branch.
 
 ## Record and documentation hygiene
 
