@@ -166,7 +166,9 @@ class LegacyRouteAuditTest(unittest.TestCase):
         result = self.audit()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("tracked files audited", result.stdout)
-        self.assertIn("3 intentional exclusions", result.stdout)
+        # Bound the expectation to the list this suite declares, so adding a
+        # negative control cannot leave a stale hard-coded count behind.
+        self.assertIn(f"{len(NEGATIVE_CONTROLS)} intentional exclusions", result.stdout)
 
 
 if __name__ == "__main__":
