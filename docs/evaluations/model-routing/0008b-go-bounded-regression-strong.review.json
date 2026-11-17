@@ -1,0 +1,23 @@
+{
+  "check_attempt_id": "attempt-0001",
+  "check_evidence_sha256": "sha256:7c818050b50a3ab5a0a9dc5a0d78caac2282e61b8f59140036e46bb18a9b7592",
+  "explanations": {
+    "Explain which accepted and rejected wire-monetary values the assertions pin, and why the signed-bigint bound is a transport requirement rather than a formatting preference.": "Satisfied. TestValidateMicroUSDEnforcesWireMonetaryContract in daemon/internal/protocol/goal_boundary_validator_test.go directly calls production ValidateMicroUSD and checks whether its returned error agrees with each expected outcome. Accepted strings are \"0\", \"1\", \"1000000\", \"9007199254740992\" (above the JSON-safe-integer maximum), and \"9223372036854775807\" (MaxInt64). Rejected strings cover empty input; leading zeroes (\"00\", \"01\"); signs (\"-1\", \"-0\", \"+1\"); fractional, exponential and hexadecimal notation (\"1.5\", \"1e6\", \"0x10\"); leading, trailing and embedded whitespace (\" 1\", \"1 \", \"1\\n\", \"1\\t0\"); non-ASCII digits (U+0661); \"NaN\"; two 19-digit overflows (\"9223372036854775808\", \"9999999999999999999\"); and the 20-digit \"10000000000000000000\". The 19-digit overflow cases distinguish numeric range enforcement from a mere length restriction. Evidence: production goal_validation.go documents PostgreSQL signed-bigint storage and enforces the bound with strconv.ParseUint(value, 10, 63); docs/design/contracts.md specifies decimal-string microusd on wire and bigint storage; contracts/v1/common.schema.json#/definitions/Microusd encodes the same upper bound. Thus an otherwise correctly formatted decimal exceeding MaxInt64 is not transportable under the shared contract. Conversely, monetary strings are not restricted to the JSON-number safe-integer range. I inspected coordinator attempt-0001 rather than rerunning its gates: both frozen commands have exit_code 0, and the raw Go event stream records this named test running and passing once, with all 23 subtests passing and no skips or failures.",
+    "Explain why each rejected commit path is not a normalized relative commit path, and which normalization rule each case would violate.": "Satisfied. TestValidateCommitPathRejectsUnnormalizedPaths directly calls production validateCommitPath and requires a non-nil error for every case. The empty string violates the minimum length of one character; 1025 repeated ASCII characters exceed the 1024-rune maximum; \"dir/\\xff\" violates valid UTF-8; \"/etc/passwd\" violates the prohibition on a leading slash and absolute paths; \"dir/fi\\x00le\" contains forbidden NUL; \"dir\\\\file\", \"C:\\\\dir\\\\file\", and \"\\\\\\\\server\\\\share\\\\file\" contain forbidden backslashes, covering backslash separators, Windows-absolute syntax and UNC syntax respectively; \"dir//file\" contains a forbidden repeated slash; and \"..\", \"../file\", \"dir/../file\", and \"dir/..\" contain forbidden complete parent-directory segments in sole, leading, embedded and trailing positions. Even \"dir/../file\" is rejected rather than resolved to another path. These expectations match goal_validation.go and contracts/v1/common.schema.json#/definitions/CommitPath; docs/design/contracts.md requires artifact paths to bind exact Git tree paths without host-filesystem normalization. The raw coordinator event stream records this named test running and passing once, with all 13 subtests passing and no skips or failures; the stored validator output and test-binary listing corroborate both required test names. Scope verification found only the permitted new test file, with production code, existing tests and gate configuration unchanged. A read-only invocation of the evaluator's require_current_subject recomputed the current source identity and changed-path set, matching the sealed subject and manifest exactly. I also verified the recorded attempt, route and gate-artifact digests."
+  },
+  "findings": [],
+  "gate_weakening": false,
+  "reviewer": {
+    "model_id": "gpt-6.1-sol",
+    "session_ref": "01a1e611-3cdf-7460-8213-d55370063a4e"
+  },
+  "routes_sha256": "sha256:c4c2d8452b725cc0b782035a30130aafb4b01291cc280043365434b2006959b9",
+  "subject_hash": "sha256:9301f14f2a6f1f51541a4bd3f730eed4a5773a5b22d02a2d9130a1052f278824",
+  "verdict": "pass",
+  "worker": {
+    "model_id": "gpt-6.1-sol",
+    "session_refs": [
+      "01a1e60e-04c7-75ca-a1ec-c28c180f1501"
+    ]
+  }
+}

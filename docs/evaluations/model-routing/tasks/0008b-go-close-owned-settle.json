@@ -1,0 +1,29 @@
+{
+  "task_id": "0008b-go-close-owned-settle",
+  "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "language": "go",
+  "risk_class": "native-ownership-settlement",
+  "workflow": "reuse_existing",
+  "outcome": "Strengthen the Windows containment close proof in daemon/internal/platform. Today jobContainment.Close reports a successful stop once JobObjectBasicAccountingInformation.ActiveProcesses reaches zero; the recorded intermittent failure of TestCloseStopsOwnedChildAfterLeaderExit shows that this accounting sample does not by itself establish that an owned process has stopped running. Before Close reports success, every process the Job Object reported owning must be confirmed no longer running, bound to that process's creation-time identity so a recycled PID cannot satisfy the confirmation, within the existing bounded close deadline; Close must fail closed when an observed owned process cannot be confirmed settled before that deadline. Preserve the existing stop-receipt, helper-release, idempotency, retry and error-preservation behavior, and every existing assertion: the package's baseline tests are unmodifiable and already drive Close through its job-call seams with non-real job handles, so Close must keep its current observable behavior for those fixtures. The change stays bounded to the Windows close proof plus the required coverage; no new daemon-wide mechanism, scheduler or second authority may be introduced.",
+  "explanations": [
+    "Explain why an empty Job Object accounting sample does not by itself prove that an owned process has stopped running, and which recorded observation motivated this change.",
+    "Explain how the confirmation is pid-reuse-safe and bounded, and what Close does when settlement cannot be established before the deadline.",
+    "Explain how the required coverage drives the production close path deterministically (which seam, which injected sequence) instead of duplicating the proof inside the test."
+  ],
+  "allowed_paths": ["daemon/internal/platform/process_windows.go", "daemon/internal/platform/process_owned_settle_windows_test.go"],
+  "protected_paths": ["daemon/internal/platform/process_windows_test.go", "daemon/internal/platform/process_unix.go", "daemon/internal/platform/process_unsupported.go", "daemon/internal/platform/containment_supervisor_windows.go"],
+  "gates": [
+    {
+      "id": "platform-tests",
+      "cwd": "daemon",
+      "argv": ["go", "test", "-json", "-count=1", "./internal/platform"],
+      "go_tests": ["TestCloseFailsClosedWhenOwnedProcessSettlementIsUnproven", "TestCloseConfirmsOwnedProcessSettlementBeforeSuccess"],
+      "go_package": "github.com/wxxb789/symmetry/daemon/internal/platform"
+    },
+    {
+      "id": "platform-vet",
+      "cwd": "daemon",
+      "argv": ["go", "vet", "./internal/platform"]
+    }
+  ]
+}

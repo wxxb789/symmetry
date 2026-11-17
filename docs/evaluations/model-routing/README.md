@@ -24,6 +24,7 @@ Checks and review imports are trusted coordinator observations, not worker autho
 ## Frozen task and exact Subject
 
 The [positive task](tasks/go-subject-receiver.json) and [escalation task](tasks/go-linux-final-scan.json) are runnable examples on real repository code.
+The 0008 two-arm class evaluation adds [go-boundary-validator-coverage](tasks/0008b-go-boundary-validator-coverage.json) (established-pattern boundary-validator regression coverage) and [go-close-owned-settle](tasks/0008b-go-close-owned-settle.json) (Windows containment ownership settlement), each run once per workflow arm against the same frozen bytes.
 Task JSON declares base commit, outcome, required explanations, allowed paths, protected paths and exact argv gates.
 The runner uses no shell command interpolation.
 Existing tests, acceptance assets and declared guards remain protected; a new task contract is required for a legitimate protected-asset change.
@@ -107,6 +108,21 @@ Host prerequisites for the Elixir carrier (measured, not assumed): a real Postgr
 
 `prepare --environment-json PATH` records the measured execution surface of the run (host, toolchain, PostgreSQL identity and route, database, bundle digest) under the run record's `environment.measured`, which every receipt row then states. Keys and values are validated, secret-shaped names are refused, and each recorded value has every host-specific absolute path these patterns recognise — drive-rooted and UNC Windows paths, and POSIX home, root and temp roots — replaced by a `sha256:` token, so from this revision onward a record does not republish a disposable root or the operator profile. The four committed `0008c` receipts predate the redaction and keep their recorded roots unedited because their digests are bound (see `docs/TODO.md`). Recording a credential value is a policy prohibition on the caller: the guard refuses secret-shaped *names*, not arbitrary values, so an ordinary-looking secret cannot be detected by shape.
 
+## Two-arm class evaluation (0008b)
+
+A class evaluation runs one frozen task under two workflow arms and derives one receipt per arm. The arms are intended to differ only in which configured route does the work; as run, the 0008b mixed arm additionally carries one coordinator-caused reviewer invocation that was discarded and charged as its `failed_attempt` phase (published with an explicit verdict and reason in `0008b-go-bounded-regression-mixed.review-attempts.json`):
+
+- **mixed arm**: the configured lightweight worker route implements; the configured strong route verifies and reviews in a separate invocation.
+- **strong-only arm**: the configured strong route implements, and the same configured strong route reviews in a separate invocation. That is invocation separation with one model family, not model diversity.
+
+Both arms get the same frozen task bytes, the same allowed and protected paths, the same gate argv, the same approval mode and wall-clock budget, and the same worker packet text; the packet differs only in the workspace path it names. Packets and budgets are coordinator-private and not exported, so the freeze is a coordinator observation, not a published artifact. Reviewer packets are necessarily not identical across arms: each embeds that arm's own sealed subject, checkpoint and gate evidence, and the candidate policy's `limitations` states that prompt hashes are not comparable across arms. External route labels and served model identities come from configuration and observed sessions, never from a worker's self-description.
+
+A rejected review is not acceptance evidence: when the independent reviewer returns `fail` with open findings, the arm keeps the failing revision and its review in the private store, the findings go back to the implementing route as failing evidence in one bounded repair round, and the repaired revision needs a fresh seal, gate execution and a fresh reviewer invocation. The failing review session is charged in the run's usage ledger, and the repair round is the run's recorded `repair_count`.
+
+Every discarded or superseded reviewer invocation is published as an attempt record with an explicit verdict and reason, not left to coordinator prose: the class B arms publish `<class>-<arm>.review-attempts.json`, and the class A mixed arm publishes its discarded first review the same way. The candidate policy binds each published attempt record with `review_attempts_ref` and `review_attempts_sha256`.
+
+Seal the class list and both task files before the first arm starts, and publish the frozen digests with the receipts. Per-class results live in this directory as `<class>-<arm>.json` receipts, their review records, the derived `0008b-policy.json` candidate record and `0008b-controls.json`; the narrative closure record stays under `docs/evidence/`.
+
 ## Receipt and cost semantics
 
 The runner derives task rows with the quality policy's fixed fields: `task_id`, `base`, `head`, `language`, `risk_class`, `workflow`, `model_ids`, `prompt_hashes`, nullable input/output/cached tokens, reported/estimated cost with provenance and price version, wall/review time, repair count, `accepted`, reviewer findings, later defects, environment and evidence references.
@@ -136,6 +152,7 @@ From the repository root:
 ```sh
 python scripts/ci/test-model-routing-evaluation.py
 python scripts/ci/test-model-routing-omp-usage.py
+python scripts/ci/test-model-routing-record-sanitize.py
 python scripts/ci/test-linux-v2-source-subject.py
 ```
 
@@ -147,7 +164,7 @@ go test ./...
 ```
 
 The focused Go task also requires exact named-test execution through the frozen task gate.
-CI's existing daemon job runs both new Python regression suites sequentially before the ordinary Go suite; these deterministic parser/runner controls need no model credentials and do not replace the live evaluation records.
+CI's existing daemon job runs the Python regression suites (evaluation runner, OMP usage extraction, record path sanitisation, Linux v2 contracts) sequentially before the ordinary Go suite; these deterministic parser/runner controls need no model credentials and do not replace the live evaluation records.
 Linux native/race, Control, wire and browser gates are neither removed nor reinterpreted by this tooling.
 Record unavailable or inapplicable gates rather than claiming they passed.
 
@@ -155,8 +172,10 @@ Record unavailable or inapplicable gates rather than claiming they passed.
 
 Each run needs a receipt plus the exact checks, independent review and any escalation handoff.
 Keep sanitized task rows here and narrative closure records under `docs/evidence/`, following the existing executable-witness convention.
+When capturing argv or output into a published record, render host-specific absolute paths with `scripts/ci/model-routing-record-sanitize.py` (a disposable root becomes the `<disposable-root>` token, other absolute paths become `path-sha256:<digest>`), and record the rendering in the record as `0008b-controls.json` does in its `record_rendering` block.
 Rejection controls may deliberately corrupt a disposable copy of a real run; they are controls, not additional live-model samples.
 Parser regression fixtures establish parser behavior only and never replace the real Go/Elixir work required by the goal.
+The 0008b class evidence is [go-bounded-regression mixed](0008b-go-bounded-regression-mixed.json) and [strong-only](0008b-go-bounded-regression-strong.json), [go-native-ownership-settlement mixed](0008b-go-native-ownership-settlement-mixed.json) and [strong-only](0008b-go-native-ownership-settlement-strong.json), their review records, the [candidate policy record](0008b-policy.json) and the [refusal controls](0008b-controls.json); the narrative closure record is [`docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`](../../evidence/goal-0008b-go-model-routing-2026-11-17.md).
 
 ## Explicit local limits
 

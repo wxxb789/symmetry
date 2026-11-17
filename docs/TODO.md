@@ -78,6 +78,22 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
       green in run 43715830442 and on rerun job 132834151127. Revalidate the close/settle
       window; keep the survived-child assertion.
+- [ ] Investigate the load-sensitive omp harness failure
+      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
+      `daemon/internal/harness/omp` (`adapter_final_message_test.go:44`,
+      `context deadline exceeded` after 1.38 s). Observed once during goal 0008b's
+      repository-wide `go test ./...` run (1,797 top-level tests: 1,740 pass,
+      56 skip, 1 fail) while that package alone then reported `ok` at 4.631 s,
+      and not reproduced in isolation: `-count=3` passed on the unchanged base
+      clone `5c2e0ada` and on the working tree. Revalidate the deadline budget
+      under load; keep the assertion. Closed on `main` by `8082317` (#44): 89 wall-clock budget
+      sites across 16 test files now point at one documented `testHangGuard` per package
+      (`const testHangGuard = 30 * time.Second`, "turns a hung harness into a failure; never a
+      statement about how fast the adapter should be"), no assertion was removed or weakened, and in
+      `omp` a failing wait now names the outstanding step (`mustSettle(t, "WaitTurn", err)`) so a
+      guard expiry can no longer be reported as this test's behavioural failure. The observation
+      above stays as the record; the open action does not.
+
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
       `control/test/symmetry_control/integrations_test.exs:1161` (`assert
@@ -278,3 +294,74 @@ Manual tasks and deferred maintenance discovered during scoped changes.
   prints a digest, compares nothing and cannot fail, and no job or script invoked it. The recorded
   digests in `docs/evidence/goal-0007c-safe-work-planning-2026-11-16.md` name it as the algorithm of
   record, so that receipt can no longer be recomputed from the tree; the file remains in git history.
+
+## Open findings from the 0008b model-routing review
+
+- [ ] Revalidate the open class B finding against
+      `daemon/internal/platform/process_windows.go`: the non-durable
+      `containmentSupervisorStopLease` branch of `Close` caches only the handle
+      release, so after a settlement failure a repeated `Close` can return nil
+      without the proof (HEAD `:535-539`; the sibling `!durableAuthority` branch
+      sits at `:506`). Observed at medium severity as `open` in both 0008b class B
+      reviews (`0008b-go-native-ownership-settlement-{mixed,strong}.review-attempts.json`,
+      findings F4/F2, repaired-revision coordinates `:601-605`/`:524-526` and
+      `:607-612`/`:509-511`) and in the candidate policy's negative findings. The
+      branch predates the 0008b revision; it is reachable through the native
+      Go-test-binary `AttachProcess` route, which returns
+      `noopContainmentSupervisorLease` (`containment_supervisor_windows.go:934`),
+      and the production daemon's durable-authority path is not affected. Keep the
+      finding visible; fix or re-scope in a separate maintenance change.
+
+## Record and documentation hygiene
+
+- [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
+      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
+      instead of rewriting history:
+      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
+      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
+      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
+      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
+      records with that helper and records the rendering in the record
+      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
+      record's quoted digest consistent when the older records are re-published.
+
+- [ ] Decide whether record cleanliness needs an enforced gate, and keep the sanitising
+      tool's argv/output scope with the 0008a re-publish. `scripts/ci/model-routing-record-sanitize.py`
+      exposes `--check` (write nothing; exit 1 while a host absolute path remains), but no CI
+      step invokes it: CI runs only the unit suite
+      (`python3 ../scripts/ci/test-model-routing-record-sanitize.py`,
+      `.github/workflows/ci.yml:1138`), so published-record cleanliness rests on those unit
+      tests (`--check` cases at `scripts/ci/test-model-routing-record-sanitize.py:89-98`)
+      plus the manual render step documented at `docs/evaluations/model-routing/README.md:163`.
+      The README already scopes the renderer to argv/output capture, which is also its safety
+      boundary: it rewrites every absolute path it finds, including path fixtures quoted
+      inside recorded prose — harmless for `argv`/`output` fields (the `path-sha256:<digest>`
+      token is a deterministic function of the path, so the rendered record stays reproducible
+      and unambiguously mapped; note `output_sha256` binds the rendered text, not the
+      pre-render bytes) but corrupting for an
+      explanation whose meaning depends on the quoted path. Decide whether to add a
+      `--check`-style gate over the committed records; the future 0008a re-publish should
+      repeat the argv/output-only scope and record any prose fixture it deliberately leaves
+      rendered.
+
+- [ ] Revalidate the stale 0008-series prerequisite text:
+      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
+      and 0008c results" while the 0008b candidate policy is produced and awaiting
+      the owner's verdict. Pre-existing and not introduced by the 0008b evidence
+      change; correct the wording once the 0008b verdict lands. (The `0006h`
+      index-row dead link above is the same class of stale documentation and is
+      already tracked.)
+
+- [ ] Decide whether the 0008b receipts need re-production under the current shared runner. They bind
+      `scripts/ci/model-routing-evaluation.py` as produced —
+      `sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56` — while `main`'s #42
+      extended that runner for the Elixir carrier
+      (`sha256:8ae5b2b6ba961924f7702aa4181e8488913b4d63171922bf1cf760e62142db50`), so the current bytes
+      refuse the 0008b records for submission at `$.evidence.tooling_sources.model-routing-evaluation.py`,
+      exactly as they refuse the committed 0008c receipts (see the model-routing entry above). The
+      producing bytes stay reachable from the annotated tag `0008b-produced-tooling` (commit `253a701`,
+      the head this branch was rebased from, tagged and pushed so the reference survives the rebase), and
+      the post-rebase audit recomputation reports exactly those four
+      tooling-digest mismatches and nothing else (`checks: 99, failures: 4`). Re-execute the runs if a
+      future submission requires receipts produced by the current bytes; never re-derive by editing a
+      receipt.

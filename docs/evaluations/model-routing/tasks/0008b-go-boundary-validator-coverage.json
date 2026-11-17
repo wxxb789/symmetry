@@ -1,0 +1,28 @@
+{
+  "task_id": "0008b-go-boundary-validator-coverage",
+  "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "language": "go",
+  "risk_class": "bounded-regression",
+  "workflow": "reuse_existing",
+  "outcome": "Add real production boundary-validator regression coverage in daemon/internal/protocol: pin the documented wire-monetary contract of ValidateMicroUSD and the documented rejection set of validateCommitPath. Do not change production code, existing tests or gate configuration. The new coverage must call the actual production functions; a test that reimplements their logic, asserts on a copy, or only pins text is not coverage.",
+  "explanations": [
+    "Explain which accepted and rejected wire-monetary values the assertions pin, and why the signed-bigint bound is a transport requirement rather than a formatting preference.",
+    "Explain why each rejected commit path is not a normalized relative commit path, and which normalization rule each case would violate."
+  ],
+  "allowed_paths": ["daemon/internal/protocol/goal_boundary_validator_test.go"],
+  "protected_paths": ["daemon/internal/protocol/goal_validation.go", "daemon/internal/protocol/goal_validation_test.go"],
+  "gates": [
+    {
+      "id": "protocol-tests",
+      "cwd": "daemon",
+      "argv": ["go", "test", "-json", "-count=1", "./internal/protocol"],
+      "go_tests": ["TestValidateMicroUSDEnforcesWireMonetaryContract", "TestValidateCommitPathRejectsUnnormalizedPaths"],
+      "go_package": "github.com/wxxb789/symmetry/daemon/internal/protocol"
+    },
+    {
+      "id": "protocol-vet",
+      "cwd": "daemon",
+      "argv": ["go", "vet", "./internal/protocol"]
+    }
+  ]
+}
