@@ -313,12 +313,16 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       its verdict from wall-clock waits sized for an idle host (`browser/playwright.config.mjs`:
       `timeout: 60_000`, `expect.timeout: 30_000`), so any revision can be reported red without a
       code change, and neither a red full run nor a green isolation pass can be read as the surface's
-      own property. The same signature reaches this delivery's own deterministic suite (a restored
-      `scrollTop` observed as 0 in one case, a render wait timing out in another, different cases in
-      different runs, each passing in isolation), so the class is not confined to the pre-existing
-      suites. Hosted CI does not reproduce it because the job is not saturated the same way — the
-      runner gives the suite a dedicated machine — so a green hosted run neither explains nor retires
-      a red local run, and a local failure must not be cited as a regression without the isolation
-      pass beside it. The fix belongs to the observations (waits that end when the served response or
-      the rendered state ends, instead of a load-sized maximum) or to a serialized suite on a freed
-      host; either way it must be measured in both directions and name the bytes it was measured on.
+      own property. The class is not confined to the pre-existing suites: a render wait in this
+      delivery's own deterministic suite timed out once under load too, and the same load exposed a
+      real defect in it — a restored `scrollTop` observed as 0 in its round-trip and scope-switch
+      cases — which this delivery repairs (`frontend/src/features/chat/chat.tsx`: a browser pinning
+      `scrollTop` at the pane's maximum under a replaced transcript is no longer recorded as the
+      reader's own move), with the regression test, the falsification and the re-measured suite rows
+      in the receipt; the timeout half is this class and stays open. Hosted CI does not reproduce it
+      because the job is not saturated the same way — the runner gives the suite a dedicated machine —
+      so a green hosted run neither explains nor retires a red local run, and a local failure must not
+      be cited as a regression without the isolation pass beside it. The fix belongs to the
+      observations (waits that end when the served response or the rendered state ends, instead of a
+      load-sized maximum) or to a serialized suite on a freed host; either way it must be measured in
+      both directions and name the bytes it was measured on.

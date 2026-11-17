@@ -24,6 +24,8 @@ value it records.
 | This delivery, repaired (source) | `sha256:d52d250677296c9b914806a381920fc6a2dd31af60bb688995539e377737031a` over the repaired 45-path manifest (the pre-repair 43 paths plus `control/lib/symmetry_control/orchestration.ex` and `control/lib/symmetry_control/workspaces.ex`); every number recorded by the repair round below was produced on it |
 | Rebase target | `706174ecda9504c6c1d991ddd4f862ff3bf47f0c` — "test(omp): remove the wakeup race from the sink-failure test (#45)"; the main-line revision the branch was rebased onto (main after #37, #39, #40, #42, #43, #44 and #45) |
 | This delivery, rebased onto the current main (source) | `sha256:2a10b33e0ea248e178d2f000c012bb6c505123d4409e43560377a3ce122e1e58` over the same 45-path manifest: the path set is unchanged and 20 of the 45 paths differ in content from the repaired revision (`.github/workflows/ci.yml`, `browser/README.md`, `contracts/fixtures/manifest.json`, `contracts/generated/effect/index.ts`, `contracts/generated/ts/index.ts`, `contracts/scripts/check-effect.mjs`, `contracts/scripts/check.mjs`, `contracts/scripts/generate.mjs`, `contracts/ts/index.ts`, `control/lib/symmetry_control_web/portal_session.ex`, `control/lib/symmetry_control_web/router.ex`, `control/test/symmetry_control/goals/contract_fixture_manifest_test.exs`, `control/test/symmetry_control_web/portal_session_test.exs`, `daemon/internal/contracts/generated.go`, `daemon/internal/contracts/schema_bundle.json`, `frontend/src/app/application.ts`, `frontend/src/app/router.test.tsx`, `frontend/src/app/router.tsx`, `frontend/src/services/api.ts`, `frontend/src/styles.css`); the rebase section below names every resolution and every row re-measured on it |
+| This delivery, with the scroll-restore repair (source) | `sha256:dc8cdfc540063973b92cf48718e1ca970a1c5d69b13edfd2135eadc7eefcd55a` over the same 45-path manifest, differing from the rebased revision in exactly `frontend/src/features/chat/chat.tsx` and its regression test `frontend/src/features/chat/chat.test.tsx`; its rows are S1–S5 below |
+| This delivery, with the scope-switch offset capture (source) | `sha256:370c87a06ddfb553337945fc72744f67fc55fae8f8b84d63025a6681d89fb3b7` over the same 45-path manifest, differing from the scroll-restore-repaired revision in exactly `frontend/src/features/chat/chat.tsx` and its regression test `frontend/src/features/chat/chat.test.tsx`; its rows are S6–S10 below, and every row written for an earlier revision keeps naming that revision |
 | Deliverable shape | one independently mergeable PR on top of the rebased base (`706174e`); the branch was rebased in place, so its local SHAs were rewritten (nothing pushed, no remote or other worktree touched), tree left for verification |
 
 Reproduction (PowerShell 7, repository root):
@@ -385,6 +387,92 @@ re-run), check 13's three-suite full run (only its isolation set was re-run, B3)
 work-detail matrix, R3's live scoped-conversation walk, R6a–R6c's red-before demonstrations, and R5's
 frontend values (re-run in B4). None of them is restated here as a property of the rebased revision.
 
+## Scroll-restore repair (2026-11-17)
+
+The deterministic scoped-conversation suite lost a restored offset on the rebased revision (B2:
+`Expected: 40` / `Received: 0` at the run-scope round trip three times and `Expected: 120` /
+`Received: 0` at the mobile scope switch once, while the same cases passed in isolation and in
+sequence). The pane is one element for every scope, so a scope switch replaces the transcript under
+it, and Chromium then pins `scrollTop` at the pane's own maximum and raises a scroll event exactly
+like a reader's own move. Instrumented runs of the pre-fix build did **not** reproduce a failure — the
+scroll probe (the offset the pane owed, the offset the scope had recorded, the value the browser
+reported at every write, commit and scroll event, and where a restore was settled) stayed green in
+three suite-context runs, `.tmp/rebase/dbg-run{1,2,5}.log` — so the mechanism was confirmed in a
+deterministic reproduction of that pane state in a scratch copy of the delivered component, whose
+probe read
+
+```
+scroll owed=None recorded=40 top=0 sh=96 ch=160
+```
+
+— the pane pinned under a replacement it cannot hold (`sh` 96, `ch` 160), the pinning recorded as this
+scope's position (`recorded` 40 → 0) and, whenever a restore was still owed, settled there, so
+nothing re-asserted the offset and the pane stayed at 0 (`.tmp/rebase/dbg-vitest.log`).
+
+The fix is `frontend/src/features/chat/chat.tsx:440-457` (`#chat-scroll`'s `onScroll`): a pane pinned
+at its own maximum, below an offset it cannot hold, was clamped and not scrolled — the offset stays
+this scope's, the restore stays owed, and the next commit re-asserts it once the layout can hold it.
+The signal is what the pane itself reports (its own value and its own scrollable range), never a
+sleep, a longer timeout or a relaxed assertion; a reader's own move inside such a pane sits below
+that maximum and is still recorded, and still takes over.
+
+| # | Command | Observed |
+| --- | --- | --- |
+| S1 | Red before / green after (unit): the new regression test `frontend/src/features/chat/chat.test.tsx` — "keeps a scope's offset when the browser pins the pane under a replaced transcript" — against the unmodified source in a scratch copy, then against this revision | scratch copy: exit 1, `AssertionError: expected +0 to be 40` (`.tmp/rebase/dbg-vitest3.log`); this revision: exit 0, `Tests 24 passed (24)` (`.tmp/rebase/fix-vitest-chat3.log`). The file's second new case ("still records a reader's own move inside a pane too short for the scope's offset") is a boundary guard for the clamp rule: it passes on both revisions and pins that a reader's own move is never read as the browser's pinning |
+| S4 | Source identity on the repaired tree: the reproduction procedure above with the rebased base | 45 delivered source paths and `sha256:dc8cdfc540063973b92cf48718e1ca970a1c5d69b13edfd2135eadc7eefcd55a` (revision table), differing from the rebased revision in exactly `frontend/src/features/chat/chat.tsx` and `frontend/src/features/chat/chat.test.tsx` |
+| S5 | Gates on the repaired revision (pinned toolchains): `pnpm --filter @symmetry/frontend test`, `typecheck`, `lint`, `build`, `pnpm contracts:check` | test exit 0 — `17 passed (17)` files and `297 passed (297)` tests, the union of both sides' suites plus this repair's two cases (`.tmp/rebase/fix2-fe-test-full.log`); typecheck exit 0; lint exit 0; build exit 0 with the staged `control/priv/static/portal` assets being this tree's (`index-CRg_TvDf.js`); `contracts:check` exit 0 — `Validated 21 Draft 7 schemas and 240 fixtures`, `Effect decoded all 240 raw fixtures`, `Generated contract DTOs are up to date.` |
+
+### The scope-switch offset capture (2026-11-17)
+
+The suite-context failures that survived the clamp rule above were instrumented rather than guessed
+at. `.tmp/rebase/diag-run1.log` failed `browser/tests/portal-chat.spec.mjs:189` (`Expected: 120` /
+`Received: 0`) on the desktop project, and because that run served a probe build of the component
+(the offset each scope owed, the offset it had recorded, and the pane's own
+`scrollTop`/`scrollHeight`/`clientHeight`/row count at every commit, write and scroll event), the
+failing attempt's Playwright trace carries the whole sequence —
+`.tmp/rebase/trace-diag1/portal-chat-Scoped-convers-3888f-rites-another-scope-s-draft-desktop-chromium-repeat1/trace.zip`,
+member `1-trace.trace`, 37 probe entries:
+
+```
+t=2137 render    key=workspace recorded=40 top=120 sh=4090 rows=44
+t=2146 key-write key=workspace wanted=40   wrote=40 stuck=True
+t=2375 render    key=project   recorded=0  top=40  sh=4645 rows=50
+t=2386 key-write key=project   wanted=0    wrote=0  stuck=True sh=4090 rows=44
+t=2658 key-write key=project   wanted=0    wrote=0  stuck=True
+```
+
+The project scope's 120 never appears in the trace as a scroll event, and its `recorded` offset is 0
+from the moment it was left on. Chromium coalesces one scroll event per frame: the case positions
+the pane (`setScroll`, `browser/tests/portal-chat.spec.mjs:74`) and requests the scope switch in its
+next action, so the commit that replaced that scope's transcript rewrote `scrollTop` before the
+browser ever reported 120 — the offset the scope was left with was never observed by the surface at
+all. The arriving pane was tall (`sh=4090`), so the restore that followed was not a clamp: 0 stuck,
+and no clamp rule could have read a signal there. This is why the earlier repair's rule (and any
+"re-assert until the layout is stable") cannot reach this class: the value that would be re-asserted
+was the wrong one to begin with.
+
+The fix takes the surface's own switch intent as the observation point:
+`frontend/src/features/chat/chat.tsx:333-347` (`rememberLeavingScope`), called from `changeScope` and
+`changeRun` before they navigate — the pane still holds the departing scope's own transcript there,
+so its live `scrollTop` is that scope's position. A pane pinned below the offset the scope holds is
+the replacement's clamp and not a position the reader chose: it stays owed and is not recorded. The
+classification is the one `onScroll` already used, now shared as `panePinnedBelowOffset`
+(`chat.tsx:585-593`). No sleep, no longer timeout and no relaxed assertion is involved; in-page links
+keep relying on the pane's own scroll events, which is right for user-driven navigation.
+
+| # | Command | Observed |
+| --- | --- | --- |
+| S6 | Red before / green after (unit, deterministic): the new case `frontend/src/features/chat/chat.test.tsx` — "keeps the offset a scope was left with when the pane's own positioning was never reported as a scroll" (a programmatic `scrollTop` write in the same frame as the scope switch, which jsdom never reports as a scroll) | before this revision's source edit: exit 1 — `Tests 1 failed │ 24 passed (25)`, `AssertionError: expected +0 to be 120` (`.tmp/rebase/fix3-vitest-red.log`); with the capture: exit 0 — `Tests 25 passed (25)` (`.tmp/rebase/fix3-vitest-green.log`) |
+| S7 | Red before / green after (browser, deterministic): the same sequence driven in one task through the surface's own controls (`pane.scrollTop = 120` and the scope `<select>`'s `change` in a single `page.evaluate`, so the browser cannot have reported the position) against the pre-capture build and against this revision, both on this host | pre-capture build (port 4036, scratch tree): exit 1 — `Expected: 120` / `Received: 0` (`.tmp/rebase/falsify-capture.log`); this revision (port 4035): exit 0 — `1 passed (21.4s)` (`.tmp/rebase/control-capture.log`) |
+| S8 | Suite-context repetitions of the deterministic scoped-conversation suite on this revision (`playwright test tests/portal-chat.spec.mjs`, both projects, port 4035) | exit 1 — `10 passed / 2 failed` (mobile: a console-500 assertion on the cursor case and a 30 s render wait for the surface's Refresh control, `.tmp/rebase/fix3-run-G.log`); exit 1 — `11 passed / 1 failed` (mobile: the uncertain-send case at a 60 s timeout, its console list diff, `.tmp/rebase/fix3-run-H.log`); exit 0 — `12 passed` (`.tmp/rebase/fix3-run-I.log`). **No offset assertion failed in any of the three** (no `Expected: 120`/`Expected: 40` in those logs), where the pre-capture revision lost the offset at `:189`, `:570` and `:106`; the two remaining failures are this host's foreign-dev-server 500 pages |
+| S9 | Isolation and gates on this revision: the mobile project alone, then `typecheck`, `lint`, the frontend suite, `build` and `contracts:check` (pinned toolchains) | isolation exit 0 — `6 passed`, the mobile project's whole set (`.tmp/rebase/fix3-isolated.log`); typecheck exit 0 (no diagnostics); lint exit 0; frontend suite exit 0 — `17 passed (17)` files, `298 passed (298)` tests (`.tmp/rebase/fix3-fe-test.log`); build exit 0 with this tree's staged assets (`control/priv/static/portal` → `index-3Ea3GXnf.js`, whose SHA-256 matches the file the run's server answers at `/portal/assets/index-3Ea3GXnf.js`); `contracts:typecheck`, `contracts:test`, `contracts:check` and `contracts:check-effect` each exit 0 |
+| S10 | Source identity on this revision: the reproduction procedure above with the rebased base | 45 delivered source paths (`docs/**` excluded) and `sha256:370c87a06ddfb553337945fc72744f67fc55fae8f8b84d63025a6681d89fb3b7` (revision table), differing from the scroll-restore-repaired revision in exactly `frontend/src/features/chat/chat.tsx` and `frontend/src/features/chat/chat.test.tsx` |
+
+Goal clause 1 (each scope's draft, selection and scroll survive a switch, and a background update
+never writes another scope's state) is demonstrated on this revision by S6–S9 and S10; B2 names the
+revision whose attempts failed before any repair, S1–S5 name the clamp rule's own revision, and B2's
+isolation passes remain the rebased revision's own rows.
+
 ## Limitations
 
 - **The rebased revision's rows are B1–B4; everything else keeps the revision it names.** The rebase
@@ -396,6 +484,21 @@ frontend values (re-run in B4). None of them is restated here as a property of t
   suite, the three-suite browser full run, the live work-detail matrix and the live
   scoped-conversation walk were not re-run on the rebased revision, and the rebase section names each
   of them.
+- **The scroll-restore-repaired revision's rows are S1–S5** (the scroll-restore section). Its
+  suite-context attempts were **not** all green: of six runs, two ended `12 passed`, one `10 passed
+  / 2 failed`, two `11 passed / 1 failed` and one `11 passed / 1 failed` with a console-500 failure
+  on a seeded read, so no green suite is claimed there — the offset losses among them are the ones
+  the capture section below now explains. Its isolation pass (the five mobile cases) was green
+  (exit 0), and its digest and gate rows are that revision's own.
+- **The scope-switch-capture revision's rows are S6–S10** (same section): the deterministic unit and
+  browser pairs (S6, S7), the suite-context repetitions and the isolation/gate rows (S8, S9) and its
+  source identity (S10). Failures that remain anywhere in its suite-context runs are environment
+  failures on this host — foreign dev servers from earlier sessions share this worktree's
+  `control/_build` and answer some requests with a non-JSON error page (`# unhandled …`), which is
+  what a console-500 assertion or a 30 s render wait records — and never an offset assertion. The
+  whole Control suite, the three-suite browser full run, the live work-detail matrix and the live
+  scoped-conversation walk were not re-run on this revision, so every row that names them keeps
+  naming the revision it was produced on.
 - **Owner acceptance is not supplied.** The goal's own Owner-acceptance
   paragraph asks the owner to review rendered workspace-, project- and
   run-scoped conversation with a work-item target on actual work; a model

@@ -5,6 +5,17 @@ Rebase note (2026-11-17): the branch was rebased onto
 `706174ecda9504c6c1d991ddd4f862ff3bf47f0c` (#37, #39, #40, #42, #43, #44 and #45) before its PR
 opened; the plan's steps are unchanged by that rebase, and the receipt's own rebase section records
 the per-file resolutions and the rows re-measured on the rebased revision.
+Repair note (2026-11-17): the rebased revision's deterministic suite exposed a real defect behind its
+intermittent `Expected: 40`/`120` / `Received: 0` failures — a browser-pinned `scrollTop` recorded as
+the reader's own move in `frontend/src/features/chat/chat.tsx`. The plan's scope is unchanged; the
+receipt's scroll-restore section records the mechanism, the fix, the falsification and the rows
+re-measured on the repaired revision.
+Capture note (2026-11-17): the suite-context failures that survived that repair were instrumented
+rather than guessed at, and their trace shows the other half — Chromium coalesces a scroll event per
+frame, so a scope positioned and left in the same frame never reports its offset at all, and the
+scope's own switch intent is the point where the pane still holds it. The plan's scope is unchanged;
+the receipt's scroll-restore section records the instrumented sequence, the capture in
+`frontend/src/features/chat/chat.tsx` and the rows re-measured on that revision.
 Contract: `docs/goals/0007g-scoped-engineering-chat.md`. Shape reference: 0007f
 (`docs/plans/2026-11-16-0007f-runtime-control-plan.md`,
 `docs/evidence/goal-0007f-runtime-control-2026-11-16.md`).
