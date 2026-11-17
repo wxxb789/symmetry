@@ -68,27 +68,30 @@ func TestCodexProbeKnownVersionHelpAndSchemaFailsClosed(t *testing.T) {
 	}, schemaDigest: CodexTestedSchemaHash}
 
 	capabilities, err := probeCodexExecutableWithRunner(context.Background(), "codex", runner)
-	if !errors.Is(err, ErrNativeUnverified) {
-		t.Fatalf("probe error = %v, want ErrNativeUnverified", err)
-	}
-	if capabilities.Kind != KindCodex || capabilities.NativeVersion != testedCodexVersion || !capabilities.VersionKnown {
-		t.Fatalf("capabilities identity = %+v, want Codex %s with known version", capabilities, testedCodexVersion)
-	}
-	if !capabilities.TransportVerified || capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
-		t.Fatalf("capabilities = %+v, want help-only transport evidence and no operations", capabilities)
-	}
-	if got, want := runner.calls, []string{"--version", "app-server --help"}; !sameStrings(got, want) {
-		t.Fatalf("runner calls = %#v, want %#v", got, want)
-	}
+	assertKnownVersionProjection(t, capabilities, err, knownVersionProjection{
+		provider:  "Codex",
+		kind:      KindCodex,
+		version:   testedCodexVersion,
+		wantError: ErrNativeUnverified,
+		calls:     runner.calls,
+		wantCalls: []string{"--version", "app-server --help"},
+	})
 }
 
-func TestCodexProbeRejectsNonExactVersionOutput(t *testing.T) {
+// The exact version gate has one owner. The registry probe seam and the codex
+// adapter both reject a version through ValidateCodexVersionOutput, so the
+// non-exact transcripts are asserted once against that validator and once
+// through the registry seam that must stop before the help probe.
+func TestProbeRejectsNonExactVersionOutput(t *testing.T) {
 	for _, versionOutput := range []string{
 		"codex-cli " + CodexTestedVersion + "-alpha.1\n",
 		"codex-cli " + CodexTestedVersion + "+build.1\n",
 		"codex-cli " + CodexTestedVersion + " trailing-token\n",
 	} {
 		t.Run(versionOutput, func(t *testing.T) {
+			if version, err := ValidateCodexVersionOutput(versionOutput); !errors.Is(err, ErrUnsupportedVersion) || version != "" {
+				t.Fatalf("ValidateCodexVersionOutput(%q) = (%q, %v), want ErrUnsupportedVersion with no parsed version", versionOutput, version, err)
+			}
 			runner := &codexFixtureRunner{responses: map[string][]byte{"--version": []byte(versionOutput)}}
 			capabilities, err := probeCodexExecutableWithRunner(context.Background(), "codex", runner)
 			if !errors.Is(err, ErrUnsupportedVersion) {

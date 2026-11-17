@@ -828,22 +828,27 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     HTTPStub.verify_shared!()
   end
 
-  test "stale exact unknown caller replays committed success before authentication", context do
-    assert_terminal_replay_after_dispatch_lock(context, :exact, "succeeded", :authentication)
-  end
-
-  test "stale exact unknown caller replays committed failure before authentication", context do
-    assert_terminal_replay_after_dispatch_lock(context, :exact, "failed", :authentication)
-  end
-
-  test "stale generic unknown caller replays committed success before network readback",
-       context do
-    assert_terminal_replay_after_dispatch_lock(context, :generic, "succeeded", :transport)
-  end
-
-  test "stale generic unknown caller replays committed failure before network readback",
-       context do
-    assert_terminal_replay_after_dispatch_lock(context, :generic, "failed", :transport)
+  # The four replay cases share one expectation and differ only in the caller
+  # binding, the committed terminal state, and the injected failure, so one loop
+  # registers one named test per case.
+  for {name, binding, terminal_state, failure} <- [
+        {"stale exact unknown caller replays committed success before authentication", :exact,
+         "succeeded", :authentication},
+        {"stale exact unknown caller replays committed failure before authentication", :exact,
+         "failed", :authentication},
+        {"stale generic unknown caller replays committed success before network readback",
+         :generic, "succeeded", :transport},
+        {"stale generic unknown caller replays committed failure before network readback",
+         :generic, "failed", :transport}
+      ] do
+    test name, context do
+      assert_terminal_replay_after_dispatch_lock(
+        context,
+        unquote(binding),
+        unquote(terminal_state),
+        unquote(failure)
+      )
+    end
   end
 
   test "exact GitHub Goal content mismatch stays unknown and never redispatches", context do
@@ -2261,12 +2266,16 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     refute_receive {:provider_action, _, _, _, _, _, _}, 50
   end
 
-  test "HTTP 5xx mutation failures remain retryable unknowns", context do
-    assert_unknown_mutation_failure(context, "Fail HTTP 503")
-  end
-
-  test "invalid successful mutation responses remain retryable unknowns", context do
-    assert_unknown_mutation_failure(context, "Return invalid success")
+  # Both mutation failures share one expectation and differ only in the fixture,
+  # so one loop registers one named test per fixture.
+  for {name, fixture} <- [
+        {"HTTP 5xx mutation failures remain retryable unknowns", "Fail HTTP 503"},
+        {"invalid successful mutation responses remain retryable unknowns",
+         "Return invalid success"}
+      ] do
+    test name, context do
+      assert_unknown_mutation_failure(context, unquote(fixture))
+    end
   end
 
   test "pre-dispatch authentication failures are definite", context do

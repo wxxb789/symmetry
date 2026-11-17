@@ -580,3 +580,36 @@ func (process *fakeProcess) wasTerminated() bool {
 	defer process.mu.Unlock()
 	return process.terminated
 }
+
+// knownVersionProjection is one provider's expected probe projection once the
+// exact tested version and transport help were recorded. The provider supplies
+// its own fixture, expected constants, and error expectation, so the shared
+// assertion below cannot drift between providers.
+type knownVersionProjection struct {
+	provider  string
+	kind      Kind
+	version   string
+	wantError error
+	calls     []string
+	wantCalls []string
+}
+
+// assertKnownVersionProjection asserts the projection every provider probe must
+// report for that evidence: a known version, verified transport, no native
+// operation, and only the commands that provider's probe issues. Control-surface
+// expectations a provider does not share stay asserted in that provider's test.
+func assertKnownVersionProjection(t *testing.T, capabilities Capabilities, err error, want knownVersionProjection) {
+	t.Helper()
+	if !errors.Is(err, want.wantError) {
+		t.Fatalf("%s probe error = %v, want %v", want.provider, err, want.wantError)
+	}
+	if capabilities.Kind != want.kind || capabilities.NativeVersion != want.version || !capabilities.VersionKnown {
+		t.Fatalf("%s capabilities identity = %+v, want %s %s with known version", want.provider, capabilities, want.kind, want.version)
+	}
+	if !capabilities.TransportVerified || capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
+		t.Fatalf("%s capabilities = %+v, want help-only transport evidence and no operations", want.provider, capabilities)
+	}
+	if !sameStrings(want.calls, want.wantCalls) {
+		t.Fatalf("%s runner calls = %#v, want %#v", want.provider, want.calls, want.wantCalls)
+	}
+}

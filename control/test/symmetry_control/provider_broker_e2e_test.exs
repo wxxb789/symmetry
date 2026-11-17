@@ -196,16 +196,19 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
      ingress_recorder: ingress_recorder}
   end
 
-  test "GitHub Issue reaches GitHub pull request, review, and Actions projection", context do
-    run_provider_flow!(github_case(), context)
-  end
-
-  test "Azure Boards work item reaches GitHub changes and Azure Pipelines projection", context do
-    run_provider_flow!(mixed_provider_case(), context)
-  end
-
-  test "Azure Boards work item reaches Azure Repos, review, and Pipelines projection", context do
-    run_provider_flow!(azure_devops_case(), context)
+  # The three provider flows share one expectation and differ only in their
+  # fixture, so one loop registers one named test per flow.
+  for {name, fixture} <- [
+        {"GitHub Issue reaches GitHub pull request, review, and Actions projection",
+         :github_case},
+        {"Azure Boards work item reaches GitHub changes and Azure Pipelines projection",
+         :mixed_provider_case},
+        {"Azure Boards work item reaches Azure Repos, review, and Pipelines projection",
+         :azure_devops_case}
+      ] do
+    test name, context do
+      run_provider_flow!(unquote(fixture)(), context)
+    end
   end
 
   @tag artifact_validation_e2e: true
