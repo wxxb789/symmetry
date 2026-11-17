@@ -722,3 +722,42 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       log tail is a diagnostic, so whatever it shows (an eager Postgres connection in a boot child, or a first-bind window
       the 30 s retry cannot cover) still has to be fixed from the evidence it now leaves. The retry window, the timeouts and
       every assertion in the step are unchanged; the upload and annotation themselves are only exercised by a real job run.
+- [ ] Apply the one-guard-per-package convention to the remaining non-harness wall-clock verdicts.
+      The backlog item recorded in `8082317` (#44) said roughly 176 further non-harness select fallbacks
+      still decided verdicts with wall-clock time; re-derived on `e72290a` that class is 249 lines
+      (`case <-time.(After|Tick|NewTimer)(` in non-harness test files: 262 lines minus the 13 already on
+      a guard), so the recorded figure predated the tree's growth rather than overstating it. This change
+      puts 276 sites on the documented per-package `testHangGuard`: 207 select fallbacks retimed, 47
+      context budgets, 7 raw timers, 11 poll-loop deadlines, 3 duplicate 30 s test constants folded
+      (`processOwnershipTestTimeout`, `tcpPeerHelperTimeout`, the local `cleanupTimeout`) and 1 new guard
+      for a readiness wait that replaced a 50 ms sleep with the fixture's own marker; the three failure
+      messages that named the clock ("within the bound", "timed out waiting for helper child PID", "only
+      by test timeout") now name the outstanding step. No assertion, budget, skip or product file was
+      touched. 281 of the listed sites now sit on that guard (13 -> 224 select fallbacks, 3 -> 50 context
+      budgets, 0 -> 7 raw timers). The lister, since `scripts/` holds no such helper: `rg -n --no-heading
+      --sort path --glob '*_test.go' -g '!daemon/internal/harness/**' -e 'case
+      <-time\.(After|Tick|NewTimer)\(' -e 'time\.NewTimer\(' -e 'time\.AfterFunc\(' -e
+      'time\.Sleep\(' -e 'context\.WithTimeout\(' -e 'context\.WithDeadline\(' -e 'time\.Since\('
+      daemon | wc -l` -> 458 lines on this revision, and `rg -c testHangGuard` over the same output is
+      281. Classification of the 458: (a) 281 hang guards on the per-package guard; (b) 48 behavioural
+      budgets kept because the elapsed time is the contract - 18 negative probes whose expiry is the
+      expected outcome (a stale-frame window, a not-before-release probe, two 25 ms containment probes,
+      the fixture's configured `sink.delay`), 8 fallbacks derived from the product's own deadline
+      (`containmentCloseDeadline`, `time.Until(deadline)`), 13 injected product deadlines (25 ms
+      `WaitTurn`, 50 ms `RunBoundedCommand`, 20 ms terminate, 150 ms `WaitContext`, 100 ms caller
+      deadlines, a 130 ms busy-spin probe, a deliberately expired deadline), 8 elapsed-time assertions
+      that prove the bound they assert (a 1 s ceiling over a deadline-respecting wait, a 75 ms floor for
+      the soft-stop grace, one measured-and-reported witness value) and 1 timer derived from an absolute
+      deadline; (c) 65 sleeps - 45 in the host-provisioned e2e witnesses, 12 poll intervals inside
+      explicit bounded loops that already wait on the product's own observable, 6 fixture payloads, 2
+      negative-probe observation windows (a loaded host can only make those pass); (d) 64 out of scope -
+      63 guard-shaped decisions inside host-provisioned suites (`daemon/e2e` 35, `daemon/native/linux-gate`
+      28) plus 1 fixture timer installed into the product's scheduler. Open remainder: those 63 e2e and
+      linux-gate decisions cannot be exercised on this host and need a provisioned runner plus
+      independent review; `scripts/ci/linux-v2-host-peer-probe.go` keeps its own tool timeouts
+      (capability probes, not test verdicts). Findings, not fixed: the negative-reconnect window in
+      `notification/client_test.go:283` and the descendant-monitor polls wait on conditions the product
+      deliberately does not publish, so their windows stay wall-clock. Verification: `gofmt -l .` empty,
+      `go vet ./...` rc 0 on windows, `GOOS=linux go vet ./...` rc 0, `go test -count=1` rc 0 over the six
+      touched packages, and the guard was demonstrated to fire with its named step in a byte-identical
+      scratch copy whose only difference was a fixture that never wrote its readiness marker.

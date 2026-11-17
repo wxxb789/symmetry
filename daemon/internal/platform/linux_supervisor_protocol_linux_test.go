@@ -53,7 +53,7 @@ func TestLinuxSupervisorOwnerWatchdogDistinguishesDisarmAndEOF(t *testing.T) {
 	_ = writeFD2.Close()
 	select {
 	case <-watchdog2.ownerLost():
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("EOF did not signal owner loss")
 	}
 	watchdog2.disarm()

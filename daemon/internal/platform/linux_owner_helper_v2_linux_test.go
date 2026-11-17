@@ -173,7 +173,7 @@ func TestLinuxOwnerAnchorRunReaperRejectsForeignChildBeforeAdoptingIt(t *testing
 		t.Fatalf("validate exact other scratch run grant: %v", err)
 	}
 	otherLeafPath := filepath.Join(otherGrant.Parent.Path, otherGrant.Leaf.LeafName)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -425,7 +425,7 @@ func TestLinuxOwnerHelperV2UntrustedStopCannotBecomeReceiptEvidence(t *testing.T
 // A real killed child must be reaped by its pidfd before the helper can expose
 // the exact wait proof consumed by failed-Prepare cleanup.
 func TestLinuxOwnerHelperV2ExactWaitReapsPhysicallyStoppedChild(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	child := startLinuxOwnerAnchorTestProcess(t, ctx, "target", false)
 	process := authority.LinuxCgroupProcessIdentity{
@@ -545,7 +545,7 @@ func TestLinuxOwnerHelperV2StatusDoesNotLatchExpiredLease(t *testing.T) {
 	case server = <-accepted:
 	case err := <-acceptErr:
 		t.Fatalf("accept helper Status test: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("helper Status test connection was not accepted")
 	}
 	defer server.Close()
@@ -666,7 +666,7 @@ func TestLinuxOwnerHelperV2ResponseRejectsActionOutsideStatus(t *testing.T) {
 	case server = <-accepted:
 	case err := <-acceptErr:
 		t.Fatalf("accept helper response test: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("helper response test connection was not accepted")
 	}
 	defer server.Close()

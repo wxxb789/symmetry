@@ -78,7 +78,7 @@ func TestLinuxSupervisorLeaseStateReplaysAndFencesGenerations(t *testing.T) {
 		if !state.takeExpiry() {
 			t.Fatal("current timer wake did not expire the lease")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("lease timer did not fire")
 	}
 	if _, err := state.renew(time.Second, 4); !errors.Is(err, ErrLinuxSupervisorLeaseExpired) {
@@ -188,7 +188,7 @@ func TestLinuxSupervisorLeaseStateOwnerLossLinearizesWithResume(t *testing.T) {
 	}()
 	select {
 	case <-detachStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("resume did not reach the detach gate")
 	}
 	latchDone := make(chan struct{})
@@ -207,7 +207,7 @@ func TestLinuxSupervisorLeaseStateOwnerLossLinearizesWithResume(t *testing.T) {
 	}
 	select {
 	case <-latchDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("owner loss did not latch after detach released")
 	}
 	if _, err := resumeFirst.renew(time.Minute, 2); !errors.Is(err, ErrLinuxSupervisorLeaseExpired) {
@@ -227,7 +227,7 @@ func TestLinuxSupervisorOwnerWatchdogLatchesBeforeWakeAndDisarmDoesNotLatch(t *t
 	}
 	select {
 	case <-watchdog.ownerLost():
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("owner watchdog did not report loss")
 	}
 	order <- "wake"
@@ -248,7 +248,7 @@ func TestLinuxSupervisorOwnerWatchdogLatchesBeforeWakeAndDisarmDoesNotLatch(t *t
 	}
 	select {
 	case <-disarmedWatchdog.done:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("disarmed owner watchdog did not stop")
 	}
 	if disarmed {
@@ -508,7 +508,7 @@ func TestLinuxSupervisorTargetCannotRetainMetadataSocketAfterExec(t *testing.T) 
 			t.Errorf("read target descriptor witness: %v", result.err)
 		}
 		witnessLine = result.line
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Error("target did not report its inherited socket descriptors")
 	}
 	if witnessLine != "SYMMETRY_METADATA_SOCKET_ACCESSIBLE=false\n" {
@@ -601,7 +601,7 @@ func TestLinuxSupervisorOverlappingRunsDoNotInheritPriorDescriptors(t *testing.T
 				}
 				select {
 				case <-supervisor.helperDone:
-				case <-time.After(2 * time.Second):
+				case <-time.After(testHangGuard):
 					t.Errorf("%s helper did not exit during bounded cleanup", name)
 				}
 				if err := supervisor.Terminate(true); err != nil {
@@ -715,7 +715,7 @@ func TestLinuxSupervisorOverlappingRunsDoNotInheritPriorDescriptors(t *testing.T
 		if result.oldPIDFD != "SYMMETRY_OLD_PIDFD_ACCESSIBLE=false\n" {
 			t.Errorf("run B old pidfd witness = %q, want run A pidfd inaccessible", result.oldPIDFD)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("run B did not report its descriptor inheritance witness")
 	}
 	if err := secondIO.stdinWrite.Close(); err != nil {
@@ -930,7 +930,7 @@ func TestLinuxSupervisorOwnerLossProofBarrierIsPostReapAndOptIn(t *testing.T) {
 			}
 			select {
 			case <-supervisor.helperDone:
-			case <-time.After(5 * time.Second):
+			case <-time.After(testHangGuard):
 				t.Error("Linux supervisor helper did not exit during cleanup")
 				return
 			}
@@ -1022,7 +1022,7 @@ func TestLinuxSupervisorOwnerLossProofBarrierIsPostReapAndOptIn(t *testing.T) {
 		}
 		select {
 		case <-supervisor.helperDone:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("Linux supervisor helper did not exit after recovery release")
 		}
 		supervisor.mu.Lock()
@@ -1110,7 +1110,7 @@ func TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec(t *testing.T) {
 			}
 			select {
 			case <-supervisor.helperDone:
-			case <-time.After(5 * time.Second):
+			case <-time.After(testHangGuard):
 				t.Error("wrong-session helper did not exit during bounded cleanup")
 			}
 		}
@@ -1165,8 +1165,8 @@ func TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec(t *testing.T) {
 	_ = supervisor.AbortContainment()
 	select {
 	case <-supervisor.helperDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("wrong-session helper did not finish precommit abort within the bound")
+	case <-time.After(testHangGuard):
+		t.Fatalf("wrong-session helper did not finish precommit abort before the %s hang guard expired", testHangGuard)
 	}
 	handoff := supervisor.Handoff()
 	if _, err := ProvePreparedSupervisorAborted(handoff, func() error { return nil }); err != nil {
@@ -1329,7 +1329,7 @@ func TestLinuxSupervisorMirrorRequiresHelperDeath(t *testing.T) {
 	}
 	select {
 	case <-supervisor.helperDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("helper did not exit after kill")
 	}
 	// An in-flight response can be lost at the same time as helper death;
@@ -1475,7 +1475,7 @@ func TestLinuxSupervisorStopWriteFailureAfterHelperExitUsesSealedMirror(t *testi
 		t.Fatal(err)
 	}
 	waitForMarker := func(path string) error {
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(testHangGuard)
 		for {
 			if _, err := os.Stat(path); err == nil {
 				return nil
@@ -1507,7 +1507,7 @@ func TestLinuxSupervisorStopWriteFailureAfterHelperExitUsesSealedMirror(t *testi
 		}
 		select {
 		case <-supervisor.helperDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Error("helper did not exit at control-write boundary")
 		}
 		requestWriteErr = writeLinuxSupervisorFrame(control, request)
@@ -2225,7 +2225,7 @@ func TestLinuxSupervisorResponseLossStopUsesRecoveryReceipt(t *testing.T) {
 		if request.Operation != linuxSupervisorOpStop || request.Secret != value.Secret {
 			t.Fatalf("recovery stop request = %#v, want authenticated stop", request)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("recovery stop request was not received")
 	}
 	receipt, ok := supervisor.ContainmentStopReceipt()
@@ -2260,7 +2260,7 @@ func TestStopPersistedLinuxSupervisorRequiresTerminalScanSeal(t *testing.T) {
 		if request.Operation != linuxSupervisorOpStop || request.Secret != value.Secret {
 			t.Fatalf("missing-seal recovery request = %#v, want authenticated stop", request)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("missing-seal recovery request was not received")
 	}
 }
@@ -2346,7 +2346,7 @@ func TestLinuxSupervisorResponseWriteLossReplaysStopWhileHelperLives(t *testing.
 		_ = os.Remove(endpoint)
 	})
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	waitSignal := func(label string, signal <-chan struct{}) {
 		t.Helper()
 		remaining := time.Until(deadline)
@@ -2533,7 +2533,7 @@ func TestLinuxSupervisorReleaseResponseLossUsesRecoveryWhenReaderNil(t *testing.
 		if request.Operation != linuxSupervisorOpRelease || request.Secret != value.Secret {
 			t.Fatalf("recovery release request = %#v, want authenticated release", request)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("recovery release request was not received")
 	}
 	if !supervisor.released || !supervisor.closed {
@@ -2585,7 +2585,7 @@ func TestLinuxSupervisorReleaseResponseLossFailureRetainsAuthority(t *testing.T)
 		if request.Operation != linuxSupervisorOpRelease {
 			t.Fatalf("recovery failure request operation = %q, want release", request.Operation)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("recovery release request was not received")
 	}
 	if supervisor.released || supervisor.closed {
@@ -3089,7 +3089,7 @@ func TestLinuxSupervisorControlEOFFailsClosedBeforeOwnerLoss(t *testing.T) {
 	_ = supervisor.ownerWrite.Close()
 	select {
 	case <-supervisor.helperDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("helper did not exit after recovery release")
 	}
 	_ = stdinRead.Close()

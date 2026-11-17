@@ -34,7 +34,7 @@ func TestRunnerPassesCallerContextToProcessLauncher(t *testing.T) {
 	}()
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("process launcher was not entered")
 	}
 	cancel()
@@ -43,7 +43,7 @@ func TestRunnerPassesCallerContextToProcessLauncher(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Start() error = %v, want context cancellation", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Start() did not return after launcher context cancellation")
 	}
 }
@@ -98,7 +98,7 @@ func TestContainmentCloseErrorDoesNotPersistGenericUnprovenMarker(t *testing.T) 
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 0); !errors.Is(err, closeErr) {
 		t.Fatalf("Terminate() error = %v, want %v", err, closeErr)
@@ -359,7 +359,7 @@ func TestFinalizeContainmentRetriesPartialHelperCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 0); !errors.Is(err, want) {
 		t.Fatalf("Terminate() error = %v, want partial helper error %v", err, want)
@@ -406,7 +406,7 @@ func TestFinalizeContainmentRetryRetainsPartialBaseError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 0); !errors.Is(err, helperErr) {
 		t.Fatalf("Terminate() error = %v, want helper error %v", err, helperErr)
@@ -449,7 +449,7 @@ func TestFinalizeContainmentRetriesPartialHandleReleaseAfterHelperSuccess(t *tes
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 0); !errors.Is(err, releaseErr) {
 		t.Fatalf("Terminate() error = %v, want release error %v", err, releaseErr)
@@ -504,7 +504,7 @@ func TestStartUsesAttachmentIdentityFromOriginalProcess(t *testing.T) {
 	if persistedPID != process.PID || persistedIdentity != process.Identity {
 		t.Fatalf("PersistProcess() = (%d, %q), want (%d, %q)", persistedPID, persistedIdentity, process.PID, process.Identity)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 0); err != nil {
 		t.Fatalf("Terminate() error = %v", err)
@@ -807,7 +807,7 @@ func TestTerminateFallsBackAfterUnsupportedSoftStopAndPreservesGrace(t *testing.
 	containment := &scriptedContainment{softErr: fmt.Errorf("soft stop unavailable: %w", errors.ErrUnsupported)}
 	process := startWithTestContainment(t, containment)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	started := time.Now()
 	if err := process.Terminate(ctx, 100*time.Millisecond); err != nil {
@@ -830,7 +830,7 @@ func TestTerminatePreservesGenuineSoftFailureAfterHardFallback(t *testing.T) {
 	containment := &scriptedContainment{softErr: want}
 	process := startWithTestContainment(t, containment)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 0); !errors.Is(err, want) {
 		t.Fatalf("Terminate() error = %v, want genuine soft failure", err)
@@ -846,7 +846,7 @@ func TestTerminatePreservesSoftFailureJoinedWithUnsupported(t *testing.T) {
 	containment := &scriptedContainment{softErr: errors.Join(errors.ErrUnsupported, want)}
 	process := startWithTestContainment(t, containment)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 0); !errors.Is(err, want) {
 		t.Fatalf("Terminate() error = %v, want joined genuine soft failure", err)

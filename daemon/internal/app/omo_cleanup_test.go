@@ -219,7 +219,7 @@ func TestOmOReviewRegressionStoppedResultsPermitOnlyExactDaemonCleanup(t *testin
 			if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "Exercise stopped-result cleanup", Context: json.RawMessage(`{}`)}); err != nil {
 				t.Fatal(err)
 			}
-			bounded, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			bounded, cancel := context.WithTimeout(context.Background(), testHangGuard)
 			defer cancel()
 			turnErr := staged.WaitTurn(bounded)
 			if (process.semantic == nil && !errors.Is(turnErr, omo.ErrMissingResult)) || (process.semantic != nil && turnErr != nil) {

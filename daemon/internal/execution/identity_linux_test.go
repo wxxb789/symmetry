@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
@@ -18,7 +17,7 @@ import (
 func TestStartExposesLinuxProcessCreationIdentity(t *testing.T) {
 	process := startHelper(t, &recordingSink{}, "wait")
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 		defer cancel()
 		_ = process.Terminate(ctx, 0)
 	})

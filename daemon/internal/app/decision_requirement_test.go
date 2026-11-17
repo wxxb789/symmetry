@@ -213,7 +213,7 @@ func TestFatalDecisionCancellationCauseSurvivesMissingRunnerSinkError(t *testing
 	}
 	select {
 	case <-finished:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("stopped process did not settle")
 	}
 	failed := supervisoryJournal(t, app, key)

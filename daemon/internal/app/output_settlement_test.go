@@ -112,7 +112,7 @@ func TestRunnerOutputTruncationCannotBeHiddenByNativeSemanticSuccess(t *testing.
 		slots:               make(chan struct{}, 1),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	app.startAssignment(ctx, protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: controlClient.work})

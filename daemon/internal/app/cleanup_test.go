@@ -115,7 +115,7 @@ func TestCleanupPendingUsesBoundedShutdownCancellableContext(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("cleanup error = %v, want context cancellation", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("shutdown did not cancel active cleanup")
 	}
 	if _, err := store.LoadJournal(key); err != nil {
@@ -142,7 +142,7 @@ func TestBackgroundStopCancelsAndJoinsCleanupWorker(t *testing.T) {
 	go func() { done(); close(stopped) }()
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("background stop did not join active cleanup")
 	}
 }
@@ -181,7 +181,7 @@ func TestBlockedCleanupDoesNotBlockOutboxDelivery(t *testing.T) {
 	done := make(chan struct{})
 	go func() { daemon.flushAll(ctx); close(done) }()
 	select {
-	case <-time.After(3 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("blocked cleanup prevented an unrelated outbox event from being delivered")
 	case <-control.events:
 	}
@@ -219,7 +219,7 @@ func TestRecoveredCleanupPendingOnlyCleansWithoutControlOrSlotReacquisition(t *t
 	daemon.flushAll(context.Background())
 	select {
 	case <-cleaned:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("recovered cleanup-pending journal was not cleaned")
 	}
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
@@ -579,7 +579,7 @@ func TestReturnedProcessBlocksCleanupUntilWaitCompletes(t *testing.T) {
 	close(process.returnRelease)
 	select {
 	case <-process.terminated:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("returned process was not terminated after cancellation")
 	}
 	journal, err = store.LoadJournal(key)
@@ -727,7 +727,7 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 			daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "g"}})
 			select {
 			case <-test.process.terminated:
-			case <-time.After(processOwnershipTestTimeout):
+			case <-time.After(testHangGuard):
 				t.Fatal("startup failure did not terminate returned process")
 			}
 			journal, err := store.LoadJournal(key)
@@ -765,7 +765,7 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 			}
 			select {
 			case <-cleaned:
-			case <-time.After(processOwnershipTestTimeout):
+			case <-time.After(testHangGuard):
 				t.Fatal("workspace was not cleaned after returned process exit")
 			}
 		})

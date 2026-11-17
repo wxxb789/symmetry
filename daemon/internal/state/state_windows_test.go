@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+// testHangGuard bounds how long a test waits for the store or a blocked
+// filesystem operation to publish an observable. It only turns a hung harness
+// into a failure; it is never a statement about how fast the product should be,
+// so a loaded host cannot turn a slow rename into a verdict about the store.
+const testHangGuard = 30 * time.Second
+
 func TestWindowsGoalSessionPathsUseProtectedAccountOnlyDACL(t *testing.T) {
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
@@ -73,7 +79,7 @@ func TestWindowsWriteAtomicRetriesAfterReaderHandleReleases(t *testing.T) {
 			t.Fatal("writeAtomic() succeeded while destination reader handle was held")
 		}
 		t.Fatalf("writeAtomic() returned before observing the blocked rename: %v", err)
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		if err := syscall.CloseHandle(reader); err != nil {
 			readerOpen = false
 			t.Fatalf("CloseHandle(reader) after writer timeout = %v", err)
@@ -82,7 +88,7 @@ func TestWindowsWriteAtomicRetriesAfterReaderHandleReleases(t *testing.T) {
 		select {
 		case err := <-done:
 			t.Fatalf("writeAtomic() did not attempt the blocked rename: returned %v after release", err)
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("writeAtomic() did not attempt the blocked rename")
 		}
 	}

@@ -242,7 +242,7 @@ func TestVerifyLoopbackTCPPeerV2WaitsForPendingAcceptOnSameConnectionWithoutWrit
 	if err != nil {
 		t.Fatalf("get connected TCP socket: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	pending := make(chan struct{})
 	accepted := make(chan struct{})

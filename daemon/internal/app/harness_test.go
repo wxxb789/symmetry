@@ -1020,7 +1020,7 @@ func TestOpenCodeLegacyClaimBarrierPreservesCancellationPrecedence(t *testing.T)
 			})
 			select {
 			case <-entered:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("OpenCode assignment did not reach the claim barrier")
 			}
 			switch cancellation {
@@ -1041,7 +1041,7 @@ func TestOpenCodeLegacyClaimBarrierPreservesCancellationPrecedence(t *testing.T)
 			releaseClaim()
 			select {
 			case <-done:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("OpenCode assignment did not finish after the claim grant")
 			}
 			journal, err = store.LoadJournal(key)
@@ -3497,12 +3497,12 @@ func TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier(t *t
 	}()
 	select {
 	case <-closeEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("initial native close did not start")
 	}
 	select {
 	case <-retryPublished:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("initial native close failure did not publish recovery barrier")
 	}
 	if !active.nativeCloseRetryRequired || !active.cleanupBlocked {
@@ -3510,7 +3510,7 @@ func TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier(t *t
 	}
 	select {
 	case <-session.waitEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("initial native final wait did not start")
 	}
 	session.closeErr = nil
@@ -3521,7 +3521,7 @@ func TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier(t *t
 	}()
 	select {
 	case <-session.waitEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("close retry did not reach final native wait")
 	}
 	select {
@@ -3532,7 +3532,7 @@ func TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier(t *t
 	close(finalGate)
 	select {
 	case <-retryDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("close retry did not finish after final native wait release")
 	}
 	app.mu.Lock()
@@ -3544,7 +3544,7 @@ func TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier(t *t
 	}
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("original native completion did not finish after retry")
 	}
 	if active.cleanupBlocked || active.nativeUsageRetryPending || active.nativeUsageRetryInFlight || !active.nativeUsageFinalized {
@@ -4281,13 +4281,13 @@ func TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt(t *testing.T) 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
 	case <-session.turnStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
 	}
 	releaseTurnReturn()
 	select {
 	case <-session.waitTurnEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native terminal wait did not start")
 	}
 	command := protocol.Command{RunID: "run-1", Generation: 1, CommandID: "cancel-1", Kind: "cancel"}
@@ -4503,7 +4503,7 @@ func TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability(t *testing
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
 	case <-session.turnStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatalf("native Pi provider turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
 	}
 	request := session.request
@@ -4597,7 +4597,7 @@ func TestGoalAdmissionLeavesProviderAccessNilForNativeHarness(t *testing.T) {
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
 	case <-session.turnStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
 	}
 	if session.request.ProviderAccess != nil {
@@ -5751,7 +5751,7 @@ func TestNativeAdapterStartPublicationLinearizesCancellation(t *testing.T) {
 			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 			select {
 			case <-startEntered:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("native Adapter.Start did not enter")
 			}
 			command := protocol.Command{RunID: "run-1", Generation: 1, CommandID: "cancel-start-race", Kind: "cancel"}
@@ -5813,7 +5813,7 @@ func TestNativeAdapterStartPublicationLinearizesCancellation(t *testing.T) {
 			close(startRelease)
 			select {
 			case <-session.turnStarted:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("native turn did not start after Adapter.Start publication")
 			}
 			if app.handleCommand(context.Background(), command) {
@@ -5864,7 +5864,7 @@ func TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn(t *testing.T) {
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
 	case <-startEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatalf("native Adapter.Start did not enter: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
 	}
 	now := time.Now().UTC()
@@ -6157,7 +6157,7 @@ func TestCancelDuringGoalSubjectPreparationDoesNotLaunchNativeSession(t *testing
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
 	case <-prepareEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Goal Subject preparation did not start")
 	}
 	if !app.handleCommand(context.Background(), protocol.Command{RunID: "run-1", Generation: 1, CommandID: "cancel-prelaunch", Kind: "cancel"}) {
@@ -6211,7 +6211,7 @@ func TestCancelAfterGoalSessionIntentDoesNotCrossNativeStartBoundary(t *testing.
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
 	case <-leaseClockEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Goal launch did not reach the final native lease boundary")
 	}
 	if !app.handleCommand(context.Background(), protocol.Command{RunID: "run-1", Generation: 1, CommandID: "cancel-before-native-start", Kind: "cancel"}) {

@@ -184,7 +184,7 @@ func TestGoalNativeStartUsesAtomicProcessPersistenceBeforeObserver(t *testing.T)
 	})
 	select {
 	case <-session.turnStarted:
-	case <-time.After(10 * time.Second):
+	case <-time.After(testHangGuard):
 		journal, loadErr := store.LoadJournal(key)
 		if loadErr != nil {
 			t.Fatalf("native turn did not start; read journal: %v", loadErr)

@@ -576,7 +576,7 @@ func TestClientExecuteProviderActionRedirectAndCancellationAreSingleAttempt(t *t
 		}()
 		select {
 		case <-started:
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("request did not reach server")
 		}
 		cancel()
@@ -585,7 +585,7 @@ func TestClientExecuteProviderActionRedirectAndCancellationAreSingleAttempt(t *t
 			if err == nil || !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancellation error = %v", err)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("canceled request did not return")
 		}
 		close(release)

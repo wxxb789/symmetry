@@ -256,7 +256,7 @@ func TestRejectedCancelAfterObservedTerminalUsesFinalResultPastWaitTurnDeadline(
 		if !acknowledged {
 			t.Fatal("explicitly rejected cancellation was not durably acknowledged")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancellation did not finish after its WaitTurn deadline")
 	}
 
@@ -710,7 +710,7 @@ func TestLeaseOwnedNativeStartErrorsCleanupAndAcknowledgeBeforeReturn(t *testing
 			var startErr error
 			select {
 			case startErr = <-errCh:
-			case <-time.After(2 * time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("lease-owned native start failure did not return")
 			}
 			if startErr == nil || !strings.Contains(startErr.Error(), leaseReason) || !strings.Contains(startErr.Error(), stageErr.Error()) {
@@ -912,7 +912,7 @@ func TestLateCancelSubjectVerificationStopsOnDaemonShutdown(t *testing.T) {
 		if !acknowledged {
 			t.Fatal("shutdown-cancelled Subject verification did not preserve the terminal acknowledgement")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("late-cancel Subject verification ignored daemon shutdown")
 	}
 	journal, err := store.LoadJournal(key)
@@ -1308,7 +1308,7 @@ func TestOrphanedNativeUsageRetryCannotReleaseCancellationOwner(t *testing.T) {
 		if !acknowledged {
 			t.Fatal("cancellation owner did not publish its acknowledgement")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancellation settlement did not finish")
 	}
 	journal, err := store.LoadJournal(key)
@@ -1526,7 +1526,7 @@ func TestFlushRunDefersNativeUsageRecoveryToLiveTerminalOwner(t *testing.T) {
 	awaitNativeSettlementSignal(t, terminalEntered, "live usage retry did not reach terminal persistence")
 	select {
 	case <-flushAllDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("flushAll blocked behind live terminal publication")
 	}
 
@@ -1541,7 +1541,7 @@ func TestFlushRunDefersNativeUsageRecoveryToLiveTerminalOwner(t *testing.T) {
 		if err != nil {
 			t.Fatalf("flushRun while live usage owner active error = %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("flushRun raced the live usage owner")
 	}
 	terminalCallsMu.Lock()
@@ -1729,7 +1729,7 @@ func (client *outboxIsolationControl) Transition(ctx context.Context, runID stri
 
 func awaitNativeSettlementSignal(t *testing.T, signal <-chan struct{}, failure string) {
 	t.Helper()
-	timer := time.NewTimer(10 * time.Second)
+	timer := time.NewTimer(testHangGuard)
 	defer timer.Stop()
 	select {
 	case <-signal:

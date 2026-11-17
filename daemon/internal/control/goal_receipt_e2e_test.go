@@ -125,7 +125,7 @@ func TestGoalSessionReceiptHTTP(t *testing.T) {
 		t.Fatal("invalid private receipt protocol configuration")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 
 	var output goalReceiptE2EOutput
