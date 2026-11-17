@@ -1258,6 +1258,46 @@ func (barrier *linuxV2NativeWitnessBarriers) ensureFresh() error {
 	return nil
 }
 
+// linkLinuxV2NativeWitnessStageMarker publishes one redacted stage marker as a
+// single visible state change: the external owner-witness harness
+// (waitLinuxV2OwnerWitnessStage) polls the stage path, decodes the first
+// readable document, and reports a decode failure or field mismatch as a hard
+// error, so the create-then-write sequence this replaced exposed an empty or
+// truncated document to that poll. The document is assembled in a temporary
+// file in the witness directory and linked into place, which keeps the
+// exact-replay contract the O_EXCL create provided: an existing destination
+// (a symlink included) fails with an exist error and is never replaced, and
+// neither the temporary name nor the link target is ever followed, because
+// O_EXCL fails on a planted symlink and link never follows one.
+func linkLinuxV2NativeWitnessStageMarker(path string, contents []byte) error {
+	temporaryPath, err := assembleLinuxWitnessMarkerFile(path, contents)
+	if err != nil {
+		return err
+	}
+	linkErr := os.Link(temporaryPath, path)
+	if removeErr := os.Remove(temporaryPath); linkErr == nil {
+		linkErr = removeErr
+	}
+	return linkErr
+}
+
+// readLinuxV2NativeWitnessStageMarkerReplay reads an existing stage marker for
+// the exact-replay comparison without following a symlink at the destination,
+// the posture the create step used to provide.
+func readLinuxV2NativeWitnessStageMarkerReplay(path string) ([]byte, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), "owner-witness-stage-replay")
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("wrap owner witness stage replay marker")
+	}
+	defer file.Close()
+	return io.ReadAll(file)
+}
+
 func (barrier *linuxV2NativeWitnessBarriers) stage(ctx context.Context, marker linuxV2NativeWitnessStageMarker, hold bool) error {
 	if ctx == nil || marker.Stage == "" || marker.Case != barrier.caseName || marker.RunKey != barrier.runKey {
 		return errors.New("witness stage marker does not match its exact case and RunKey")
@@ -1267,34 +1307,16 @@ func (barrier *linuxV2NativeWitnessBarriers) stage(ctx context.Context, marker l
 		return errors.New("encode redacted owner witness stage marker")
 	}
 	path := filepath.Join(barrier.request.Directory, marker.Stage+".json")
-	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
-	if errors.Is(err, unix.EEXIST) {
-		previous, readErr := os.ReadFile(path)
+	err = linkLinuxV2NativeWitnessStageMarker(path, encoded)
+	if errors.Is(err, os.ErrExist) {
+		previous, readErr := readLinuxV2NativeWitnessStageMarkerReplay(path)
 		if readErr != nil || !bytes.Equal(previous, encoded) {
 			return errors.New("existing owner witness stage marker differs from exact replay")
 		}
 	} else if err != nil {
 		return fmt.Errorf("create redacted owner witness stage marker: %w", err)
-	} else {
-		file := os.NewFile(uintptr(fd), "owner-witness-stage")
-		if file == nil {
-			_ = unix.Close(fd)
-			return errors.New("wrap owner witness stage marker")
-		}
-		if _, err := file.Write(encoded); err != nil {
-			_ = file.Close()
-			return fmt.Errorf("write redacted owner witness stage marker: %w", err)
-		}
-		if err := file.Sync(); err != nil {
-			_ = file.Close()
-			return fmt.Errorf("sync redacted owner witness stage marker: %w", err)
-		}
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("close redacted owner witness stage marker: %w", err)
-		}
-		if err := syncLinuxV2NativeWitnessDirectory(barrier.request.Directory); err != nil {
-			return err
-		}
+	} else if err := syncLinuxV2NativeWitnessDirectory(barrier.request.Directory); err != nil {
+		return err
 	}
 	if !hold || barrier.request.HoldAfter != marker.Stage {
 		return nil

@@ -1013,6 +1013,45 @@ func (runner Runner) waitForLeaseArmedResumeBarrier(ctx context.Context, started
 	)
 }
 
+// publishResumeBarrierMarker publishes one resume-barrier document as a single
+// visible state change: the crash-witness harness polls the reached path,
+// reads the first document it can see, and parses it for the exact daemon,
+// target and lease-armed fields, so a create-then-write sequence would expose
+// an empty or truncated marker to that poll. The document is assembled in a
+// temporary file in the destination directory and renamed into place; the
+// destination must still be absent, which keeps the create-with-O_EXCL
+// contract the barrier already validates before it starts.
+func publishResumeBarrierMarker(path string, contents []byte) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("barrier marker %q already exists", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".partial-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	written, writeErr := temporary.Write(contents)
+	if writeErr == nil && written != len(contents) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr == nil {
+		writeErr = os.Rename(temporaryPath, path)
+	}
+	if writeErr != nil {
+		_ = os.Remove(temporaryPath)
+		return writeErr
+	}
+	return nil
+}
+
 func (runner Runner) waitForResumeBarrier(ctx context.Context, started *startedProcess, phase, reachedEnvironment, releaseEnvironment string, leaseArmed bool) error {
 	if os.Getenv(resumeBarrierWitnessGateEnvironment) != "1" {
 		return nil
@@ -1043,10 +1082,6 @@ func (runner Runner) waitForResumeBarrier(ctx context.Context, started *startedP
 		return fmt.Errorf("validate release marker %q: %w", releasePath, err)
 	}
 
-	reached, err := os.OpenFile(reachedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("create reached marker %q: %w", reachedPath, err)
-	}
 	marker := fmt.Sprintf(
 		"pid=%d\ntarget_pid=%d\ntime=%s\nlease_armed=%t\n",
 		os.Getpid(),
@@ -1054,15 +1089,8 @@ func (runner Runner) waitForResumeBarrier(ctx context.Context, started *startedP
 		time.Now().UTC().Format(time.RFC3339Nano),
 		leaseArmed,
 	)
-	writeErr := error(nil)
-	if _, writeErr = reached.WriteString(marker); writeErr == nil {
-		writeErr = reached.Sync()
-	}
-	if closeErr := reached.Close(); writeErr == nil {
-		writeErr = closeErr
-	}
-	if writeErr != nil {
-		return fmt.Errorf("publish reached marker %q: %w", reachedPath, writeErr)
+	if err := publishResumeBarrierMarker(reachedPath, []byte(marker)); err != nil {
+		return fmt.Errorf("publish reached marker %q: %w", reachedPath, err)
 	}
 
 	deadline := time.NewTimer(resumeBarrierTimeout)

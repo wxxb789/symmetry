@@ -174,6 +174,31 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       create-then-write documents whose e2e readers poll non-empty and then parse them; no
       occurrence is recorded there, and only a torn read of one small write remains possible
       once the non-empty gate is passed.
+      Follow-up slice (branch `fix/barrier-publish-atomicity`, based on da02900): the two writers
+      recorded as still open above are the same defect, not a weaker one.
+      `waitForResumeBarrier` created the commit/resume and lease-armed reached markers with
+      `os.OpenFile(O_CREATE|O_EXCL)` and wrote the four-line marker afterwards
+      (`daemon/internal/execution/runner.go:1046`), and `waitForLinuxStopReceiptBarrier` created
+      the stop-receipt JSON the same way (`daemon/internal/app/app.go:2207`). Their harness
+      readers poll the path, accept any non-empty read and then parse it
+      (`daemon/e2e/production_linux_containment_witness_test.go:804-816`, `:2701-2708`), which a
+      non-empty but incomplete document still fails, and `waitLinuxV2OwnerWitnessStage`
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go:272-297`) turns a readable but
+      undecodable stage marker into a hard error; that shape reached the owner-witness stage
+      writer at `daemon/internal/app/linux_owner_witness_linux.go:1270`. All three now assemble
+      the document in a temporary file in the destination directory and publish it in one step
+      (`publishResumeBarrierMarker`, `publishLinuxStopReceiptBarrierMarker`,
+      `linkLinuxV2NativeWitnessStageMarker`); the stage marker links the temporary file into
+      place, so an existing marker still fails as an exist error for the exact-replay comparison
+      and is never replaced, and the replay read keeps the no-follow posture the create had.
+      Cleared by ordering rather than changed: the in-process `restoreStageMarkers` reader and
+      the `internal/execution` probe/startup fixtures observe presence only, or after the
+      writing process completed (`internal/execution/probe_test.go:194-201`,
+      `internal/execution/runner_windows_test.go:74-106`), and the owner-witness preflight writes
+      control files (`cgroup.kill`) that are never parsed. Residual: a crash between the
+      temporary write and its publish leaves a dot-prefixed `.partial-*` file instead of an
+      empty marker, which `ensureFresh` then reports as a non-empty barrier directory; both fail
+      loudly and no occurrence is recorded.
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
       in `daemon/internal/platform` (`process_windows_test.go:1004`, "owned child <pid>
       survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
