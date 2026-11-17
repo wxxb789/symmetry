@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { savedViewStorageKey } from "../features/projects/saved-views";
 import type { Project } from "../services/api";
 import { readAttention, readWorkDetail, readWorkItem } from "../services/api.fixtures";
-import type { RealtimePush, RealtimeSocket } from "../services/realtime";
+import { socketEndpoint, type RealtimePush, type RealtimeSocket } from "../services/realtime";
 import { createApplication, safeReturnTo, type Application } from "./application";
 import { createAppRouter } from "./router";
 
@@ -1011,11 +1011,12 @@ class ScriptedTransport {
 
 /**
  * The invalidation socket is the one piece of browser state the shell owns outside
- * React: the Phoenix client keeps its own reconnect timer and resolves the socket
- * endpoint from the browser's `location` global on every attempt. A shell that has
- * been torn down must release that client, or the timer re-reads a global the
- * document no longer has — which is how a run whose every assertion passed still
- * reported `ReferenceError: location is not defined` after the environment closed.
+ * React: the Phoenix client keeps its own reconnect timer and retries whatever
+ * endpoint it was handed. A shell that has been torn down must release that client,
+ * or the timer opens a socket nobody owns — and while the portal handed over a
+ * relative endpoint, that retry re-read the `location` global after the document
+ * that owned it had closed, which is how a run whose every assertion passed still
+ * reported `ReferenceError: location is not defined`.
  */
 describe("workspace socket lifetime", () => {
   it("releases the invalidation client it started when the shell unmounts", async () => {
@@ -1030,16 +1031,17 @@ describe("workspace socket lifetime", () => {
 
   it("leaves no socket reconnect running after the shell unmounts", async () => {
     ScriptedTransport.instances.length = 0;
-    // The shipped declaration covers the one surface the portal consumes, so the
-    // transport seam the Phoenix client exposes for its own tests is named here.
-    const socketFactory = (token: () => string) => new Socket("/portal/socket", {
+    // The portal's own endpoint, as the shipped factory resolves it from this
+    // page, with the transport seam the Phoenix client exposes for its own tests
+    // named here (the shipped declaration covers the one surface the portal
+    // consumes). The URL asserted below is therefore the URL a deployed portal
+    // connects to, not a path the test made up.
+    const socketFactory = (token: () => string) => new Socket(socketEndpoint(), {
       authToken: token,
       params: {},
       transport: ScriptedTransport,
     } as PhoenixSocketOptions);
     const { unmount } = renderWorkspace("/portal/attention", servedFetcher(), { socketFactory });
-    // The endpoint is resolved from the browser's own location global, so this
-    // construction is the read that outlived the workspace.
     await waitFor(() => expect(ScriptedTransport.instances).toHaveLength(1));
     expect(ScriptedTransport.instances[0]?.url).toBe(`ws://${window.location.host}/portal/socket/websocket?vsn=2.0.0`);
     // A refused connect arms the client's retry (10 ms out); the workspace is torn
