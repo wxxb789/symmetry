@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 )
@@ -38,15 +37,14 @@ func TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock(t *tes
 		return nil
 	}), nil)
 	startTestTurn(t, session)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if err := session.WaitTurn(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustSettle(t, "WaitTurn", session.WaitTurn(ctx))
+	mustSettle(t, "Close", session.Close(ctx))
 	result, err := session.Wait(ctx)
+	if ctx.Err() != nil {
+		t.Fatalf("Wait did not settle before the %s hang guard expired", testHangGuard)
+	}
 	if err != nil {
 		t.Fatalf("reasoning block beside the text block rejected: %v", err)
 	}

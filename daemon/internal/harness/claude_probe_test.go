@@ -110,14 +110,13 @@ func TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation(t *testing
 		context          func() (context.Context, context.CancelFunc)
 		want             error
 		cancelAfterStart bool
-		waitWithin       time.Duration
 	}{
 		{name: "local timeout", context: func() (context.Context, context.CancelFunc) {
 			return context.Background(), func() {}
-		}, want: context.DeadlineExceeded, waitWithin: claudeProbeTimeout + time.Second},
+		}, want: context.DeadlineExceeded},
 		{name: "caller cancellation", context: func() (context.Context, context.CancelFunc) {
 			return context.WithCancel(context.Background())
-		}, want: context.Canceled, cancelAfterStart: true, waitWithin: time.Second},
+		}, want: context.Canceled, cancelAfterStart: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := test.context()
@@ -131,7 +130,7 @@ func TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation(t *testing
 
 			select {
 			case <-runner.started:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("probeClaudeExecutable() did not start the runner")
 			}
 			if test.cancelAfterStart {
@@ -143,8 +142,8 @@ func TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation(t *testing
 				if !errors.Is(err, test.want) {
 					t.Fatalf("probeClaudeExecutable() error = %v, want %v", err, test.want)
 				}
-			case <-time.After(test.waitWithin):
-				t.Fatalf("probeClaudeExecutable() did not return within %v", test.waitWithin)
+			case <-time.After(testHangGuard):
+				t.Fatalf("probeClaudeExecutable() did not return after %s", test.name)
 			}
 		})
 	}

@@ -881,7 +881,7 @@ func TestProviderBridgeCloseCancelsCooperativeExecution(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("cooperative executor did not start")
 	}
-	closeContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	closeContext, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := bridge.Close(closeContext); err != nil {
 		t.Fatalf("Close cooperative execution error = %v", err)

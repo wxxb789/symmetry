@@ -323,7 +323,7 @@ func TestClaudeCandidateCancellationFenceOutranksInFlightTerminal(t *testing.T) 
 	}()
 	select {
 	case <-sink.resultEntered:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native result frame never reached the sink")
 	}
 	// Claim the cancellation fence while the terminal is still inside the sink.
@@ -558,7 +558,7 @@ func TestClaudeCandidateCancelFenceSupersedesInvalidTerminal(t *testing.T) {
 	}()
 	select {
 	case <-sink.resultEntered:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("invalid native result frame never reached the sink")
 	}
 	receipts, receiptErrors := cancelAndAwaitTermination(t, staged, process)
@@ -610,7 +610,7 @@ func TestClaudeCandidateSupersededResultDoesNotPoisonLaterRecords(t *testing.T) 
 	}()
 	select {
 	case <-sink.resultEntered:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("invalid native result frame never reached the sink")
 	}
 	receipts, receiptErrors := cancelAndAwaitTermination(t, staged, process)
@@ -691,7 +691,7 @@ func TestClaudeCandidateLateCancelAfterTerminalObservationIsRejected(t *testing.
 	}()
 	select {
 	case <-sink.taskResultEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("terminal result was not held in EventTaskResult delivery")
 	}
 
@@ -784,7 +784,7 @@ func TestClaudeCandidateStartTurnCloseRaceCancelsPromptWrite(t *testing.T) {
 	}()
 	select {
 	case <-process.writeStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("StartTurn() did not reach the fake write")
 	}
 	closeResult := make(chan error, 1)
@@ -794,7 +794,7 @@ func TestClaudeCandidateStartTurnCloseRaceCancelsPromptWrite(t *testing.T) {
 		if err == nil {
 			t.Fatal("StartTurn() succeeded after Close() fenced the prompt write")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("StartTurn() remained blocked after Close() cancellation")
 	}
 	select {
@@ -802,7 +802,7 @@ func TestClaudeCandidateStartTurnCloseRaceCancelsPromptWrite(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Close() error = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Close() did not complete after cancelling prompt write")
 	}
 	if writes := process.writeCount(); writes != 0 {
@@ -1064,7 +1064,7 @@ func TestClaudeCandidateCancelledControlContextDoesNotAcknowledgeFailure(t *test
 		if attempt != nil {
 			select {
 			case <-attempt.done:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("cancelled control close attempt did not settle")
 			}
 		}
@@ -1225,7 +1225,7 @@ func cancelAndAwaitTermination(t *testing.T, session Session, process *claudeCan
 // bounded termination request, and fails with the caller's message otherwise.
 func awaitClaudeCandidateTermination(t *testing.T, process *claudeCandidateFakeProcess, message string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	for {
 		if calls, _ := process.terminationDetails(); calls > 0 {
 			return
@@ -1262,7 +1262,7 @@ func claudeCandidateStdoutSink(t *testing.T, process *claudeCandidateFakeProcess
 // also holds the stop before the runner stops delivering output.
 func awaitClaudeCandidateCloseFence(t *testing.T, session *claudeCandidateSession) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	for {
 		session.mutex.Lock()
 		closing := session.closing
@@ -1283,7 +1283,7 @@ func cleanupClaudeCandidateSessionExpectClose(t *testing.T, session Session, exp
 		if err := session.Close(context.Background()); err != nil && (expectedCloseErr == nil || !errors.Is(err, expectedCloseErr)) {
 			t.Errorf("candidate cleanup Close() error = %v", err)
 		}
-		waitContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		waitContext, cancel := context.WithTimeout(context.Background(), testHangGuard)
 		_, waitErr := session.Wait(waitContext)
 		cancel()
 		if waitErr != nil {
@@ -1292,7 +1292,7 @@ func cleanupClaudeCandidateSessionExpectClose(t *testing.T, session Session, exp
 		if native, ok := session.(*claudeCandidateSession); ok {
 			select {
 			case <-native.watchDone:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Errorf("candidate cleanup watcher did not terminate")
 			}
 		}

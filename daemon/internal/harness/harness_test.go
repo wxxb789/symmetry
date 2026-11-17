@@ -12,6 +12,11 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
+// testHangGuard bounds how long a test waits for a scripted, in-process double
+// to publish an observable. It only turns a hung harness into a failure; it is
+// never a statement about how fast the adapter should be.
+const testHangGuard = 30 * time.Second
+
 type testAdapter struct {
 	capabilities Capabilities
 }
@@ -348,7 +353,7 @@ func TestGenericSessionCloseRetriesFailedTerminationAndStabilizesSuccess(t *test
 	go func() { firstDone <- session.Close(context.Background()) }()
 	select {
 	case <-process.firstTerminateStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("first Close() did not start process termination")
 	}
 

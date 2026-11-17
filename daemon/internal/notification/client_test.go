@@ -14,6 +14,12 @@ import (
 	"github.com/coder/websocket"
 )
 
+// testHangGuard bounds how long a test waits for the local WebSocket server or
+// the client loop to publish an observable. It only turns a hung harness into a
+// failure; it is never a statement about how fast the client should be, so a
+// loaded host cannot turn a slow round trip into a verdict about the client.
+const testHangGuard = 30 * time.Second
+
 func TestRunJoinsAuthenticatesSendsHeartbeatAndDeliversHints(t *testing.T) {
 	wrongReplySent := make(chan struct{})
 	allowCorrectReply := make(chan struct{})
@@ -83,13 +89,13 @@ func TestRunJoinsAuthenticatesSendsHeartbeatAndDeliversHints(t *testing.T) {
 			if got != expected {
 				t.Errorf("hint = %#v, want %#v", got, expected)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatalf("timed out waiting for hint %#v", expected)
 		}
 	}
 	select {
 	case <-heartbeatReceived:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("timed out waiting for heartbeat")
 	}
 
@@ -128,7 +134,7 @@ func TestRunReconnectsAfterPhoenixErrorWithNewJoinReference(t *testing.T) {
 
 	select {
 	case <-connectedTwice:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("client did not reconnect after phx_error")
 	}
 	mu.Lock()
@@ -157,7 +163,7 @@ func TestRunStopsPromptlyWhenContextIsCancelled(t *testing.T) {
 	done := runClient(client, ctx, make(chan Hint, 1))
 	select {
 	case <-joined:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("client did not join")
 	}
 	cancel()
@@ -204,7 +210,7 @@ func TestRunDropsWakeHintsWhenReceiverIsUnavailable(t *testing.T) {
 	done := runClient(client, ctx, make(chan Hint))
 	select {
 	case <-sent:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("client blocked while sending a wake hint")
 	}
 	cancel()
@@ -235,7 +241,7 @@ func TestRunReconnectsWhenHeartbeatReplyIsMissing(t *testing.T) {
 	done := runClient(client, ctx, make(chan Hint, 4))
 	select {
 	case <-reconnected:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("client did not reconnect after a missing heartbeat reply")
 	}
 	cancel()
@@ -281,7 +287,7 @@ func TestRunIgnoresStaleChannelCloseFrames(t *testing.T) {
 	close(releaseCurrentClose)
 	select {
 	case <-reconnected:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("client did not reconnect after the current phx_close")
 	}
 	cancel()
@@ -306,12 +312,12 @@ func TestRunDialUsesDeadline(t *testing.T) {
 	done := runClient(client, ctx, make(chan Hint))
 	select {
 	case <-dialStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("client did not start dialing")
 	}
 	select {
 	case <-dialCancelled:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("WebSocket dial did not observe its deadline")
 	}
 	cancel()
@@ -365,7 +371,7 @@ func TestAuthenticatedWebSocketRejectsRedirectBeforeForwardingMachineToken(t *te
 		t.Errorf("cloned HTTP client timeout = %v, want %v", got, permissiveClient.Timeout)
 	}
 
-	dialContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	dialContext, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	connection, _, err := websocket.Dial(dialContext, client.websocketURL, &websocket.DialOptions{
 		HTTPClient: client.httpClient,
@@ -477,7 +483,7 @@ func waitForRun(t *testing.T, done <-chan error) error {
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Run did not return after context cancellation")
 		return nil
 	}

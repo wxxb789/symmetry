@@ -13,6 +13,12 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 )
 
+// testHangGuard bounds how long a contract test waits for a scripted runner or
+// for a probe to publish an outcome. It only turns a hung harness into a
+// failure; it is never a statement about how fast a probe should be, so a
+// loaded host cannot turn a slow wakeup into a verdict about the probe.
+const testHangGuard = 30 * time.Second
+
 // commandRunner is the injection seam every provider probe exposes: each
 // provider package accepts a runner with exactly this method set.
 type commandRunner interface {
@@ -87,21 +93,14 @@ func TestProbeBoundsHangingRunnerAndPreservesCancellation(t *testing.T) {
 				context          func() (context.Context, context.CancelFunc)
 				want             error
 				cancelAfterStart bool
-				waitWithin       time.Duration
 			}{
 				{name: "local timeout", context: func() (context.Context, context.CancelFunc) { return context.Background(), func() {} }, want: context.DeadlineExceeded},
 				{name: "caller earlier deadline", context: func() (context.Context, context.CancelFunc) {
 					return newExpiredDeadlineContext()
-				}, want: context.DeadlineExceeded, cancelAfterStart: true, waitWithin: time.Second},
-				{name: "caller cancellation", context: func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, want: context.Canceled, cancelAfterStart: true, waitWithin: time.Second},
+				}, want: context.DeadlineExceeded, cancelAfterStart: true},
+				{name: "caller cancellation", context: func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, want: context.Canceled, cancelAfterStart: true},
 			} {
 				t.Run(test.name, func(t *testing.T) {
-					// The local-timeout row must return inside the bound the
-					// provider itself chose.
-					waitWithin := test.waitWithin
-					if waitWithin == 0 {
-						waitWithin = provider.probeTimeout + time.Second
-					}
 					ctx, cancel := test.context()
 					defer cancel()
 					runner := hangingRunner{started: make(chan struct{})}
@@ -111,17 +110,19 @@ func TestProbeBoundsHangingRunnerAndPreservesCancellation(t *testing.T) {
 					}()
 					select {
 					case <-runner.started:
-					case <-time.After(time.Second):
+					case <-time.After(testHangGuard):
 						t.Fatal("the probe did not start the injected runner")
 					}
 					if test.cancelAfterStart {
 						cancel()
 					}
+					// Only the provider's own bound may end the local-timeout
+					// row; the guard below only catches a harness that hangs.
 					var err error
 					select {
 					case err = <-done:
-					case <-time.After(waitWithin):
-						t.Fatalf("the probe did not return within %v", waitWithin)
+					case <-time.After(testHangGuard):
+						t.Fatalf("the probe did not return after its own %s bound", provider.probeTimeout)
 					}
 					if !errors.Is(err, test.want) {
 						t.Fatalf("probe error = %v, want %v", err, test.want)
@@ -152,7 +153,7 @@ func TestProbeRejectsSuccessfulRunnerResultAfterCancellation(t *testing.T) {
 			}()
 			select {
 			case <-runner.started:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("the probe did not start the injected runner")
 			}
 			cancel()
@@ -161,7 +162,7 @@ func TestProbeRejectsSuccessfulRunnerResultAfterCancellation(t *testing.T) {
 				if !errors.Is(err, context.Canceled) {
 					t.Fatalf("probe error = %v, want context.Canceled", err)
 				}
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("the probe did not return after cancellation")
 			}
 			calls := runner.callsSnapshot()

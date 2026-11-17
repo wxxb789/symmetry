@@ -18,6 +18,11 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 )
 
+// testHangGuard bounds how long a test waits for a scripted, in-process double
+// to publish an observable. It only turns a hung harness into a failure; it is
+// never a statement about how fast the adapter should be.
+const testHangGuard = 30 * time.Second
+
 func TestProbeRecordsExactTransportButRemainsUnverified(t *testing.T) {
 	adapter := NewAdapterWithRunner("opencode", fixtureCommandRunner{responses: map[string][]byte{
 		"--version":    []byte("opencode v2.3.0\n"),
@@ -546,7 +551,7 @@ func TestOpenPeerOwnershipFailureDoesNotRetryHealth(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close(context.Background())
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	_, err = session.(harness.StagedSession).Open(ctx)
 	if !errors.Is(err, ErrPeerOwnership) || ctx.Err() != nil || api.healthCalls != 1 || api.createCalls != 0 {

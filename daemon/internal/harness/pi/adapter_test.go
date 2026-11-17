@@ -17,6 +17,11 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
+// testHangGuard bounds how long a test waits for a scripted, in-process double
+// to publish an observable. It only turns a hung harness into a failure; it is
+// never a statement about how fast the adapter should be.
+const testHangGuard = 30 * time.Second
+
 func TestCloneTaskResultPreservesSchemaValidEmptyArrays(t *testing.T) {
 	semantic, err := protocol.ParseTaskResult([]byte(validTaskResultJSON(t)))
 	if err != nil {
@@ -264,7 +269,7 @@ func TestOpenReturnsPromptlyWhenCleanProcessExitLeavesGetStateUnacknowledged(t *
 		if err == nil || errors.Is(err, context.Canceled) {
 			t.Fatalf("Open() error = %v, want final process outcome", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Open() remained blocked after clean process exit")
 	}
 	if sink.has(harness.EventSessionStarted) {
@@ -308,7 +313,7 @@ func TestStartTurnReturnsPromptlyWhenCleanProcessExitLeavesPromptUnacknowledged(
 		if err == nil || errors.Is(err, context.Canceled) {
 			t.Fatalf("StartTurn() error = %v, want final process outcome", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("StartTurn() remained blocked after clean process exit")
 	}
 	result, err := session.Wait(context.Background())
@@ -1136,7 +1141,7 @@ func piResumeHandleAt(t *testing.T, filename string) *harness.ResumeHandle {
 
 func closePiSession(t *testing.T, session *nativeSession) {
 	t.Helper()
-	context, cancel := context.WithTimeout(context.Background(), time.Second)
+	context, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := session.Close(context); err != nil {
 		t.Fatalf("Close() error = %v", err)

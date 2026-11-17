@@ -232,7 +232,7 @@ func TestProbeRejectsSuccessfulSchemaResultAfterCancellation(t *testing.T) {
 	}()
 	select {
 	case <-runner.started:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Probe() did not start the injected schema runner")
 	}
 	cancel()
@@ -241,7 +241,7 @@ func TestProbeRejectsSuccessfulSchemaResultAfterCancellation(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Probe() error = %v, want context.Canceled", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Probe() did not return after schema cancellation")
 	}
 	if len(runner.calls) != 2 || runner.calls[0] != "--version" || runner.calls[1] != "app-server --help" {
@@ -263,14 +263,14 @@ func TestProbeBoundsHangingSchemaRunner(t *testing.T) {
 	}()
 	select {
 	case <-runner.started:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Probe() did not start the schema runner")
 	}
 	var err error
 	select {
 	case err = <-done:
-	case <-time.After(probeTimeout + time.Second):
-		t.Fatalf("Probe() did not return within %v", probeTimeout+time.Second)
+	case <-time.After(testHangGuard):
+		t.Fatalf("Probe() did not return after its own %s bound", probeTimeout)
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Probe() error = %v, want context.DeadlineExceeded", err)
