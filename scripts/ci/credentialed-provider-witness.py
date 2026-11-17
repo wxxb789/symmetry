@@ -51,7 +51,16 @@ import time
 
 FIXTURE = "wxxb789/symmetry-provider-sandbox"
 BASE = "551e0057e4829816587eaa8efb39f0b18eaa6445"
-SECRET = re.compile(rb"(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]+|Bearer\s+[A-Za-z0-9._~+/-]{12,})", re.I)
+# The credential shapes this witness can recognise, and only these:
+#   * GitHub tokens        `gh[pousr]_` followed by 8+ word characters
+#   * GitHub fine-grained  `github_pat_` followed by word characters
+#   * Bearer authorization `Bearer` followed by a 12+ character token
+# AWS (`AKIA...`), GitLab (`glpat-...`) and Slack (`xox...`) shapes are not
+# covered, so a clean scan is evidence about these three shapes and never about
+# credential absence in general.
+GITHUB_OR_BEARER_CREDENTIAL = re.compile(
+    rb"(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]+|Bearer\s+[A-Za-z0-9._~+/-]{12,})", re.I
+)
 
 
 def require(value, code):
@@ -65,7 +74,7 @@ def encoded(value):
 
 def safe_write(path, value):
     data = encoded(value)
-    require(not SECRET.search(data), "credential_pattern_in_evidence")
+    require(not GITHUB_OR_BEARER_CREDENTIAL.search(data), "github_or_bearer_credential_in_evidence")
     with open(path, "xb") as stream:
         os.chmod(path, 0o600)
         stream.write(data)
@@ -127,7 +136,8 @@ def scan_evidence(directory):
     count = 0
     for path in directory.iterdir():
         if path.is_file():
-            require(not SECRET.search(path.read_bytes()), "credential_pattern_in_evidence")
+            require(not GITHUB_OR_BEARER_CREDENTIAL.search(path.read_bytes()),
+                    "github_or_bearer_credential_in_evidence")
             count += 1
     return count
 
@@ -160,17 +170,18 @@ def compile_validated_source(root, config, observed_source, directory, environme
     try:
         result = subprocess.run(command, cwd=root / "control", env=environment,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180, check=False)
-        require(not SECRET.search(result.stdout + result.stderr), "credential_pattern_in_process_output")
+        require(not GITHUB_OR_BEARER_CREDENTIAL.search(result.stdout + result.stderr),
+                "github_or_bearer_credential_in_process_output")
         code = result.returncode
     except subprocess.TimeoutExpired as error:
-        require(not SECRET.search((error.stdout or b"") + (error.stderr or b"")),
-                "credential_pattern_in_process_output")
+        require(not GITHUB_OR_BEARER_CREDENTIAL.search((error.stdout or b"") + (error.stderr or b"")),
+                    "github_or_bearer_credential_in_process_output")
         code = -1
     safe_write(directory / ("compile-recovery.json" if recovering else "compile.json"), {
         "command": command, "exit_code": code,
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "manifest_sha256": observed_source["manifest_sha256"],
-        "process_output": "discarded; credential-pattern checked before discard",
+        "process_output": "discarded; GitHub and Bearer credential shapes checked before discard",
     })
     require(code == 0, "validated_source_compile_failed")
     require(source(root, config) == observed_source, "source_changed_during_compile")
@@ -218,7 +229,8 @@ def main():
             result = subprocess.run(command, cwd=root / "control", env=environment,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180, check=False)
             # Raw process output is never written or printed: exceptions may contain headers.
-            require(not SECRET.search(result.stdout + result.stderr), "credential_pattern_in_process_output")
+            require(not GITHUB_OR_BEARER_CREDENTIAL.search(result.stdout + result.stderr),
+                    "github_or_bearer_credential_in_process_output")
             code = result.returncode
             failure_reason = None
             diagnostic = None
@@ -239,7 +251,7 @@ def main():
         row = {"phase": phase, "command": command, "exit_code": code,
                "elapsed_seconds": round(time.monotonic() - started, 3),
                "expected_exit_code": 86 if phase == "crash" else 0,
-               "process_output": "discarded; credential-pattern checked before discard",
+               "process_output": "discarded; GitHub and Bearer credential shapes checked before discard",
                "failure_reason": failure_reason, "diagnostic": diagnostic}
         with open(directory / "commands.jsonl", "ab") as stream:
             os.chmod(directory / "commands.jsonl", 0o600)

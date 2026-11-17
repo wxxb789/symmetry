@@ -13,7 +13,6 @@ import hashlib
 import http.client
 import http.server
 import json
-import mmap
 import os
 import pathlib
 import platform
@@ -37,6 +36,12 @@ FIXED_ARGS = ["--mode", "rpc", "--no-extensions", "--no-skills", "--no-context-f
 MAX_BODY = 16 << 20
 SECRET_FIELDS = {"authorization", "machine_token", "lease_token", "enrollment_token",
                  "operator_token", "api_key", "apikey", "secret", "pipe_token"}
+# `go version -m` build records the daemon identity is read from.
+GO_BUILD_SETTINGS = ("vcs", "vcs.revision", "vcs.time", "vcs.modified")
+# The registration endpoint Control exposes for one machine session. The
+# identifiers are parsed and validated as UUIDs below; a pattern that only
+# matched `[0-9a-f-]+` accepted `----` and `-` as a machine and session.
+MACHINE_SESSION_ENDPOINT = re.compile(r"/api/v1/machines/([^/]+)/sessions/([^/]+)")
 SOURCE_PATHS = ["scripts/ci/omo-control-native-evidence.py", "scripts/ci/omo-control-native-fixture.exs",
                 "daemon/cmd/symmetry-daemon/main.go", "daemon/internal/app/app.go",
                 "daemon/internal/config/config.go", "daemon/internal/control/client.go",
@@ -56,6 +61,24 @@ class Rejected(Exception):
 def require(condition, reason):
     if not condition:
         raise Rejected(reason)
+
+
+def canonical_uuid(value, label):
+    """Return `value` when it is the canonical hyphenated UUID Control emits."""
+    try:
+        parsed = str(uuid.UUID(value))
+    except (AttributeError, TypeError, ValueError):
+        raise Rejected(f"successful registration has an invalid daemon-session endpoint: {label} is not a UUID") from None
+    require(parsed == value.lower(),
+            f"successful registration has an invalid daemon-session endpoint: {label} is not a canonical hyphenated UUID")
+    return parsed
+
+
+def machine_session_ids(path):
+    """Return the validated machine and daemon-session identifiers of `path`."""
+    match = MACHINE_SESSION_ENDPOINT.fullmatch(path)
+    require(match is not None, "successful registration has an invalid daemon-session endpoint")
+    return canonical_uuid(match.group(1), "machine id"), canonical_uuid(match.group(2), "session id")
 
 
 def sha(data):
@@ -86,20 +109,42 @@ def workspace_files(workspace, git, env, receipt):
     return files
 
 
+def parse_go_build_settings(output):
+    """Return the embedded settings `go version -m` printed for one executable.
+
+    Every record is `<kind>\\t<key>[=<value>]`. Only the parsed `build` records
+    Go itself reports count, so a decoy `vcs.revision=` blob elsewhere in the
+    image cannot win the way it won a byte search. A setting reported twice with
+    different values is ambiguous evidence and is rejected, not resolved by
+    position.
+    """
+    fields = {}
+    for line in output.splitlines():
+        # The tool indents every record line (`\tbuild\tvcs.revision=...`); the
+        # header line and any blank line carry no tab-separated record.
+        kind, tab, record = line.strip().partition("\t")
+        if not tab or kind != "build" or "=" not in record:
+            continue
+        key, _, value = record.partition("=")
+        if key not in GO_BUILD_SETTINGS:
+            continue
+        if key in fields and fields[key] != value:
+            raise Rejected(f"go version -m reported conflicting {key} records for the production daemon binary")
+        fields[key] = value
+    return fields
+
+
 def go_build_source(path):
-    # Go embeds these build-info lines in ordinary production executables.
-    # Absence is explicitly unverified, never inferred from the executable name.
-    with path.open("rb") as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as image:
-        fields = {}
-        for key in ("vcs", "vcs.revision", "vcs.time", "vcs.modified"):
-            match = re.search(rb"(?:build\t|\n)" + re.escape(key.encode()) + rb"=([^\n\x00]+)", image)
-            if match:
-                try:
-                    fields[key] = match.group(1).decode("utf-8", "strict")
-                except UnicodeDecodeError:
-                    raise Rejected("embedded daemon build identity is invalid UTF-8; raw contents withheld") from None
-        return {"embedded_build_info": fields,
-                "source_revision": fields.get("vcs.revision", "unverified: production binary lacks embedded VCS revision")}
+    # `go version -m` is the supported reader for the module and build-setting
+    # records Go embeds in ordinary production executables. Absence of a VCS
+    # revision stays explicitly unverified, never inferred from the file name.
+    go = shutil.which("go")
+    require(go is not None, "explicit local Go executable unavailable; daemon build identity is unverified")
+    result = subprocess.run([go, "version", "-m", str(path)], capture_output=True, text=True)
+    require(result.returncode == 0, "go version -m refused the production daemon binary; build identity is unverified")
+    fields = parse_go_build_settings(result.stdout)
+    return {"embedded_build_info": fields,
+            "source_revision": fields.get("vcs.revision", "unverified: production binary lacks embedded VCS revision")}
 
 
 def canonical(value):
@@ -332,10 +377,10 @@ class LossProxy:
             with self.lock:
                 self.calls.append(call)
                 if handler.command == "PUT" and "/machines/" in path and "/sessions/" in path and 200 <= status < 300:
-                    registration = {"path": path, "request": parse_json(body, "registration request"),
+                    machine_id, session_id = machine_session_ids(path)
+                    registration = {"path": path, "machine_id": machine_id, "session_id": session_id,
+                                    "request": parse_json(body, "registration request"),
                                     "response": parse_json(payload, "registration response")}
-                    require(re.fullmatch(r"/api/v1/machines/[0-9a-f-]+/sessions/[0-9a-f-]+", path),
-                            "successful registration has an invalid daemon-session endpoint")
                     require(isinstance(registration["request"], dict) and isinstance(registration["response"], dict),
                             "successful registration lacks authoritative JSON objects")
                     self.registrations.append(registration)
@@ -964,8 +1009,8 @@ def witness(args, receipt):
         require(len(proxy.registrations) >= 2, "daemon restart lacks two actual successful registrations")
         registrations = []
         for item in proxy.registrations:
-            endpoint = re.fullmatch(r"/api/v1/machines/([^/]+)/sessions/([^/]+)", item["path"])
-            require(endpoint and endpoint.group(1) == identity["machine_id"], "registration changed durable machine identity")
+            machine_id, daemon_instance_id = machine_session_ids(item["path"])
+            require(machine_id == identity["machine_id"], "registration changed durable machine identity")
             returned = item["response"].get("runtimes")
             declared = item["request"].get("runtimes")
             require(isinstance(returned, list) and len(returned) == 1 and isinstance(returned[0], dict) and
@@ -976,7 +1021,7 @@ def witness(args, receipt):
                     runtime.get("runtime_id") == selected[0]["runtime_id"] and
                     type(runtime.get("runtime_epoch")) is int and runtime["runtime_epoch"] > 0,
                     "registration returned a missing/mismatched runtime identity or epoch")
-            registrations.append({"machine_id": endpoint.group(1), "daemon_instance_id": endpoint.group(2),
+            registrations.append({"machine_id": machine_id, "daemon_instance_id": daemon_instance_id,
                                   "path": item["path"], "runtime_id": runtime["runtime_id"], "runtime_epoch": runtime["runtime_epoch"]})
         require(registrations[0]["path"] != registrations[-1]["path"] and
                 registrations[-1]["runtime_epoch"] > registrations[0]["runtime_epoch"],

@@ -152,5 +152,48 @@ for byte in stderr:
                 self.assertTrue(all(not thread.is_alive() for thread in process.threads))
 
 
+class UrlUserinfoRedactionTest(unittest.TestCase):
+    """A hostile URL in captured output must not leak its password tail."""
+
+    PASSWORD_IN_USERINFO = "https://alice:p@s:w0rd@control.internal/x"
+
+    def sanitize(self, text):
+        return WITNESS.Receipt("").sanitize(text)
+
+    def test_password_containing_at_sign_is_redacted_whole(self):
+        sanitized = self.sanitize('{"url": "%s"}' % self.PASSWORD_IN_USERINFO)
+        self.assertEqual(sanitized, '{"url": "https://[REDACTED]@control.internal/x"}')
+        for fragment in ("alice", "p@s:w0rd", "s:w0rd"):
+            self.assertNotIn(fragment, sanitized)
+
+    def test_userinfo_is_redacted_through_the_module_helper(self):
+        self.assertEqual(
+            WITNESS.redact_url_userinfo(self.PASSWORD_IN_USERINFO),
+            "https://[REDACTED]@control.internal/x",
+        )
+
+    def test_authority_without_a_password_is_still_redacted(self):
+        self.assertEqual(
+            WITNESS.redact_url_userinfo("https://token@host:8443/p?q=1#f"),
+            "https://[REDACTED]@host:8443/p?q=1#f",
+        )
+
+    def test_credential_free_urls_are_left_alone(self):
+        for url in ("https://control.internal/x", "http://127.0.0.1:4000/api/v1/runtimes"):
+            self.assertEqual(WITNESS.redact_url_userinfo(url), url)
+
+    def test_ipv6_authority_keeps_its_brackets(self):
+        self.assertEqual(
+            WITNESS.redact_url_userinfo("https://u:p@[::1]:8080/x"),
+            "https://[REDACTED]@[::1]:8080/x",
+        )
+
+    def test_unparsable_authority_is_dropped_rather_than_printed(self):
+        self.assertEqual(
+            WITNESS.redact_url_userinfo("see https://u:p@[::1/x for details"),
+            "see [REDACTED] for details",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

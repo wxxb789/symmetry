@@ -128,6 +128,40 @@ def private_root(root):
     return "protected inheritable Windows owner-rights and SYSTEM DACL"
 
 
+# A URL inside captured output can carry a foreign credential. The scan is
+# deliberately narrow: it only redacts the authority, and it keeps the rest of
+# the URL so the observation stays readable.
+URL_TOKEN = re.compile(r"https?://[^\s\"'<>\\]+")
+
+
+def redact_url_userinfo(text):
+    """Replace the userinfo of every URL in `text` with a fixed marker.
+
+    `urllib.parse.urlsplit` splits the authority at its *last* `@`, so a
+    password that itself contains `@` is still recognised as userinfo and the
+    rebuilt authority keeps only the host and port. The former
+    `(https?://)[^\\s/@\"<>]+:[^\\s/@\"<>]+@` pattern stopped at the first `@`,
+    which turned `https://alice:p@s:w0rd@control.internal/x` into
+    `https://[REDACTED]@s:w0rd@control.internal/x` and leaked the password tail.
+    """
+
+    def redact(match):
+        token = match.group(0)
+        try:
+            parsed = urllib.parse.urlsplit(token)
+        except ValueError:
+            # An authority the standard parser rejects is evidence of nothing.
+            return "[REDACTED]"
+        if not parsed.username and not parsed.password:
+            return token
+        authority = parsed.netloc.rpartition("@")[2]
+        return urllib.parse.urlunsplit(
+            (parsed.scheme, "[REDACTED]@" + authority, parsed.path, parsed.query, parsed.fragment)
+        )
+
+    return URL_TOKEN.sub(redact, text)
+
+
 class Receipt:
     def __init__(self, secret):
         self.secret_forms = tuple(set((secret, json.dumps(secret)[1:-1],
@@ -157,7 +191,7 @@ class Receipt:
             if secret:
                 text = text.replace(secret, "[REDACTED]")
         # A foreign credential-bearing URL is never useful as evidence.
-        return re.sub(r"(https?://)[^\s/@\"<>]+:[^\s/@\"<>]+@", r"\1[REDACTED]@", text)
+        return redact_url_userinfo(text)
 
     def check_raw(self, text):
         return not any(secret and secret in text for secret in self.secret_forms)

@@ -268,10 +268,13 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       must either dispatch it against a current subject or record that no acceptance has happened since
       the split.
 
-- [ ] Extend the `scripts/audit-no-legacy-routes.sh` target list, or record the gap as permanent. The
-      audit deliberately enumerates its surfaces (`scripts/audit-no-legacy-routes.sh:8-25`) and lists
-      `.github/workflows/ci.yml` but not `.github/workflows/linux-native-v2-acceptance.yml`, which was
-      moved out of `ci.yml`, nor the composite action `.github/actions/prepare-pi-release/action.yml`
-      added by the 2026-11-17 consolidation. Recorded here as an open, accepted limitation: the guard
-      itself stays untouched and ungated, but its enumerated surface may no longer cover every
-      production contract file that can carry a retired U2 route.
+- `scripts/audit-no-legacy-routes.sh` no longer enumerates its surfaces. It derives every audited file
+  from `git ls-files` (binary and asset extensions excepted) and names its three intentional
+  exclusions, so `.github/workflows/linux-native-v2-acceptance.yml` and the composite action
+  `.github/actions/prepare-pi-release/action.yml` are covered without further maintenance.
+  `scripts/ci/test-no-legacy-routes-audit.py` reproduces the placements the enumerated list missed.
+  The job itself stays ungated, as the 2026-11-17 review decided.
+- `scripts/ci/0007c-subject-digest.ps1` was deleted with the `chore/fence-replacements` audit: it
+  prints a digest, compares nothing and cannot fail, and no job or script invoked it. The recorded
+  digests in `docs/evidence/goal-0007c-safe-work-planning-2026-11-16.md` name it as the algorithm of
+  record, so that receipt can no longer be recomputed from the tree; the file remains in git history.
