@@ -15,8 +15,8 @@ func TestAllGoalSchemasCompileAndGeneratedTimestampsStayStrings(t *testing.T) {
 	if err := ensureSchemas(); err != nil {
 		t.Fatalf("schemas did not compile: %v", err)
 	}
-	if len(schemas) != 20 {
-		t.Fatalf("compiled schemas = %d, want 20", len(schemas))
+	if want := declaredSchemaCount(t); len(schemas) != want {
+		t.Fatalf("compiled schemas = %d, want %d: every schema the embedded bundle declares is compiled", len(schemas), want)
 	}
 	if commitPath == nil || commitPath.MatchTimeout != 10*time.Millisecond {
 		t.Fatalf("CommitPath regex timeout = %v, want %v", commitPath.MatchTimeout, 10*time.Millisecond)
@@ -29,6 +29,24 @@ func TestAllGoalSchemasCompileAndGeneratedTimestampsStayStrings(t *testing.T) {
 	if admission.Limits.DeadlineAt != "2026-09-09T00:00:00Z" {
 		t.Fatalf("deadline_at = %q", admission.Limits.DeadlineAt)
 	}
+}
+
+// declaredSchemaCount is the number of schemas the embedded bundle declares. The
+// compiled registry must hold exactly these, so a contract that adds a schema
+// cannot be left out of the daemon's envelopes without failing here.
+func declaredSchemaCount(t *testing.T) int {
+	t.Helper()
+	var bundle map[string]json.RawMessage
+	if err := json.Unmarshal(schemaBundle, &bundle); err != nil {
+		t.Fatalf("decode embedded schema bundle: %v", err)
+	}
+	count := 0
+	for name := range bundle {
+		if strings.HasSuffix(name, ".schema.json") {
+			count++
+		}
+	}
+	return count
 }
 
 func TestDecodePreservesNullableMicrousdFields(t *testing.T) {
