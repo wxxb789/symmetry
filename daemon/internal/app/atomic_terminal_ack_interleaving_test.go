@@ -62,7 +62,7 @@ func TestAtomicTerminalAcknowledgementUnknownWriteSurvivesDeliveredTransition(t 
 		if err != nil {
 			t.Fatalf("interleaved outbox flush error = %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("interleaved outbox flush did not finish")
 	}
 	if controlClient.transitionCalls != 1 || controlClient.acknowledgementCalls != 1 {

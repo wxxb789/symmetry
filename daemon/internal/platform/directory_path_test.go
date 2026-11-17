@@ -4,7 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+// testHangGuard bounds how long a test waits for a scripted supervisor, helper
+// or child process to publish an observable. It only turns a hung harness into
+// a failure; it is never a statement about how fast the product should be, so a
+// loaded host cannot turn a slow stop or reap into a verdict about the product.
+const testHangGuard = 30 * time.Second
 
 func TestResolveExistingDirectoryRejectsInvalidRawPaths(t *testing.T) {
 	directory := t.TempDir()

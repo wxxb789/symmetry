@@ -8,7 +8,6 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
@@ -74,7 +73,7 @@ func TestProcessRetriesReceiptPersistenceAfterWaitWithoutRestopping(t *testing.T
 	if first.ContainmentError == nil || !errors.Is(first.ContainmentError, want) {
 		t.Fatalf("first process result containment error = %v, want %v", first.ContainmentError, want)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 0); err != nil {
 		t.Fatalf("retry Terminate() error = %v", err)

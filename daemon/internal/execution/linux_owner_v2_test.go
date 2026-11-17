@@ -118,7 +118,7 @@ func TestLinuxV2LiveOwnerStatusHelperExitDuringStatusRPC(t *testing.T) {
 		_ = unix.Close(pidfd)
 		t.Fatal("wrap helper pidfd")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	statusReader := linuxV2HelperStatusReaderFunc(func(ctx context.Context) (platform.LinuxOwnerHelperV2Status, error) {
 		if err := ctx.Err(); err != nil {
@@ -224,7 +224,7 @@ func TestLinuxV2LiveOwnerStatusWaitsForLeaseRenewalSettlement(t *testing.T) {
 	go func() { result <- owner.waitForLeaseRenewal(ctx) }()
 	select {
 	case <-ctx.doneCalled:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		settle()
 		t.Fatal("live-owner status did not wait on the in-flight lease ACK")
 	}
@@ -948,7 +948,7 @@ func TestLinuxCloneStopFailureDoesNotWaitForDetachedPipeWriter(t *testing.T) {
 	var result Result
 	select {
 	case result = <-waitDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Process.Wait() blocked on a detached writer after an unproven cgroup stop")
 	}
 	if result.ContainmentError == nil || !result.OutputTruncated {
@@ -1037,7 +1037,7 @@ func TestLinuxCloneSuccessfulStopBoundsDetachedPipeDrain(t *testing.T) {
 	var result Result
 	select {
 	case result = <-waitDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Process.Wait() blocked after a successful cgroup stop with a detached pipe writer")
 	}
 	if !result.OutputTruncated || result.Success() || !finalizerCalled.Load() || !outcome.StopReceiptValid || !outcome.LeafRemovalProven {
@@ -1155,7 +1155,7 @@ func TestLinuxCloneCancellationInvalidatesCandidateBeforeFinalizer(t *testing.T)
 	cancel()
 	select {
 	case <-terminationObserved:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("run-context cancellation was not captured in the clone outcome")
 	}
 	close(waitRelease)
@@ -1199,7 +1199,7 @@ func TestLinuxCloneTerminateDeadlineDuringFinalizerDoesNotBlock(t *testing.T) {
 	go func() { waitDone <- process.Wait() }()
 	select {
 	case <-finalizerStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("clone finalizer did not reach its terminal decision")
 	}
 	terminationContext, cancelTermination := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -1208,7 +1208,7 @@ func TestLinuxCloneTerminateDeadlineDuringFinalizerDoesNotBlock(t *testing.T) {
 	var terminationErr error
 	select {
 	case terminationErr = <-terminationDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Terminate() blocked past its deadline while clone finalization was in progress")
 	}
 	cancelTermination()
@@ -1269,7 +1269,7 @@ func TestLinuxCloneTerminateDeadlineBoundsFinalizerStartedAfterResult(t *testing
 	go func() { terminationDone <- process.Terminate(terminationContext, 0) }()
 	select {
 	case <-finalizerStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Terminate() did not start exact-owner finalization retry")
 	}
 	select {
@@ -1277,7 +1277,7 @@ func TestLinuxCloneTerminateDeadlineBoundsFinalizerStartedAfterResult(t *testing
 		if !errors.Is(terminationErr, context.DeadlineExceeded) {
 			t.Fatalf("Terminate() after early stop = %v, want the caller's deadline", terminationErr)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Terminate() blocked past its deadline while starting finalization after the result")
 	}
 	release()

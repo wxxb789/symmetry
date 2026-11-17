@@ -19,6 +19,12 @@ import (
 
 const machineToken = "machine-token"
 
+// testHangGuard bounds how long a test waits for a scripted in-process control
+// server or client to publish an observable. It only turns a hung harness into
+// a failure; it is never a statement about how fast the product should be, so a
+// loaded host cannot turn a slow round trip into a verdict about the client.
+const testHangGuard = 30 * time.Second
+
 func TestOmOReviewRegressionClientRegistersNativeRuntime(t *testing.T) {
 	repositoryResourceID := "77777777-7777-4777-8777-777777777777"
 	for _, kind := range []string{"omo", "unknown_native"} {
@@ -464,14 +470,14 @@ func TestClientHonorsRequestCancellationAndDoesNotRetryMutation(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("request did not reach server")
 	}
 	cancel()
 
 	select {
 	case err = <-result:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Claim() did not return after context cancellation")
 	}
 	if !errors.Is(err, context.Canceled) {

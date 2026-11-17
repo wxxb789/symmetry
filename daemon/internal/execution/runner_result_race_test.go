@@ -155,7 +155,7 @@ func waitForResultRaceTermination(t *testing.T, result <-chan error) error {
 	select {
 	case err := <-result:
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Terminate() did not return")
 		return nil
 	}

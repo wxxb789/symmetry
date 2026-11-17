@@ -898,7 +898,7 @@ func TestReleaseProcessGroupOwnerTransfersBlockedMonitorOwnership(t *testing.T) 
 	go func() { releaseResult <- releaseProcessGroupOwner(group) }()
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("descendant monitor did not enter the blocked reader")
 	}
 
@@ -930,12 +930,12 @@ func TestReleaseProcessGroupOwnerTransfersBlockedMonitorOwnership(t *testing.T) 
 	releaseReaderOnce.Do(func() { close(releaseReader) })
 	select {
 	case <-group.monitorDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("descendant monitor did not stop after releasing the reader")
 	}
 	select {
 	case <-closeEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("retire goroutine did not begin pidfd release")
 	}
 	allowPIDFDCloseOnce.Do(func() { close(allowPIDFDClose) })
@@ -1477,7 +1477,7 @@ func TestProcessGroupCloseRejectsLiveSetSIDDescendant(t *testing.T) {
 
 	select {
 	case <-group.escapeObserved:
-	case <-time.After(15 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("descendant monitor did not observe setsid escape")
 	}
 	waitStarted = true
@@ -2036,7 +2036,7 @@ func TestAttachProcessWaitsForInitialDescendantScan(t *testing.T) {
 		if group != nil && group.monitorDone != nil {
 			select {
 			case <-group.monitorDone:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Errorf("initial descendant monitor did not stop during cleanup")
 			}
 		}
@@ -2053,7 +2053,7 @@ func TestAttachProcessWaitsForInitialDescendantScan(t *testing.T) {
 
 	select {
 	case <-scanStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("initial descendant scan did not start")
 	}
 	select {
@@ -2841,7 +2841,7 @@ func (owner *linuxTestChildOwner) cleanup(t *testing.T) {
 		return
 	}
 	_ = syscall.Kill(owner.pid, syscall.SIGKILL)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	for {
 		var status unix.WaitStatus
 		waitedPID, err := unix.Wait4(owner.pid, &status, unix.WNOHANG, nil)

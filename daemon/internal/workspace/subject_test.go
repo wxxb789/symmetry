@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,12 @@ import (
 )
 
 const subjectResourceID = "00000000-0000-4000-8000-000000000001"
+
+// testHangGuard bounds how long a test waits for a scripted git command or
+// subject-materialization pass to publish an observable. It only turns a hung
+// harness into a failure; it is never a statement about how fast the product
+// should be, so a loaded host cannot turn slow git IO into a verdict.
+const testHangGuard = 30 * time.Second
 
 func TestPrepareSubjectUsesAdmittedCommitAfterRefDrift(t *testing.T) {
 	repository := newSubjectRepository(t)
@@ -473,13 +480,41 @@ func TestGitCommandOutputLimitedHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	command := workspaceOutputHelperCommand(t, ctx, "block", 0)
+	readiness, err := command.StderrPipe()
+	if err != nil {
+		t.Fatalf("output helper stderr pipe error = %v", err)
+	}
 
 	result := make(chan error, 1)
 	go func() {
 		_, err := gitCommandOutputLimited(ctx, command, 64, ErrSubjectTreeTooLarge)
 		result <- err
 	}()
-	time.Sleep(50 * time.Millisecond)
+
+	// The "block" fixture reports readiness on stderr once it is blocked in its
+	// own loop, so the cancellation below lands during the read. Sleeping for a
+	// fixed delay instead would make the test's subject depend on host speed.
+	readinessErr := make(chan error, 1)
+	go func() {
+		marker := make([]byte, len(workspaceOutputHelperReadyMarker))
+		if _, err := io.ReadFull(readiness, marker); err != nil {
+			readinessErr <- err
+			return
+		}
+		if string(marker) != workspaceOutputHelperReadyMarker {
+			readinessErr <- fmt.Errorf("output helper readiness marker = %q, want %q", marker, workspaceOutputHelperReadyMarker)
+			return
+		}
+		readinessErr <- nil
+	}()
+	select {
+	case err := <-readinessErr:
+		if err != nil {
+			t.Fatalf("output helper readiness: %v", err)
+		}
+	case <-time.After(testHangGuard):
+		t.Fatalf("output helper did not report readiness before the %s hang guard expired", testHangGuard)
+	}
 	cancel()
 
 	select {
@@ -487,10 +522,15 @@ func TestGitCommandOutputLimitedHonorsContextCancellation(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("gitCommandOutputLimited() error = %v, want context.Canceled", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("gitCommandOutputLimited() did not stop after context cancellation")
 	}
 }
+
+// workspaceOutputHelperReadyMarker is what the "block" fixture mode writes to
+// stderr once it is blocked, so a test can wait for the fixture's own readiness
+// instead of a wall-clock delay.
+const workspaceOutputHelperReadyMarker = "ready"
 
 func workspaceOutputHelperCommand(t *testing.T, ctx context.Context, mode string, count int) *exec.Cmd {
 	t.Helper()
@@ -527,7 +567,7 @@ func TestWorkspaceOutputHelper(t *testing.T) {
 	case "emit":
 		_, _ = os.Stdout.Write([]byte(strings.Repeat("x", count)))
 	case "block":
-		_, _ = os.Stdout.Write([]byte("ready"))
+		_, _ = os.Stderr.WriteString(workspaceOutputHelperReadyMarker)
 		for {
 			time.Sleep(time.Second)
 		}
@@ -665,7 +705,7 @@ func TestMaterializeSubjectCancellationStopsBatchStream(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("MaterializeSubject() error = %v, want context.Canceled", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("MaterializeSubject did not stop after context cancellation")
 	}
 	if got := gitTrace2StartCount(gitTrace2Starts(t, tracePath), "cat-file"); got != 1 {
@@ -916,7 +956,7 @@ func assertNoOwnedGitChildProcesses(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		return
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	for {
 		if len(gitChildProcessIDs()) == 0 {
 			time.Sleep(100 * time.Millisecond)
@@ -950,7 +990,7 @@ func TestSubjectMeasurementWitness(t *testing.T) {
 			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways,
 		},
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 
 	started := time.Now()
@@ -1219,7 +1259,7 @@ func TestSubjectBatchStreamCancelFailureFallsBackToKill(t *testing.T) {
 	var outcome digestOutcome
 	select {
 	case outcome = <-result:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		cancel()
 		outcome = <-result
 		t.Fatalf("subject digest did not stop after a failed batch cancellation: %v (cancellation attempts %d)", outcome.err, cancelCalls.Load())

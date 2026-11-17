@@ -410,7 +410,7 @@ func TestRunContinuesAfterTypedRecoveryPending(t *testing.T) {
 			cancel()
 			select {
 			case <-finished:
-			case <-time.After(3 * time.Second):
+			case <-time.After(testHangGuard):
 				t.Errorf("Run goroutine did not stop during cleanup")
 			}
 		})
@@ -418,7 +418,7 @@ func TestRunContinuesAfterTypedRecoveryPending(t *testing.T) {
 		var observation inputRecoveryObservation
 		select {
 		case observation = <-registered:
-		case <-time.After(3 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("Run did not register after durable input failure recovery")
 		}
 		if observation.err != nil {
@@ -436,7 +436,7 @@ func TestRunContinuesAfterTypedRecoveryPending(t *testing.T) {
 		}
 		select {
 		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("Run did not stop after registration observation")
 		}
 		select {
@@ -509,13 +509,13 @@ func TestRunContinuesAfterTypedRecoveryPending(t *testing.T) {
 			cancel()
 			select {
 			case <-finished:
-			case <-time.After(3 * time.Second):
+			case <-time.After(testHangGuard):
 				t.Errorf("Run goroutine did not stop during cleanup")
 			}
 		})
 		select {
 		case <-control.registered:
-		case <-time.After(3 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("native recovery did not register")
 		}
 		awaitReconcileCall(t, control.calls, 1)
@@ -526,14 +526,14 @@ func TestRunContinuesAfterTypedRecoveryPending(t *testing.T) {
 		for range 2 {
 			select {
 			case <-stopCalls:
-			case <-time.After(3 * time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("native recovery stop attempt did not occur before backoff")
 			}
 		}
 		timers.fireUntil(t, minimumInterval, control.calls, 2)
 		select {
 		case <-stopCalls:
-		case <-time.After(3 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("native recovery did not retry after controlled backoff")
 		}
 		cancel()
@@ -542,7 +542,7 @@ func TestRunContinuesAfterTypedRecoveryPending(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
-		case <-time.After(3 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("native Run did not stop")
 		}
 	})
@@ -598,14 +598,14 @@ func TestReconcilePendingRecoverySchedulesSnapshotBeforeBackoff(t *testing.T) {
 		cancel()
 		select {
 		case <-finished:
-		case <-time.After(3 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Errorf("Run goroutine did not stop during cleanup")
 		}
 	})
 
 	select {
 	case <-control.registered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("snapshot recovery did not register")
 	}
 	select {
@@ -613,14 +613,14 @@ func TestReconcilePendingRecoverySchedulesSnapshotBeforeBackoff(t *testing.T) {
 		if call != 1 {
 			t.Fatalf("Reconcile call = %d, want 1", call)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Reconcile call 1 did not occur after registration")
 	}
 	timers.await(t, minimumInterval)
 	var observation snapshotStartObservation
 	select {
 	case observation = <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testHangGuard):
 		cancel()
 		t.Fatal("Control snapshot assignment was not started after pending recovery reconcile")
 	}
@@ -638,7 +638,7 @@ func TestReconcilePendingRecoverySchedulesSnapshotBeforeBackoff(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Run did not stop after snapshot scheduling assertion")
 	}
 }

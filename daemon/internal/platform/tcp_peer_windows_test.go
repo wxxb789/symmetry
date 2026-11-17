@@ -116,7 +116,7 @@ func openNativeLoopbackConnection(t *testing.T) (net.Conn, net.Conn, tcpPeerTupl
 	case server = <-accepted:
 	case err := <-acceptError:
 		t.Fatalf("accept: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("accept timed out")
 	}
 	t.Cleanup(func() { _ = server.Close() })

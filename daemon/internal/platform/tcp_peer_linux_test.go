@@ -103,7 +103,7 @@ func TestVerifyLoopbackTCPPeerWaitsForDeferredAcceptWithoutWriting(t *testing.T)
 	if err != nil {
 		t.Fatalf("ProcessIdentity() error = %v", err)
 	}
-	verifyContext, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	verifyContext, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := VerifyLoopbackTCPPeer(verifyContext, client, os.Getpid(), identity); err != nil {
 		t.Fatalf("VerifyLoopbackTCPPeer() error = %v", err)

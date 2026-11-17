@@ -2350,7 +2350,7 @@ func TestLinuxV2CapacityTwoWaitsForReleaseThenRechecksOwnerState(t *testing.T) {
 				}()
 				select {
 				case <-stopped:
-				case <-time.After(10 * time.Second):
+				case <-time.After(testHangGuard):
 					t.Error("capacity-two workers did not stop after cancellation")
 				}
 			}()
@@ -2477,7 +2477,7 @@ func TestLinuxV2CapacityTwoWaitsForReleaseThenRechecksOwnerState(t *testing.T) {
 			case <-firstWorkerDone:
 				journal, loadErr := store.LoadJournal(state.RunKey{RunID: "run-first", Generation: 1})
 				t.Fatalf("first capacity-two Run exited before native Start: journal=%#v err=%v", journal, loadErr)
-			case <-time.After(10 * time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("first capacity-two Run did not enter native Start")
 			}
 			select {
@@ -2485,7 +2485,7 @@ func TestLinuxV2CapacityTwoWaitsForReleaseThenRechecksOwnerState(t *testing.T) {
 			case <-firstWorkerDone:
 				journal, loadErr := store.LoadJournal(state.RunKey{RunID: "run-first", Generation: 1})
 				t.Fatalf("first capacity-two Run exited before establishing owner state: journal=%#v err=%v", journal, loadErr)
-			case <-time.After(10 * time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("first capacity-two Run did not establish owner state")
 			}
 			app.startAssignment(ctx, protocol.Assignment{RunID: "run-second", Generation: 1, Work: workSecond})
@@ -2494,7 +2494,7 @@ func TestLinuxV2CapacityTwoWaitsForReleaseThenRechecksOwnerState(t *testing.T) {
 				if delay <= leaseSafetyMargin {
 					t.Fatalf("second Run waited with only %s remaining before lease safety margin", delay)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("second Run did not wait for the first launch phase")
 			}
 			if controlClient.claimCalls != 2 {
@@ -2520,7 +2520,7 @@ func TestLinuxV2CapacityTwoWaitsForReleaseThenRechecksOwnerState(t *testing.T) {
 				// before the second owner rechecks cross-RunKey state.
 				select {
 				case <-firstTurnEntered:
-				case <-time.After(10 * time.Second):
+				case <-time.After(testHangGuard):
 					t.Fatal("first capacity-two Run did not enter its live turn after RELEASE")
 				}
 				firstKey := state.RunKey{RunID: "run-first", Generation: 1}
@@ -2534,7 +2534,7 @@ func TestLinuxV2CapacityTwoWaitsForReleaseThenRechecksOwnerState(t *testing.T) {
 					firstJournal, firstErr := store.LoadJournal(state.RunKey{RunID: "run-first", Generation: 1})
 					secondJournal, secondErr := store.LoadJournal(secondKey)
 					t.Fatalf("capacity-two workers exited before second native Start: first=%#v (%v), second=%#v (%v)", firstJournal, firstErr, secondJournal, secondErr)
-				case <-time.After(10 * time.Second):
+				case <-time.After(testHangGuard):
 					t.Fatal("second capacity-two Run did not enter native Start after first RELEASE")
 				}
 				select {
@@ -2542,12 +2542,12 @@ func TestLinuxV2CapacityTwoWaitsForReleaseThenRechecksOwnerState(t *testing.T) {
 					if err != nil {
 						t.Fatalf("bind second capacity-two owner after first RELEASE: %v", err)
 					}
-				case <-time.After(10 * time.Second):
+				case <-time.After(testHangGuard):
 					t.Fatal("second capacity-two owner did not finish binding")
 				}
 				select {
 				case <-secondTurnEntered:
-				case <-time.After(10 * time.Second):
+				case <-time.After(testHangGuard):
 					t.Fatal("second capacity-two Run did not enter its live turn")
 				}
 				for _, key := range []state.RunKey{{RunID: "run-first", Generation: 1}, secondKey} {
@@ -2563,7 +2563,7 @@ func TestLinuxV2CapacityTwoWaitsForReleaseThenRechecksOwnerState(t *testing.T) {
 			} else {
 				select {
 				case <-firstWorkerDone:
-				case <-time.After(10 * time.Second):
+				case <-time.After(testHangGuard):
 					t.Fatal("capacity-two workers did not reject the unresolved first owner")
 				}
 				firstKey := state.RunKey{RunID: "run-first", Generation: 1}

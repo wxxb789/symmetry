@@ -517,12 +517,12 @@ func TestContainmentSupervisorUnauthenticatedRequestDoesNotStopJob(t *testing.T)
 	runDone := make(chan error, 1)
 	go func() { runDone <- runContainmentSupervisor(containmentSupervisorArgs{}, bootstrap) }()
 	cleanup := func() {
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(testHangGuard)
 		_, _ = requestContainmentSupervisorPipe(endpoint, "close", deadline)
 		_, _ = requestContainmentSupervisorPipe(endpoint, "release", deadline)
 		select {
 		case <-runDone:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Errorf("containment supervisor did not finish during cleanup")
 		}
 	}
@@ -590,7 +590,7 @@ func TestContainmentSupervisorOwnerWatchdogObservesOwnerEOF(t *testing.T) {
 	}
 	select {
 	case <-watchdog.ownerLost():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("owner watchdog did not observe owner EOF")
 	}
 }
@@ -616,7 +616,7 @@ func TestContainmentSupervisorOwnerWatchdogLeavesLiveOwnerArmed(t *testing.T) {
 	}
 	select {
 	case <-watchdog.ownerLost():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("owner watchdog did not observe EOF after live owner closed")
 	}
 }
@@ -902,12 +902,12 @@ func TestContainmentSupervisorLeaseExpiryRetainsRecoveryAfterStopFailure(t *test
 			return
 		default:
 		}
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(testHangGuard)
 		_, _ = requestContainmentSupervisorPipe(endpoint, "recover", deadline)
 		_, _ = requestContainmentSupervisorPipe(endpoint, "release", deadline)
 		select {
 		case <-runFinished:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testHangGuard):
 			t.Errorf("containment supervisor did not finish during cleanup")
 		}
 	}()
@@ -937,7 +937,7 @@ func TestContainmentSupervisorLeaseExpiryRetainsRecoveryAfterStopFailure(t *test
 	}
 	select {
 	case <-secondStopComplete:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("failed expiry stop was not retried by the supervisor loop")
 	}
 
@@ -955,7 +955,7 @@ func TestContainmentSupervisorLeaseExpiryRetainsRecoveryAfterStopFailure(t *test
 	}
 	select {
 	case <-releaseCalled:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("successful recovery did not release the supervisor Job")
 	}
 	select {
@@ -963,7 +963,7 @@ func TestContainmentSupervisorLeaseExpiryRetainsRecoveryAfterStopFailure(t *test
 		if runErr != nil {
 			t.Fatalf("runContainmentSupervisor() error = %v", runErr)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("containment supervisor did not complete after release")
 	}
 }

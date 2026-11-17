@@ -300,7 +300,7 @@ func TestSuspendedProcessWaitAndCloseDoNotRaceHandleRelease(t *testing.T) {
 		}{code: code, err: err}
 	}()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	for {
 		process.mu.Lock()
 		waiters := process.waiters
@@ -325,7 +325,7 @@ func TestSuspendedProcessWaitAndCloseDoNotRaceHandleRelease(t *testing.T) {
 		if result.code != 1 {
 			t.Fatalf("concurrent Wait() exit code = %d, want 1", result.code)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("concurrent Wait() did not finish after Close()")
 	}
 }

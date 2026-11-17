@@ -1391,7 +1391,7 @@ func TestRunRestartDrainsAppliedInputOutboxBeforeRegistrationThenFailsTerminal(t
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		cancel()
 		t.Fatal("restart recovery did not converge")
 	}
@@ -1401,7 +1401,7 @@ func TestRunRestartDrainsAppliedInputOutboxBeforeRegistrationThenFailsTerminal(t
 		if journal.LocalState != "cleanup_pending" || journal.TerminalState != "failed" || journal.TerminalVerdict != state.TerminalVerdictAccepted || journal.InputCommandIntent == nil || !journal.InputCommandIntent.AcknowledgementDelivered {
 			t.Fatalf("terminal journal before cleanup = %#v", journal)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("failed terminal was not durably queued before cleanup")
 	}
 	if _, err := recoveredStore.LoadJournal(key); !state.IsNotFound(err) {
@@ -1534,7 +1534,7 @@ func TestRestartInputRecoveryDoesNotRegisterUntilMalformedResponseDrainSucceeds(
 	var timer *manualDeadlineTimer
 	select {
 	case timer = <-timers:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("restart recovery did not schedule a retry")
 	}
 	if timer.delay != minimumInterval {
@@ -1549,7 +1549,7 @@ func TestRestartInputRecoveryDoesNotRegisterUntilMalformedResponseDrainSucceeds(
 		if err != nil {
 			t.Fatalf("initialize error = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("restart recovery did not complete after a successful drain")
 	}
 	if got, want := api.callsSnapshot(), []string{"transition:running", "transition:running", "ack:input-1:applied:input-ack-1", "register"}; !sameStrings(got, want) {
@@ -1801,7 +1801,7 @@ func TestCancelWinsInputLifecycleGateWithoutWritingStdin(t *testing.T) {
 	}()
 	select {
 	case <-terminated:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancel did not terminate before entering the input lifecycle gate")
 	}
 	active.inputMu.Unlock()
@@ -1853,7 +1853,7 @@ func TestConclusiveCleanupStopsQueuedInputAndCancellationReceipts(t *testing.T) 
 	for name, completion := range map[string]<-chan struct{}{"input": inputDone, "cancel": cancelDone} {
 		select {
 		case <-completion:
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatalf("%s command completion hung after conclusive cleanup", name)
 		}
 	}
@@ -1889,7 +1889,7 @@ func TestShutdownCancelsInputCompletionRetryBeforeTerminating(t *testing.T) {
 	}()
 	select {
 	case <-writeClosed:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("input write did not begin")
 	}
 	waitingDone := make(chan error, 1)
@@ -1908,17 +1908,17 @@ func TestShutdownCancelsInputCompletionRetryBeforeTerminating(t *testing.T) {
 		if received {
 			t.Fatal("input completion unexpectedly persisted after closing the store")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("input completion retry did not stop during shutdown")
 	}
 	select {
 	case <-waitingDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("waiting output remained blocked on input lifecycle mutex")
 	}
 	select {
 	case <-shutdownDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("shutdown did not join after cancelling input completion retry")
 	}
 	if process.terminations != 1 {
@@ -1982,7 +1982,7 @@ func TestInputLifecycleOrdersInputBeforeWaitingOrExit(t *testing.T) {
 		}()
 		select {
 		case <-process.waitEntered:
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("process exit did not reach Wait()")
 		}
 		select {
@@ -1996,7 +1996,7 @@ func TestInputLifecycleOrdersInputBeforeWaitingOrExit(t *testing.T) {
 		}
 		select {
 		case <-exitDone:
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("process exit did not finish")
 		}
 		journal, err := store.LoadJournal(key)
@@ -2041,7 +2041,7 @@ func TestBoundedInputWriteCancelsExecutionAfterTimeout(t *testing.T) {
 		if !errors.Is(cause, errInputWriteTimeout) {
 			t.Fatalf("stopExecution cause = %v, want timeout", cause)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("timeout did not cancel execution")
 	}
 }
@@ -2120,7 +2120,7 @@ func TestInputWriteTimeoutFailsAcknowledgementAndTerminalForCommandPaths(t *test
 			go func() { handled <- d.handleCommand(context.Background(), command) }()
 			select {
 			case <-process.entered:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("command did not reach blocking WriteInput")
 			}
 			timer.channel <- time.Now()
@@ -2129,17 +2129,17 @@ func TestInputWriteTimeoutFailsAcknowledgementAndTerminalForCommandPaths(t *test
 				if !accepted {
 					t.Fatal("command timeout was not durably acknowledged")
 				}
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("bounded command handler did not return after timer fired")
 			}
 			select {
 			case <-terminationDone:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("timeout did not terminate the execution")
 			}
 			select {
 			case <-waitDone:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("process exit did not queue a terminal failure")
 			}
 			journal, err := store.LoadJournal(key)
@@ -2191,12 +2191,12 @@ func TestStartupFailureRetriesTerminalPersistenceWithStableID(t *testing.T) {
 	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: protocol.Work{Goal: "g"}})
 	select {
 	case <-firstFailure:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("startup failure did not enter terminal persistence retry")
 	}
 	select {
 	case <-timerCreated:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("terminal persistence retry did not create its timer")
 	}
 	if len(transitions) != 1 {
@@ -2245,7 +2245,7 @@ func TestRenewLeaseErrorClearsCommandRequestBarrier(t *testing.T) {
 	}()
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("renew RPC did not start")
 	}
 	if requests, _ := commandRequestCounts(daemon); requests != 1 {
@@ -2332,12 +2332,12 @@ func TestStartAssignmentDoesNotBlockReactor(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("startAssignment blocked the reactor")
 	}
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("claim worker did not start")
 	}
 	close(gate)
@@ -2404,7 +2404,7 @@ func TestLeaseExpiryCancelsBlockedPrepareWithoutProcess(t *testing.T) {
 	daemon.renewLeases(context.Background())
 	select {
 	case <-workspace.cancelled:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("lease expiry did not cancel blocked Prepare")
 	}
 	daemon.workers.Wait()
@@ -2443,7 +2443,7 @@ func TestRenewLeasesStopsExpiredRecoveredJournalBeforeEligibility(t *testing.T) 
 	daemon.renewLeases(context.Background())
 	select {
 	case <-terminated:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("expired recovered journal did not terminate persisted process")
 	}
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
@@ -2491,7 +2491,7 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 	}()
 	select {
 	case <-workspace.cancelled:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancel command did not cancel blocked Prepare")
 	}
 	daemon.workers.Wait()
@@ -2511,7 +2511,7 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 	inputUnlocked = true
 	select {
 	case <-firstPersistenceFailure:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancel command did not attempt atomic receipt persistence")
 	}
 	retryTimer.channel <- time.Now()
@@ -2520,7 +2520,7 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 		if !acknowledged {
 			t.Fatal("cancel command did not persist an atomic terminal receipt")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancel command did not retry atomic receipt persistence")
 	}
 	if attempts != 2 {
@@ -2620,7 +2620,7 @@ func TestCancelledCommandSignalsOutboxAfterAtomicReceipt(t *testing.T) {
 	}
 	select {
 	case <-wake:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("atomic cancellation did not wake outbox")
 	}
 	journal, err := store.LoadJournal(key)
@@ -2668,7 +2668,7 @@ func TestCancelledReceiptTreatsDurablePersistenceAsIdempotent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("atomic receipt error = %v, want idempotent success", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("atomic receipt did not stop after durable persistence")
 	}
 	journal, err := store.LoadJournal(key)
@@ -2773,7 +2773,7 @@ func TestAtomicCancelledReceiptCannotBeDeletedBeforeAcknowledgement(t *testing.T
 	}
 	select {
 	case <-outboxDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("outbox did not drain atomic cancellation")
 	}
 	if got, want := control.calls, []string{"transition:cancelled", "ack:cancel-1"}; !sameStrings(got, want) {
@@ -2820,7 +2820,7 @@ func TestDurableTerminalRejectsConcurrentCancellation(t *testing.T) {
 	close(api.releaseCompleted)
 	select {
 	case <-flushed:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("outbox did not recover from stale terminal response")
 	}
 
@@ -3305,7 +3305,7 @@ func TestBlockedReactorDoesNotBlockLiveness(t *testing.T) {
 		go func() { daemon.runLiveness(ctx); close(livenessDone) }()
 		select {
 		case <-api.renewEntered:
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("blocked dispatch prevented renewal")
 		}
 		cancel()
@@ -3872,7 +3872,7 @@ func TestEarlierRenewalCompletionKeepsLaterCancellationHandle(t *testing.T) {
 	finishTerminal := daemon.beginTerminal(key)
 	select {
 	case <-control.secondCancelled:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("older renewal completion cleared the newer cancellation handle")
 	}
 	finishTerminal(false)
@@ -4062,7 +4062,7 @@ func TestOwnershipLossReleasesActiveSlotAfterProcessStops(t *testing.T) {
 	daemon.flushRun(context.Background(), journal)
 	select {
 	case <-process.terminated:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("ownership loss did not terminate the process")
 	}
 	select {
@@ -4102,7 +4102,7 @@ func TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration(t *testing.T)
 	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	control := &terminalRecoveryControl{cancel: cancel, cancelAfterFlush: true, transitionErr: errors.New("temporary failure")}
 	err := Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart))
@@ -4543,12 +4543,12 @@ func TestRunRetriesReconcileWithBackoffWithoutNotifications(t *testing.T) {
 		if pid != 99 {
 			t.Fatalf("terminated persisted PID = %d, want 99", pid)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("retry did not process stale_stop for the persisted run")
 	}
 	select {
 	case <-cleanup.entered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("stale journal cleanup did not start")
 	}
 	journal, err := store.LoadJournal(key)
@@ -4605,7 +4605,7 @@ func TestTerminalTransitionEnqueueFailureRetainsJournalAndSlot(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("terminal persistence retry did not stop after root cancellation")
 	}
 	journal, err := store.LoadJournal(key)
@@ -5328,7 +5328,7 @@ func TestRenewalCommandsUseSerialExecutorWithoutBlockingLiveness(t *testing.T) {
 	go func() { daemon.renewLeases(ctx); close(renewed) }()
 	select {
 	case <-api.renewEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("blocked command executor prevented another run renewal")
 	}
 	<-renewed
@@ -5336,7 +5336,7 @@ func TestRenewalCommandsUseSerialExecutorWithoutBlockingLiveness(t *testing.T) {
 	cancel()
 	select {
 	case <-executorDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("command executor did not exit after shutdown")
 	}
 	if input.writes != 1 {
@@ -5727,16 +5727,16 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	daemon.scheduleSnapshot(protocol.RuntimeSnapshot{Commands: []protocol.Command{{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel", Payload: json.RawMessage(`{}`)}}})
 	select {
 	case <-input.terminated:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("scheduled cancel did not preempt blocked input")
 	}
 	close(input.release)
 	select {
 	case <-cancelPersisted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("scheduled cancellation did not persist after input completion")
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	var journal state.RunJournal
 	var err error
 	for {
@@ -5778,7 +5778,7 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	}()
 	select {
 	case <-joined:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("background shutdown did not join command and snapshot workers")
 	}
 }
@@ -5825,7 +5825,7 @@ func TestBlockedCommandDoesNotDelayUnrelatedScheduledAssignment(t *testing.T) {
 	<-input.entered
 	select {
 	case <-started:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testHangGuard):
 		t.Fatal("blocked command delayed an unrelated assignment")
 	}
 	release.Do(func() { close(input.release) })
@@ -5856,7 +5856,7 @@ func TestReleaseRunUnblocksCommandWaiters(t *testing.T) {
 	for name, completion := range map[string]<-chan struct{}{"original": firstDone, "duplicate": duplicateDone} {
 		select {
 		case <-completion:
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatalf("%s command waiter remained blocked after run release", name)
 		}
 	}
@@ -5900,7 +5900,7 @@ func TestDeliveredCommandReceiptEvictsCompletedDedupeEntry(t *testing.T) {
 	cancel()
 	select {
 	case <-executorDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("command executor did not exit")
 	}
 }
@@ -5963,7 +5963,7 @@ func TestAcknowledgementDeliverySuppressesLateCommandsFromEverySnapshotResponse(
 			close(control.release)
 			select {
 			case <-responseDone:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("late response did not complete")
 			}
 			if process.writes != 1 {
@@ -5975,7 +5975,7 @@ func TestAcknowledgementDeliverySuppressesLateCommandsFromEverySnapshotResponse(
 			cancel()
 			select {
 			case <-executorDone:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("command executor did not exit")
 			}
 		})
@@ -6017,7 +6017,7 @@ func TestAcknowledgementDeliveryTombstonesEveryPreAckRequest(t *testing.T) {
 	close(firstGate)
 	select {
 	case <-completed:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("first late dispatch did not complete")
 	}
 	if requests, _ := commandRequestCounts(daemon); requests != 1 {
@@ -6029,7 +6029,7 @@ func TestAcknowledgementDeliveryTombstonesEveryPreAckRequest(t *testing.T) {
 	close(secondGate)
 	select {
 	case <-completed:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("second late dispatch did not complete")
 	}
 	if process.writes != 1 {
@@ -6088,7 +6088,7 @@ func TestAcknowledgementPersistenceDoesNotBlockNewCommandRequests(t *testing.T) 
 	var duringPersistenceRequestID uint64
 	select {
 	case duringPersistenceRequestID = <-requestStarted:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testHangGuard):
 		t.Fatal("beginCommandRequest blocked on acknowledgement persistence")
 	}
 	if requests, queued := commandRequestCounts(daemon); requests != 2 || queued != 1 {
@@ -6100,7 +6100,7 @@ func TestAcknowledgementPersistenceDoesNotBlockNewCommandRequests(t *testing.T) 
 	close(control.release)
 	select {
 	case <-responseDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("stale dispatch did not complete during acknowledgement persistence")
 	}
 	if process.writes != 1 {
@@ -6169,7 +6169,7 @@ func TestFailedAcknowledgementPersistenceKeepsProvisionalTombstoneUntilResponseE
 	close(control.release)
 	select {
 	case <-responseDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("stale dispatch did not complete")
 	}
 	if process.writes != 1 {
@@ -6207,7 +6207,7 @@ func TestCommandRequestClearsAfterErroredSnapshotResponses(t *testing.T) {
 			close(control.release)
 			select {
 			case <-done:
-			case <-time.After(time.Second):
+			case <-time.After(testHangGuard):
 				t.Fatal("response handling did not finish")
 			}
 			if requests, _ := commandRequestCounts(daemon); requests != 0 {
@@ -6254,7 +6254,7 @@ func TestCancelledSnapshotDoesNotLaunchAssignmentsBehindBlockedCommand(t *testin
 	cancel()
 	select {
 	case <-snapshotDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancelled snapshot stayed blocked behind command execution")
 	}
 	select {
@@ -6265,7 +6265,7 @@ func TestCancelledSnapshotDoesNotLaunchAssignmentsBehindBlockedCommand(t *testin
 	close(input.release)
 	select {
 	case <-executorDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("command executor did not join after blocked input released")
 	}
 }
@@ -6664,7 +6664,7 @@ func TestLivenessExitsOnShutdown(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("liveness did not exit after shutdown")
 	}
 }
@@ -6791,7 +6791,7 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 		if !succeeded {
 			t.Fatal("completed terminal cleanup used failure policy")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("completed terminal cleanup did not run")
 	}
 }
@@ -6950,7 +6950,7 @@ func TestScheduledCancelDuringClaimCompletesAfterDurableReceipt(t *testing.T) {
 	daemon.workers.Wait()
 	select {
 	case <-completion:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancel command did not complete after durable acknowledgement")
 	}
 	daemon.commandWG.Wait()
@@ -7053,7 +7053,7 @@ func TestRenewLeasesDoesNotSeriallyBlockOtherRuns(t *testing.T) {
 		select {
 		case runID := <-api.started:
 			seen[runID] = true
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("a hung renewal blocked another run")
 		}
 	}
@@ -7069,7 +7069,7 @@ func TestRenewLeasesDoesNotSeriallyBlockOtherRuns(t *testing.T) {
 	close(release)
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("renewal loop did not complete")
 	}
 	if !secondProcessed {
@@ -7113,7 +7113,7 @@ func TestRenewLeasesJoinsWorkersAfterShutdown(t *testing.T) {
 	for range 2 {
 		select {
 		case <-api.started:
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			cancel()
 			close(api.releaseSecond)
 			t.Fatal("renewal worker did not start")
@@ -7132,7 +7132,7 @@ func TestRenewLeasesJoinsWorkersAfterShutdown(t *testing.T) {
 	if !returnedEarly {
 		select {
 		case <-done:
-		case <-time.After(time.Second):
+		case <-time.After(testHangGuard):
 			t.Fatal("renewal loop did not join cancelled workers")
 		}
 	}
@@ -7274,9 +7274,10 @@ func startupTestDaemon(t *testing.T, store *state.Store, service workspace.Servi
 }
 
 // testHangGuard bounds how long a test waits for an in-process, fully scripted
-// daemon to stop. It only turns a hung harness into a failure; it is never a
-// statement about how fast the product should stop, so it sits far above any
-// real scheduling delay, race instrumentation included.
+// daemon to reach the state the test asserts - stopping, starting, publishing a
+// terminal, or releasing a returned process. It only turns a hung harness into
+// a failure; it is never a statement about how fast the product should be, so
+// it sits far above any real scheduling delay, race instrumentation included.
 const testHangGuard = 30 * time.Second
 
 // stopTestDaemon performs the daemon's own shutdown ordering for a test-built
@@ -7498,7 +7499,7 @@ func (factory *recordingTimerFactory) new(delay time.Duration) deadlineTimer {
 
 func (factory *recordingTimerFactory) await(t *testing.T, delay time.Duration) *recordingDeadlineTimer {
 	t.Helper()
-	timeout := time.NewTimer(time.Second)
+	timeout := time.NewTimer(testHangGuard)
 	defer timeout.Stop()
 	for {
 		if timer := factory.next(delay); timer != nil {
@@ -7514,7 +7515,7 @@ func (factory *recordingTimerFactory) await(t *testing.T, delay time.Duration) *
 
 func (factory *recordingTimerFactory) fireUntil(t *testing.T, delay time.Duration, calls <-chan int, want int) {
 	t.Helper()
-	timeout := time.NewTimer(time.Second)
+	timeout := time.NewTimer(testHangGuard)
 	defer timeout.Stop()
 	for {
 		if timer := factory.next(delay); timer != nil {
@@ -7552,7 +7553,7 @@ func awaitReconcileCall(t *testing.T, calls <-chan int, want int) {
 		if got != want {
 			t.Fatalf("Reconcile call = %d, want %d", got, want)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatalf("Reconcile call %d did not occur", want)
 	}
 }
@@ -9111,8 +9112,6 @@ func (client fakeNotifier) Run(ctx context.Context, hints chan<- notification.Hi
 
 type fakeProcess struct{ result execution.Result }
 
-const processOwnershipTestTimeout = 30 * time.Second
-
 func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
 	store, err := state.New(t.TempDir())
 	if err != nil {
@@ -9154,7 +9153,7 @@ func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
 	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "work"}})
 	select {
 	case <-process.detailsEntered:
-	case <-time.After(processOwnershipTestTimeout):
+	case <-time.After(testHangGuard):
 		t.Fatal("returned process identity was not observed")
 	}
 	active := daemon.runningRun(key)
@@ -9261,17 +9260,17 @@ func TestRunShutdownDoesNotWaitForUnresolvedProcessReturnedWithStartError(t *tes
 	}()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("assignment did not reach Start")
 	}
 	select {
 	case <-recorded:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("returned process identity was not persisted")
 	}
 	select {
 	case <-process.detailsEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("returned process identity was not observed")
 	}
 	if got := process.waitCalls.Load(); got != 0 {
@@ -9284,7 +9283,7 @@ func TestRunShutdownDoesNotWaitForUnresolvedProcessReturnedWithStartError(t *tes
 		if runErr != nil {
 			t.Fatalf("Run() error = %v", runErr)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Run() waited for unresolved Process.Wait")
 	}
 	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
@@ -9664,7 +9663,7 @@ func TestLateCancelAfterStagedTerminalObservationCannotWin(t *testing.T) {
 	}()
 	select {
 	case <-session.terminalObservedReady:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native terminal observation did not reach the waiter")
 	}
 
@@ -9735,7 +9734,7 @@ func TestObservedNativeFailureWinsLateCancel(t *testing.T) {
 	}()
 	select {
 	case <-session.terminalObservedReady:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native terminal observation did not reach the waiter")
 	}
 
@@ -9906,7 +9905,7 @@ func TestCancelledNativeStartLeaseExpiryPreservesAcknowledgement(t *testing.T) {
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
 	case <-startEntered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native Adapter.Start did not enter")
 	}
 	key := state.RunKey{RunID: "run-1", Generation: 1}
@@ -9984,7 +9983,7 @@ func TestCancelResponseLossAfterTerminalObservationIsFailedNotRejected(t *testin
 	}()
 	select {
 	case <-session.terminalObservedReady:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native terminal observation did not reach the waiter")
 	}
 	command := protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-response-lost", Kind: "cancel"}

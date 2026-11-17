@@ -75,7 +75,7 @@ func TestLinuxOwnerAnchorProcessHelper(t *testing.T) {
 }
 
 func TestLinuxOwnerAnchorPIDFDReadyTracksExactChildExit(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	process := startLinuxOwnerAnchorTestProcess(t, ctx, "target", false)
 	identity := authority.LinuxCgroupProcessIdentity{
@@ -314,7 +314,7 @@ func TestLinuxOwnerHelperFinalizationIsSingleFlightAndExactReplay(t *testing.T) 
 }
 
 func TestLinuxOwnerAnchorSubreaperAdoptsAndReapsAfterHelperDeath(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	anchor := startLinuxOwnerAnchorTestProcess(t, ctx, "anchor", true)
 	ready := readLinuxOwnerAnchorTestEvent(t, anchor.output)
@@ -379,7 +379,7 @@ func TestLinuxOwnerAnchorSubreaperAdoptsAndReapsAfterHelperDeath(t *testing.T) {
 // adoption/wait boundary; it does not substitute for installed-gate or
 // delegated-cgroup host validation.
 func TestLinuxOwnerAnchorPhysicalOnlyChildReapsWithoutRunReceipt(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	anchor := startLinuxOwnerAnchorTestProcess(t, ctx, "physical-anchor", true)
 	ready := readLinuxOwnerAnchorTestEvent(t, anchor.output)
@@ -439,7 +439,7 @@ func TestLinuxOwnerAnchorPhysicalOnlyChildReapsWithoutRunReceipt(t *testing.T) {
 }
 
 func TestLinuxOwnerAnchorWaitRejectsECHILDAndStalePIDIdentity(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	helper := startLinuxOwnerAnchorTestProcess(t, ctx, "helper", true)
 	ready := readLinuxOwnerAnchorTestEvent(t, helper.output)
@@ -1269,7 +1269,7 @@ func TestLinuxOwnerAnchorKillWriteRetriesOnlyAfterDefiniteNoWrite(t *testing.T) 
 }
 
 func TestLinuxOwnerAnchorUnresolvedRunDoesNotAbortSiblingSupervision(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	healthyProcess := startLinuxOwnerAnchorTestProcess(t, ctx, "target", false)
 	defer healthyProcess.stop(t)
@@ -1340,7 +1340,7 @@ func TestLinuxOwnerAnchorHelperDeathReusesCachedStopEvidence(t *testing.T) {
 }
 
 func TestLinuxOwnerAnchorNormalStopRejectsForeignRunChildInLeaf(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	anchorIdentity, err := ProcessIdentity(os.Getpid())
 	if err != nil {
@@ -1751,7 +1751,7 @@ func (process *linuxOwnerAnchorTestProcess) stop(t *testing.T) {
 	if process.targetFile != nil {
 		_ = unix.PidfdSendSignal(int(process.targetFile.Fd()), unix.SIGKILL, nil, 0)
 		if process.targetID.Validate() == nil {
-			cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			cleanup, cancel := context.WithTimeout(context.Background(), testHangGuard)
 			_ = linuxOwnerAnchorWaitPIDFD(cleanup, process.targetFile, process.targetID)
 			cancel()
 		}
@@ -1936,7 +1936,7 @@ func runLinuxOwnerAnchorTestProcessMode(physicalOnly bool) error {
 	defer func() {
 		if !helperWaited {
 			_ = unix.PidfdSendSignal(helperPIDFD, unix.SIGKILL, nil, 0)
-			cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			cleanup, cancel := context.WithTimeout(context.Background(), testHangGuard)
 			_ = linuxOwnerAnchorWaitPIDFD(cleanup, helperFile, authority.LinuxCgroupProcessIdentity{PID: helper.Process.Pid, Identity: helperIdentity})
 			cancel()
 			_ = helper.Process.Release()
@@ -1945,7 +1945,7 @@ func runLinuxOwnerAnchorTestProcessMode(physicalOnly bool) error {
 			if !targetWaited {
 				_ = unix.PidfdSendSignal(int(targetFile.Fd()), unix.SIGKILL, nil, 0)
 				if targetIdentity.Validate() == nil {
-					cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					cleanup, cancel := context.WithTimeout(context.Background(), testHangGuard)
 					_ = linuxOwnerAnchorWaitPIDFD(cleanup, targetFile, targetIdentity)
 					cancel()
 				}
@@ -1955,7 +1955,7 @@ func runLinuxOwnerAnchorTestProcessMode(physicalOnly bool) error {
 		if foreignFile != nil {
 			_ = unix.PidfdSendSignal(int(foreignFile.Fd()), unix.SIGKILL, nil, 0)
 			if foreignIdentity.Validate() == nil {
-				cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				cleanup, cancel := context.WithTimeout(context.Background(), testHangGuard)
 				_ = linuxOwnerAnchorWaitPIDFD(cleanup, foreignFile, foreignIdentity)
 				cancel()
 			}
@@ -2066,7 +2066,7 @@ func runLinuxOwnerAnchorTestProcessMode(physicalOnly bool) error {
 		if err := unix.PidfdSendSignal(int(targetFile.Fd()), unix.SIGKILL, nil, 0); err != nil {
 			return fmt.Errorf("contain exact unregistered gate by pidfd in test fixture: %w", err)
 		}
-		waitContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		waitContext, cancel := context.WithTimeout(context.Background(), testHangGuard)
 		err = waitLinuxOwnerAnchorPIDFDReady(waitContext, targetFile)
 		cancel()
 		if err != nil {

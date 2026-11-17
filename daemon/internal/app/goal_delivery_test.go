@@ -2040,12 +2040,12 @@ func TestNativeTerminalObservationWinsLateLeaseTermination(t *testing.T) {
 	}()
 	select {
 	case <-closeEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native close did not start after successful WaitTurn")
 	}
 	select {
 	case <-waitEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native final wait did not start")
 	}
 	daemon.mu.Lock()
@@ -2067,7 +2067,7 @@ func TestNativeTerminalObservationWinsLateLeaseTermination(t *testing.T) {
 	close(finalWaitGate)
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native terminal observation did not complete")
 	}
 	daemon.mu.Lock()
@@ -2143,7 +2143,7 @@ func TestNativeCancellationOwnerStopsLosingTerminalWaiter(t *testing.T) {
 	}()
 	select {
 	case <-waitTurnEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native terminal waiter did not enter WaitTurn")
 	}
 	cancelDone := make(chan bool, 1)
@@ -2154,12 +2154,12 @@ func TestNativeCancellationOwnerStopsLosingTerminalWaiter(t *testing.T) {
 	}()
 	select {
 	case <-usageEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancellation owner did not reach final usage persistence")
 	}
 	select {
 	case <-waiterDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		close(releaseUsage)
 		usageReleased = true
 		<-cancelDone
@@ -2233,7 +2233,7 @@ func TestNativeTerminalOwnerRejectsConcurrentCancellation(t *testing.T) {
 	}()
 	select {
 	case <-waitEntered:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native terminal owner did not reach final Wait")
 	}
 	command := protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-after-terminal", Kind: "cancel"}
@@ -2251,7 +2251,7 @@ func TestNativeTerminalOwnerRejectsConcurrentCancellation(t *testing.T) {
 	close(finalWaitGate)
 	select {
 	case <-waiterDone:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native terminal owner did not complete")
 	}
 	if !app.handleCommand(context.Background(), command) {

@@ -82,7 +82,7 @@ func TestTerminateClosesStdinBeforeBlockedContainmentStopAndOwnsCleanupOnce(t *t
 		t.Fatalf("stdin observer error = %v", err)
 	default:
 	}
-	writeTimer := time.NewTimer(5 * time.Second)
+	writeTimer := time.NewTimer(testHangGuard)
 	select {
 	case err := <-writeResult:
 		writeTimer.Stop()
@@ -140,7 +140,7 @@ func observeTerminationTestStdin(file *os.File, firstByte, allowEOFRead, eof cha
 
 func waitTerminationOrder(t *testing.T, signal <-chan struct{}, message string) {
 	t.Helper()
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(testHangGuard)
 	defer timer.Stop()
 	select {
 	case <-signal:

@@ -127,9 +127,8 @@ func cleanupRunnerTestProcess(t *testing.T, process *Process) {
 	if process == nil {
 		return
 	}
-	const cleanupTimeout = 5 * time.Second
 
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	terminationErr := process.Terminate(ctx, 0)
 	cancel()
 	if terminationErr == nil {
@@ -139,7 +138,7 @@ func cleanupRunnerTestProcess(t *testing.T, process *Process) {
 	// Terminate owns one shutdown operation and may outlive a caller whose
 	// context expired. Rejoin that operation once with a fresh bounded context
 	// before failing the test; never retry the operation indefinitely.
-	retryContext, retryCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	retryContext, retryCancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer retryCancel()
 	retryErr := process.Terminate(retryContext, 0)
 	select {
@@ -182,7 +181,7 @@ func TestTerminateStopsDescendantProcessOnWindows(t *testing.T) {
 	sink := &recordingSink{notify: make(chan struct{}, 1)}
 	process := startHelper(t, sink, "tree-parent")
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 		defer cancel()
 		_ = process.Terminate(ctx, 0)
 	})
@@ -195,7 +194,7 @@ func TestTerminateStopsDescendantProcessOnWindows(t *testing.T) {
 		t.Fatalf("child process %d was not running before termination; tasklist output: %q", childPID, details)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 100*time.Millisecond); err != nil {
 		t.Fatalf("Terminate() error = %v", err)
@@ -210,7 +209,7 @@ func TestRootExitDoesNotLeaveADescendantHoldingStdoutOnWindows(t *testing.T) {
 	sink := &recordingSink{notify: make(chan struct{}, 1)}
 	process := startHelper(t, sink, "root-exits-child-holding-stdout")
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 		defer cancel()
 		_ = process.Terminate(ctx, 0)
 	})
@@ -234,7 +233,7 @@ func TestRootExitDoesNotLeaveADescendantHoldingStdoutOnWindows(t *testing.T) {
 
 func waitForStdout(t *testing.T, sink *recordingSink) string {
 	t.Helper()
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(testHangGuard)
 	defer timer.Stop()
 	for {
 		if output := sink.output(Stdout); strings.HasPrefix(output, "child:") {
@@ -243,7 +242,7 @@ func waitForStdout(t *testing.T, sink *recordingSink) string {
 		select {
 		case <-sink.notify:
 		case <-timer.C:
-			t.Fatal("timed out waiting for helper child PID")
+			t.Fatalf("helper child PID was not observed before the %s hang guard expired", testHangGuard)
 			return ""
 		}
 	}

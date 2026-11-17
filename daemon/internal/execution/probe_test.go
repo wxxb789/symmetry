@@ -56,7 +56,7 @@ func TestRunBoundedCommandTerminatesOnCallerCancellation(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("RunBoundedCommand() error = %v, want context.Canceled", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("RunBoundedCommand() did not terminate after cancellation")
 	}
 }
@@ -82,7 +82,7 @@ func TestRunBoundedCommandStopsDescendantHoldingOutputPipe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("child PID output %q is not an integer: %v", output, err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	for probeProcessExists(childPID) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -193,7 +193,7 @@ func boundedProbeInvocation(mode string, arguments ...string) Invocation {
 
 func waitForProbeMarker(t *testing.T, marker string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	for {
 		if _, err := os.Stat(marker); err == nil {
 			return

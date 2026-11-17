@@ -28,7 +28,7 @@ func TestNativeStartAttachmentBarrierDefersCancellationUntilReceipt(t *testing.T
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
 	case <-readyEntered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("native start did not reach the durable ready marker")
 	}
 

@@ -18,6 +18,12 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
+// testHangGuard bounds how long a test waits for a scripted runner, sink or
+// child process to publish an observable. It only turns a hung harness into a
+// failure; it is never a statement about how fast the product should be, so a
+// loaded host cannot turn a slow settle into a verdict about the runner.
+const testHangGuard = 30 * time.Second
+
 func TestStartPassesArgumentsDirectlyWithoutShell(t *testing.T) {
 	t.Parallel()
 
@@ -115,7 +121,7 @@ func TestResultDoneClosesAfterTerminationAndWaitIsReusable(t *testing.T) {
 	default:
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 100*time.Millisecond); err != nil && !strings.Contains(err.Error(), "Linux descendant containment is unproven") {
 		t.Fatalf("Terminate() error = %v", err)
@@ -123,7 +129,7 @@ func TestResultDoneClosesAfterTerminationAndWaitIsReusable(t *testing.T) {
 
 	select {
 	case <-resultDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("ResultDone() did not close after process termination")
 	}
 	first := process.Wait()
@@ -161,7 +167,7 @@ func TestTerminateIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	process := startHelper(t, &recordingSink{}, "wait")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 
 	var waitGroup sync.WaitGroup
@@ -199,7 +205,7 @@ func TestTerminateFallsBackToRootKillWhenForcedContainmentFails(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	err = process.Terminate(ctx, 0)
 	if !errors.Is(err, forceFailure) {
@@ -218,11 +224,11 @@ func TestTerminateCancelsABlockingSinkAndCompletesDrain(t *testing.T) {
 	process := startHelper(t, sink, "stdout", "3145728")
 	select {
 	case <-sink.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("sink did not receive an output event")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, 0); err != nil {
 		t.Fatalf("Terminate() error = %v", err)
@@ -236,7 +242,7 @@ func TestTerminateCancelsABlockingSinkAndCompletesDrain(t *testing.T) {
 	}
 	select {
 	case <-sink.cancelled:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("blocking sink context was not cancelled")
 	}
 }
@@ -562,7 +568,7 @@ func receiveInputResult(t *testing.T, results <-chan error) error {
 	select {
 	case err := <-results:
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("input operation did not return")
 		return nil
 	}
@@ -575,7 +581,7 @@ func waitForResult(t *testing.T, process *Process) Result {
 	select {
 	case result := <-results:
 		return result
-	case <-time.After(10 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Process.Wait() did not return")
 		return Result{}
 	}

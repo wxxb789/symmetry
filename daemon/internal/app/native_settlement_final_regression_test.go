@@ -403,7 +403,7 @@ func TestTaskResultUnknownWriteReadbackPrecedesEventRetirement(t *testing.T) {
 		if err != nil {
 			t.Fatalf("retire delivered task_result = %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("delivered task_result did not retire after readback")
 	}
 	journal, err := store.LoadJournal(key)

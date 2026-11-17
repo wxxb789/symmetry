@@ -21,8 +21,6 @@ import (
 
 const tcpPeerHelperEnvironment = "GO_WANT_TCP_PEER_HELPER"
 
-const tcpPeerHelperTimeout = 15 * time.Second
-
 func TestVerifyLoopbackTCPPeerRejectsInvalidInputs(t *testing.T) {
 	pipeClient, pipeServer := net.Pipe()
 	defer pipeClient.Close()
@@ -90,7 +88,7 @@ func TestVerifyLoopbackTCPPeerWithOwnedHelperProcess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("VerifyLoopbackTCPPeer(owned helper) error = %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("VerifyLoopbackTCPPeer did not observe helper accept")
 	}
 
@@ -152,7 +150,7 @@ type tcpPeerHelper struct {
 
 func startTCPPeerHelper(t *testing.T) *tcpPeerHelper {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), tcpPeerHelperTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestVerifyLoopbackTCPPeerWithOwnedHelperProcess$")
 	command.WaitDelay = time.Second
 	command.Env = append(os.Environ(), tcpPeerHelperEnvironment+"=1")

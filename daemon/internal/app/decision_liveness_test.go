@@ -95,7 +95,7 @@ func TestRequiredInvalidDecisionStopsRealBlockedChildBeforeAndAfterAttachment(t 
 		}
 		t.Run(name, func(t *testing.T) {
 			app, key := decisionLivenessDaemon(t, true)
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 			defer cancel()
 			runner := execution.NewRunner()
 			app.start = func(executionContext context.Context, invocation execution.Invocation, sink execution.Sink) (Process, error) {
@@ -138,7 +138,7 @@ func TestRequiredInvalidDecisionStopsRealBlockedChildBeforeAndAfterAttachment(t 
 				t.Fatal("invalid required decision left the real child blocked on stdin")
 			}
 			if ctx.Err() != nil {
-				t.Fatal("invalid decision was stopped only by test timeout")
+				t.Fatal("testHangGuard")
 			}
 			journal := supervisoryJournal(t, app, key)
 			if journal.LocalState != "terminal_pending" || journal.TerminalState != "failed" || app.isCancelled(key) {
@@ -175,7 +175,7 @@ func TestRequiredInvalidDecisionStopsRealBlockedChildBeforeAndAfterAttachment(t 
 
 func TestLegacyQuestionOnlyDecisionKeepsRealChildLiveUntilInput(t *testing.T) {
 	app, key := decisionLivenessDaemon(t, false)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	runner := execution.NewRunner()
 	launched := make(chan context.Context, 1)

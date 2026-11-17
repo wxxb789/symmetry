@@ -28,7 +28,7 @@ func TestTerminatedZeroExitIsNotSuccessfulOnUnix(t *testing.T) {
 	}
 	waitForUnixOutput(t, sink, "ready")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(ctx, time.Second); err != nil && !strings.Contains(err.Error(), "Linux descendant containment is unproven") {
 		t.Fatalf("Terminate() error = %v", err)
@@ -49,7 +49,7 @@ func TestRootExitDoesNotLeaveADescendantHoldingStdoutOnUnix(t *testing.T) {
 	sink := &recordingSink{notify: make(chan struct{}, 1)}
 	process := startHelper(t, sink, "root-exits-child-holding-stdout")
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 		defer cancel()
 		_ = process.Terminate(ctx, 0)
 	})
@@ -66,7 +66,7 @@ func TestRootExitDoesNotLeaveADescendantHoldingStdoutOnUnix(t *testing.T) {
 	if !result.Success() {
 		t.Fatalf("result = %+v, want successful root completion", result)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testHangGuard)
 	for unixProcessExists(childPID) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -94,7 +94,7 @@ func waitForUnixStdout(t *testing.T, sink *recordingSink) string {
 
 func waitForUnixOutput(t *testing.T, sink *recordingSink, prefix string) string {
 	t.Helper()
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(testHangGuard)
 	defer timer.Stop()
 	for {
 		if output := sink.output(Stdout); strings.HasPrefix(output, prefix) {
@@ -103,7 +103,7 @@ func waitForUnixOutput(t *testing.T, sink *recordingSink, prefix string) string 
 		select {
 		case <-sink.notify:
 		case <-timer.C:
-			t.Fatal("timed out waiting for helper child PID")
+			t.Fatalf("helper child PID was not observed before the %s hang guard expired", testHangGuard)
 			return ""
 		}
 	}

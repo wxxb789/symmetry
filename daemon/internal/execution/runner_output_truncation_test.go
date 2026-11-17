@@ -31,7 +31,7 @@ func TestOutputTruncatedDeliveredBeforeTerminate(t *testing.T) {
 	}
 	select {
 	case <-sink.notify:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("output event was not delivered")
 	}
 
@@ -70,7 +70,7 @@ func TestOutputTruncatedQueuedDiscard(t *testing.T) {
 	}
 	select {
 	case <-sink.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("sink did not start handling the first event")
 	}
 	if !process.enqueue(Stdout, []byte("queued")) {
@@ -102,7 +102,7 @@ func TestOutputTruncatedCanceledSinkError(t *testing.T) {
 	}
 	select {
 	case <-sink.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("sink did not start handling the event")
 	}
 
@@ -111,7 +111,7 @@ func TestOutputTruncatedCanceledSinkError(t *testing.T) {
 	waitForOutputStop(t, process)
 	select {
 	case <-sink.returned:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("sink did not return after cancellation")
 	}
 	close(release)
@@ -135,7 +135,7 @@ func TestOutputTruncatedCanceledSinkNil(t *testing.T) {
 	}
 	select {
 	case <-sink.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("sink did not start handling the event")
 	}
 
@@ -144,7 +144,7 @@ func TestOutputTruncatedCanceledSinkNil(t *testing.T) {
 	waitForOutputStop(t, process)
 	select {
 	case <-sink.returned:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("sink did not return after cancellation")
 	}
 	close(release)
@@ -165,7 +165,7 @@ func TestOutputTruncatedNaturalDrain(t *testing.T) {
 	}
 	select {
 	case <-sink.notify:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("output event was not delivered")
 	}
 	close(release)
@@ -257,7 +257,7 @@ func newOutputLifecycleProcess(t *testing.T, sink Sink) (*Process, chan struct{}
 	}
 	select {
 	case <-waitStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("process wait did not start")
 	}
 	return process, waitRelease
@@ -280,7 +280,7 @@ func waitForOutputStop(t *testing.T, process *Process) {
 	t.Helper()
 	select {
 	case <-process.outputStop:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("output delivery did not stop")
 	}
 }
