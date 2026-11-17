@@ -62,6 +62,8 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - name: Check lockfile registry provenance
+        run: python3 scripts/ci/check-lockfile-registry.py
       - run: pnpm install --frozen-lockfile
       - run: pnpm contracts:check
       - run: pnpm --filter @symmetry/frontend typecheck
@@ -541,11 +543,14 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - name: Check lockfile registry provenance
+        run: python3 ../scripts/ci/check-lockfile-registry.py
       - run: pnpm install --frozen-lockfile
         working-directory: .
       - run: pnpm --filter symmetry-browser-acceptance exec playwright install --with-deps chromium
         working-directory: .
       - name: Render authenticated release shell on desktop and mobile
+        id: render_release_shell
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -576,6 +581,35 @@ jobs:
               tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs \
               tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs \
               tests/portal-cutover.spec.mjs tests/portal-chat.spec.mjs
+      # A release that never binds leaves no evidence anywhere else in the run:
+      # the log files are the only record of why it did not start. Surface their
+      # tail in the annotation (workflow commands need `%`, CR and LF escaped) and
+      # upload both logs, on the render step's own failure only.
+      - name: Report release shell boot log
+        if: failure() && steps.render_release_shell.outcome == 'failure'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log="$RUNNER_TEMP/shell-release.log"
+          if [[ ! -s "$log" ]]; then
+            echo "::error title=Release shell boot log missing::${log} holds no bytes: the render step failed before the release wrote a log, so this failure has no boot log to read."
+            exit 0
+          fi
+          tail_text=$(tail --bytes=8000 "$log")
+          escaped=${tail_text//'%'/'%25'}
+          escaped=${escaped//$'\r'/'%0D'}
+          escaped=${escaped//$'\n'/'%0A'}
+          echo "::error title=Release shell boot log tail (last 8000 bytes of ${log})::${escaped}"
+      - name: Upload release shell boot logs
+        if: failure() && steps.render_release_shell.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shell-release-boot-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/shell-release.log
+            ${{ runner.temp }}/shell-expiry.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -1137,6 +1171,7 @@ jobs:
           python3 ../scripts/ci/test-go-test-json-gate.py
           python3 ../scripts/ci/test-assert-folded-gates.py
           python3 ../scripts/ci/test-assert-runner-matches-target.py
+          python3 ../scripts/ci/test-check-lockfile-registry.py
       - name: Check auditable model-routing workflow
         run: |
           python3 ../scripts/ci/test-model-routing-evaluation.py
@@ -1728,6 +1763,11 @@ jobs:
         with:
           go-version: '1.27.0'
           cache-dependency-path: daemon/go.sum
+      # The Compose stack builds docker/control.Dockerfile, which runs
+      # `pnpm install --frozen-lockfile` inside the image, so this job installs
+      # from the same lockfile as the `contracts` and `control` jobs.
+      - name: Check lockfile registry provenance
+        run: python3 scripts/ci/check-lockfile-registry.py
       - name: Smoke-test local HTTP and production HTTPS Compose stacks
         shell: bash
         run: |

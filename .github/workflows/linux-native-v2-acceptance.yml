@@ -170,6 +170,8 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - name: Check lockfile registry provenance
+        run: python3 scripts/ci/check-lockfile-registry.py
       - run: pnpm install --frozen-lockfile
       - run: pnpm contracts:check
       - run: pnpm --filter @symmetry/frontend typecheck
