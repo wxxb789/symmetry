@@ -429,8 +429,9 @@ revision the 0008d run had at that point (`scripts/ci/model-routing-evaluation.p
 **not** the delivered revision, which is the correction this section owes an audit: the runner the
 commands below executed was `sha256:619f0d37…`, one docstring paragraph away from the delivered bytes,
 and an earlier version of this paragraph called those passes "the final revision". The series-closing
-repair then ran the five repository suites once each on the delivered revision and records that pass
-separately:
+repair then ran the five repository suites on the delivered revision - once each, plus one repeat of
+the runner suite after its first pass failed a load-sensitive fixture on a host that was running the
+other suites beside it - and records both passes:
 
 | Command (revision it ran on) | Observed | Exit |
 | --- | --- | --- |
@@ -455,6 +456,7 @@ as it happened rather than tidied:
 | `python scripts/ci/test-linux-v2-source-subject.py` (repaired tree) | `Ran 4 tests in 5.840s`, `OK` | 0 |
 | `python scripts/ci/test-model-routing-source-subject.py` (repaired tree; new suite) | `Ran 6 tests in 0.225s`, `OK (skipped=1)`, the skip being the owner-execute-bit case this Windows host cannot express | 0 |
 | `python scripts/ci/test-model-routing-evaluation.py` (repaired tree, suite `sha256:dbe1a0fe…`, pass 1) | `Ran 56 tests in 962.088s`, `FAILED (failures=1, skipped=2)`: `test_timed_out_gate_terminates_its_descendants` - "a gate descendant survived the per-gate timeout" | 1 |
+| the same command again on the same revision, quiet host (pass 2) | `Ran 56 tests in 1026.271s`, `OK (skipped=2)`; the new derivation printed `vitest_report_detail refusal shapes: 17 returns, 15 reached by the suite's malformed-report cases, 2 unreached: "the derived vitest run timed out" (line 1569), "the derived vitest report carries a malformed assertion" (line 1598)` | 0 |
 
 The runner suite's failing case is a load-sensitive fixture, not a claim about the runner: pass 1 ran
 on a host that was also executing the four suites above and the record re-derivations, which this
@@ -462,9 +464,11 @@ workflow's own runbook forbids ("do not run the evaluation/measurement workflow 
 full test suite on the same host"). The failure is recorded here, the log stays in the private store
 (`final-runner-suite-repair.log`), the assertion was not touched, and `docs/TODO.md` carries the
 symptom, the fixture's 1.0 s/0.5 s/2.0 s timing and the snapshot-kill path (`taskkill /F /T`) for
-separate maintenance. One further pass on the same revision was then launched with nothing else
-running; its result is appended to this section in the repair's follow-up commit and to
-`final-runner-suite-repair-2.log` in the store.
+separate maintenance. One further pass then ran on the same revision with nothing else on the host
+and passed (`Ran 56 tests in 1026.271s`, `OK (skipped=2)`, exit 0, including the case that failed
+under load) - the pair is what the two rows above say, with no failing result overwritten and no
+assertion weakened, and both logs stay in the private store (`final-runner-suite-repair.log`,
+`final-runner-suite-repair-2.log`).
 
 The delivered runner differs from the one those four commands ran against (`sha256:619f0d37…`) only in
 one paragraph inside the `vitest_report_detail` docstring, added after the second review round asked it

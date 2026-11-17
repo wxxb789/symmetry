@@ -201,7 +201,9 @@ Unresolved in this series:
    timeout"), a load-sensitive fixture - while four other suites and the record re-derivations ran
    beside it, the concurrent-host combination this workflow's runbook forbids. The closure record
    carries that failed row rather than a tidied one, the assertion is untouched, and `docs/TODO.md`
-   carries the fixture's timing and the snapshot-kill path for separate maintenance.
+   carries the fixture's timing and the snapshot-kill path for separate maintenance. One quiet pass
+   on the same revision then ran green (`Ran 56 tests in 1026.271s`, `OK (skipped=2)`, exit 0,
+   including the case that failed under load), and both passes are rows in the closure record.
 9. The TypeScript gates resolved their toolchain through a shared hoisted `node_modules` one level
    above the run directories. That tree is outside every sealed checkout and outside this subject; the
    run's `environment.json` records the route and asserts that integrity values are the frozen
