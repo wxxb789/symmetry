@@ -138,7 +138,8 @@ change and are charged in the ledger as failed attempts with their observed usag
 estimates (USD `0.033549` and `0.2531725`, 91.9 s and 104.3 s), never as zero and never as a bill.
 
 The extended tooling is byte-frozen for the whole evaluation, and the receipts name the bytes that
-actually executed the runs. Produced revision, byte-retrievable from snapshot commit `cab222b`:
+actually executed the runs. Produced revision, byte-retrievable from the annotated tag
+`0008c-produced-tooling` (commit `cab222b`, pushed to `origin`), which preserves it across the rebase:
 `scripts/ci/model-routing-evaluation.py`
 `sha256:932290d7f76f5bd18e2778cd468b88b6852ba9a10721ae997bc10325db190ef5`,
 `scripts/ci/test-model-routing-evaluation.py` `sha256:0ef724556bdf604cc334742fed44d0d5ee882f5aabbc8b3d5398c725c34c87ea`,
@@ -154,7 +155,7 @@ current worktree bytes are
 is stated rather than hidden: because `tooling_sources` binds the runner, re-running `accept` with
 the current bytes refuses each receipt at `$.evidence.tooling_sources.model-routing-evaluation.py`
 (measured, exit 1) — the repository's documented rule that changing tooling invalidates an older
-submitted receipt. With the produced revision's bytes all four re-verify (`git archive cab222b
+submitted receipt. With the produced revision's bytes all four re-verify (`git archive 0008c-produced-tooling
 scripts/ci`, then `accept --run-dir <store run> --receipt docs/evaluations/model-routing/0008c-<run>.json`,
 exit 0 each, `accepted: true`). No gate was re-run under different tooling bytes, and every receipt,
 store copy, Subject and attempt digest still recomputes.
@@ -166,8 +167,8 @@ scripts/ci/test-model-routing-omp-usage.py` — 31 tests, `OK`, exit 0; `python
 scripts/ci/linux-v2-source-subject.py` — 4 tests, `OK`, exit 0. On this win32 host exactly two
 guards fire, one skip each, and both are the `os.name != "posix"` representation of a platform
 limit: `test_file_modes_are_bound_when_git_tracks_them`
-(`scripts/ci/test-model-routing-evaluation.py:1007`) and `test_non_utf8_checkout_paths_are_refused`
-(`:1474`). The recorded count is also the proof of which guards fired: every other skip in that
+(`scripts/ci/test-model-routing-evaluation.py:1008`) and `test_non_utf8_checkout_paths_are_refused`
+(`:1475`). The recorded count is also the proof of which guards fired: every other skip in that
 suite is conditional on a real construction or toolchain — symlink creation, the Go toolchain, the
 directory-junction helper — so `skipped=2` shows that all of them executed, including the two new
 fake-`mix`/ExUnit tests, which would have pushed the count above 2 had the fixture been skipped
@@ -462,7 +463,7 @@ pinned toolchain and PostgreSQL container as the runs):
 | `mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e` with `SYMMETRY_GOAL_RECEIPT_E2E=1` and a fresh `symmetry_receipt_e2e_<32 hex>` database | `1 passed, 10 excluded`, `Finished in 33.0 seconds` | 0 |
 
 Two environment facts from these runs belong in the record. First, the goal-receipt gate failed
-twice before passing, and both failures were in the invoking shell rather than the tree; both are
+twice before passing, and both failures are attributed to the invoking shell rather than the tree; both are
 retained under the private root's `closure/`: `goal-receipt.log` records the gate's own
 ephemeral-database setup assertion failing before any test ran (`goal receipt E2E requires its
 dedicated ephemeral PostgreSQL database`; the operator's account, not printed by the gate, is that
@@ -510,9 +511,18 @@ accepted subjects and are likewise frozen. No wrapper layer, duplicate cache or 
 added: the runner, the source-subject seal, the receipt/manifest format and the review route are the
 0008a ones.
 
-One external repository change appeared during closure and is recorded rather than touched: commit
-`cab222b` (subject `base`, 23 paths, +5,830/−29) now carries the whole increment on the local
+One external repository change appeared during closure and is recorded rather than touched. This
+paragraph states the closure-time state, and the landing note below supersedes it: commit
+`cab222b` (subject `base`, 23 paths, +5,830/−29) carried the whole increment on the local
 `feat/0008c-elixir-model-routing` branch. The coordinator did not create it — it never ran
-`git commit` — and it did not amend, reset, rewrite or push it: the branch is one commit ahead of
-`origin/main` and no `0008c` head exists on the remote. The edits made after that commit, including
-this section, remain uncommitted, so the tree still carries uncommitted changes for verification.
+`git commit` — and it did not amend, reset, rewrite or push it: the branch was one commit ahead of
+`origin/main` and no `0008c` head existed on the remote. The edits made after that commit, including
+this section, remained uncommitted at closure, so the tree still carried uncommitted changes for
+verification then.
+
+Landing (integrator, after this closure record). The repair was committed as `a9f4d93`, rebased onto
+`671525c` (the `docs/TODO.md` conflict resolved as a union, no other conflict), and re-verified there:
+`Ran 46 tests … OK (skipped=2)`, the two other suites green, the tagged revision accepting all four
+receipts (exit 0 each) and the current bytes refusing them exactly as documented above. The
+produced-tooling revision named in this record is preserved as the annotated tag
+`0008c-produced-tooling` (pushed to `origin`), so it remains retrievable after the rebase.
