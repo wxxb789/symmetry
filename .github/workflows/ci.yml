@@ -202,6 +202,7 @@ jobs:
           archive-sha256: 811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5
           executable-sha256: 6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57
           executable-path: ${{ runner.temp }}/pi-1.5.2/pi/pi
+          release-dir: ${{ runner.temp }}/pi-1.5.2
           expected-version: "1.5.2"
           provenance-file: ${{ runner.temp }}/pi-control-e2e-linux-provenance.txt
           log-file: ${{ runner.temp }}/pi-control-e2e-linux.log
@@ -846,6 +847,7 @@ jobs:
           archive-sha256: e6adb8cb8c84eca14391ad24b363de9d2be98a89ca3ba3fdee1fa4de32b7f2e8
           executable-sha256: 40a062bedd75767e2c3c889265de7c83d64a0ba55c74b60243c2453d97cffd85
           executable-path: ${{ runner.temp }}\pi-1.5.2\pi.exe
+          release-dir: ${{ runner.temp }}\pi-1.5.2
           expected-version: "1.5.2"
           provenance-file: ${{ runner.temp }}\pi-control-e2e-windows-provenance.txt
           log-file: ${{ runner.temp }}\pi-control-e2e-windows.log
@@ -1111,6 +1113,7 @@ jobs:
           python3 ../scripts/ci/test-assert-exunit-summary.py
           python3 ../scripts/ci/test-go-test-json-gate.py
           python3 ../scripts/ci/test-assert-folded-gates.py
+          python3 ../scripts/ci/test-assert-runner-matches-target.py
       - name: Check auditable model-routing workflow
         run: |
           python3 ../scripts/ci/test-model-routing-evaluation.py

@@ -10,7 +10,10 @@ inputs:
     description: Upstream release URL of the pinned Pi archive.
     required: true
   target:
-    description: Target triple the pinned archive and executable belong to.
+    description: >-
+      Target triple the pinned archive and executable belong to. Each platform step fails closed
+      unless the runner's real system and machine (`uname -s`/`uname -m` on POSIX) match the
+      triple's own fields.
     required: true
   archive-name:
     description: Name the archive is downloaded as, relative to RUNNER_TEMP.
@@ -22,7 +25,17 @@ inputs:
     description: Expected SHA-256 of the extracted executable.
     required: true
   executable-path:
-    description: Absolute path the executable must be extracted to.
+    description: >-
+      Absolute path the executable must exist at after extraction. Verified as a file before the
+      digest is read, so an archive extracted into the wrong directory fails there instead of being
+      reported as a directory by the digest tool.
+    required: true
+  release-dir:
+    description: >-
+      Absolute directory the archive is extracted into. Stated by the caller rather than derived
+      from `executable-path`: the archive's own root entry (`pi/` for the Linux tarball, the flat
+      `pi.exe` for the Windows zip) sits directly in this directory, so a derived parent would
+      extract one level too deep.
     required: true
   expected-version:
     description: Exact `--version` output the pinned executable must report.
@@ -61,6 +74,7 @@ runs:
         PI_ARCHIVE_SHA256: ${{ inputs.archive-sha256 }}
         PI_EXECUTABLE_SHA256: ${{ inputs.executable-sha256 }}
         PI_EXECUTABLE_PATH: ${{ inputs.executable-path }}
+        PI_RELEASE_DIR: ${{ inputs.release-dir }}
         PI_EXPECTED_VERSION: ${{ inputs.expected-version }}
         PI_PROVENANCE_FILE: ${{ inputs.provenance-file }}
         PI_LOG_FILE: ${{ inputs.log-file }}
@@ -69,15 +83,11 @@ runs:
       run: |
         set -Eeuo pipefail
 
-        if [ "$PI_TARGET" != 'x86_64-pc-linux-gnu' ]; then
-          printf 'this action step only prepares the x86_64-pc-linux-gnu pinned release; got %s\n' "$PI_TARGET" >&2
-          exit 1
-        fi
-        if [ "$RUNNER_OS" != 'Linux' ] || [ "$RUNNER_ARCH" != 'X64' ]; then
-          printf 'pinned Pi target %s requires a Linux X64 runner; got %s %s\n' \
-            "$PI_TARGET" "$RUNNER_OS" "$RUNNER_ARCH" >&2
-          exit 1
-        fi
+        python3 "$GITHUB_WORKSPACE/scripts/ci/assert-runner-matches-target.py" \
+          --target "$PI_TARGET" \
+          --system "$(uname -s)" \
+          --machine "$(uname -m)"
+
         if [ "$PI_WRITE_STATIC_PROVENANCE" != 'true' ]; then
           printf 'the POSIX static provenance block is owned by this action; got write-static-provenance=%s\n' \
             "$PI_WRITE_STATIC_PROVENANCE" >&2
@@ -85,7 +95,7 @@ runs:
         fi
 
         archive="$RUNNER_TEMP/$PI_ARCHIVE_NAME"
-        release_dir=$(dirname -- "$PI_EXECUTABLE_PATH")
+        release_dir="$PI_RELEASE_DIR"
         executable="$PI_EXECUTABLE_PATH"
         log="$PI_LOG_FILE"
         provenance="$PI_PROVENANCE_FILE"
@@ -120,6 +130,7 @@ runs:
           sha256sum --check --strict 2>&1 | tee -a "$log"
 
         tar --extract --file "$archive" --directory "$release_dir"
+        test -f "$executable"
         test -x "$executable"
 
         actual_executable_sha256=$(sha256sum "$executable" | awk '{print $1}')
@@ -147,6 +158,7 @@ runs:
         PI_ARCHIVE_SHA256: ${{ inputs.archive-sha256 }}
         PI_EXECUTABLE_SHA256: ${{ inputs.executable-sha256 }}
         PI_EXECUTABLE_PATH: ${{ inputs.executable-path }}
+        PI_RELEASE_DIR: ${{ inputs.release-dir }}
         PI_EXPECTED_VERSION: ${{ inputs.expected-version }}
         PI_PROVENANCE_FILE: ${{ inputs.provenance-file }}
         PI_LOG_FILE: ${{ inputs.log-file }}
@@ -154,12 +166,9 @@ runs:
       run: |
         $ErrorActionPreference = 'Stop'
 
-        if ($env:PI_TARGET -ne 'x86_64-pc-windows') {
-          throw "this action step only prepares the x86_64-pc-windows pinned release; got $env:PI_TARGET"
-        }
-        if ($env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ARCH -ne 'X64') {
-          throw "pinned Pi target $env:PI_TARGET requires a Windows X64 runner; got $env:RUNNER_OS $env:RUNNER_ARCH"
-        }
+        & python "$env:GITHUB_WORKSPACE/scripts/ci/assert-runner-matches-target.py" --target $env:PI_TARGET
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
         if ($env:PI_WRITE_STATIC_PROVENANCE -ne 'false') {
           throw "the Windows static provenance block (runner image and PostgreSQL prerequisites) is owned by the job initialisation step; pass write-static-provenance: 'false'"
         }
@@ -167,7 +176,7 @@ runs:
         $releaseUrl = $env:PI_RELEASE_URL
         $archive = Join-Path $env:RUNNER_TEMP $env:PI_ARCHIVE_NAME
         $executable = $env:PI_EXECUTABLE_PATH
-        $releaseDir = Split-Path -Parent $executable
+        $releaseDir = $env:PI_RELEASE_DIR
         $archiveSha256 = $env:PI_ARCHIVE_SHA256
         $executableSha256 = $env:PI_EXECUTABLE_SHA256
         $expectedVersion = $env:PI_EXPECTED_VERSION

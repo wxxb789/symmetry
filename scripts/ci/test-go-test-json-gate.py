@@ -44,6 +44,39 @@ def fake_command(body, exit_code=0):
     return [sys.executable, "-c", source]
 
 
+# Emits the descriptor numbers the child actually inherited and exits 9 when the
+# set is not exactly stdio. `/proc/self/fd` is procfs and `subprocess.pass_fds` is
+# POSIX-only, which is why every descriptor assertion below is POSIX-only: Windows
+# has neither, so those tests cannot run there at all. The enumeration's own
+# directory descriptor is excluded either by its target or by having vanished.
+FD_PROBE = (
+    "import json, os, sys\n"
+    "observed = {}\n"
+    "for name in os.listdir('/proc/self/fd'):\n"
+    "    path = '/proc/self/fd/' + name\n"
+    "    try:\n"
+    "        target = os.readlink(path)\n"
+    "    except FileNotFoundError:\n"
+    "        continue\n"
+    "    if target == '/proc/self/fd':\n"
+    "        continue\n"
+    "    observed[int(name)] = target\n"
+    "print(json.dumps({'fds': {str(fd): value for fd, value in sorted(observed.items())}}))\n"
+    "sys.stdout.flush()\n"
+    "if sorted(observed) != [0, 1, 2]:\n"
+    "    print('descriptors other than stdio are inherited: ' + repr(sorted(observed)), file=sys.stderr)\n"
+    "    raise SystemExit(9)\n"
+)
+
+
+def observed_descriptors(output):
+    """The descriptor set the probe reported on stdout."""
+    for line in reversed(output.splitlines()):
+        if line.startswith("{"):
+            return sorted(json.loads(line)["fds"], key=int)
+    raise AssertionError(f"the descriptor probe printed no report:\n{output}")
+
+
 class GateTestCase(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -271,33 +304,20 @@ class StdioBoundaryTests(GateTestCase):
         )
         self.assertEqual(result.returncode, 7)
 
-    @unittest.skipUnless(os.name == "posix", "the stdio-only boundary is a Linux descriptor contract")
-    def test_boundary_leaves_only_stdio_inherited(self):
-        inspector = (
-            "import os, sys\n"
-            "extra = []\n"
-            "for fd in sorted(int(name) for name in os.listdir('/proc/self/fd')):\n"
-            "    if fd <= 2:\n"
-            "        continue\n"
-            "    target = os.readlink(f'/proc/self/fd/{fd}')\n"
-            "    if target != '/proc/self/fd':\n"
-            "        extra.append((fd, target))\n"
-            "if extra:\n"
-            "    print(f'unexpected inherited descriptors: {extra}', file=sys.stderr)\n"
-            "    raise SystemExit(9)\n"
-        )
-        command = [sys.executable, "-c", inspector]
-        result = self.run_gate(
-            self.base_options(*self.group(PACKAGE, TEST)),
-            command,
-        )
-        self.assertEqual(result.returncode, 1)  # no events, so the named gate fails closed
-        result = self.run_gate(
-            self.base_options("--stdio-boundary", *self.group(PACKAGE, TEST)),
-            command,
-        )
+    def test_boundary_is_the_documented_sibling(self):
+        self.assertEqual(GATE.BOUNDARY_SCRIPT.name, "stdio-only-caller-boundary.py")
+
+    @unittest.skipUnless(
+        os.name == "posix", "the stdio-only boundary is a Linux descriptor contract (procfs)"
+    )
+    def test_gate_runner_boundary_leaves_only_stdio_inherited(self):
+        command = [sys.executable, "-c", FD_PROBE]
+        result = self.run_gate(self.base_options("--stdio-boundary", *self.group(PACKAGE, TEST)), command)
+        # The probe is not a Go test, so the named gate fails closed; the point of
+        # this test is what the probe observed, which the runner echoes as events.
+        self.assertEqual(observed_descriptors(result.stdout), ["0", "1", "2"])
         self.assertEqual(result.returncode, 1)
-        self.assertNotIn("unexpected inherited descriptors", result.stderr)
+        self.assertNotIn("descriptors other than stdio", result.stderr)
 
 
 class ArgumentTests(unittest.TestCase):
@@ -343,9 +363,6 @@ class StdioBoundaryScriptTests(unittest.TestCase):
             check=False,
         )
 
-    def test_boundary_is_the_documented_sibling(self):
-        self.assertEqual(GATE.BOUNDARY_SCRIPT.name, "stdio-only-caller-boundary.py")
-
     def test_boundary_preserves_the_command_status_and_output(self):
         result = self.run_boundary(
             [sys.executable, "-c", "import sys; print('streamed'); sys.exit(4)"]
@@ -358,23 +375,62 @@ class StdioBoundaryScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("requires a command", result.stderr)
 
-    @unittest.skipUnless(os.name == "posix", "the stdio-only boundary is a Linux descriptor contract")
-    def test_boundary_leaves_only_stdio_inherited(self):
-        inspector = (
-            "import os, sys\n"
-            "extra = []\n"
-            "for fd in sorted(int(name) for name in os.listdir('/proc/self/fd')):\n"
-            "    if fd <= 2:\n"
-            "        continue\n"
-            "    target = os.readlink(f'/proc/self/fd/{fd}')\n"
-            "    if target != '/proc/self/fd':\n"
-            "        extra.append((fd, target))\n"
-            "if extra:\n"
-            "    print(f'unexpected inherited descriptors: {extra}', file=sys.stderr)\n"
-            "    raise SystemExit(9)\n"
+    @unittest.skipUnless(
+        os.name == "posix", "the descriptor probe needs procfs (/proc/self/fd) and pass_fds"
+    )
+    def test_probe_sees_only_stdio_when_run_directly(self):
+        result = subprocess.run(
+            [sys.executable, "-c", FD_PROBE], capture_output=True, text=True, check=False
         )
-        result = self.run_boundary([sys.executable, "-c", inspector])
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(observed_descriptors(result.stdout), ["0", "1", "2"])
+
+    @unittest.skipUnless(
+        os.name == "posix", "the descriptor probe needs procfs (/proc/self/fd) and pass_fds"
+    )
+    def test_probe_sees_a_deliberately_inherited_descriptor(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", FD_PROBE],
+                capture_output=True,
+                text=True,
+                check=False,
+                pass_fds=(read_fd,),
+            )
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        self.assertEqual(result.returncode, 9)
+        self.assertIn(str(read_fd), observed_descriptors(result.stdout))
+        self.assertIn("descriptors other than stdio", result.stderr)
+
+    @unittest.skipUnless(
+        os.name == "posix", "the descriptor probe needs procfs (/proc/self/fd) and pass_fds"
+    )
+    def test_boundary_leaves_only_stdio_inherited(self):
+        result = self.run_boundary([sys.executable, "-c", FD_PROBE])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(observed_descriptors(result.stdout), ["0", "1", "2"])
+
+    @unittest.skipUnless(
+        os.name == "posix", "the descriptor probe needs procfs (/proc/self/fd) and pass_fds"
+    )
+    def test_boundary_closes_a_deliberately_inherited_descriptor(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            process = subprocess.run(
+                [sys.executable, str(GATE.BOUNDARY_SCRIPT), sys.executable, "-c", FD_PROBE],
+                capture_output=True,
+                text=True,
+                check=False,
+                pass_fds=(read_fd,),
+            )
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(observed_descriptors(process.stdout), ["0", "1", "2"])
 
 
 if __name__ == "__main__":
