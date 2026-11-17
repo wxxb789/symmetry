@@ -9,6 +9,7 @@ import {
   type ChatScope,
   type ExecutionGeneration,
 } from "../services/api";
+import { createRealtime, type RealtimeHandle, type RealtimeSocket } from "../services/realtime";
 
 interface BrowserLocation {
   href: string;
@@ -20,6 +21,17 @@ export interface Application {
   /** The same fetch transport the reads use, for the authenticated command POSTs. */
   fetcher: typeof fetch;
   queryClient: QueryClient;
+  /**
+   * The operator invalidation client. It is the single owner of change
+   * discovery: server invalidations while connected, the polling fallback while
+   * not, and a snapshot refetch on every (re)connect.
+   */
+  realtime: RealtimeHandle;
+  /**
+   * The authenticated bootstrap hands the short-lived socket token here. It is
+   * held in memory only; nothing writes it to storage.
+   */
+  rememberSocketToken: (token: string) => void;
   auth: {
     getSnapshot: () => boolean;
     subscribe: (listener: () => void) => () => void;
@@ -38,12 +50,17 @@ export function safeReturnTo(href: string): string {
   return "/portal/attention";
 }
 
-export function createApplication(options: { fetcher?: typeof fetch; location?: BrowserLocation } = {}): Application {
+export function createApplication(options: {
+  fetcher?: typeof fetch;
+  location?: BrowserLocation;
+  realtime?: { socketFactory?: (token: () => string) => RealtimeSocket; pollIntervalMs?: number; batchMs?: number; visibility?: () => boolean };
+} = {}): Application {
   const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
   const api = createApi(fetcher);
   const location = options.location ?? window.location;
   const listeners = new Set<() => void>();
   let signedOut = false;
+  let socketToken = "";
   // Session expiry is one recovery for reads and for commands: cancel in-flight
   // work, drop the private cache, then return to the login page with a safe path.
   const expireSession = () => {
@@ -83,10 +100,31 @@ export function createApplication(options: { fetcher?: typeof fetch; location?: 
       },
     },
   });
+  // A connect attempt reads the token synchronously; a refused or dropped
+  // connection refreshes it from the same-origin bootstrap so the client's own
+  // retry carries a live token. The token is short-lived by design, so it is
+  // re-read rather than cached for the session's lifetime.
+  const refreshSocketToken = async () => {
+    try {
+      const session = await api.session(new AbortController().signal);
+      socketToken = session.socket_token;
+    } catch {
+      // A failed refresh leaves the previous token in place; the next attempt
+      // refreshes again, and the polling fallback keeps reads converging.
+    }
+  };
+  const realtime = createRealtime({
+    queryClient,
+    token: () => socketToken,
+    refreshToken: () => { void refreshSocketToken(); },
+    ...(options.realtime ?? {}),
+  });
   return {
     api,
     fetcher,
     queryClient,
+    realtime,
+    rememberSocketToken: (token: string) => { socketToken = token; },
     auth: {
       getSnapshot: () => signedOut,
       subscribe: (listener: () => void) => {

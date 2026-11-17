@@ -318,6 +318,25 @@ defmodule SymmetryControl.Goals do
 
   def fetch_goal(_), do: {:error, :invalid_request}
 
+  @doc """
+  The goal's current event sequence, or nil for an unknown or malformed id.
+
+  This is the durable cursor of the goal's own event log; the portal
+  invalidation path carries it so a connected browser can continue its receipt
+  list from the last sequence it rendered instead of refetching every page. It
+  is a notification hint, never authority: the served event page stays the
+  source of truth.
+  """
+  @spec current_event_sequence(Ecto.UUID.t()) :: integer() | nil
+  def current_event_sequence(goal_id) when is_binary(goal_id) do
+    case valid_uuid(goal_id) do
+      :ok -> Repo.one(from goal in Goal, where: goal.id == ^goal_id, select: goal.event_sequence)
+      _invalid -> nil
+    end
+  end
+
+  def current_event_sequence(_goal_id), do: nil
+
   @spec goal_managed_task?(Ecto.UUID.t()) :: boolean()
   def goal_managed_task?(task_id) when is_binary(task_id) do
     if valid_uuid?(task_id) do

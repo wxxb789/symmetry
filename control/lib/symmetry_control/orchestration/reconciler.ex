@@ -5,13 +5,23 @@ defmodule SymmetryControl.Orchestration.Reconciler do
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Scheduler
+  alias SymmetryControl.Portal.Invalidations
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
   def run_once(opts \\ []) do
     result = Orchestration.expire(opts)
+    publish(result)
     Scheduler.wake()
     result
+  end
+
+  # An expired run or an offline runtime changed a served portal read: publish
+  # only when the sweep actually moved something, so a silent tick costs nothing.
+  defp publish(%{expired_runs: expired_runs, offline_runtimes: offline_runtimes}) do
+    if expired_runs > 0, do: Invalidations.publish(%{kind: "run"})
+    if offline_runtimes > 0, do: Invalidations.publish(%{kind: "runtime"})
+    :ok
   end
 
   @impl true

@@ -14,6 +14,7 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
   alias Oban.Job
   alias SymmetryControl.{Goals, Repo}
   alias SymmetryControl.Orchestration.Notifier
+  alias SymmetryControl.Portal.Invalidations
 
   @impl Oban.Worker
   def perform(%Job{} = job), do: dispatch(job.args)
@@ -24,7 +25,12 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
   defp dispatch(%{"goal_id" => goal_id, "revision" => revision, "action_id" => action_id})
        when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) do
     with :ok <- recover_unstarted_cancellations(goal_id) do
-      case Goals.control_dispatch_plan(goal_id, revision, action_id) do
+      result = Goals.control_dispatch_plan(goal_id, revision, action_id)
+      # The dispatch either superseded the plan or recorded a global-control
+      # event on the goal; both are goal changes the connected browsers refetch.
+      if match?({:ok, _plan}, result), do: Invalidations.publish(%{kind: "goal", id: goal_id})
+
+      case result do
         {:ok, :superseded} ->
           :ok
 

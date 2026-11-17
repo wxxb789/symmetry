@@ -555,7 +555,12 @@ jobs:
           export SYMMETRY_ENROLLMENT_TOKEN="$(openssl rand -hex 32)"
           echo "::add-mask::$SYMMETRY_OPERATOR_TOKEN"
           export SYMMETRY_CONTRACTS_DIR="$GITHUB_WORKSPACE/contracts"
-          export PHX_HOST=localhost PHX_SERVER=true
+          # The browser drives this instance at 127.0.0.1, and the operator
+          # invalidation socket enforces the endpoint's origin check (Phoenix's
+          # default, which compares the Origin host against the configured url
+          # host). Point the endpoint at the host the gate actually browses
+          # instead of disabling the check.
+          export PHX_HOST=127.0.0.1 PHX_SERVER=true
           bin=_build/prod/rel/symmetry_control/bin/symmetry_control
           PORT=4000 RELEASE_NODE=symmetry_shell "$bin" start > "$RUNNER_TEMP/shell-release.log" 2>&1 &
           primary=$!
@@ -570,7 +575,7 @@ jobs:
             pnpm --filter symmetry-browser-acceptance test \
               tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs \
               tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs \
-              tests/portal-chat.spec.mjs
+              tests/portal-cutover.spec.mjs tests/portal-chat.spec.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

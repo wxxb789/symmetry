@@ -16,9 +16,10 @@ export default defineConfig({
       "/portal/api": { target, changeOrigin: false },
       "/portal/login": { target, changeOrigin: false },
       "/portal/logout": { target, changeOrigin: false },
-      "/portal/classic": { target, changeOrigin: false },
-      "/assets/portal.js": { target, changeOrigin: false },
-      "/assets/portal.css": { target, changeOrigin: false },
+      "/assets/login.css": { target, changeOrigin: false },
+      // The operator invalidation socket, proxied to Phoenix with the WebSocket
+      // upgrade; the SPA and Phoenix share the dev origin, so cookies apply.
+      "/portal/socket": { target, changeOrigin: false, ws: true },
       "/socket": { target, changeOrigin: false, ws: true },
     },
   },

@@ -445,3 +445,49 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       tooling-digest mismatches and nothing else (`checks: 99, failures: 4`). Re-execute the runs if a
       future submission requires receipts produced by the current bytes; never re-derive by editing a
       receipt.
+
+## Deferred review findings (0007i, rebased onto `ca29a8e`)
+
+- [ ] Revalidate the pre-existing doc drift in `docs/design/quality.md`: line 41 still says the frontend
+      commands "do not exist until goal 0007 builds `frontend/`" and line 116 lists them as a goal-0007
+      target, while `.github/workflows/ci.yml:67-70` has run them since 0007a. Observed while recording
+      the 0007i gate table; update the quality policy in a separate documentation change.
+
+- [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover
+      them: the packaged release binary cannot boot on this Windows host because the generated
+      `erts-*/bin/erl` shim calls `erlexec` without the Windows `.exe` name (the browser gate therefore
+      runs the production configuration through `mix phx.server`, the same release-style instance the
+      0007h receipt records), and the browser suite's expiry/mobile projects need the release plus a
+      fixture database that only the two release instances provide.
+
+- [ ] Investigate the intermittent Control failure
+      `control recovery selects pending actions after more than one page of terminal no-op Goals` in
+      `control/test/symmetry_control/goals_test.exs:4753`. It is recorded from the pre-rebase delivery
+      revision `7235708` (`.tmp/gates/control-test-final.log`, 2026-11-17 11:16,
+      `884/886 passed, 21 skipped`, exit 2) with `** (EXIT from #PID<...>)` /
+      `** (DBConnection.ConnectionError) could not checkout the connection owned by #PID<...>
+      ({:sql_sandbox_owner, ...}) ... request was dropped from queue after 111ms`, raised inside
+      `Ecto.Repo.Preloader`'s supervised `Task`; the same suite's earlier run (09:44) reported
+      `885/886 passed` with the `pwsh` failure alone, so the case is intermittently load-sensitive:
+      it admits 101 Goals and cancels each one before asserting
+      `Goals.recover_pending_goal_control_actions/1`, and the sandbox owner's connection is preempted
+      while the preload tasks queue. This is not the `integrations_test.exs:1161` flake recorded above
+      (different test and call site). Revalidate whether the preload can run without a second supervised
+      task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
+      recovery page it checks.
+
+- [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
+      failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
+      pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in
+      6.9 s in the same run, and both projects passed in the 12:10 run on the pre-repair bundle. The
+      retained trace shows the injected `route.abort("internetdisconnected")` never fired (no
+      `/portal/api/workspace` request or failure after the route was installed), and the click's
+      `refresh()` refetched `["connections"]` but not `["workspace"]` because of the page's guard
+      `if (!workspace.isFetching) void workspace.refetch()` (`frontend/src/features/connections/connections.tsx:351-352`;
+      the same guard also sits in `onRefreshProject` at `:501`). `workspace.isFetching` is never read
+      during render, so React Query's automatic change tracking does not watch it and a render taken while
+      a read was in flight leaves the guard snapshot at `true` until something else re-renders the page —
+      a state-snapshot race, not a cutover change. Decide whether the guard should read the query's live
+      `fetchStatus` at click time (`queryClient.getQueryState(key)?.fetchStatus`) or whether a
+      user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
+      the injected-failure design.

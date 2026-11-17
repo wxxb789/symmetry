@@ -20,6 +20,10 @@ const projects: Project[] = [
 const applications: Application[] = [];
 afterEach(() => { for (const app of applications) app.queryClient.clear(); applications.length = 0; localStorage.clear(); });
 
+// The session bootstrap serves the CSRF token for commands and the short-lived
+// socket token for the invalidation channel; every fixture serves both members.
+const sessionBody = (csrfToken: string) => JSON.stringify({ csrf_token: csrfToken, socket_token: "test-socket-token" });
+
 function renderWorkspace(path: string, fetcher: typeof fetch = vi.fn<typeof fetch>().mockImplementation((input) => {
   const requestPath = input instanceof Request ? input.url : String(input);
   const url = new URL(requestPath, "http://localhost");
@@ -33,7 +37,7 @@ function renderWorkspace(path: string, fetcher: typeof fetch = vi.fn<typeof fetc
     }))));
   }
   return Promise.resolve(new Response(JSON.stringify(requestPath.endsWith("/session")
-    ? { csrf_token: "session-token" }
+    ? { csrf_token: "session-token", socket_token: "test-socket-token" }
     : { selected_project_id: projectId, projects: projects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })) })));
 })) {
   const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
@@ -145,7 +149,7 @@ describe("workspace navigation", () => {
     const old = Promise.withResolvers<Response>();
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
       const path = input instanceof Request ? input.url : String(input);
-      if (path.endsWith("/session")) return Promise.resolve(new Response('{"csrf_token":"token"}'));
+      if (path.endsWith("/session")) return Promise.resolve(new Response(sessionBody("token")));
       if (path.includes(`project_id=${firstProjectId}`)) return old.promise;
       return Promise.resolve(new Response(JSON.stringify({ selected_project_id: secondProjectId, projects: [projects[1]] })));
     });
@@ -162,7 +166,7 @@ describe("workspace navigation", () => {
     const user = userEvent.setup();
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
       const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response('{"csrf_token":"token"}'));
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("token")));
       const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id") ?? firstProjectId;
       return Promise.resolve(projectId === "missing" ? new Response("{}", { status: 404 }) : new Response(JSON.stringify({
         selected_project_id: projectId,
@@ -201,7 +205,7 @@ describe("workspace navigation", () => {
   it("shows a recoverable error and renders empty data only after successful retry", async () => {
     let workspaceRead = 0;
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      if ((input instanceof Request ? input.url : String(input)).endsWith("/session")) return Promise.resolve(new Response('{"csrf_token":"token"}'));
+      if ((input instanceof Request ? input.url : String(input)).endsWith("/session")) return Promise.resolve(new Response(sessionBody("token")));
       workspaceRead += 1;
       return Promise.resolve(workspaceRead === 1 ? new Response("{}", { status: 403 }) : new Response('{"selected_project_id":null,"projects":[]}'));
     });
@@ -235,7 +239,7 @@ describe("workspace navigation", () => {
     // would keep the fetch in flight and mask the focus transition under test.
     application.queryClient.setQueryDefaults(["session"], { retry: false });
     await vi.waitFor(() => expect(sessionReads.length).toBeGreaterThan(0));
-    sessionReads[0]?.(new Response('{"csrf_token":"cached-token"}'));
+    sessionReads[0]?.(new Response(sessionBody("cached-token")));
     await screen.findByRole("heading", { level: 1, name: "Attention" });
     const selection = screen.getByLabelText("Project");
     await waitFor(() => expect(selection).toBeEnabled());
@@ -251,7 +255,7 @@ describe("workspace navigation", () => {
     // The read then recovers; the URL is unchanged and the router stays idle.
     act(() => { window.dispatchEvent(new Event("visibilitychange")); });
     await vi.waitFor(() => expect(sessionReads.length).toBeGreaterThan(2));
-    sessionReads[2]?.(new Response('{"csrf_token":"recovered-token"}'));
+    sessionReads[2]?.(new Response(sessionBody("recovered-token")));
     await act(async () => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 20); await promise; });
     expect(selection).toHaveFocus();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled();
@@ -265,7 +269,7 @@ describe("workspace navigation", () => {
     let csrfToken = "initial-session-token";
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => Promise.resolve(new Response(JSON.stringify(
       (input instanceof Request ? input.url : String(input)).endsWith("/session")
-        ? { csrf_token: csrfToken }
+        ? { csrf_token: csrfToken, socket_token: "test-socket-token" }
         : { selected_project_id: firstProjectId, projects: [projects[0]] },
     ))));
     try {
@@ -294,8 +298,8 @@ describe("workspace navigation", () => {
       if (!path.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ selected_project_id: firstProjectId, projects: [projects[0]] })));
       sessionRead += 1;
       return sessionRead === 1
-        ? Promise.resolve(new Response(JSON.stringify({ csrf_token: csrfToken })))
-        : bootstrap.then(() => new Response(JSON.stringify({ csrf_token: csrfToken })));
+        ? Promise.resolve(new Response(sessionBody(csrfToken)))
+        : bootstrap.then(() => new Response(sessionBody(csrfToken)));
     });
     renderWorkspace("/portal/attention", fetcher);
     await screen.findByRole("heading", { level: 1, name: "Attention" });
@@ -315,7 +319,7 @@ describe("workspace navigation", () => {
     // While the fresh bootstrap read is still pending, a click must not POST yet.
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     expect(nativeSubmit).not.toHaveBeenCalled();
-    releaseBootstrap(new Response(JSON.stringify({ csrf_token: csrfToken })));
+    releaseBootstrap(new Response(sessionBody(csrfToken)));
     await vi.waitFor(() => {
       if (postedToken === null) throw new Error("native logout POST not reached");
     });
@@ -343,7 +347,7 @@ const workViewProjects: Project[] = [
 function workReadFetcher({ detail, holdDetail }: { detail: Record<string, unknown>; holdDetail?: Promise<void> }) {
   return vi.fn<typeof fetch>().mockImplementation((input) => {
     const requestPath = input instanceof Request ? input.url : String(input);
-    if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+    if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
     if (requestPath.includes("/portal/api/work-items/")) {
       const respond = () => new Response(requestPath.endsWith("/timeline")
         ? JSON.stringify({ items: [], next_before: null })
@@ -598,7 +602,7 @@ describe("readable work views", () => {
     const user = userEvent.setup();
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
       const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
       if (requestPath.includes("/portal/api/work-items/")) {
         return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
           id: subjectId,
@@ -673,7 +677,7 @@ describe("readable work views", () => {
     };
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
       const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
       if (requestPath.includes("/portal/api/work-items/")) {
         return Promise.resolve(new Response(requestPath.endsWith("/timeline")
           ? JSON.stringify({ items: [], next_before: null })
@@ -710,7 +714,7 @@ describe("execution history boundaries", () => {
   function historyFetcher(reads: { details: number; timelineBefore: string[] }) {
     return vi.fn<typeof fetch>().mockImplementation((input) => {
       const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
       if (requestPath.includes("/portal/api/work-items/")) {
         const url = new URL(requestPath, "http://localhost");
         if (url.pathname.endsWith("/timeline")) {
@@ -773,7 +777,7 @@ describe("execution history boundaries", () => {
     const reads = { details: 0, timelineBefore: [] as string[] };
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
       const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
       if (requestPath.includes("/portal/api/work-items/")) {
         const url = new URL(requestPath, "http://localhost");
         if (url.pathname.endsWith("/timeline")) {
@@ -817,7 +821,7 @@ describe("execution history boundaries", () => {
     const reads = { details: 0, timelineBefore: [] as string[] };
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
       const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
       if (requestPath.includes("/portal/api/work-items/")) {
         const url = new URL(requestPath, "http://localhost");
         if (url.pathname.endsWith("/timeline")) {
@@ -862,7 +866,7 @@ describe("execution history boundaries", () => {
     const reads = { details: 0, timelineBefore: [] as string[] };
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
       const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
       if (requestPath.includes("/portal/api/work-items/")) {
         const url = new URL(requestPath, "http://localhost");
         if (url.pathname.endsWith("/timeline")) {

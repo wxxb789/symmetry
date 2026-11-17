@@ -335,4 +335,13 @@ Reconnect does a snapshot refetch and goal-event cursor catchup; polling remains
 a fallback. Connection loss or missed messages cannot lose state. No second
 browser event store or frontend transition engine.
 
+The 0007i cutover implements the payload above without a "latest version"
+member: its publishers send the resource type/id, the identity when the changed
+surface exposes one, the served version when the changed stream exposes one (no
+publisher does today) and the durable goal event cursor, and no consumer reads a
+version. Do not treat "latest version" as delivered: the smallest proposed
+amendment is to replace it with "the served version marker when the changed
+stream exposes one", and until the owner adopts that amendment the deviation is
+open and recorded in the 0007i receipt rather than silently conformed to.
+
 Draft choice reference: [ExJsonSchema supported drafts](https://github.com/jonasschmidt/ex_json_schema). Draft 7 avoids a native extension solely for a newer dialect.

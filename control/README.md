@@ -47,12 +47,15 @@ the server-selected project rather than implying a global blocker summary.
 On scoped pages, the header reuses that read's project directory; a failed scoped
 read loads the default directory so project navigation remains usable.
 
-Existing writable project, board, connection and Chat flows remain at
-`/portal/classic` until their React replacements reach parity. Switching uses a
-full document navigation, never two simultaneous workspace runtimes or shared
-client stores. Existing hash links retain their project query and route to the
-classic document. Both entrypoints use the same session and CSRF protection.
-Unauthenticated legacy links retain only validated classic query parameters.
+Every writable project, board, connection, work, goal and Chat flow is served by
+this one SPA document at `/portal`; the 0007i cutover deleted the classic EEx
+workspace renderer, its `portal.js`/`portal.css` presentation and the
+`/portal/classic` route, so one writable UI state owner remains and `/portal/classic`
+is a real 404. Existing `/portal#...` hash links are repaired exactly once by the
+SPA bootstrap to their new routes, keeping the project scope those links carried.
+The login template, its stylesheet and the session/CSRF protection around every
+route stay. Unauthenticated legacy links retain only validated legacy query
+parameters.
 The login form submits to its current document URL so the browser retains the
 legacy fragment across the login redirect. API expiry
 cancels reads and clears private Query state before redirecting to sign in.
@@ -61,8 +64,8 @@ Local HTTP is only for an explicitly trusted development or container network.
 For Vite development, start Phoenix first, then run
 `mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend dev` from the root.
 Open `http://127.0.0.1:5173/portal/`; session/login/logout and socket requests
-proxy to Phoenix, as do `/portal/classic` and its `/assets/portal.js` and
-`/assets/portal.css` assets. `SYMMETRY_PHOENIX_ORIGIN` overrides the upstream origin. CSRF
+proxy to Phoenix, as does the login page's own `/assets/login.css`.
+`SYMMETRY_PHOENIX_ORIGIN` overrides the upstream origin. CSRF
 remains enabled. Use the same hostname for both origins.
 
 In production, do not publish Phoenix directly. It must receive private HTTP

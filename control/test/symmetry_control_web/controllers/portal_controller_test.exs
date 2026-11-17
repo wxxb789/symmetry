@@ -72,33 +72,38 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     end
   end
 
-  test "the authenticated classic document retains existing workspace flows without loading React" do
-    page =
-      api_conn()
-      |> put_req_header("accept", "text/html")
-      |> get("/portal/classic?project_id=project-123")
-
-    body = html_response(page, 200)
-    assert body =~ "Symmetry"
-    assert body =~ "Engineering workspace"
-    assert body =~ "id=\"kanban-board\""
-    assert body =~ "id=\"chat-form\""
-    assert body =~ "id=\"resource-dialog\""
-    assert body =~ "/assets/portal.css"
-    assert body =~ "/assets/portal.js"
-    assert body =~ ~s(href="/portal/classic" aria-label="Symmetry workspace")
-    assert body =~ ~s(href="/portal" aria-label="Workspace shell")
-    assert get_resp_header(page, "cache-control") == ["no-store"]
-    refute body =~ "/portal/assets/"
-    refute body =~ ~s(<div id="root")
+  test "the removed classic route is a real 404, not an SPA fallback" do
+    for path <- ["/portal/classic", "/portal/classic?project_id=project-123"] do
+      assert %{"error" => %{"code" => "not_found"}} =
+               api_conn()
+               |> put_req_header("accept", "text/html")
+               |> get(path)
+               |> json_response(404)
+    end
   end
 
-  test "classic source assets remain served from the release priv directory", %{conn: conn} do
-    assert conn |> get("/assets/portal.css") |> response(200) =~ "--surface"
-    assert conn |> get("/assets/portal.js") |> response(200) =~ "loadWorkspace"
+  test "the login stylesheet is served from the release priv directory and keeps only login rules",
+       %{
+         conn: conn
+       } do
+    stylesheet = conn |> get("/assets/login.css") |> response(200)
+
+    assert stylesheet =~ "--surface"
+    assert stylesheet =~ ".login-page"
+    assert stylesheet =~ ".login-panel"
+    assert stylesheet =~ ".login-form"
+    assert stylesheet =~ ".brand-mark"
+    refute stylesheet =~ ".kanban-board"
+    refute stylesheet =~ ".workspace-nav"
+
+    assert %{"error" => %{"code" => "not_found"}} =
+             conn |> get("/assets/portal.css") |> json_response(404)
+
+    assert %{"error" => %{"code" => "not_found"}} =
+             conn |> get("/assets/portal.js") |> json_response(404)
   end
 
-  test "built hashed assets are public and immutable while login CSS remains available", %{
+  test "built hashed assets are public and immutable", %{
     conn: conn
   } do
     index = File.read!(portal_index_path())
@@ -125,8 +130,6 @@ defmodule SymmetryControlWeb.PortalControllerTest do
         refute get_resp_header(served, "content-type") == ["text/html; charset=utf-8"]
       end
     end
-
-    assert conn |> get("/assets/portal.css") |> response(200) =~ ".login-panel"
   end
 
   test "unknown API, asset, and shell paths remain real 404s instead of SPA HTML" do
@@ -160,9 +163,6 @@ defmodule SymmetryControlWeb.PortalControllerTest do
       assert response(unavailable, 503) =~ "Workspace assets are unavailable"
       assert get_resp_header(unavailable, "cache-control") == ["no-store"]
       refute unavailable.resp_body =~ "<html"
-
-      classic = api_conn() |> put_req_header("accept", "text/html") |> get("/portal/classic")
-      assert html_response(classic, 200) =~ "id=\"kanban-board\""
     after
       File.rename!(unavailable_path, index_path)
     end

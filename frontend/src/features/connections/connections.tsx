@@ -412,10 +412,14 @@ export function ConnectionsPage() {
   const trackSubject = (subject: string, pending: boolean) =>
     setPendingSubjects((current) => ({ ...current, [subject]: Math.max(0, (current[subject] ?? 0) + (pending ? 1 : -1)) }));
   // A continuation that settles belongs to the connection the operator is
-  // looking at: the page drops it when the operator has left that connection,
-  // even though the request outlives its detail instance.
+  // looking at: the page drops it when the operator moved to another
+  // connection, even though the request outlives its detail instance. An empty
+  // selection is not "moved to another connection": the change-discovery read
+  // removes a connection another operator deleted, and that reconcile clears
+  // the selection before the refusal its own subject caused arrives — the
+  // operator still issued the request, so its reason must be stated.
   const noticeFor = (connectionId: string, notice: string) => {
-    if (mounted.current && selectionRef.current === connectionId) setNotice(notice);
+    if (mounted.current && (selectionRef.current === connectionId || selectionRef.current === null)) setNotice(notice);
   };
   const clearSelectionFor = (connectionId: string) => {
     if (!mounted.current || selectionRef.current !== connectionId) return;

@@ -1,7 +1,21 @@
+// Goal 2 Compose daemon acceptance, driven on the React workspace surfaces.
+//
+// The production Compose stack completes F1-F7 through the real control plane.
+// Fixtures are seeded through the authenticated Portal API: the classic
+// project/resource/work dialogs were only seeding here, and their own planning
+// surfaces are covered by portal-work-planning.spec.mjs and
+// portal-connections.spec.mjs. The classic workspace document and its drawer
+// are retired; every observable state below is read back from the rendered SPA
+// or the server's own read APIs:
+//   - board                -> /portal/projects/:projectId (view=board)
+//   - work detail/controls -> /portal/work/:workItemId (drawer at desktop width)
+//   - project resources    -> /portal/connections?projectId=
+// The retired classic pieces are named in the migration comments at the point
+// they were replaced, and in browser/README.md.
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
+import { api, attachResource, createWorkItem, login, workspace } from "./readable-fixtures.mjs";
 
 const composeEnabled = process.env.SYMMETRY_COMPOSE_DAEMON === "1";
-const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
 
 function uniqueProject(prefix = "DC") {
   const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -14,109 +28,50 @@ function fixtureDescription(mode, description) {
   return `[symmetry-fake-agent:${mode}]\n${description}`;
 }
 
-async function login(page) {
-  await page.goto("/portal/login?return_to=%2Fportal%2Fclassic");
-  await page.getByLabel("Operator token").fill(operatorToken);
-  await Promise.all([
-    page.waitForURL(/\/portal\/classic(?:\?|#|$)/),
-    page.getByRole("button", { name: "Open workspace" }).click()
-  ]);
-  await expect(page.locator("#refresh-button")).toBeVisible();
+const projectUrl = (id, params = {}) => {
+  const query = new URLSearchParams(params).toString();
+  return `/portal/projects/${id}${query ? `?${query}` : ""}`;
+};
+const workUrl = (id) => `/portal/work/${id}`;
+// The pages render more than one role=status region (notice lines and sr-only
+// announcers), so every notice assertion is scoped by its text.
+const statusNotice = (scope, text) => scope.locator('p[role="status"]', { hasText: text });
+const boardCard = (page, title) => page.getByRole("link", { name: title });
+const columnOf = (page, title) =>
+  page.locator("[data-board-card]", { has: boardCard(page, title) }).getAttribute("data-board-column");
+// The rendered board order and the served order, both by position.
+const renderedColumnTitles = (page, state) =>
+  page.evaluate(
+    (column) =>
+      Array.from(document.querySelectorAll(`[data-board-column='${column}'] .work-title`)).map((element) =>
+        element.textContent?.trim()
+      ),
+    state
+  );
+async function servedColumnTitles(page, projectId, state) {
+  const project = (await workspace(page, projectId)).body.projects.find(
+    (candidate) => candidate.id === projectId
+  );
+  return project.work_items
+    .filter((item) => item.status === state)
+    .sort((left, right) => left.position - right.position)
+    .map((item) => item.title);
 }
-
-async function portalRequest(page, path, options = {}) {
-  return page.evaluate(async ({ requestPath, requestOptions }) => {
-    const csrf = document.querySelector("meta[name='csrf-token']")?.content || "";
-    const response = await fetch(requestPath, {
-      credentials: "same-origin",
-      ...requestOptions,
-      headers: {
-        Accept: "application/json",
-        ...(requestOptions.body ? { "Content-Type": "application/json" } : {}),
-        ...(requestOptions.method && requestOptions.method !== "GET" ? { "x-csrf-token": csrf } : {}),
-        ...(requestOptions.headers || {})
-      }
-    });
-    return { status: response.status, body: await response.json() };
-  }, { requestPath: path, requestOptions: options });
+async function moveByKeyboard(page, title, key) {
+  const card = boardCard(page, title);
+  await card.focus();
+  await page.keyboard.press(`Shift+${key}`);
 }
-
-async function createProject(page, project, defaults = { agent: "default", workspace: "primary" }) {
-  await page.locator("#new-project-button").click();
-  const dialog = page.locator("#project-dialog");
-  await dialog.getByLabel("Name").fill(project.name);
-  await dialog.getByLabel("Key").fill(project.key);
-  await dialog.getByLabel("Default agent").fill(defaults.agent);
-  await dialog.getByLabel("Workspace").fill(defaults.workspace);
-  await dialog.getByLabel("Description").fill("Trusted-local Compose execution acceptance");
-  await dialog.getByRole("button", { name: "Create" }).click();
-  await expect(page.locator("#project-title")).toHaveText(project.name);
-  const projectId = new URL(page.url()).searchParams.get("project_id");
-  expect(projectId).toBeTruthy();
-  return projectId;
+async function itemDetail(page, id) {
+  const response = await api(page, "GET", `/portal/api/work-items/${id}`);
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  return response.body;
 }
-
-async function attachResource(page, resource) {
-  await page.getByRole("button", { name: "Attach resource" }).click();
-  const dialog = page.locator("#resource-dialog");
-  await dialog.getByLabel("Type").selectOption(resource.kind);
-  await dialog.locator('select[name="status"]').selectOption(resource.status);
-  await dialog.locator('select[name="sync_status"]').selectOption(resource.sync_status);
-  await dialog.getByLabel("Name").fill(resource.name);
-  await dialog.getByLabel("Provider", { exact: true }).fill(resource.provider);
-  if (resource.registered_ref) {
-    const select = dialog.getByLabel("Registered reference");
-    await expect(select.locator(`option[value="${resource.registered_ref}"]`)).toHaveCount(1);
-    await select.evaluate((element, value) => {
-      element.value = value;
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-    }, resource.registered_ref);
-    await expect(select).toHaveValue(resource.registered_ref);
-  } else {
-    await dialog.getByLabel("Reference", { exact: true }).fill(resource.external_ref);
-  }
-  if (resource.url) await dialog.getByLabel("URL").fill(resource.url);
-  if (resource.status_message) await dialog.getByLabel("Status detail").fill(resource.status_message);
-  await dialog.getByRole("button", { name: "Attach" }).click();
-  await expect(page.locator("#resource-table")).toContainText(resource.name);
-}
-
-async function createWorkItem(page, item) {
-  await page.getByRole("link", { name: "Board" }).click();
-  await page.getByRole("button", { name: "New work item" }).click();
-  const dialog = page.locator("#work-item-dialog");
-  await dialog.getByLabel("Title").fill(item.title);
-  await dialog.getByLabel("Description").fill(item.description);
-  await dialog.getByLabel("Status").selectOption(item.status || "ready");
-  await dialog.getByLabel("Priority").selectOption(item.priority || "medium");
-  await dialog.getByLabel("Owner type").selectOption(item.assignee_type);
-  if (item.assignee_name) await dialog.getByLabel("Owner", { exact: true }).fill(item.assignee_name);
-  if (item.repository) {
-    await dialog.locator('select[name="repository_resource_id"]').selectOption({
-      label: item.repository
-    });
-  }
-  if (item.branch) await dialog.getByLabel("Branch").fill(item.branch);
-  if (item.blocked) {
-    await dialog.getByLabel("Blocked").check();
-    await dialog.getByLabel("Blocker").fill(item.blocker);
-  }
-  await dialog.getByRole("button", { name: "Create" }).click();
-  await expect(page.locator(".work-card", { hasText: item.title })).toBeVisible();
-}
-
-async function openWork(page, title) {
-  await page.locator(".work-card", { hasText: title }).click();
-  await expect(page.locator("#detail-title")).toHaveText(title);
-}
-
-async function detailJSON(page, title) {
-  const workItemId = await page.locator(".work-card", { hasText: title }).getAttribute("data-id");
-  return page.evaluate(async (id) => {
-    const response = await fetch(`/portal/api/work-items/${id}`, { credentials: "same-origin" });
-    return response.json();
-  }, workItemId);
+async function openWork(page, id, title) {
+  await page.goto(workUrl(id));
+  const detail = page.getByRole("dialog", { name: title });
+  await expect(detail.getByRole("heading", { level: 1, name: title })).toBeVisible();
+  return detail;
 }
 
 test.describe("Goal 2 Compose daemon acceptance", () => {
@@ -133,28 +88,35 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     const retryTitle = `Retry workflow ${project.key}`;
 
     await login(page);
-    const projectId = await createProject(page, project, { agent: "placeholder", workspace: "placeholder" });
 
-    await page.getByRole("button", { name: "Project settings" }).click();
-    const projectDialog = page.locator("#project-dialog");
-    await projectDialog.getByLabel("Default agent").fill("default");
-    await projectDialog.getByLabel("Workspace").fill("primary");
-    await projectDialog.getByLabel("Description").fill("F1-F7 production Compose acceptance workspace");
-    await projectDialog.getByRole("button", { name: "Save" }).click();
+    // The classic project dialog and its settings edit were seeding for the
+    // daemon (default agent/workspace, description); the same values go through
+    // the authenticated Portal API, and the SPA project surface renders them.
+    const created = await api(page, "POST", "/portal/api/projects", {
+      key: project.key,
+      name: project.name,
+      default_agent_profile: "default",
+      default_workspace: "primary",
+      description: "F1-F7 production Compose acceptance workspace"
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const projectId = created.body.project.id;
+
+    await page.goto(projectUrl(projectId, { view: "board" }));
+    await expect(page.getByRole("heading", { level: 1, name: project.name })).toBeVisible();
 
     let runtime;
     await expect
       .poll(async () => {
-        const workspace = await portalRequest(page, `/portal/api/workspace?project_id=${projectId}`);
-        runtime = workspace.body.registered_runtimes.find(
+        const read = await workspace(page, projectId);
+        runtime = read.body.registered_runtimes.find(
           (candidate) => candidate.agent_profile === "default" && candidate.workspace === "primary"
         );
         return Boolean(runtime);
       }, { timeout: 30_000 })
       .toBe(true);
 
-    await page.getByRole("link", { name: "Resources" }).click();
-    await attachResource(page, {
+    const repository = await attachResource(page, projectId, {
       kind: "repository",
       status: "healthy",
       sync_status: "synced",
@@ -164,7 +126,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
       url: "https://github.com/wxxb789/symmetry",
       status_message: "Repository is available"
     });
-    await attachResource(page, {
+    await attachResource(page, projectId, {
       kind: "ci",
       status: "degraded",
       sync_status: "failed",
@@ -174,7 +136,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
       url: "https://github.com/wxxb789/symmetry/actions",
       status_message: "CI webhook delivery failed"
     });
-    await attachResource(page, {
+    await attachResource(page, projectId, {
       kind: "connection",
       status: "offline",
       sync_status: "stale",
@@ -184,84 +146,125 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
       url: "https://github.com",
       status_message: "Reconnect provider credentials"
     });
-    await attachResource(page, {
+    await attachResource(page, projectId, {
       kind: "agent",
       status: "healthy",
       sync_status: "synced",
       name: "Compose agent",
       provider: "Symmetry",
-      registered_ref: "default"
+      external_ref: "default"
     });
-    await attachResource(page, {
+    await attachResource(page, projectId, {
       kind: "runtime",
       status: "healthy",
       sync_status: "synced",
       name: "Compose runtime",
       provider: "Symmetry",
-      registered_ref: runtime.runtime_id
+      external_ref: runtime.runtime_id
     });
 
-    await expect(page.locator(".health-item", { hasText: "Connections" })).toContainText("Degraded");
-    await expect(page.locator(".health-item", { hasText: "Sync" })).toContainText("Attention");
-    const connectionRow = page.locator(".resource-row", { hasText: "Compose connection" });
+    // The classic health grid and resource dialog move to the project resource
+    // console: the same served state (degraded/offline health, sync state,
+    // status detail) is read from the surface the fixed IA gives resources.
+    await page.goto(`/portal/connections?projectId=${projectId}`);
+    let resources = page.getByRole("list", { name: "Project resources" });
+    const connectionRow = resources
+      .getByRole("listitem")
+      .filter({ has: page.getByRole("button", { name: "Sync Compose connection", exact: true }) });
     await expect(connectionRow).toContainText("Reconnect provider credentials");
-    await connectionRow.click();
-    const resourceDialog = page.locator("#resource-dialog");
-    await expect(resourceDialog.locator('select[name="status"]')).toHaveValue("offline");
-    await expect(resourceDialog.locator('select[name="sync_status"]')).toHaveValue("stale");
-    await expect(resourceDialog.getByRole("button", { name: "Update" })).toBeVisible();
-    await resourceDialog.press("Escape");
+    await expect(connectionRow.getByText("Offline", { exact: true })).toBeVisible();
+    await expect(connectionRow.getByText("Stale", { exact: true })).toBeVisible();
+    await connectionRow.getByRole("button", { name: "Update Compose connection", exact: true }).click();
+    const resourceDialog = page.getByRole("dialog", { name: "Update resource" });
+    const resourceFacts = resourceDialog.locator("dl.connection-facts");
+    await expect(resourceFacts).toContainText("Offline");
+    await expect(resourceFacts).toContainText("Stale");
+    await expect(resourceFacts).toContainText("Reconnect provider credentials");
+    await resourceDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(resourceDialog).toBeHidden();
 
-    await createProject(page, auxiliary);
-    await page.locator("#project-switcher").selectOption(projectId);
-    await expect(page.locator("#project-title")).toHaveText(project.name);
-    await page.getByRole("link", { name: "Resources" }).click();
-    await expect(page.locator("#resource-table")).toContainText("Compose repository");
-    await expect(page.locator("#resource-table")).toContainText("Compose runtime");
+    // Project switching: the auxiliary project serves no resources while the
+    // main project's console keeps its five seeded rows.
+    const auxiliaryCreated = await api(page, "POST", "/portal/api/projects", {
+      key: auxiliary.key,
+      name: auxiliary.name
+    });
+    expect(auxiliaryCreated.status, JSON.stringify(auxiliaryCreated.body)).toBe(201);
+    await page.goto(`/portal/connections?projectId=${auxiliaryCreated.body.project.id}`);
+    await expect(page.getByRole("heading", { name: "No resources yet" })).toBeVisible();
+    await page.goto(`/portal/connections?projectId=${projectId}`);
+    resources = page.getByRole("list", { name: "Project resources" });
+    await expect(resources).toContainText("Compose repository");
+    await expect(resources).toContainText("Compose runtime");
 
-    await createWorkItem(page, {
+    const human = await createWorkItem(page, projectId, {
       title: humanTitle,
       description: "Human-owned work with complete delivery metadata",
+      status: "ready",
       priority: "urgent",
       assignee_type: "human",
       assignee_name: "Lina",
-      repository: "Compose repository",
+      repository_resource_id: repository.id,
       branch: `feat/${project.key.toLowerCase()}`,
       blocked: true,
       blocker: "Needs architecture decision"
     });
-    await createWorkItem(page, {
+    const wait = await createWorkItem(page, projectId, {
       title: waitTitle,
       description: fixtureDescription("wait_input", "Request and persist one human decision."),
+      status: "ready",
       priority: "high",
       assignee_type: "agent",
-      repository: "Compose repository"
+      repository_resource_id: repository.id
     });
 
-    const humanCard = page.locator(".work-card", { hasText: humanTitle });
-    await humanCard.getByTitle("Move down").click();
-    await expect(page.locator("[data-status='ready'] .work-card h3")).toHaveText([waitTitle, humanTitle]);
+    await page.goto(projectUrl(projectId, { view: "board" }));
+    await expect(page.getByRole("heading", { level: 1, name: project.name })).toBeVisible();
+    await expect.poll(() => servedColumnTitles(page, projectId, "ready")).toEqual([humanTitle, waitTitle]);
+    await expect.poll(() => renderedColumnTitles(page, "ready")).toEqual([humanTitle, waitTitle]);
+
+    // The classic "Move down" button becomes the board's keyboard reorder; the
+    // served and rendered order both move and survive a reload.
+    await moveByKeyboard(page, humanTitle, "ArrowDown");
+    await expect(statusNotice(page, "Moved down")).toBeVisible();
+    await expect.poll(() => servedColumnTitles(page, projectId, "ready")).toEqual([waitTitle, humanTitle]);
+    await expect.poll(() => renderedColumnTitles(page, "ready")).toEqual([waitTitle, humanTitle]);
     await page.reload();
-    await expect(page.locator("#project-title")).toHaveText(project.name);
-    await expect(page.locator("[data-status='ready'] .work-card h3")).toHaveText([waitTitle, humanTitle]);
-    await openWork(page, humanTitle);
-    await page.getByRole("button", { name: "Edit" }).click();
-    const humanDialog = page.locator("#work-item-dialog");
-    await humanDialog.getByLabel("Pull request URL").fill("https://github.com/wxxb789/symmetry/pull/42");
-    await humanDialog.locator('select[name="ci_status"]').selectOption("passed");
-    await humanDialog.locator('select[name="review_status"]').selectOption("approved");
-    await humanDialog.getByRole("button", { name: "Save" }).click();
-    await expect(page.locator("#detail-content")).toContainText("Approved");
-    await page.getByRole("button", { name: "Close details" }).click();
-    await openWork(page, humanTitle);
-    await page.locator("#detail-status-select").selectOption("review");
-    await expect(page.locator("[data-status='review'] .work-card", { hasText: humanTitle })).toBeVisible();
-    await page.getByRole("button", { name: "Close details" }).click();
-    await openWork(page, humanTitle);
-    await page.locator("#detail-status-select").selectOption("done");
-    await expect(page.locator("[data-status='done'] .work-card", { hasText: humanTitle })).toBeVisible();
-    const human = await detailJSON(page, humanTitle);
-    expect(human.work_item).toEqual(
+    await expect(page.getByRole("heading", { level: 1, name: project.name })).toBeVisible();
+    await expect.poll(() => renderedColumnTitles(page, "ready")).toEqual([waitTitle, humanTitle]);
+
+    // The classic keyboard/dialog case's overflow assertion survives on the SPA
+    // board (the harness runs desktop Chromium here; the narrow-width checks run
+    // in the other SPA suites' projects).
+    const dimensions = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth
+    }));
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+
+    // The classic drawer's manual delivery edit becomes the work-item editor,
+    // and the detail re-read serves the stored values.
+    const humanDetail = await openWork(page, human.id, humanTitle);
+    await humanDetail.getByRole("button", { name: "Edit work item" }).click();
+    const humanEditor = page.getByRole("dialog", { name: "Edit work item" });
+    await humanEditor.getByLabel("Pull request URL").fill("https://github.com/wxxb789/symmetry/pull/42");
+    await humanEditor.getByLabel("CI", { exact: true }).selectOption("passed");
+    await humanEditor.getByLabel("Review").selectOption("approved");
+    await humanEditor.getByRole("button", { name: "Save" }).click();
+    await expect(statusNotice(humanDetail, "Work item updated.")).toBeVisible();
+    await expect(humanDetail.locator("dl.delivery-list").locator("div", { hasText: "Review" }).first()).toContainText(
+      "approved"
+    );
+
+    // Ready -> review -> done was one select in the classic drawer; the board's
+    // keyboard status move takes one step per rendered column.
+    await page.goto(projectUrl(projectId, { view: "board" }));
+    for (const state of ["in_progress", "review", "done"]) {
+      await moveByKeyboard(page, humanTitle, "ArrowRight");
+      await expect.poll(() => columnOf(page, humanTitle)).toBe(state);
+    }
+    const humanDone = await itemDetail(page, human.id);
+    expect(humanDone.work_item).toEqual(
       expect.objectContaining({
         status: "done",
         priority: "urgent",
@@ -272,23 +275,30 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
         execution: null
       })
     );
-    await page.getByRole("button", { name: "Close details" }).click();
 
-    await openWork(page, waitTitle);
-    await page.getByRole("button", { name: "Start run" }).click();
-    await expect(page.locator("#detail-content")).toContainText("Agent needs a decision", { timeout: 30_000 });
-    const waiting = await detailJSON(page, waitTitle);
+    const waitDetail = await openWork(page, wait.id, waitTitle);
+    await waitDetail.getByRole("button", { name: "Start run" }).click();
+    await expect(waitDetail.getByRole("heading", { name: "Agent needs a decision" })).toBeVisible({ timeout: 30_000 });
+    const waiting = await itemDetail(page, wait.id);
     const waitingTransitionId = waiting.work_item.execution.waiting.transition_id;
     expect(waiting.work_item.execution).toEqual(
       expect.objectContaining({ state: "waiting_for_input", generation: 1, runtime_id: runtime.runtime_id })
     );
-    const activeWorkspace = await portalRequest(page, `/portal/api/workspace?project_id=${projectId}`);
-    const activeEntry = activeWorkspace.body.activity.find((entry) => entry.work_item.title === waitTitle);
+    const activeWorkspace = (await workspace(page, projectId)).body;
+    const activeEntry = activeWorkspace.activity.find((entry) => entry.work_item.title === waitTitle);
     expect(activeEntry.execution).toEqual(
       expect.objectContaining({ state: "waiting_for_input", runtime_id: runtime.runtime_id })
     );
     expect(activeEntry.runtime.runtime_id).toBe(runtime.runtime_id);
 
+    // A lost response: the route forwards the request (the durable command
+    // exists) and only the response is dropped, so the browser has no
+    // confirmation. The receipt states the unknown outcome — never applied —
+    // and the reader's draft survives. If the served waiting signal still
+    // offers the request when the route is released, pressing the same control
+    // replays the same browser-minted identity; the run may also have completed
+    // already, in which case the faithful snapshot owns the state. Either way
+    // the timeline carries exactly one durable input command.
     let droppedStatus;
     let replayStatus;
     let firstInputRequest = true;
@@ -304,16 +314,24 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
         await route.fulfill({ response });
       }
     });
-    await page.getByLabel("Response").fill("continue");
-    await page.getByRole("button", { name: "Send" }).click();
+    await waitDetail.getByLabel("Response").fill("continue");
+    await waitDetail.getByRole("button", { name: "Send" }).click();
     await expect.poll(() => droppedStatus).toBe(202);
-    await expect(page.getByLabel("Response")).toHaveValue("continue");
-    await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
-    await page.getByRole("button", { name: "Send" }).click();
-    await expect.poll(() => replayStatus).toBe(200);
+    const unknownReceipt = waitDetail.locator(".receipt").filter({ hasText: "Outcome unknown" }).first();
+    await expect(unknownReceipt).toBeVisible({ timeout: 20_000 });
+    await expect(unknownReceipt).not.toContainText("Applied");
+    const durableInput = (await itemDetail(page, wait.id)).raw.timeline.filter(
+      (entry) => entry.source === "command" && entry.data.kind === "provide_input"
+    );
+    expect(durableInput, "the lost response still left a durable input command").toHaveLength(1);
     await page.unroute("**/portal/api/work-items/*/input");
-    await expect(page.locator("#detail-content")).toContainText("Completed", { timeout: 30_000 });
-    const waited = await detailJSON(page, waitTitle);
+    if ((await waitDetail.getByRole("button", { name: "Send" }).count()) === 1) {
+      await expect(waitDetail.getByLabel("Response")).toHaveValue("continue");
+      await waitDetail.getByRole("button", { name: "Send" }).click();
+      await expect.poll(() => replayStatus).toBe(200);
+    }
+    await expect(waitDetail.locator(".control-bar .chip")).toHaveText("Completed", { timeout: 30_000 });
+    const waited = await itemDetail(page, wait.id);
     expect(waited.work_item.execution).toEqual(
       expect.objectContaining({ state: "completed", generation: 1, runtime_id: runtime.runtime_id })
     );
@@ -325,38 +343,40 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
       ])
     );
     expect(
-      waited.raw.timeline.filter(
-        (entry) => entry.source === "command" && entry.data.kind === "provide_input"
-      )
+      waited.raw.timeline.filter((entry) => entry.source === "command" && entry.data.kind === "provide_input")
     ).toHaveLength(1);
     allowBrowserError(page, /status of 409/);
-    const staleInput = await portalRequest(page, `/portal/api/work-items/${waited.work_item.id}/input`, {
-      method: "POST",
-      body: JSON.stringify({
-        input: { answer: "stale" },
-        action_id: `stale-${project.key}`,
-        waiting_transition_id: waitingTransitionId
-      })
+    const staleInput = await api(page, "POST", `/portal/api/work-items/${wait.id}/input`, {
+      input: { answer: "stale" },
+      action_id: `stale-${project.key}`,
+      waiting_transition_id: waitingTransitionId
     });
     expect(staleInput.status).toBe(409);
     expect(staleInput.body).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: "state_conflict" }) }));
-    await page.locator("#detail-status-select").selectOption("done");
-    await expect(page.locator("[data-status='done'] .work-card", { hasText: waitTitle })).toBeVisible();
-    await page.getByRole("button", { name: "Close details" }).click();
 
-    await createWorkItem(page, {
+    // The launched run already moved the item to in_progress; the classic
+    // select jumped straight to done, the board's keyboard move takes the
+    // remaining steps.
+    await page.goto(projectUrl(projectId, { view: "board" }));
+    for (const state of ["review", "done"]) {
+      await moveByKeyboard(page, waitTitle, "ArrowRight");
+      await expect.poll(() => columnOf(page, waitTitle)).toBe(state);
+    }
+
+    const cancelItem = await createWorkItem(page, projectId, {
       title: cancelTitle,
       description: fixtureDescription("slow", "Enter a real process and cancel it through the portal."),
+      status: "ready",
       assignee_type: "agent",
-      repository: "Compose repository"
+      repository_resource_id: repository.id
     });
-    await openWork(page, cancelTitle);
-    await page.getByRole("button", { name: "Start run" }).click();
-    await expect(page.locator("#detail-content")).toContainText("Running", { timeout: 30_000 });
-    await page.getByRole("button", { name: "Cancel run" }).click();
-    await expect(page.locator("#detail-content")).toContainText("Cancelled", { timeout: 30_000 });
-    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
-    const cancelled = await detailJSON(page, cancelTitle);
+    const cancelDetail = await openWork(page, cancelItem.id, cancelTitle);
+    await cancelDetail.getByRole("button", { name: "Start run" }).click();
+    await expect(cancelDetail.locator(".control-bar .chip")).toHaveText("Running", { timeout: 30_000 });
+    await cancelDetail.getByRole("button", { name: "Cancel run" }).click();
+    await expect(cancelDetail.locator(".control-bar .chip")).toHaveText("Cancelled", { timeout: 30_000 });
+    await expect(cancelDetail.getByRole("button", { name: "Retry" })).toBeVisible();
+    const cancelled = await itemDetail(page, cancelItem.id);
     expect(cancelled.work_item.execution).toEqual(expect.objectContaining({ state: "cancelled", generation: 1 }));
     expect(cancelled.raw.timeline).toEqual(
       expect.arrayContaining([
@@ -364,37 +384,43 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
         expect.objectContaining({ source: "transition", data: expect.objectContaining({ state: "cancelled" }) })
       ])
     );
-    await page.getByRole("button", { name: "Close details" }).click();
 
-    await createWorkItem(page, {
+    const retryItem = await createWorkItem(page, projectId, {
       title: retryTitle,
       description: fixtureDescription("fail_once_then_evidence_success", "Fail once and preserve both generations."),
+      status: "ready",
       assignee_type: "agent",
-      repository: "Compose repository"
+      repository_resource_id: repository.id
     });
-    await openWork(page, retryTitle);
-    await page.getByRole("button", { name: "Start run" }).click();
-    await expect(page.locator("#detail-content")).toContainText("Failure", { timeout: 30_000 });
-    const failed = await detailJSON(page, retryTitle);
+    const retryDetail = await openWork(page, retryItem.id, retryTitle);
+    await retryDetail.getByRole("button", { name: "Start run" }).click();
+    await expect(retryDetail.locator(".control-bar .chip")).toHaveText("Failed", { timeout: 30_000 });
+    const failed = await itemDetail(page, retryItem.id);
     expect(failed.work_item.execution).toEqual(expect.objectContaining({ state: "failed", generation: 1 }));
-    await expect(page.locator(".health-item", { hasText: "Executions" })).toContainText("Fault");
+    // The classic health rail's "Executions: Fault" has no SPA render (health is
+    // not a surface in the fixed IA); the served value is asserted on the same
+    // workspace read that backed the classic rail.
+    expect((await workspace(page, projectId)).body.health).toEqual(
+      expect.objectContaining({ executions: "fault" })
+    );
 
-    await page.getByRole("button", { name: "Edit" }).click();
-    const retryDialog = page.locator("#work-item-dialog");
-    await retryDialog
+    await retryDetail.getByRole("button", { name: "Edit work item" }).click();
+    const retryEditor = page.getByRole("dialog", { name: "Edit work item" });
+    await retryEditor
       .getByLabel("Description")
       .fill(fixtureDescription("fail_once_then_evidence_success", "Corrected intent is used by generation two."));
-    await retryDialog.getByRole("button", { name: "Save" }).click();
-    await expect(page.locator("#detail-content")).toContainText("Corrected intent is used by generation two.");
-    await page.getByRole("button", { name: "Retry" }).click();
-    await expect(page.locator("#detail-content")).toContainText("Completed the requested engineering work", {
+    await retryEditor.getByRole("button", { name: "Save" }).click();
+    await expect(statusNotice(retryDetail, "Work item updated.")).toBeVisible();
+    await expect(retryDetail.getByText("Corrected intent is used by generation two.", { exact: false })).toBeVisible();
+    await retryDetail.getByRole("button", { name: "Retry" }).click();
+    await expect(retryDetail.getByText("Completed the requested engineering work", { exact: false })).toBeVisible({
       timeout: 30_000
     });
-    await expect(page.locator("#detail-content")).toContainText("Verified the requested change");
-    await expect(page.locator("#detail-content")).toContainText("README.md");
-    await expect(page.locator("#detail-content")).toContainText("fake-agent verification");
+    await expect(retryDetail.getByText("Verified the requested change", { exact: false })).toBeVisible();
+    await expect(retryDetail.getByText("README.md", { exact: false })).toBeVisible();
+    await expect(retryDetail.getByText("fake-agent verification", { exact: false })).toBeVisible();
 
-    const retried = await detailJSON(page, retryTitle);
+    const retried = await itemDetail(page, retryItem.id);
     expect(retried.work_item.execution.task_id).toBe(failed.work_item.execution.task_id);
     expect(retried.work_item.execution).toEqual(expect.objectContaining({ state: "completed", generation: 2 }));
     expect(retried.work_item.delivery.pull_request).toEqual(expect.objectContaining({ source: "agent" }));
@@ -407,22 +433,23 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
         .map((entry) => entry.data.kind)
     ).toEqual(expect.arrayContaining(["progress", "finding", "artifact", "test", "pull_request", "ci", "review", "summary"]));
 
-    await page.getByRole("button", { name: "Edit" }).click();
-    const deliveryDialog = page.locator("#work-item-dialog");
-    await deliveryDialog.getByLabel("Pull request URL").fill("https://github.com/wxxb789/symmetry/pull/84");
-    await deliveryDialog.locator('select[name="ci_status"]').selectOption("passed");
-    await deliveryDialog.locator('select[name="review_status"]').selectOption("approved");
-    await deliveryDialog.getByRole("button", { name: "Save" }).click();
-    await expect(page.locator("#detail-content")).toContainText("Approved");
-    await page.getByRole("button", { name: "Close details" }).click();
-    await openWork(page, retryTitle);
-    await page.locator("#detail-status-select").selectOption("review");
-    await expect(page.locator("[data-status='review'] .work-card", { hasText: retryTitle })).toBeVisible();
-    await page.getByRole("button", { name: "Close details" }).click();
-    await openWork(page, retryTitle);
-    await page.locator("#detail-status-select").selectOption("done");
-    await expect(page.locator("[data-status='done'] .work-card", { hasText: retryTitle })).toBeVisible();
-    const approved = await detailJSON(page, retryTitle);
+    await retryDetail.getByRole("button", { name: "Edit work item" }).click();
+    const deliveryEditor = page.getByRole("dialog", { name: "Edit work item" });
+    await deliveryEditor.getByLabel("Pull request URL").fill("https://github.com/wxxb789/symmetry/pull/84");
+    await deliveryEditor.getByLabel("CI", { exact: true }).selectOption("passed");
+    await deliveryEditor.getByLabel("Review").selectOption("approved");
+    await deliveryEditor.getByRole("button", { name: "Save" }).click();
+    await expect(statusNotice(retryDetail, "Work item updated.")).toBeVisible();
+    const retryReviewRow = retryDetail.locator("dl.delivery-list").locator("div", { hasText: "Review" }).first();
+    await expect(retryReviewRow).toContainText("approved");
+    await expect(retryReviewRow).toContainText("source: manual");
+
+    await page.goto(projectUrl(projectId, { view: "board" }));
+    for (const state of ["review", "done"]) {
+      await moveByKeyboard(page, retryTitle, "ArrowRight");
+      await expect.poll(() => columnOf(page, retryTitle)).toBe(state);
+    }
+    const approved = await itemDetail(page, retryItem.id);
     expect(approved.work_item.delivery.pull_request).toEqual(
       expect.objectContaining({ source: "manual", url: "https://github.com/wxxb789/symmetry/pull/84" })
     );
@@ -430,28 +457,36 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     expect(approved.work_item.delivery.review).toEqual(
       expect.objectContaining({ source: "manual", status: "approved" })
     );
-    await page.getByRole("button", { name: "Close details" }).click();
 
+    // The classic topbar settings dialog and its status select move to the
+    // project settings surface; the retired status select's disabled state
+    // becomes the board's server-policy refusal of a move.
+    await page.goto(projectUrl(projectId));
     await page.getByRole("button", { name: "Project settings" }).click();
-    await projectDialog.getByLabel("Status").selectOption("archived");
-    await projectDialog.getByRole("button", { name: "Save" }).click();
-    await expect(page.locator("#project-state")).toHaveText("Archived");
-    await openWork(page, retryTitle);
-    await expect(page.locator("#detail-status-select")).toBeDisabled();
-    await page.getByRole("button", { name: "Close details" }).click();
-    await page.getByRole("button", { name: "Project settings" }).click();
-    await projectDialog.getByLabel("Status").selectOption("active");
-    await projectDialog.getByRole("button", { name: "Save" }).click();
-    await expect(page.locator("#project-state")).toHaveText("Active");
+    const projectSettings = page.getByRole("dialog", { name: "Project settings" });
+    await projectSettings.getByLabel("Status").selectOption("archived");
+    await projectSettings.getByRole("button", { name: "Save" }).click();
+    await expect(statusNotice(page, "Project archived.")).toBeVisible();
+    await expect(page.getByText(/This project is archived/)).toBeVisible();
+    await page.goto(projectUrl(projectId, { view: "board" }));
+    await expect(boardCard(page, retryTitle)).toBeVisible();
+    await moveByKeyboard(page, retryTitle, "ArrowRight");
+    await expect(statusNotice(page, "restore it to move work")).toBeVisible();
+    await expect.poll(() => columnOf(page, retryTitle)).toBe("done");
+    await page.goto(projectUrl(projectId));
+    await page.getByRole("button", { name: "Restore project" }).click();
+    await expect(statusNotice(page, "Project restored.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "New work item" })).toBeVisible();
 
-    await page.getByRole("link", { name: "Activity" }).click();
-    await expect(page.locator(".activity-row", { hasText: waitTitle })).toContainText("default");
-    await expect(page.locator(".activity-row", { hasText: waitTitle })).toContainText("Done");
-    await expect(page.locator(".activity-row", { hasText: cancelTitle })).toContainText("Retry available");
-    await expect(page.locator(".activity-row", { hasText: retryTitle })).toContainText("Generation 2");
-    await expect(page.locator(".activity-row", { hasText: retryTitle })).toContainText("Done");
+    // The classic Activity rail is retired with the classic document; plan §6
+    // maps it to the project board and the work detail, so each row's observable
+    // claim is asserted on the surface that now serves it: the cancelled run's
+    // "Retry available" is the served retry control on its detail.
+    const cancelSurface = await openWork(page, cancelItem.id, cancelTitle);
+    await expect(cancelSurface.locator(".control-bar .chip")).toHaveText("Cancelled");
+    await expect(cancelSurface.getByRole("button", { name: "Retry" })).toBeVisible();
 
-    const persisted = await portalRequest(page, `/portal/api/workspace?project_id=${projectId}`);
+    const persisted = await workspace(page, projectId);
     const persistedProject = persisted.body.projects.find((candidate) => candidate.id === projectId);
     expect(persistedProject).toEqual(
       expect.objectContaining({
@@ -474,43 +509,63 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
       expect.objectContaining({ status: "done", execution: expect.objectContaining({ state: "completed", generation: 2 }) })
     );
 
-    // Persisted execution reads moved to /portal/work/:workItemId; every
-    // mutation and lifecycle assertion above stays classic.
-    await page.goto(`/portal/projects/${projectId}`);
-    await page.getByRole("link", { name: retryTitle }).click();
-    const retryDetail = page.getByRole("dialog", { name: retryTitle });
-    await expect(retryDetail.getByRole("heading", { level: 1, name: retryTitle })).toBeVisible();
+    // Persisted execution reads on the SPA board and work detail: the board
+    // carries the final columns and the work detail carries the reported
+    // output, the generation and the delivery values already proved through the
+    // API, without labelling them accepted. This is also where the classic
+    // Activity rows' claims are read back: the waiting run's runtime label
+    // ("default") as the served owner, and the retried run's "Generation 2" as
+    // the reported source.
+    await page.goto(projectUrl(projectId, { view: "board" }));
+    await expect.poll(() => columnOf(page, humanTitle)).toBe("done");
+    await expect.poll(() => columnOf(page, waitTitle)).toBe("done");
+    await expect.poll(() => columnOf(page, retryTitle)).toBe("done");
+    await page.getByRole("link", { name: waitTitle }).click();
+    const waitedSurface = page.getByRole("dialog", { name: waitTitle });
+    await expect(waitedSurface.getByRole("heading", { level: 1, name: waitTitle })).toBeVisible();
+    await expect(waitedSurface.locator(".control-bar .chip")).toHaveText("Completed");
     await expect(
-      retryDetail
+      waitedSurface.locator("dl.detail-facts").locator("div", { hasText: "Owner" })
+    ).toContainText("default");
+    await expect(
+      waitedSurface
         .locator("section.detail-section", { has: page.getByRole("heading", { name: "Execution history" }) })
         .locator("ol.timeline > li.timeline-entry")
         .first()
     ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(waitedSurface).toHaveCount(0);
+
+    await page.getByRole("link", { name: retryTitle }).click();
+    const retriedSurface = page.getByRole("dialog", { name: retryTitle });
+    await expect(retriedSurface.getByRole("heading", { level: 1, name: retryTitle })).toBeVisible();
     // The rendered detail must carry the real reported output and delivery
     // values already proved through the API, without labelling them accepted.
     const retriedItemId = persistedProject.work_items.find((item) => item.title === retryTitle).id;
-    const servedDetail = (await portalRequest(page, `/portal/api/work-items/${retriedItemId}`)).body;
+    const servedDetail = await itemDetail(page, retriedItemId);
     const servedReported = servedDetail.outcome.summary ??
       (servedDetail.work_item.execution?.result?.summary ?? null);
     expect(servedReported).toBeTruthy();
     // Scoped to the actual Reported execution output section: the same summary
     // text legitimately repeats as a timeline entry headline.
-    const reportedSection = retryDetail.locator("section.detail-section", {
+    const reportedSection = retriedSurface.locator("section.detail-section", {
       has: page.getByRole("heading", { name: "Reported execution output", exact: true })
     });
     await expect(reportedSection.getByText(servedReported, { exact: false })).toBeVisible();
-    await expect(retryDetail.getByText("No accepted evidence available", { exact: false })).toBeVisible();
-    const retryDelivery = retryDetail.locator("dl.delivery-list");
+    await expect(reportedSection.getByText("Source: execution generation 2", { exact: false })).toBeVisible();
+    await expect(retriedSurface.getByText("No accepted evidence available", { exact: false })).toBeVisible();
+    const retriedDelivery = retriedSurface.locator("dl.delivery-list");
     for (const [label, entry] of [
       ["Pull request", servedDetail.work_item.delivery.pull_request],
       ["CI", servedDetail.work_item.delivery.ci],
       ["Review", servedDetail.work_item.delivery.review]
     ]) {
-      const row = retryDelivery.locator("div", { hasText: label }).first();
+      const row = retriedDelivery.locator("div", { hasText: label }).first();
       await expect(row).toContainText(`source: ${entry.source}`);
       if (typeof entry.url === "string" && entry.url.startsWith("http")) {
         await expect(row.getByRole("link", { name: "Open" })).toHaveAttribute("href", entry.url);
       }
     }
+
   });
 });

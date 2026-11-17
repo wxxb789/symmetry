@@ -247,22 +247,32 @@ test("existing tab refreshes logout CSRF after shared-cookie login on explicit v
   await capture(page, testInfo, "fresh-csrf", "Shared-cookie tab renewed the session; explicit visibility notification triggered real bootstrap refetch and logout succeeded without a reload; native background visibility is not claimed");
 });
 
-test("classic and legacy hashes use separate documents without losing existing work", async ({ page }, testInfo) => {
+test("the legacy hash repair lands on the new route exactly once", async ({ page }, testInfo) => {
   await login(page);
   const selected = await project(page, "C");
+  const documentLoads = [];
+  const recordLoad = (request) => {
+    if (request.resourceType() === "document") documentLoads.push(request.url());
+  };
+  page.on("request", recordLoad);
   await page.goto(`/portal?project_id=${selected.id}#board`);
-  await expect(page).toHaveURL(new RegExp(`/portal/classic\\?project_id=${selected.id}#board$`));
-  await expect(page.locator("#project-title")).toHaveText(selected.name);
-  await expect(page.getByRole("button", { name: "New work item", exact: true })).toBeVisible();
-  await expect(page.locator('script[src="/assets/portal.js"]')).toHaveCount(1);
-  await expect(page.locator('script[type="module"]')).toHaveCount(0);
-  await page.goto("/portal/attention");
-  await expect(page.getByRole("heading", { name: "Attention", exact: true, level: 1 })).toBeVisible();
-  await expect(page.locator('script[src="/assets/portal.js"]')).toHaveCount(0);
-  await capture(page, testInfo, "separate-documents", "Classic retains existing controls; only one workspace runtime mounted in each document");
+  await expect(page).toHaveURL(new RegExp(`/portal/projects/${selected.id}$`));
+  await expect(page.getByRole("heading", { level: 1, name: selected.name })).toBeVisible();
+  // Exactly once: one document load, one history replacement, then a stable
+  // destination URL with no further redirect.
+  expect(documentLoads).toHaveLength(1);
+  await page.waitForTimeout(300);
+  await expect(page).toHaveURL(new RegExp(`/portal/projects/${selected.id}$`));
+  expect(documentLoads).toHaveLength(1);
+  expect(await page.evaluate(() => performance.getEntriesByType("navigation").length)).toBe(1);
+  page.off("request", recordLoad);
+  // The retired presentation is gone: neither its document nor its assets exist.
+  expect((await page.request.get("/portal/classic")).status()).toBe(404);
+  expect((await page.request.get("/assets/portal.js")).status()).toBe(404);
+  await capture(page, testInfo, "legacy-hash-repair", "The legacy project board hash landed on /portal/projects/<id> with one document load, one history replacement and no second redirect; the retired classic document and asset answer 404");
 });
 
-test("signed-out legacy project board link survives real login", async ({ page }, testInfo) => {
+test("signed-out legacy project board link survives real login onto its new route", async ({ page }, testInfo) => {
   await login(page);
   const selected = await project(page, "L");
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
@@ -275,12 +285,32 @@ test("signed-out legacy project board link survives real login", async ({ page }
   expect(new URL(page.url()).searchParams.get("return_to")).toBe(destination.split("#")[0]);
   await page.getByLabel("Operator token").fill(operatorToken);
   await page.getByRole("button", { name: "Open workspace" }).click();
-  await expect(page).toHaveURL(new RegExp(`/portal/classic\\?project_id=${selected.id}#board$`));
-  await expect(page.locator("#project-title")).toHaveText(selected.name);
-  await expect(page.getByRole("button", { name: "New work item", exact: true })).toBeVisible();
-  await expect(page.locator('script[src="/assets/portal.js"]')).toHaveCount(1);
-  await expect(page.locator('script[type="module"]')).toHaveCount(0);
-  await capture(page, testInfo, "legacy-login-scope", "Real logout, original legacy project board link and login recover the named project in the classic document");
+  await expect(page).toHaveURL(new RegExp(`/portal/projects/${selected.id}$`));
+  await expect(page.getByRole("heading", { level: 1, name: selected.name })).toBeVisible();
+  await capture(page, testInfo, "legacy-login-scope", "Real logout, the original legacy project board link and login recover the named project on /portal/projects/<id> through the one-time hash repair");
+});
+
+test("invalid credentials and a missing CSRF header are refused by the real server", async ({ page }) => {
+  allowBrowserError(page, /status of 401/);
+  allowBrowserError(page, /status of 403/);
+  await page.goto("/portal/login");
+  await page.getByLabel("Operator token").fill("invalid-token");
+  await page.getByRole("button", { name: "Open workspace" }).click();
+  await expect(page.getByRole("alert")).toContainText("Operator token is invalid");
+
+  await login(page);
+  // The migrated session-boundary probe: an authenticated same-origin POST
+  // without the session's CSRF header is refused by the server, not by a stub.
+  const withoutCsrf = await page.evaluate(async () => {
+    const response = await fetch("/portal/api/projects", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ name: "Rejected", key: "NOPE" })
+    });
+    return response.status;
+  });
+  expect(withoutCsrf).toBe(403);
 });
 
 test("expired authentication clears private content and recovers the deep link", async ({ page }, testInfo) => {

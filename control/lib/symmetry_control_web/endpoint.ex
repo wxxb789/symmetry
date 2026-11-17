@@ -17,11 +17,25 @@ defmodule SymmetryControlWeb.Endpoint do
     websocket: [connect_info: [:x_headers]],
     longpoll: false
 
+  # The operator invalidation socket. A separate path is required: Phoenix
+  # compiles one dispatch clause per socket path, so two sockets cannot share
+  # `/socket`. The only credential here is the short-lived audience-scoped token
+  # from the authenticated session bootstrap (see PortalSocketToken).
+  # `auth_token` is a socket option, not a websocket-transport option: declared
+  # inside `websocket:` it is overwritten with nil and the token parsed from the
+  # `base64url.bearer.phx.` subprotocol never reaches `PortalSocket.connect/3`,
+  # which then refuses every handshake with 403. The token also has to be named
+  # in `connect_info`, because the transport forwards only the declared keys.
+  socket "/portal/socket", SymmetryControlWeb.PortalSocket,
+    auth_token: true,
+    websocket: [connect_info: [:auth_token, :x_headers]],
+    longpoll: false
+
   plug Plug.Static,
     at: "/assets",
     from: {:symmetry_control, "priv/portal_assets"},
     gzip: false,
-    only: ~w(portal.css portal.js)
+    only: ~w(login.css)
 
   plug Plug.Static,
     at: "/portal/assets",

@@ -1,15 +1,20 @@
 import { expect, test } from "./fixtures.mjs";
+import { api, login } from "./readable-fixtures.mjs";
 
 const projectId = process.env.SYMMETRY_COMPOSE_PROJECT_ID;
 const projectKey = process.env.SYMMETRY_COMPOSE_PROJECT_KEY;
 const projectName = process.env.SYMMETRY_COMPOSE_PROJECT_NAME;
-const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
+
+const workUrl = (id) => `/portal/work/${id}`;
+const columnOf = (page, title) =>
+  page
+    .locator("[data-board-card]", { has: page.getByRole("link", { name: title }) })
+    .getAttribute("data-board-column");
 
 async function workItemDetail(page, id) {
-  return page.evaluate(async (workItemId) => {
-    const response = await fetch(`/portal/api/work-items/${workItemId}`, { credentials: "same-origin" });
-    return response.json();
-  }, id);
+  const response = await api(page, "GET", `/portal/api/work-items/${id}`);
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  return response.body;
 }
 
 test.describe("Goal 2 Compose restart acceptance", () => {
@@ -22,26 +27,17 @@ test.describe("Goal 2 Compose restart acceptance", () => {
     const cancelTitle = `Cancel workflow ${projectKey}`;
     const retryTitle = `Retry workflow ${projectKey}`;
 
-    await page.goto("/portal/login?return_to=%2Fportal%2Fclassic");
-    await page.getByLabel("Operator token").fill(operatorToken);
-    await Promise.all([
-      page.waitForURL(/\/portal\/classic(?:\?|#|$)/),
-      page.getByRole("button", { name: "Open workspace" }).click()
-    ]);
+    await login(page);
 
-    await page.goto(`/portal/classic?project_id=${projectId}#activity`);
-    await expect(page.locator("#project-key")).toHaveText(projectKey);
-    await expect(page.locator("#project-title")).toHaveText(projectName);
-    await expect(page.locator(".activity-row", { hasText: waitTitle })).toContainText("default");
-    await expect(page.locator(".activity-row", { hasText: waitTitle })).toContainText("Done");
-    await expect(page.locator(".activity-row", { hasText: cancelTitle })).toContainText("Retry available");
-    await expect(page.locator(".activity-row", { hasText: retryTitle })).toContainText("Generation 2");
-    await expect(page.locator(".activity-row", { hasText: retryTitle })).toContainText("Done");
+    // The classic workspace document is retired; the read-after-restart check
+    // runs on the SPA routes that now serve the same state. The classic
+    // #project-key/#project-title read becomes the project heading and the item
+    // keys the project board serves.
+    await page.goto(`/portal/projects/${projectId}?view=board`);
+    await expect(page.getByRole("heading", { level: 1, name: projectName })).toBeVisible();
+    await expect(page.getByRole("link", { name: waitTitle })).toContainText(projectKey);
 
-    const workspace = await page.evaluate(async (id) => {
-      const response = await fetch(`/portal/api/workspace?project_id=${id}`, { credentials: "same-origin" });
-      return { status: response.status, body: await response.json() };
-    }, projectId);
+    const workspace = await api(page, "GET", `/portal/api/workspace?project_id=${projectId}`);
 
     expect(workspace.status).toBe(200);
     expect(workspace.body.selected_project_id).toBe(projectId);
@@ -143,14 +139,31 @@ test.describe("Goal 2 Compose restart acceptance", () => {
         .map((entry) => entry.data.kind)
     ).toEqual(expect.arrayContaining(["progress", "finding", "artifact", "test", "pull_request", "ci", "review", "summary"]));
 
-    // The post-restart read also renders on the new work detail surface; the
+    // The classic Activity rows' observable claims are asserted on the board
+    // and the work details that now serve them: the waiting row's "Done" and
+    // its runtime label as the served owner, the cancelled row's "Retry
+    // available" as the served retry control, and the retried row's
+    // "Generation 2" and "Done".
+    await expect.poll(() => columnOf(page, waitTitle)).toBe("done");
+    await expect.poll(() => columnOf(page, retryTitle)).toBe("done");
+    await page.goto(workUrl(cancelled.id));
+    const cancelledSurface = page.getByRole("dialog", { name: cancelTitle });
+    await expect(cancelledSurface.getByRole("heading", { level: 1, name: cancelTitle })).toBeVisible();
+    await expect(cancelledSurface.locator(".control-bar .chip")).toHaveText("Cancelled");
+    await expect(cancelledSurface.getByRole("button", { name: "Retry" })).toBeVisible();
+
+    // The post-restart read also renders on the work detail surface; the
     // persisted lifecycle assertions above stay unchanged. The waiting workflow
     // serves no summary, so the rendered reported read is asserted against the
     // retried workflow, whose generation-2 summary event is proved above.
-    await page.goto(`/portal/projects/${projectId}`);
+    await page.goto(`/portal/projects/${projectId}?view=board`);
     await page.getByRole("link", { name: waitTitle }).click();
     const waitedSurface = page.getByRole("dialog", { name: waitTitle });
     await expect(waitedSurface.getByRole("heading", { level: 1, name: waitTitle })).toBeVisible();
+    await expect(waitedSurface.locator(".control-bar .chip")).toHaveText("Completed");
+    await expect(
+      waitedSurface.locator("dl.detail-facts").locator("div", { hasText: "Owner" })
+    ).toContainText("default");
     await expect(
       waitedSurface
         .locator("section.detail-section", { has: page.getByRole("heading", { name: "Execution history" }) })
@@ -175,6 +188,7 @@ test.describe("Goal 2 Compose restart acceptance", () => {
       has: page.getByRole("heading", { name: "Reported execution output", exact: true })
     });
     await expect(reportedSection.getByText(servedReported, { exact: false })).toBeVisible();
+    await expect(reportedSection.getByText("Source: execution generation 2", { exact: false })).toBeVisible();
     await expect(retriedSurface.getByText("No accepted evidence available", { exact: false })).toBeVisible();
     const retriedDelivery = retriedSurface.locator("dl.delivery-list");
     for (const [label, entry] of [

@@ -1,5 +1,36 @@
 # Next goals for local Codex
 
+Goal [0007i](0007i-portal-cutover.md) completed the single real-time Portal
+cutover run on 2026-11-17 and stays in place (the 0007 lettered goals are not
+archived; only their receipts are). The
+[series release receipt](../evidence/goal-0007i-portal-cutover-series-receipt-2026-11-17.md)
+binds one Subject — base revision `ca29a8e` plus this branch's delivery commit — and
+maps every clause of the full-series acceptance contract, preserved verbatim, to
+evidence valid for that revision, with the rendered capture set, the removed
+presentation list, the migrated acceptance suites and the explicit unresolved
+findings. It is **produced and awaiting the owner's verdict**: the owner's review
+of the integrated deployed experience is not a condition this run can satisfy,
+and no `achieve` was issued. The owner's recorded authorization removed the
+classic routes, `portal.js`/CSS and the EEx workspace renderer in this same PR
+after parity for every surface whose migrated suite executed, while keeping the
+ordering limit (parity before removal), the audit
+fence, the protocol/wire contracts, the fixtures-only provider boundary (0007d/0007e),
+credential locality, every fail-closed gate and the one-time `/portal#...` hash
+repair. The cutover was rebased onto `ca29a8e`, which carries goal 0007g's scoped
+engineering conversation: `main`'s `/portal/chat` surface, its `chat-read`
+contract family and its daemon envelope registration are the ones this revision
+ships, so the conversation surface the cutover had added itself (and the
+`chat-conversation` contract family it shipped with) was superseded and removed
+rather than kept as a second implementation, exactly as one owner per category of
+state requires. 0007g's own native-admission clause is satisfied by 0007g's
+delivery, not by the cutover.
+The compose surface is the named exception: its migrated suites never executed
+on this host, so its removal is carried by inspection only and the receipt
+records the parity limit as unmet rather than passed.
+Provider behaviour is real Portal API/database behaviour with controlled provider
+fixtures; no provider host was contacted. Unexecuted or host-limited checks stay
+explicit in the receipt instead of being reported as passes.
+
 Goal [0009](archive/0009-achieve-contract-amendments.md) produced its A/B/C
 amendment evidence and is archived with its contract text unchanged. The
 [implementation receipt](../evidence/goal-0009-achieve-contract-amendments-2026-11-15.md)

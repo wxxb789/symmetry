@@ -64,7 +64,7 @@
   kbd { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; padding: 1px 4px; border: 1px solid var(--color-line); border-radius: 3px; margin-left: 20px; }
   .mobile-nav-trigger { display: none; }
   .workspace-content { width: 100%; max-width: 1280px; margin-inline: auto; padding: 36px 40px 48px; flex: 1; }
-  .page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 32px; }
+  .page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 32px; flex-wrap: wrap; }
   .page-heading p { margin-top: 8px; }
   .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
   .count { color: var(--color-muted); font-size: 12px; margin-left: 8px; font-weight: 400; }
@@ -354,7 +354,18 @@
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .loading-icon { animation: none; } }
+/* A reduced-motion request stops every animation and transition the workspace
+   shell can run, not only the loading indicator: nothing decorative is load
+   bearing, and a surface must render identically with motion removed. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .loading-icon { animation: none; }
+}
 @media (max-width: 900px) {
   .topbar { padding: 16px 24px; }
   .connection-layout { grid-template-columns: minmax(0, 1fr); }
