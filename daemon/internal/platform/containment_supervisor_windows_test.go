@@ -646,6 +646,7 @@ func TestContainmentSupervisorStopStateDoesNotReplayProvenStop(t *testing.T) {
 	previousQuery := queryJobActiveProcesses
 	previousWait := waitForEmptyJob
 	previousClose := closeJob
+	previousProcessIDs := queryJobProcessIDs
 	terminateJob = func(syscall.Handle) error {
 		terminates++
 		return nil
@@ -661,11 +662,13 @@ func TestContainmentSupervisorStopStateDoesNotReplayProvenStop(t *testing.T) {
 		releases++
 		return nil
 	}
+	queryJobProcessIDs = func(syscall.Handle) ([]ownedJobProcess, error) { return nil, nil }
 	t.Cleanup(func() {
 		terminateJob = previousTerminate
 		queryJobActiveProcesses = previousQuery
 		waitForEmptyJob = previousWait
 		closeJob = previousClose
+		queryJobProcessIDs = previousProcessIDs
 	})
 
 	state := containmentSupervisorStopState{}
@@ -687,6 +690,7 @@ func TestContainmentSupervisorStopStateRetriesAfterUnprovenFailure(t *testing.T)
 	previousWait := waitForEmptyJob
 	previousQuery := queryJobActiveProcesses
 	previousClose := closeJob
+	previousProcessIDs := queryJobProcessIDs
 	terminateJob = func(syscall.Handle) error {
 		attempts++
 		return nil
@@ -699,11 +703,13 @@ func TestContainmentSupervisorStopStateRetriesAfterUnprovenFailure(t *testing.T)
 	}
 	queryJobActiveProcesses = func(syscall.Handle) (uint32, error) { return 0, nil }
 	closeJob = func(syscall.Handle) error { return nil }
+	queryJobProcessIDs = func(syscall.Handle) ([]ownedJobProcess, error) { return nil, nil }
 	t.Cleanup(func() {
 		terminateJob = previousTerminate
 		waitForEmptyJob = previousWait
 		queryJobActiveProcesses = previousQuery
 		closeJob = previousClose
+		queryJobProcessIDs = previousProcessIDs
 	})
 
 	state := containmentSupervisorStopState{}
@@ -725,6 +731,7 @@ func TestStopAndReleaseSupervisorJobDoesNotReleaseBeforeEmptyProof(t *testing.T)
 	previousWait := waitForEmptyJob
 	previousQuery := queryJobActiveProcesses
 	previousClose := closeJob
+	previousProcessIDs := queryJobProcessIDs
 	terminateJob = func(syscall.Handle) error { return nil }
 	waitForEmptyJob = func(syscall.Handle, time.Time, func(syscall.Handle) (uint32, error)) error {
 		return want
@@ -734,11 +741,13 @@ func TestStopAndReleaseSupervisorJobDoesNotReleaseBeforeEmptyProof(t *testing.T)
 		releases++
 		return nil
 	}
+	queryJobProcessIDs = func(syscall.Handle) ([]ownedJobProcess, error) { return nil, nil }
 	t.Cleanup(func() {
 		terminateJob = previousTerminate
 		waitForEmptyJob = previousWait
 		queryJobActiveProcesses = previousQuery
 		closeJob = previousClose
+		queryJobProcessIDs = previousProcessIDs
 	})
 
 	if err := stopAndReleaseSupervisorJob(syscall.Handle(1234), func() error { return closeJob(syscall.Handle(1234)) }); !errors.Is(err, want) {

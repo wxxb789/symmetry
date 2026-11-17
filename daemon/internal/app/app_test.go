@@ -7273,6 +7273,44 @@ func startupTestDaemon(t *testing.T, store *state.Store, service workspace.Servi
 	}
 }
 
+// testHangGuard bounds how long a test waits for an in-process, fully scripted
+// daemon to stop. It only turns a hung harness into a failure; it is never a
+// statement about how fast the product should stop, so it sits far above any
+// real scheduling delay, race instrumentation included.
+const testHangGuard = 30 * time.Second
+
+// stopTestDaemon performs the daemon's own shutdown ordering for a test-built
+// daemon: cancel the run's background context, cancel the active runs, then
+// join the assignment workers. The reactor does the same before it joins them
+// (app.go: stopBackground, stopAll, workers.Wait). Without it a worker that can
+// no longer make its terminal transition durable - for example because the test
+// released its Store with a deferred Close, which runs before t.Cleanup -
+// retries against the daemon's uncancellable fallback context and the package
+// dies at the go-test timeout with the test's own failure unrecorded.
+func stopTestDaemon(t *testing.T, app *daemon) {
+	t.Helper()
+	app.mu.Lock()
+	if app.background == nil {
+		background, cancel := context.WithCancel(context.Background())
+		app.background, app.backgroundCancel = background, cancel
+	}
+	app.backgroundStop = true
+	cancel := app.backgroundCancel
+	app.mu.Unlock()
+	cancel()
+	app.stopAll()
+	stopped := make(chan struct{})
+	go func() {
+		app.workers.Wait()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(testHangGuard):
+		t.Fatal("daemon assignment workers did not stop after the daemon's root context was cancelled")
+	}
+}
+
 func claimedStore(t *testing.T) (*state.Store, state.RunKey) {
 	t.Helper()
 	return claimedStoreAt(t, t.TempDir())
@@ -9109,7 +9147,7 @@ func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		releaseProcessWait()
-		daemon.workers.Wait()
+		stopTestDaemon(t, daemon)
 		daemon.failedStartWatchWG.Wait()
 	})
 	key := state.RunKey{RunID: "run-1", Generation: 1}
@@ -9863,7 +9901,7 @@ func TestCancelledNativeStartLeaseExpiryPreservesAcknowledgement(t *testing.T) {
 		default:
 			close(startRelease)
 		}
-		app.workers.Wait()
+		stopTestDaemon(t, app)
 	})
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {

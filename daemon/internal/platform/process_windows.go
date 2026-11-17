@@ -14,6 +14,8 @@ import (
 	"time"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
+
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 )
 
@@ -21,8 +23,10 @@ const (
 	containmentCloseDeadline            = 5 * time.Second
 	containmentCloseProbeInterval       = 10 * time.Millisecond
 	jobObjectBasicAccountingInformation = 1
+	jobObjectBasicProcessIdList         = 3
 	jobObjectExtendedLimitInformation   = 9
 	jobObjectLimitKillOnJobClose        = 0x00002000
+	ownedJobProcessListLimit            = 1 << 16
 	windowsCreateNoWindow               = 0x08000000
 	windowsCreateNewConsole             = 0x00000010
 	windowsDetachedProcess              = 0x00000008
@@ -39,10 +43,27 @@ var (
 	terminateProcessForAttachFailure = terminateFailedAttachProcess
 	terminateJob                     = terminateOwnedJob
 	queryJobActiveProcesses          = queryOwnedJobActiveProcesses
+	queryJobProcessIDs               = queryOwnedJobProcessIDs
 	closeJob                         = syscall.CloseHandle
 	waitForEmptyJob                  = waitForJobToEmpty
 	readProcessIdentityFromHandle    = processIdentityFromHandle
 )
+
+// basicProcessIDList mirrors JOBOBJECT_BASIC_PROCESS_ID_LIST. The kernel fills
+// both counts and as many process IDs as fit; processIDList is the first of
+// numberOfProcessIDsInList entries in a buffer sized for the whole list.
+type basicProcessIDList struct {
+	numberOfAssignedProcesses uint32
+	numberOfProcessIDsInList  uint32
+	processIDList             [1]uintptr
+}
+
+// ownedJobProcess is a process the Job Object owned at the stop boundary,
+// bound to the creation time that tells a recycled PID apart from that process.
+type ownedJobProcess struct {
+	pid      int
+	identity string
+}
 
 // Containment owns a launched process's platform-specific termination boundary.
 type Containment interface {
@@ -522,9 +543,7 @@ func (job *jobContainment) Close() error {
 	}
 	deadline := time.Now().Add(containmentCloseDeadline)
 	var stopErr error
-	if err := terminateJob(handle); err != nil {
-		stopErr = fmt.Errorf("terminate job object during containment close: %w", err)
-	} else if err := waitForEmptyJob(handle, deadline, queryJobActiveProcesses); err != nil {
+	if err := terminateJobAndProveStop(handle, deadline); err != nil {
 		stopErr = err
 	}
 	if partial, ok := job.supervisor.(containmentSupervisorPartialLease); ok {
@@ -641,6 +660,134 @@ func waitForJobToEmpty(handle syscall.Handle, deadline time.Time, query func(sys
 		}
 		time.Sleep(remaining)
 	}
+}
+
+// queryOwnedJobProcessIDs lists the processes the Job Object owns and binds each
+// to its creation-time identity. The list is sampled before the Job is
+// terminated because the Job stops reporting a member as soon as it terminates.
+// A member Windows no longer knows has stopped and needs no settlement; any
+// other bind failure fails the proof closed, and a PID recycled between the two
+// kernel calls can only make the settlement check fail closed too, never report
+// an unproven stop as proven.
+func queryOwnedJobProcessIDs(handle syscall.Handle) ([]ownedJobProcess, error) {
+	for size := unsafe.Sizeof(basicProcessIDList{}); size <= ownedJobProcessListLimit; size *= 2 {
+		buffer := make([]byte, size)
+		result, _, callError := queryInformationJobObject.Call(
+			uintptr(handle),
+			jobObjectBasicProcessIdList,
+			uintptr(unsafe.Pointer(&buffer[0])),
+			uintptr(len(buffer)),
+			0,
+		)
+		if result == 0 {
+			if errors.Is(callError, syscall.ERROR_MORE_DATA) {
+				continue
+			}
+			return nil, fmt.Errorf("list owned job processes: %w", callError)
+		}
+		list := (*basicProcessIDList)(unsafe.Pointer(&buffer[0]))
+		capacity := (uintptr(len(buffer)) - unsafe.Sizeof(basicProcessIDList{})) / unsafe.Sizeof(uintptr(0))
+		if uintptr(list.numberOfProcessIDsInList) > capacity+1 {
+			return nil, errors.New("owned job process list does not fit the sampled buffer")
+		}
+		return ownedJobProcesses(list, list.numberOfProcessIDsInList)
+	}
+	return nil, errors.New("owned job process list exceeds the bounded stop sample")
+}
+
+func ownedJobProcesses(head *basicProcessIDList, count uint32) ([]ownedJobProcess, error) {
+	if count == 0 {
+		return nil, nil
+	}
+	processIDs := unsafe.Slice(&head.processIDList[0], count)
+	owned := make([]ownedJobProcess, 0, count)
+	for _, processID := range processIDs {
+		identity, err := ProcessIdentity(int(processID))
+		if err != nil {
+			if !errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+				return nil, fmt.Errorf("bind owned job process %d identity: %w", processID, err)
+			}
+			// Windows reports an unknown PID this way; the member is gone.
+			continue
+		}
+		owned = append(owned, ownedJobProcess{pid: int(processID), identity: identity})
+	}
+	return owned, nil
+}
+
+// waitOwnedProcessesStopped confirms every process the Job Object owned at the
+// stop boundary has stopped. Job accounting reaches zero when the Job starts
+// terminating its members, which is not an observation that any of them has
+// stopped running, so this waits on the process objects themselves, bound to
+// the same close deadline, and fails closed when an owned process is still
+// running then.
+func waitOwnedProcessesStopped(owned []ownedJobProcess, deadline time.Time) error {
+	for _, member := range owned {
+		for {
+			running, detail := ownedProcessRunning(member)
+			if !running {
+				break
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return fmt.Errorf("owned process %d (%s) was still running after the containment close deadline: %s", member.pid, member.identity, detail)
+			}
+			if remaining > containmentCloseProbeInterval {
+				remaining = containmentCloseProbeInterval
+			}
+			time.Sleep(remaining)
+		}
+	}
+	return nil
+}
+
+// ownedProcessRunning reports whether the recorded owned process is still
+// running. The creation-time identity is what makes that a statement about the
+// owned process object rather than about whatever now happens to hold the PID.
+func ownedProcessRunning(member ownedJobProcess) (bool, string) {
+	handle, err := openProcessForIdentity(member.pid, syscall.SYNCHRONIZE)
+	if err != nil {
+		return false, fmt.Sprintf("the owned process is no longer openable: %v", err)
+	}
+	defer syscall.CloseHandle(handle)
+	actual, err := processIdentityFromHandle(member.pid, handle)
+	if err != nil {
+		return true, fmt.Sprintf("read the owned process creation time: %v", err)
+	}
+	if actual != member.identity {
+		return false, fmt.Sprintf("PID %d now has identity %s instead of the owned %s", member.pid, actual, member.identity)
+	}
+	status, err := syscall.WaitForSingleObject(handle, 0)
+	if err != nil {
+		return true, fmt.Sprintf("wait for the owned process: %v", err)
+	}
+	if status == syscall.WAIT_OBJECT_0 {
+		return false, "the owned process object has terminated"
+	}
+	return true, fmt.Sprintf("the owned process object has not terminated (wait status 0x%x)", status)
+}
+
+// terminateJobAndProveStop terminates the Job Object and establishes the stop
+// proof both containment owners publish: the Job must be empty within the
+// deadline, and every process it owned at the stop boundary must be observed
+// stopped, bound to that process's creation-time identity. An owned process
+// that is still running when the deadline expires fails the proof, so a caller
+// that reports success has settled the processes it claimed to stop.
+func terminateJobAndProveStop(handle syscall.Handle, deadline time.Time) error {
+	owned, ownedErr := queryJobProcessIDs(handle)
+	if err := terminateJob(handle); err != nil {
+		return fmt.Errorf("terminate job object during containment close: %w", err)
+	}
+	if err := waitForEmptyJob(handle, deadline, queryJobActiveProcesses); err != nil {
+		return err
+	}
+	if ownedErr != nil {
+		return ownedErr
+	}
+	if err := waitOwnedProcessesStopped(owned, deadline); err != nil {
+		return err
+	}
+	return nil
 }
 
 // TerminateProcessGroup is unavailable on Windows because Job Objects, not

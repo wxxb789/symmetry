@@ -26,38 +26,111 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestPIDFDGroupSupportProbeReleasesProcessHandle(t *testing.T) {
-	previousGC := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(previousGC)
-	countPIDFDs := func() int {
-		t.Helper()
-		entries, err := os.ReadDir("/proc/self/fd")
+// pidfdTargetPID reports the process a pidfd refers to from the kernel's own
+// /proc/self/fdinfo report. It is the attribution the probe observation needs:
+// a pidfd for another process says nothing about the probe's own handle.
+func pidfdTargetPID(fd int) (int, error) {
+	data, err := os.ReadFile(filepath.Join("/proc/self/fdinfo", strconv.Itoa(fd)))
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		value, ok := strings.CutPrefix(line, "Pid:")
+		if !ok {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return 0, err
+		}
+		return pid, nil
+	}
+	return 0, errors.New("pidfd fdinfo does not report a target Pid")
+}
+
+// pidfdsForThisProcess returns the descriptor numbers of the open pidfds that
+// refer to this process. The capability probe opens exactly one such pidfd per
+// call, so a probe that fails to release its process handle leaves a pidfd that
+// the observation can attribute to that probe rather than to whatever else this
+// test binary is doing.
+func pidfdsForThisProcess(t *testing.T) map[int]struct{} {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := make(map[int]struct{})
+	for _, entry := range entries {
+		fd, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		count := 0
-		for _, entry := range entries {
-			target, err := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if target == "anon_inode:[pidfd]" {
-				count++
-			}
+		if target != "anon_inode:[pidfd]" {
+			continue
 		}
-		return count
+		targetPID, err := pidfdTargetPID(fd)
+		if err != nil {
+			// The descriptor was closed or replaced while this listing ran.
+			continue
+		}
+		if targetPID == os.Getpid() {
+			open[fd] = struct{}{}
+		}
 	}
-	before := countPIDFDs()
-	for range 16 {
+	return open
+}
+
+func TestPIDFDGroupSupportProbeReleasesProcessHandle(t *testing.T) {
+	previousGC := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(previousGC)
+	// A pidfd held by an unrelated component of this test binary must not decide
+	// this test. Counting every pidfd in the process cannot attribute anything to
+	// the probes, which is how run 44055523619 reported "capability probes
+	// retained pidfds: before=2 after=1" while the probes retained nothing: the
+	// baseline contained a pidfd no probe ever created and an unrelated release
+	// during the loop moved the count.
+	unrelated, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		t.Fatalf("required prerequisite unavailable: pidfd_open for this process: %v", err)
+	}
+	unrelatedReleased := false
+	t.Cleanup(func() {
+		if !unrelatedReleased {
+			_ = unix.Close(unrelated)
+		}
+	})
+	baseline := pidfdsForThisProcess(t)
+	if _, ok := baseline[unrelated]; !ok {
+		t.Fatalf("pidfd %d for process %d is not attributable through /proc/self/fdinfo: %v", unrelated, os.Getpid(), baseline)
+	}
+	for index := range 16 {
+		// A supported group-signalling kernel only accepts this flag on a pidfd,
+		// so a probe that returns nil here used a real pidfd for this process and
+		// had to release it; the loop cannot pass on a handle fallback.
 		if err := checkPIDFDGroupSupport(); err != nil {
 			t.Fatal(err)
 		}
+		if index == 7 {
+			if err := unix.Close(unrelated); err != nil {
+				t.Fatalf("close unrelated pidfd: %v", err)
+			}
+			unrelatedReleased = true
+		}
 	}
-	if after := countPIDFDs(); after != before {
-		t.Fatalf("capability probes retained pidfds: before=%d after=%d", before, after)
+	// Only a pidfd that did not exist before the probes can be one the probe
+	// retained. Descriptors this process already held belong to other components
+	// and say nothing about the probes, whether they are still open or not.
+	for fd := range pidfdsForThisProcess(t) {
+		if _, existed := baseline[fd]; !existed {
+			t.Fatalf("capability probe retained pidfd %d for process %d across 16 probes", fd, os.Getpid())
+		}
 	}
 }
 

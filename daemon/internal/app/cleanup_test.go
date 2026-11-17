@@ -720,7 +720,7 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 			}
 			t.Cleanup(func() {
 				releaseProcessWait()
-				daemon.workers.Wait()
+				stopTestDaemon(t, daemon)
 				daemon.failedStartWatchWG.Wait()
 			})
 			key := state.RunKey{RunID: "run-1", Generation: 1}
