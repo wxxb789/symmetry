@@ -38,6 +38,10 @@ negative_controls=(
   # The archived 0005 remediation plan quotes the forbidden action path shape in
   # the pitfall that tells authors not to introduce example route literals.
   docs/goals/archive/0005-REMEDIATION_PLAN.md
+  # This audit's own suite has to carry the retired literal to prove that
+  # copying it into a scanned surface makes the audit fail, so the fixture is
+  # an intentional negative control by construction.
+  scripts/ci/test-no-legacy-routes-audit.py
 )
 
 # U2 replaced these action endpoints with resource-oriented routes. The pattern

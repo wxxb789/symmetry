@@ -35,6 +35,7 @@ NEGATIVE_CONTROLS = (
     "control/test/symmetry_control_web/controllers/protocol_controller_test.exs",
     "docs/evidence/ci-process-trim-2026-11-15.md",
     "docs/goals/archive/0005-REMEDIATION_PLAN.md",
+    "scripts/ci/test-no-legacy-routes-audit.py",
 )
 
 # Filenames a retired literal can hide in, keyed by the reason the previous
