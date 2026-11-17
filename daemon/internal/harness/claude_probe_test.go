@@ -23,20 +23,18 @@ func TestClaudeProbeKnownVersionAndHelpFailsClosed(t *testing.T) {
 	}}
 
 	capabilities, err := probeClaudeExecutable(context.Background(), `C:\Users\lhan\.local\bin\claude.exe`, runner)
-	if !errors.Is(err, ErrNativeUnverified) {
-		t.Fatalf("probe error = %v, want ErrNativeUnverified", err)
-	}
-	if capabilities.Kind != KindClaude || capabilities.NativeVersion != ClaudeTestedVersion || !capabilities.VersionKnown {
-		t.Fatalf("capabilities identity = %+v, want Claude %s with known version", capabilities, ClaudeTestedVersion)
-	}
-	if !capabilities.TransportVerified || capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume {
-		t.Fatalf("capabilities = %+v, want help-only transport evidence and no operations", capabilities)
-	}
-	if capabilities.Guidance != GuidanceUnsupported || capabilities.Pause != PauseUnsupported || capabilities.ApprovalResponse || capabilities.Usage != UsageUnknown || capabilities.HardCostLimit {
-		t.Fatalf("unsupported controls = %+v, want all unsupported", capabilities)
-	}
-	if got, want := runner.calls, []string{"--version", "--help"}; !sameStrings(got, want) {
-		t.Fatalf("runner calls = %#v, want %#v", got, want)
+	assertKnownVersionProjection(t, capabilities, err, knownVersionProjection{
+		provider:  "Claude",
+		kind:      KindClaude,
+		version:   ClaudeTestedVersion,
+		wantError: ErrNativeUnverified,
+		calls:     runner.calls,
+		wantCalls: []string{"--version", "--help"},
+	})
+	// Resume and the interactive controls are this provider's own surface: the
+	// shared projection above cannot speak for them.
+	if capabilities.Resume || capabilities.Guidance != GuidanceUnsupported || capabilities.Pause != PauseUnsupported || capabilities.ApprovalResponse || capabilities.Usage != UsageUnknown || capabilities.HardCostLimit {
+		t.Fatalf("unsupported controls = %+v, want resume and every interactive control unsupported", capabilities)
 	}
 }
 

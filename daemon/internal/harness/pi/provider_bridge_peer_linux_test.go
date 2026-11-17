@@ -46,7 +46,7 @@ type providerBridgePeerRequest struct {
 // owner acceptance.
 func TestProviderBridgeKernelPeerClientProcess(t *testing.T) {
 	if os.Getenv(providerBridgePeerChildEnv) != "1" {
-		return
+		t.Skip("child mode only: startProviderBridgeKernelPeer spawns this binary with " + providerBridgePeerChildEnv + "=1 for TestProviderBridgeCloseReleasesBoundPeerFD and TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction")
 	}
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {

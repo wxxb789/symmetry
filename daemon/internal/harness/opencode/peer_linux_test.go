@@ -98,7 +98,7 @@ func (listener openCodePeerObservedListener) Accept() (net.Conn, error) {
 // production owner acceptance.
 func TestOpenCodeKernelPeerServerProcess(t *testing.T) {
 	if os.Getenv(openCodePeerServerEnv) != "1" {
-		return
+		t.Skip("child mode only: the parent OpenCode peer tests (TestOpenCodeHealthRejectsWrongLinuxV2PeerBindingsBeforeRequest, TestOpenCodeQualifiedStartNamespacePeerDenials, TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP, TestOpenCodeV2VerifierRejectsReleasedPeer, TestOpenCodePeerCloseWaitsForActiveVerification) spawn this binary through startOpenCodeKernelPeerServer with " + openCodePeerServerEnv + "=1")
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
