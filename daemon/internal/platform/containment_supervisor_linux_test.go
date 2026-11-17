@@ -4,6 +4,7 @@ package platform
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1174,6 +1175,44 @@ func TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec(t *testing.T) {
 	}
 	if _, err := os.Stat(targetMarker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("target user-code marker after abort = %v, want absent", err)
+	}
+}
+
+// TestLinuxSupervisorWitnessPublishKeepsDirectoryClean pins the exclusivity and
+// cleanup half of the atomic witness publish: an existing witness is never
+// truncated or replaced in place, and a rejected publish leaves no partial file
+// in the directory a reader polls. The empty intermediate document the reader
+// used to accept is removed by assembling the file elsewhere and renaming it,
+// which this test cannot observe directly; it keeps the surrounding contract
+// (present-or-whole destination, clean directory) from regressing silently.
+func TestLinuxSupervisorWitnessPublishKeepsDirectoryClean(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "wrong-session-hello.json")
+	contents := []byte("{\"actual\":{\"target_pid\":4321}}\n")
+	if err := publishLinuxSupervisorWitnessFile(path, contents); err != nil {
+		t.Fatalf("publishLinuxSupervisorWitnessFile() error = %v", err)
+	}
+	published, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(published, contents) {
+		t.Fatalf("published witness = (%q, %v), want %q", published, err, contents)
+	}
+	if err := publishLinuxSupervisorWitnessFile(path, []byte("replacement\n")); err == nil {
+		t.Fatal("publishLinuxSupervisorWitnessFile() replaced an existing witness in place")
+	}
+	preserved, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(preserved, contents) {
+		t.Fatalf("witness after rejected publish = (%q, %v), want the original %q", preserved, err, contents)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if len(names) != 1 || names[0] != filepath.Base(path) {
+		t.Fatalf("witness directory entries = %v, want only %q", names, filepath.Base(path))
 	}
 }
 

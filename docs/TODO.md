@@ -146,6 +146,34 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       43724904655 job 132844651104 on a workflow-only diff, then green on rerun job
       132846453648. Revalidate whether the helper witness can be decoded before it is fully
       written; keep the witness assertion itself and leave the fix to separate maintenance.
+      Second occurrence: run 44133750246 job `daemon` on main `3781c78`, the same tree that
+      passed the identical job in the PR #56 run minutes earlier; the failing line and message
+      match. Mechanism: `writeLinuxSupervisorHelloSessionWitness` created the destination with
+      `os.OpenFile(O_WRONLY|O_CREATE|O_EXCL)` and wrote the JSON afterwards, so the poller
+      `waitForLinuxSupervisorTestMarker` accepted a zero-byte document as its first successful
+      read and decoded it; the helper's create-to-write window is microseconds wide, so only the
+      10 ms poll interval landing inside it under load reproduced the failure.
+      `daemon/internal/platform/containment_supervisor_linux.go` now assembles each helper-side
+      witness document in a temporary file in the destination directory and renames it into
+      place (`publishLinuxSupervisorWitnessFile`, `:2318`), so a reader observes either no
+      document or a complete one, and the witness assertion itself is unchanged. The same
+      publish covers the owner-loss proof reached/result markers (`:2505`, `:2531`), read by the
+      same poller, the drop-response fired marker (`:2178`), whose e2e poller compares its first
+      successful read to `fired\n`, and the release response-loss reached marker (`:3528`),
+      whose content is parsed after a non-empty poll. The scan-injection markers (`:2627`,
+      `:2691`, `:2708`) keep `os.WriteFile`: their readers gate on a non-empty read or observe
+      after the frame that orders the write, so the zero-byte state the other readers accept is
+      already filtered there. The Windows `writeContainmentSupervisorWitnessMarker`
+      (`containment_supervisor_windows.go:1486`) has the same create-then-write shape but only
+      ordered readers (a same-process `os.Stat` after the handoff returns, and e2e parses after
+      the writing process exits), so it carries no observed or reachable race; the adjacent
+      Windows `TestCloseStopsOwnedChildAfterLeaderExit` observation above stays a different
+      defect (an owned child survived `Close()`), not a witness-publication race. Still open for
+      the owning change: the runner/app resume and stop-receipt barrier markers
+      (`daemon/internal/execution/runner.go:1046`, `daemon/internal/app/app.go:2207`) still
+      create-then-write documents whose e2e readers poll non-empty and then parse them; no
+      occurrence is recorded there, and only a torn read of one small write remains possible
+      once the non-empty gate is passed.
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
       in `daemon/internal/platform` (`process_windows_test.go:1004`, "owned child <pid>
       survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
