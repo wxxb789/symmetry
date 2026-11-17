@@ -211,12 +211,36 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       Either the server should serve the more specific code or the client entry should be removed;
       decide in a separate maintenance change with a test that pins the served code.
 
-- [ ] Investigate the intermittent Linux failure
-      `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` in
-      `daemon/internal/platform` (`process_unix_linux_test.go:2119`, `monitor terminal reason =
-      owner_stop, want leader_absent`). Observed in run 43898893639 job 133409923040 under
-      `go test -race ./...` on the 0007d head, green on rerun of the same job. Revalidate the
-      leader-exit/owner-stop ordering window; keep the terminal-reason assertion.
+- [ ] Close the `daemon/internal/platform` flake class: the Linux descendant-monitor terminal reason
+      and the Windows owned-child close window. A rerun, a longer timeout or a relaxed assertion is
+      not a fix, and neither side may be closed on the other side's evidence.
+      **Linux terminal reason — fixed at the cause; verification is CI on the new revision, not a
+      local green.** `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` failed
+      twice in the same source family with `process_unix_linux_test.go:2119: monitor terminal reason
+      = owner_stop, want leader_absent`: run 43898893639 job 133409923040 (`go test -race ./...` on
+      the 0007d head, green on rerun of the same job) and run 44027453497 job `daemon` (push of main
+      `dacec450`), while the **same tree** was green on the `pull_request` run 44026216492 (merged
+      head of #41, `cf9e4a1`). That job runs, from `daemon/`:
+      `python3 ../scripts/ci/stdio-only-caller-boundary.py "$(command -v go)" test -race -count=1 -timeout 600s ./...`
+      (step "Run race tests with the same stdio-only caller boundary", `.github/workflows/ci.yml`,
+      after that job's `gofmt -l .` and `go vet ./...`). Cause: one first-writer-wins field had two
+      writers — the stop requester wrote `owner_stop` *before* it signalled `monitorStop`, and the
+      monitor wrote `leader_absent` only after a clean scan observed the leader gone — so a caller
+      asking whether the leader was proven absent received whichever path arrived first. Now the
+      monitor goroutine is the only writer and publishes the reason before it closes `monitorDone`
+      (`process_unix.go`: `recordDescendantMonitorTerminalReason`, `stopDescendantMonitor`,
+      `monitorDescendants`); the shipped assertion is unchanged.
+      `TestProcessGroupStopRequestKeepsCleanLeaderAbsentTerminalReason` forces the two paths into
+      that race's order and fails with the same `owner_stop` text against the unpatched revision. On
+      this host's Linux (WSL, go1.27.0) the shipped test itself hit `owner_stop` in 2 of 800 `-race`
+      runs before the fix and 0 of 800 after; that still only judges a gate once CI runs it on a
+      pushed revision.
+      **Windows owned-child — untouched.** `TestCloseStopsOwnedChildAfterLeaderExit`
+      (`process_windows_test.go:1004`, "owned child <pid> survived Close()") was observed in run
+      43720680428 job 132831780245 on a docs-only diff, green in run 43715830442 and on rerun job
+      132834151127; this change makes no claim about it, so this entry stays open. The Linux
+      supervisor helper-witness flake
+      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry above.
 
 - [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
       43905338877 job 133432721943 as `panic: test timed out after 10m0s` with

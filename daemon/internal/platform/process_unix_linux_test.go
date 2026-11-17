@@ -2129,6 +2129,133 @@ func TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven(t *tes
 	}
 }
 
+// TestProcessGroupStopRequestKeepsCleanLeaderAbsentTerminalReason forces the
+// two writers of the monitor terminal reason into the order the CI flake ran
+// them in: a scan that has already observed the leader absent after a clean
+// descendant scan is one acknowledgement away from publishing that reason when
+// the owner's stop request arrives. The request must not replace the leader
+// absent proof the caller asked for with owner_stop, so the close that follows
+// stays a proven teardown instead of an unresolved containment.
+func TestProcessGroupStopRequestKeepsCleanLeaderAbsentTerminalReason(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	initialScanComplete := make(chan struct{})
+	leaderAbsentObserved := make(chan struct{})
+	beforeReasonPublication := make(chan struct{})
+	releaseReasonPublication := make(chan struct{})
+	var initialScanOnce sync.Once
+	var leaderAbsentOnce sync.Once
+	var publicationOnce sync.Once
+	var leaderAbsent atomic.Bool
+	// scanObservedAbsent is only set by a leader read that returned "absent", so
+	// the initial scan's clean acknowledgements (leader present) cannot enter
+	// the publication barrier.
+	var scanObservedAbsent atomic.Bool
+	await := func(ch <-chan struct{}, step string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(containmentCloseDeadline):
+			t.Fatalf("timed out waiting for %s", step)
+		}
+	}
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		if pid != anchor.pid {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		if leaderAbsent.Load() {
+			scanObservedAbsent.Store(true)
+			leaderAbsentOnce.Do(func() { close(leaderAbsentObserved) })
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		initialScanOnce.Do(func() { close(initialScanComplete) })
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	var signals []unix.Signal
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		if signal == unix.SIGKILL {
+			return nil
+		}
+		if signal == 0 {
+			return unix.ESRCH
+		}
+		t.Fatalf("unexpected signal %v", signal)
+		return nil
+	}, func(int) error { return nil })
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	if err := group.setDescendantScanObserver(func(event descendantScanEvent) error {
+		// "retire" is the last durable acknowledgement a clean scan writes and
+		// it runs immediately before the scan publishes its terminal reason.
+		if event.Phase == "retire" && scanObservedAbsent.Load() {
+			publicationOnce.Do(func() { close(beforeReasonPublication) })
+			<-releaseReasonPublication
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseReasonPublication:
+		default:
+			close(releaseReasonPublication)
+		}
+		_ = group.stopDescendantMonitor(time.Now().Add(containmentCloseDeadline))
+	})
+
+	group.startDescendantMonitor()
+	await(initialScanComplete, "the initial descendant scan")
+	leaderAbsent.Store(true)
+	await(leaderAbsentObserved, "a monitor scan observing the absent leader")
+	await(beforeReasonPublication, "the leader-absent scan reaching its terminal reason")
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- group.stopDescendantMonitor(time.Now().Add(containmentCloseDeadline)) }()
+	// The closed stop channel proves the request has been issued, so the order
+	// under test is forced rather than timed: the leader-absent scan is still
+	// parked in front of its own reason publication.
+	await(group.monitorStop, "the descendant monitor stop request")
+	close(releaseReasonPublication)
+	if err := <-stopDone; err != nil {
+		t.Fatalf("stopDescendantMonitor() = %v", err)
+	}
+
+	if group.monitorTerminalReason != descendantMonitorTerminalCleanLeaderAbsent {
+		t.Fatalf("monitor terminal reason = %s, want %s", group.monitorTerminalReason, descendantMonitorTerminalCleanLeaderAbsent)
+	}
+	result, err := group.descendantMonitorTerminalResult()
+	if err != nil {
+		t.Fatalf("descendantMonitorTerminalResult() = %v, want the leader-absent terminal to survive the stop request", err)
+	}
+	if !result.stopped || result.terminalReason != descendantMonitorTerminalCleanLeaderAbsent {
+		t.Fatalf("terminal result = %#v, want the stopped monitor's leader-absent proof", result)
+	}
+	if clean, details := group.cleanDescendantTerminalProof(result); !clean {
+		t.Fatalf("terminal proof = unclean (%s), want clean", details)
+	}
+	if err := group.Close(); err != nil {
+		t.Fatalf("Close() after a stopped monitor that proved the leader absent = %v, want nil", err)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) {
+		t.Fatalf("signals = %#v, want [SIGKILL 0]", signals)
+	}
+	if group.fd != -1 || !group.closeCompleted || group.ContainmentCloseRetryable() {
+		t.Fatalf("after proven leader reaping fd:%d completed:%v retryable:%v, want released, complete, non-retryable", group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
+	}
+}
+
 func TestProcessGroupCloseWaitsForDelayedCleanLeaderAbsentTerminal(t *testing.T) {
 	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
 	initialScan := make(chan struct{})
