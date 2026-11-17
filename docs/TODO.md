@@ -664,6 +664,60 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       stops once the socket reports connected, and the channel's own join completion
       (`frontend/src/services/realtime.ts`, `channel.join()` in `connect()`) is not treated as a read
       epoch — so the repair belongs to that signal in the product, not to a longer wait.
+      **Fixed product half** (branch `fix/channel-join-read-epoch`). The join is now a read
+      epoch: the client's `channel.join()` carries an `ok` hook that performs exactly the read
+      an invalidation takes — the unclassified payload's own pass (`realtime.ts:294-296`, the
+      `invalidateReads` call `flush` makes for an unclassified frame at `:168`) — issued once
+      per completed join. It fires on every rejoin too, because the Phoenix client resends the
+      same join push (`Channel.rejoin` -> `joinPush.resend`, whose `reset` keeps the receive
+      hooks), which is the same window on a reconnect: the frames published while the channel is
+      errored are dropped the same way. The socket-open snapshot read (`:243-250`) stays, polling
+      is not reinstated (`syncPolling` still stops on `connected`, `:189-193`), no timer is
+      added, and the reconcile is unconditional because nothing on this side can decide it: the
+      payload's `cursor` has no store here by design and the join reply carries no position, so
+      the epoch event itself justifies the read.
+      Evidence on this host, frontend vitest (jsdom), with the new cases run against the
+      unpatched bytes and the delivered ones: `src/app/router.test.tsx`'s `channel-join read
+      epoch` case drives the real shell and the real `/portal/work/:workItemId` surface over a
+      scripted socket whose `publish` drops anything sent before the join (there is no
+      subscription to address, as on the server); it opens the transport, posts the run and
+      publishes its `run` invalidation inside the window, observes that no read follows (the
+      pre-run document still renders, no `Queued` chip), then completes the join. Red on the
+      unpatched bytes for exactly that reason (`2 failed | 53 passed (55)`, exit 1: the case
+      stops at `router.test.tsx:1173`'s `findByText("Queued")` with the pre-run control bar in
+      the DOM dump, and its client-side sibling in `src/services/realtime.test.ts` reports
+      `expected "invalidateQueries" to be called 2 times, but got 1 times`); green on the
+      delivered bytes. Sabotage: making that reconcile conditional on a received frame
+      (`if (pending.length > 0) invalidateReads()`) re-breaks both cases for the same reasons
+      (`TestingLibraryElementError: Unable to find an element with the text: Queued`;
+      `expected "invalidateQueries" to be called 2 times, but got 1 times`, exit 1), which is
+      the point: the read cannot be decided by a frame the client never received, so a
+      payload-driven repair is not a repair.
+      The same window was checked in the other direction and no second defect was found: while
+      the client is not connected the fallback is armed (`syncPolling` stops it only for
+      `closed` or `connected`, and `connected` is set in the socket-open hook alone, `:245`), so
+      a frame published while the socket is down is covered by a poll tick; a transport
+      reconnect always reads (`:248`); and the channel's own rejoin now reconciles through the
+      same hook.
+      What remains, still not converted: `portal-cutover.spec.mjs:377`'s polling-fallback case,
+      whose subject is the fallback itself — its reader's every socket attempt is closed
+      (`established === 0`) and it waits `FALLBACK_CADENCE_GUARD_MS` (20 s, four of the client's
+      5 s ticks) on the surface. The join epoch does not touch it: a reader that never joins has
+      no join to complete. What would show the conversion is an observable mark of a fallback
+      pass: the client publishing the read it issued on a tick, the way it already publishes
+      its connection status. The case would then wait on that mark plus the read it caused,
+      dropping the elapsed bound rather than lengthening it.
+      The case that exposed the window (`portal-work-views.spec.mjs:1110`, converted by #58 to
+      drive the surface's own refresh control and to wait on the read it serves) is not converted
+      back to waiting on the invalidation channel. A browser case does not hold either end of that
+      window as a product path: the suite's routed websocket can withhold the join frames, but
+      that would make the case's precondition a property of the harness's own timing again, and
+      its frame counters (`pushed`, `pushedAt`) can only observe a delivery that happened, never
+      the interval between the transport opening and the subscription existing. What would
+      justify waiting on the channel there is a page-visible mark of the join epoch — the client
+      publishing `subscribed from here`, the way it publishes connection status — after which
+      the case could wait on that mark plus the read it causes. The window's deterministic proof
+      stays the frontend case above, where both the drop and the join are held.
 ## Open findings from the 0008b model-routing review
 
 - [ ] Revalidate the open class B finding against

@@ -48,7 +48,7 @@ function servedFetcher(): typeof fetch {
   });
 }
 
-function renderWorkspace(path: string, fetcher: typeof fetch = servedFetcher(), realtime?: { socketFactory?: (token: () => string) => RealtimeSocket }) {
+function renderWorkspace(path: string, fetcher: typeof fetch = servedFetcher(), realtime?: NonNullable<Parameters<typeof createApplication>[0]>["realtime"]) {
   const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() }, ...(realtime === undefined ? {} : { realtime }) });
   applications.push(application);
   const history = createMemoryHistory({ initialEntries: [path] });
@@ -1051,5 +1051,138 @@ describe("workspace socket lifetime", () => {
     unmount();
     await act(async () => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 250); await promise; });
     expect(ScriptedTransport.instances).toHaveLength(1);
+  });
+});
+
+/**
+ * A scripted invalidation socket that keeps the transport's two moments apart: the
+ * socket opening (what `status` reports, and what stops the polling fallback) and
+ * the channel join completing (what subscribes this browser to the operator
+ * topic). A broadcast reaches this side only once the join completed — before
+ * that the server has no subscription to address and Phoenix never replays — so
+ * `publish` in that window drops the payload exactly as a deployment does.
+ */
+function joiningSocket() {
+  let joined = false;
+  let dropped = 0;
+  const opens: Array<() => void> = [];
+  const invalidations: Array<(payload: unknown) => void> = [];
+  const okReplies: Array<() => void> = [];
+  const push: RealtimePush = {
+    receive: (status, callback) => {
+      if (status === "ok") okReplies.push(callback);
+      return push;
+    },
+  };
+  const socket: RealtimeSocket = {
+    connect: () => undefined,
+    disconnect: () => undefined,
+    onOpen: (callback) => { opens.push(callback); },
+    onClose: () => undefined,
+    onError: () => undefined,
+    channel: () => ({
+      on: (_event, callback) => { invalidations.push(callback); return 1; },
+      join: () => push,
+    }),
+  };
+  return {
+    socket,
+    open: () => { for (const callback of opens) callback(); },
+    joinOk: () => { joined = true; for (const callback of okReplies) callback(); },
+    publish: (payload: unknown) => {
+      if (!joined) { dropped += 1; return; }
+      for (const callback of invalidations) callback(payload);
+    },
+    /** How many publishes the case made inside the socket-open -> join window. */
+    dropped: () => dropped,
+  };
+}
+
+/**
+ * The window between the socket opening and the channel join completing, against
+ * the surface that depends on an invalidation to re-read.
+ *
+ * `connect()` claims `connected` — and `syncPolling` stops the polling fallback on
+ * that status — when the Phoenix client reports the transport open, but the server
+ * subscribes this browser to `portal:invalidations` only when its join clause runs,
+ * one exchange later. An invalidation published in between is broadcast to a topic
+ * this client is not on: it is dropped, and the surface it named keeps rendering
+ * the document it read before the change. The join reply is the epoch at which the
+ * client issues the read that invalidation would have caused.
+ */
+describe("channel-join read epoch", () => {
+  const subjectId = "40000000-0000-4000-8000-000000000001";
+  const runId = "50000000-0000-4000-8000-000000000001";
+  const taskId = "60000000-0000-4000-8000-000000000001";
+  const preRunDetail = () => readWorkDetail({ id: subjectId, projectId: firstProjectId, title: "Realtime subject" });
+  const runDetail = () => readWorkDetail({
+    id: subjectId,
+    projectId: firstProjectId,
+    title: "Realtime subject",
+    execution: { task_id: taskId, run_id: runId, generation: 1, state: "queued", can_cancel: true },
+  });
+
+  it("reads the state an invalidation published before the join completed would have named", async () => {
+    const socket = joiningSocket();
+    let runPosted = false;
+    let detailReads = 0;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
+      if (url.pathname === "/portal/api/session") {
+        return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token", socket_token: "test-socket-token" })));
+      }
+      if (url.pathname === `/portal/api/work-items/${subjectId}`) {
+        detailReads += 1;
+        // The served document is fixed while the read is answered, so the case can
+        // state which read saw which state.
+        return Promise.resolve(new Response(JSON.stringify(runPosted ? runDetail() : preRunDetail())));
+      }
+      if (url.pathname === "/portal/api/workspace") {
+        return Promise.resolve(new Response(JSON.stringify({
+          selected_project_id: firstProjectId,
+          projects: [{ id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active", resources: [], work_items: [] }],
+          health: { status: "unknown" },
+          runtimes: [],
+          registered_runtimes: [],
+        })));
+      }
+      return Promise.resolve(new Response("{}", { status: 404 }));
+    });
+    // The fallback cadence is out of this case's reach: the read observed below can
+    // only be the one the completed join issues, never a poll tick. The fallback's
+    // own stop-when-connected guarantee is `realtime.test.ts`'s.
+    const { unmount } = renderWorkspace(`/portal/work/${subjectId}`, fetcher, { socketFactory: () => socket.socket, pollIntervalMs: 60_000 });
+    try {
+      await screen.findByText("No execution recorded");
+      const preRunReads = detailReads;
+
+      // The transport opens: the client reports `connected` and its polling
+      // fallback stops, then issues its snapshot read — answered, still, from the
+      // pre-run document, because the run has not been posted yet.
+      act(() => { socket.open(); });
+      await waitFor(() => expect(detailReads).toBe(preRunReads + 1));
+      expect(screen.getByText("No execution recorded")).toBeInTheDocument();
+
+      // The run posts and its invalidation is published inside the window. This
+      // client has no subscription yet, so the frame is dropped — asserted below,
+      // so the case cannot pass by having published it after the join — and no
+      // read follows: the surface still renders the pre-run document, and the read
+      // that would have named the change has not happened.
+      runPosted = true;
+      act(() => { socket.publish({ kind: "run", id: runId, work_item_id: subjectId }); });
+      expect(socket.dropped(), "the frame was published inside the join window").toBe(1);
+      expect(detailReads, "a frame published before the join reaches no reader").toBe(preRunReads + 1);
+      expect(screen.getByText("No execution recorded")).toBeInTheDocument();
+
+      // The join completes. This is the epoch: from here the client is a
+      // subscriber, and the read the frame would have caused is issued against the
+      // state the run wrote.
+      act(() => { socket.joinOk(); });
+      expect(await screen.findByText("Queued")).toBeInTheDocument();
+      expect(screen.queryByText("No execution recorded")).toBeNull();
+      expect(detailReads, "the completed join reconciled with exactly one read").toBe(preRunReads + 2);
+    } finally {
+      unmount();
+    }
   });
 });
