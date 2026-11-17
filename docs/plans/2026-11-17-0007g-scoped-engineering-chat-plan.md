@@ -1,6 +1,10 @@
 # 0007g scoped engineering chat — implementation plan
 
 Revision: branch HEAD `dd2e9db0829d105ac58d1713d01092811cda86ff` (merged 0007f).
+Rebase note (2026-11-17): the branch was rebased onto
+`706174ecda9504c6c1d991ddd4f862ff3bf47f0c` (#37, #39, #40, #42, #43, #44 and #45) before its PR
+opened; the plan's steps are unchanged by that rebase, and the receipt's own rebase section records
+the per-file resolutions and the rows re-measured on the rebased revision.
 Contract: `docs/goals/0007g-scoped-engineering-chat.md`. Shape reference: 0007f
 (`docs/plans/2026-11-16-0007f-runtime-control-plan.md`,
 `docs/evidence/goal-0007f-runtime-control-2026-11-16.md`).

@@ -78,22 +78,6 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
       green in run 43715830442 and on rerun job 132834151127. Revalidate the close/settle
       window; keep the survived-child assertion.
-- [ ] Investigate the load-sensitive omp harness failure
-      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
-      `daemon/internal/harness/omp` (`adapter_final_message_test.go:44`,
-      `context deadline exceeded` after 1.38 s). Observed once during goal 0008b's
-      repository-wide `go test ./...` run (1,797 top-level tests: 1,740 pass,
-      56 skip, 1 fail) while that package alone then reported `ok` at 4.631 s,
-      and not reproduced in isolation: `-count=3` passed on the unchanged base
-      clone `5c2e0ada` and on the working tree. Revalidate the deadline budget
-      under load; keep the assertion. Closed on `main` by `8082317` (#44): 89 wall-clock budget
-      sites across 16 test files now point at one documented `testHangGuard` per package
-      (`const testHangGuard = 30 * time.Second`, "turns a hung harness into a failure; never a
-      statement about how fast the adapter should be"), no assertion was removed or weakened, and in
-      `omp` a failing wait now names the outstanding step (`mustSettle(t, "WaitTurn", err)`) so a
-      guard expiry can no longer be reported as this test's behavioural failure. The observation
-      above stays as the record; the open action does not.
-
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
       `control/test/symmetry_control/integrations_test.exs:1161` (`assert
@@ -211,36 +195,12 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       Either the server should serve the more specific code or the client entry should be removed;
       decide in a separate maintenance change with a test that pins the served code.
 
-- [ ] Close the `daemon/internal/platform` flake class: the Linux descendant-monitor terminal reason
-      and the Windows owned-child close window. A rerun, a longer timeout or a relaxed assertion is
-      not a fix, and neither side may be closed on the other side's evidence.
-      **Linux terminal reason — fixed at the cause; verification is CI on the new revision, not a
-      local green.** `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` failed
-      twice in the same source family with `process_unix_linux_test.go:2119: monitor terminal reason
-      = owner_stop, want leader_absent`: run 43898893639 job 133409923040 (`go test -race ./...` on
-      the 0007d head, green on rerun of the same job) and run 44027453497 job `daemon` (push of main
-      `dacec450`), while the **same tree** was green on the `pull_request` run 44026216492 (merged
-      head of #41, `cf9e4a1`). That job runs, from `daemon/`:
-      `python3 ../scripts/ci/stdio-only-caller-boundary.py "$(command -v go)" test -race -count=1 -timeout 600s ./...`
-      (step "Run race tests with the same stdio-only caller boundary", `.github/workflows/ci.yml`,
-      after that job's `gofmt -l .` and `go vet ./...`). Cause: one first-writer-wins field had two
-      writers — the stop requester wrote `owner_stop` *before* it signalled `monitorStop`, and the
-      monitor wrote `leader_absent` only after a clean scan observed the leader gone — so a caller
-      asking whether the leader was proven absent received whichever path arrived first. Now the
-      monitor goroutine is the only writer and publishes the reason before it closes `monitorDone`
-      (`process_unix.go`: `recordDescendantMonitorTerminalReason`, `stopDescendantMonitor`,
-      `monitorDescendants`); the shipped assertion is unchanged.
-      `TestProcessGroupStopRequestKeepsCleanLeaderAbsentTerminalReason` forces the two paths into
-      that race's order and fails with the same `owner_stop` text against the unpatched revision. On
-      this host's Linux (WSL, go1.27.0) the shipped test itself hit `owner_stop` in 2 of 800 `-race`
-      runs before the fix and 0 of 800 after; that still only judges a gate once CI runs it on a
-      pushed revision.
-      **Windows owned-child — untouched.** `TestCloseStopsOwnedChildAfterLeaderExit`
-      (`process_windows_test.go:1004`, "owned child <pid> survived Close()") was observed in run
-      43720680428 job 132831780245 on a docs-only diff, green in run 43715830442 and on rerun job
-      132834151127; this change makes no claim about it, so this entry stays open. The Linux
-      supervisor helper-witness flake
-      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry above.
+- [ ] Investigate the intermittent Linux failure
+      `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` in
+      `daemon/internal/platform` (`process_unix_linux_test.go:2119`, `monitor terminal reason =
+      owner_stop, want leader_absent`). Observed in run 43898893639 job 133409923040 under
+      `go test -race ./...` on the 0007d head, green on rerun of the same job. Revalidate the
+      leader-exit/owner-stop ordering window; keep the terminal-reason assertion.
 
 - [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
       43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
@@ -336,73 +296,29 @@ Manual tasks and deferred maintenance discovered during scoped changes.
   digests in `docs/evidence/goal-0007c-safe-work-planning-2026-11-16.md` name it as the algorithm of
   record, so that receipt can no longer be recomputed from the tree; the file remains in git history.
 
-## Open findings from the 0008b model-routing review
+## Browser acceptance under host load
 
-- [ ] Revalidate the open class B finding against
-      `daemon/internal/platform/process_windows.go`: the non-durable
-      `containmentSupervisorStopLease` branch of `Close` caches only the handle
-      release, so after a settlement failure a repeated `Close` can return nil
-      without the proof (HEAD `:535-539`; the sibling `!durableAuthority` branch
-      sits at `:506`). Observed at medium severity as `open` in both 0008b class B
-      reviews (`0008b-go-native-ownership-settlement-{mixed,strong}.review-attempts.json`,
-      findings F4/F2, repaired-revision coordinates `:601-605`/`:524-526` and
-      `:607-612`/`:509-511`) and in the candidate policy's negative findings. The
-      branch predates the 0008b revision; it is reachable through the native
-      Go-test-binary `AttachProcess` route, which returns
-      `noopContainmentSupervisorLease` (`containment_supervisor_windows.go:934`),
-      and the production daemon's durable-authority path is not affected. Keep the
-      finding visible; fix or re-scope in a separate maintenance change.
-
-## Record and documentation hygiene
-
-- [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
-      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
-      instead of rewriting history:
-      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
-      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
-      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
-      records with that helper and records the rendering in the record
-      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
-      record's quoted digest consistent when the older records are re-published.
-
-- [ ] Decide whether record cleanliness needs an enforced gate, and keep the sanitising
-      tool's argv/output scope with the 0008a re-publish. `scripts/ci/model-routing-record-sanitize.py`
-      exposes `--check` (write nothing; exit 1 while a host absolute path remains), but no CI
-      step invokes it: CI runs only the unit suite
-      (`python3 ../scripts/ci/test-model-routing-record-sanitize.py`,
-      `.github/workflows/ci.yml:1138`), so published-record cleanliness rests on those unit
-      tests (`--check` cases at `scripts/ci/test-model-routing-record-sanitize.py:89-98`)
-      plus the manual render step documented at `docs/evaluations/model-routing/README.md:163`.
-      The README already scopes the renderer to argv/output capture, which is also its safety
-      boundary: it rewrites every absolute path it finds, including path fixtures quoted
-      inside recorded prose — harmless for `argv`/`output` fields (the `path-sha256:<digest>`
-      token is a deterministic function of the path, so the rendered record stays reproducible
-      and unambiguously mapped; note `output_sha256` binds the rendered text, not the
-      pre-render bytes) but corrupting for an
-      explanation whose meaning depends on the quoted path. Decide whether to add a
-      `--check`-style gate over the committed records; the future 0008a re-publish should
-      repeat the argv/output-only scope and record any prose fixture it deliberately leaves
-      rendered.
-
-- [ ] Revalidate the stale 0008-series prerequisite text:
-      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
-      and 0008c results" while the 0008b candidate policy is produced and awaiting
-      the owner's verdict. Pre-existing and not introduced by the 0008b evidence
-      change; correct the wording once the 0008b verdict lands. (The `0006h`
-      index-row dead link above is the same class of stale documentation and is
-      already tracked.)
-
-- [ ] Decide whether the 0008b receipts need re-production under the current shared runner. They bind
-      `scripts/ci/model-routing-evaluation.py` as produced —
-      `sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56` — while `main`'s #42
-      extended that runner for the Elixir carrier
-      (`sha256:8ae5b2b6ba961924f7702aa4181e8488913b4d63171922bf1cf760e62142db50`), so the current bytes
-      refuse the 0008b records for submission at `$.evidence.tooling_sources.model-routing-evaluation.py`,
-      exactly as they refuse the committed 0008c receipts (see the model-routing entry above). The
-      producing bytes stay reachable from the annotated tag `0008b-produced-tooling` (commit `253a701`,
-      the head this branch was rebased from, tagged and pushed so the reference survives the rebase), and
-      the post-rebase audit recomputation reports exactly those four
-      tooling-digest mismatches and nothing else (`checks: 99, failures: 4`). Re-execute the runs if a
-      future submission requires receipts produced by the current bytes; never re-derive by editing a
-      receipt.
+- [ ] Re-measure the pre-existing browser suites on a quiesced host and take their verdicts off
+      wall-clock budgets. Clause 8's re-run exposed the class: six full runs of the three
+      pre-existing suites `tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs
+      tests/portal-execution-control.spec.mjs` (~48 cases) produced `45 passed`, `3 skipped` twice (in
+      4.7 m and 7.9 m) and `43`, `42`, `43` and `39` passed with 2–6 failures and the same
+      `3 skipped` in 9.2 m, 10.0 m, 10.9 m and 21.9 m. The failing set is not stable either:
+      the list/board case fails at desktop width in three runs and its mobile sibling in another, the
+      two deep-link cases in others, and the five mobile failures of the 21.9 m run all pass
+      `5 passed`, exit 0, in 45.5 s in isolation on those same bytes. A revision therefore has two
+      available verdicts from this suite and which one a run produces tracks how saturated the host is
+      (other sessions' servers, browsers and a concurrently running suite share it), not the
+      revision — which is why this is a class and not a one-off: every one of these suites decides
+      its verdict from wall-clock waits sized for an idle host (`browser/playwright.config.mjs`:
+      `timeout: 60_000`, `expect.timeout: 30_000`), so any revision can be reported red without a
+      code change, and neither a red full run nor a green isolation pass can be read as the surface's
+      own property. The same signature reaches this delivery's own deterministic suite (a restored
+      `scrollTop` observed as 0 in one case, a render wait timing out in another, different cases in
+      different runs, each passing in isolation), so the class is not confined to the pre-existing
+      suites. Hosted CI does not reproduce it because the job is not saturated the same way — the
+      runner gives the suite a dedicated machine — so a green hosted run neither explains nor retires
+      a red local run, and a local failure must not be cited as a regression without the isolation
+      pass beside it. The fix belongs to the observations (waits that end when the served response or
+      the rendered state ends, instead of a load-sized maximum) or to a serialized suite on a freed
+      host; either way it must be measured in both directions and name the bytes it was measured on.

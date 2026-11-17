@@ -22,14 +22,18 @@ value it records.
 | Base | `dd2e9db0829d105ac58d1713d01092811cda86ff` — "feat(0007f): runtime visibility and trustworthy execution control (#38)" |
 | This delivery, before the repair round (source) | `sha256:bb3d48212069eb571a76e68f7dbbd6c2bc7d29edbaecf050d1cdc84ba307d6af` over the delivered 43-path manifest (procedure below); rows 1–18 were produced on it unless a row says otherwise |
 | This delivery, repaired (source) | `sha256:d52d250677296c9b914806a381920fc6a2dd31af60bb688995539e377737031a` over the repaired 45-path manifest (the pre-repair 43 paths plus `control/lib/symmetry_control/orchestration.ex` and `control/lib/symmetry_control/workspaces.ex`); every number recorded by the repair round below was produced on it |
-| Deliverable shape | one independently mergeable PR on top of the base; no push, no history rewrite, tree left for verification |
+| Rebase target | `706174ecda9504c6c1d991ddd4f862ff3bf47f0c` — "test(omp): remove the wakeup race from the sink-failure test (#45)"; the main-line revision the branch was rebased onto (main after #37, #39, #40, #42, #43, #44 and #45) |
+| This delivery, rebased onto the current main (source) | `sha256:2a10b33e0ea248e178d2f000c012bb6c505123d4409e43560377a3ce122e1e58` over the same 45-path manifest: the path set is unchanged and 20 of the 45 paths differ in content from the repaired revision (`.github/workflows/ci.yml`, `browser/README.md`, `contracts/fixtures/manifest.json`, `contracts/generated/effect/index.ts`, `contracts/generated/ts/index.ts`, `contracts/scripts/check-effect.mjs`, `contracts/scripts/check.mjs`, `contracts/scripts/generate.mjs`, `contracts/ts/index.ts`, `control/lib/symmetry_control_web/portal_session.ex`, `control/lib/symmetry_control_web/router.ex`, `control/test/symmetry_control/goals/contract_fixture_manifest_test.exs`, `control/test/symmetry_control_web/portal_session_test.exs`, `daemon/internal/contracts/generated.go`, `daemon/internal/contracts/schema_bundle.json`, `frontend/src/app/application.ts`, `frontend/src/app/router.test.tsx`, `frontend/src/app/router.tsx`, `frontend/src/services/api.ts`, `frontend/src/styles.css`); the rebase section below names every resolution and every row re-measured on it |
+| Deliverable shape | one independently mergeable PR on top of the rebased base (`706174e`); the branch was rebased in place, so its local SHAs were rewritten (nothing pushed, no remote or other worktree touched), tree left for verification |
 
 Reproduction (PowerShell 7, repository root):
 
 ```powershell
-# the delivered source paths: the base to the working tree, plus untracked
-# files, minus docs/**
-git diff --name-only dd2e9db | Where-Object { $_ -notlike "docs/*" } > paths.txt
+# the delivered source paths: this branch's own base to the working tree, plus
+# untracked files, minus docs/**. The base is the branch's parent: `706174e`
+# after the rebase, `dd2e9db` before it — the repaired-revision and rebased
+# values in the table above were each taken with their own base.
+git diff --name-only 706174e | Where-Object { $_ -notlike "docs/*" } > paths.txt
 git ls-files --others --exclude-standard | Where-Object { $_ -notlike "docs/*" } >> paths.txt
 # hash every listed file into "<sha256>  <path>`n" lines, sort the lines by
 # [string]::CompareOrdinal over the path, then SHA-256 the UTF-8 manifest bytes
@@ -332,8 +336,66 @@ one names the revision it measured.
 - **Owner acceptance is still not supplied** (unchanged from the pre-repair
   record).
 
+## Rebase onto current main (2026-11-17)
+
+The branch was rebased in place onto `706174e` (main after #37 and #39–#45) so it can open as one
+mergeable PR against the current main. Nothing was pushed, `main` and every other worktree were left
+untouched, and the rebased tree is what this section's rows were measured on. Seventeen paths
+conflicted; each was resolved as the union of both sides, and only the schema-count constants and four
+one-line alternations are files where both sides rewrote the same line (they take the value the union
+requires: 18 base schemas + upstream's `attention-read`/`goal-read` + this delivery's `chat-read` = 21).
+This section's rows are B1–B4; row 12, R2 and row 13 keep their own revision labels and their
+re-measured counterparts are B2 and B3.
+
+| Conflicted path | Resolution |
+| --- | --- |
+| `.github/workflows/ci.yml` | upstream's consolidated control job kept whole (the folded `pi-control-e2e-linux` steps and the credentialed-witness step) and this delivery's `tests/portal-chat.spec.mjs` added to the release render step's suite list |
+| `contracts/scripts/generate.mjs`, `contracts/scripts/check.mjs` | the schema-count loss detector reads 21 — the 21 `contracts/v1/*.schema.json` roots on disk are the evidence; `check.mjs`'s presentation-read set keeps both sides' entries |
+| `contracts/scripts/check-effect.mjs` | presentation-read set, decoder map and schema map are the union of both sides |
+| `contracts/ts/index.ts` | `ChatReadSchema`/`ChatRead` added beside upstream's `AttentionRead*`/`GoalRead*` |
+| `contracts/fixtures/manifest.json` | upstream's reformatting kept whole and this delivery's six `chat-read` fixtures appended verbatim: 240 entries = 226 base + 8 upstream + 6 here, every entry byte-equal to the side that authored it, every id resolvable and every referenced schema known |
+| `contracts/generated/ts/index.ts`, `contracts/generated/effect/index.ts`, `daemon/internal/contracts/generated.go`, `daemon/internal/contracts/schema_bundle.json` | regenerated from the union schema set: `node contracts/scripts/generate.mjs --check` passes on this tree **and** on the unmodified `706174e` tree, so the artifacts carry no host or dependency drift, and `pnpm contracts:check` reports 21 schemas and 240 fixtures |
+| `control/lib/symmetry_control_web/portal_session.ex` | one `@shell_path` carrying both sides' members: `attention|connections|chat|goals/[A-Za-z0-9_-]+|projects(?:/[A-Za-z0-9_-]+)?|runtimes|work/[A-Za-z0-9_-]+` |
+| `control/test/symmetry_control_web/portal_session_test.exs` | the reject list carries upstream's six `/portal/goals…` cases and this delivery's four `/portal/chat…` cases |
+| `frontend/src/app/application.ts` | `safeReturnTo`'s path alternation carries both sides' members (same list as the shell path) |
+| `frontend/src/app/router.tsx` | route tree: upstream's `goalRoute` plus this delivery's `chatRoute` |
+| `frontend/src/app/router.test.tsx` | import union (`readAttention` + `safeReturnTo`); both sides' cases retained |
+| `frontend/src/services/api.ts` | import union (`AttentionRead as AttentionReadBoundary`, `ChatRead`, `type SymmetryAttentionReadV1`, `type SymmetryChatReadV1`); this delivery's chat types, decoders and methods unchanged |
+| `docs/TODO.md` | every section both sides added is present: `(0007g)`, `(0007h)` and the CI consolidation decisions |
+| auto-merged both-side paths: `browser/README.md`, `control/lib/symmetry_control_web/router.ex`, `control/test/symmetry_control/goals/contract_fixture_manifest_test.exs`, `frontend/src/styles.css` | merged coherently by git and audited: both document routes are in the router (`/portal/chat` and `/portal/goals/:goal_id`), the manifest test keeps upstream's `@presentation_reads` attribute and guard beside this delivery's `chat-read` validator entry, and the stylesheet keeps upstream's rules plus this delivery's chat block in the same layer |
+
+Every path both sides changed (17 conflicted and 4 auto-merged, 21 in all) was then audited line by
+line against both sides' additions: every line either side added relative to `dd2e9db` is present in
+the rebased tree, and the only absent lines are the ones the two sides rewrote in place (the rows
+above). Twenty-five of the 45 delivered source paths are byte-identical to the repaired revision —
+including `browser/tests/portal-chat.spec.mjs`, `browser/tests/readable-fixtures.mjs`,
+`frontend/src/features/chat/chat.tsx`, `scopes.ts`, `presentation.ts` and
+`contracts/fixtures/valid/chat-read.run-waiting-decision.json`.
+
+| # | Command | Observed |
+| --- | --- | --- |
+| B1 | Source identity: the reproduction procedure above with the rebased base (`pwsh -NoProfile -File .tmp/rebase/source-digest-rebased.ps1`) | 45 delivered source paths (`docs/**` excluded) and `sha256:2a10b33e0ea248e178d2f000c012bb6c505123d4409e43560377a3ce122e1e58` (revision table). The path set is identical to the repaired revision's and 20 paths differ in content, so the earlier digest values do not describe this tree; every row that names them names its own revision and none of them is restated here |
+| B2 | Deterministic scoped conversation, rebased revision: `SYMMETRY_PORTAL_URL=http://127.0.0.1:4035 mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test tests/portal-chat.spec.mjs` | Five suite-context attempts, each exit 1 with exactly one failure and 11 of 12 cases green: `11 passed`, 1.4 m — desktop `…:469` read `Expected: 40` / `Received: 0` at its restored offset (`.tmp/rebase/rb-det-chat.log`); `5 passed` on the desktop project alone, 43.1 s (`…:469`, `.tmp/rebase/rb-det-chat-desktop.log`); `11 passed` on the desktop project doubled, 2.3 m — the run-scope render case `…:376` timed out at 33.6 s in its second pass (`.tmp/rebase/rb-det-chat-desktop2x.log`); `11 passed`, 1.6 m on a freshly created and migrated database (`…:469`, `.tmp/rebase/rb-det-chat-freshdb.log`); `11 passed`, 2.5 m on a fresh database with the server's debug output off the terminal — mobile `…:106` read `Expected: 120` / `Received: 0` (`.tmp/rebase/rb-det-chat-freshdb2.log`). On the same bytes the same cases pass alone and in sequence: `…:469` alone `1 passed`, 7.4 s (`.tmp/rebase/rb-det-chat-case1.log`); `…:376` + `…:469` `2 passed`, 10.7 s (`.tmp/rebase/rb-det-chat-pair.log`). The failing case, its helper and its fixture are unchanged from the repaired revision (the unchanged list above), and the failing case differs between attempts: this is the load class `docs/TODO.md` now records, not a rebase regression — but the suite is **not** claimed green on the rebased revision |
+| B3 | Isolated five-case mobile run, rebased revision: `SYMMETRY_PORTAL_URL=http://127.0.0.1:4035 mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test tests/portal-execution-control.spec.mjs:232 tests/portal-execution-control.spec.mjs:293 tests/portal-work-views.spec.mjs:126 tests/portal-work-views.spec.mjs:613 tests/portal-work-views.spec.mjs:707 --project=mobile-chromium` | `5 passed`, exit 0, 38.5 s (`.tmp/rebase/rb-isolated-mobile.log`) — the five cases check 13's full run left red, pass on the rebased bytes in isolation |
+| B4 | Elixir, frontend and contract gates on the rebased revision (pinned toolchains): `mix format --check-formatted` over the nine changed Elixir files; `mix compile --warnings-as-errors`; R1's focused suite; `pnpm --filter @symmetry/frontend typecheck`, `lint`, `test`, `build`; `pnpm contracts:check` | format exit 0; compile exit 0; `Result: 31 passed`, exit 0, 9.4 s (`.tmp/rebase/rb-focused-elixir.log`); typecheck exit 0; lint exit 0; `17 passed (17)` files, `295 passed (295)` tests, exit 0 (the count is the union of both sides' suites, `.tmp/rebase/rb-fe-test.log`); build exit 0 with the staged `control/priv/static/portal` assets being this tree's (`.tmp/rebase/fe-build.log`); `contracts:check` exit 0 — `Validated 21 Draft 7 schemas and 240 fixtures`, `Effect decoded all 240 raw fixtures`, `Generated contract DTOs are up to date.` (`.tmp/rebase/rb-contracts-check.log`) |
+
+**Rows the rebase did not re-measure** (each keeps the revision label it already carries): checks 1–11
+and 18, checks 15 and 16, check 12's pre-repair and repaired-tree runs (B2 is the rebased revision's
+re-run), check 13's three-suite full run (only its isolation set was re-run, B3), check 14's live
+work-detail matrix, R3's live scoped-conversation walk, R6a–R6c's red-before demonstrations, and R5's
+frontend values (re-run in B4). None of them is restated here as a property of the rebased revision.
+
 ## Limitations
 
+- **The rebased revision's rows are B1–B4; everything else keeps the revision it names.** The rebase
+  re-measured the source identity (B1), the deterministic scoped-conversation suite (B2), the
+  five-case mobile isolation set (B3) and the Elixir/frontend/contract gates (B4). The deterministic
+  scoped-conversation suite is **not** claimed green on the rebased revision: five suite-context
+  attempts each ended with one failure (11 of 12 cases green) while the same cases pass in isolation
+  and in sequence on the same bytes, and the failing case differs between attempts. The whole Control
+  suite, the three-suite browser full run, the live work-detail matrix and the live
+  scoped-conversation walk were not re-run on the rebased revision, and the rebase section names each
+  of them.
 - **Owner acceptance is not supplied.** The goal's own Owner-acceptance
   paragraph asks the owner to review rendered workspace-, project- and
   run-scoped conversation with a work-item target on actual work; a model
