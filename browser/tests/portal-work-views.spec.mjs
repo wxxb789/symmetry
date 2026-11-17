@@ -1107,7 +1107,7 @@ test.describe("Readable work views", () => {
     await closeDetail(page, isMobile, { escape: true });
   });
 
-  test("a disconnected read recovers and reconciles with the server's own snapshot", async ({ page }, testInfo) => {
+  test("a disconnected read recovers and reconciles with the server's own snapshot", async ({ page, isMobile }, testInfo) => {
     await login(page);
     const seeded = await seedProject(page, {
       prefix: "RC",
@@ -1137,6 +1137,25 @@ test.describe("Readable work views", () => {
       return { status: response.status, body };
     }, item.id);
     expect(executing.status, JSON.stringify(executing.body)).toBe(202);
+    // The run is issued through the API rather than through the surface, so the
+    // surface has no reason of its own to re-read it: the refresh control below
+    // drives that read, and the precondition this case needs — the served run
+    // rendered as queued before the read is disconnected — is the state that
+    // read serves. Waiting on the operator invalidation channel instead made
+    // this case's precondition a property of the host's delivery timing: a
+    // frame published before the channel finished joining is never
+    // re-delivered, and a client that believes it is connected does not poll,
+    // so a stale surface stays stale for the whole expect budget with nothing
+    // left to observe. Hosted occurrence: CI run 44128369103, `control` job,
+    // this case, 31.5 s, failing here with the drawer rendering the pre-run
+    // "No execution recorded" and no refresh ever delivered.
+    const detail = detailSurface(page, isMobile, item.title);
+    const queuedRead = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === `/portal/api/work-items/${item.id}` && response.status() === 200;
+    });
+    await detail.getByRole("button", { name: ui.refresh, exact: true }).click();
+    expect((await queuedRead).status()).toBe(200);
     await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
 
     // The read is disconnected: the surface must say so and must not invent a

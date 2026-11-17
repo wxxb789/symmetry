@@ -29,6 +29,32 @@ const authorityPolicy = () => ({
   allowed_actions: []
 });
 
+// Records the application's own history writes before its module runs. The
+// one-time repair replaces the location once per legacy document; the router
+// then writes its own entry state with an empty URL, which names no location and
+// is not a navigation. Counting the writes that do name a location is how the
+// loop below states "exactly once, no second redirect" from the app's own
+// behaviour instead of from a sleep that a returning redirect would satisfy.
+function recordHistoryWrites() {
+  window.__historyWrites = [];
+  for (const name of ["replaceState", "pushState"]) {
+    const original = window.history[name].bind(window.history);
+    window.history[name] = (...args) => {
+      window.__historyWrites.push({ name, url: String(args[2] ?? "") });
+      return original(...args);
+    };
+  }
+}
+
+const historyWrites = (page) => page.evaluate(() => window.__historyWrites);
+// The socket's own reconnect backoff is the subject of the catch-up case, so its
+// wait is a backstop over the client's retry schedule rather than a tighter
+// observation.
+const RECONNECT_GUARD_MS = 30_000;
+// The polling fallback's cadence is five seconds; four of them is the backstop
+// over the client's own reads. The pass still requires a real read and a real
+// render — the guard only decides when a missing one is declared missing.
+const FALLBACK_CADENCE_GUARD_MS = 20_000;
 const executionPolicy = () => ({
   automatic_execution: false,
   max_parallel_tasks: 1,
@@ -200,17 +226,21 @@ test.describe("portal cutover", () => {
       { hash: "#unknown-view", expected: "/portal/attention?unavailable=unknown-view" }
     ];
     const observed = [];
+    await page.addInitScript(recordHistoryWrites);
     for (const entry of cases) {
       await page.goto(`/portal?project_id=${project.id}${entry.hash}`);
       await expect.poll(() => `${new URL(page.url()).pathname}${new URL(page.url()).search}`).toBe(entry.expected);
-      const afterSettle = await (async () => {
-        await page.waitForTimeout(200);
-        return `${new URL(page.url()).pathname}${new URL(page.url()).search}`;
-      })();
       // Exactly once: the destination is stable, the document was loaded once,
-      // and no second redirect ran.
+      // and no second redirect ran. The redirect evidence is the app's own
+      // history writes for this document — exactly one write names a location,
+      // and it names the destination. A 200 ms sleep used to stand in for this
+      // clause, which made it a property of the clock and let a second redirect
+      // that returned to the same URL satisfy it.
+      const afterSettle = `${new URL(page.url()).pathname}${new URL(page.url()).search}`;
       expect(afterSettle).toBe(entry.expected);
       expect(await page.evaluate(() => performance.getEntriesByType("navigation").length)).toBe(1);
+      expect((await historyWrites(page)).filter((write) => write.url !== "").map((write) => write.url))
+        .toEqual([entry.expected]);
       observed.push({ hash: entry.hash, expected: entry.expected, observed: afterSettle });
     }
     await page.goto(`/portal?project_id=${project.id}#board`);
@@ -260,6 +290,12 @@ test.describe("portal cutover", () => {
     expect(socket.pushed, "the reader's socket received at least one invalidation frame").toBeGreaterThan(0);
     expect(socket.pushedAt, "the push crossed the reader's socket after the write started").toBeGreaterThanOrEqual(writeStarted);
     expect(socket.pushedAt, "the reader's read followed the pushed invalidation").toBeLessThanOrEqual(readAt);
+    // The elapsed time is the contract here, not a standby for one: this case
+    // exists to prove the read came from the pushed invalidation rather than
+    // from the 5 s fallback tick, so the read must sit inside the batch window
+    // and well inside that cadence — measured between the two product events
+    // (the frame the reader's socket received and the read it caused), never
+    // waited on.
     expect(readAt - writeStarted, "the read landed well inside the 5 s polling cadence").toBeLessThan(3000);
     // The reader never reloaded: the same document received the invalidation.
     expect(await reader.evaluate(() => performance.timeOrigin)).toBe(documentTime);
@@ -317,7 +353,7 @@ test.describe("portal cutover", () => {
       (request) =>
         request.url().includes(`/portal/api/goals/${goalId}/events`) &&
         new URL(request.url()).searchParams.get("after") === String(lastSequence),
-      { timeout: 30000 }
+      { timeout: RECONNECT_GUARD_MS }
     );
     socket.mode = "live";
     await catchUp;
@@ -360,7 +396,7 @@ test.describe("portal cutover", () => {
 
     const createdBefore = Date.now();
     await createWorkItem(page, project.id, { title, status: "ready", priority: "medium" });
-    await expect(reader.getByRole("link", { name: title })).toBeVisible({ timeout: 20000 });
+    await expect(reader.getByRole("link", { name: title })).toBeVisible({ timeout: FALLBACK_CADENCE_GUARD_MS });
     // The reader converged with no established operator socket, so the fallback
     // cadence is the only thing that could have refreshed it.
     expect(socket.attempts).toBeGreaterThan(0);

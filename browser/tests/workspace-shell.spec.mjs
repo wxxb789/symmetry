@@ -3,6 +3,33 @@ import { allowBrowserError, expect, test } from "./fixtures.mjs";
 
 const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
 
+// The expiry release is started with a two-second session lifetime
+// (SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2 in CI's render step). The guard is
+// three of those lifetimes, and the intervals are tight because the case is
+// about the first server read after the TTL, not about a long wait. What is
+// waited on is the server's own 401 — never elapsed time standing in for it.
+const EXPIRY_GUARD_MS = 6_000;
+const EXPIRY_POLL_INTERVALS = [100, 250, 500];
+
+// Records the application's own history writes before its module runs. The
+// one-time legacy repair replaces the location once; the router then writes its
+// own entry state with an empty URL, which names no location and is not a
+// navigation. Counting the writes that do name a location is how a case can
+// state "no second redirect" from the app's own behaviour instead of from a
+// sleep that a returning redirect would satisfy.
+function recordHistoryWrites() {
+  window.__historyWrites = [];
+  for (const name of ["replaceState", "pushState"]) {
+    const original = window.history[name].bind(window.history);
+    window.history[name] = (...args) => {
+      window.__historyWrites.push({ name, url: String(args[2] ?? "") });
+      return original(...args);
+    };
+  }
+}
+
+const historyWrites = (page) => page.evaluate(() => window.__historyWrites);
+
 async function login(page, path = "/portal/attention") {
   await page.goto(`/portal/login?return_to=${encodeURIComponent(path)}`);
   await page.getByLabel("Operator token").fill(operatorToken);
@@ -255,20 +282,31 @@ test("the legacy hash repair lands on the new route exactly once", async ({ page
     if (request.resourceType() === "document") documentLoads.push(request.url());
   };
   page.on("request", recordLoad);
+  await page.addInitScript(recordHistoryWrites);
   await page.goto(`/portal?project_id=${selected.id}#board`);
   await expect(page).toHaveURL(new RegExp(`/portal/projects/${selected.id}$`));
+  // The destination's own read has rendered its subject: the repair has landed
+  // and no navigation of it is still in flight behind the render.
   await expect(page.getByRole("heading", { level: 1, name: selected.name })).toBeVisible();
-  // Exactly once: one document load, one history replacement, then a stable
-  // destination URL with no further redirect.
+  const destination = `/portal/projects/${selected.id}`;
+  // Exactly once: one document load, and no redirect after it.
   expect(documentLoads).toHaveLength(1);
-  await page.waitForTimeout(300);
-  await expect(page).toHaveURL(new RegExp(`/portal/projects/${selected.id}$`));
-  expect(documentLoads).toHaveLength(1);
-  expect(await page.evaluate(() => performance.getEntriesByType("navigation").length)).toBe(1);
   page.off("request", recordLoad);
   // The retired presentation is gone: neither its document nor its assets exist.
   expect((await page.request.get("/portal/classic")).status()).toBe(404);
   expect((await page.request.get("/assets/portal.js")).status()).toBe(404);
+  // The last observation point of the case, after two live requests the app
+  // served: the URL, the document count, the page's own navigation entries and
+  // the app's own history writes are all read here. A 300 ms sleep used to be
+  // the whole evidence for "no further redirect", which made that clause a
+  // property of the clock — and a second redirect that returned to this URL
+  // satisfied it. The written locations are counted instead: exactly one, the
+  // repair's own replacement.
+  await expect(page).toHaveURL(new RegExp(`/portal/projects/${selected.id}$`));
+  expect(documentLoads).toHaveLength(1);
+  expect(await page.evaluate(() => performance.getEntriesByType("navigation").length)).toBe(1);
+  expect((await historyWrites(page)).filter((write) => write.url !== "").map((write) => write.url))
+    .toEqual([destination]);
   await capture(page, testInfo, "legacy-hash-repair", "The legacy project board hash landed on /portal/projects/<id> with one document load, one history replacement and no second redirect; the retired classic document and asset answer 404");
 });
 
@@ -322,7 +360,7 @@ test("expired authentication clears private content and recovers the deep link",
   await page.getByRole("button", { name: "Open workspace" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Projects", exact: true })).toBeVisible();
   await expect.poll(async () => (await page.request.get(`${expiry}/portal/api/session`)).status(), {
-    timeout: 6000, intervals: [100, 250, 500]
+    timeout: EXPIRY_GUARD_MS, intervals: EXPIRY_POLL_INTERVALS
   }).toBe(401);
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${expiry}/portal/login\\?return_to=%2Fportal%2Fprojects$`));
