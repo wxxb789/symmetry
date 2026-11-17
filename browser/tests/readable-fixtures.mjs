@@ -8,6 +8,13 @@ import { expect } from "./fixtures.mjs";
 
 export const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
 
+// One backstop for the shell's own session probe: the probe is a real read on a
+// host these suites share with live daemons and their browsers, so the wait
+// matches that load instead of failing the run before any product behaviour is
+// observed. It is a maximum, never a verdict: every assertion after it decodes
+// the running control plane.
+const LOGIN_GUARD_MS = 30_000;
+
 export function uniqueKey(prefix = "RW") {
   const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
     .slice(-6)
@@ -19,11 +26,8 @@ export async function login(page, path = "/portal/attention") {
   await page.goto(`/portal/login?return_to=${encodeURIComponent(path)}`);
   await page.getByLabel("Operator token").fill(operatorToken);
   await page.getByRole("button", { name: "Open workspace" }).click();
-  // The shell's session probe is a real read on a host these suites share with
-  // live daemons and their browsers, so the wait matches that load instead of
-  // failing the run before any product behaviour is observed.
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole("combobox", { name: "Project", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible({ timeout: LOGIN_GUARD_MS });
+  await expect(page.getByRole("combobox", { name: "Project", exact: true })).toBeVisible({ timeout: LOGIN_GUARD_MS });
 }
 
 export async function api(page, method, path, body) {

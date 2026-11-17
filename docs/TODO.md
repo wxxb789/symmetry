@@ -555,6 +555,87 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       observations (waits that end when the served response or the rendered state ends, instead of a
       load-sized maximum) or to a serialized suite on a freed host; either way it must be measured in
       both directions and name the bytes it was measured on.
+      Correction (2026-11-18), superseding the two claims above that hosted CI does not reproduce
+      the class, and that saturation alone decides it: hosted CI *did* reproduce it. Run
+      `44128369103` (PR #56, a daemon-only change), job `control`, step "Render authenticated release
+      shell on desktop and mobile", case `tests/portal-work-views.spec.mjs:1110 › Readable work views
+      › a disconnected read recovers and reconciles with the server's own snapshot`: `desktop-chromium`
+      failed in 31.5 s while its mobile sibling passed in 2.8 s in the same run (72 passed, 1 failed,
+      3 skipped). The uploaded report's `error-context.md` shows why, and it is not the revision: the
+      drawer rendered the run's *pre-run* document for the whole 30 s `expect` budget (`Execution: No
+      execution recorded`, `Start run` still offered), so the wait ended as `element(s) not found`
+      exactly as the recorded local runs did. A dedicated machine is no protection against that,
+      because the case posted its run through the API and then waited for the surface to *hear* about
+      it: that happens only when the operator invalidation channel delivers the frame, and a client
+      that believes it is connected does not poll (`frontend/src/services/realtime.ts`: `syncPolling`
+      stops at `status === "connected"`), so a frame published in the window between the socket
+      opening and its channel joining leaves the surface stale with nothing left to observe. Load
+      widens that window; it does not create it.
+      Inventory of the whole render step — the six spec files it runs plus their helpers — listed with
+      `rg -n -e '<pattern>'` from `browser/` over
+      `tests/{workspace-shell,portal-work-views,portal-execution-control,portal-goal-managed,portal-cutover,portal-chat}.spec.mjs`
+      and `tests/fixtures.mjs`, `tests/readable-fixtures.mjs`, `tests/planning-fixtures.mjs`, where
+      `<pattern>` is the alternation of the wall-clock forms `waitForTimeout(`, `.toPass(`,
+      `waitForFunction(`, `Promise.race(`, `new Promise((resolve) => { setTimeout`, `test.setTimeout(`,
+      `timeout: <value>`, `intervals:`, `Date.now()`, `performance.now()` and `_GUARD_MS = `
+      (regex-escaped): 33 matching lines on `origin/main`'s
+      bytes, 37 on the delivered bytes. The 33 classify into 28 sites — **4 verdicts decided by
+      elapsed time**, 21 hang guards, 3 pacing/attribution budgets — because three matches are
+      fixture/attribution `Date.now()` reads that decide nothing and two line pairs belong to one site
+      each. The four verdict sites, quoted at `origin/main`'s coordinates, are converted, none of them
+      by lengthening a timeout, adding a retry, weakening an assertion or making a failure
+      conditional: `portal-work-views.spec.mjs:1140` (the line CI failed on) now drives the detail
+      surface's own refresh control and waits on the read it serves (its 200 plus the served state it
+      renders) instead of on the channel's delivery; `portal-execution-control.spec.mjs:191-209` (the
+      clock at `:200-207`) holds the surface's own detail reads so the replay press lands on the state
+      the case observed, and asserts the server's own `disposition: "replayed"` unconditionally —
+      before the change the reload's own read had already served the settled execution and removed the
+      control, so that assertion never ran at all (measured: 3 runs of 3) and the clock that guarded
+      its branch decided nothing; `workspace-shell.spec.mjs:264` and `portal-cutover.spec.mjs:207` now
+      count the application's own history writes that name a location (recorded by an `addInitScript`
+      before the module runs) instead of sleeping 300 ms / 200 ms past the redirect they claim cannot
+      happen. The 21 guards and 3 pacing budgets stay, each a named constant with its reason beside it
+      (`EXPIRY_GUARD_MS`/`EXPIRY_POLL_INTERVALS`, `STATE_GUARD_MS`, `BACKGROUND_READ_GUARD_MS`,
+      `RECONNECT_GUARD_MS`, `WALK_GUARD_MS`/`HISTORY_WALK_GUARD_MS`,
+      `LOGIN_GUARD_MS`, `FIXTURE_GUARD_MS`); no guard value was changed. `portal-cutover.spec.mjs`'s
+      `readAt - writeStarted < 3000` (`:263` before the change, `:293` after) keeps its elapsed budget
+      because there the elapsed time *is* the contract (the read must land inside the batch window and
+      well inside the 5 s fallback cadence), and it is measured between two product events, never
+      waited on.
+      Falsification, on this host, against a `mix phx.server` of the delivered revision plus a second
+      instance started with `SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2` (the render step's own
+      configuration) on PostgreSQL 18.6: with the surface's read answered from the pre-run document the
+      converted work-views wait fails for its stated reason (`1 failed`, 34.3 s, exit 1, the CI
+      occurrence's own error) and passes on the delivered bytes (`1 passed`, exit 0); with the server
+      answering `disposition: "applied"` the converted replay assertion fails (`1 failed`, exit 1) and
+      the delivered file passes (`10 passed`, exit 0, both projects); a temporary second redirect in
+      `frontend/src/main.tsx` that leaves the destination and returns to it failed both converted
+      "exactly once" cases (exit 1 each) while the pre-change `waitForTimeout` versions of those same
+      two cases *passed* it (exit 0 each) — the sleep could not fail for the claim it stood for — with
+      the sabotage reverted afterwards (the rebuilt bundle hashed back to the delivered asset name).
+      One of those budgets is not a backstop in practice and is reported as the class's live half:
+      `portal-cutover.spec.mjs:377`'s polling-fallback case (`:341` before the change) sizes
+      `FALLBACK_CADENCE_GUARD_MS` at four of the client's own 5 s poll ticks, and the delivered bytes
+      hit it on this host — `mobile-chromium` failed that case inside the acceptance pass below while
+      its desktop sibling passed in 1.6 s, which is the class's own signature (a red and a green
+      verdict for the same bytes, decided by how saturated the host was). Its elapsed budget is the
+      subject, not a standby for one: convergence through the fallback cadence can only be observed
+      by waiting at least one tick, and the case already records the reader's own reads and asserts
+      one followed the write, so what remains load-sized is the bound over the app's cadence. The
+      conversion left for it is a product signal for "the fallback just ticked" (or a fallback that
+      does not depend on wall-clock ticks), which the product does not publish today.
+      Acceptance pass of the six render-step specs on the delivered bytes, the render step's own file
+      list through the direct Playwright CLI (`pnpm --offline` refuses a junctioned `node_modules` on
+      this host): the render step's own file list (`node node_modules/@playwright/test/cli.js test tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs tests/portal-cutover.spec.mjs tests/portal-chat.spec.mjs`) reported `74 passed`, `1 failed`, `1 skipped` in 9.4 m, exit 1: the failure is the unconverted `portal-cutover.spec.mjs:377` cadence case named above (`mobile-chromium`), every converted case passed on both projects, and the skip is the desktop-only concurrency case's mobile sibling.
+      What could not run here: the packaged release, which cannot boot on this Windows host (the
+      generated `erts-*/bin/erl` shim calls `erlexec` without the `.exe` name), so the render step's
+      release instances stay CI's to run. `portal-goal-managed.spec.mjs` ran rather than skipping
+      because all three `POSTGRES_*` coordinates were set for the pass, and the expiry case ran against
+      the second instance. Remaining product half of the class, reported rather than papered over: a
+      connected client has no recovery for an invalidation it never received — the polling fallback
+      stops once the socket reports connected, and the channel's own join completion
+      (`frontend/src/services/realtime.ts`, `channel.join()` in `connect()`) is not treated as a read
+      epoch — so the repair belongs to that signal in the product, not to a longer wait.
 ## Open findings from the 0008b model-routing review
 
 - [ ] Revalidate the open class B finding against

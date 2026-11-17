@@ -11,14 +11,28 @@
 // cancel -> cancelled, retry availability, retry hidden after reassignment, and
 // an idempotent replay of an unconfirmed attempt.
 //
-// Network interception appears in two places only, each named in the case that
+// Network interception appears in three places only, each named in the case that
 // uses it and each explicitly separated from real-data acceptance:
 //   1. holding a control POST response past the rendered receipt, to prove an
 //      in-flight request is never rendered as applied;
 //   2. refusing a control POST entirely, to render the unknown outcome a lost
-//      response produces, then proving the durable attempt is replayed once.
+//      response produces, then proving the durable attempt is replayed once;
+//   3. holding the surface's own detail reads while that replay is pressed, so
+//      the press lands on the state the case observed instead of racing the
+//      next background refresh — the replay verdict is the server's disposition
+//      for the request the press sends, never a clock that could decide it.
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
 import { api, createProject, createWorkItem, login, updateWorkItem, uniqueKey } from "./readable-fixtures.mjs";
+
+// One backstop for every wait in this file: a maximum, never a weaker
+// observation. The control plane serves these reads in milliseconds; the guard
+// only decides how long a genuinely missing state is waited out before the case
+// fails, and it is the same magnitude every site already used.
+const STATE_GUARD_MS = 20_000;
+// The tightest wait here is the background refresh an explicit visibility
+// notification triggers; it is named separately because its boundary is
+// tighter, not because the observation is weaker.
+const BACKGROUND_READ_GUARD_MS = 15_000;
 
 const ui = {
   start: "Start run",
@@ -80,7 +94,7 @@ test.describe("Execution control", () => {
     await page.getByRole("button", { name: ui.start }).click();
     await expect(page.locator(".receipt").first()).toContainText(ui.receiptRequested);
     await expect(page.locator(".receipt").first()).not.toContainText(ui.receiptApplied);
-    await expect.poll(() => executionOf(page, item.id), { timeout: 20_000 }).toMatchObject({ state: "queued", generation: 1 });
+    await expect.poll(() => executionOf(page, item.id), { timeout: STATE_GUARD_MS }).toMatchObject({ state: "queued", generation: 1 });
 
     // The queued execution renders the served state in the control bar and in
     // the chips. The classic live-timer and Activity-row assertions are retired
@@ -93,8 +107,8 @@ test.describe("Execution control", () => {
     await expect(page.getByText(ui.stateQueued, { exact: true }).first()).toBeVisible();
 
     await page.getByRole("button", { name: ui.cancel }).click();
-    await expect(page.getByText(ui.stateCancelled, { exact: true }).first()).toBeVisible({ timeout: 20_000 });
-    await expect.poll(() => executionOf(page, item.id), { timeout: 20_000 }).toMatchObject({ state: "cancelled" });
+    await expect(page.getByText(ui.stateCancelled, { exact: true }).first()).toBeVisible({ timeout: STATE_GUARD_MS });
+    await expect.poll(() => executionOf(page, item.id), { timeout: STATE_GUARD_MS }).toMatchObject({ state: "cancelled" });
 
     const cancel = (await timelineOf(page, item.id)).filter((entry) => entry.source === "command" && entry.data.kind === "cancel");
     expect(cancel, "one durable cancel command").toHaveLength(1);
@@ -148,15 +162,28 @@ test.describe("Execution control", () => {
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await expect(page.locator(".receipt").first()).not.toContainText(ui.receiptApplied);
     release();
-    await expect(page.locator(".receipt").first()).toContainText(ui.receiptAwaitingRuntime, { timeout: 20_000 });
+    await expect(page.locator(".receipt").first()).toContainText(ui.receiptAwaitingRuntime, { timeout: STATE_GUARD_MS });
     await page.unroute(`**/portal/api/work-items/${item.id}/run`);
 
     const lost = await queuedAgentWork(page, "EL");
     await openWorkDetail(page, lost.item.id);
     await page.getByRole("button", { name: ui.start }).click();
-    await expect(page.getByRole("button", { name: ui.cancel })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: ui.cancel })).toBeVisible({ timeout: STATE_GUARD_MS });
     // The dropped response is the only console error this case may produce.
     allowBrowserError(page, /net::ERR_FAILED/);
+    // The settlement the dropped response records server-side reaches this
+    // browser only through its own reads, so those reads are held from here on.
+    // The press below then lands on the snapshot the case just observed
+    // (attempt recorded, control present) instead of on whatever the next
+    // background refresh happened to deliver, which is what made the replay
+    // assertion skippable: measured locally before this change, the reload's own
+    // read had already served the settled execution in three runs of three, so
+    // the control was gone and `disposition: "replayed"` was never asserted —
+    // the 15 s clock that decided it could only ever pass.
+    const heldReads = [];
+    await page.route(`**/portal/api/work-items/${lost.item.id}`, async (route) => {
+      heldReads.push(route);
+    });
     // The request reaches the server and only its response is dropped, so the
     // durable command exists while the browser has no confirmation at all.
     await page.route(`**/portal/api/work-items/${lost.item.id}/cancel`, async (route) => {
@@ -165,8 +192,28 @@ test.describe("Execution control", () => {
     });
     await page.getByRole("button", { name: ui.cancel }).click();
     const unknownReceipt = page.locator(".receipt").filter({ hasText: ui.receiptUnknown }).first();
-    await expect(unknownReceipt).toBeVisible({ timeout: 20_000 });
+    await expect(unknownReceipt).toBeVisible({ timeout: STATE_GUARD_MS });
     await expect(unknownReceipt).not.toContainText(ui.receiptApplied);
+
+    // The durable command exists, so the execution settles from the server even
+    // though this browser never saw a response; pressing the control again is
+    // that recorded attempt's replay and never mints a second command. The
+    // verdict is the server's own disposition for this browser's request: no
+    // clock decides whether the claim is asserted.
+    await page.unroute(`**/portal/api/work-items/${lost.item.id}/cancel`);
+    const replayResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === `/portal/api/work-items/${lost.item.id}/cancel`;
+    });
+    await page.getByRole("button", { name: ui.cancel }).click();
+    const replayed = await replayResponse;
+    expect(replayed.status()).toBe(200);
+    expect((await replayed.json()).disposition).toBe("replayed");
+    // A read the page superseded and cancelled cannot be continued; every
+    // assertion here is about the state the surface keeps, never about the
+    // delivery of a held response.
+    for (const route of heldReads) await route.continue().catch(() => undefined);
+    await page.unroute(`**/portal/api/work-items/${lost.item.id}`);
 
     // The reload reconstructs the same attempt from its stored identity, so the
     // receipt is pending again instead of vanishing — still never applied.
@@ -177,38 +224,11 @@ test.describe("Execution control", () => {
     /* The reload reconstructs the attempt before the detail snapshot arrives; if
        the snapshot lands first, the durable command owns the receipt and the
        attempt renders nothing. Either way it is never applied. */
-    await expect(pending.or(settled).first()).toBeVisible({ timeout: 20_000 });
+    await expect(pending.or(settled).first()).toBeVisible({ timeout: STATE_GUARD_MS });
     if (await pending.count() === 1) await expect(pending).not.toContainText(ui.receiptApplied);
 
-    // The durable command exists, so the execution settles from the server even
-    // though this browser never saw a response; pressing the control again is
-    // that recorded attempt's replay and never mints a second command.
-    await page.unroute(`**/portal/api/work-items/${lost.item.id}/cancel`);
-    const cancelControl = page.getByRole("button", { name: ui.cancel });
-    // The background refresh may settle the execution from the server while the
-    // reader is about to press: a moved-on execution removes the control, and
-    // that is the same final state without a second request.
-    if (await cancelControl.count() === 1) {
-      const replayResponse = page.waitForResponse((response) => {
-        const url = new URL(response.url());
-        return url.pathname === `/portal/api/work-items/${lost.item.id}/cancel`;
-      });
-      const clicked = await cancelControl.click({ timeout: 5_000 }).then(() => true).catch(() => false);
-      if (clicked) {
-        // Bounded: a click that landed while the execution moved on may send no
-        // request at all, and the final state is asserted below either way.
-        const replayed = await Promise.race([
-          replayResponse,
-          new Promise((resolve) => { setTimeout(() => resolve(null), 15_000); })
-        ]);
-        if (replayed !== null) {
-          expect(replayed.status()).toBe(200);
-          expect((await replayed.json()).disposition).toBe("replayed");
-        }
-      }
-    }
-    await expect.poll(() => executionOf(page, lost.item.id), { timeout: 20_000 }).toMatchObject({ state: "cancelled" });
-    await expect(page.getByText(ui.stateCancelled, { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => executionOf(page, lost.item.id), { timeout: STATE_GUARD_MS }).toMatchObject({ state: "cancelled" });
+    await expect(page.getByText(ui.stateCancelled, { exact: true }).first()).toBeVisible({ timeout: STATE_GUARD_MS });
     const replay = (await timelineOf(page, lost.item.id)).filter((entry) => entry.source === "command" && entry.data.kind === "cancel");
     expect(replay, "exactly one durable cancel command after a lost response").toHaveLength(1);
   });
@@ -224,7 +244,7 @@ test.describe("Execution control", () => {
     await expect(page.locator(".control-note")).toContainText("Chat");
 
     await page.getByRole("button", { name: ui.start }).click();
-    await expect.poll(() => executionOf(page, item.id), { timeout: 20_000 }).toMatchObject({ state: "queued" });
+    await expect.poll(() => executionOf(page, item.id), { timeout: STATE_GUARD_MS }).toMatchObject({ state: "queued" });
     await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Resume" })).toHaveCount(0);
   });
@@ -281,7 +301,7 @@ test.describe("Execution control", () => {
     await answer.evaluate((input) => input.setSelectionRange(7, 7));
 
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await expect.poll(() => detailRequests, { timeout: 15_000 }).toBeGreaterThan(1);
+    await expect.poll(() => detailRequests, { timeout: BACKGROUND_READ_GUARD_MS }).toBeGreaterThan(1);
     await expect(answer).toHaveValue("staging-blue");
     await expect(answer).toBeFocused();
     expect(await answer.evaluate((input) => input.selectionStart)).toBe(7);

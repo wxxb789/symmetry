@@ -12,6 +12,12 @@ import { fileURLToPath } from "node:url";
 const controlRoot = fileURLToPath(new URL("../../control/", import.meta.url));
 const fixtureScript = fileURLToPath(new URL("../../scripts/ci/portal-planning-fixture.exs", import.meta.url));
 
+// The fixture's own subprocess is a real `mix run` against the running control
+// plane's database: this is the backstop that decides when a wedged fixture run
+// is declared failed, never an observation of the fixture's outcome (the
+// changeset's effect is read back over HTTP by the case that uses it).
+const FIXTURE_GUARD_MS = 180_000;
+
 function runFixture(args) {
   // File mode: `mix run file.exs -- args` would put the literal "--" into
   // System.argv/0, so the fixture args follow the script path directly.
@@ -23,7 +29,7 @@ function runFixture(args) {
       env: process.env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "inherit"],
-      timeout: 180_000
+      timeout: FIXTURE_GUARD_MS
     }
   );
   return output.trim();

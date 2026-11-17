@@ -28,6 +28,14 @@ import { fileURLToPath } from "node:url";
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
 import { api, attachResource, capture, createProject, login, uniqueKey } from "./readable-fixtures.mjs";
 
+// Per-test backstops for the real-data walks below. They seed and read dozens of
+// durable messages through the real API (44 messages with three scope changes;
+// 66 messages with a cursor walk and a full paging pass), so the per-test maximum
+// is the walk's own budget rather than an observation: the guard only decides how
+// long an unfinished walk runs before the case is declared failed, and every
+// rendered state it asserts is still the control plane's own answer.
+const WALK_GUARD_MS = 150_000;
+const HISTORY_WALK_GUARD_MS = 240_000;
 const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 function deferred() {
@@ -105,7 +113,7 @@ async function seedMessages(page, scope, count, prefix) {
 test.describe("Scoped conversation", () => {
   test("each scope keeps its own draft, intent and scroll, and a late read never overwrites another scope's draft", async ({ page }, testInfo) => {
     // A real-data walk: 44 seeded messages, three scope changes and a held read.
-    test.setTimeout(150_000);
+    test.setTimeout(WALK_GUARD_MS);
     await login(page, "/portal/chat");
     const key = uniqueKey("CS");
     const project = await createProject(page, { key, name: `Chat scopes ${key}` });
@@ -295,7 +303,7 @@ test.describe("Scoped conversation", () => {
   test("history follows the served cursor, keeps loaded pages across a refresh, and names an unloaded boundary instead of presenting it as continuous", async ({ page }, testInfo) => {
     // A real-data walk: 66 seeded messages, the served cursor, a recovery read
     // and a full API paging pass.
-    test.setTimeout(240_000);
+    test.setTimeout(HISTORY_WALK_GUARD_MS);
     await login(page, "/portal/chat");
     const key = uniqueKey("CH");
     const project = await createProject(page, { key, name: `Chat history ${key}` });
@@ -480,7 +488,7 @@ test.describe("Scoped conversation", () => {
     // asserts are real scrolls of real content, and `setScrolledOffset` refuses
     // to continue when the pane cannot scroll that far (a pane that cannot
     // scroll is a failure here, never a silent 0).
-    test.setTimeout(150_000);
+    test.setTimeout(WALK_GUARD_MS);
     const fixture = JSON.parse(await fs.readFile(path.join(repoRoot, "contracts/fixtures/valid/chat-read.run-waiting-decision.json"), "utf8"));
     const runId = fixture.run_id;
     const runtimeId = fixture.runs[0].work_item.execution.runtime_id;
