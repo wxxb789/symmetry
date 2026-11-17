@@ -2173,6 +2173,57 @@ func (daemon *daemon) observeContainmentStop(key state.RunKey, pid int, identity
 	return waitForLinuxStopReceiptBarrier(key, pid, identity, receipt)
 }
 
+// assembleLinuxWitnessMarkerFile writes a witness marker document into a
+// temporary file next to its destination and returns the temporary path; the
+// caller publishes it with one rename or link. Witness markers are read by
+// polling harnesses that parse the first document they can see, so the
+// document must never be observable while it is incomplete.
+func assembleLinuxWitnessMarkerFile(path string, contents []byte) (string, error) {
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".partial-*")
+	if err != nil {
+		return "", err
+	}
+	temporaryPath := temporary.Name()
+	written, writeErr := temporary.Write(contents)
+	if writeErr == nil && written != len(contents) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		_ = os.Remove(temporaryPath)
+		return "", writeErr
+	}
+	return temporaryPath, nil
+}
+
+// publishLinuxStopReceiptBarrierMarker publishes the stop-receipt barrier
+// document as a single visible state change: the witness harness polls the
+// reached path, reads the first non-empty document, and decodes it as the
+// barrier JSON, so a create-then-write sequence would expose an empty or
+// truncated marker to that decode. The destination must still be absent, which
+// keeps the create-with-O_EXCL contract the barrier validates before it starts.
+func publishLinuxStopReceiptBarrierMarker(path string, contents []byte) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("witness marker %q already exists", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporaryPath, err := assembleLinuxWitnessMarkerFile(path, contents)
+	if err != nil {
+		return err
+	}
+	if renameErr := os.Rename(temporaryPath, path); renameErr != nil {
+		_ = os.Remove(temporaryPath)
+		return renameErr
+	}
+	return nil
+}
+
 func waitForLinuxStopReceiptBarrier(key state.RunKey, pid int, identity string, receipt authority.StopReceipt) error {
 	if os.Getenv(linuxStopReceiptBarrierWitnessEnv) != "1" {
 		return nil
@@ -2204,22 +2255,11 @@ func waitForLinuxStopReceiptBarrier(key state.RunKey, pid int, identity string, 
 	if err != nil {
 		return fmt.Errorf("encode Linux stop-receipt barrier marker: %w", err)
 	}
-	marker, err := os.OpenFile(reachedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("create Linux stop-receipt barrier marker: %w", err)
+	if err := publishLinuxStopReceiptBarrierMarker(reachedPath, contents); err != nil {
+		return fmt.Errorf("create or publish Linux stop-receipt barrier marker: %w", err)
 	}
-	_, writeErr := marker.Write(contents)
-	if writeErr == nil {
-		writeErr = marker.Sync()
-	}
-	if closeErr := marker.Close(); writeErr == nil {
-		writeErr = closeErr
-	}
-	if writeErr == nil {
-		writeErr = syncLinuxStopReceiptBarrierDirectory(filepath.Dir(reachedPath))
-	}
-	if writeErr != nil {
-		return fmt.Errorf("persist Linux stop-receipt barrier marker: %w", writeErr)
+	if err := syncLinuxStopReceiptBarrierDirectory(filepath.Dir(reachedPath)); err != nil {
+		return fmt.Errorf("persist Linux stop-receipt barrier marker: %w", err)
 	}
 	deadline := time.NewTimer(linuxStopReceiptBarrierTimeout)
 	defer deadline.Stop()
