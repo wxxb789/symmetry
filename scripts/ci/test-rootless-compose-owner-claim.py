@@ -31,9 +31,14 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/portal/login":
-            self.send_page(200, b'<input name="_csrf_token" value="fixture-csrf">', cookie=True)
+            # The decoys are hostile input: the real token has to win, and a
+            # first-match scrape would submit `decoy-in-js` and be refused.
+            self.send_page(200, b"""<script>var decoy = '<input name="_csrf_token" value="decoy-in-js">';</script>
+<!-- <input name="_csrf_token" value="decoy-in-comment"> -->
+<form method="post"><input type="hidden" name="_csrf_token" value="fixture-csrf"></form>""", cookie=True)
         elif self.path == "/portal" and "fixture-session=csrf" in self.headers.get("Cookie", ""):
-            self.send_page(200, b'<meta name="csrf-token" content="authenticated-csrf">')
+            self.send_page(200, b"""<script>var decoy = '<meta name="csrf-token" content="decoy-in-js">';</script>
+<meta name="csrf-token" content="authenticated-csrf">""")
         else:
             self.send_page(403, b"Secure session missing")
 
@@ -76,6 +81,56 @@ class PortalTLSClientTest(unittest.TestCase):
                 server.shutdown()
                 thread.join()
                 server.server_close()
+
+
+class CsrfTokenParserTest(unittest.TestCase):
+    """Hostile markup must not decide which CSRF token the fixture submits."""
+
+    def login_token(self, page):
+        return claim.single_token(claim.csrf_tokens(page).input_tokens, "login page")
+
+    def test_decoy_in_a_script_body_does_not_win(self):
+        page = (
+            '<script>var decoy = \'<input name="_csrf_token" value="decoy-in-js">\';</script>'
+            '<form method="post"><input type="hidden" name="_csrf_token" value="real-token"></form>'
+        )
+        self.assertEqual(self.login_token(page), "real-token")
+
+    def test_decoy_in_a_comment_does_not_win(self):
+        page = (
+            '<!-- <input name="_csrf_token" value="decoy-in-comment"> -->'
+            '<input name="_csrf_token" value="real-token">'
+        )
+        self.assertEqual(self.login_token(page), "real-token")
+
+    def test_attribute_order_does_not_matter(self):
+        self.assertEqual(self.login_token('<input value="real-token" name="_csrf_token">'), "real-token")
+
+    def test_entities_in_the_token_attribute_are_decoded(self):
+        self.assertEqual(self.login_token('<input name="_csrf_token" value="a&amp;b">'), "a&b")
+
+    def test_decoy_meta_inside_a_script_body_does_not_win(self):
+        page = (
+            '<script>var decoy = \'<meta name="csrf-token" content="decoy-in-js">\';</script>'
+            '<meta name="csrf-token" content="authenticated-csrf">'
+        )
+        self.assertEqual(
+            claim.single_token(claim.csrf_tokens(page).meta_tokens, "authenticated page"),
+            "authenticated-csrf",
+        )
+
+    def test_two_distinct_real_tokens_are_refused(self):
+        page = '<input name="_csrf_token" value="one"><input name="_csrf_token" value="two">'
+        with self.assertRaisesRegex(SystemExit, "carried 2 distinct CSRF tokens"):
+            self.login_token(page)
+
+    def test_repeated_identical_token_is_one_token(self):
+        page = '<input name="_csrf_token" value="same"><input name="_csrf_token" value="same">'
+        self.assertEqual(self.login_token(page), "same")
+
+    def test_page_without_a_token_is_refused(self):
+        with self.assertRaisesRegex(SystemExit, "omitted CSRF token"):
+            self.login_token("<html><body>no token here</body></html>")
 
 
 if __name__ == "__main__":

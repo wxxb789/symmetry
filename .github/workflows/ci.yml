@@ -144,31 +144,30 @@ jobs:
         timeout-minutes: 5
         env:
           SYMMETRY_GOAL_RECEIPT_E2E: "1"
+          SYMMETRY_EXUNIT_EVENTS_FILE: ${{ runner.temp }}/goal-receipt-e2e-events.json
         run: |
           set -Eeuo pipefail
           export POSTGRES_DB="symmetry_receipt_e2e_$(openssl rand -hex 16)"
-          test_output="$RUNNER_TEMP/goal-receipt-e2e.log"
+          : > "$SYMMETRY_EXUNIT_EVENTS_FILE"
           set +e
-          mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e 2>&1 |
-            tee "$test_output"
-          pipeline_status=("${PIPESTATUS[@]}")
-          test_status=${pipeline_status[0]}
-          tee_status=${pipeline_status[1]}
+          mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs \
+            --only goal_receipt_e2e \
+            --formatter ExUnit.CLIFormatter \
+            --formatter SymmetryControl.ExUnitJsonFormatter 2>&1
+          test_status=$?
           set -e
 
-          summary_status=0
-          python3 ../scripts/ci/assert-exunit-summary.py "$test_output" \
+          gate_status=0
+          python3 ../scripts/ci/assert-exunit-json.py "$SYMMETRY_EXUNIT_EVENTS_FILE" \
             --runner-status "$test_status" \
-            --expected-selector goal_receipt_e2e || summary_status=$?
+            --expected-selector goal_receipt_e2e \
+            'test committed harness session receipts recover through real Go HTTP after listener restarts' || gate_status=$?
 
           if (( test_status != 0 )); then
             exit "$test_status"
           fi
-          if (( tee_status != 0 )); then
-            exit "$tee_status"
-          fi
-          if (( summary_status != 0 )); then
-            exit "$summary_status"
+          if (( gate_status != 0 )); then
+            exit "$gate_status"
           fi
       # This gate had no invocation site anywhere in the tree while the witness it
       # exercises stayed live. It needs a working `mix` and the compiled Control test
@@ -450,25 +449,31 @@ jobs:
         id: linux_pi_e2e
         if: always()
         shell: bash
+        env:
+          SYMMETRY_EXUNIT_EVENTS_FILE: ${{ runner.temp }}/pi-control-e2e-linux-events.json
         run: |
           set -Eeuo pipefail
           log="$RUNNER_TEMP/pi-control-e2e-linux.log"
-          test_output="$RUNNER_TEMP/pi-control-e2e-linux-test.log"
-          : > "$test_output"
+          : > "$SYMMETRY_EXUNIT_EVENTS_FILE"
           set +e
           SYMMETRY_PI_CONTROL_E2E=1 \
           SYMMETRY_PI_CONTROL_E2E_EXECUTABLE="$RUNNER_TEMP/pi-1.5.2/pi/pi" \
-            mix test test/symmetry_control/pi_control_e2e_test.exs --only pi_control_e2e_linux_refusal --include skip:pi_control_e2e_linux_refusal 2>&1 |
-            tee -a "$log" "$test_output"
+            mix test test/symmetry_control/pi_control_e2e_test.exs \
+              --only pi_control_e2e_linux_refusal \
+              --include skip:pi_control_e2e_linux_refusal \
+              --formatter ExUnit.CLIFormatter \
+              --formatter SymmetryControl.ExUnitJsonFormatter 2>&1 |
+            tee -a "$log"
           pipeline_status=("${PIPESTATUS[@]}")
           test_status=${pipeline_status[0]}
           tee_status=${pipeline_status[1]}
           set -e
 
-          summary_status=0
-          python3 ../scripts/ci/assert-exunit-summary.py "$test_output" \
+          gate_status=0
+          python3 ../scripts/ci/assert-exunit-json.py "$SYMMETRY_EXUNIT_EVENTS_FILE" \
             --runner-status "$test_status" \
-            --expected-selector pi_control_e2e_linux_refusal || summary_status=$?
+            --expected-selector pi_control_e2e_linux_refusal \
+            'test Linux Pi exact Control Goal Claim refuses the missing installed owner before effects' || gate_status=$?
 
           if (( test_status != 0 )); then
             exit "$test_status"
@@ -476,8 +481,8 @@ jobs:
           if (( tee_status != 0 )); then
             exit "$tee_status"
           fi
-          if (( summary_status != 0 )); then
-            exit "$summary_status"
+          if (( gate_status != 0 )); then
+            exit "$gate_status"
           fi
       - name: Cleanup orphaned Pi Control processes
         id: linux_pi_cleanup
@@ -894,27 +899,36 @@ jobs:
         env:
           SYMMETRY_PI_CONTROL_E2E: "1"
           SYMMETRY_PI_CONTROL_E2E_EXECUTABLE: ${{ runner.temp }}\pi-1.5.2\pi.exe
+          SYMMETRY_EXUNIT_EVENTS_FILE: ${{ runner.temp }}\pi-control-e2e-windows-events.json
           TEMP: ${{ runner.temp }}\symmetry-pi-control-tmp
           TMP: ${{ runner.temp }}\symmetry-pi-control-tmp
           TMPDIR: ${{ runner.temp }}\symmetry-pi-control-tmp
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
-          $testOutput = & mix test test/symmetry_control/pi_control_e2e_test.exs --only pi_control_e2e_native_positive --include skip:pi_control_e2e_native_positive 2>&1
+          [System.IO.File]::WriteAllText($env:SYMMETRY_EXUNIT_EVENTS_FILE, '')
+          $testOutput = & mix test test/symmetry_control/pi_control_e2e_test.exs `
+            --only pi_control_e2e_native_positive `
+            --include skip:pi_control_e2e_native_positive `
+            --formatter ExUnit.CLIFormatter `
+            --formatter SymmetryControl.ExUnitJsonFormatter 2>&1
           $testStatus = $LASTEXITCODE
-          $testLog = Join-Path $env:RUNNER_TEMP 'pi-control-e2e-windows-test.log'
           $testOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
-          $testOutput | ForEach-Object { [string]$_ } | Set-Content -LiteralPath $testLog
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "e2e_exit_status=$testStatus"
 
-          $summaryOutput = & python ../scripts/ci/assert-exunit-summary.py $testLog `
+          $gateOutput = & python ../scripts/ci/assert-exunit-json.py $env:SYMMETRY_EXUNIT_EVENTS_FILE `
             --runner-status $testStatus `
             --expected-selector pi_control_e2e_native_positive `
+            'test real Pi repository work crosses Control receipts without accepting the Goal' `
+            'test hard daemon crash recovers an in-flight Pi run without replaying effects' `
+            'test real Pi committed candidate is independently validated and achieves the Goal' `
+            'test real Pi fresh handoff preserves Control lineage and starts one new native session' `
+            'test real Pi retained resume crosses a fresh daemon with fenced Control lineage' `
             --provenance $env:PI_E2E_PROVENANCE 2>&1
-          $summaryStatus = $LASTEXITCODE
-          $summaryOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+          $gateStatus = $LASTEXITCODE
+          $gateOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
           if ($testStatus -ne 0) { exit $testStatus }
-          if ($summaryStatus -ne 0) { exit $summaryStatus }
+          if ($gateStatus -ne 0) { exit $gateStatus }
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'gate_status=passed'
       - name: Record Windows Pi E2E prerequisite failure diagnostics
         if: always() && steps.windows_postgres.outcome == 'failure'
@@ -1108,9 +1122,12 @@ jobs:
           # This gate had no invocation site anywhere in the tree while the tooling
           # it exercises stayed live; run it here rather than never.
           python3 ../scripts/ci/test-omo-native-evidence.py
+          # Same reason: the control witness's path and build-identity parsers
+          # had no fixture of their own while they decided what evidence means.
+          python3 ../scripts/ci/test-omo-control-native-evidence.py
       - name: Check CI gate helper scripts
         run: |
-          python3 ../scripts/ci/test-assert-exunit-summary.py
+          python3 ../scripts/ci/test-assert-exunit-json.py
           python3 ../scripts/ci/test-go-test-json-gate.py
           python3 ../scripts/ci/test-assert-folded-gates.py
           python3 ../scripts/ci/test-assert-runner-matches-target.py
@@ -1250,6 +1267,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: scripts/audit-no-legacy-routes.sh
+      # The audit derives its target list from `git ls-files`, so this test proves
+      # the derivation covers the placements the retired hand-written list missed
+      # and that the remaining exclusions are still load-bearing.
+      - run: python3 scripts/ci/test-no-legacy-routes-audit.py
 
   daemon-windows:
     needs: changes
@@ -1294,7 +1315,21 @@ jobs:
       - name: Run production pre-authority crash witness matrix
         env:
           SYMMETRY_PRODUCTION_PREAUTHORITY_WITNESS: "1"
-        run: go test -count=1 -timeout 600s ./e2e -run '^TestProductionPreAuthority(CrashWitnessMatrix|WrongSecretFirstClientRace)$' -v
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          $testEvents = Join-Path $env:RUNNER_TEMP 'production-pre-authority-crash-witness.json'
+          $testErrors = Join-Path $env:RUNNER_TEMP 'production-pre-authority-crash-witness.stderr.log'
+          # The witness tests skip themselves unless the opt-in env var is set and
+          # a renamed or mistyped `-run` pattern exits 0 with no test evidence, so
+          # both named tests have to be present in the JSON event stream to pass.
+          & $python ../scripts/ci/go-test-json-gate.py `
+            --events $testEvents `
+            --stderr $testErrors `
+            --assert github.com/wxxb789/symmetry/daemon/e2e TestProductionPreAuthorityCrashWitnessMatrix TestProductionPreAuthorityWrongSecretFirstClientRace `
+            --command go test -count=1 -timeout 600s -json ./e2e -run '^TestProductionPreAuthority(CrashWitnessMatrix|WrongSecretFirstClientRace)$'
+          exit $LASTEXITCODE
 
       # Folded from the retired `opencode-production-unsupported-windows` job: same
       # windows runner, same Go toolchain, same `daemon` working directory. V1

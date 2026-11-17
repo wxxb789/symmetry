@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create one real Portal WorkItem and generic OpenCode Claim for Compose refusal evidence."""
 
+import html.parser
 import http.cookiejar
 import json
 import pathlib
@@ -14,12 +15,52 @@ import urllib.parse
 import urllib.request
 import uuid
 
-LOGIN_CSRF = re.compile(r'name="_csrf_token"\s+value="([^"]+)"')
-PAGE_CSRF = re.compile(r'<meta name="csrf-token" content="([^"]+)"')
-
 
 def fail(message: str) -> None:
     raise SystemExit(f"rootless Compose Control fixture failed: {message}")
+
+
+class CsrfTokenParser(html.parser.HTMLParser):
+    """Collect CSRF token attributes from the elements the page really contains.
+
+    Nothing is matched against raw text, so a token-shaped string that is not an
+    element attribute — a decoy inside a `<script>` body, an HTML comment, or any
+    other text node — cannot win the way it won the previous first-match regex,
+    and the attribute order of a real input no longer matters.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.input_tokens: list[str] = []
+        self.meta_tokens: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = {name.lower(): value for name, value in attrs}
+        if tag == "input" and attributes.get("name") == "_csrf_token":
+            value = attributes.get("value")
+            if value:
+                self.input_tokens.append(value)
+        elif tag == "meta" and attributes.get("name") == "csrf-token":
+            content = attributes.get("content")
+            if content:
+                self.meta_tokens.append(content)
+
+
+def csrf_tokens(page: str) -> CsrfTokenParser:
+    parser = CsrfTokenParser()
+    parser.feed(page)
+    parser.close()
+    return parser
+
+
+def single_token(tokens: list[str], page: str) -> str:
+    """Return the one token the page carried; an ambiguous page is refused."""
+    distinct = sorted(set(tokens))
+    if not distinct:
+        fail(f"Control Portal {page} omitted CSRF token")
+    if len(distinct) > 1:
+        fail(f"Control Portal {page} carried {len(distinct)} distinct CSRF tokens")
+    return distinct[0]
 
 
 def read_json_response(response, expected_status: int):
@@ -64,10 +105,8 @@ def portal_client(base_url: str, operator_token: str, ca_file: str):
                 fail("Control Portal login page returned a non-success status")
     except (urllib.error.URLError, UnicodeError):
         fail("Control Portal login page was unavailable")
-    token_match = LOGIN_CSRF.search(login_page)
-    if not token_match:
-        fail("Control Portal login page omitted CSRF token")
-    form = urllib.parse.urlencode({"_csrf_token": token_match.group(1), "operator_token": operator_token}).encode("utf-8")
+    form_token = single_token(csrf_tokens(login_page).input_tokens, "login page")
+    form = urllib.parse.urlencode({"_csrf_token": form_token, "operator_token": operator_token}).encode("utf-8")
     request = urllib.request.Request(
         base_url + "/portal/login", data=form, method="POST",
         headers={
@@ -84,10 +123,8 @@ def portal_client(base_url: str, operator_token: str, ca_file: str):
                 fail("Control Portal login did not establish an operator session")
     except (urllib.error.URLError, UnicodeError):
         fail("Control Portal operator login failed")
-    page_token = PAGE_CSRF.search(portal_page)
-    if not page_token:
-        fail("authenticated Control Portal page omitted CSRF token")
-    return client, page_token.group(1)
+    page_token = single_token(csrf_tokens(portal_page).meta_tokens, "authenticated page")
+    return client, page_token
 
 
 def main() -> int:
