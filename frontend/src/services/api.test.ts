@@ -224,3 +224,115 @@ describe("control command boundary", () => {
     expect(failure).toMatchObject({ message: "This change was refused. If you signed in elsewhere, refresh the page and try again." });
   });
 });
+
+describe("chat boundary", () => {
+  const projectId = "11111111-1111-4111-8111-111111111111";
+  const runId = "22222222-2222-4222-8222-222222222222";
+  const conversation = {
+    scope: "run",
+    project_id: projectId,
+    run_id: runId,
+    messages: [{
+      id: "33333333-3333-4333-8333-333333333333",
+      role: "human",
+      intent: "guidance",
+      content: "Prefer the smallest diff.",
+      inserted_at: "2026-11-16T10:00:00.000000Z",
+      work_item_id: "44444444-4444-4444-8444-444444444444",
+      command: {
+        command_id: "55555555-5555-4555-8555-555555555555",
+        task_id: "66666666-6666-4666-8666-666666666666",
+        run_id: runId,
+        generation: 1,
+        kind: "guidance",
+        payload: { message: "Prefer the smallest diff." },
+        state: "pending",
+        issued_at: "2026-11-16T10:00:00.000000Z",
+        applied_at: null,
+        acknowledgement_id: null,
+        acknowledgement_outcome: null,
+        acknowledged_at: null,
+      },
+      metadata: { source: "durable_command", generation: 1 },
+    }],
+    runs: [],
+    next_before: "cursor-token",
+  };
+
+  it("reads a conversation with only the members that scope accepts", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(conversation)));
+    const api = createApi(fetcher);
+    const result = await api.chatConversation({ scope: "run", projectId, runId, before: "cursor /+?=&" }, new AbortController().signal);
+    expect(result.messages[0]?.command?.acknowledgement_outcome).toBeNull();
+    expect(result.next_before).toBe("cursor-token");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[0]).toBe(`/portal/api/chat?scope=run&run_id=${runId}&before=cursor+%2F%2B%3F%3D%26`);
+  });
+
+  it("never sends a project read a run member or the other way around", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ ...conversation, scope: "project", run_id: null })));
+    const api = createApi(fetcher);
+    await api.chatConversation({ scope: "project", projectId, runId }, new AbortController().signal);
+    expect(fetcher.mock.calls[0]?.[0]).toBe(`/portal/api/chat?scope=project&project_id=${projectId}`);
+
+    const workspaceFetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ ...conversation, scope: "workspace", project_id: null, run_id: null })));
+    await createApi(workspaceFetcher).chatConversation({ scope: "workspace", projectId, runId }, new AbortController().signal);
+    expect(workspaceFetcher.mock.calls[0]?.[0]).toBe("/portal/api/chat?scope=workspace");
+  });
+
+  it("rejects a conversation the read schema cannot trust", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ ...conversation, scope: "elsewhere" })));
+    const failure = await createApi(fetcher)
+      .chatConversation({ scope: "workspace" }, new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the message answer's HTTP status as its disposition", async () => {
+    const body = {
+      message: { id: "33333333-3333-4333-8333-333333333333", role: "human", intent: "discuss", content: "A question", inserted_at: "2026-11-16T10:00:00.000000Z", work_item_id: null },
+      reply: { id: "44444444-4444-4444-8444-444444444444", role: "assistant", intent: "discuss", content: "An answer", inserted_at: "2026-11-16T10:00:01.000000Z", work_item_id: null },
+      work_item_id: null,
+      command: null,
+    };
+    const payload = { scope: "workspace", intent: "discuss", content: "A question", action_id: "action-1" } as const;
+    const created = await createApi(vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(body), { status: 201 })))
+      .chatMessage(payload, "csrf", new AbortController().signal);
+    expect(created.disposition).toBe("created");
+    expect(created.command).toBeNull();
+    const replayed = await createApi(vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 })))
+      .chatMessage(payload, "csrf", new AbortController().signal);
+    expect(replayed.disposition).toBe("replayed");
+    expect(replayed.message.id).toBe("33333333-3333-4333-8333-333333333333");
+  });
+
+  it("sends the frozen request verbatim with the caller's CSRF token and never retries", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      message: { id: "33333333-3333-4333-8333-333333333333", role: "human", intent: "guidance", content: "Steer", inserted_at: null, work_item_id: null },
+      reply: { id: "44444444-4444-4444-8444-444444444444", role: "assistant", intent: "guidance", content: "Saved", inserted_at: null, work_item_id: null },
+      work_item_id: "55555555-5555-4555-8555-555555555555",
+      command: { command_id: "66666666-6666-4666-8666-666666666666", kind: "guidance", state: "pending", acknowledgement_outcome: null, applied_at: null },
+    }), { status: 201 }));
+    const payload = { scope: "run" as const, run_id: runId, intent: "guidance", content: "Steer", action_id: "action-1", work_item_id: "55555555-5555-4555-8555-555555555555", generation: 1 };
+    const outcome = await createApi(fetcher).chatMessage(payload, "rotated-token", new AbortController().signal);
+    expect(outcome.command?.state).toBe("pending");
+    expect(outcome.workItemId).toBe("55555555-5555-4555-8555-555555555555");
+    const [path, init] = fetcher.mock.calls[0] ?? [];
+    expect(path).toBe("/portal/api/chat/messages");
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toMatchObject({ "x-csrf-token": "rotated-token" });
+    expect(init?.body).toBe(JSON.stringify(payload));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries the server's refusal for a changed replay", async () => {
+    const refusal = { error: { code: "idempotency_conflict", message: "This action id was already used with a different request." } };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(refusal), { status: 409 }));
+    const failure = await createApi(fetcher)
+      .chatMessage({ scope: "workspace", intent: "discuss", content: "changed", action_id: "action-1" }, "csrf", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(ServerRefusal);
+    expect(failure).toMatchObject({ status: 409, code: "idempotency_conflict" });
+  });
+});

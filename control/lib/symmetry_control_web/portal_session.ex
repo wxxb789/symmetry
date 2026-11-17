@@ -2,7 +2,7 @@ defmodule SymmetryControlWeb.PortalSession do
   @moduledoc false
 
   @default_max_age_seconds 8 * 60 * 60
-  @shell_path ~r{\A/portal(?:/(?:attention|connections|goals/[A-Za-z0-9_-]+|projects(?:/[A-Za-z0-9_-]+)?|runtimes|work/[A-Za-z0-9_-]+))?\z}
+  @shell_path ~r{\A/portal(?:/(?:attention|connections|chat|goals/[A-Za-z0-9_-]+|projects(?:/[A-Za-z0-9_-]+)?|runtimes|work/[A-Za-z0-9_-]+))?\z}
   @connection_identifier_param ~r{\AconnectionId=[A-Za-z0-9_-]+\z}
   @classic_identifier_param ~r{\A(?:project_id|run_id)=[A-Za-z0-9_-]+\z}
   # Work-surface search state the shell itself writes into its own URLs: the
@@ -15,6 +15,11 @@ defmodule SymmetryControlWeb.PortalSession do
   @work_text_param ~r{\A(?:q|state|owner)=(?:[A-Za-z0-9*.+_-]|%(?:09|[2-9A-Fa-f][0-9A-Fa-f]))*\z}
   @work_blocked_param ~r{\Ablocked=(?:1|%221%22)\z}
   @work_project_param ~r{\AprojectId=[A-Za-z0-9_-]+\z}
+  # The chat document carries the member scope it was opened with plus the
+  # project or run it is bound to; those are the only parameters the shell
+  # writes into its own URLs, so the query allowlist accepts nothing else.
+  @chat_scope_param ~r{\Ascope=(?:workspace|project|run)\z}
+  @chat_run_param ~r{\ArunId=[A-Za-z0-9_-]+\z}
   @work_search_params [@work_view_param, @work_text_param, @work_blocked_param]
   @work_item_search_params @work_search_params ++ [@work_project_param]
 
@@ -50,6 +55,9 @@ defmodule SymmetryControlWeb.PortalSession do
   # runtimes page to /portal.
   defp shell_query?("/portal/runtimes", query),
     do: Regex.match?(@work_project_param, query)
+
+  defp shell_query?("/portal/chat", query),
+    do: work_query?(query, [@chat_scope_param, @work_project_param, @chat_run_param])
 
   defp shell_query?("/portal/projects/" <> _project_id, query),
     do: work_query?(query, @work_search_params)

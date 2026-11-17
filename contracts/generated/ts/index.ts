@@ -2,6 +2,7 @@
 export type { SymmetryAdapterCapabilitiesV1 } from "./adapter-capabilities.js";
 export type { SymmetryAdmissionV1 } from "./admission.js";
 export type { SymmetryAttentionReadV1 } from "./attention-read.js";
+export type { SymmetryChatReadV1 } from "./chat-read.js";
 export type { SymmetryConnectionsReadV1 } from "./connections-read.js";
 export type { SymmetryContextSnapshotV1 } from "./context-snapshot.js";
 export type { SymmetryDecisionV1 } from "./decision.js";

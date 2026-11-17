@@ -19,8 +19,11 @@ export async function login(page, path = "/portal/attention") {
   await page.goto(`/portal/login?return_to=${encodeURIComponent(path)}`);
   await page.getByLabel("Operator token").fill(operatorToken);
   await page.getByRole("button", { name: "Open workspace" }).click();
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "Project", exact: true })).toBeVisible();
+  // The shell's session probe is a real read on a host these suites share with
+  // live daemons and their browsers, so the wait matches that load instead of
+  // failing the run before any product behaviour is observed.
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("combobox", { name: "Project", exact: true })).toBeVisible({ timeout: 30_000 });
 }
 
 export async function api(page, method, path, body) {
@@ -44,8 +47,16 @@ export async function api(page, method, path, body) {
   );
 }
 
-export async function createProject(page, { key, name, description = "Readable work views acceptance fixture" }) {
-  const response = await api(page, "POST", "/portal/api/projects", { key, name, description });
+export async function createProject(page, { key, name, description = "Readable work views acceptance fixture", defaultAgentProfile, defaultWorkspace }) {
+  // `defaultAgentProfile`/`defaultWorkspace` are additive: a case that must
+  // reach a registered runtime names the same binding the daemon registered.
+  const response = await api(page, "POST", "/portal/api/projects", {
+    key,
+    name,
+    description,
+    ...(defaultAgentProfile === undefined ? {} : { default_agent_profile: defaultAgentProfile }),
+    ...(defaultWorkspace === undefined ? {} : { default_workspace: defaultWorkspace })
+  });
   expect(response.status, JSON.stringify(response.body)).toBe(201);
   return { id: response.body.project.id, key, name };
 }

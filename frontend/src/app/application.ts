@@ -5,6 +5,8 @@ import {
   Unauthenticated,
   type ActionId,
   type Api,
+  type ChatMessageRequest,
+  type ChatScope,
   type ExecutionGeneration,
 } from "../services/api";
 
@@ -27,7 +29,7 @@ export interface Application {
 export function safeReturnTo(href: string): string {
   try {
     const url = new URL(href);
-    if (/^\/portal\/(attention|connections|goals\/[^/]+|projects(?:\/[^/]+)?|runtimes|work\/[^/]+)\/?$/.test(url.pathname)) {
+    if (/^\/portal\/(attention|chat|connections|goals\/[^/]+|projects(?:\/[^/]+)?|runtimes|work\/[^/]+)\/?$/.test(url.pathname)) {
       return `${url.pathname}${url.search}`;
     }
   } catch {
@@ -198,4 +200,45 @@ export const provideInputMutation = (api: Api) => mutationOptions({
     actionId: ActionId;
     csrf: string;
   }) => api.provideInput(workItemId, input, waitingTransitionId, actionId, csrf, new AbortController().signal),
+});
+
+/** The scope members one conversation query is keyed and read by. */
+export interface ChatScopeKey {
+  readonly scope: ChatScope;
+  readonly projectId: string | null;
+  readonly runId: string | null;
+}
+
+/**
+ * The scoped conversation read. `staleTime: 0` keeps an explicit refresh and a
+ * window-focus refetch honest re-reads of the server, and the key is per scope,
+ * so a background update for one scope can never touch another scope's data.
+ */
+export const chatConversationOptions = (api: Api, key: ChatScopeKey) => queryOptions({
+  queryKey: ["chat", key],
+  queryFn: ({ signal }) => api.chatConversation(key, signal),
+  staleTime: 0,
+});
+
+/**
+ * One older conversation page, by the served `before` cursor. It stays disabled
+ * until the reader asks for it through `Load older`, and the page it returns is
+ * retained by the surface rather than by this cursor's own key.
+ */
+export const chatOlderPageOptions = (api: Api, key: ChatScopeKey, before: string) => queryOptions({
+  queryKey: ["chat-older", { ...key, before }],
+  queryFn: ({ signal }) => api.chatConversation({ ...key, before }, signal),
+  staleTime: 0,
+  enabled: false,
+});
+
+/**
+ * One conversation message. The payload is frozen by the caller before it is
+ * sent: a retry passes the same object, so the server replays the recorded
+ * message instead of applying a second one.
+ */
+export const chatMessageMutation = (api: Api) => mutationOptions({
+  mutationKey: ["chat-message"],
+  mutationFn: ({ payload, csrf }: { payload: ChatMessageRequest; csrf: string }) =>
+    api.chatMessage(payload, csrf, new AbortController().signal),
 });

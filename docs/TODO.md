@@ -281,6 +281,23 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       policy as intended. Named as a limitation by the 0007f review round; out of that diff's
       scope.
 
+## Deferred review findings (0007g)
+
+- [ ] Give the work detail an entry point into a run's conversation. The classic workspace drawer
+      offered "Open Chat" and "Review decision in Chat" for a work item whose execution carries a
+      `run_id`; the migrated `/portal/chat` is reachable from the shell's Chat entry (whose run
+      picker lists the served runs) but the React work detail added by 0007f has no such link, so a
+      waiting decision is only reachable by picking the run in Chat. Adding the link is work-detail
+      surface work (0007f's file) and was outside the 0007g diff; `browser/tests/portal.spec.mjs`
+      keeps the classic drawer's own buttons until the 0007i cutover.
+
+- [ ] Redirect the documented `#chat` hash location to `/portal/chat`. The frontend design fixes
+      "old `/portal#chat` … redirect once to the new equivalent URL", and
+      `frontend/src/app/legacy.ts` still maps the fragment to `/portal/classic#chat` (the classic
+      surface's own in-page entry points write that hash). The one-time hash mapping belongs to the
+      0007i cutover, which retires the classic writable UI; changing it earlier would split the
+      classic page's own navigation from its hash.
+
 ## Deferred review findings (0007h)
 
 - [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate

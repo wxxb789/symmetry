@@ -3,6 +3,7 @@ import {
   AdapterCapabilitiesSchema,
   AdmissionSchema,
   AttentionReadSchema,
+  ChatReadSchema,
   ConnectionsReadSchema,
   ContextSnapshotSchema,
   DecisionSchema,
@@ -40,6 +41,7 @@ export {
   AdapterCapabilitiesSchema,
   AdmissionSchema,
   AttentionReadSchema,
+  ChatReadSchema,
   ConnectionsReadSchema,
   ContextSnapshotSchema,
   DecisionSchema,
@@ -99,6 +101,7 @@ function boundary<A>(
 export const AdapterCapabilities = boundary(AdapterCapabilitiesSchema);
 export const Admission = boundary(AdmissionSchema, validateAdmissionSemantics);
 export const AttentionRead = boundary(AttentionReadSchema, undefined, parsePresentationJson);
+export const ChatRead = boundary(ChatReadSchema, undefined, parsePresentationJson);
 export const ConnectionsRead = boundary(ConnectionsReadSchema, undefined, parsePresentationJson);
 export const ContextSnapshot = boundary(ContextSnapshotSchema, validateContextSnapshotSemantics);
 export const Decision = boundary(DecisionSchema, validateDecisionSemantics);

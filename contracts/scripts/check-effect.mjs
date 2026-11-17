@@ -8,6 +8,7 @@ import { parsePresentationJson, parseWireJson, WireJsonError } from "../ts/wire-
 const fixtureRoot = new URL("../fixtures/", import.meta.url);
 const presentationReadSchemas = new Set([
   "attention-read",
+  "chat-read",
   "goal-read",
   "work-detail-read",
   "work-timeline-read",
@@ -18,6 +19,7 @@ const decoders = {
   "adapter-capabilities": Contracts.AdapterCapabilities,
   admission: Contracts.Admission,
   "attention-read": Contracts.AttentionRead,
+  "chat-read": Contracts.ChatRead,
   "connections-read": Contracts.ConnectionsRead,
   "context-snapshot": Contracts.ContextSnapshot,
   decision: Contracts.Decision,
@@ -40,6 +42,7 @@ const schemas = {
   "adapter-capabilities": Contracts.AdapterCapabilitiesSchema,
   admission: Contracts.AdmissionSchema,
   "attention-read": Contracts.AttentionReadSchema,
+  "chat-read": Contracts.ChatReadSchema,
   "connections-read": Contracts.ConnectionsReadSchema,
   "context-snapshot": Contracts.ContextSnapshotSchema,
   decision: Contracts.DecisionSchema,

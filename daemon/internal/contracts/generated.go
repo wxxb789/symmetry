@@ -150,6 +150,304 @@ type ProjectBlockedEntry struct {
 	WorkItemKey   *string `json:"work_item_key"`
 }
 
+// Consumed fields of SymmetryControl.Chat.conversation/1 (GET /portal/api/chat): the
+// server-resolved scope, the scoped message page and the newest work items' detail
+// projections. Unconsumed presentation fields remain additive.
+type SymmetryChatReadV1 struct {
+	Messages   []ChatMessage `json:"messages"`
+	NextBefore *string       `json:"next_before"`
+	ProjectID  *string       `json:"project_id"`
+	RunID      *string       `json:"run_id"`
+	Runs       []ChatRun     `json:"runs"`
+	Scope      Scope         `json:"scope"`
+}
+
+// Chat.message_json/1: one durable conversation message as served in the scoped page,
+// oldest first. discuss and status questions never create a command, so command stays null
+// for them.
+type ChatMessage struct {
+	Command    *ChatCommand           `json:"command"`
+	Content    string                 `json:"content"`
+	ID         string                 `json:"id"`
+	InsertedAt *string                `json:"inserted_at"`
+	Intent     string                 `json:"intent"`
+	Metadata   map[string]interface{} `json:"metadata"`
+	Role       Role                   `json:"role"`
+	WorkItemID *string                `json:"work_item_id"`
+}
+
+// Protocol.command/1 as embedded in a chat message receipt. Task-scoped commands (a cancel
+// or retry recorded before any run exists) carry run_id and generation as null; run-scoped
+// commands carry both.
+type ChatCommand struct {
+	AcknowledgedAt         *string                `json:"acknowledged_at"`
+	AcknowledgementID      *string                `json:"acknowledgement_id"`
+	AcknowledgementOutcome *string                `json:"acknowledgement_outcome"`
+	AppliedAt              *string                `json:"applied_at"`
+	CommandID              string                 `json:"command_id"`
+	Generation             *int64                 `json:"generation"`
+	IssuedAt               *string                `json:"issued_at"`
+	Kind                   string                 `json:"kind"`
+	Payload                map[string]interface{} `json:"payload"`
+	RunID                  *string                `json:"run_id"`
+	State                  string                 `json:"state"`
+	TaskID                 string                 `json:"task_id"`
+}
+
+// Chat.ReadModel.runs/2 entry: the work detail projection behind one scoped work item,
+// newest first and capped at the read model's run limit. raw.timeline is blanked to []
+// while keeping the same members because the chat read serves no raw history rows; the work
+// detail endpoint remains the diagnostic surface for raw events.
+type ChatRun struct {
+	Outcome  RunOutcome                `json:"outcome"`
+	Raw      RunRaw                    `json:"raw"`
+	Timeline []RunWorkItemTimelineItem `json:"timeline"`
+	WorkItem RunWorkItem               `json:"work_item"`
+}
+
+// PortalJSON outcome/5: reported execution output with blocker and delivery summary.
+// summary and tests are carried verbatim from the task result or its evidence fallback
+// (legacy payloads may hold objects or strings), while result and failure bodies stay
+// open-ended.
+type RunOutcome struct {
+	Blocker          *string                `json:"blocker"`
+	ChangedArtifacts []interface{}          `json:"changed_artifacts"`
+	CiStatus         *string                `json:"ci_status"`
+	Delivery         PurpleWorkItemDelivery `json:"delivery"`
+	Failure          map[string]interface{} `json:"failure"`
+	Findings         []interface{}          `json:"findings"`
+	Goal             string                 `json:"goal"`
+	Owner            PurpleWorkItemAssignee `json:"owner"`
+	Phase            string                 `json:"phase"`
+	PullRequestURL   *string                `json:"pull_request_url"`
+	Result           map[string]interface{} `json:"result"`
+	ReviewStatus     *string                `json:"review_status"`
+	Summary          interface{}            `json:"summary"`
+	Tests            interface{}            `json:"tests"`
+}
+
+type PurpleWorkItemDelivery struct {
+	Ci          PurpleWorkItemDeliveryValue `json:"ci"`
+	PullRequest PurpleWorkItemDeliveryValue `json:"pull_request"`
+	Review      PurpleWorkItemDeliveryValue `json:"review"`
+}
+
+// PortalJSON effective_delivery/6: the consumed core is value, source, generation, url and
+// status; provider, recorded_at and other evidence fields stay source-specific and additive.
+type PurpleWorkItemDeliveryValue struct {
+	Generation *int64   `json:"generation"`
+	Provider   *string  `json:"provider"`
+	RecordedAt *string  `json:"recorded_at"`
+	Source     CiSource `json:"source"`
+	Status     *string  `json:"status"`
+	URL        *string  `json:"url"`
+	Value      *string  `json:"value"`
+}
+
+// PortalJSON owner/1: assignee identity as served, with null members when unset.
+type PurpleWorkItemAssignee struct {
+	AgentProfile *string `json:"agent_profile"`
+	Name         *string `json:"name"`
+	Type         *string `json:"type"`
+}
+
+// Unfiltered Protocol.task/1 snapshot and full timeline page behind the detail projection.
+type RunRaw struct {
+	NextBefore *string                   `json:"next_before"`
+	Task       *PurpleTaskRead           `json:"task"`
+	Timeline   []RunWorkItemTimelineItem `json:"timeline"`
+}
+
+// Protocol.task/1 as served for the work item snapshot.
+type PurpleTaskRead struct {
+	Controls      PurpleTaskControls     `json:"controls"`
+	Failure       map[string]interface{} `json:"failure"`
+	Generation    int64                  `json:"generation"`
+	LatestCommand *PurpleWorkItemCommand `json:"latest_command"`
+	Result        map[string]interface{} `json:"result"`
+	RunID         *string                `json:"run_id"`
+	State         string                 `json:"state"`
+	TaskID        string                 `json:"task_id"`
+	Waiting       *PurpleWorkItemWaiting `json:"waiting"`
+	Work          PurpleTaskWork         `json:"work"`
+}
+
+type PurpleTaskControls struct {
+	CanGuide           bool `json:"can_guide"`
+	CanPause           bool `json:"can_pause"`
+	CanResume          bool `json:"can_resume"`
+	SupervisoryControl bool `json:"supervisory_control"`
+}
+
+// Protocol.command/1: latest guidance command receipt for the current generation.
+// Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and
+// generation as null; run-scoped commands carry both.
+type PurpleWorkItemCommand struct {
+	AcknowledgedAt         *string                `json:"acknowledged_at"`
+	AcknowledgementID      *string                `json:"acknowledgement_id"`
+	AcknowledgementOutcome *string                `json:"acknowledgement_outcome"`
+	AppliedAt              *string                `json:"applied_at"`
+	CommandID              string                 `json:"command_id"`
+	Generation             *int64                 `json:"generation"`
+	IssuedAt               *string                `json:"issued_at"`
+	Kind                   string                 `json:"kind"`
+	Payload                map[string]interface{} `json:"payload"`
+	RunID                  *string                `json:"run_id"`
+	State                  string                 `json:"state"`
+	TaskID                 string                 `json:"task_id"`
+}
+
+// Protocol.waiting/1: current waiting_for_input context; the decision packet stays open
+// because it is carried verbatim from the runtime payload.
+type PurpleWorkItemWaiting struct {
+	Decision     *PurpleWorkItemWaitingDecision `json:"decision"`
+	Generation   int64                          `json:"generation"`
+	Payload      map[string]interface{}         `json:"payload"`
+	Question     *string                        `json:"question"`
+	RecordedAt   *string                        `json:"recorded_at"`
+	RunID        string                         `json:"run_id"`
+	TransitionID string                         `json:"transition_id"`
+}
+
+// Agent-supplied waiting_for_input decision packet; options and recommendation are advisory
+// display data.
+type PurpleWorkItemWaitingDecision struct {
+	Context             *string                               `json:"context,omitempty"`
+	Options             []PurpleWorkItemWaitingDecisionOption `json:"options,omitempty"`
+	Reason              *string                               `json:"reason,omitempty"`
+	RecommendedOptionID *string                               `json:"recommended_option_id"`
+}
+
+type PurpleWorkItemWaitingDecisionOption struct {
+	Consequence *string `json:"consequence,omitempty"`
+	ID          *string `json:"id,omitempty"`
+	Label       *string `json:"label,omitempty"`
+}
+
+type PurpleTaskWork struct {
+	AgentProfile         *string                `json:"agent_profile"`
+	Goal                 *string                `json:"goal"`
+	Input                map[string]interface{} `json:"input"`
+	RequiredCapabilities map[string]interface{} `json:"required_capabilities,omitempty"`
+	Workspace            *string                `json:"workspace"`
+}
+
+// Protocol.timeline_page/2 item shared by work detail raw.timeline and the timeline read;
+// data is discriminated on source. Command items carry null run_id and generation when the
+// command is task-scoped, while event and transition items always keep run-scoped
+// identities.
+type RunWorkItemTimelineItem struct {
+	Data       PurpleTimelineData         `json:"data"`
+	Generation *int64                     `json:"generation"`
+	RecordedAt *string                    `json:"recorded_at"`
+	RunID      *string                    `json:"run_id"`
+	Source     WorkItemTimelineItemSource `json:"source"`
+}
+
+// Timeline event payload with run identity removed by Protocol.timeline_data/2.
+//
+// Timeline transition payload with run identity removed by Protocol.timeline_data/2.
+//
+// Timeline command receipt with run_id and generation removed by Protocol.timeline_data/2.
+type PurpleTimelineData struct {
+	EventID                *string                `json:"event_id,omitempty"`
+	Kind                   *string                `json:"kind,omitempty"`
+	OccurredAt             *string                `json:"occurred_at"`
+	Payload                map[string]interface{} `json:"payload"`
+	Sequence               *int64                 `json:"sequence,omitempty"`
+	State                  *string                `json:"state,omitempty"`
+	TransitionID           *string                `json:"transition_id,omitempty"`
+	AcknowledgedAt         *string                `json:"acknowledged_at"`
+	AcknowledgementID      *string                `json:"acknowledgement_id"`
+	AcknowledgementOutcome *string                `json:"acknowledgement_outcome"`
+	AppliedAt              *string                `json:"applied_at"`
+	CommandID              *string                `json:"command_id,omitempty"`
+	IssuedAt               *string                `json:"issued_at"`
+	TaskID                 *string                `json:"task_id,omitempty"`
+}
+
+// PortalJSON.work_item/2 as served in workspace rows and work detail reads. The definition
+// body is identical in workspace-read.schema.json and work-detail-read.schema.json so the
+// effect generator shares one graph for both roots; the JSON Schema to TypeScript modules
+// and the quicktype Go output may still restate the shape per root.
+type RunWorkItem struct {
+	Assignee     *PurpleWorkItemAssignee  `json:"assignee,omitempty"`
+	Blocked      bool                     `json:"blocked"`
+	Blocker      *string                  `json:"blocker"`
+	Branch       *string                  `json:"branch"`
+	CanStart     *bool                    `json:"can_start,omitempty"`
+	CiResource   *string                  `json:"ci_resource"`
+	CiResourceID *string                  `json:"ci_resource_id"`
+	CiStatus     *string                  `json:"ci_status"`
+	Delivery     *PurpleWorkItemDelivery  `json:"delivery,omitempty"`
+	Description  *string                  `json:"description"`
+	Execution    *PurpleWorkItemExecution `json:"execution"`
+	External     *PurpleWorkItemExternal  `json:"external"`
+	GoalID       *string                  `json:"goal_id"`
+	// True only when the all-or-nothing Goal membership (goal_id, admitted_revision,
+	// acceptance_contract) is set; served so a client can present no writable path for a
+	// Goal-managed item.
+	GoalManaged          *bool   `json:"goal_managed,omitempty"`
+	ID                   string  `json:"id"`
+	Key                  string  `json:"key"`
+	Position             *int64  `json:"position,omitempty"`
+	Priority             *string `json:"priority,omitempty"`
+	ProjectID            *string `json:"project_id,omitempty"`
+	PullRequestURL       *string `json:"pull_request_url"`
+	Repository           *string `json:"repository"`
+	RepositoryResourceID *string `json:"repository_resource_id"`
+	ReviewStatus         *string `json:"review_status"`
+	Status               string  `json:"status"`
+	Title                string  `json:"title"`
+	UpdatedAt            *string `json:"updated_at"`
+	Version              *int64  `json:"version,omitempty"`
+	Workspace            *string `json:"workspace"`
+}
+
+// PortalJSON.execution_summary/1 as served when the work item has an orchestration task;
+// null otherwise.
+type PurpleWorkItemExecution struct {
+	CanCancel          bool                          `json:"can_cancel"`
+	CanGuide           bool                          `json:"can_guide"`
+	CanPause           bool                          `json:"can_pause"`
+	CanResume          bool                          `json:"can_resume"`
+	CanRetry           bool                          `json:"can_retry"`
+	Failure            map[string]interface{}        `json:"failure"`
+	Generation         int64                         `json:"generation"`
+	IntentLocked       bool                          `json:"intent_locked"`
+	LatestCommand      *PurpleWorkItemCommand        `json:"latest_command"`
+	Result             map[string]interface{}        `json:"result"`
+	RunID              *string                       `json:"run_id"`
+	RuntimeID          *string                       `json:"runtime_id"`
+	State              string                        `json:"state"`
+	SupervisoryControl bool                          `json:"supervisory_control"`
+	TaskID             string                        `json:"task_id"`
+	Timing             PurpleWorkItemExecutionTiming `json:"timing"`
+	Waiting            *PurpleWorkItemWaiting        `json:"waiting"`
+}
+
+type PurpleWorkItemExecutionTiming struct {
+	FinishedAt *string `json:"finished_at"`
+	StartedAt  *string `json:"started_at"`
+	StateSince *string `json:"state_since"`
+}
+
+// PortalJSON.external_work_item/1 safe display and link fields; raw provider payloads
+// (data, delivery_data) remain additive and unconsumed.
+type PurpleWorkItemExternal struct {
+	Assignee  *string  `json:"assignee"`
+	Available bool     `json:"available"`
+	ID        *string  `json:"id"`
+	Labels    []string `json:"labels"`
+	Provider  *string  `json:"provider"`
+	// Field names the external tracker owns; write refusals still come from Control.
+	ProviderOwnedFields []string `json:"provider_owned_fields,omitempty"`
+	ResourceID          *string  `json:"resource_id"`
+	State               *string  `json:"state"`
+	UpdatedAt           *string  `json:"updated_at"`
+	URL                 *string  `json:"url"`
+}
+
 // Consumed fields of the existing portal connection read and its mutation projections.
 // Presentation values stay open strings so an unknown status, capability or auth type
 // remains renderable; unconsumed presentation fields remain additive.
@@ -1149,25 +1447,25 @@ type SymmetryUsageV1 struct {
 // Consumed fields of the existing PortalJSON.work_item_detail read projection. Unconsumed
 // presentation fields remain additive.
 type SymmetryWorkDetailReadV1 struct {
-	Outcome  WorkItemOutcome                  `json:"outcome"`
-	Raw      WorkDetailRaw                    `json:"raw"`
-	Timeline []RawWorkItemTimelineItem        `json:"timeline"`
-	WorkItem SymmetryWorkDetailReadV1WorkItem `json:"work_item"`
+	Outcome  SymmetryWorkDetailReadV1Outcome                `json:"outcome"`
+	Raw      SymmetryWorkDetailReadV1Raw                    `json:"raw"`
+	Timeline []SymmetryWorkDetailReadV1WorkItemTimelineItem `json:"timeline"`
+	WorkItem SymmetryWorkDetailReadV1WorkItem               `json:"work_item"`
 }
 
 // PortalJSON outcome/5: reported execution output with blocker and delivery summary.
 // summary and tests are carried verbatim from the task result or its evidence fallback
 // (legacy payloads may hold objects or strings), while result and failure bodies stay
 // open-ended.
-type WorkItemOutcome struct {
+type SymmetryWorkDetailReadV1Outcome struct {
 	Blocker          *string                `json:"blocker"`
 	ChangedArtifacts []interface{}          `json:"changed_artifacts"`
 	CiStatus         *string                `json:"ci_status"`
-	Delivery         OutcomeDelivery        `json:"delivery"`
+	Delivery         FluffyWorkItemDelivery `json:"delivery"`
 	Failure          map[string]interface{} `json:"failure"`
 	Findings         []interface{}          `json:"findings"`
 	Goal             string                 `json:"goal"`
-	Owner            OwnerClass             `json:"owner"`
+	Owner            FluffyWorkItemAssignee `json:"owner"`
 	Phase            string                 `json:"phase"`
 	PullRequestURL   *string                `json:"pull_request_url"`
 	Result           map[string]interface{} `json:"result"`
@@ -1176,15 +1474,15 @@ type WorkItemOutcome struct {
 	Tests            interface{}            `json:"tests"`
 }
 
-type OutcomeDelivery struct {
-	Ci          PurpleWorkItemDeliveryValue `json:"ci"`
-	PullRequest PurpleWorkItemDeliveryValue `json:"pull_request"`
-	Review      PurpleWorkItemDeliveryValue `json:"review"`
+type FluffyWorkItemDelivery struct {
+	Ci          FluffyWorkItemDeliveryValue `json:"ci"`
+	PullRequest FluffyWorkItemDeliveryValue `json:"pull_request"`
+	Review      FluffyWorkItemDeliveryValue `json:"review"`
 }
 
 // PortalJSON effective_delivery/6: the consumed core is value, source, generation, url and
 // status; provider, recorded_at and other evidence fields stay source-specific and additive.
-type PurpleWorkItemDeliveryValue struct {
+type FluffyWorkItemDeliveryValue struct {
 	Generation *int64   `json:"generation"`
 	Provider   *string  `json:"provider"`
 	RecordedAt *string  `json:"recorded_at"`
@@ -1195,34 +1493,34 @@ type PurpleWorkItemDeliveryValue struct {
 }
 
 // PortalJSON owner/1: assignee identity as served, with null members when unset.
-type OwnerClass struct {
+type FluffyWorkItemAssignee struct {
 	AgentProfile *string `json:"agent_profile"`
 	Name         *string `json:"name"`
 	Type         *string `json:"type"`
 }
 
 // Unfiltered Protocol.task/1 snapshot and full timeline page behind the detail projection.
-type WorkDetailRaw struct {
-	NextBefore *string                   `json:"next_before"`
-	Task       *TaskRead                 `json:"task"`
-	Timeline   []RawWorkItemTimelineItem `json:"timeline"`
+type SymmetryWorkDetailReadV1Raw struct {
+	NextBefore *string                                        `json:"next_before"`
+	Task       *FluffyTaskRead                                `json:"task"`
+	Timeline   []SymmetryWorkDetailReadV1WorkItemTimelineItem `json:"timeline"`
 }
 
 // Protocol.task/1 as served for the work item snapshot.
-type TaskRead struct {
-	Controls      TaskControls             `json:"controls"`
-	Failure       map[string]interface{}   `json:"failure"`
-	Generation    int64                    `json:"generation"`
-	LatestCommand *TaskReadWorkItemCommand `json:"latest_command"`
-	Result        map[string]interface{}   `json:"result"`
-	RunID         *string                  `json:"run_id"`
-	State         string                   `json:"state"`
-	TaskID        string                   `json:"task_id"`
-	Waiting       *TaskReadWorkItemWaiting `json:"waiting"`
-	Work          TaskWork                 `json:"work"`
+type FluffyTaskRead struct {
+	Controls      FluffyTaskControls     `json:"controls"`
+	Failure       map[string]interface{} `json:"failure"`
+	Generation    int64                  `json:"generation"`
+	LatestCommand *FluffyWorkItemCommand `json:"latest_command"`
+	Result        map[string]interface{} `json:"result"`
+	RunID         *string                `json:"run_id"`
+	State         string                 `json:"state"`
+	TaskID        string                 `json:"task_id"`
+	Waiting       *FluffyWorkItemWaiting `json:"waiting"`
+	Work          FluffyTaskWork         `json:"work"`
 }
 
-type TaskControls struct {
+type FluffyTaskControls struct {
 	CanGuide           bool `json:"can_guide"`
 	CanPause           bool `json:"can_pause"`
 	CanResume          bool `json:"can_resume"`
@@ -1232,7 +1530,7 @@ type TaskControls struct {
 // Protocol.command/1: latest guidance command receipt for the current generation.
 // Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and
 // generation as null; run-scoped commands carry both.
-type TaskReadWorkItemCommand struct {
+type FluffyWorkItemCommand struct {
 	AcknowledgedAt         *string                `json:"acknowledged_at"`
 	AcknowledgementID      *string                `json:"acknowledgement_id"`
 	AcknowledgementOutcome *string                `json:"acknowledgement_outcome"`
@@ -1249,8 +1547,8 @@ type TaskReadWorkItemCommand struct {
 
 // Protocol.waiting/1: current waiting_for_input context; the decision packet stays open
 // because it is carried verbatim from the runtime payload.
-type TaskReadWorkItemWaiting struct {
-	Decision     *PurpleWorkItemWaitingDecision `json:"decision"`
+type FluffyWorkItemWaiting struct {
+	Decision     *FluffyWorkItemWaitingDecision `json:"decision"`
 	Generation   int64                          `json:"generation"`
 	Payload      map[string]interface{}         `json:"payload"`
 	Question     *string                        `json:"question"`
@@ -1261,20 +1559,20 @@ type TaskReadWorkItemWaiting struct {
 
 // Agent-supplied waiting_for_input decision packet; options and recommendation are advisory
 // display data.
-type PurpleWorkItemWaitingDecision struct {
+type FluffyWorkItemWaitingDecision struct {
 	Context             *string                               `json:"context,omitempty"`
-	Options             []PurpleWorkItemWaitingDecisionOption `json:"options,omitempty"`
+	Options             []FluffyWorkItemWaitingDecisionOption `json:"options,omitempty"`
 	Reason              *string                               `json:"reason,omitempty"`
 	RecommendedOptionID *string                               `json:"recommended_option_id"`
 }
 
-type PurpleWorkItemWaitingDecisionOption struct {
+type FluffyWorkItemWaitingDecisionOption struct {
 	Consequence *string `json:"consequence,omitempty"`
 	ID          *string `json:"id,omitempty"`
 	Label       *string `json:"label,omitempty"`
 }
 
-type TaskWork struct {
+type FluffyTaskWork struct {
 	AgentProfile         *string                `json:"agent_profile"`
 	Goal                 *string                `json:"goal"`
 	Input                map[string]interface{} `json:"input"`
@@ -1286,8 +1584,8 @@ type TaskWork struct {
 // data is discriminated on source. Command items carry null run_id and generation when the
 // command is task-scoped, while event and transition items always keep run-scoped
 // identities.
-type RawWorkItemTimelineItem struct {
-	Data       PurpleTimelineData         `json:"data"`
+type SymmetryWorkDetailReadV1WorkItemTimelineItem struct {
+	Data       FluffyTimelineData         `json:"data"`
 	Generation *int64                     `json:"generation"`
 	RecordedAt *string                    `json:"recorded_at"`
 	RunID      *string                    `json:"run_id"`
@@ -1299,7 +1597,7 @@ type RawWorkItemTimelineItem struct {
 // Timeline transition payload with run identity removed by Protocol.timeline_data/2.
 //
 // Timeline command receipt with run_id and generation removed by Protocol.timeline_data/2.
-type PurpleTimelineData struct {
+type FluffyTimelineData struct {
 	EventID                *string                `json:"event_id,omitempty"`
 	Kind                   *string                `json:"kind,omitempty"`
 	OccurredAt             *string                `json:"occurred_at"`
@@ -1321,7 +1619,7 @@ type PurpleTimelineData struct {
 // effect generator shares one graph for both roots; the JSON Schema to TypeScript modules
 // and the quicktype Go output may still restate the shape per root.
 type SymmetryWorkDetailReadV1WorkItem struct {
-	Assignee     *OwnerClass              `json:"assignee,omitempty"`
+	Assignee     *FluffyWorkItemAssignee  `json:"assignee,omitempty"`
 	Blocked      bool                     `json:"blocked"`
 	Blocker      *string                  `json:"blocker"`
 	Branch       *string                  `json:"branch"`
@@ -1329,10 +1627,10 @@ type SymmetryWorkDetailReadV1WorkItem struct {
 	CiResource   *string                  `json:"ci_resource"`
 	CiResourceID *string                  `json:"ci_resource_id"`
 	CiStatus     *string                  `json:"ci_status"`
-	Delivery     *OutcomeDelivery         `json:"delivery,omitempty"`
+	Delivery     *FluffyWorkItemDelivery  `json:"delivery,omitempty"`
 	Description  *string                  `json:"description"`
-	Execution    *PurpleWorkItemExecution `json:"execution"`
-	External     *PurpleWorkItemExternal  `json:"external"`
+	Execution    *FluffyWorkItemExecution `json:"execution"`
+	External     *FluffyWorkItemExternal  `json:"external"`
 	GoalID       *string                  `json:"goal_id"`
 	// True only when the all-or-nothing Goal membership (goal_id, admitted_revision,
 	// acceptance_contract) is set; served so a client can present no writable path for a
@@ -1356,7 +1654,7 @@ type SymmetryWorkDetailReadV1WorkItem struct {
 
 // PortalJSON.execution_summary/1 as served when the work item has an orchestration task;
 // null otherwise.
-type PurpleWorkItemExecution struct {
+type FluffyWorkItemExecution struct {
 	CanCancel          bool                          `json:"can_cancel"`
 	CanGuide           bool                          `json:"can_guide"`
 	CanPause           bool                          `json:"can_pause"`
@@ -1365,18 +1663,18 @@ type PurpleWorkItemExecution struct {
 	Failure            map[string]interface{}        `json:"failure"`
 	Generation         int64                         `json:"generation"`
 	IntentLocked       bool                          `json:"intent_locked"`
-	LatestCommand      *TaskReadWorkItemCommand      `json:"latest_command"`
+	LatestCommand      *FluffyWorkItemCommand        `json:"latest_command"`
 	Result             map[string]interface{}        `json:"result"`
 	RunID              *string                       `json:"run_id"`
 	RuntimeID          *string                       `json:"runtime_id"`
 	State              string                        `json:"state"`
 	SupervisoryControl bool                          `json:"supervisory_control"`
 	TaskID             string                        `json:"task_id"`
-	Timing             PurpleWorkItemExecutionTiming `json:"timing"`
-	Waiting            *TaskReadWorkItemWaiting      `json:"waiting"`
+	Timing             FluffyWorkItemExecutionTiming `json:"timing"`
+	Waiting            *FluffyWorkItemWaiting        `json:"waiting"`
 }
 
-type PurpleWorkItemExecutionTiming struct {
+type FluffyWorkItemExecutionTiming struct {
 	FinishedAt *string `json:"finished_at"`
 	StartedAt  *string `json:"started_at"`
 	StateSince *string `json:"state_since"`
@@ -1384,7 +1682,7 @@ type PurpleWorkItemExecutionTiming struct {
 
 // PortalJSON.external_work_item/1 safe display and link fields; raw provider payloads
 // (data, delivery_data) remain additive and unconsumed.
-type PurpleWorkItemExternal struct {
+type FluffyWorkItemExternal struct {
 	Assignee  *string  `json:"assignee"`
 	Available bool     `json:"available"`
 	ID        *string  `json:"id"`
@@ -1410,7 +1708,7 @@ type SymmetryWorkTimelineReadV1 struct {
 // command is task-scoped, while event and transition items always keep run-scoped
 // identities.
 type SymmetryWorkTimelineReadV1WorkItemTimelineItem struct {
-	Data       FluffyTimelineData         `json:"data"`
+	Data       TentacledTimelineData      `json:"data"`
 	Generation *int64                     `json:"generation"`
 	RecordedAt *string                    `json:"recorded_at"`
 	RunID      *string                    `json:"run_id"`
@@ -1422,7 +1720,7 @@ type SymmetryWorkTimelineReadV1WorkItemTimelineItem struct {
 // Timeline transition payload with run identity removed by Protocol.timeline_data/2.
 //
 // Timeline command receipt with run_id and generation removed by Protocol.timeline_data/2.
-type FluffyTimelineData struct {
+type TentacledTimelineData struct {
 	EventID                *string                `json:"event_id,omitempty"`
 	Kind                   *string                `json:"kind,omitempty"`
 	OccurredAt             *string                `json:"occurred_at"`
@@ -1494,19 +1792,19 @@ type WorkspaceResource struct {
 // effect generator shares one graph for both roots; the JSON Schema to TypeScript modules
 // and the quicktype Go output may still restate the shape per root.
 type WorkItemElement struct {
-	Assignee     *PurpleWorkItemAssignee  `json:"assignee,omitempty"`
-	Blocked      bool                     `json:"blocked"`
-	Blocker      *string                  `json:"blocker"`
-	Branch       *string                  `json:"branch"`
-	CanStart     *bool                    `json:"can_start,omitempty"`
-	CiResource   *string                  `json:"ci_resource"`
-	CiResourceID *string                  `json:"ci_resource_id"`
-	CiStatus     *string                  `json:"ci_status"`
-	Delivery     *PurpleWorkItemDelivery  `json:"delivery,omitempty"`
-	Description  *string                  `json:"description"`
-	Execution    *FluffyWorkItemExecution `json:"execution"`
-	External     *FluffyWorkItemExternal  `json:"external"`
-	GoalID       *string                  `json:"goal_id"`
+	Assignee     *TentacledWorkItemAssignee  `json:"assignee,omitempty"`
+	Blocked      bool                        `json:"blocked"`
+	Blocker      *string                     `json:"blocker"`
+	Branch       *string                     `json:"branch"`
+	CanStart     *bool                       `json:"can_start,omitempty"`
+	CiResource   *string                     `json:"ci_resource"`
+	CiResourceID *string                     `json:"ci_resource_id"`
+	CiStatus     *string                     `json:"ci_status"`
+	Delivery     *TentacledWorkItemDelivery  `json:"delivery,omitempty"`
+	Description  *string                     `json:"description"`
+	Execution    *TentacledWorkItemExecution `json:"execution"`
+	External     *TentacledWorkItemExternal  `json:"external"`
+	GoalID       *string                     `json:"goal_id"`
 	// True only when the all-or-nothing Goal membership (goal_id, admitted_revision,
 	// acceptance_contract) is set; served so a client can present no writable path for a
 	// Goal-managed item.
@@ -1528,21 +1826,21 @@ type WorkItemElement struct {
 }
 
 // PortalJSON owner/1: assignee identity as served, with null members when unset.
-type PurpleWorkItemAssignee struct {
+type TentacledWorkItemAssignee struct {
 	AgentProfile *string `json:"agent_profile"`
 	Name         *string `json:"name"`
 	Type         *string `json:"type"`
 }
 
-type PurpleWorkItemDelivery struct {
-	Ci          FluffyWorkItemDeliveryValue `json:"ci"`
-	PullRequest FluffyWorkItemDeliveryValue `json:"pull_request"`
-	Review      FluffyWorkItemDeliveryValue `json:"review"`
+type TentacledWorkItemDelivery struct {
+	Ci          TentacledWorkItemDeliveryValue `json:"ci"`
+	PullRequest TentacledWorkItemDeliveryValue `json:"pull_request"`
+	Review      TentacledWorkItemDeliveryValue `json:"review"`
 }
 
 // PortalJSON effective_delivery/6: the consumed core is value, source, generation, url and
 // status; provider, recorded_at and other evidence fields stay source-specific and additive.
-type FluffyWorkItemDeliveryValue struct {
+type TentacledWorkItemDeliveryValue struct {
 	Generation *int64   `json:"generation"`
 	Provider   *string  `json:"provider"`
 	RecordedAt *string  `json:"recorded_at"`
@@ -1554,30 +1852,30 @@ type FluffyWorkItemDeliveryValue struct {
 
 // PortalJSON.execution_summary/1 as served when the work item has an orchestration task;
 // null otherwise.
-type FluffyWorkItemExecution struct {
-	CanCancel          bool                          `json:"can_cancel"`
-	CanGuide           bool                          `json:"can_guide"`
-	CanPause           bool                          `json:"can_pause"`
-	CanResume          bool                          `json:"can_resume"`
-	CanRetry           bool                          `json:"can_retry"`
-	Failure            map[string]interface{}        `json:"failure"`
-	Generation         int64                         `json:"generation"`
-	IntentLocked       bool                          `json:"intent_locked"`
-	LatestCommand      *PurpleWorkItemCommand        `json:"latest_command"`
-	Result             map[string]interface{}        `json:"result"`
-	RunID              *string                       `json:"run_id"`
-	RuntimeID          *string                       `json:"runtime_id"`
-	State              string                        `json:"state"`
-	SupervisoryControl bool                          `json:"supervisory_control"`
-	TaskID             string                        `json:"task_id"`
-	Timing             FluffyWorkItemExecutionTiming `json:"timing"`
-	Waiting            *PurpleWorkItemWaiting        `json:"waiting"`
+type TentacledWorkItemExecution struct {
+	CanCancel          bool                             `json:"can_cancel"`
+	CanGuide           bool                             `json:"can_guide"`
+	CanPause           bool                             `json:"can_pause"`
+	CanResume          bool                             `json:"can_resume"`
+	CanRetry           bool                             `json:"can_retry"`
+	Failure            map[string]interface{}           `json:"failure"`
+	Generation         int64                            `json:"generation"`
+	IntentLocked       bool                             `json:"intent_locked"`
+	LatestCommand      *TentacledWorkItemCommand        `json:"latest_command"`
+	Result             map[string]interface{}           `json:"result"`
+	RunID              *string                          `json:"run_id"`
+	RuntimeID          *string                          `json:"runtime_id"`
+	State              string                           `json:"state"`
+	SupervisoryControl bool                             `json:"supervisory_control"`
+	TaskID             string                           `json:"task_id"`
+	Timing             TentacledWorkItemExecutionTiming `json:"timing"`
+	Waiting            *TentacledWorkItemWaiting        `json:"waiting"`
 }
 
 // Protocol.command/1: latest guidance command receipt for the current generation.
 // Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and
 // generation as null; run-scoped commands carry both.
-type PurpleWorkItemCommand struct {
+type TentacledWorkItemCommand struct {
 	AcknowledgedAt         *string                `json:"acknowledged_at"`
 	AcknowledgementID      *string                `json:"acknowledgement_id"`
 	AcknowledgementOutcome *string                `json:"acknowledgement_outcome"`
@@ -1592,7 +1890,7 @@ type PurpleWorkItemCommand struct {
 	TaskID                 string                 `json:"task_id"`
 }
 
-type FluffyWorkItemExecutionTiming struct {
+type TentacledWorkItemExecutionTiming struct {
 	FinishedAt *string `json:"finished_at"`
 	StartedAt  *string `json:"started_at"`
 	StateSince *string `json:"state_since"`
@@ -1600,26 +1898,26 @@ type FluffyWorkItemExecutionTiming struct {
 
 // Protocol.waiting/1: current waiting_for_input context; the decision packet stays open
 // because it is carried verbatim from the runtime payload.
-type PurpleWorkItemWaiting struct {
-	Decision     *FluffyWorkItemWaitingDecision `json:"decision"`
-	Generation   int64                          `json:"generation"`
-	Payload      map[string]interface{}         `json:"payload"`
-	Question     *string                        `json:"question"`
-	RecordedAt   *string                        `json:"recorded_at"`
-	RunID        string                         `json:"run_id"`
-	TransitionID string                         `json:"transition_id"`
+type TentacledWorkItemWaiting struct {
+	Decision     *TentacledWorkItemWaitingDecision `json:"decision"`
+	Generation   int64                             `json:"generation"`
+	Payload      map[string]interface{}            `json:"payload"`
+	Question     *string                           `json:"question"`
+	RecordedAt   *string                           `json:"recorded_at"`
+	RunID        string                            `json:"run_id"`
+	TransitionID string                            `json:"transition_id"`
 }
 
 // Agent-supplied waiting_for_input decision packet; options and recommendation are advisory
 // display data.
-type FluffyWorkItemWaitingDecision struct {
-	Context             *string                               `json:"context,omitempty"`
-	Options             []FluffyWorkItemWaitingDecisionOption `json:"options,omitempty"`
-	Reason              *string                               `json:"reason,omitempty"`
-	RecommendedOptionID *string                               `json:"recommended_option_id"`
+type TentacledWorkItemWaitingDecision struct {
+	Context             *string                                  `json:"context,omitempty"`
+	Options             []TentacledWorkItemWaitingDecisionOption `json:"options,omitempty"`
+	Reason              *string                                  `json:"reason,omitempty"`
+	RecommendedOptionID *string                                  `json:"recommended_option_id"`
 }
 
-type FluffyWorkItemWaitingDecisionOption struct {
+type TentacledWorkItemWaitingDecisionOption struct {
 	Consequence *string `json:"consequence,omitempty"`
 	ID          *string `json:"id,omitempty"`
 	Label       *string `json:"label,omitempty"`
@@ -1627,7 +1925,7 @@ type FluffyWorkItemWaitingDecisionOption struct {
 
 // PortalJSON.external_work_item/1 safe display and link fields; raw provider payloads
 // (data, delivery_data) remain additive and unconsumed.
-type FluffyWorkItemExternal struct {
+type TentacledWorkItemExternal struct {
 	Assignee  *string  `json:"assignee"`
 	Available bool     `json:"available"`
 	ID        *string  `json:"id"`
@@ -1760,6 +2058,38 @@ const (
 	Fresh             SessionMode = "fresh"
 	Handoff           SessionMode = "handoff"
 	SessionModeResume SessionMode = "resume"
+)
+
+type Role string
+
+const (
+	Assistant Role = "assistant"
+	Human     Role = "human"
+)
+
+type CiSource string
+
+const (
+	Agent    CiSource = "agent"
+	Manual   CiSource = "manual"
+	None     CiSource = "none"
+	Provider CiSource = "provider"
+)
+
+type WorkItemTimelineItemSource string
+
+const (
+	Command    WorkItemTimelineItemSource = "command"
+	Event      WorkItemTimelineItemSource = "event"
+	Transition WorkItemTimelineItemSource = "transition"
+)
+
+type Scope string
+
+const (
+	Project   Scope = "project"
+	Run       Scope = "run"
+	Workspace Scope = "workspace"
 )
 
 type ContentKind string
@@ -2064,21 +2394,4 @@ type SymmetryUsageV1SchemaVersion string
 
 const (
 	SchemaVersionSymmetryUsageV1 SymmetryUsageV1SchemaVersion = "symmetry.usage.v1"
-)
-
-type CiSource string
-
-const (
-	Agent    CiSource = "agent"
-	Manual   CiSource = "manual"
-	None     CiSource = "none"
-	Provider CiSource = "provider"
-)
-
-type WorkItemTimelineItemSource string
-
-const (
-	Command    WorkItemTimelineItemSource = "command"
-	Event      WorkItemTimelineItemSource = "event"
-	Transition WorkItemTimelineItemSource = "transition"
 )

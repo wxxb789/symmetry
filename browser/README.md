@@ -6,6 +6,15 @@ resource and control flows and fixture semantics at `/portal/classic` (its
 classic resource binding, synchronization and assignment checks moved to the
 new-route resource flows in `tests/portal-connections.spec.mjs`, 0007e); project
 and work-item planning moved to the planning suite below (0007c).
+The classic Chat walk that `/portal/classic#chat` owned moved to the scoped
+conversation suite below (0007g): the per-scope draft/selection/scroll walk,
+the question-versus-control separation, the uncertain-send retry, the cursored
+history walk and the unsafe-content walk now run on `/portal/chat` against the
+real Portal API, and the classic live Chat walk moved to the same route against
+a real daemon. The classic surface keeps its own markup until the 0007i
+cutover, but no acceptance checks it any more; the retired assertions and their
+successors are listed in
+`docs/evidence/goal-0007g-scoped-engineering-chat-*.md`.
 The 0007f execution-control and runtime checks that the new
 `/portal/work/:workItemId` and `/portal/runtimes` surfaces replace — the
 classic work-detail control walk (Cancel run -> Cancelled, Retry availability,
@@ -80,7 +89,8 @@ SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
 POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55442 POSTGRES_DB=symmetry_control_dev \
 mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test \
   tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs \
-  tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs
+  tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs \
+  tests/portal-chat.spec.mjs
 ```
 
 It renders desktop/mobile navigation, keyboard focus, loading, empty, network
@@ -109,8 +119,8 @@ session. CI starts both release instances and saves the render report.
 Fixture-only project/work/resource creation uses the existing
 authenticated APIs; the React shell's own mutation surfaces are connection
 management at `/portal/connections`, project/work-item planning on the project
-and work-item surfaces (both covered below), and the work-detail execution
-controls added by goal 0007f.
+and work-item surfaces (both covered below), the work-detail execution controls
+added by goal 0007f, and the scoped conversation added by goal 0007g.
 The shared-cookie CSRF case sends an explicit `visibilitychange` notification:
 The 0007a host kept its Playwright documents visible even after native window
 minimization.
@@ -439,8 +449,52 @@ and the final Kanban move.
 pwsh -NoProfile -File .\browser\scripts\run-chat-daemon-tests.ps1
 ```
 
-The isolated cooperative daemon verifies Chat-created work, questions without
-execution mutation, durable guidance in real artifacts, safe-boundary pause,
-same-run resume, structured decisions, completion, and cancellation with retained
-artifacts. It reports its log/artifact directory and stops its own daemon on exit.
-The normal suite includes deterministic Chat coverage at desktop/mobile widths.
+The isolated cooperative daemon drives `/portal/chat`: Chat-created work,
+questions without execution mutation (the commands list is compared byte for
+byte before and after), durable guidance in real artifacts after a real
+reconnect that re-reads its acknowledgement, safe-boundary pause, same-run
+resume, the structured decision packet, completion with the guidance retained
+in the artifact, one action identity's identical replay and changed-payload
+refusal, a stale-generation control refused by the server, unsafe served output
+rendered inertly on a real run, and cancellation with retained artifacts. It
+asserts the cancellation on the cancelled attempt's own `result.json` step
+counter — read before the control, then compared across the daemon's release of
+its local journal — because that work item's goal already contains the word
+"cancelled" and a `progress.md` substring match would be satisfied before the
+control takes effect. Its keyboard walk waits for the window-focus refetch's own
+response (`window`, where TanStack Query's focus manager listens) instead of
+sleeping past the refresh. It reports its log/artifact directory and stops its
+own daemon on exit. The normal
+suite includes deterministic scoped-conversation coverage at desktop/mobile
+widths.
+
+The runner's cooperative agent profile is deliberately slower and longer than
+the fake agent's default (200 steps at 400 ms, decision at step 150): the
+operator's pre-decision controls must be acknowledged before the agent asks for
+its decision, and the walk judges observable behaviour, never these timings.
+
+## Scoped conversation acceptance (0007g)
+
+`tests/portal-chat.spec.mjs` is the real-API acceptance for `/portal/chat`: the
+three scopes in one session with per-scope draft, selection and scroll (a held
+late read for one scope is released while another is selected), a question saved
+without a command, an uncertain send retried with the frozen action identity so
+the server replay applies exactly one message, a changed replay refused with the
+server's own 409 `idempotency_conflict`, the served cursor walk over 66 real
+messages with the retained older page and the explicit `data-boundary-*` note
+when the refreshed page and the loaded history share no message id, a failed
+read recovering into the server's snapshot, inert rendering of unsafe content,
+and the run scope's own draft, intent and offset round-tripped through the
+in-page scope control (the pane must really be able to hold the asserted offset,
+or the case fails on that precondition instead of reporting a clamped 0).
+Interception appears in five named mechanisms: holding one real conversation
+read; aborting one real POST and rewriting one real request body; aborting one
+real conversation read; and fulfilling the run-scope conversation plus one
+runtime row from the committed
+`contracts/fixtures/valid/chat-read.run-waiting-decision.json` fixture, because
+no native runtime exists on this host — the two cases that use that fixture are
+schema-valid synthetic projections and never count as real run evidence; the
+real run-scope walk is the live-daemon suite above. The scope-switch, run round
+trip and history walks capture a full-page screenshot plus an observation JSON
+through the shared `capture` helper, the same way the live-daemon walk records
+its decision packet and keyboard walk.

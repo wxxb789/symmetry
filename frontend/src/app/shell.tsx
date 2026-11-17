@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useMatch, useNavigate, useRouteContext, useRouterState } from "@tanstack/react-router";
-import { Cable, Command, Folder, Inbox, LogOut, Menu, MonitorCog, Search, X } from "lucide-react";
+import { Cable, Command, Folder, Inbox, LogOut, Menu, MessageSquare, MonitorCog, Search, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { errorMessage } from "../services/api";
 import { ErrorState, LoadingState } from "../components/workspace";
@@ -21,9 +21,10 @@ function useProjectScope() {
   // URL's claim only covers the window before that projection arrives.
   const servedWork = useQuery({ ...workDetailOptions(application.api, workScope?.workItemId ?? ""), enabled: workScope !== undefined });
   const searchProjectId = useMatch({ from: "/attention", shouldThrow: false, select: (match) => match.search.projectId });
+  const chatProjectId = useMatch({ from: "/chat", shouldThrow: false, select: (match) => match.search.projectId });
   const connectionsProjectId = useMatch({ from: "/connections", shouldThrow: false, select: (match) => match.search.projectId });
   const runtimesProjectId = useMatch({ from: "/runtimes", shouldThrow: false, select: (match) => match.search.projectId });
-  return projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId ?? connectionsProjectId ?? runtimesProjectId;
+  return projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId ?? chatProjectId ?? connectionsProjectId ?? runtimesProjectId;
 }
 
 function useProjectDirectory() {
@@ -38,6 +39,7 @@ function NavigationLinks({ onNavigate }: { onNavigate?: () => void }) {
   const projectId = useProjectScope();
   return <nav aria-label="Workspace navigation" className="nav-links">
     <Link to="/attention" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Inbox size={18} aria-hidden="true" />Attention</Link>
+    <Link to="/chat" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><MessageSquare size={18} aria-hidden="true" />Chat</Link>
     <Link to="/projects" onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Folder size={18} aria-hidden="true" />Projects</Link>
     <Link to="/connections" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Cable size={18} aria-hidden="true" />Connections</Link>
     <Link to="/runtimes" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><MonitorCog size={18} aria-hidden="true" />Runtimes</Link>
@@ -108,11 +110,12 @@ function CommandPalette() {
         <input id="command-search" className="command-input" type="search" placeholder="Search projects and pages…" value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
         <div className="command-results">
           {(!filter || "attention".includes(filter)) && <Link className="command-result" to="/attention" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><Inbox size={18} aria-hidden="true" />Attention</Link>}
+          {(!filter || "chat".includes(filter)) && <Link className="command-result" to="/chat" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><MessageSquare size={18} aria-hidden="true" />Chat</Link>}
           {(!filter || "projects".includes(filter)) && <Link className="command-result" to="/projects" onClick={closeForNavigation}><Folder size={18} aria-hidden="true" />All projects</Link>}
           {(!filter || "connections".includes(filter)) && <Link className="command-result" to="/connections" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><Cable size={18} aria-hidden="true" />Connections</Link>}
           {(!filter || "runtimes".includes(filter)) && <Link className="command-result" to="/runtimes" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><MonitorCog size={18} aria-hidden="true" />Runtimes</Link>}
           {projects.map((project) => <Link className="command-result" key={project.id} to="/projects/$projectId" params={{ projectId: project.id }} onClick={closeForNavigation}><Folder size={18} aria-hidden="true" /><span>{project.name}<span className="item-key"> {project.key}</span></span></Link>)}
-          {filter && projects.length === 0 && !"attention".includes(filter) && !"projects".includes(filter) && !"connections".includes(filter) && !"runtimes".includes(filter) && <p className="muted" role="status">No matching destinations.</p>}
+          {filter && projects.length === 0 && !"attention".includes(filter) && !"chat".includes(filter) && !"projects".includes(filter) && !"connections".includes(filter) && !"runtimes".includes(filter) && <p className="muted" role="status">No matching destinations.</p>}
           {query.isError && <p className="muted">Project search is unavailable. You can still navigate to Attention or Projects.</p>}
         </div>
       </Dialog.Content>

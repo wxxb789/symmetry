@@ -13,7 +13,10 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   timeout: 60_000,
-  expect: { timeout: 10_000 },
+  // A maximum wait, never a weaker observation: these suites share the host
+  // with live daemons whose runs stream events, and one real conversation read
+  // of a live run was measured at 9.9 s under that load.
+  expect: { timeout: 30_000 },
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL,

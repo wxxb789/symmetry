@@ -33,7 +33,8 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     "plan-proposal" => &ContractValidation.validate_plan_proposal/2,
     "task-result" => &ContractValidation.validate_task_result/2,
     "usage" => &ContractValidation.validate_usage/2,
-    "workspace-read" => &ContractValidation.validate_workspace_read/2
+    "workspace-read" => &ContractValidation.validate_workspace_read/2,
+    "chat-read" => &ContractValidation.validate_chat_read/2
   }
 
   test "public Elixir validators agree with every manifest semantic expectation" do

@@ -48,6 +48,8 @@ $configPath = Join-Path $runRoot "daemon.json"
   runtime = @{
     runtime_key = "chat-$fixtureSuffix"
     name = "Chat acceptance runtime"
+    # One slot: the daemon refuses a larger capacity for an existing_checkout
+    # workspace, and the spec runs one walk so nothing competes for it.
     capacity = 1
     agent_profile = $profile
     workspace = $workspace
@@ -55,7 +57,7 @@ $configPath = Join-Path $runRoot "daemon.json"
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding utf8NoBOM
 
 $process = $null
-$environmentNames = @("SYMMETRY_PORTAL_URL", "SYMMETRY_OPERATOR_TOKEN", "SYMMETRY_CHAT_LIVE", "SYMMETRY_CHAT_PROFILE", "SYMMETRY_CHAT_WORKSPACE", "SYMMETRY_CHAT_ARTIFACTS", "SYMMETRY_CHAT_STATE", "SYMMETRY_CHAT_SCREENSHOTS", "SYMMETRY_CHAT_CONTROL_CONTAINER")
+$environmentNames = @("SYMMETRY_PORTAL_URL", "SYMMETRY_OPERATOR_TOKEN", "SYMMETRY_PLAYWRIGHT_OUTPUT", "SYMMETRY_CHAT_LIVE", "SYMMETRY_CHAT_PROFILE", "SYMMETRY_CHAT_WORKSPACE", "SYMMETRY_CHAT_ARTIFACTS", "SYMMETRY_CHAT_STATE", "SYMMETRY_CHAT_SCREENSHOTS", "SYMMETRY_CHAT_CONTROL_CONTAINER")
 $previousEnvironment = @{}
 foreach ($name in $environmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process") }
 try {
@@ -66,9 +68,14 @@ try {
     -Environment @{
       SYMMETRY_ENROLLMENT_TOKEN = $EnrollmentToken
       SYMMETRY_FAKE_AGENT_MODE = "autonomous"
-      SYMMETRY_FAKE_AGENT_STEPS = "120"
-      SYMMETRY_FAKE_AGENT_STEP_MS = "250"
-      SYMMETRY_FAKE_AGENT_DECISION_AT = "65"
+      SYMMETRY_FAKE_AGENT_STEPS = "200"
+      # 400 ms per step with the decision at step 150: the walk's operator
+      # phases (question, guidance, pause) must be acknowledged before the
+      # agent asks for its decision, so the fixture gives the operator roughly
+      # 60 s of agent time instead of the 16 s the default profile leaves.
+      # The walk's judgements are observable behaviour, never these timings.
+      SYMMETRY_FAKE_AGENT_STEP_MS = "400"
+      SYMMETRY_FAKE_AGENT_DECISION_AT = "150"
     } -PassThru
 
   $env:SYMMETRY_PORTAL_URL = $ControlUrl
@@ -79,6 +86,10 @@ try {
   $env:SYMMETRY_CHAT_ARTIFACTS = $workspacePath
   $env:SYMMETRY_CHAT_STATE = $statePath
   $env:SYMMETRY_CHAT_SCREENSHOTS = $runRoot
+  # Traces, videos and screenshots belong to this run's own directory: the
+  # shared temp directory is cleaned by every Playwright start, which once
+  # deleted this run's trace mid-walk.
+  $env:SYMMETRY_PLAYWRIGHT_OUTPUT = Join-Path $runRoot "playwright-results"
   $env:SYMMETRY_CHAT_CONTROL_CONTAINER = $ControlContainer
   Push-Location (Join-Path $repoRoot "browser")
   try {

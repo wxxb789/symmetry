@@ -1,11 +1,13 @@
 import {
   AttentionRead as AttentionReadBoundary,
+  ChatRead,
   ConnectionsRead,
   GoalRead as GoalReadBoundary,
   WorkDetailRead,
   WorkTimelineRead,
   WorkspaceRead,
   type SymmetryAttentionReadV1,
+  type SymmetryChatReadV1,
   type SymmetryConnectionsReadV1,
   type SymmetryGoalReadV1,
   type SymmetryWorkDetailReadV1,
@@ -119,6 +121,70 @@ export type Execution = NonNullable<WorkItem["execution"]>;
 export type ExecutionReceipt = Execution["latest_command"];
 export type WaitingInput = NonNullable<Execution["waiting"]>;
 export type Runtime = NonNullable<Workspace["runtimes"]>[number];
+
+/** The server's chat scope vocabulary, as the conversation read serves it. */
+export type ChatScope = SymmetryChatReadV1["scope"];
+
+/** The scoped conversation read's decoded projection. */
+export type ChatConversation = SymmetryChatReadV1;
+export type ChatConversationMessage = ChatConversation["messages"][number];
+export type ChatConversationRun = ChatConversation["runs"][number];
+
+/**
+ * The scope members one conversation read carries. The query string carries
+ * only the members the server accepts for that scope: a project read never
+ * carries `run_id` and a run read never carries `project_id`.
+ */
+export interface ChatConversationQuery {
+  readonly scope: ChatScope;
+  readonly projectId?: string | null;
+  readonly runId?: string | null;
+  /** The served `next_before` direction only; the cursor is opaque. */
+  readonly before?: string | null;
+}
+
+/**
+ * One `POST /portal/api/chat/messages` request, frozen at send time. A retry
+ * after a lost response resends this exact object: the same `action_id` and a
+ * byte-equivalent body, so the server replays its recorded message instead of
+ * applying a second one.
+ */
+export interface ChatMessageRequest {
+  readonly scope: ChatScope;
+  readonly project_id?: string;
+  readonly run_id?: string;
+  readonly intent: string;
+  readonly content: string;
+  readonly action_id: string;
+  readonly work_item_id?: string;
+  readonly generation?: number;
+  readonly waiting_transition_id?: string;
+  readonly option_id?: string;
+  readonly target_project_id?: string;
+  readonly work?: {
+    readonly title?: string;
+    readonly repository_resource_id?: string;
+    readonly ci_resource_id?: string;
+  };
+}
+
+/** The command receipt members the conversation renders. */
+export interface ChatCommandView {
+  readonly command_id: string;
+  readonly kind: string;
+  readonly state: string;
+  readonly acknowledgement_outcome: string | null;
+  readonly applied_at?: string | null;
+}
+
+/** The POST answer: the two durable messages, the target work item and the command. */
+export interface ChatMessageOutcome {
+  readonly disposition: MutationDisposition;
+  readonly message: { readonly id: string };
+  readonly reply: { readonly id: string };
+  readonly workItemId: string | null;
+  readonly command: ChatCommandView | null;
+}
 
 /** A caller-minted idempotency identity. One value per proposed operation. */
 export type ActionId = string & { readonly ActionId: unique symbol };
@@ -332,6 +398,33 @@ const InputResponse = Schema.Struct({
   execution: ControlExecution,
 });
 
+// The chat message answer is a narrower receipt than the conversation read: it
+// carries the two durable messages of the accepted action, the target work item
+// and the action's command. These structs decode the members the surface
+// consumes (the identity and the receipt), and the HTTP status — 200 replayed,
+// 201 created — is the disposition the answer itself does not carry.
+const ChatPostedMessage = Schema.Struct({
+  id: Schema.NonEmptyString,
+  role: Schema.String,
+  intent: Schema.String,
+  content: Schema.String,
+  inserted_at: Schema.NullOr(Schema.String),
+  work_item_id: Schema.NullOr(Schema.String),
+});
+const ChatPostedCommand = Schema.Struct({
+  command_id: Schema.NonEmptyString,
+  kind: Schema.NonEmptyString,
+  state: Schema.NonEmptyString,
+  acknowledgement_outcome: Schema.NullOr(Schema.String),
+  applied_at: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const ChatMessageResponse = Schema.Struct({
+  message: ChatPostedMessage,
+  reply: ChatPostedMessage,
+  work_item_id: Schema.NullOr(Schema.String),
+  command: Schema.NullOr(ChatPostedCommand),
+});
+
 type ControlExecutionValue = typeof ControlExecution.Type;
 type ControlCommandValue = typeof ControlCommand.Type;
 
@@ -391,6 +484,18 @@ export interface Api {
   deleteResource: (resourceId: string, version: number, csrf: string, signal: AbortSignal) => Promise<{ deletedResourceId: string }>;
   syncResource: (resourceId: string, csrf: string, signal: AbortSignal) => Promise<ResourceReceipt>;
   syncProject: (projectId: string, csrf: string, signal: AbortSignal) => Promise<{ syncedResourceIds: readonly string[] }>;
+  /**
+   * The scoped conversation read. The query string carries only the members the
+   * server accepts for that scope, and the cursor is always the served opaque
+   * `before` direction.
+   */
+  chatConversation: (query: ChatConversationQuery, signal: AbortSignal) => Promise<ChatConversation>;
+  /**
+   * One conversation message. The payload is the caller's frozen request; the
+   * 200/201 status is the disposition the answer itself does not carry. One
+   * attempt per call — a caller that must retry resends the same payload.
+   */
+  chatMessage: (payload: ChatMessageRequest, csrf: string, signal: AbortSignal) => Promise<ChatMessageOutcome>;
   startWork: (workItemId: string, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<StartOutcome>;
   cancelWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<CancelOutcome>;
   retryWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<RetryOutcome>;
@@ -463,7 +568,10 @@ function request<A>(
   fetcher: typeof fetch,
   path: string,
   init: RequestInit,
-  decode: (body: Uint8Array) => Effect.Effect<A, unknown>,
+  // The status is handed to the decoder for the one answer whose disposition is
+  // the HTTP status rather than a served member (a replayed chat message
+  // answers 200, a created one 201).
+  decode: (body: Uint8Array, status: number) => Effect.Effect<A, unknown>,
 ): Effect.Effect<A, ApiError> {
   return Effect.gen(function* () {
     const { response, body } = yield* Effect.tryPromise({
@@ -498,7 +606,7 @@ function request<A>(
       }
       return yield* Effect.fail(init.method === "GET" ? statusError(response.status) : mutationStatusError(response.status));
     }
-    return yield* decode(body).pipe(Effect.mapError(() => new UnexpectedResponse({
+    return yield* decode(body, response.status).pipe(Effect.mapError(() => new UnexpectedResponse({
       message: "The server response could not be read safely. Refresh or contact your operator.",
       status: response.status,
       transient: false,
@@ -549,6 +657,28 @@ const retryResponse = (body: Uint8Array) =>
 const inputResponse = (body: Uint8Array) =>
   decodeBody(body).pipe(
     Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(InputResponse))(text)),
+  );
+
+// A chat message answers 201 when the action created its messages and 200 when
+// the identical action was replayed; the answer itself carries no disposition.
+const chatMessageResponse = (body: Uint8Array, status: number) =>
+  decodeBody(body).pipe(
+    Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(ChatMessageResponse))(text)),
+    Effect.map((value) => ({
+      disposition: status === 200 ? ("replayed" as const) : ("created" as const),
+      message: value.message,
+      reply: value.reply,
+      workItemId: value.work_item_id,
+      // Normalized so a receipt is either a complete command or absent, never a
+      // member that is present as undefined.
+      command: value.command === null ? null : {
+        command_id: value.command.command_id,
+        kind: value.command.kind,
+        state: value.command.state,
+        acknowledgement_outcome: value.command.acknowledgement_outcome,
+        applied_at: value.command.applied_at ?? null,
+      },
+    })),
   );
 
 export function createApi(
@@ -650,6 +780,24 @@ export function createApi(
         { method: "POST", csrf },
         (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(ProjectSyncBody))(text))),
       ).pipe(Effect.map((value) => ({ syncedResourceIds: value.synced_resource_ids }))), signal);
+    },
+    chatConversation(query: ChatConversationQuery, signal: AbortSignal): Promise<ChatConversation> {
+      // Only the members the server accepts for this scope: a project read never
+      // carries run_id and a run read never carries project_id.
+      const params = new URLSearchParams({ scope: query.scope });
+      if (query.scope === "project" && query.projectId) params.set("project_id", query.projectId);
+      if (query.scope === "run" && query.runId) params.set("run_id", query.runId);
+      if (query.before) params.set("before", query.before);
+      return run(
+        request(fetcher, `/portal/api/chat?${params.toString()}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => ChatRead.decodeJson(text)))),
+        signal,
+      );
+    },
+    chatMessage(payload: ChatMessageRequest, csrf: string, signal: AbortSignal): Promise<ChatMessageOutcome> {
+      return run(
+        request(fetcher, "/portal/api/chat/messages", { method: "POST", body: payload, csrf }, chatMessageResponse),
+        signal,
+      );
     },
     /**
      * The four control attempts. Each carries the session read's live CSRF
