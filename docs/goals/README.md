@@ -298,6 +298,8 @@ receipts reuse valid evidence, never repeat implementation or duplicate
 authorized acceptance actions. Missing evidence or unresolved requirements keep
 the receipt incomplete; owner verdicts are recorded separately when they arrive.
 
+**0006g, 0006j and 0006k — administrative recording closure (2026-11-17).** These three goals are archived with the rest of the series. This is recording closure only and **does not satisfy the completion contract**: 0006g's delivered outcome is the unsupported decision recorded at `daemon/internal/harness/testdata/opencode/2.3.0/README.md:1-3`; 0006j's receipt states `Status: incomplete; no operational capability promoted on either platform` (`docs/evidence/goal-0006j-omp-native-capability-2026-11-14.md:3`) with a later addendum recording an authorized Windows acceptance and a Linux partial; 0006k's implementation reached the release Subject via PR #22, but no goal receipt or credentialed Control/daemon witness execution was recorded, and its closure paragraph was missing until this line. Their unmet requirements remain unmet.
+
 ## Durable engineering work
 
 | Goal | Desired outcome |
@@ -305,12 +307,12 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 | [0006d](archive/0006d-codex-native-capability.md) | Evidence-bounded Codex native capability |
 | [0006e](archive/0006e-claude-native-capability.md) | Evidence-bounded Claude Code native capability |
 | [0006f](archive/0006f-pi-native-capability.md) | Evidence-bounded pi native continuity |
-| [0006g](0006g-opencode-support-decision.md) | Evidence-backed OpenCode V2 support decision |
+| [0006g](archive/0006g-opencode-support-decision.md) | Evidence-backed OpenCode V2 support decision |
 | [0006h](0006h-credentialed-provider-accounting.md) | Credentialed provider reconciliation and accounting |
 | [0006i](archive/0006i-exact-subject-release-acceptance.md) | Exact-subject release and authorized acceptance |
-| [0006j](0006j-omp-native-capability.md) | Evidence-bounded Oh My Pi native capability |
-| [0006k](0006k-omo-native-capability.md) | Evidence-bounded OmO native capability |
-| [0006-final](archive/0006-final.md) | Archived series-review record; full-series acceptance incomplete |
+| [0006j](archive/0006j-omp-native-capability.md) | Evidence-bounded Oh My Pi native capability |
+| [0006k](archive/0006k-omo-native-capability.md) | Evidence-bounded OmO native capability |
+| [0006-final](archive/0006-final.md) | Archived series-review record; **accepted by the owner** (wxxb789, 2026-11-17) with recorded incompleteness: the series' own findings F1-F8 stay unmet and no claim is made that the completion contract is satisfied |
 
 ## Modern workspace
 

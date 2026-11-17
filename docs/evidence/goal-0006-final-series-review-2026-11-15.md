@@ -371,3 +371,5 @@ maintenance or formatter changes are included.
 [ci-native]: https://github.com/wxxb789/symmetry/actions/runs/43673581776
 [codex-review]: https://github.com/wxxb789/symmetry/pull/22#issuecomment-6883104913
 [probe-artifact]: https://github.com/wxxb789/symmetry/actions/runs/43673581776/artifacts/14145314081
+
+- **0006a — completion evidence not found (recorded 2026-11-17).** A search for 0006a's own closure paragraph, receipt or merge evidence across `docs/goals/README.md`, `docs/evidence/`, `docs/plans/` and the repository for the string `0006a` returned nothing beyond the index's parenthetical that 0006a, 0006b and 0006c are archived. This line records the absence; no evidence is invented, and the goal's own completion predicates remain the only thing that could demonstrate it.
