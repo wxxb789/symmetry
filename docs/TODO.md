@@ -682,6 +682,16 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       count of canonical-registry tarball URLs against the lockfile's entry count (or regenerate with
       `--registry=https://registry.npmjs.org/`) and state which registry the bytes came from.
 
+      **Enforced (2026-11-17, `fix/ci-diagnosable-release-boot`):** the registry host of every recorded tarball URL is
+      checked by `scripts/ci/check-lockfile-registry.py`, which parses `pnpm-lock.yaml` as a YAML stream and runs before the
+      install in the `contracts`, `control` and `compose` jobs of `.github/workflows/ci.yml` and in the dispatch-only
+      `contracts` job of `.github/workflows/linux-native-v2-acceptance.yml`. It fails closed (exit 2) on a missing, empty,
+      unparseable or tarball-free lockfile and prints every entry whose URL is off-host (exit 1), so a mirror-hosted
+      lockfile now fails in CI before anything installs from it; its unit suite runs in the `daemon` job's "Check CI gate
+      helper scripts" step. Still open: regenerating the lockfile with the repository-pinned pnpm and a canonical registry
+      remains a manual duty, and the checker covers recorded tarball URLs only — it does not verify integrity hashes, and
+      entries that record no tarball URL still resolve through whatever registry the install is configured with.
+
 ## Release-shell render failures leave no diagnosable evidence
 
 - [ ] The `control` job's step "Render authenticated release shell on desktop and mobile" starts the
@@ -700,3 +710,15 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       occurrence is diagnosable instead of inferred; then fix whatever the log shows (candidate
       mechanisms: an eager Postgres connection in a boot child, or a first-bind window the 30 s retry
       cannot cover).
+
+      **Enforced (2026-11-17, `fix/ci-diagnosable-release-boot`):** that step now carries `id: render_release_shell`, and on
+      its own failure the `control` job runs "Report release shell boot log", which emits
+      `::error title=Release shell boot log tail (last 8000 bytes of $RUNNER_TEMP/shell-release.log)::<escaped tail>` (with
+      `%`, CR and LF escaped so release output cannot forge a workflow command), and "Upload release shell boot logs", which
+      uploads `shell-release.log` and `shell-expiry.log` as the artifact `shell-release-boot-<run id>-<run attempt>`
+      (`if-no-files-found: warn`). Both are guarded by `if: failure() && steps.render_release_shell.outcome == 'failure'`, so
+      passing runs upload neither log and an earlier step's failure cannot produce a boot-log annotation. Still open: a boot
+      that dies before the redirect creates no log at all — the annotation then reports that the log holds no bytes — and the
+      log tail is a diagnostic, so whatever it shows (an eager Postgres connection in a boot child, or a first-bind window
+      the 30 s retry cannot cover) still has to be fixed from the evidence it now leaves. The retry window, the timeouts and
+      every assertion in the step are unchanged; the upload and annotation themselves are only exercised by a real job run.
