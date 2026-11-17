@@ -492,6 +492,16 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
       the injected-failure design.
 
+## Lockfiles must carry canonical registry URLs
+
+- [ ] Regenerate `pnpm-lock.yaml` only with the repository-pinned pnpm and a canonical registry, and check the result before
+      committing. On 2026-11-17 this host's user-level `~/.npmrc` pointed at a package-feed mirror, so a regenerated lockfile
+      recorded 96 tarball URLs at the mirror's host and CI's supply-chain policy rejected the install with
+      `ERR_PNPM_TARBALL_URL_MISMATCH` in the `contracts` and `compose` jobs of run `44050937524`; pnpm caches that policy
+      verdict by lockfile hash, so the stale lockfile kept passing locally after the change. Before committing, compare the
+      count of canonical-registry tarball URLs against the lockfile's entry count (or regenerate with
+      `--registry=https://registry.npmjs.org/`) and state which registry the bytes came from.
+
 ## Release-shell render failures leave no diagnosable evidence
 
 - [ ] The `control` job's step "Render authenticated release shell on desktop and mobile" starts the
