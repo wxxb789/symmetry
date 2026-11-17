@@ -2175,7 +2175,7 @@ func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) b
 	supervisor.mu.Unlock()
 
 	if markerPath := strings.TrimSpace(os.Getenv(linuxSupervisorDropResponseMarkerEnv)); markerPath != "" {
-		_ = os.WriteFile(markerPath, []byte("fired\n"), 0o600)
+		_ = publishLinuxSupervisorWitnessFile(markerPath, []byte("fired\n"))
 	}
 	_ = responseRead.Close()
 	if controlWrite != nil {
@@ -2305,6 +2305,47 @@ func wrongLinuxSupervisorHelloSession(anchor LinuxProcessGroupAnchor) (int64, er
 	return session, nil
 }
 
+// publishLinuxSupervisorWitnessFile publishes a helper-side witness document as
+// one visible state change: readers poll these paths and accept the first
+// successful read, so a document must never be observable while it is
+// incomplete. The previous create-then-write sequence exposed an empty file
+// first, and the wrong-session test decoded that intermediate state as
+// `decode wrong-session helper witness: unexpected end of JSON input` (CI run
+// 44133750246). The document is assembled in a temporary file in the
+// destination directory and renamed into place; the destination must still be
+// absent, which keeps the create-with-O_EXCL contract of witness paths that
+// this package validates as absent before a run.
+func publishLinuxSupervisorWitnessFile(path string, contents []byte) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("witness path %q already exists", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".partial-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	written, writeErr := temporary.Write(contents)
+	if writeErr == nil && written != len(contents) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr == nil {
+		writeErr = os.Rename(temporaryPath, path)
+	}
+	if writeErr != nil {
+		_ = os.Remove(temporaryPath)
+		return writeErr
+	}
+	return nil
+}
+
 func writeLinuxSupervisorHelloSessionWitness(path string, actual, transmitted linuxSupervisorHello) error {
 	witness := linuxSupervisorHelloSessionWitness{
 		Actual: linuxSupervisorHelloAnchorWitness{
@@ -2323,24 +2364,8 @@ func writeLinuxSupervisorHelloSessionWitness(path string, actual, transmitted li
 	if err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
 	contents = append(contents, '\n')
-	written, err := file.Write(contents)
-	if err != nil || written != len(contents) {
-		_ = file.Close()
-		_ = os.Remove(path)
-		if err != nil {
-			return err
-		}
-		return io.ErrShortWrite
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return nil
+	return publishLinuxSupervisorWitnessFile(path, contents)
 }
 
 func waitForLinuxSupervisorHelloSessionRelease(owner *os.File, releasePath string) error {
@@ -2521,25 +2546,7 @@ func linuxSupervisorOwnerLossProofResultCategory(proofErr error) string {
 }
 
 func writeLinuxSupervisorTestMarker(path, contents string) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	written, writeErr := io.WriteString(file, contents)
-	if writeErr == nil && written != len(contents) {
-		writeErr = io.ErrShortWrite
-	}
-	if writeErr == nil {
-		writeErr = file.Sync()
-	}
-	if closeErr := file.Close(); writeErr == nil {
-		writeErr = closeErr
-	}
-	if writeErr != nil {
-		_ = os.Remove(path)
-		return writeErr
-	}
-	return nil
+	return publishLinuxSupervisorWitnessFile(path, []byte(contents))
 }
 
 func installLinuxSupervisorScanFailureInjection(group *processGroup, targetPID int, targetIdentity string) func() {
@@ -3511,10 +3518,6 @@ func (supervisor *linuxSupervisor) waitForLinuxSupervisorReleaseResponseLossBarr
 		return errors.New("Linux supervisor release response-loss barrier requires a stop receipt")
 	}
 
-	reached, err := os.OpenFile(reachedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("create release response-loss reached marker %q: %w", reachedPath, err)
-	}
 	marker := fmt.Sprintf(
 		"pid=%d\ntime=%s\noperation=%s\nreceipt_present=%t\n",
 		os.Getpid(),
@@ -3522,15 +3525,8 @@ func (supervisor *linuxSupervisor) waitForLinuxSupervisorReleaseResponseLossBarr
 		linuxSupervisorOpRelease,
 		receiptPresent,
 	)
-	writeErr := error(nil)
-	if _, writeErr = reached.WriteString(marker); writeErr == nil {
-		writeErr = reached.Sync()
-	}
-	if closeErr := reached.Close(); writeErr == nil {
-		writeErr = closeErr
-	}
-	if writeErr != nil {
-		return fmt.Errorf("publish release response-loss reached marker %q: %w", reachedPath, writeErr)
+	if err := publishLinuxSupervisorWitnessFile(reachedPath, []byte(marker)); err != nil {
+		return fmt.Errorf("publish release response-loss reached marker %q: %w", reachedPath, err)
 	}
 
 	deadline := time.NewTimer(linuxSupervisorReleaseBarrierTimeout)
