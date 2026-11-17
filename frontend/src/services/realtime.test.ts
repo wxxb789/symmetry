@@ -75,6 +75,60 @@ function harness(options: { pollIntervalMs?: number; visibility?: () => boolean 
   return { queryClient, invalidate, fake, refreshToken, realtime, keys };
 }
 
+/**
+ * A scripted WebSocket, the transport the Phoenix client resolves for itself from
+ * the global `WebSocket` when the portal builds its production socket. Stubbing
+ * that global is how this file drives the shipped endpoint resolution — the
+ * factory, the endpoint and the client between them — instead of replacing the
+ * socket with a seam the production path does not have.
+ */
+class ScriptedWebSocket {
+  static readonly instances: ScriptedWebSocket[] = [];
+  readonly url: string;
+  readyState = 0;
+  binaryType = "blob";
+  onopen: (() => void) | null = null;
+  onerror: ((error?: unknown) => void) | null = null;
+  onmessage: ((event: unknown) => void) | null = null;
+  onclose: ((event: unknown) => void) | null = null;
+  constructor(url: string) {
+    this.url = url;
+    ScriptedWebSocket.instances.push(this);
+  }
+  send(): void {}
+  close(): void {
+    this.readyState = 3;
+  }
+  /** Refuse the connection the way a browser does before the socket ever opens. */
+  refuse(): void {
+    this.readyState = 3;
+    this.onerror?.("connection refused");
+    this.onclose?.({ code: 1006, reason: "", wasClean: false });
+  }
+}
+
+/** The window globals the checks below take away or replace for one body each. */
+type WindowGlobal = "location" | "document" | "window";
+
+/**
+ * Run `body` with one window global taken away (`undefined`) or replaced, then
+ * restore it. Taking one away is how a check faces the environment the reported
+ * error came from — a document that has closed while the timer it armed is still
+ * ticking — and replacing the location is how it faces a deployment served from
+ * another origin.
+ */
+function withGlobal(name: WindowGlobal, replacement: PropertyDescriptor | undefined, body: () => void): void {
+  const original = Object.getOwnPropertyDescriptor(globalThis, name);
+  if (original === undefined) throw new Error(`this environment exposes no ${name} global to work with`);
+  if (replacement === undefined) delete (globalThis as unknown as Record<string, unknown>)[name];
+  else Object.defineProperty(globalThis, name, replacement);
+  try {
+    body();
+  } finally {
+    Object.defineProperty(globalThis, name, original);
+  }
+}
+
 describe("operator invalidation client", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -82,6 +136,7 @@ describe("operator invalidation client", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("joins the operator topic and reports connection state", () => {
@@ -284,5 +339,96 @@ describe("operator invalidation client", () => {
     expect(realtime.status()).toBe("disconnected");
     vi.advanceTimersByTime(200);
     expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("hands the client an absolute endpoint, so its own retry reads no global", () => {
+    ScriptedWebSocket.instances.length = 0;
+    vi.stubGlobal("WebSocket", ScriptedWebSocket);
+    const queryClient = new QueryClient();
+    const realtime = createRealtime({ queryClient, token: () => "socket-token", pollIntervalMs: 50 });
+    const urls = () => ScriptedWebSocket.instances.map((transport) => transport.url);
+    const expected = `ws://${window.location.host}/portal/socket/websocket?vsn=2.0.0`;
+
+    // The endpoint is resolved from the page before the client exists and handed
+    // over absolutely: the client's own URL assembly has nothing left to resolve.
+    realtime.connect();
+    expect(urls()).toEqual([expected]);
+
+    // A refused attempt arms the client's retry, 10 ms out. It fires in an
+    // environment whose `location` is gone — the `ReferenceError` the contracts job
+    // reported twice, from a retry that outlived the document that owned the global
+    // — and a relative endpoint would be resolved from that global again. The
+    // absolute one is reused, so the retry targets the same page without reading
+    // anything.
+    withGlobal("location", undefined, () => {
+      ScriptedWebSocket.instances[0]?.refuse();
+      vi.advanceTimersByTime(20);
+    });
+    expect(urls()).toEqual([expected, expected]);
+
+    realtime.close();
+  });
+
+  it("targets the origin the portal is served from, port and scheme included", () => {
+    ScriptedWebSocket.instances.length = 0;
+    vi.stubGlobal("WebSocket", ScriptedWebSocket);
+    const queryClient = new QueryClient();
+    const realtime = createRealtime({ queryClient, token: () => "socket-token", pollIntervalMs: 50 });
+    const elsewhere: PropertyDescriptor = { configurable: true, value: { protocol: "https:", host: "portal.example.test:8443" } };
+
+    // The endpoint follows the page: another host, another port, a secure origin
+    // (the `wss` half of the scheme rule) — the socket goes where the portal came
+    // from, exactly as the relative path it replaced did.
+    withGlobal("location", elsewhere, () => {
+      realtime.connect();
+    });
+    expect(ScriptedWebSocket.instances.map((transport) => transport.url)).toEqual([
+      "wss://portal.example.test:8443/portal/socket/websocket?vsn=2.0.0",
+    ]);
+
+    realtime.close();
+  });
+
+  it("refuses to invent an endpoint where there is no page, instead of a relative path", () => {
+    ScriptedWebSocket.instances.length = 0;
+    vi.stubGlobal("WebSocket", ScriptedWebSocket);
+    const queryClient = new QueryClient();
+    const realtime = createRealtime({ queryClient, token: () => "socket-token", pollIntervalMs: 50 });
+
+    // A non-browser import has no page origin, and the relative path it used to be
+    // handed is the bare-global read the absolute endpoint exists to remove. The
+    // absence is said in as many words, before any socket exists to fail later —
+    // and before the client is left to read a `location` that is not there either.
+    withGlobal("window", undefined, () => {
+      withGlobal("location", undefined, () => {
+        expect(() => { realtime.connect(); }).toThrow("the realtime socket needs a page origin: there is no window.location to resolve an absolute endpoint from");
+      });
+    });
+    expect(ScriptedWebSocket.instances).toHaveLength(0);
+    expect(realtime.status()).toBe("disconnected");
+
+    realtime.close();
+  });
+
+  it("polls without a document rather than reading the global it no longer has", () => {
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    // No bootstrap token yet: the client waits in its polling fallback, as a shell
+    // whose session read has not resolved does.
+    const realtime = createRealtime({ queryClient, token: () => "", pollIntervalMs: 50 });
+    realtime.connect();
+    expect(realtime.status()).toBe("disconnected");
+
+    // The tick keeps coming in an environment whose document has closed — the
+    // jsdom a finished test file tears down, or an import that never had one. The
+    // fallback refreshes a visible page and none is there: the read makes that
+    // decision itself instead of reading a global that is gone, and refreshes
+    // nothing.
+    withGlobal("document", undefined, () => {
+      expect(() => vi.advanceTimersByTime(120)).not.toThrow();
+    });
+    expect(invalidate).not.toHaveBeenCalled();
+
+    realtime.close();
   });
 });

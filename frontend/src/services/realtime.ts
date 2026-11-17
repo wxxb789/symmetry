@@ -15,6 +15,11 @@ import { Socket } from "phoenix";
  * Loss recovery is structural rather than message-based: on every (re)connect the
  * client refetches every read, and while the socket is down it polls on the
  * retired classic cadence, so a missed invalidation costs freshness, never state.
+ *
+ * The socket endpoint is this module's own decision, not the client's: it is
+ * resolved once per socket, absolutely, from the page's location (see
+ * `socketEndpoint`), so no connect attempt — the client's own reconnects
+ * included — reads a global the page no longer has.
  */
 
 export interface InvalidationPayload {
@@ -71,13 +76,44 @@ export interface RealtimeHandle {
 }
 
 export const REALTIME_TOPIC = "portal:invalidations";
+const SOCKET_PATH = "/portal/socket";
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_BATCH_MS = 200;
 
+/**
+ * The absolute endpoint the Phoenix client is handed, resolved once per socket
+ * from the page's own location.
+ *
+ * The client resolves the bare `location` global itself — `Socket.endPointURL`
+ * reads `location.protocol` and `location.host`, and every `transportConnect`
+ * reaches it, the client's own reconnect timer included — but only for a
+ * *relative* endpoint: an absolute one is used as handed. Resolving it here is
+ * therefore what keeps that read off the portal's path, so a retry that outlives
+ * the document it was started in has nothing left to read. That is the
+ * `ReferenceError: location is not defined` a finished test file reported twice
+ * while every assertion passed: the retry outlived the shell that owned it.
+ *
+ * Scheme and host come from the page, so the socket follows the origin the portal
+ * is served from — a different port, a proxy, a later deployment — exactly as the
+ * relative path did: `https:` pages get `wss:`, everything else `ws:`.
+ *
+ * A non-browser import has no page origin, and the relative path it used to get
+ * in that case is the bare-global read this resolution exists to remove, so the
+ * absence is answered in as many words rather than deferred to the client.
+ */
+export function socketEndpoint(): string {
+  if (typeof window === "undefined") {
+    throw new Error("the realtime socket needs a page origin: there is no window.location to resolve an absolute endpoint from");
+  }
+  const page = window.location;
+  return `${page.protocol === "https:" ? "wss" : "ws"}://${page.host}${SOCKET_PATH}`;
+}
+
 function phoenixSocket(token: () => string): RealtimeSocket {
   // `authToken` is a function, so every connect attempt (including the client's
-  // own reconnects) carries the token the bootstrap most recently issued.
-  return new Socket("/portal/socket", {
+  // own reconnects) carries the token the bootstrap most recently issued; the
+  // endpoint is resolved once here, so no attempt resolves it from the page again.
+  return new Socket(socketEndpoint(), {
     authToken: token,
     params: {},
   });
@@ -87,7 +123,12 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
   const queryClient = options.queryClient;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const batchMs = options.batchMs ?? DEFAULT_BATCH_MS;
-  const visible = options.visibility ?? (() => document.visibilityState === "visible");
+  // The fallback poll refreshes only a document the browser reports as visible, and
+  // only a document can report anything: this module is imported where none exists,
+  // so the environment decision is made where the read happens — the same one the
+  // visibility listener below makes — instead of leaving the ticking timer to read a
+  // global its environment no longer has.
+  const visible = options.visibility ?? (() => typeof document !== "undefined" && document.visibilityState === "visible");
   const socketFactory = options.socketFactory ?? phoenixSocket;
 
   const listeners = new Set<() => void>();
