@@ -154,6 +154,14 @@ export function WorkspaceRoot() {
     application.rememberSocketToken(socketToken);
     application.realtime.connect();
   }, [application, socketToken, signedOut]);
+  // The invalidation client's lifetime is the signed-in shell's, not the bootstrap
+  // token's: the effect above re-runs on a rotated token without reopening the
+  // socket, so its release is keyed to the mount and to the session ending. A shell
+  // that was torn down — or one whose session ended — must leave no socket
+  // reconnecting (the client's own retry re-resolves the socket endpoint from the
+  // browser's location global) and no polling fallback reading with a token nobody
+  // re-mints.
+  useEffect(() => () => { application.realtime.close(); }, [application, signedOut]);
   // Route changes own the heading reset. Search-parameter updates (the
   // URL-backed filters) are not route changes: keying the reset on the full
   // href moved focus to the heading on every keystroke of a filter input.

@@ -2,10 +2,12 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Socket, type PhoenixSocketOptions } from "phoenix";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { savedViewStorageKey } from "../features/projects/saved-views";
 import type { Project } from "../services/api";
 import { readAttention, readWorkDetail, readWorkItem } from "../services/api.fixtures";
+import type { RealtimePush, RealtimeSocket } from "../services/realtime";
 import { createApplication, safeReturnTo, type Application } from "./application";
 import { createAppRouter } from "./router";
 
@@ -24,23 +26,30 @@ afterEach(() => { for (const app of applications) app.queryClient.clear(); appli
 // socket token for the invalidation channel; every fixture serves both members.
 const sessionBody = (csrfToken: string) => JSON.stringify({ csrf_token: csrfToken, socket_token: "test-socket-token" });
 
-function renderWorkspace(path: string, fetcher: typeof fetch = vi.fn<typeof fetch>().mockImplementation((input) => {
-  const requestPath = input instanceof Request ? input.url : String(input);
-  const url = new URL(requestPath, "http://localhost");
-  const projectId = url.searchParams.get("project_id") ?? firstProjectId;
-  if (url.pathname === "/portal/api/attention") {
-    const scoped = url.searchParams.get("project_id") ?? firstProjectId;
-    const project = projects.find((candidate) => candidate.id === scoped);
-    return Promise.resolve(new Response(JSON.stringify(readAttention({
-      selectedProjectId: scoped,
-      blocked: (project?.work_items ?? []).filter((item) => item.blocked).map((item) => ({ projectId: scoped, projectName: project?.name ?? null, workItemId: item.id, key: item.key, title: item.title, status: item.status, blocker: item.blocker })),
-    }))));
-  }
-  return Promise.resolve(new Response(JSON.stringify(requestPath.endsWith("/session")
-    ? { csrf_token: "session-token", socket_token: "test-socket-token" }
-    : { selected_project_id: projectId, projects: projects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })) })));
-})) {
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
+// The workspace's own transport: the bootstrap read mints the socket token the
+// shell connects its invalidation client with, and every other read answers with
+// the served document the surface asked for.
+function servedFetcher(): typeof fetch {
+  return vi.fn<typeof fetch>().mockImplementation((input) => {
+    const requestPath = input instanceof Request ? input.url : String(input);
+    const url = new URL(requestPath, "http://localhost");
+    const projectId = url.searchParams.get("project_id") ?? firstProjectId;
+    if (url.pathname === "/portal/api/attention") {
+      const scoped = url.searchParams.get("project_id") ?? firstProjectId;
+      const project = projects.find((candidate) => candidate.id === scoped);
+      return Promise.resolve(new Response(JSON.stringify(readAttention({
+        selectedProjectId: scoped,
+        blocked: (project?.work_items ?? []).filter((item) => item.blocked).map((item) => ({ projectId: scoped, projectName: project?.name ?? null, workItemId: item.id, key: item.key, title: item.title, status: item.status, blocker: item.blocker })),
+      }))));
+    }
+    return Promise.resolve(new Response(JSON.stringify(requestPath.endsWith("/session")
+      ? { csrf_token: "session-token", socket_token: "test-socket-token" }
+      : { selected_project_id: projectId, projects: projects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })) })));
+  });
+}
+
+function renderWorkspace(path: string, fetcher: typeof fetch = servedFetcher(), realtime?: { socketFactory?: (token: () => string) => RealtimeSocket }) {
+  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() }, ...(realtime === undefined ? {} : { realtime }) });
   applications.push(application);
   const history = createMemoryHistory({ initialEntries: [path] });
   const router = createAppRouter(application, history);
@@ -952,5 +961,93 @@ describe("chat route", () => {
     expect(safeReturnTo(`http://localhost/portal/chat?scope=run&runId=${runScope}`)).toBe(`/portal/chat?scope=run&runId=${runScope}`);
     expect(safeReturnTo("http://localhost/portal/chat/elsewhere")).toBe("/portal/attention");
     expect(safeReturnTo("http://localhost/portal/logout")).toBe("/portal/attention");
+  });
+});
+
+/** A scripted invalidation client, so a test can watch the shell start and release one. */
+function scriptedSocket() {
+  let connects = 0;
+  let disconnects = 0;
+  const push: RealtimePush = { receive: () => push };
+  const socket: RealtimeSocket = {
+    connect: () => { connects += 1; },
+    disconnect: () => { disconnects += 1; },
+    onOpen: () => undefined,
+    onClose: () => undefined,
+    onError: () => undefined,
+    channel: () => ({ on: () => 1, join: () => push }),
+  };
+  return { socket, connects: () => connects, disconnects: () => disconnects };
+}
+
+/**
+ * A scripted WebSocket transport, the level the invalidation client's own reconnect
+ * lives at: the test decides when a connect attempt is refused, and the client's
+ * retry timer arms itself from that refusal.
+ */
+class ScriptedTransport {
+  static readonly instances: ScriptedTransport[] = [];
+  readonly url: string;
+  readyState = 0;
+  bufferedAmount = 0;
+  binaryType = "blob";
+  onopen: (() => void) | null = null;
+  onerror: ((error?: unknown) => void) | null = null;
+  onmessage: ((event: unknown) => void) | null = null;
+  onclose: ((event: unknown) => void) | null = null;
+  constructor(url: string) {
+    this.url = url;
+    ScriptedTransport.instances.push(this);
+  }
+  send(): void {}
+  close(): void { this.readyState = 3; }
+  /** Refuse the connection the way a browser does before the socket ever opens. */
+  refuse(): void {
+    this.readyState = 3;
+    this.onerror?.("connection refused");
+    this.onclose?.({ code: 1006, reason: "", wasClean: false });
+  }
+}
+
+/**
+ * The invalidation socket is the one piece of browser state the shell owns outside
+ * React: the Phoenix client keeps its own reconnect timer and resolves the socket
+ * endpoint from the browser's `location` global on every attempt. A shell that has
+ * been torn down must release that client, or the timer re-reads a global the
+ * document no longer has — which is how a run whose every assertion passed still
+ * reported `ReferenceError: location is not defined` after the environment closed.
+ */
+describe("workspace socket lifetime", () => {
+  it("releases the invalidation client it started when the shell unmounts", async () => {
+    const socket = scriptedSocket();
+    const { application, unmount } = renderWorkspace("/portal/attention", servedFetcher(), { socketFactory: () => socket.socket });
+    await waitFor(() => expect(socket.connects()).toBe(1));
+    expect(application.realtime.status()).toBe("connecting");
+    unmount();
+    expect(socket.disconnects()).toBe(1);
+    expect(application.realtime.status()).toBe("disconnected");
+  });
+
+  it("leaves no socket reconnect running after the shell unmounts", async () => {
+    ScriptedTransport.instances.length = 0;
+    // The shipped declaration covers the one surface the portal consumes, so the
+    // transport seam the Phoenix client exposes for its own tests is named here.
+    const socketFactory = (token: () => string) => new Socket("/portal/socket", {
+      authToken: token,
+      params: {},
+      transport: ScriptedTransport,
+    } as PhoenixSocketOptions);
+    const { unmount } = renderWorkspace("/portal/attention", servedFetcher(), { socketFactory });
+    // The endpoint is resolved from the browser's own location global, so this
+    // construction is the read that outlived the workspace.
+    await waitFor(() => expect(ScriptedTransport.instances).toHaveLength(1));
+    expect(ScriptedTransport.instances[0]?.url).toBe(`ws://${window.location.host}/portal/socket/websocket?vsn=2.0.0`);
+    // A refused connect arms the client's retry (10 ms out); the workspace is torn
+    // down while that retry is still pending, exactly as a finished test file
+    // unmounts the shell while the socket is between attempts.
+    act(() => { ScriptedTransport.instances[0]!.refuse(); });
+    unmount();
+    await act(async () => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 250); await promise; });
+    expect(ScriptedTransport.instances).toHaveLength(1);
   });
 });
