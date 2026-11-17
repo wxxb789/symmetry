@@ -1,0 +1,54 @@
+{
+  "check_attempt_id": "attempt-0001",
+  "check_evidence_sha256": "sha256:63ac8f95a9dde74f420c7b19efd7e93ccda246cc018b1fefd9b07f3227dd9253",
+  "explanations": {
+    "Explain how an aborted command request is distinguished from a transport failure, and why the refusal decoding path and every existing caller keep their behaviour.": "postPortalCommand (api.ts:784-806) separates the three abort shapes from a real transport failure by evidence, not by guessing: an already-cancelled request is refused before the fetcher runs ('if (signal?.aborted) throw signal.reason'), a fetcher rejection whose error name is AbortError is re-thrown unchanged (isAbortError, api.ts:768-769) instead of being re-labelled, and a rejection that arrives after the caller's signal aborted also yields signal.reason; only a rejection with no abort evidence becomes Network('Cannot reach the server. Check your connection and try again.'). The signal itself reaches the transport through the trailing optional parameter of both functions and the '...(signal === undefined ? {} : { signal })' spread. Executed evidence: the named case asserts identity with toBe for the fetcher's own DOMException in the in-flight cancellation, identity with the abort reason for the already-aborted call, that the fetcher receives the caller's exact signal object (line 59), and that TypeError('offline') still resolves to Network with the existing message; my mutant runs in a throwaway copy outside the sealed checkout confirm each clause is load-bearing (dropping the pre-check returns the decoded payload, dropping the spread fails with 'expected undefined to be AbortSignal', dropping the AbortError rethrow substitutes signal.reason for the fetcher's error). Refusal decoding is byte-identical: refusal() (api.ts:830-843) is unchanged and now receives Either.isRight(document) ? document.right : null, the same value the previous decodeUnknownOption path yielded - the decoded document for a readable body and null for an unreadable one - so a non-2xx JSON refusal still builds MutationRefused with exactly the server's members (asserted member-by-member, including current_version, current_revision, allowed_actions and details) and a non-JSON non-2xx still maps through statusError (409 to Conflict, 403 to Forbidden, both asserted); the redirect guard placed before decoding still raises Unauthenticated (asserted, and the assertion fails if that guard is deleted). Existing callers keep their behaviour because the parameter is optional and trailing: detail.tsx:53/82/92 and attention.tsx:169 still pass four arguments, frontend-typecheck exited 0 and the full frontend suite ran 238/238 in 16 files; the read path (request/json), readRetry, the CSRF header, cache: 'no-store' and redirect: 'manual' are untouched, the api.ts diff being one hunk (37 insertions, 7 deletions) and no protected path appearing in git diff HEAD --name-only.",
+    "Explain why a 2xx command body the decoder cannot read must reject instead of resolving a placeholder, and name the caller path that would otherwise announce an accepted command from it.": "Before this change postPortalCommand decoded the body with Schema.decodeUnknownOption and, for response.ok, returned the decoded value or the placeholder null, so a 2xx whose body is not a JSON document (proxy error HTML, empty body) resolved like a receipt. Its consumer announces acceptance without reading the payload: frontend/src/features/goals/detail.tsx:53 sends the command through postGoalCommand and the mutation's onSuccess (lines 58-63) unconditionally sets the notice '<action> accepted by the server.' before invalidating the goal/event/attention queries; frontend/src/features/attention/attention.tsx:169 does the same for project goal creation with 'The server created the Goal.'. A body the server never sent as a receipt would therefore be rendered as an authoritative acknowledgement, which is exactly what frontend/AGENTS.md forbids ('Commands stay pending until authoritative acknowledgement'). The reviewed revision throws UnexpectedResponse({message, status: response.status, transient: false}) when the decode is a Left (api.ts:817-823) and returns document.right only for a JSON document (api.ts:824), so the mutation rejects instead of succeeding, onError maps it through errorMessage, and the 'no receipt' promise in the two-step plan approval path (detail.tsx:83) can no longer be satisfied by an unreadable body. Executed evidence: the named case 'rejects an unreadable command success body instead of returning a placeholder receipt' asserts the instance, status 202 and 200, transient:false and absence of Network for both postPortalCommand and postGoalCommand, and my own reproduction against the base source in a throwaway copy outside the sealed checkout fails with 'expected null to be an instance of UnexpectedResponse' - the placeholder receipt the task removes. readRetry (api.ts:842) counts UnexpectedResponse only when transient is true and application.ts:80 keeps mutations at retry:false, so the new failure is never auto-retried."
+  },
+  "findings": [
+    {
+      "description": "Discriminating power verified by execution in a throwaway copy outside the sealed checkout (<disposable-root>/runs/scratch-review, since deleted; the sealed checkout was copied from, never written). Against the base source (git show HEAD:frontend/src/services/api.ts) the named cases fail exactly where behaviour changed: case 1 'expected null to be an instance of UnexpectedResponse', case 2 'expected null to be DOMException{ AbortError }' - the base resolves the placeholder and ignores the fifth argument. Single-line mutants of the reviewed revision are also caught: transient:true -> case 1 fails on toMatchObject({status:202,transient:false}); abort pre-check removed -> case 2 returns the decoded payload; signal spread removed -> case 2 fails at line 59 'expected undefined to be AbortSignal'; isAbortError rethrow removed -> case 2 fails on error identity; object-strictness added to the 2xx branch -> case 3 rejects the scalar 42 body; non-2xx non-JSON routed to UnexpectedResponse -> case 3 fails 'to be an instance of Conflict' (line 104); redirect guard deleted -> case 3 fails 'to be an instance of Unauthenticated' (line 115).",
+      "id": "revert-and-mutants-fail-named-cases",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Named case 3 passes on the base revision, i.e. it is not discriminating for the receipt fix by itself; that is the mandated shape of the frozen task, which requires the JSON-payload and refusal behaviour to stay exactly as today, and the mutant runs above show it still fails for every wrong variant of that unchanged path. Cases 1 and 2 carry the changed behaviour and both fail on the base revision.",
+      "id": "case-3-pins-unchanged-path-on-base",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "The frozen browser gate runs only the repository's baseline specs (checks/attempt-0001/browser-acceptance/stdout.bin: 26 passed, desktop-chromium and mobile-chromium) and asserts neither the unreadable-2xx rejection nor the abort passthrough, so it is regression evidence, not coverage of the new behaviour. The frozen task assigns the new cases to frontend/src/services/command-receipts.test.ts and states no rendered or accessibility claim, so nothing rendered is asserted or missing; the caller-visible claim ('no caller can announce an accepted command from a body the decoder could not read') is supported by the focused cases plus the unchanged caller code read: frontend/src/features/goals/detail.tsx:53 command mutation whose onSuccess (lines 58-63) sets '<action> accepted by the server.' without inspecting the body, and frontend/src/features/attention/attention.tsx:169 create mutation whose onSuccess sets 'The server created the Goal.'.",
+      "id": "browser-coverage-boundary",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "checks/attempt-0001/focused-tests/vitest-report.json (sha256:e9e81833...) lists exactly the three frozen fullNames, all 'passed', in one entry whose file is the sealed checkout's frontend/src/services/command-receipts.test.ts; no duplicated or missing names. The test file imports only vitest, ./api and ./commands - no fs, reporter or process writes - so the report is the reporter's own output, and the three cases are module-level it() declarations outside any describe. Every gate result.json records subject_hash_before == subject_hash_after == sha256:d2c533c19e605f15546714083fbdec0de5e031138390fca0e5c83b8829a3e32a (sealed Subject), so no gate evidence binds stale source.",
+      "id": "named-report-is-executed-not-fabricated",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "The gitignored generated paths declared as changed are byte-identical across the two locations and derived from this revision: frontend/dist/assets/index-DKLiyHmL.js == control/priv/static/portal/assets/index-DKLiyHmL.js (sha256:ca6b56dde7cbfae4c9a16db74bfc7711f4cc643a77f96097a79c95b7b658d673) and the two index.html copies match (sha256:a04bafe72e044b83a3af29ecf1bc8a7478c7336e446193a712a255fccb75cea), with the new message text present in the bundle, so the browser gate served the revision's own build.",
+      "id": "staged-bundle-matches-revision",
+      "severity": "info",
+      "status": "resolved"
+    }
+  ],
+  "gate_weakening": false,
+  "reviewer": {
+    "model_id": "deepseek-v4.1-flash-fast",
+    "session_ref": "01a1e85b-f7f2-72df-a547-fc18f48f1c10"
+  },
+  "routes_sha256": "sha256:86af4fef9286cdf1a460152154230148c007d699640da80ed974dffc7c94cc67",
+  "subject_hash": "sha256:d2c533c19e605f15546714083fbdec0de5e031138390fca0e5c83b8829a3e32a",
+  "verdict": "pass",
+  "worker": {
+    "model_id": "deepseek-v4.1-flash-fast",
+    "session_refs": [
+      "01a1e833-e530-76c9-a990-08d61cd810e0"
+    ]
+  }
+}

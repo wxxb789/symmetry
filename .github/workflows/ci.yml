@@ -1142,6 +1142,7 @@ jobs:
           python3 ../scripts/ci/test-model-routing-evaluation.py
           python3 ../scripts/ci/test-model-routing-omp-usage.py
           python3 ../scripts/ci/test-model-routing-record-sanitize.py
+          python3 ../scripts/ci/test-model-routing-source-subject.py
       # The ordinary (non-race) pass is scoped to the two packages whose named
       # assertions are checked below. The full ordinary suite and the full race
       # suite are not redundant shapes: on run 43975580744 the ordinary pass failed

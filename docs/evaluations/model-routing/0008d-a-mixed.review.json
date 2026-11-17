@@ -1,0 +1,48 @@
+{
+  "check_attempt_id": "attempt-0004",
+  "check_evidence_sha256": "sha256:cf4ec2b74508c773715b1bac11639ce3b9659b8f819ae33ecab2cf6650babc25",
+  "explanations": {
+    "Explain how a member the record does not carry is rendered, and why that path cannot produce 'Not supported' for an absent member.": "A member the record does not carry is rendered by delegation to the pre-existing presentation helper: runtimes.tsx line 31 computes const presentation = booleanCapability(capabilities[member]) for each literal member name, and presentation.ts (protected, unmodified) implements booleanCapability(value: boolean | undefined) as: undefined -> the shared notAdvertised presentation { label: 'Not advertised', tone: 'unknown' }, otherwise value ? supported : notSupported. There is no default parameter, no ??path-sha256:019ba55f0ab169c59b4551532624572c653ad2065d99bb8bbd5473fc292f2393 coercion and no fallback that maps absence to false, so the notSupported branch is reachable only when the record carries a literal false; an absent member therefore always renders the 'Not advertised' chip with the existing dashed chip-unknown tone. The decode layer reinforces this: RuntimeCapabilities decodes its booleans with optionalWith(S.Boolean, {exact: true}) (contracts/generated/effect), so an absent member stays absent instead of being filled with a default before the component sees it. Executed evidence: the focused-tests vitest JSON report (sha256 9c0a60e8..., 3/3 passed) contains 'renders a capability member the record does not carry as Not advertised rather than Not supported', which asserts chip text 'Not advertised', class chip-unknown, and .not.toHaveTextContent('Not supported') on the provider_access row while a served false interactive member still reads 'Not supported' with chip-failed - and the independent mutation run where the scratch copy substituted capabilities[member] ?? false failed those absence cases with \"expected 'Not supported' to be 'Not advertised'\", proving the assertion pins this path rather than passing vacuously.",
+    "Explain why the adapter-independent boolean members must render for a runtime whose adapter member is absent, and name the served projection and the frontend type member that carry them.": "The served projection is the workspace read's Protocol.runtime/1 capability map: runtimes[].capabilities, defined as RuntimeCapabilities in contracts/v1/workspace-read.schema.json ('a legacy registration without adapter metadata serves only the boolean subset, so every member stays optional') and generated as contracts/generated/ts/workspace-read.ts:269-275 with optional adapter plus optional structured_input/provider_access/interactive/supervisory_control booleans. The control read serves that map verbatim from the registered record - control/lib/symmetry_control/goals/read_model.ex:2417 (runtime_projection/1) does capabilities: sanitize(map_value(runtime, :capabilities, %{}), 4_000) and synthesizes nothing - and contracts/fixtures/valid/workspace-read.enriched-row.json shows both shapes side by side: one row with all four booleans plus an adapter declaration, and one legacy row carrying only {'structured_input': true, 'provider_access': true} with no adapter member. The frontend type member that carries them is Runtime['capabilities'] (frontend/src/services/api.ts:121, Runtime = NonNullable<Workspace['runtimes']>[number]; Workspace = SymmetryWorkspaceReadV1 at api.ts:42), i.e. the same optional boolean members decoded by the Effect WorkspaceRead schema (optionalWith(S.Boolean, {exact: true})). Because those members are genuinely served for an adapter-less registration, the page must render them as rows for such a runtime: before this change the adapter === undefined branch of RuntimeCard emitted only the 'Adapter record not advertised. ... no operation is claimed.' sentence, so the served boolean answers were invisible to the operator, and the only alternative reading - deriving booleans from the absent adapter - would fabricate values the record does not carry. The reviewed runtimes.tsx now renders CapabilityMemberRows unconditionally inside the existing 'Advertised capabilities' section and keeps the sentence for the adapter-less card, which is exactly what the first and third named cases assert."
+  },
+  "findings": [
+    {
+      "description": "The frozen browser gate (26 passed, desktop-chromium + mobile-chromium) exercises path-sha256:621a9c2b2e32cc7289ad2a1e5f869d12e2d782c3d580971a5cff9639e0d22e88 only through browser/tests/portal-execution-control.spec.mjs:293 'the runtimes list names its compatibility filter instead of claiming an empty registry', which asserts h1, the empty-state copy and article.runtime-card count parity with the served read - never the new capability rows. The new rendered behaviour therefore rests on jsdom/RTL evidence alone, and jsdom applies no CSS, so the chip tone is asserted as class names plus written label text (chipText), not as visual colour. No action required: the frozen task binds the new behaviour to the three named cases in frontend/src/features/runtimes/capability-rows.test.tsx, and the browser specs are regression evidence for the surrounding page (empty states, card count, both widths).",
+      "id": "browser-rows-coverage",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Independently verified the named tests bind the real production path by running mutation experiments in a scratch copy of frontend/ outside the sealed checkout (the frozen gates were not re-run): (a) baseline copy reproduced 3/3 passed; (b) restoring the base revision of frontend/src/features/runtimes/runtimes.tsx failed all three named cases ('no capability row for structured_input', [data-capability] length); (c) introducing a plausible defect, booleanCapability(capabilities[member] ?? false) in the scratch runtimes.tsx, failed exactly the two absence cases with \"expected 'Not supported' to be 'Not advertised'\" while the served-values case still passed. The tests discriminate the task's core non-substitution claim rather than matching mock data.",
+      "id": "mutation-nonvacuity",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "git diff HEAD --name-only in the sealed checkout is exactly frontend/src/features/runtimes/runtimes.tsx plus the new untracked frontend/src/features/runtimes/capability-rows.test.tsx; no protected path (presentation.ts, runtimes.test.tsx, styles.css, api.ts, router.tsx, contracts/**, browser/**, control/lib/**, control/test/**) is touched. The new test file performs no filesystem writes and no reporter manipulation: it renders through the real createApplication/createAppRouter + RouterProvider path and mocks only the HTTP fetcher, and the stored focused-tests report was written by vitest itself (--reporter=json --outputFile recorded in checks/attempt-0004/focused-tests/result.json); its on-disk sha256 9c0a60e82f560055360b6a7ab349fc4fb39e52f13f6413e0a5296394a3270a6d equals the recorded vitest_report_sha256, the single testResults entry is the checkout's capability-rows.test.tsx, and the three assertionResults carry exactly the frozen names with status passed and empty ancestorTitles (module-level, not inside a describe).",
+      "id": "scope-and-report-integrity",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "The refactor in runtimes.tsx keeps the adapter branch intact: the 'Adapter record not advertised. ...' sentence is byte-identical for adapter===undefined, the adapter facts dl and the operationRows ul render for adapter!==undefined unchanged, and the new member rows use only existing classes (runtime-facts/dl rows, chip, chip-<tone>); frontend/src/styles.css is unmodified. The adapter path is directly asserted by the third named case (10 [data-operation] rows, hard_cost_limit 'Not supported', usage 'Unknown', Harness/Protocol version facts) and appears in the built bundle. All 11 frozen gates exit 0 on the sealed subject (subject_hash_before == subject_hash_after == sha256:03309e00...), the full frontend suite ran 16 files / 238 tests including the new file (no skips: numPendingTests 0), and frontend/dist vs control/priv/static/portal artifacts are byte-identical and contain the new strings (data-capability, the four labels, the absence sentence).",
+      "id": "adapter-path-preservation",
+      "severity": "info",
+      "status": "resolved"
+    }
+  ],
+  "gate_weakening": false,
+  "reviewer": {
+    "model_id": "deepseek-v4.1-flash-fast",
+    "session_ref": "01a1e851-cd1c-7239-8620-d3e9f4dadbb4"
+  },
+  "routes_sha256": "sha256:86af4fef9286cdf1a460152154230148c007d699640da80ed974dffc7c94cc67",
+  "subject_hash": "sha256:03309e00d13932f9ba1f06344a6f1ef5951ff272f2a757d9262459c3411723db",
+  "verdict": "pass",
+  "worker": {
+    "model_id": "deepseek-v4.1-flash-fast",
+    "session_refs": [
+      "01a1e833-e562-725d-99bb-a6e51a128b04"
+    ]
+  }
+}

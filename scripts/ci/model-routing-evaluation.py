@@ -100,6 +100,7 @@ DEFAULT_TIMEOUT = 1800.0
 PROCESS_TREE_REAP_SECONDS = 10.0
 GO_LIST_FAILURE_PREFIX = "the package test binary did not list the named Go tests: "
 EXUNIT_FAILURE_PREFIX = "the traced ExUnit run did not execute every named test: "
+VITEST_FAILURE_PREFIX = "the traced vitest run did not report every named test as passed: "
 SOURCE_CHANGED_SUFFIX = "source changed while executing this gate"
 
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -156,7 +157,10 @@ TASK_KEYS = {
     "task_id", "base", "language", "risk_class", "workflow", "outcome",
     "explanations", "allowed_paths", "protected_paths", "gates",
 }
-GATE_KEYS = {"id", "cwd", "argv", "go_tests", "go_package", "exunit_tests", "exunit_files", "env"}
+GATE_KEYS = {
+    "id", "cwd", "argv", "go_tests", "go_package", "exunit_tests", "exunit_files",
+    "vitest_tests", "vitest_files", "env",
+}
 REQUIRED_GATE_KEYS = {"id", "cwd", "argv"}
 ROUTES_KEYS = {"worker", "reviewer"}
 ROLE_KEYS = {"model_id", "provenance", "credential_route", "authorization_ref"}
@@ -220,6 +224,10 @@ RESULT_KEYS = {
     "env", "exunit_tests", "exunit_files", "exunit_argv", "exunit_exit_code",
     "exunit_timed_out", "exunit_stdout_sha256", "exunit_stderr_sha256",
     "exunit_stdout_bytes", "exunit_stderr_bytes", "exunit_error",
+    "vitest_tests", "vitest_files", "vitest_argv", "vitest_exit_code",
+    "vitest_timed_out", "vitest_stdout_sha256", "vitest_stderr_sha256",
+    "vitest_stdout_bytes", "vitest_stderr_bytes", "vitest_report_sha256",
+    "vitest_report_bytes", "vitest_error",
     "validator", "subject_hash_before", "subject_hash_after", "passed",
 }
 VALIDATOR_KEYS = {"argv", "exit_code", "stdout_sha256", "stderr_sha256", "stdout_bytes", "stderr_bytes"}
@@ -519,6 +527,43 @@ def is_protected_asset(path: str) -> bool:
     return path.rsplit("/", 1)[-1] in PROTECTED_BASENAMES
 
 
+# Tool-generated run caches that live inside a project's own `node_modules`
+# directory. `vitest run` writes `node_modules/.vite/vitest/**` and
+# `node_modules/.vitest-cache/**` unconditionally inside the project it runs in,
+# and neither directory can hold a resolvable package: Node resolves a bare
+# specifier from `<dir>/node_modules/<name>`, so only a directory *named*
+# `<name>` can shadow a dependency. Binding their run state would make every
+# gate that executes vitest change the sealed revision it just verified, so the
+# manifest excludes exactly these cache directories and nothing else under
+# `node_modules`; a package directory, an installed dependency or any other file
+# under the same `node_modules` stays bound and is refused outside allowed paths.
+TOOL_CACHE_DIRECTORIES = (".vite", ".vite-temp", ".vitest-cache")
+
+
+def is_tool_cache_path(path: str) -> bool:
+    parts = path.split("/")
+    for index, segment in enumerate(parts[:-1]):
+        # The cache name must name a directory with an entry inside it: a file
+        # that merely carries a cache name is not run state.
+        if (
+            segment == "node_modules"
+            and parts[index + 1] in TOOL_CACHE_DIRECTORIES
+            and index + 1 < len(parts) - 1
+        ):
+            return True
+    return False
+
+
+def is_tool_cache_directory(path: str) -> bool:
+    """True when the path names a tool-cache directory the manifest excludes.
+
+    The manifest walk asks this for one directory at a time, and it is the same
+    definition `is_tool_cache_path` answers for entries inside such a directory, so
+    the exclusion rule lives in one place instead of a second inline condition.
+    """
+    return is_tool_cache_path(f"{path}/")
+
+
 # ---------------------------------------------------------------------------
 # Git and source binding
 
@@ -581,11 +626,28 @@ def executable_bits_tracked(checkout: pathlib.Path) -> bool:
 
 
 def iter_source_paths(checkout: pathlib.Path) -> list[str]:
-    """Every checkout file and symlink; only .git internals are excluded."""
+    """Every checkout file and symlink; only .git internals and tool caches are excluded.
+
+    The excluded tool caches are exactly the directories `is_tool_cache_path`
+    names, asked per directory by `is_tool_cache_directory`: run state written by
+    vitest inside a project's own `node_modules`, which cannot hold a resolvable
+    module and would otherwise change the sealed revision during every gate that
+    executes vitest. This is a declared boundary, not a proof of harmlessness: a
+    file placed inside one of those directories is not bound by the Source
+    manifest and the seal records no digest for it, so in principle a worker could
+    hide code there that a relative import reaches during a gate. The exclusion
+    stays narrow - three cache names, directories under `node_modules` only, while
+    package files elsewhere remain bound - no run observed such a file, and
+    removing the exclusion entirely needs vitest's run state outside the checkout,
+    which is proposed in `docs/TODO.md`.
+    """
     paths: list[str] = []
     for root, dirnames, filenames in os.walk(checkout):
         for dirname in list(dirnames):
             if dirname == ".git":
+                dirnames.remove(dirname)
+                continue
+            if is_tool_cache_directory(pathlib.Path(root, dirname).relative_to(checkout).as_posix()):
                 dirnames.remove(dirname)
                 continue
             candidate = pathlib.Path(root, dirname)
@@ -1095,6 +1157,29 @@ def validate_gate(value: Any, index: int) -> dict[str, Any]:
             raise Refused(f"{source} exunit_tests requires exunit_files")
         if pathlib.PurePath(argv[0]).name.lower() not in ("mix", "mix.exe", "mix.bat", "mix.cmd"):
             raise Refused(f"{source} exunit_tests requires a mix gate command")
+    vitest_tests = None
+    if "vitest_tests" in value:
+        vitest_tests = require_text_list(
+            value["vitest_tests"], source + " vitest_tests", minimum=1, unique=True, max_length=300
+        )
+        if len(vitest_tests) > 50:
+            raise Refused(f"{source} vitest_tests must list at most 50 tests")
+        if any("\0" in name for name in vitest_tests):
+            raise Refused(f"{source} vitest_tests must not contain NUL")
+    vitest_files = None
+    if "vitest_files" in value:
+        vitest_files = require_path_list(value["vitest_files"], source + " vitest_files", allow_glob=False)
+        if not vitest_files:
+            raise Refused(f"{source} vitest_files must list at least 1 file")
+        if len(vitest_files) > 20:
+            raise Refused(f"{source} vitest_files must list at most 20 files")
+    if vitest_files is not None and vitest_tests is None:
+        raise Refused(f"{source} vitest_files requires vitest_tests")
+    if vitest_tests is not None:
+        if vitest_files is None:
+            raise Refused(f"{source} vitest_tests requires vitest_files")
+        if not is_vitest_entry(argv):
+            raise Refused(f"{source} vitest_tests requires a vitest entry-point gate command")
     return {
         "id": gate_id,
         "cwd": cwd,
@@ -1103,6 +1188,8 @@ def validate_gate(value: Any, index: int) -> dict[str, Any]:
         "go_package": go_package,
         "exunit_tests": exunit_tests,
         "exunit_files": exunit_files,
+        "vitest_tests": vitest_tests,
+        "vitest_files": vitest_files,
         "env": validate_gate_env(value["env"], source) if "env" in value else {},
     }
 
@@ -1429,6 +1516,108 @@ def exunit_trace_argv(gate: dict[str, Any]) -> list[str] | None:
     return [gate["argv"][0], "test", "--trace", "--seed", "0", *gate["exunit_files"]]
 
 
+def is_vitest_entry(argv: list[str]) -> bool:
+    """True when argv runs a vitest entry point as `<interpreter> <vitest entry>`."""
+    if len(argv) < 2:
+        return False
+    name = pathlib.PurePath(argv[1]).name.lower()
+    return name.startswith("vitest") and name.endswith((".mjs", ".cjs", ".js"))
+
+
+def vitest_report_argv(gate: dict[str, Any], gate_dir: pathlib.Path) -> list[str] | None:
+    """Derive the structured vitest cross-check argv for a named-vitest-test gate, if any.
+
+    The derived run writes vitest's own JSON report next to the gate evidence, so
+    the check parses a structured document instead of matching printed text.
+    """
+    if not gate["vitest_tests"]:
+        return None
+    return [
+        *gate["argv"][:2],
+        "run",
+        "--reporter=json",
+        "--outputFile",
+        str(gate_dir / "vitest-report.json"),
+        *gate["vitest_files"],
+    ]
+
+
+def vitest_report_detail(expected: list[str], exit_code: int | None, report_raw: bytes) -> str | None:
+    """First reason the derived vitest report is not acceptance evidence, or None.
+
+    The report is vitest's JSON reporter document: every named test must appear
+    exactly once with `status: "passed"` at module level (no `ancestorTitles`, so a
+    frozen name binds one top-level declaration), the reporter's own failure count
+    must be zero and its success flag true. A missing, empty, unparsable or
+    summary-less report fails closed instead of reading as a pass.
+
+    The refusals are ordered so the most specific defect is the one reported: an
+    unreadable or non-object document, a non-success flag, a summary whose total is
+    not an integer, a non-zero failure count, an empty result list, then the named
+    tests themselves - while walking the assertions, a name declared inside a
+    describe block or finished with a status other than `passed`, and afterwards a
+    name reported zero times or more than once - and last a total smaller than the
+    frozen named list. The walk interleaves its structural refusals in that order
+    too: a file result that is not an object, a file result without an assertions
+    list, an assertion that is not an object, and an assertion without a name,
+    status or ancestor list each refuse before the per-name checks reach that entry,
+    and the exit-code refusals are checked first of all. This paragraph is the order,
+    not an inventory: every branch in this function refuses, and the order only
+    decides which reason a reader sees first.
+    """
+    if exit_code is None:
+        return "the derived vitest run timed out"
+    if exit_code != 0:
+        return f"the derived vitest run exited with code {exit_code}"
+    try:
+        report = strict_json(report_raw, "derived vitest report", MAX_CAPTURE_BYTES)
+    except Refused:
+        return "the derived vitest run wrote no readable JSON report"
+    if not isinstance(report, dict):
+        return "the derived vitest report is not a JSON object"
+    if report.get("success") is not True:
+        return "the derived vitest report does not record a successful run"
+    total = report.get("numTotalTests")
+    failed = report.get("numFailedTests")
+    if isinstance(total, bool) or not isinstance(total, int):
+        return "the derived vitest report carries no complete test summary"
+    if isinstance(failed, bool) or not isinstance(failed, int) or failed != 0:
+        return "the derived vitest report records failing tests"
+    test_results = report.get("testResults")
+    if not isinstance(test_results, list) or not test_results:
+        return "the derived vitest report carries no test results"
+    counts = dict.fromkeys(expected, 0)
+    for file_result in test_results:
+        if not isinstance(file_result, dict):
+            return "the derived vitest report carries a malformed file result"
+        assertions = file_result.get("assertionResults")
+        if not isinstance(assertions, list):
+            return "the derived vitest report carries a file result without assertions"
+        for assertion in assertions:
+            if not isinstance(assertion, dict):
+                return "the derived vitest report carries a malformed assertion"
+            full_name = assertion.get("fullName")
+            status = assertion.get("status")
+            ancestors = assertion.get("ancestorTitles")
+            if not isinstance(full_name, str) or not isinstance(status, str) or not isinstance(ancestors, list):
+                return "the derived vitest report carries an assertion without a name, status or ancestor list"
+            if full_name not in counts:
+                continue
+            if ancestors:
+                return f"the named test {full_name!r} is declared inside a describe block"
+            if status != "passed":
+                return f"the named test {full_name!r} finished with status {status!r}"
+            counts[full_name] += 1
+    for name in expected:
+        if counts[name] == 0:
+            return f"missing {name}"
+        if counts[name] > 1:
+            return f"{name} was reported {counts[name]} times"
+    if total < len(expected):
+        return "the derived vitest report carries no complete test summary"
+    return None
+
+
 def exunit_trace_observations(expected: list[str], stdout_raw: bytes) -> list[dict[str, Any]]:
     """Count finished `mix test --trace` observations for each expected test name.
 
@@ -1654,6 +1843,35 @@ def execute_gate(
         detail = exunit_trace_detail(gate["exunit_tests"], exunit_exit_code, exunit_stdout_raw)
         if detail is not None:
             exunit_error = EXUNIT_FAILURE_PREFIX + detail
+    vitest_argv = vitest_report_argv(gate, gate_dir)
+    vitest_ran = (
+        vitest_argv is not None and gate_command_error is None and not timed_out and exit_code == 0
+    )
+    vitest_exit_code: int | None = None
+    vitest_timed_out = False
+    vitest_stdout_raw = b""
+    vitest_stderr_raw = b""
+    vitest_report_raw = b""
+    vitest_error: str | None = None
+    if vitest_ran:
+        # A test file can print a passing name and exit before running anything, so the
+        # derived run writes vitest's own JSON report and every named test must appear
+        # in it exactly once with a passed status.
+        try:
+            vitest_exit_code, vitest_stdout_raw, vitest_stderr_raw, vitest_timed_out = run_owned_command(
+                vitest_argv, str(cwd), timeout, gate_env
+            )
+        except OSError as failure:
+            raise Refused(f"could not run the vitest structured report for gate {gate['id']}: {failure}")
+        write_bytes(gate_dir / "vitest.stdout.bin", vitest_stdout_raw)
+        write_bytes(gate_dir / "vitest.stderr.bin", vitest_stderr_raw)
+        report_path = gate_dir / "vitest-report.json"
+        if report_path.is_file():
+            vitest_report_raw = read_bytes(report_path, MAX_CAPTURE_BYTES, "derived vitest report")
+        write_bytes(report_path, vitest_report_raw)
+        detail = vitest_report_detail(gate["vitest_tests"], vitest_exit_code, vitest_report_raw)
+        if detail is not None:
+            vitest_error = VITEST_FAILURE_PREFIX + detail
     if gate["go_tests"] is not None:
         validator = run_validator(gate_dir, gate, gate_env)
     else:
@@ -1664,6 +1882,7 @@ def execute_gate(
         and exit_code == 0
         and (validator is None or validator["exit_code"] == 0)
         and exunit_error is None
+        and vitest_error is None
     )
     return {
         "gate_id": gate["id"],
@@ -1674,6 +1893,8 @@ def execute_gate(
         "env": gate["env"],
         "exunit_tests": gate["exunit_tests"],
         "exunit_files": gate["exunit_files"],
+        "vitest_tests": gate["vitest_tests"],
+        "vitest_files": gate["vitest_files"],
         "exit_code": exit_code,
         "timed_out": timed_out,
         "error": error,
@@ -1695,6 +1916,16 @@ def execute_gate(
         "exunit_stdout_bytes": len(exunit_stdout_raw) if exunit_ran else None,
         "exunit_stderr_bytes": len(exunit_stderr_raw) if exunit_ran else None,
         "exunit_error": exunit_error,
+        "vitest_argv": vitest_argv,
+        "vitest_exit_code": vitest_exit_code if vitest_ran else None,
+        "vitest_timed_out": vitest_timed_out,
+        "vitest_stdout_sha256": sha256_hex(vitest_stdout_raw) if vitest_ran else None,
+        "vitest_stderr_sha256": sha256_hex(vitest_stderr_raw) if vitest_ran else None,
+        "vitest_stdout_bytes": len(vitest_stdout_raw) if vitest_ran else None,
+        "vitest_stderr_bytes": len(vitest_stderr_raw) if vitest_ran else None,
+        "vitest_report_sha256": sha256_hex(vitest_report_raw) if vitest_ran else None,
+        "vitest_report_bytes": len(vitest_report_raw) if vitest_ran else None,
+        "vitest_error": vitest_error,
         "validator": validator,
         "subject_hash_before": None,
         "subject_hash_after": None,
@@ -1715,6 +1946,8 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         ("env", gate["env"]),
         ("exunit_tests", gate["exunit_tests"]),
         ("exunit_files", gate["exunit_files"]),
+        ("vitest_tests", gate["vitest_tests"]),
+        ("vitest_files", gate["vitest_files"]),
     ):
         if result[key] != expected:
             raise Refused(f"the stored result for gate {gate['id']} does not match the frozen gate {key}")
@@ -1729,6 +1962,9 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
     exunit_argv = exunit_trace_argv(gate)
     if result["exunit_argv"] != exunit_argv:
         raise Refused(f"the stored result for gate {gate['id']} does not match the derived ExUnit trace command")
+    vitest_argv = vitest_report_argv(gate, gate_dir)
+    if result["vitest_argv"] != vitest_argv:
+        raise Refused(f"the stored result for gate {gate['id']} does not match the derived vitest report command")
     # The derived list and trace runs happen exactly when the gate command itself ran and
     # exited 0.
     # The stored error conflates the gate command error, a reported list failure and the
@@ -1745,6 +1981,7 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
             gate_command_error = None
     list_expected = list_argv is not None and exit_code == 0 and gate_command_error is None and not timed_out
     exunit_expected = exunit_argv is not None and exit_code == 0 and gate_command_error is None and not timed_out
+    vitest_expected = vitest_argv is not None and exit_code == 0 and gate_command_error is None and not timed_out
     expected_files = {"result.json", "stdout.bin", "stderr.bin"}
     if gate["go_tests"] is not None:
         expected_files |= {"validator.stdout.bin", "validator.stderr.bin"}
@@ -1752,6 +1989,8 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         expected_files |= {"go-list.stdout.bin", "go-list.stderr.bin"}
     if exunit_expected:
         expected_files |= {"exunit.stdout.bin", "exunit.stderr.bin"}
+    if vitest_expected:
+        expected_files |= {"vitest.stdout.bin", "vitest.stderr.bin", "vitest-report.json"}
     actual_files = sorted(entry.name for entry in gate_dir.iterdir())
     if actual_files != sorted(expected_files):
         raise Refused(f"the stored evidence for gate {gate['id']} contains unexpected files")
@@ -1886,6 +2125,66 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
                 raise Refused(f"gate {gate['id']} records ExUnit trace evidence without an executed trace run")
         if result["exunit_timed_out"] is not False:
             raise Refused(f"gate {gate['id']} records ExUnit trace evidence without an executed trace run")
+    vitest_error: str | None = None
+    vitest_exit_code: int | None = None
+    if vitest_expected:
+        vitest_stdout_raw = read_bytes(
+            gate_dir / "vitest.stdout.bin", MAX_CAPTURE_BYTES, f"gate {gate['id']} vitest report stdout"
+        )
+        vitest_stderr_raw = read_bytes(
+            gate_dir / "vitest.stderr.bin", MAX_CAPTURE_BYTES, f"gate {gate['id']} vitest report stderr"
+        )
+        vitest_report_raw = read_bytes(
+            gate_dir / "vitest-report.json", MAX_CAPTURE_BYTES, f"gate {gate['id']} vitest report"
+        )
+        if (
+            result["vitest_stdout_sha256"] is None
+            or result["vitest_stdout_bytes"] is None
+            or result["vitest_stderr_sha256"] is None
+            or result["vitest_stderr_bytes"] is None
+            or result["vitest_report_sha256"] is None
+            or result["vitest_report_bytes"] is None
+        ):
+            raise Refused(f"gate {gate['id']} does not record the executed vitest report output")
+        if (
+            require_digest(result["vitest_stdout_sha256"], f"gate {gate['id']} vitest_stdout_sha256")
+            != sha256_hex(vitest_stdout_raw)
+            or require_integer(result["vitest_stdout_bytes"], f"gate {gate['id']} vitest_stdout_bytes")
+            != len(vitest_stdout_raw)
+            or require_digest(result["vitest_stderr_sha256"], f"gate {gate['id']} vitest_stderr_sha256")
+            != sha256_hex(vitest_stderr_raw)
+            or require_integer(result["vitest_stderr_bytes"], f"gate {gate['id']} vitest_stderr_bytes")
+            != len(vitest_stderr_raw)
+            or require_digest(result["vitest_report_sha256"], f"gate {gate['id']} vitest_report_sha256")
+            != sha256_hex(vitest_report_raw)
+            or require_integer(result["vitest_report_bytes"], f"gate {gate['id']} vitest_report_bytes")
+            != len(vitest_report_raw)
+        ):
+            raise Refused(f"the stored vitest report for gate {gate['id']} changed after it was captured")
+        vitest_exit_code = require_optional_integer(
+            result["vitest_exit_code"], f"gate {gate['id']} vitest_exit_code", -4096
+        )
+        vitest_timed_out = require_bool(result["vitest_timed_out"], f"gate {gate['id']} vitest_timed_out")
+        if vitest_timed_out != (vitest_exit_code is None):
+            raise Refused(f"the stored vitest report run for gate {gate['id']} disagrees with its exit code")
+        detail = vitest_report_detail(gate["vitest_tests"], vitest_exit_code, vitest_report_raw)
+        vitest_error = None if detail is None else VITEST_FAILURE_PREFIX + detail
+        passed = passed and vitest_error is None
+    else:
+        for key in (
+            "vitest_exit_code",
+            "vitest_stdout_sha256",
+            "vitest_stderr_sha256",
+            "vitest_stdout_bytes",
+            "vitest_stderr_bytes",
+            "vitest_report_sha256",
+            "vitest_report_bytes",
+            "vitest_error",
+        ):
+            if result[key] is not None:
+                raise Refused(f"gate {gate['id']} records vitest report evidence without an executed report run")
+        if result["vitest_timed_out"] is not False:
+            raise Refused(f"gate {gate['id']} records vitest report evidence without an executed report run")
     if result["passed"] is not passed:
         raise Refused(f"the stored result for gate {gate['id']} claims passed={result['passed']} but its evidence says {passed}")
     return {
@@ -1897,11 +2196,15 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         "env": gate["env"],
         "exunit_tests": gate["exunit_tests"],
         "exunit_files": gate["exunit_files"],
+        "vitest_tests": gate["vitest_tests"],
+        "vitest_files": gate["vitest_files"],
         "exit_code": exit_code,
         "timed_out": timed_out,
         "error": error,
         "exunit_exit_code": exunit_exit_code,
         "exunit_error": exunit_error,
+        "vitest_exit_code": vitest_exit_code,
+        "vitest_error": vitest_error,
         "subject_bound": subject_bound,
         "passed": passed,
         "stdout_sha256": result["stdout_sha256"],
@@ -2360,6 +2663,10 @@ def build_receipt(
             "exunit_files": gate["exunit_files"],
             "exunit_exit_code": gate["exunit_exit_code"],
             "exunit_error": gate["exunit_error"],
+            "vitest_tests": gate["vitest_tests"],
+            "vitest_files": gate["vitest_files"],
+            "vitest_exit_code": gate["vitest_exit_code"],
+            "vitest_error": gate["vitest_error"],
         }
         for gate in (attempt["gates"] if attempt is not None else [])
     ]
@@ -2490,6 +2797,8 @@ def derive_receipt(run_dir: pathlib.Path, candidate_usage: bytes | None = None) 
                     detail = gate["error"]
                 elif gate["exunit_error"] is not None:
                     detail = gate["exunit_error"]
+                elif gate["vitest_error"] is not None:
+                    detail = gate["vitest_error"]
                 else:
                     detail = f"exit code {gate['exit_code']}"
                 blockers.append(f"check attempt {attempt['attempt_id']} gate {gate['id']} did not pass ({detail})")

@@ -1,0 +1,1075 @@
+{
+  "acceptance_blockers": [],
+  "accepted": true,
+  "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+  "checks": [
+    {
+      "argv": [
+        "node",
+        "../../node_modules/typescript/bin/tsc",
+        "--project",
+        "contracts/tsconfig.json"
+      ],
+      "cwd": ".",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "contracts-typecheck",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "contracts/scripts/check.mjs"
+      ],
+      "cwd": ".",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "contracts-generated-drift",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "contracts/scripts/check-effect.mjs"
+      ],
+      "cwd": ".",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "contracts-effect-drift",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "--test",
+        "contracts/scripts/"
+      ],
+      "cwd": ".",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "contracts-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/@typescript/native/bin/tsc",
+        "--noEmit"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-typecheck",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/eslint/bin/eslint.js",
+        ".",
+        "--max-warnings",
+        "0"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-lint",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/vitest/vitest.mjs",
+        "run",
+        "src/services/command-receipts.test.ts"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "focused-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": 0,
+      "vitest_files": [
+        "src/services/command-receipts.test.ts"
+      ],
+      "vitest_tests": [
+        "rejects an unreadable command success body instead of returning a placeholder receipt",
+        "forwards an aborted command request as a cancellation rather than a network failure",
+        "keeps a JSON command body its decoded payload and a refusal its own status error"
+      ]
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/vitest/vitest.mjs",
+        "run"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/vite/bin/vite.js",
+        "build"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-build",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "scripts/stage-assets.mjs"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-stage-assets",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/@playwright/test/cli.js",
+        "test",
+        "tests/workspace-shell.spec.mjs",
+        "tests/portal-execution-control.spec.mjs"
+      ],
+      "cwd": "browser",
+      "env": {
+        "SYMMETRY_PORTAL_URL": "http://127.0.0.1:4040",
+        "SYMMETRY_SHELL_EXPIRY_URL": "http://127.0.0.1:4041"
+      },
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "browser-acceptance",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    }
+  ],
+  "cost": {
+    "accounting_complete": false,
+    "estimated_cost": 0.8930115000000001,
+    "incomplete_reasons": [
+      "missing price version in 3 model phase(s)",
+      "no provider-reported cost in 3 model phase(s)"
+    ],
+    "known_estimated_cost_subtotal": 0.8930115000000001,
+    "known_reported_cost_subtotal": 0,
+    "price_versions": [],
+    "reported_cost": null
+  },
+  "environment": {
+    "git_version": "git version 2.56.0.windows.4",
+    "machine": "AMD64",
+    "measured": {
+      "base_commit": "dacec45034abc667ae65d41e1f778a896ec340c7",
+      "browser_route": "Playwright 1.64.1 desktop-chromium and mobile-chromium against the run's own staged bundle; captures copied into the run store after the check",
+      "control_route": "Phoenix dev server from each run's sealed checkout on 127.0.0.1:4040 plus an expiry instance on 127.0.0.1:4041 (SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2); PostgreSQL 18.6-alpine container on 127.0.0.1:55464, database symmetry_control_dev",
+      "eval_host": "Windows NT 10.0.26300 x64; one host and one execution surface for all four runs",
+      "js_deps_route": "shared hoisted pnpm 12.17.0 install at <store>/runs/node_modules, one level above every run dir, resolved by ancestor node_modules walking; the provisioning lockfile copy substitutes the unreachable npmjs host with the configured feed; integrity values are the frozen lockfile's own",
+      "node_version": "v26.13.1",
+      "toolchain_route": "Elixir 1.20.4 / OTP 29 for the Control server (MIX_DEPS_PATH/MIX_BUILD_PATH outside the checkout); TypeScript and vitest entries pinned to lockfile package paths"
+    },
+    "platform": "win32",
+    "python_version": "3.12.10"
+  },
+  "evidence": {
+    "check_attempt": {
+      "attempt_id": "attempt-0001",
+      "attempt_sha256": "sha256:af4d4152722726cd386dd94018a49c64dec255570a1d1f13bcb61b4948f8f88c",
+      "complete": true,
+      "gates": [
+        {
+          "id": "contracts-typecheck",
+          "passed": true,
+          "result_sha256": "sha256:c12d1b76ae50b4942d4d79c61ebf86a429280c925ae37b5e49de5a3b328c3d3a",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "contracts-generated-drift",
+          "passed": true,
+          "result_sha256": "sha256:097899d70b7a15b1d41923975b654009c2848d4f0befcb7c2342a679deb9f4ac",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:013a777fb714705f416fc034886eee69beccff317ca957f0457ef8581e601898",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "contracts-effect-drift",
+          "passed": true,
+          "result_sha256": "sha256:82fc5dfa08624267ab7418259ac465c6c969ed4e8ecea3767b912f2c9bba4b2f",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e65762adedbdc301b3d206df2c8f09534ef7abbc32b818b3d268a81cdabf3347",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "contracts-tests",
+          "passed": true,
+          "result_sha256": "sha256:7f9a37d573d071146e9a755fe76ddf2598f713a3cb011fe9b0dc370cc0c597ae",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:aede10f35677711affecaf9c0e9d095772280a1df450ed85051555a2653da3ee",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-typecheck",
+          "passed": true,
+          "result_sha256": "sha256:5c2803fb20f6987dab5c7470a7d5b308ebb534aef6eea2f8285a6e63f06a20e4",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-lint",
+          "passed": true,
+          "result_sha256": "sha256:5fbbb2ba9fe12d5bc05fdfbe714b033a9b4e7e921b3028a396d4ce4238ebb095",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "focused-tests",
+          "passed": true,
+          "result_sha256": "sha256:01c0351d36a9ea261c8936d79a68e51ffaf0a3e8b3ee3703890d181dbc178492",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:cfa0ca420b14867bfdf25c0592cb783986e0b482b93a0c3dd8861a35fc7ce2af",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-tests",
+          "passed": true,
+          "result_sha256": "sha256:d91fa73a02a2232c26dd2a8f4468d88912c5dbabf19bd67511235eb645e6f8ad",
+          "stderr_sha256": "sha256:a246f21e3d7f34cd9b1f77289231d8835ad6eecdf0d27fda01cd7a909e23ddf0",
+          "stdout_sha256": "sha256:99aa87cbb22b30f11ca6b436385dcbc86df839987a5af7dfa613c2d58d7654d4",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-build",
+          "passed": true,
+          "result_sha256": "sha256:37093b32697407c4516556f529670581574e6d9583a122a41d76481682924a61",
+          "stderr_sha256": "sha256:351b524197fb492920789369e7f1a271420c757633fbb553b280a181ac4c31a4",
+          "stdout_sha256": "sha256:a7ae717c965f46111faf35dd9a81d7f5db6f4db7720b7eaa4ee0eeae0a6659c5",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-stage-assets",
+          "passed": true,
+          "result_sha256": "sha256:2bec1714367853d95e7651d90cd988e2b8357f5d223ca53f23893232e720e564",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "browser-acceptance",
+          "passed": true,
+          "result_sha256": "sha256:9fb9c300e4cc2c32a26b59e404b1f7b93e00e1e7c6faa8a4c2d8533371d41949",
+          "stderr_sha256": "sha256:8b3335cfba2615d0d1ad4f2c4a97692735311c8a5483b2c148fb199bd3519387",
+          "stdout_sha256": "sha256:f92aa7faddde26f3d108fc5894d71ea265ff0e64db756087dc1692567f6dbaaf",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        }
+      ],
+      "passed": true,
+      "routes_sha256": "sha256:80c9763b153d22f007deb0cec63fddb0afdd0c018d44117ab02ba9d132c4ef5f",
+      "subject_hash": "sha256:d7dbee102448a942957280980f9d4eea2a70b2afad09fb7c998271b226db9f06",
+      "task_sha256": "sha256:480eef71bb356133fb004bd97b30bad67df89b38be1202618e70a20cc8529809"
+    },
+    "frozen_review_sha256": "sha256:bc54cbe0fb7734598c19bf8cfbd6a2f3e05365ffbbd600c875a6ff238849a701",
+    "frozen_routes_sha256": "sha256:80c9763b153d22f007deb0cec63fddb0afdd0c018d44117ab02ba9d132c4ef5f",
+    "frozen_task_sha256": "sha256:480eef71bb356133fb004bd97b30bad67df89b38be1202618e70a20cc8529809",
+    "frozen_usage_sha256": "sha256:441276687c138c7e86f27b0f76e197407d7f9abe1bf811e8b648118e9007f046",
+    "tooling_sources": {
+      "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+      "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+      "model-routing-evaluation.py": "sha256:8150471596dee8cf88cedd2778f77b8d20fc37633972dc3d7b59df50cf123ee5"
+    }
+  },
+  "explanations": [
+    "Explain why a 2xx command body the decoder cannot read must reject instead of resolving a placeholder, and name the caller path that would otherwise announce an accepted command from it.",
+    "Explain how an aborted command request is distinguished from a transport failure, and why the refusal decoding path and every existing caller keep their behaviour."
+  ],
+  "head": "dacec45034abc667ae65d41e1f778a896ec340c7",
+  "language": "typescript",
+  "later_defects": [],
+  "model_ids": [
+    {
+      "api": "openai-completions",
+      "model": "deepseek-v4.1-flash-fast",
+      "provider": "tencent-litellm"
+    },
+    {
+      "api": "openai-responses",
+      "model": "gpt-6.1-sol",
+      "provider": "ghc"
+    }
+  ],
+  "outcome": "The command POST path in `frontend/src/services/api.ts` (`postPortalCommand`, and `postGoalCommand` through it) must stop turning an unreadable command response into a receipt: a 2xx response whose body is not a JSON document must reject with the existing `UnexpectedResponse` error carrying that response's status and `transient: false`, so no caller can announce an accepted command from a body the decoder could not read, while a 2xx response whose body is a JSON document keeps resolving exactly the payload it decodes today (including a JSON body that is not an object). The same two functions must accept and forward an `AbortSignal` as a new trailing optional parameter, and a cancelled request must stay the caller's own cancellation instead of being re-labelled as a transport failure: when the request was aborted (the signal is already aborted, or the fetcher rejects with an `AbortError`), the rejection must be the abort error, and an unrelated transport failure must keep rejecting as `Network` with the existing message. Refusal decoding is unchanged: a non-2xx JSON refusal still becomes `MutationRefused` carrying exactly the members the server sent, a non-2xx body that is not JSON still maps through the status error path (409 to `Conflict`, 403 to `Forbidden`), and session redirects still raise `Unauthenticated`. Existing callers must keep compiling and behaving exactly as today when they pass no signal: no caller signature may become required, and the read path (`request`/`json`), retry policy, CSRF header, `cache: \"no-store\"` and `redirect: \"manual\"` stay as they are. Add your new cases in `frontend/src/services/command-receipts.test.ts`; the three cases must be declared at module level, outside any `describe` block, because the frozen named-test acceptance binds the reporter's full test name exactly: 'rejects an unreadable command success body instead of returning a placeholder receipt', 'forwards an aborted command request as a cancellation rather than a network failure' and 'keeps a JSON command body its decoded payload and a refusal its own status error'.",
+  "phases": [
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "the coordinating primary session is shared across all four runs and the wider working session, so this run has no separable exploration model session; the sealed packet bytes and their digests are the exploration artifact",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "exploration",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.36061790000000005,
+      "known_subtotals": {
+        "assistant_messages": 17,
+        "assistant_messages_with_cost_total": 17,
+        "assistant_messages_with_usage": 17,
+        "cacheRead": {
+          "messages": 17,
+          "sum": 956559
+        },
+        "cacheWrite": {
+          "messages": 17,
+          "sum": 64916
+        },
+        "cached": {
+          "messages": 17,
+          "sum": 1021475
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 17,
+            "sum": 0.09565589999999999
+          },
+          "cacheWrite": {
+            "messages": 17,
+            "sum": 0.16229000000000007
+          },
+          "input": {
+            "messages": 17,
+            "sum": 0.00010199999999999997
+          },
+          "output": {
+            "messages": 17,
+            "sum": 0.10257000000000002
+          },
+          "total": {
+            "messages": 17,
+            "sum": 0.36061790000000005
+          }
+        },
+        "input": {
+          "messages": 17,
+          "sum": 51
+        },
+        "output": {
+          "messages": 17,
+          "sum": 10257
+        },
+        "reasoningTokens": {
+          "messages": 13,
+          "sum": 4581
+        },
+        "totalTokens": {
+          "messages": 17,
+          "sum": 1031783
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 17,
+        "assistant_messages_with_cost_total": 17,
+        "assistant_messages_with_usage": 17,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-existing-provider",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 54,
+          "message": 70,
+          "model_change": 1,
+          "model_usage": 7,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1,
+          "ttsr_injection": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          }
+        ],
+        "records": 136,
+        "resolved_model_identity": null,
+        "routing_provenance": "modelRoles.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:f2c78340993916ce857f45747541d69b10ead92f2405cfc617c24e548ad9508c",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 17,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:dc416a4ac32a132489ad73915c65076cdab6d3ed7d59842c2b33e7cd272d638d"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e833-e539-7550-8dcd-7c68b9f20213",
+      "stage": "implementation",
+      "tokens": {
+        "cached": 1021475,
+        "input": 51,
+        "output": 10257
+      },
+      "wall_time": 423.287
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "the eleven frozen gates are local processes (node, vitest, vite, the contracts checkers, Playwright against the run's own Control server) executed by scripts/ci/model-routing-evaluation.py; no model session participates",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "verification",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 349.62
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.1573944,
+      "known_subtotals": {
+        "assistant_messages": 72,
+        "assistant_messages_with_cost_total": 72,
+        "assistant_messages_with_usage": 72,
+        "cacheRead": {
+          "messages": 72,
+          "sum": 6957120
+        },
+        "cacheWrite": {
+          "messages": 72,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 72,
+          "sum": 6957120
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 72,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 72,
+            "sum": 0
+          },
+          "input": {
+            "messages": 72,
+            "sum": 0.03049679999999999
+          },
+          "output": {
+            "messages": 72,
+            "sum": 0.1268976
+          },
+          "total": {
+            "messages": 72,
+            "sum": 0.1573944
+          }
+        },
+        "input": {
+          "messages": 72,
+          "sum": 101656
+        },
+        "output": {
+          "messages": 72,
+          "sum": 105748
+        },
+        "reasoningTokens": {
+          "messages": 67,
+          "sum": 83513
+        },
+        "totalTokens": {
+          "messages": 72,
+          "sum": 7164524
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 72,
+        "assistant_messages_with_cost_total": 72,
+        "assistant_messages_with_usage": 72,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-existing-provider",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 93,
+          "message": 163,
+          "model_change": 1,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          }
+        ],
+        "records": 260,
+        "resolved_model_identity": null,
+        "routing_provenance": "task.agentModelOverrides.reviewer",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:4f40d976b548d3021439149d73d2d1b52b11222c68564c72ae58edb2e366d955",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 72,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:c28d56e276a3e5a50ce1d06133fb9bca546836c013c27c3147a88369dc174e0d"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e861-f89a-772f-940d-b5a1b8057221",
+      "stage": "review",
+      "tokens": {
+        "cached": 6957120,
+        "input": 101656,
+        "output": 105748
+      },
+      "wall_time": 462.866
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "no repair round was run: the first completed implementation attempt was accepted",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "repair",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.3749992,
+      "known_subtotals": {
+        "assistant_messages": 15,
+        "assistant_messages_with_cost_total": 15,
+        "assistant_messages_with_usage": 15,
+        "cacheRead": {
+          "messages": 15,
+          "sum": 819042
+        },
+        "cacheWrite": {
+          "messages": 15,
+          "sum": 78466
+        },
+        "cached": {
+          "messages": 15,
+          "sum": 897508
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 15,
+            "sum": 0.08190420000000001
+          },
+          "cacheWrite": {
+            "messages": 15,
+            "sum": 0.19616499999999998
+          },
+          "input": {
+            "messages": 15,
+            "sum": 8.999999999999998e-05
+          },
+          "output": {
+            "messages": 15,
+            "sum": 0.09684000000000002
+          },
+          "total": {
+            "messages": 15,
+            "sum": 0.3749992
+          }
+        },
+        "input": {
+          "messages": 15,
+          "sum": 45
+        },
+        "output": {
+          "messages": 15,
+          "sum": 9684
+        },
+        "reasoningTokens": {
+          "messages": 13,
+          "sum": 5078
+        },
+        "totalTokens": {
+          "messages": 15,
+          "sum": 907237
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 15,
+        "assistant_messages_with_cost_total": 15,
+        "assistant_messages_with_usage": 15,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-existing-provider",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 55,
+          "message": 69,
+          "model_change": 1,
+          "model_usage": 2,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          }
+        ],
+        "records": 130,
+        "resolved_model_identity": null,
+        "routing_provenance": "modelRoles.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:b34c15f5276d169b69ea22519c5472ca805eb07914e26fcf0f882c1531c4068b",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 15,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:d1d2b2dd28a3c2789fabff27b62ac031bcdd4b35dd9f44dc41822bd3de83bce7"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e82d-1bf2-7740-894f-ab5bc6bc3d92",
+      "stage": "failed_attempt",
+      "tokens": {
+        "cached": 897508,
+        "input": 45,
+        "output": 9684
+      },
+      "wall_time": 340.037
+    }
+  ],
+  "prompt_hashes": [
+    {
+      "kind": "user_message",
+      "sha256": "sha256:c28d56e276a3e5a50ce1d06133fb9bca546836c013c27c3147a88369dc174e0d"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:d1d2b2dd28a3c2789fabff27b62ac031bcdd4b35dd9f44dc41822bd3de83bce7"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:dc416a4ac32a132489ad73915c65076cdab6d3ed7d59842c2b33e7cd272d638d"
+    }
+  ],
+  "repair_count": 0,
+  "review": {
+    "check_attempt_id": "attempt-0001",
+    "evidence_sha256": "sha256:bc54cbe0fb7734598c19bf8cfbd6a2f3e05365ffbbd600c875a6ff238849a701",
+    "gate_weakening": false,
+    "model_id": "deepseek-v4.1-flash-fast",
+    "routes_sha256": "sha256:80c9763b153d22f007deb0cec63fddb0afdd0c018d44117ab02ba9d132c4ef5f",
+    "session_ref": "01a1e861-f89a-772f-940d-b5a1b8057221",
+    "subject_hash": "sha256:d7dbee102448a942957280980f9d4eea2a70b2afad09fb7c998271b226db9f06",
+    "verdict": "pass"
+  },
+  "review_time": 462.866,
+  "reviewed_explanations": {
+    "Explain how an aborted command request is distinguished from a transport failure, and why the refusal decoding path and every existing caller keep their behaviour.": "An aborted command request is distinguished at three points in frontend/src/services/api.ts: signal?.throwIfAborted() runs before the fetch, so a pre-aborted signal rejects with exactly the caller's signal.reason (the test compares identity with rejects.toBe(alreadyAborted.signal.reason)); the fetch init forwards the signal only when supplied (`...(signal === undefined ? {} : { signal })`); and the catch clause rethrows the rejection itself when signal?.aborted or when the error is an object whose name is 'AbortError' (a DOMException or a fetcher-thrown Error with that name), while any other rejection keeps the pre-existing Network('Cannot reach the server. Check your connection and try again.'). The frozen base's bare `catch { throw new Network(...) }` relabelled every cancellation as a transport failure; the named case 'forwards an aborted command request as a cancellation rather than a network failure' covers both aborted paths by identity and both transport-failure paths (undefined signal and a fresh non-aborted signal) expecting Network with the existing message, so a subtle mis-merge fails it. Refusal decoding and every existing caller keep their behaviour because the only new failure on the success path is `response.ok && document._tag === 'None'`: the opaqueredirect/302/303 -> Unauthenticated check, refusal(response.status, payload) building MutationRefused from exactly the server's members (code, message, optional current_version, current_revision, allowed_actions, details), and the non-JSON status path (409 -> Conflict, 403 -> Forbidden for commands, Unauthenticated for 401) are byte-for-byte the base logic, and `signal?: AbortSignal` is a trailing optional parameter on postPortalCommand and postGoalCommand so frontend/src/features/attention/attention.tsx (4-argument call) and frontend/src/features/goals/detail.tsx (4-argument calls) compile and run unchanged without it. Executed evidence: frontend-typecheck, frontend-lint, the full 238-test frontend suite and the 26-case browser baseline all passed on the sealed revision, and the third named case pins the unchanged JSON payloads, request init (CSRF header, cache: 'no-store', redirect: 'manual') and refusal/status mapping.",
+    "Explain why a 2xx command body the decoder cannot read must reject instead of resolving a placeholder, and name the caller path that would otherwise announce an accepted command from it.": "frontend/src/services/api.ts postPortalCommand decodes the body with Schema.decodeUnknownOption(Schema.parseJson(Schema.Unknown))(await response.text()); when the result is None (HTML or other non-JSON text, truncated JSON, whitespace-only, or an empty 204 body) the pre-change code still returned `payload`, which is null — a receipt-shaped success for a body that carries no receipt, so a caller could announce acceptance it never verifiably received. Resolving must reject instead because the outcome the UI reports is derived from this return value: frontend/src/features/goals/detail.tsx registers `postGoalCommand` as the `command` useMutation and its onSuccess announces `${actionLabel(...)} accepted by the server.` plus query invalidations, and frontend/src/features/attention/attention.tsx NewGoalButton calls `postPortalCommand` for goal creation and its onSuccess announces 'The server created the Goal.' — that is the caller path that would otherwise announce an accepted command from a placeholder. The change makes response.ok with document._tag === 'None' throw UnexpectedResponse{message: 'The server response could not be read safely. Refresh or contact your operator.', status: response.status, transient: false}, so those callers run their onError branch, and readRetry(0, failure) is false so an unverifiable command is not silently auto-retried. Executed evidence: the named case 'rejects an unreadable command success body instead of returning a placeholder receipt' asserts instanceof UnexpectedResponse, the exact response status and transient:false for four bodies (HTML text, '{\"receipt\":' truncation, whitespace, null/204) across both postPortalCommand and postGoalCommand, and asserts readRetry is false; stored vitest-report.json records it passed exactly once at module level (focused-tests exit 0); reverting the api.ts hunk makes it fail by resolving null."
+  },
+  "reviewer_findings": [
+    {
+      "description": "Abort handling verified in frontend/src/services/api.ts: postPortalCommand calls signal?.throwIfAborted() before fetch, forwards the signal only when defined (`...(signal === undefined ? {} : { signal })`), and in catch rethrows when `signal?.aborted` or the rejection's name is 'AbortError'; otherwise it throws the unchanged Network('Cannot reach the server. Check your connection and try again.'). The named case 'forwards an aborted command request as a cancellation rather than a network failure' asserts rejection identity (`rejects.toBe(signal.reason)` for a pre-aborted controller; `rejects.toBe(abortError)` for an abort during flight and for two AbortError-shaped fetcher rejections with no signal passed) and asserts TypeError transport failures still reject as Network with the existing message for undefined and fresh non-aborted signals. The frozen base's catch-all `throw new Network(...)` relabelled every abort, so the test fails on it.",
+      "id": "abort-vs-transport",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "browser-acceptance (gate exit 0) executed only the repository baseline specs browser/tests/workspace-shell.spec.mjs and browser/tests/portal-execution-control.spec.mjs at desktop and mobile chromium (26/26 passed, stored stdout); it asserts no command-receipt or abort behaviour of the changed functions. The new decoder/abort behaviour is therefore evidenced by the focused unit test alone, which exercises the real production functions through per-test fetcher mocks at the HTTP boundary. The frozen task states no rendered or accessibility claim, so no browser assertion of this behaviour was required; recorded so acceptance evidence is not over-claimed.",
+      "id": "browser-coverage-boundary",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Named-test evidence is executed, not fabricated: the derived run stored in checks/attempt-0001/focused-tests/result.json (vitest_argv: vitest run --reporter=json --outputFile <gate-dir>/vitest-report.json src/services/command-receipts.test.ts, exit 0, stdout 'JSON report written to ...') produced a report where each of the three frozen full names appears exactly once with status 'passed' and empty ancestorTitles (module level), numFailedTests 0, numPendingTests 0. frontend/src/services/command-receipts.test.ts imports only vitest, ./api and ./commands, performs no filesystem writes, and asserts against the real postPortalCommand/postGoalCommand with fetcher mocks only at the HTTP boundary, so the report cannot be produced by the test file; the reporter overwrites any earlier content at the end of its own run. No required test was removed, skipped or weakened (new file has no describe/skip/todo; api.test.ts and api.fixtures.ts are unchanged).",
+      "id": "named-test-evidence",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Preserved behaviour verified by the named case 'keeps a JSON command body its decoded payload and a refusal its own status error' and by the diff shape: 2xx JSON bodies (object with extra members, array, string, number, false, null) resolve exactly the decoded payload; request init keeps method POST, credentials same-origin, Accept/content-type/x-csrf-token headers, JSON body, cache no-store, redirect manual; non-2xx JSON refusals still become MutationRefused carrying the server's code/message and optional current_version/current_revision/allowed_actions/details; non-JSON 409/403 still map to Conflict/Forbidden and 302/303/401 to Unauthenticated (redirect check unchanged and ordered before decoding). That case is a preservation guard (it would also pass on the frozen base) — its role, per the frozen outcome, is to pin 'keeps resolving exactly the payload it decodes today'. The read path (request/decodeBody), readRetry and the refusal helpers are untouched by the diff; frontend suite 238/238 tests and browser baseline 26/26 passed on the sealed revision.",
+      "id": "preserved-contracts",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Receipt-truth fix verified in frontend/src/services/api.ts postPortalCommand: when response.ok and `Schema.decodeUnknownOption(Schema.parseJson(Schema.Unknown))(await response.text())` yields None (non-JSON text, truncated JSON, empty 204), it now throws UnexpectedResponse{message: 'The server response could not be read safely. Refresh or contact your operator.', status: response.status, transient: false} instead of resolving the null placeholder; readRetry(0, err) is false so the command is never auto-retried. Reverting only those lines makes the named case fail (it resolves null). Executed evidence: checks/attempt-0001/focused-tests/vitest-report.json lists 'rejects an unreadable command success body instead of returning a placeholder receipt' exactly once, module-level, status passed; gate exit 0; my independent rerun of the coordinator's recompute_gate/inspect_attempt over the stored evidence revalidates every gate (subject_hash_before/after == sealed for all 11).",
+      "id": "receipt-truth",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Review-process note: loading the runner module for independent verification created a transient Python bytecode cache at scripts/ci/__pycache__/ inside the checkout; it was deleted immediately and no source, task, runner or evidence file was modified. Re-running the coordinator's require_current_subject afterwards reproduces the sealed subject sha256:d7dbee10… exactly, confirming the reviewed tree equals the seal.",
+      "id": "review-hygiene",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Reviewed revision is the sealed subject and stays inside allowed paths. `git diff HEAD` in the checkout shows only frontend/src/services/api.ts (18 insertions, 4 deletions); frontend/src/services/command-receipts.test.ts is new; the remaining sealed changes are build outputs frontend/dist/{index.html,assets/index-CcD5vOfx.css,assets/index-DMUUAcAe.js} plus their byte-identical stage-assets copies under control/priv/static/portal/ (sha256 equal for index.html and both hashed assets). Protected paths (frontend/src/services/api.test.ts, api.fixtures.ts, commands.ts, control-actions.ts, frontend/src/features/**, browser/**, contracts/**, control/**) are untouched: recomputing changes with the coordinator's runner reproduces sealed.json's 8 changed paths (A/M only) and the recomputed subject sha256:d7dbee102448a942957280980f9d4eea2a70b2afad09fb7c998271b226db9f06 equals the sealed subject; require_current_subject passes.",
+      "id": "scope-sealed-paths",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Boundary, not a defect: postPortalCommand decodes with `await response.text()` (pre-existing) rather than the read path's fatal TextDecoder (decodeBody), so a 2xx body with invalid UTF-8 bytes whose U+FFFD-substituted text still parses as JSON resolves a payload instead of rejecting. The frozen outcome defines the reject condition as a body the existing decoder cannot read (document._tag === 'None') and requires JSON bodies to keep resolving exactly the payload decoded today, so the implementation matches the contract; noted as the limit of the 'unreadable' definition for anyone reading it as byte-level validation.",
+      "id": "utf8-lossy-boundary",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "The vitest gates write run state inside the checkout (node_modules/.vitest-cache/**, frontend/node_modules/.vite/**; file timestamps fall inside the frontend-tests gate window and did not change the sealed revision). The coordinator's runner excludes exactly these TOOL_CACHE_DIRECTORIES from the subject manifest: recomputing the manifest over the current tree reproduces sealed.json digest sha256:23ac1dd1d90136f22f76523847a8db2ad569915cb7c810c8c3dac6b354c4fedd with file_count 1286 and subject sha256:d7dbee10…; the post-gate tree still equals the seal under require_current_subject.",
+      "id": "vitest-run-caches",
+      "severity": "info",
+      "status": "resolved"
+    }
+  ],
+  "risk_class": "decoder-async-receipt-truth",
+  "routes": {
+    "reviewer": {
+      "authorization_ref": "0008d reuse_existing: independent review invocation of the existing configured reviewer route; no new profile, credential or spend cap.",
+      "credential_route": "Existing configured tencent-litellm provider route via the openai-completions API, authenticated by the existing harness provider configuration. Route metadata only; no credential value was read.",
+      "model_id": "deepseek-v4.1-flash-fast",
+      "provenance": "Configured reviewer route: task.agentModelOverrides.reviewer -> modelRoles.flash_max (tencent-litellm/deepseek-v4.1-flash-fast:max), invoked as a separate headless OMP session that did not implement the task."
+    },
+    "worker": {
+      "authorization_ref": "0008d reuse_existing: the existing configured strong-route worker invocation used by the 0008b/0008c class evaluations; no new profile, credential or spend cap.",
+      "credential_route": "Existing configured ghc provider route via the openai-responses API, authenticated by the existing harness provider configuration. Route metadata only; no credential value was read.",
+      "model_id": "gpt-6.1-sol",
+      "provenance": "Configured strong route: modelRoles.sol_high (ghc/gpt-6.1-sol:high, thinking high), the configured default strong route value, invoked as a separate headless OMP session through the gdd omp-run launcher in the run's isolated checkout."
+    }
+  },
+  "schema": "symmetry-model-routing-evaluation/v1",
+  "subject": {
+    "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+    "changed_paths": [
+      {
+        "path": "control/priv/static/portal/assets/index-CcD5vOfx.css",
+        "status": "A"
+      },
+      {
+        "path": "control/priv/static/portal/assets/index-DMUUAcAe.js",
+        "status": "A"
+      },
+      {
+        "path": "control/priv/static/portal/index.html",
+        "status": "A"
+      },
+      {
+        "path": "frontend/dist/assets/index-CcD5vOfx.css",
+        "status": "A"
+      },
+      {
+        "path": "frontend/dist/assets/index-DMUUAcAe.js",
+        "status": "A"
+      },
+      {
+        "path": "frontend/dist/index.html",
+        "status": "A"
+      },
+      {
+        "path": "frontend/src/services/api.ts",
+        "status": "M"
+      },
+      {
+        "path": "frontend/src/services/command-receipts.test.ts",
+        "status": "A"
+      }
+    ],
+    "content_revision": "uncommitted:sha256:23ac1dd1d90136f22f76523847a8db2ad569915cb7c810c8c3dac6b354c4fedd",
+    "head": "dacec45034abc667ae65d41e1f778a896ec340c7",
+    "manifest_digest": "sha256:23ac1dd1d90136f22f76523847a8db2ad569915cb7c810c8c3dac6b354c4fedd",
+    "subject_hash": "sha256:d7dbee102448a942957280980f9d4eea2a70b2afad09fb7c998271b226db9f06"
+  },
+  "subject_hash": "sha256:d7dbee102448a942957280980f9d4eea2a70b2afad09fb7c998271b226db9f06",
+  "task_id": "0008d-ts-command-receipt-truth",
+  "tokens": {
+    "cached": 8876103,
+    "input": 101752,
+    "known_cached_subtotal": 8876103,
+    "known_input_subtotal": 101752,
+    "known_output_subtotal": 125689,
+    "output": 125689
+  },
+  "wall_time": 1575.81,
+  "workflow": "reuse_existing"
+}

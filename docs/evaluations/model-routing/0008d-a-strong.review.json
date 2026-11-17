@@ -1,0 +1,42 @@
+{
+  "check_attempt_id": "attempt-0001",
+  "check_evidence_sha256": "sha256:05a3ebe3c5c999cb97b29b8c35f136bf6a263e133d740d7a2e0d2c23988bb562",
+  "explanations": {
+    "Explain how a member the record does not carry is rendered, and why that path cannot produce 'Not supported' for an absent member.": "Rendering: runtimes.tsx:70-72 calls `booleanCapability(runtime.capabilities[member])` for each of the four members, and presentation.ts:30-33 (`export function booleanCapability(value: boolean | undefined)`) returns the module constant `notAdvertised = { label: \"Not advertised\", tone: \"unknown\" }` when `value === undefined`, otherwise `value ? supported : notSupported`. The guard ordering is what makes the false conclusion unreachable: 'Not supported' is produced only by a literal `false` (tone `failed`), inside the branch that runs after the undefined check, so no input that is absent can yield it. Nothing between the wire and the row synthesises a default: the workspace boundary is a validation filter, not a normalising decoder (contracts/generated/effect/index.ts:1132-1139 wraps RuntimeCapabilities in openObject with each member `S.optionalWith(S.Boolean, { exact: true })`, and openObject is `fromSchema(schema, preserveExcessPropertyOptions)` in contracts/ts/schema-helpers.ts:72), so a member the server omitted stays absent on the decoded object; the server itself serves the stored map verbatim (orchestration.ex:724). Presentation of absence also does not rely on colour alone: the chip renders the existing `unknown` tone as `chip-unknown`, styled dashed (frontend/src/styles.css:214), and the row keeps its member name text and `data-capability` attribute. Executed evidence: named test 'renders a capability member the record does not carry as Not advertised rather than Not supported' serves `capabilities: {}` through the same real fetch/decode/render path and asserts all four rows read 'Not advertised' with class chip-unknown, and that `queryByText(\"Not supported\")` finds nothing inside the section; the stored focused report records it as passed (3/3).",
+    "Explain why the adapter-independent boolean members must render for a runtime whose adapter member is absent, and name the served projection and the frontend type member that carry them.": "A legacy registration declares no adapter, so the adapter facts block and the ten operation rows cannot render any capability truth for it; the only capability data such a runtime serves is the four-boolean subset, and the page's own contract (frontend/src/features/runtimes/runtimes.tsx header: 'Every row renders a served member or an explicit absence label') means omitting them would silently drop served truth and leave an adapter-less card with a bare absence sentence. The open question of what may legally be served is closed on the server: Orchestration.runtime_read_model/1 projects `capabilities: runtime.capabilities` verbatim from the stored Protocol.runtime/1 registration (control/lib/symmetry_control/orchestration.ex:724, reached via runtime_snapshots/0), and valid_runtime_capabilities_schema?path-sha256:e11f3495a68ec262cb2a0d2554d7c7f7117d46607941f61df5118bf85d9f10a8 (orchestration.ex:4140-4173) admits exactly :structured_input, :provider_access, :interactive, :supervisory_control (atom or string keys, boolean values) when the registration carries no adapter metadata, so an adapter-less registration serves only that boolean subset. Served projection: `GET path-sha256:810a366d2c2015260438c1d13f04adadc3a5c9830cd26b878a34d499f5725675`, the runtimes/registered_runtimes snapshot list built by SymmetryControl.Workspaces.ReadModel (control/lib/symmetry_control/workspaces/read_model.ex:40-41) whose per-runtime `capabilities` object is the registered capability map. Frontend type member: `Runtime[\"capabilities\"]`, where `export type Runtime = NonNullable<Workspace[\"runtimes\"]>[number]` (frontend/src/services/api.ts:121) and `RuntimeCapabilities` (contracts/generated/ts/workspace-read.ts:268-275, from contracts/v1/workspace-read.schema.json#path-sha256:523fbab2dec35bee76871b6d3da9e2194517771463763c1936d88db39a821bfc) declares `structured_input?`, `provider_access?`, `interactive?`, `supervisory_control?` as optional booleans; the value arrives through WorkspaceRead.decodeJson (api.ts:560). Executed evidence: named test 'renders the four served boolean capabilities of an adapter-less runtime as rows' serves {structured_input:true, provider_access:false, interactive:true, supervisory_control:false} with no `adapter` member, then asserts the four rows inside the section located as role region named 'Advertised capabilities', keeps the 'Adapter record not advertised...' sentence visible, asserts 4 [data-capability] rows and 0 [data-operation] rows; the stored focused report records it as passed (3/3)."
+  },
+  "findings": [
+    {
+      "description": "No real-browser assertion covers the new rows, and none is required by the frozen acceptance: the browser gate argv is the two baseline specs (tests/workspace-shell.spec.mjs, tests/portal-execution-control.spec.mjs), which contain no capability-row selector (grep for 'capabilit' in browser/tests matches only portal-connections specs and the Runtime-visibility empty-state test at tests/portal-execution-control.spec.mjs:293). Stored output shows 26 passed in 2.7m across desktop-chromium and mobile-chromium (checks/attempt-0001/browser-acceptance/stdout.bin), i.e. regression evidence only. The new behaviour and its accessibility claim are carried by the focused jsdom test against the real component and decoder: it locates the section by role 'region' resolved from the h3's aria-labelledby and asserts each member's name text and chip label, so heading association, member addressability and the non-colour label are asserted, though only in jsdom (environment: jsdom, frontend/vitest.config.ts). No defect found; stated as a coverage boundary.",
+      "id": "browser-coverage-boundary",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Two assertions the named tests do not make, verified in code instead. (a) Row order: the task requires the four rows below the adapter-absence sentence; production code places the new <ul> after the sentence/operation-block ternary (frontend/src/features/runtimes/runtimes.tsx:71-81) so the order holds, but the tests assert presence only. (b) Row count in the adapter-present case: test 3 asserts each of the four member rows plus exactly 10 [data-operation] rows but not the count of [data-capability]; test 1 does pin that count to 4 for the adapter-less case. Both are test-strength nits, not defects; the focused report shows 3/3 passed (checks/attempt-0001/focused-tests/vitest-report.json).",
+      "id": "test-strength-boundaries",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Scope holds. `git status --porcelain` in the sealed checkout is exactly ` M frontend/src/features/runtimes/runtimes.tsx` plus untracked `frontend/src/features/runtimes/capability-rows.test.tsx`; `git diff HEAD --stat` is 19 insertions/1 deletion in runtimes.tsx alone. No protected path is modified: runtimes.test.tsx, presentation.test.ts, presentation.ts, services/api.ts, styles.css, contracts/**, browser/** and control/lib/** have no worktree diff, and presentation.ts's booleanCapability already exists in the base commit (git show dacec45:frontend/src/features/runtimes/presentation.ts:30-33). The remaining sealed changed paths are the gitignored build outputs (frontend/dist/** and control/priv/static/portal/**), which on disk are byte-identical to each other (cmp) and referenced by both index.html copies; every one of the 11 declared gates recorded subject_hash_before == subject_hash_after == sha256:6519aefe... , so evidence binds the sealed subject and no gate mutated source.",
+      "id": "scope-and-protected-paths",
+      "severity": "info",
+      "status": "resolved"
+    }
+  ],
+  "gate_weakening": false,
+  "reviewer": {
+    "model_id": "deepseek-v4.1-flash-fast",
+    "session_ref": "01a1e856-c826-7641-b862-6a69ef5d9469"
+  },
+  "routes_sha256": "sha256:80c9763b153d22f007deb0cec63fddb0afdd0c018d44117ab02ba9d132c4ef5f",
+  "subject_hash": "sha256:6519aefe65750295973a07e365ae9c41e83f3117bace5626e5f1a0de79a7217e",
+  "verdict": "pass",
+  "worker": {
+    "model_id": "gpt-6.1-sol",
+    "session_refs": [
+      "01a1e833-e544-71a0-b746-9c0dcc2657a6"
+    ]
+  }
+}

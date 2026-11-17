@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the evaluation CLI through real Git, subprocess and file surfaces."""
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -24,6 +25,59 @@ def load_runner_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def refusal_returns(source_text, function):
+    """Parse every refusal `return` of one runner function out of the module's syntax tree.
+
+    The inventory is the function's own `ast`, never a text match: each row is
+    `(line, kind, source_segment)` for a `return` whose value is not `None`, where
+    `kind` is `literal` for a plain string and `template` for an f-string. A record
+    that quotes "N refusal shapes" is quoting this set, so the count follows from the
+    artifact instead of from a list written by hand.
+    """
+    tree = ast.parse(source_text)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == function:
+            rows = []
+            for statement in ast.walk(node):
+                if not isinstance(statement, ast.Return) or statement.value is None:
+                    continue
+                value = statement.value
+                if isinstance(value, ast.Constant) and value.value is None:
+                    continue
+                kind = (
+                    "literal" if isinstance(value, ast.Constant) and isinstance(value.value, str)
+                    else "template" if isinstance(value, ast.JoinedStr)
+                    else "other"
+                )
+                rows.append((statement.lineno, kind, ast.get_source_segment(source_text, value)))
+            return sorted(rows)
+    raise AssertionError(f"the runner no longer defines {function}")
+
+
+def exercise(function, call):
+    """Call `function` and report the lines of its own body that ran.
+
+    Returns `(result, executed_lines)`. Coverage is measured by execution, so a branch
+    counts as reached because it ran, not because its text appears somewhere.
+    """
+    executed = []
+    code = function.__code__
+
+    def tracer(frame, event, _argument):
+        if event == "line" and frame.f_code is code:
+            executed.append(frame.f_lineno)
+        return tracer
+
+    previous = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        result = call()
+    finally:
+        sys.settrace(previous)
+    return result, executed
+
 
 EMIT_OK = "print('gate ok')"
 EMIT_PASS = (
@@ -58,6 +112,11 @@ EMIT_SKIPPED_DESCENDANT = (
 )
 EXIT_THREE = EMIT_PASS + "raise SystemExit(3)\n"
 WRITE_DURING_GATE = "open('wrote_during_gate.txt', 'w').write('x')\n"
+
+VITEST_NAMED_TESTS = (
+    "renders one row per served boolean capability member",
+    "never claims a capability the record does not carry",
+)
 
 FILES = {
     "app/main.go": "package app\n\nfunc Main() int { return 1 }\n",
@@ -229,6 +288,48 @@ class EvaluationTests(unittest.TestCase):
             "exunit_tests": list(tests),
         }
         return gate
+
+    def install_fake_vitest(self, report=None, report_exit=0, gate_exit=0, write_report=True):
+        """Install a vitest entry point that writes a chosen JSON report instead of running tests.
+
+        The runner derives the structured report command only for a gate whose argv
+        names the vitest entry, so the fixture is a Node module exactly like the real
+        entry point: the derived command launches it through the same interpreter and
+        must find the report it wrote at `--outputFile`. A run without `--outputFile`
+        is the gate command itself and only prints a marker, so a test can fail the
+        gate command while keeping the derived report controllable.
+        """
+        directory = self.root / "fake-vitest"
+        directory.mkdir(exist_ok=True)
+        entry = directory / "vitest_entry.mjs"
+        report_literal = "null" if report is None else json.dumps(report)
+        source = (
+            "import { writeFileSync } from 'node:fs';\n"
+            "const args = process.argv.slice(2);\n"
+            "const index = args.indexOf('--outputFile');\n"
+            f"const report = {report_literal};\n"
+            "if (args[0] === 'run' && index >= 0) {\n"
+            + ("  if (report !== null) writeFileSync(args[index + 1], JSON.stringify(report));\n"
+               if write_report else "")
+            + f"  process.exit({report_exit});\n"
+            "}\n"
+            "console.log('vitest gate command ran');\n"
+            f"process.exit({gate_exit});\n"
+        )
+        self.write(entry, source)
+        probe = subprocess.run(["node", str(entry)], capture_output=True, text=True, check=False)
+        if "vitest gate command ran" not in probe.stdout:
+            self.fail(f"the fake vitest fixture did not launch: {probe.returncode} {probe.stdout} {probe.stderr}")
+        return entry
+
+    def vitest_gate(self, entry, *, gate_id="vitest-gate", tests, files=("src/witness.test.tsx",), cwd="."):
+        return {
+            "id": gate_id,
+            "cwd": cwd,
+            "argv": ["node", str(entry), "run"],
+            "vitest_files": list(files),
+            "vitest_tests": list(tests),
+        }
 
     def run_dir(self) -> pathlib.Path:
         return self.root / "run"
@@ -1808,6 +1909,479 @@ class EvaluationTests(unittest.TestCase):
         receipt = self.stored_receipt(run)
         self.assertIsNone(receipt["checks"][0]["exunit_exit_code"])
         self.assertIsNone(receipt["checks"][0]["exunit_error"])
+
+    def test_tool_cache_run_state_is_not_bound_by_the_manifest(self) -> None:
+        run = self.root / "run-tool-cache"
+        self.assert_ok(self.prepare(run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        # `vitest run` writes its run state inside the project's own node_modules
+        # directory; the sealed revision binds the source change and not that state.
+        self.edit("app/node_modules/.vite/vitest/results.json", '{"failed":[]}\n', run=run)
+        self.edit("app/node_modules/.vitest-cache/ab/entry.json", "{}\n", run=run)
+        self.edit("app/node_modules/.vite-temp/stale.tmp", "x\n", run=run)
+        sealed = self.assert_ok(self.seal(run=run))
+        self.assertEqual([change["path"] for change in sealed["changed_paths"]], ["app/main.go"])
+        control = self.root / "run-tool-cache-control"
+        self.assert_ok(self.prepare(run=control))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=control)
+        control_sealed = self.assert_ok(self.seal(run=control))
+        self.assertEqual(sealed["file_count"], control_sealed["file_count"])
+        checked = self.assert_ok(self.check(run=run))
+        self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
+        self.assertTrue(self.assert_ok(self.receipt(self.usage_rows(), run=run))["accepted"])
+        # A later gate regenerating that run state must not change the subject.
+        self.edit("app/node_modules/.vite/vitest/results.json", '{"failed":["app/main_test.go"]}\n', run=run)
+        self.assertEqual(self.assert_ok(self.receipt(self.usage_rows(), run=run))["accepted"], True)
+        self.assert_ok(self.accept(run=run))
+
+    def test_package_files_under_node_modules_stay_bound(self) -> None:
+        run = self.root / "run-node-modules-package"
+        self.assert_ok(self.prepare(run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/node_modules/react/index.js", "module.exports = {};\n", run=run)
+        self.assert_refused(self.seal(run=run), "outside allowed_paths")
+        (self.checkout(run) / "app" / "node_modules" / "react" / "index.js").unlink()
+        self.assert_ok(self.seal(run=run))
+
+    def test_tool_cache_predicate_stays_narrow(self) -> None:
+        runner = load_runner_module()
+        for path in (
+            "node_modules/.vite/x",
+            "frontend/node_modules/.vite/vitest/results.json",
+            "frontend/node_modules/.vite-temp/stale.tmp",
+            "a/node_modules/.vitest-cache/ab/entry.json",
+        ):
+            self.assertTrue(runner.is_tool_cache_path(path), path)
+        for path in (
+            "node_modules/react/index.js",
+            "frontend/node_modules/vite/index.js",
+            "src/.vite/x",
+            "node_modules/.vite",
+            "frontend/node_modules/.cache/x",
+            "node_modules",
+        ):
+            self.assertFalse(runner.is_tool_cache_path(path), path)
+
+    @staticmethod
+    def vitest_report(entries, *, success=True, total=None, failed=0, test_results=None):
+        """A vitest JSON reporter document for `entries` = (full name, status, ancestors)."""
+        assertions = [
+            {
+                "ancestorTitles": list(ancestors),
+                "duration": 1.5,
+                "failureMessages": [],
+                "fullName": name,
+                "status": status,
+                "title": name.rsplit(" > ", 1)[-1],
+            }
+            for name, status, ancestors in entries
+        ]
+        document = {
+            "numTotalTestSuites": 1,
+            "numPassedTestSuites": 1 if success else 0,
+            "numFailedTestSuites": 0 if success else 1,
+            "numTotalTests": len(entries) if total is None else total,
+            "numPassedTests": sum(1 for _name, status, _ancestors in entries if status == "passed"),
+            "numFailedTests": failed,
+            "success": success,
+            "startTime": 1763420000000,
+            "testResults": [
+                {
+                    "assertionResults": assertions,
+                    "endTime": 1763420000123,
+                    "message": "",
+                    "name": "/fixture/src/witness.test.tsx",
+                    "startTime": 1763420000000,
+                    "status": "passed" if success else "failed",
+                }
+            ],
+        }
+        if test_results is not None:
+            document["testResults"] = test_results
+        return document
+
+    def test_vitest_report_gate_requires_every_named_test_once(self) -> None:
+        first = "renders one row per served boolean capability member"
+        second = "never claims a capability the record does not carry"
+        expected = (first, second)
+        entry = self.install_fake_vitest(
+            self.vitest_report(((first, "passed", ()), (second, "passed", ())))
+        )
+        run = self.root / "run-vitest-passing"
+        task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
+        self.accepted_run(task=task, run=run)
+        receipt = self.stored_receipt(run)
+        check = receipt["checks"][0]
+        self.assertEqual(check["id"], "vitest-gate")
+        self.assertEqual(check["vitest_tests"], list(expected))
+        self.assertEqual(check["vitest_files"], ["src/witness.test.tsx"])
+        self.assertEqual(check["vitest_exit_code"], 0)
+        self.assertIsNone(check["vitest_error"])
+        self.assertEqual(check["env"], {})
+        self.assertTrue(receipt["accepted"], receipt["acceptance_blockers"])
+        gate_dir = run / "checks" / "attempt-0001" / "vitest-gate"
+        result = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            result["vitest_argv"],
+            [
+                "node", str(entry), "run", "--reporter=json", "--outputFile",
+                str(gate_dir / "vitest-report.json"), "src/witness.test.tsx",
+            ],
+        )
+        self.assertTrue((gate_dir / "vitest-report.json").is_file())
+
+    @classmethod
+    def vitest_refusal_variants(cls):
+        """The malformed-report documents the structured-report refusals are pinned with.
+
+        Each row is `(label, document, report_exit, write_report, expected refusal text)`.
+        The gate test below runs every row through the real check, and
+        `test_vitest_report_refusal_coverage_is_derived` measures which refusal shapes
+        those same documents reach, so a record's covered/uncovered statement follows
+        from the documents this suite executes.
+        """
+        first, second = VITEST_NAMED_TESTS
+        return (
+            (
+                "missing",
+                cls.vitest_report(((first, "passed", ()),)),
+                0,
+                True,
+                f"missing {second}",
+            ),
+            (
+                "duplicate",
+                cls.vitest_report(((first, "passed", ()), (first, "passed", ()), (second, "passed", ()))),
+                0,
+                True,
+                f"{first} was reported 2 times",
+            ),
+            (
+                "nested",
+                cls.vitest_report(((first, "passed", ()), (second, "passed", ("a describe block",)))),
+                0,
+                True,
+                f"the named test {second!r} is declared inside a describe block",
+            ),
+            (
+                "summary-failed",
+                cls.vitest_report(
+                    ((first, "passed", ()), (second, "failed", ())), success=False, failed=1
+                ),
+                0,
+                True,
+                "does not record a successful run",
+            ),
+            (
+                "status-failed",
+                cls.vitest_report(((first, "passed", ()), (second, "failed", ()))),
+                0,
+                True,
+                f"the named test {second!r} finished with status 'failed'",
+            ),
+            (
+                "too-few-total-tests",
+                cls.vitest_report(((first, "passed", ()), (second, "passed", ())), total=1),
+                0,
+                True,
+                "carries no complete test summary",
+            ),
+            (
+                "no-results",
+                cls.vitest_report((), test_results=[]),
+                0,
+                True,
+                "carries no test results",
+            ),
+            (
+                "no-summary",
+                {"success": True, "testResults": [{"assertionResults": [], "name": "x", "status": "passed"}]},
+                0,
+                True,
+                "carries no complete test summary",
+            ),
+            (
+                "failed-count",
+                cls.vitest_report(((first, "passed", ()), (second, "passed", ())), failed=1),
+                0,
+                True,
+                "records failing tests",
+            ),
+            (
+                "malformed-file-result",
+                {"success": True, "numTotalTests": 2, "numFailedTests": 0, "testResults": ["not-a-file-result"]},
+                0,
+                True,
+                "carries a malformed file result",
+            ),
+            (
+                "assertions-not-a-list",
+                {"success": True, "numTotalTests": 2, "numFailedTests": 0,
+                 "testResults": [{"assertionResults": "nope"}]},
+                0,
+                True,
+                "carries a file result without assertions",
+            ),
+            (
+                "assertion-without-fields",
+                {"success": True, "numTotalTests": 2, "numFailedTests": 0,
+                 "testResults": [{"assertionResults": [{"fullName": 1}]}]},
+                0,
+                True,
+                "carries an assertion without a name, status or ancestor list",
+            ),
+            ("no-report", cls.vitest_report(((first, "passed", ()), (second, "passed", ()))), 0, False,
+             "wrote no readable JSON report"),
+            (
+                "report-exit-nonzero",
+                cls.vitest_report(((first, "passed", ()), (second, "passed", ()))),
+                1,
+                True,
+                "the derived vitest run exited with code 1",
+            ),
+            ("not-an-object", "text", 0, True, "is not a JSON object"),
+        )
+
+    def test_vitest_report_gate_refuses_missing_failing_or_nested_names(self) -> None:
+        expected = VITEST_NAMED_TESTS
+        for label, report, report_exit, write_report, needle in self.vitest_refusal_variants():
+            with self.subTest(case=label):
+                entry = self.install_fake_vitest(
+                    report, report_exit=report_exit, write_report=write_report
+                )
+                run = self.root / ("run-vitest-" + label)
+                task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
+                self.assert_ok(self.prepare(task=task, run=run))
+                self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+                self.assert_ok(self.seal(run=run))
+                checked = self.check(run=run)
+                self.assertNotEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+                summary_block = json.loads(checked.stdout)
+                self.assertTrue(summary_block["complete"])
+                self.assertFalse(summary_block["passed"])
+                gate_dir = run / "checks" / summary_block["attempt_id"] / "vitest-gate"
+                result = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
+                self.assertEqual(
+                    result["vitest_argv"],
+                    [
+                        "node", str(entry), "run", "--reporter=json", "--outputFile",
+                        str(gate_dir / "vitest-report.json"), "src/witness.test.tsx",
+                    ],
+                )
+                self.assertEqual(result["vitest_exit_code"], report_exit)
+                self.assertFalse(result["passed"])
+                self.assertIsNone(result["error"])
+                self.assertIn(needle, result["vitest_error"])
+                self.assertTrue((gate_dir / "vitest-report.json").is_file())
+                receipt_summary = self.assert_ok(self.receipt(self.usage_rows(), run=run))
+                self.assertFalse(receipt_summary["accepted"])
+                self.assertTrue(
+                    any(result["vitest_error"] in blocker for blocker in receipt_summary["acceptance_blockers"]),
+                    receipt_summary["acceptance_blockers"],
+                )
+                self.assert_refused(self.accept(run=run), "nonaccepted row")
+
+    def test_vitest_report_refusal_coverage_is_derived(self) -> None:
+        """Derive which refusal shapes of `vitest_report_detail` the suite reaches.
+
+        The published records quote a classification - how many refusal shapes the
+        function has and which of them no case reaches - so this test recomputes it from
+        artifacts instead of trusting a hand-written list: the inventory is parsed out of
+        the runner's own syntax tree, and coverage is measured by running the very
+        documents `vitest_refusal_variants` feeds through the gate test above while
+        tracing which of those returns executes. Adding or removing a refusal, or losing
+        one of the cases, changes the derived classification and fails here, so a
+        published count cannot go stale quietly. The printed line is the recomputable
+        figure the records quote.
+        """
+        runner = load_runner_module()
+        inventory = refusal_returns(SCRIPT.read_text(encoding="utf-8"), "vitest_report_detail")
+        inventory_lines = {line for line, _kind, _text in inventory}
+        self.assertEqual(len(inventory_lines), len(inventory), "two refusals share a source line")
+        reached = {}
+        for label, document, report_exit, write_report, needle in self.vitest_refusal_variants():
+            with self.subTest(case=label):
+                raw = b"" if not write_report else json.dumps(document).encode("utf-8")
+                message, executed = exercise(
+                    runner.vitest_report_detail,
+                    lambda: runner.vitest_report_detail(VITEST_NAMED_TESTS, report_exit, raw),
+                )
+                self.assertIn(needle, message or "", label)
+                hit = sorted(inventory_lines & set(executed))
+                self.assertEqual(len(hit), 1, f"{label} reached {hit} of {sorted(inventory_lines)}")
+                reached[hit[0]] = label
+        uncovered = [(line, kind, text) for line, kind, text in inventory if line not in reached]
+        print(
+            f"vitest_report_detail refusal shapes: {len(inventory)} returns, "
+            f"{len(reached)} reached by the suite's malformed-report cases, "
+            f"{len(uncovered)} unreached: "
+            + ", ".join(f"{text} (line {line})" for line, _kind, text in uncovered)
+        )
+        self.assertEqual(
+            [(kind, text) for _line, kind, text in uncovered],
+            [
+                ("literal", '"the derived vitest run timed out"'),
+                ("literal", '"the derived vitest report carries a malformed assertion"'),
+            ],
+        )
+        self.assertEqual((len(inventory), len(reached), len(uncovered)), (17, 15, 2))
+
+    def test_vitest_report_runs_only_when_the_gate_command_passes(self) -> None:
+        first = "renders one row per served boolean capability member"
+        second = "never claims a capability the record does not carry"
+        expected = (first, second)
+        entry = self.install_fake_vitest(
+            self.vitest_report(((first, "passed", ()), (second, "passed", ()))), gate_exit=3
+        )
+        run = self.root / "run-vitest-gate-failure"
+        task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        checked = self.check(run=run)
+        self.assertNotEqual(checked.returncode, 0, checked.stdout)
+        gate_dir = run / "checks" / "attempt-0001" / "vitest-gate"
+        result = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["exit_code"], 3)
+        self.assertIsNone(result["vitest_error"])
+        self.assertIsNone(result["vitest_exit_code"])
+        self.assertFalse(result["vitest_timed_out"])
+        self.assertEqual(
+            sorted(entry_name.name for entry_name in gate_dir.iterdir()),
+            ["result.json", "stderr.bin", "stdout.bin"],
+        )
+        self.assert_ok(self.receipt(self.usage_rows(), run=run))
+
+    def test_if_absent_vitest_carrier_fields_stay_null(self) -> None:
+        run = self.root / "run-vitest-plain-verify"
+        self.assert_ok(self.prepare(task=self.task(gates=[self.gate_plain()]), run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        self.assert_ok(self.check(run=run))
+        gate_dir = run / "checks" / "attempt-0001" / "plain"
+        original = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertIsNone(original["vitest_argv"])
+        self.assertIsNone(original["vitest_error"])
+        (gate_dir / "vitest-report.json").write_bytes(b"{}")
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "unexpected files")
+        (gate_dir / "vitest-report.json").unlink()
+        self.assert_ok(self.receipt(self.usage_rows(), run=run))
+        receipt = self.stored_receipt(run)
+        self.assertIsNone(receipt["checks"][0]["vitest_exit_code"])
+        self.assertIsNone(receipt["checks"][0]["vitest_error"])
+        self.assertIsNone(receipt["checks"][0]["vitest_tests"])
+        self.assertIsNone(receipt["checks"][0]["vitest_files"])
+
+    def test_prepare_validates_vitest_gate_fields(self) -> None:
+        runner = load_runner_module()
+        plain = {"id": "gate", "cwd": ".", "argv": ["node", "vitest.mjs", "run"]}
+        cases = (
+            ("tests-without-files", {**plain, "vitest_tests": ["one"]}, "vitest_tests requires vitest_files"),
+            (
+                "files-without-tests",
+                {**plain, "vitest_files": ["src/x.test.tsx"]},
+                "vitest_files requires vitest_tests",
+            ),
+            (
+                "non-vitest-argv",
+                {"id": "gate", "cwd": ".", "argv": ["node", "eslint/bin/eslint.js", "."],
+                 "vitest_files": ["src/x.test.tsx"], "vitest_tests": ["one"]},
+                "requires a vitest entry-point gate command",
+            ),
+            (
+                "too-many-tests",
+                {**plain, "vitest_files": ["src/x.test.tsx"],
+                 "vitest_tests": [f"case {index}" for index in range(51)]},
+                "at most 50 tests",
+            ),
+            (
+                "too-many-files",
+                {**plain, "vitest_files": [f"src/{index}.test.tsx" for index in range(21)],
+                 "vitest_tests": ["one"]},
+                "at most 20 files",
+            ),
+            (
+                "duplicate-tests",
+                {**plain, "vitest_files": ["src/x.test.tsx"], "vitest_tests": ["one", "one"]},
+                "must be unique",
+            ),
+            (
+                "nul-test-name",
+                {**plain, "vitest_files": ["src/x.test.tsx"], "vitest_tests": ["one\0two"]},
+                "must not contain NUL",
+            ),
+            ("empty-files", {**plain, "vitest_files": [], "vitest_tests": ["one"]}, "at least 1 file"),
+            (
+                "glob-file",
+                {**plain, "vitest_files": ["src/*.test.tsx"], "vitest_tests": ["one"]},
+                "without glob",
+            ),
+        )
+        for label, gate, needle in cases:
+            with self.subTest(case=label):
+                with self.assertRaises(runner.Refused, msg=f"validate_gate accepted {label}") as refusal:
+                    runner.validate_gate(gate, 0)
+                self.assertIn(needle, str(refusal.exception))
+
+    def test_vitest_report_evidence_is_reverified_from_stored_bytes(self) -> None:
+        first = "renders one row per served boolean capability member"
+        second = "never claims a capability the record does not carry"
+        expected = (first, second)
+        entry = self.install_fake_vitest(
+            self.vitest_report(((first, "passed", ()), (second, "passed", ())))
+        )
+        run = self.root / "run-vitest-verify"
+        task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
+        self.accepted_run(task=task, run=run)
+        gate_dir = run / "checks" / "attempt-0001" / "vitest-gate"
+        result_path = gate_dir / "result.json"
+        original_raw = result_path.read_bytes()
+        report_raw = (gate_dir / "vitest-report.json").read_bytes()
+        self.assertEqual(
+            sorted(entry_name.name for entry_name in gate_dir.iterdir()),
+            [
+                "result.json", "stderr.bin", "stdout.bin",
+                "vitest-report.json", "vitest.stderr.bin", "vitest.stdout.bin",
+            ],
+        )
+        cases = (
+            ("events", lambda value: value.update(vitest_tests=["other"]), "does not match the frozen gate vitest_tests"),
+            ("files", lambda value: value.update(vitest_files=["src/other.test.tsx"]), "does not match the frozen gate vitest_files"),
+            ("exit-code", lambda value: value.update(vitest_exit_code=7), "but its evidence says"),
+            (
+                "commands",
+                lambda value: value.update(vitest_argv=["node", "vitest.mjs", "run"]),
+                "does not match the derived vitest report command",
+            ),
+            (
+                "report-digest",
+                lambda value: value.update(vitest_report_sha256="sha256:" + "0" * 64),
+                "changed after it was captured",
+            ),
+            (
+                "stdout-digest",
+                lambda value: value.update(vitest_stdout_sha256="sha256:" + "0" * 64),
+                "changed after it was captured",
+            ),
+            ("timed-out", lambda value: value.update(vitest_timed_out=True), "disagrees with its exit code"),
+        )
+        for label, mutate, needle in cases:
+            with self.subTest(case=label):
+                result = json.loads(original_raw.decode("utf-8"))
+                mutate(result)
+                self.write_json(result_path, result)
+                self.assert_refused(self.receipt(self.usage_rows(), run=run), needle)
+                result_path.write_bytes(original_raw)
+
+        (gate_dir / "vitest-report.json").unlink()
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "contains unexpected files")
+        (gate_dir / "vitest-report.json").write_bytes(report_raw)
+        stray = gate_dir / "vitest-extra.bin"
+        stray.write_bytes(b"x")
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "contains unexpected files")
+        stray.unlink()
+        self.assert_ok(self.receipt(self.usage_rows(), run=run))
+        self.assert_ok(self.accept(run=run))
 
     def test_measured_surface_records_host_paths_as_hashed_tokens(self) -> None:
         windows_root = "C:/Users/fixture/AppData/Local/Temp/eval-run/build"

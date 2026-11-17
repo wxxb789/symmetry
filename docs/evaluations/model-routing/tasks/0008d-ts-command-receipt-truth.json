@@ -1,0 +1,153 @@
+{
+  "task_id": "0008d-ts-command-receipt-truth",
+  "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+  "language": "typescript",
+  "risk_class": "decoder-async-receipt-truth",
+  "workflow": "reuse_existing",
+  "outcome": "The command POST path in `frontend/src/services/api.ts` (`postPortalCommand`, and `postGoalCommand` through it) must stop turning an unreadable command response into a receipt: a 2xx response whose body is not a JSON document must reject with the existing `UnexpectedResponse` error carrying that response's status and `transient: false`, so no caller can announce an accepted command from a body the decoder could not read, while a 2xx response whose body is a JSON document keeps resolving exactly the payload it decodes today (including a JSON body that is not an object). The same two functions must accept and forward an `AbortSignal` as a new trailing optional parameter, and a cancelled request must stay the caller's own cancellation instead of being re-labelled as a transport failure: when the request was aborted (the signal is already aborted, or the fetcher rejects with an `AbortError`), the rejection must be the abort error, and an unrelated transport failure must keep rejecting as `Network` with the existing message. Refusal decoding is unchanged: a non-2xx JSON refusal still becomes `MutationRefused` carrying exactly the members the server sent, a non-2xx body that is not JSON still maps through the status error path (409 to `Conflict`, 403 to `Forbidden`), and session redirects still raise `Unauthenticated`. Existing callers must keep compiling and behaving exactly as today when they pass no signal: no caller signature may become required, and the read path (`request`/`json`), retry policy, CSRF header, `cache: \"no-store\"` and `redirect: \"manual\"` stay as they are. Add your new cases in `frontend/src/services/command-receipts.test.ts`; the three cases must be declared at module level, outside any `describe` block, because the frozen named-test acceptance binds the reporter's full test name exactly: 'rejects an unreadable command success body instead of returning a placeholder receipt', 'forwards an aborted command request as a cancellation rather than a network failure' and 'keeps a JSON command body its decoded payload and a refusal its own status error'.",
+  "explanations": [
+    "Explain why a 2xx command body the decoder cannot read must reject instead of resolving a placeholder, and name the caller path that would otherwise announce an accepted command from it.",
+    "Explain how an aborted command request is distinguished from a transport failure, and why the refusal decoding path and every existing caller keep their behaviour."
+  ],
+  "allowed_paths": [
+    "frontend/src/services/api.ts",
+    "frontend/dist/**",
+    "frontend/src/services/command-receipts.test.ts",
+    "control/priv/static/portal/**"
+  ],
+  "protected_paths": [
+    "frontend/src/services/commands.ts",
+    "frontend/src/services/control-actions.ts",
+    "frontend/src/services/api.test.ts",
+    "frontend/src/services/api.fixtures.ts",
+    "frontend/src/app/application.ts",
+    "frontend/src/features/**",
+    "contracts/**",
+    "browser/**",
+    "daemon/**",
+    "control/lib/**",
+    "control/test/**",
+    "control/config/**",
+    "control/mix.exs",
+    "control/mix.lock",
+    "control/priv/repo/**",
+    "control/priv/static/assets/**",
+    "control/assets/**"
+  ],
+  "gates": [
+    {
+      "id": "contracts-typecheck",
+      "cwd": ".",
+      "argv": [
+        "node",
+        "../../node_modules/typescript/bin/tsc",
+        "--project",
+        "contracts/tsconfig.json"
+      ]
+    },
+    {
+      "id": "contracts-generated-drift",
+      "cwd": ".",
+      "argv": [
+        "node",
+        "contracts/scripts/check.mjs"
+      ]
+    },
+    {
+      "id": "contracts-effect-drift",
+      "cwd": ".",
+      "argv": [
+        "node",
+        "contracts/scripts/check-effect.mjs"
+      ]
+    },
+    {
+      "id": "contracts-tests",
+      "cwd": ".",
+      "argv": [
+        "node",
+        "--test",
+        "contracts/scripts/"
+      ]
+    },
+    {
+      "id": "frontend-typecheck",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/@typescript/native/bin/tsc",
+        "--noEmit"
+      ]
+    },
+    {
+      "id": "frontend-lint",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/eslint/bin/eslint.js",
+        ".",
+        "--max-warnings",
+        "0"
+      ]
+    },
+    {
+      "id": "focused-tests",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/vitest/vitest.mjs",
+        "run",
+        "src/services/command-receipts.test.ts"
+      ],
+      "vitest_files": [
+        "src/services/command-receipts.test.ts"
+      ],
+      "vitest_tests": [
+        "rejects an unreadable command success body instead of returning a placeholder receipt",
+        "forwards an aborted command request as a cancellation rather than a network failure",
+        "keeps a JSON command body its decoded payload and a refusal its own status error"
+      ]
+    },
+    {
+      "id": "frontend-tests",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/vitest/vitest.mjs",
+        "run"
+      ]
+    },
+    {
+      "id": "frontend-build",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/vite/bin/vite.js",
+        "build"
+      ]
+    },
+    {
+      "id": "frontend-stage-assets",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "scripts/stage-assets.mjs"
+      ]
+    },
+    {
+      "id": "browser-acceptance",
+      "cwd": "browser",
+      "argv": [
+        "node",
+        "../../../node_modules/@playwright/test/cli.js",
+        "test",
+        "tests/workspace-shell.spec.mjs",
+        "tests/portal-execution-control.spec.mjs"
+      ],
+      "env": {
+        "SYMMETRY_PORTAL_URL": "http://127.0.0.1:4040",
+        "SYMMETRY_SHELL_EXPIRY_URL": "http://127.0.0.1:4041"
+      }
+    }
+  ]
+}
