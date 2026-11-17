@@ -151,11 +151,14 @@ type processGroup struct {
 	containmentUnprovenCallbackErr       error
 	containmentUnprovenCallbackMutex     sync.Mutex
 
-	monitorStop                  chan struct{}
-	monitorDone                  chan struct{}
-	monitorInitialScanDone       chan struct{}
-	monitorScanRequest           chan chan descendantMonitorScanResult
-	monitorResume                chan struct{}
+	monitorStop            chan struct{}
+	monitorDone            chan struct{}
+	monitorInitialScanDone chan struct{}
+	monitorScanRequest     chan chan descendantMonitorScanResult
+	monitorResume          chan struct{}
+	// monitorTerminalReason is written only by the monitor goroutine, before
+	// it closes monitorDone: it states how the monitor ended, never which
+	// caller asked it to end.
 	monitorTerminalReason        descendantMonitorTerminalReason
 	initialScanResult            descendantMonitorScanResult
 	initialScanComplete          bool
@@ -671,6 +674,10 @@ func (group *processGroup) waitForInitialDescendantScan(deadline time.Time) erro
 	return nil
 }
 
+// recordDescendantMonitorTerminalReason publishes the first reason the monitor
+// terminated for. Every writer runs inside the monitor goroutine and writes
+// before monitorDone closes, so a reader that has observed monitorDone reads a
+// terminal reason that can no longer change.
 func (group *processGroup) recordDescendantMonitorTerminalReason(reason descendantMonitorTerminalReason) descendantMonitorTerminalReason {
 	group.mutex.Lock()
 	defer group.mutex.Unlock()
@@ -715,11 +722,16 @@ func (group *processGroup) cleanDescendantTerminalProof(result descendantMonitor
 	)
 }
 
+// stopDescendantMonitor asks the monitor to stop and waits for it to publish
+// the reason it terminated for. The monitor owns that write (see
+// monitorDescendants), so this request only decides the recorded outcome when
+// the monitor had not reached a terminal observation of its own: a leader
+// proven absent after a clean descendant scan keeps that proof even when the
+// stop request arrives while the scan that observed it is still finishing.
 func (group *processGroup) stopDescendantMonitor(deadline time.Time) error {
 	if group == nil || group.monitorStop == nil {
 		return nil
 	}
-	group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalOwnerStop)
 	group.monitorStopOnce.Do(func() { close(group.monitorStop) })
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
@@ -948,6 +960,13 @@ func (group *processGroup) monitorDescendants() {
 	for {
 		select {
 		case <-group.monitorStop:
+			// The monitor records the reason for its own exit, before the
+			// deferred close of monitorDone publishes it. A scan outcome the
+			// monitor already reached (a leader proven absent after a clean
+			// descendant scan) is therefore never replaced by the timing of
+			// the stop request: the first writer wins, and only the monitor
+			// writes this field.
+			group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalOwnerStop)
 			return
 		case resultChannel := <-group.monitorScanRequest:
 			result := scan()
