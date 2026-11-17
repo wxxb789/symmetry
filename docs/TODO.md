@@ -359,8 +359,9 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       (`sha256:8ae5b2b6ba961924f7702aa4181e8488913b4d63171922bf1cf760e62142db50`), so the current bytes
       refuse the 0008b records for submission at `$.evidence.tooling_sources.model-routing-evaluation.py`,
       exactly as they refuse the committed 0008c receipts (see the model-routing entry above). The
-      producing bytes stay reachable in history (`git archive 253a701 scripts/ci`, the head this branch
-      was rebased from), and the post-rebase audit recomputation reports exactly those four
+      producing bytes stay reachable from the annotated tag `0008b-produced-tooling` (commit `253a701`,
+      the head this branch was rebased from, tagged and pushed so the reference survives the rebase), and
+      the post-rebase audit recomputation reports exactly those four
       tooling-digest mismatches and nothing else (`checks: 99, failures: 4`). Re-execute the runs if a
       future submission requires receipts produced by the current bytes; never re-derive by editing a
       receipt.
