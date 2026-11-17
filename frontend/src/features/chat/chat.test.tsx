@@ -584,6 +584,37 @@ describe("sending", () => {
     expect(node.scrollTop).toBe(10);
   });
 
+  it("keeps the offset a scope was left with when the pane's own positioning was never reported as a scroll", async () => {
+    const user = userEvent.setup();
+    renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
+      conversation: (url) => new Response(JSON.stringify(url.searchParams.get("scope") === "project"
+        ? conversationBody({ scope: "project", projectId, messages: [message(2, { content: "project history" })] })
+        : conversationBody({ scope: "workspace", messages: [message(1, { content: "workspace history" })] }))),
+    });
+    await openChat();
+    await screen.findByText("workspace history");
+
+    // Chromium coalesces a pane's scroll events: a pane positioned and left in
+    // the same frame is never reported as a scroll at all, so the offset this
+    // scope was left with is only observable while its own transcript is still
+    // on the pane — at the moment the switch is requested.
+    const node = scrollNode();
+    node.scrollTop = 120;
+    expect(node.scrollTop).toBe(120);
+
+    await user.selectOptions(scopeSelect(), "project");
+    await screen.findByText("project history");
+    node.scrollTop = 60;
+    expect(node.scrollTop).toBe(60);
+
+    await user.selectOptions(scopeSelect(), "workspace");
+    await screen.findByText("workspace history");
+    expect(node.scrollTop).toBe(120);
+
+    await user.selectOptions(scopeSelect(), "project");
+    expect(node.scrollTop).toBe(60);
+  });
+
   it("keeps the composer focused with its caret selection across a background refresh", async () => {
     const { application } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
       conversation: () => new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [message(1, { content: "history" })] }))),

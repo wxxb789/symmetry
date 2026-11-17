@@ -330,18 +330,36 @@ export function ChatPage() {
     });
   };
 
+  // The offset this scope leaves with is the pane's own position at the moment
+  // the switch is requested: the browser coalesces one scroll event per frame,
+  // so a pane positioned and left in the same frame — by the surface's own
+  // controls, or by a reader mid-gesture — is never reported as a scroll, and
+  // the commit that replaces this scope's transcript takes the position with it.
+  // A pane pinned below this scope's own offset is that replacement's clamp, not
+  // a position the reader chose: it stays owed and is not recorded here.
+  const rememberLeavingScope = () => {
+    const node = scrollRef.current;
+    if (node === null) return;
+    if (panePinnedBelowOffset(node, Math.max(scrollOffsetOf(key), owedScroll ?? 0))) return;
+    recordScrollOffset(key, node.scrollTop);
+    // A live position that is not the owed offset is the reader taking over.
+    if (owedScroll !== null && node.scrollTop !== owedScroll) settleScrollRestore(key);
+  };
+
   const changeScope = (next: ChatScope) => {
     if (next === urlScope) return;
     if (next === "project" && urlProjectId === null) {
       update(key, { status: { kind: "notice", message: "No project is selected, so the scope was unchanged. Open Chat from a project to hold a project conversation." } });
       return;
     }
+    rememberLeavingScope();
     // The current project/run members are carried so a round trip through
     // another scope returns to the same conversation.
     void navigate({ to: "/chat", search: { scope: next, ...(urlProjectId === null ? {} : { projectId: urlProjectId }), ...(urlRunId === null ? {} : { runId: urlRunId }) } });
   };
 
   const changeRun = (runId: string) => {
+    rememberLeavingScope();
     void navigate({ to: "/chat", search: { scope: "run", ...(urlProjectId === null ? {} : { projectId: urlProjectId }), ...(runId === "" ? {} : { runId }) } });
   };
 
@@ -447,9 +465,8 @@ export function ChatPage() {
         // scope's and the restore stays owed, so the next commit re-asserts it
         // once the layout can hold it. A reader's own move inside such a pane
         // sits below that maximum and is still theirs.
-        const range = node.scrollHeight - node.clientHeight;
         const wanted = Math.max(scrollOffsetOf(key), owedScroll ?? 0);
-        if (shown < wanted && range < wanted && shown === Math.max(0, range)) {
+        if (panePinnedBelowOffset(node, wanted)) {
           markScrollRestore(key, wanted);
           return;
         }
@@ -562,6 +579,16 @@ export function ChatPage() {
 
 function runOptionLabel(row: ServedRun): string {
   return `${row.item.key} · ${row.item.title} · Attempt ${row.execution.generation} · ${chatStateLabel(row.execution.state)}`;
+}
+
+/**
+ * True when the pane is pinned at a maximum its own transcript cannot grow past
+ * while sitting below an offset this scope holds: the pinning a transcript that
+ * replaced this pane's own raises, never a position the reader chose.
+ */
+function panePinnedBelowOffset(node: HTMLDivElement, wanted: number): boolean {
+  const range = node.scrollHeight - node.clientHeight;
+  return node.scrollTop < wanted && range < wanted && node.scrollTop === Math.max(0, range);
 }
 
 function ChatMessageRow({ message, receipt }: {
