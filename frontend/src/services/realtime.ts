@@ -13,8 +13,11 @@ import { Socket } from "phoenix";
  * reconnect epoch.
  *
  * Loss recovery is structural rather than message-based: on every (re)connect the
- * client refetches every read, and while the socket is down it polls on the
- * retired classic cadence, so a missed invalidation costs freshness, never state.
+ * client refetches every read — at the socket opening, and again when the channel
+ * join completes, because only the join makes this browser a subscriber and a
+ * frame published in between is dropped — and while the socket is down it polls on
+ * the retired classic cadence, so a missed invalidation costs freshness, never
+ * state.
  *
  * The socket endpoint is this module's own decision, not the client's: it is
  * resolved once per socket, absolutely, from the page's location (see
@@ -257,11 +260,48 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
       options.refreshToken?.();
     });
 
+    /**
+     * The channel-join epoch: `channel.join()`'s `ok` reply is the moment the
+     * server has run `PortalChannel.join/3` and subscribed this browser to the
+     * invalidation topic, and therefore the earliest instant at which a published
+     * frame can arrive here.
+     *
+     * The socket opening is not that instant. The join is a round trip — the
+     * client's own `join()` call is buffered until the transport is open and the
+     * reply comes back one exchange later — so there is a window in which the
+     * transport is open (status `connected`, and `syncPolling` has therefore
+     * already stopped the polling fallback) while the server has no subscription
+     * for this client at all. A frame published in that window is broadcast to a
+     * topic this browser is not on: it is dropped, and Phoenix never replays it.
+     *
+     * Nothing on this side can tell whether the window held a miss. The
+     * invalidation payload carries a durable `cursor`, but this client keeps no
+     * cursor store by design (discovery only), and the join reply carries no
+     * position at all. The reconcile is therefore on the join event itself, and it
+     * is the read an invalidation takes: the unclassified payload's own pass,
+     * every read refetched through one `invalidateQueries` predicate call. It is
+     * the same call the socket-open snapshot above makes, and that one stays — it
+     * is the read that covers the disconnected window, and like any read it can be
+     * overtaken by a change committed before the join landed. Exactly one reconcile
+     * pass is added per completed join; polling is not restarted, and no timer is
+     * involved, because the epoch is an event.
+     *
+     * Phoenix resends this same push on every rejoin (`channel.js` `rejoin` ->
+     * `joinPush.resend`, whose `reset` keeps its receive hooks), so a reconnect's
+     * rejoin — the frames published while the channel was errored are dropped just
+     * the same — reconciles through this hook too.
+     */
+    const onJoined = () => {
+      invalidateReads();
+    };
+
     const channel = client.channel(REALTIME_TOPIC);
     channel.on("invalidation", receive);
-    channel.join().receive("ok", () => undefined).receive("error", () => {
-      options.refreshToken?.();
-    });
+    channel.join()
+      .receive("ok", onJoined)
+      .receive("error", () => {
+        options.refreshToken?.();
+      });
 
     client.connect();
     syncPolling();

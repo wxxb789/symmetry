@@ -17,8 +17,19 @@ function fakeSocket() {
   };
   const received: Array<(payload: unknown) => void> = [];
   const joins: string[] = [];
+  const replies = { ok: [] as Array<() => void>, error: [] as Array<() => void> };
   let joined = false;
-  const push: RealtimePush = { receive: () => push };
+  // One push object across rejoins: Phoenix hands the same `joinPush` back from
+  // `Channel.join` and resends it on every rejoin (`channel.js` `rejoin` ->
+  // `joinPush.resend`, whose `reset` keeps the receive hooks), so a later reply
+  // fires the hooks an earlier reply fired.
+  const push: RealtimePush = {
+    receive: (status, callback) => {
+      if (status === "ok") replies.ok.push(callback);
+      if (status === "error") replies.error.push(callback);
+      return push;
+    },
+  };
   const socket: RealtimeSocket = {
     connect: () => undefined,
     disconnect: () => undefined,
@@ -53,6 +64,8 @@ function fakeSocket() {
     close: () => handlers.close.forEach((callback) => callback()),
     fail: (error?: unknown) => handlers.error.forEach((callback) => callback(error)),
     deliver: (payload: unknown) => received.forEach((callback) => callback(payload)),
+    joinOk: () => replies.ok.forEach((callback) => callback()),
+    joinError: () => replies.error.forEach((callback) => callback()),
   };
 }
 
@@ -169,6 +182,42 @@ describe("operator invalidation client", () => {
     fake.open();
     expect(realtime.epoch()).toBe(2);
     expect(invalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconciles every read when the channel join completes, on the read path an invalidation takes", () => {
+    // The socket opening and the channel join are two moments: the transport can be
+    // open — status `connected`, the polling fallback already stopped — while the
+    // server has not yet subscribed this browser, and a frame published in between
+    // is dropped. The join reply is the epoch, and the read it triggers must be the
+    // unclassified-invalidation pass itself rather than a narrower key list.
+    const { fake, invalidate, refreshToken, realtime } = harness();
+    realtime.connect();
+    fake.open();
+    expect(invalidate).toHaveBeenCalledTimes(1);
+
+    fake.joinOk();
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    const reconcile = invalidate.mock.calls[1]?.[0];
+    expect(reconcile?.predicate).toBeTypeOf("function");
+    expect(reconcile?.queryKey).toBeUndefined();
+    expect(reconcile?.predicate?.({ queryKey: ["session"] } as never)).toBe(false);
+    expect(reconcile?.predicate?.({ queryKey: ["attention"] } as never)).toBe(true);
+
+    // A reconnect's rejoin completes on the same hooks Phoenix resends, so the
+    // frames published while the channel was errored reconcile there too.
+    fake.close();
+    fake.open();
+    expect(invalidate).toHaveBeenCalledTimes(3);
+    fake.joinOk();
+    expect(invalidate).toHaveBeenCalledTimes(4);
+
+    // A refused join is not an epoch: the client's own rejoin timer retries the
+    // join, and the reconcile belongs to the reply that completes it. The refusal
+    // refreshes the token so that retry carries a live one.
+    refreshToken.mockClear();
+    fake.joinError();
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledTimes(4);
   });
 
   it("maps a resource invalidation onto the query keys that read it", () => {
