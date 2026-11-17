@@ -333,13 +333,13 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 | [0008a](archive/0008a-auditable-acceptance-workflow.md) | Auditable model-independent acceptance workflow |
 | [0008b](archive/0008b-go-model-routing.md) | Archived per-class Go routing evidence; produced and awaiting the owner's verdict |
 | [0008c](archive/0008c-elixir-model-routing.md) | Evidence-based Elixir model routing |
-| [0008d](archive/0008d-typescript-model-routing.md) | Archived TypeScript routing evidence and the 0008 series release receipt; produced and awaiting the owner's verdict |
+| [0008d](archive/0008d-typescript-model-routing.md) | Archived TypeScript routing evidence and the 0008 series release receipt; **accepted by the owner** (wxxb789, 2026-11-17) with the limits its receipt records |
 
 ## Achieve-contract amendments
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0009](archive/0009-achieve-contract-amendments.md) | Produced achieve authority, single-item integration and single-stream Subject amendments A/B/C; owner verdict pending |
+| [0009](archive/0009-achieve-contract-amendments.md) | Produced achieve authority, single-item integration and single-stream Subject amendments A/B/C; **accepted by the owner** (wxxb789, 2026-11-17) |
 
 Read [fixed design](../design/README.md) and root `AGENTS.md` before executing.
 Goal payloads define completion, not implementation plans. A dependency listed
