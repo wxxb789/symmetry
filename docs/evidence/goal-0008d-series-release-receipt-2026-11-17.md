@@ -13,9 +13,11 @@ awaiting the owner's verdict.
 | Item | Value |
 | --- | --- |
 | Repository | `symmetry` |
-| Base commit | `dacec45034abc667ae65d41e1f778a896ec340c7` |
-| Base tree | `33a36d9f753d6d9d85a8608b08aa1bd22123923c` |
-| Delivered source subject (1120 source paths, re-derived by the delivered tool `python scripts/ci/model-routing-source-subject.py`: every regular file in the working tree except `.git` in either form, `__pycache__`, the declared build/report output directories (`dist`, `playwright-report`, `test-results`), the whole `node_modules` tree, the `.vite`/`.vite-temp`/`.vitest-cache` tool caches, `.tmp/` and everything under `docs/`; entry = mode + file digest + path, NUL-separated; digest = sha256 over the entries sorted by the UTF-8 bytes of the path) | `sha256:e333bb857811bf7d996e05320be7ab2b2680a6757395ef41fbfbce360d823ae4` |
+| Evaluated base commit (the runs' frozen base; the revision every 0008d run receipt binds, and the meaning of "base `dacec450…`" wherever this receipt names one) | `dacec45034abc667ae65d41e1f778a896ec340c7` |
+| Evaluated base tree | `33a36d9f753d6d9d85a8608b08aa1bd22123923c` |
+| Landing base commit (what this receipt's branch is rebased onto for landing; `0007g`, `0007i` and one platform fix landed on `main` after the evaluation) | `ca1bdad981711d52bcf53377436d2b697aaf3930`, tree `3e04ba767c9f0735cc12a2e47017f843dac63301` |
+| Delivered source subject of the evaluated revision (1120 source paths, re-derived by the delivered tool `python scripts/ci/model-routing-source-subject.py`: every regular file in the working tree except `.git` in either form, `__pycache__`, the declared build/report output directories (`dist`, `playwright-report`, `test-results`), the whole `node_modules` tree, the `.vite`/`.vite-temp`/`.vitest-cache` tool caches, `.tmp/` and everything under `docs/`; entry = mode + file digest + path, NUL-separated; digest = sha256 over the entries sorted by the UTF-8 bytes of the path) | `sha256:e333bb857811bf7d996e05320be7ab2b2680a6757395ef41fbfbce360d823ae4` - the subject of the tree the evaluation closed on (evaluated base plus this delivery's own source paths). The landing tip carries a different subject; it is the next row rather than a replacement, because a reader reaching the branch after the rebase no longer has this tree |
+| Delivered source subject at the landing tip (landing base `ca1bdad…` plus this delivery, re-derived with the same tool after the landing rebase) | `sha256:70e03853e69239146d1f1669de22007c62a61bc379e36595722958d0cd093f69` over 1141 paths: the 21 extra paths are `0007g`/`0007i`'s contracts, browser and frontend additions, none of which any evaluated claim, receipt binding or check evidence in this series depends on |
 | Delivered evaluation runner | `scripts/ci/model-routing-evaluation.py` `sha256:8150471596dee8cf88cedd2778f77b8d20fc37633972dc3d7b59df50cf123ee5` |
 | Delivered runner regression suite | `scripts/ci/test-model-routing-evaluation.py` `sha256:dbe1a0fe27d3b1c119d15b4dfb408a38e591cf9fb1749ca3a9ce4fbcbc1f5fec` (superseded by the series-closing repair, which added the refusal-coverage derivation the S5 row names; history: `sha256:76f09f73…`) |
 | Private evidence root (store, outside Git) | `<store>`, a disposable coordinator root outside Git that no published record names |
@@ -32,6 +34,16 @@ not this subject, is what polices package files inside a sealed checkout), and t
 measured tree's own owner-execute bit, so this Windows worktree hashes every entry `100644` while the
 tool's `executable_paths` line (empty here) names exactly the paths whose bit differs in another
 checkout.
+
+Between the evaluation and landing, `main` moved twice and this branch was rebased onto it (`0007g`,
+`0007i` and one platform fix; landing base `ca1bdad…`). That replay changed no byte of this delivery:
+the two replayed commits are patch-identical, the runner and suite bytes are unchanged
+(`81504715…`, `dbe1a0fe…`), and the whole non-documentation difference the rebase introduced is
+`main`'s own (98 paths, the same file list and blob pairs as `dacec450…`..`ca1bdad…` outside `docs/`,
+with `.github/workflows/ci.yml` differing only by this delivery's one added workflow line). What the
+rebase does change is *which tree a reader has*: the branch tip now carries `main`'s source, so the
+tip's subject is `70e03853…` over 1141 paths while the evaluated revision's subject stays
+`e333bb85…` over 1120 - both rows above, neither presented as the other.
 
 The runner changed twice inside this letter and only the digests above are current. First: the
 receipts were derived with `sha256:d80e49ca…` (source subject `sha256:5abd13ec…`, computed before

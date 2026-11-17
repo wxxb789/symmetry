@@ -27,8 +27,11 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       table rather than bound by a receipt.
       The source subject is now computed by a delivered, reader-runnable tool
       (`python scripts/ci/model-routing-source-subject.py`, scope and entry formula in its
-      docstring): the delivered tree is `sha256:e333bb85…` over 1120 source paths. History, in the
-      order the run computed it: `sha256:5abd13ec…` (1121 paths, first scope), `sha256:5e1e4e6c…`
+      docstring). Two values are current, each on its own revision: the *evaluated* revision
+      (`dacec450` plus this delivery's source paths) is `sha256:e333bb85…` over 1120 source paths,
+      and the landing tip after the rebase onto `ca1bdad` (`ca1bdad` plus this delivery, where `main`
+      added 21 source paths under `contracts/`, `browser/` and `frontend/`) is
+      `sha256:70e03853…` over 1141. History, in the order the run computed it: `sha256:5abd13ec…` (1121 paths, first scope), `sha256:5e1e4e6c…`
       (with the `sha256:3f3b0975…` runner bytes), `sha256:e0976262…` (1123 paths,
       `sha256:619f0d37…` runner) and `sha256:4db67385…` (1118 paths, same runner) - and it was the
       last of those that was published, which a pre-publication audit showed to be stale: it was

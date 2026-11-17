@@ -17,6 +17,14 @@ owner-acceptance boundary after its Done-when. The increment starts from commit
 no commit, push or history rewrite was performed during the evaluated runs, and only this worktree
 was touched.
 
+That is the commit the *evaluation* ran from, and it stays the base every run receipt binds. For
+landing, `main` then moved twice (`0007g`, `0007i` and one platform fix) and this branch was rebased
+onto `ca1bdad981711d52bcf53377436d2b697aaf3930` (tree `3e04ba76…`) with no change to any evaluated
+byte - the replay is patch-identical, the runner and suite digests above are unchanged, and the whole
+non-documentation difference the rebase introduced is `main`'s own. Wherever this record says "base
+`dacec450…`" it means the evaluated base; the closing section states what the rebase did to the tree
+a reader reaches and to the subject this record quotes.
+
 Shape reference: the merged 0008a increment (runner, seal, receipt and manifest format), the merged
 0008b/0008c two-arm class evaluations (class list, packet shape, arm receipts, candidate policy) and
 the accepted 0007c/0007f surfaces the TypeScript tasks exercise (planning conflict recovery and the
@@ -470,6 +478,16 @@ under load) - the pair is what the two rows above say, with no failing result ov
 assertion weakened, and both logs stay in the private store (`final-runner-suite-repair.log`,
 `final-runner-suite-repair-2.log`).
 
+Every row above ran on the **evaluated revision** (base `dacec450…` plus this delivery's own source
+paths, i.e. the tree that was delivered before landing). The landing rebase onto `ca1bdad…` afterwards
+was documentation-only for this delivery and re-ran nothing: its replay is patch-identical, the
+runner, suite and subject-tool bytes it names are unchanged (`81504715…`, `dbe1a0fe…`,
+`bcdca557…`), the suites exercise exactly those tooling bytes and no `main`-side path, and `main`'s
+own non-documentation changes (98 paths) carry `main`'s CI rather than this record's run. The pass
+rows therefore keep their revision and say so, instead of being restated on a tree they did not run
+against; the only rows that move for landing are the *revision naming* rows in the release receipt
+and this record's provenance and closing sections.
+
 The delivered runner differs from the one those four commands ran against (`sha256:619f0d37…`) only in
 one paragraph inside the `vitest_report_detail` docstring, added after the second review round asked it
 to name the walk's structural refusals; the suite was not re-run for that documentation-only delta,
@@ -502,3 +520,10 @@ coverage boundary of the row claims - plus, after the repair, the 0008b promotio
 total, the duplicate full-suite pass on a superseded revision, the unbound shared dependency tree, and
 the five claims no artifact can verify. It reuses the 0008a controls and the 0008b/0008c shapes rather
 than re-measuring them, and it signs nothing for the owner.
+
+Both subject rows are the release receipt's own: the evaluated revision's subject (`e333bb85…`, 1120
+paths - the tree the suites above ran on) and the landing tip's (`70e03853…`, 1141 paths - landing
+base `ca1bdad…` plus this delivery, re-derived with the same delivered tool after the rebase, whose 21
+extra paths are `main`'s `0007g`/`0007i` additions and touch no evaluated claim). A reader who has the
+branch has the second tree and can re-derive the second value; the first stays as labelled history for
+the revision it binds.
