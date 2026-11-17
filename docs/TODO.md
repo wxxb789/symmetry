@@ -231,3 +231,22 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       Two smaller residuals from the same review live here too: the rollout-off browser case skips in hosted
       CI because it needs `SYMMETRY_GOALS_OFF_URL`, and the retained `:goal_admission_disabled` inline branch
       is unreachable in production because the attention read is not admission-gated.
+
+## CI consolidation owner decisions (2026-11-17)
+
+- [ ] Decide whether `linux-native-v2-acceptance.yml` is dispatched against a current subject or its gap
+      is recorded as permanent. The workflow (`419219121`) has **zero** recorded dispatches since it was
+      split out of `ci.yml`: `gh api repos/wxxb789/symmetry/actions/workflows/419219121/runs` reports
+      `total_count = 0`, while the in-CI job it replaced ran historically (for example run
+      `43673581776`). A skipped qualification is never a passed predicate, so no native acceptance has
+      executed since the split and none may be cited as evidence for a revision in that window. The owner
+      must either dispatch it against a current subject or record that no acceptance has happened since
+      the split.
+
+- [ ] Extend the `scripts/audit-no-legacy-routes.sh` target list, or record the gap as permanent. The
+      audit deliberately enumerates its surfaces (`scripts/audit-no-legacy-routes.sh:8-25`) and lists
+      `.github/workflows/ci.yml` but not `.github/workflows/linux-native-v2-acceptance.yml`, which was
+      moved out of `ci.yml`, nor the composite action `.github/actions/prepare-pi-release/action.yml`
+      added by the 2026-11-17 consolidation. Recorded here as an open, accepted limitation: the guard
+      itself stays untouched and ungated, but its enumerated surface may no longer cover every
+      production contract file that can carry a retired U2 route.

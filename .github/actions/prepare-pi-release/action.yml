@@ -1,0 +1,206 @@
+name: Prepare pinned Pi release
+description: >-
+  Download the pinned Pi release, verify the archive digest, extract it, verify
+  the executable digest and `--version`, and append the verified digests and
+  version to the job's provenance file. One parameterised implementation of the
+  preparation both Pi jobs used to spell out separately.
+
+inputs:
+  release-url:
+    description: Upstream release URL of the pinned Pi archive.
+    required: true
+  target:
+    description: Target triple the pinned archive and executable belong to.
+    required: true
+  archive-name:
+    description: Name the archive is downloaded as, relative to RUNNER_TEMP.
+    required: true
+  archive-sha256:
+    description: Expected SHA-256 of the downloaded archive.
+    required: true
+  executable-sha256:
+    description: Expected SHA-256 of the extracted executable.
+    required: true
+  executable-path:
+    description: Absolute path the executable must be extracted to.
+    required: true
+  expected-version:
+    description: Exact `--version` output the pinned executable must report.
+    required: true
+  provenance-file:
+    description: Absolute provenance file that receives the verified digests and version.
+    required: true
+  log-file:
+    description: Absolute log file that receives the preparation transcript.
+    required: true
+  write-static-provenance:
+    description: >-
+      Write the POSIX pinned-release provenance block (source revision, runner identity, target,
+      expected digests) before the download. The Windows job passes 'false' because its block also
+      carries runner-image and PostgreSQL prerequisite keys owned by that job's initialisation step.
+    required: false
+    default: "true"
+  witness-scope:
+    description: Value recorded as `witness_scope` in the POSIX static provenance block.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # Linux legacy owners lack retained-v2 peer capabilities; the pinned binary
+    # is only ever the x86_64 Linux release here.
+    - name: Prepare pinned Pi release (Linux x86_64)
+      if: runner.os != 'Windows'
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        PI_TARGET: ${{ inputs.target }}
+        PI_RELEASE_URL: ${{ inputs.release-url }}
+        PI_ARCHIVE_NAME: ${{ inputs.archive-name }}
+        PI_ARCHIVE_SHA256: ${{ inputs.archive-sha256 }}
+        PI_EXECUTABLE_SHA256: ${{ inputs.executable-sha256 }}
+        PI_EXECUTABLE_PATH: ${{ inputs.executable-path }}
+        PI_EXPECTED_VERSION: ${{ inputs.expected-version }}
+        PI_PROVENANCE_FILE: ${{ inputs.provenance-file }}
+        PI_LOG_FILE: ${{ inputs.log-file }}
+        PI_WRITE_STATIC_PROVENANCE: ${{ inputs.write-static-provenance }}
+        PI_WITNESS_SCOPE: ${{ inputs.witness-scope }}
+      run: |
+        set -Eeuo pipefail
+
+        if [ "$PI_TARGET" != 'x86_64-pc-linux-gnu' ]; then
+          printf 'this action step only prepares the x86_64-pc-linux-gnu pinned release; got %s\n' "$PI_TARGET" >&2
+          exit 1
+        fi
+        if [ "$RUNNER_OS" != 'Linux' ] || [ "$RUNNER_ARCH" != 'X64' ]; then
+          printf 'pinned Pi target %s requires a Linux X64 runner; got %s %s\n' \
+            "$PI_TARGET" "$RUNNER_OS" "$RUNNER_ARCH" >&2
+          exit 1
+        fi
+        if [ "$PI_WRITE_STATIC_PROVENANCE" != 'true' ]; then
+          printf 'the POSIX static provenance block is owned by this action; got write-static-provenance=%s\n' \
+            "$PI_WRITE_STATIC_PROVENANCE" >&2
+          exit 1
+        fi
+
+        archive="$RUNNER_TEMP/$PI_ARCHIVE_NAME"
+        release_dir=$(dirname -- "$PI_EXECUTABLE_PATH")
+        executable="$PI_EXECUTABLE_PATH"
+        log="$PI_LOG_FILE"
+        provenance="$PI_PROVENANCE_FILE"
+        archive_sha256="$PI_ARCHIVE_SHA256"
+        executable_sha256="$PI_EXECUTABLE_SHA256"
+        pi_version="$PI_EXPECTED_VERSION"
+
+        : > "$log"
+        rm -rf "$release_dir"
+        mkdir -p "$release_dir"
+
+        {
+          printf 'source_revision=%s\n' "$GITHUB_SHA"
+          printf 'runner_os=%s\n' "$RUNNER_OS"
+          printf 'runner_arch=%s\n' "$RUNNER_ARCH"
+          printf 'pi_target=%s\n' "$PI_TARGET"
+          printf 'pi_release_url=%s\n' "$PI_RELEASE_URL"
+          printf 'pi_version_expected=%s\n' "$pi_version"
+          printf 'pi_archive_sha256_expected=%s\n' "$archive_sha256"
+          printf 'pi_executable_path=%s\n' "$executable"
+          printf 'pi_executable_sha256_expected=%s\n' "$executable_sha256"
+          printf 'provider_credentials=none\n'
+          printf 'upstream_scope=numeric IPv4 loopback only\n'
+          printf 'witness_scope=%s\n' "$PI_WITNESS_SCOPE"
+        } > "$provenance"
+
+        curl --fail --silent --show-error --location \
+          --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
+          "$PI_RELEASE_URL" --output "$archive" 2>&1 | tee -a "$log"
+
+        printf '%s  %s\n' "$archive_sha256" "$archive" |
+          sha256sum --check --strict 2>&1 | tee -a "$log"
+
+        tar --extract --file "$archive" --directory "$release_dir"
+        test -x "$executable"
+
+        actual_executable_sha256=$(sha256sum "$executable" | awk '{print $1}')
+        actual_pi_version=$(timeout 30s "$executable" --version)
+        test "$actual_executable_sha256" = "$executable_sha256"
+        test "$actual_pi_version" = "$pi_version"
+
+        {
+          printf 'pi_archive_sha256_actual=%s\n' "$(sha256sum "$archive" | awk '{print $1}')"
+          printf 'pi_executable_sha256_actual=%s\n' "$actual_executable_sha256"
+          printf 'pi_version_actual=%s\n' "$actual_pi_version"
+        } >> "$provenance"
+
+        printf 'verified Pi %s (%s) at %s\n' "$actual_pi_version" "$actual_executable_sha256" "$executable" |
+          tee -a "$log"
+
+    - name: Prepare pinned Pi release (Windows x86_64)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      working-directory: ${{ runner.temp }}
+      env:
+        PI_TARGET: ${{ inputs.target }}
+        PI_RELEASE_URL: ${{ inputs.release-url }}
+        PI_ARCHIVE_NAME: ${{ inputs.archive-name }}
+        PI_ARCHIVE_SHA256: ${{ inputs.archive-sha256 }}
+        PI_EXECUTABLE_SHA256: ${{ inputs.executable-sha256 }}
+        PI_EXECUTABLE_PATH: ${{ inputs.executable-path }}
+        PI_EXPECTED_VERSION: ${{ inputs.expected-version }}
+        PI_PROVENANCE_FILE: ${{ inputs.provenance-file }}
+        PI_LOG_FILE: ${{ inputs.log-file }}
+        PI_WRITE_STATIC_PROVENANCE: ${{ inputs.write-static-provenance }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        if ($env:PI_TARGET -ne 'x86_64-pc-windows') {
+          throw "this action step only prepares the x86_64-pc-windows pinned release; got $env:PI_TARGET"
+        }
+        if ($env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ARCH -ne 'X64') {
+          throw "pinned Pi target $env:PI_TARGET requires a Windows X64 runner; got $env:RUNNER_OS $env:RUNNER_ARCH"
+        }
+        if ($env:PI_WRITE_STATIC_PROVENANCE -ne 'false') {
+          throw "the Windows static provenance block (runner image and PostgreSQL prerequisites) is owned by the job initialisation step; pass write-static-provenance: 'false'"
+        }
+
+        $releaseUrl = $env:PI_RELEASE_URL
+        $archive = Join-Path $env:RUNNER_TEMP $env:PI_ARCHIVE_NAME
+        $executable = $env:PI_EXECUTABLE_PATH
+        $releaseDir = Split-Path -Parent $executable
+        $archiveSha256 = $env:PI_ARCHIVE_SHA256
+        $executableSha256 = $env:PI_EXECUTABLE_SHA256
+        $expectedVersion = $env:PI_EXPECTED_VERSION
+        $log = $env:PI_LOG_FILE
+        $provenance = $env:PI_PROVENANCE_FILE
+
+        Add-Content -LiteralPath $log -Value "download_url=$releaseUrl"
+        Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent' = 'symmetry-ci' } -Uri $releaseUrl -OutFile $archive
+
+        $actualArchiveSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+        Add-Content -LiteralPath $provenance -Value "pi_archive_sha256_actual=$actualArchiveSha256"
+        if ($actualArchiveSha256 -ne $archiveSha256) {
+          throw "Pi archive SHA-256 did not equal $archiveSha256; got $actualArchiveSha256"
+        }
+
+        New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+        Expand-Archive -LiteralPath $archive -DestinationPath $releaseDir -Force
+        if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+          throw "Pi executable was not found at $executable"
+        }
+
+        $actualExecutableSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $executable).Hash.ToLowerInvariant()
+        if ($actualExecutableSha256 -ne $executableSha256) {
+          throw "Pi executable SHA-256 did not equal $executableSha256; got $actualExecutableSha256"
+        }
+
+        $versionOutput = & $executable --version 2>&1
+        $versionStatus = $LASTEXITCODE
+        $actualPiVersion = ($versionOutput -join "`n").Trim()
+        if ($versionStatus -ne 0 -or $actualPiVersion -ne $expectedVersion) {
+          throw "Pi --version did not equal $expectedVersion; status=$versionStatus output=$actualPiVersion"
+        }
+
+        Add-Content -LiteralPath $provenance -Value "pi_executable_sha256_actual=$actualExecutableSha256"
+        Add-Content -LiteralPath $provenance -Value "pi_version_actual=$actualPiVersion"
+        Add-Content -LiteralPath $log -Value "verified Pi $actualPiVersion ($actualExecutableSha256) at $executable"

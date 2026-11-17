@@ -45,7 +45,22 @@ Run CI for pull requests, pushes to `main`, tags, and manual dispatch; do not
 duplicate the full matrix on feature-branch pushes. PR evidence binds the tested
 merge revision, not the unmerged feature head. Branches without a PR and
 conflicted PRs have no automatic feature-head run. The Control job owns the
-canonical formatter gate; Pi jobs retain platform-specific compilation and E2E.
+canonical formatter gate. Platform-specific compilation and E2E are retained:
+the Linux Pi acceptance steps run inside the Control job, which shares their
+platform and Postgres service, while the Windows Pi acceptance keeps its own
+job.
+
+Amendment (2026-11-17, owner-directed CI consolidation). Two structural
+statements above are superseded while every gate they protect is retained: the
+Linux Pi acceptance steps moved from their own job into Control (same runner
+image, same database service, one compilation of the test environment instead of
+two), and the ordinary Linux Go pass is now scoped to the two packages that
+carry non-race assertions while the `-race` pass remains the full-suite pass.
+Both passes remain for an empirical reason, not a stylistic one: at `671525c`
+the ordinary pass succeeded on a revision where the race pass failed in
+`internal/harness/omp`, so neither shape may replace the other. Folding never
+masks a gate: every folded step is `if: always()`, carries its own outcome, and a
+final assertion step fails the job for any folded outcome that is not success.
 
 Ordinary Linux user/PID namespace fixtures still run as the original
 unprivileged runner UID. On disposable GitHub-hosted runners, preparation may
