@@ -533,6 +533,76 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       must either dispatch it against a current subject or record that no acceptance has happened since
       the split.
 
+    **Operator instruction (dispatch branch, exact).** The trigger is dispatch-only by design: the
+    workflow's only event is `workflow_dispatch` (`.github/workflows/linux-native-v2-acceptance.yml:3-6`),
+    its job is guarded `if: github.event_name == 'workflow_dispatch'` (`:14`), and
+    `scripts/ci/linux-v2-native-acceptance.sh:46` refuses every other event — `credentialed Linux
+    acceptance requires explicit workflow_dispatch` — so nothing else can run it: the file declares no
+    push, pull_request, schedule or `workflow_call` trigger, and `ci.yml` references it nowhere and holds
+    no `actions: write`. The entry point is workflow **"Linux native v2 acceptance"**
+    (`.github/workflows/linux-native-v2-acceptance.yml`, id `419219121`). Command, run with an
+    authenticated `gh` — `gh workflow run linux-native-v2-acceptance.yml --repo wxxb789/symmetry --ref main`.
+    `--ref` names a branch or tag, not a bare SHA: use `main`, or another ref the Environment admits whose
+    tip is the exact subject; the harness requires `GITHUB_SHA` to be a full commit SHA and records
+    `GITHUB_REF`/`GITHUB_SHA` in its output. The run then pauses in the `linux-v2-native-acceptance`
+    Environment until its required reviewer (`@wxxb789`) approves, before the job's steps start.
+
+    **Preconditions the steps assume** (recorded; the remote ones are not enforced by YAML): a GitHub-hosted
+    `ubuntu-latest` x86_64 (amd64-only) runner — no self-hosted runners are registered — that has `systemd`
+    as PID 1 and unified cgroup v2 (`/run/systemd/system`, `/sys/fs/cgroup/cgroup.controllers`), a
+    stop-provable delegated transient unit, `sudo -n`, `systemd-nspawn`, `debootstrap`, `setfacl`, `gh`, a C
+    toolchain and `jq` (the workflow installs `acl build-essential curl debootstrap gh jq python3 sudo
+    systemd-container`); pinned tooling Go 1.27.0, Elixir 1.20.4/OTP 29.0.6 and the `postgres:18.6-alpine`
+    service; the protected Environment `linux-v2-native-acceptance` with its required reviewer and branch
+    policy, which the workflow comment requires verifying before dispatch ("Before dispatch, verify the
+    Environment requires @wxxb789's separate approval, permits self-review, and admits only the reviewed
+    0006b branch"); and four configured inputs: the secrets `SYMMETRY_LINUX_V2_TEST_GITHUB_OAUTH_TOKEN`
+    (must be `gho_*`; the hosted `GITHUB_TOKEN` is refused) and `SYMMETRY_LINUX_V2_TEST_OPENAI_API_KEY`,
+    and the variables `SYMMETRY_LINUX_V2_TEST_PI_MODEL` and `SYMMETRY_LINUX_V2_TEST_OPENCODE_MODEL`.
+    Recorded status, still limiting (2026-11-15): the Environment policy read allowed branches `main` and
+    `codex/goal-0006b-crash-safe-process-containment` with `prevent_self_review=false`; and no environment
+    available here yet satisfies the host prerequisite — the last hosted attempt (run `43673581776`) failed
+    the probe with `unified_cgroup_v2_mounted=false` and the local WSL2 attempt failed at
+    `transient_unit_cleanup`, so a host that does not qualify fails at the probe before any case set runs.
+
+    **When it must be dispatched.** At release acceptance, against the exact subject, and never cited as
+    passed before it runs. The goals' pending predicate, quoted from `docs/goals/README.md`: "the operator
+    must dispatch workflow "Linux native v2 acceptance"
+    (`.github/workflows/linux-native-v2-acceptance.yml`) on `main` at `8ded771` to run the
+    environment-gated `linux-native-v2-acceptance` job on the unchanged Subject tree"; the 0006i plan
+    (`docs/plans/2026-11-15-0006i-exact-subject-release-acceptance-plan.md`) adds that it "must be
+    dispatched by the operator on the RC head and is recorded as **pending operator dispatch** with the
+    exact workflow and ref — never as passed." Caveat of record: no remote branch or tag points at
+    the frozen subject `8ded771` and dispatching a ref runs that ref's tip and workflow
+    bytes (`docs/evidence/ci-process-trim-2026-11-15.md`), so an exact-historical-subject dispatch needs
+    an approved branch or tag whose tip is that subject.
+
+    **Stale coordinates, documented rather than rewritten.** The 0006i plan and its receipt name the
+    pre-split location — the `linux-native-v2-acceptance` job inside workflow "CI", cited at
+    `.github/workflows/ci.yml:14-16` — and the goals row did too before this correction; after the
+    2026-11-15 split `ci.yml` contains no such job. Those historical files keep their bytes; the live
+    `docs/goals/README.md` row now names this workflow and file, and
+    `docs/evidence/ci-process-trim-2026-11-15.md` already records the current entry point
+    (`Linux native v2 acceptance`, `linux-native-v2-acceptance.yml`, not manual dispatch of `CI`).
+
+    **What a dispatch alone produces.** The installed A/B native-owner witness case sets — `shared`,
+    `synthetic_goal_cleanup`, `stage_replay_create_started`, `stage_replay_leaf_bound`,
+    `stage_replay_launcher_bound`, `ack_loss_launcher_bound`, `stale_leaf`, `migration`,
+    `stale_journal_run_key`, `stale_journal_run_key_legacy`, `stale_journal_fence`, `stale_journal_subject`
+    — plus the host-prerequisite probe JSON artifact; in CI they run only through
+    `scripts/ci/linux-v2-native-acceptance.sh`, which only this workflow invokes. Nothing in `ci.yml` sets
+    the gating variables `SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS`
+    (`daemon/e2e/production_linux_v2_native_witness_test.go`) or `SYMMETRY_LINUX_OWNER_TEST_SCRATCH`
+    (`daemon/native/linux-gate/protocol/`, e.g. `launcher_integration_linux_test.go`), so those witnesses
+    skip in every automatic job and the installed-owner acceptance class stays unproven while no dispatch
+    runs. A green aggregate elsewhere is not a substitute: the `integration` job's containment witness
+    matrix (`SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_*`) and the `compose` job's rootless native refusal
+    proofs are different surfaces, and the 0006i receipt
+    (`docs/evidence/goal-0006i-exact-subject-release-acceptance-2026-11-15.md`) states "A skipped or failed
+    qualification job is unavailable evidence, and a missing live environment stays explicitly incomplete
+    rather than being
+    replaced by a synthetic pass."
+
 - `scripts/audit-no-legacy-routes.sh` no longer enumerates its surfaces. It derives every audited file
   from `git ls-files` (binary and asset extensions excepted) and names its three intentional
   exclusions, so `.github/workflows/linux-native-v2-acceptance.yml` and the composite action
