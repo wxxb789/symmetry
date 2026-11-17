@@ -1,0 +1,860 @@
+{
+  "acceptance_blockers": [],
+  "accepted": true,
+  "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "checks": [
+    {
+      "argv": [
+        "mix",
+        "test",
+        "test/symmetry_control_web/controllers/goal_machine_controller_test.exs",
+        "--only",
+        "goal_receipt_e2e"
+      ],
+      "cwd": "control",
+      "env": {
+        "POSTGRES_DB": "symmetry_receipt_e2e_bb0f28ec0b9c18de666d9a8ac1def52f",
+        "SYMMETRY_GOAL_RECEIPT_E2E": "1"
+      },
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "goal-receipt-e2e",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    },
+    {
+      "argv": [
+        "mix",
+        "format",
+        "--check-formatted"
+      ],
+      "cwd": "control",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "format",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    },
+    {
+      "argv": [
+        "mix",
+        "compile",
+        "--warnings-as-errors"
+      ],
+      "cwd": "control",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "compile",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    },
+    {
+      "argv": [
+        "mix",
+        "test",
+        "test/symmetry_control/resource_sync_inflight_marker_test.exs"
+      ],
+      "cwd": "control",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": 0,
+      "exunit_files": [
+        "test/symmetry_control/resource_sync_inflight_marker_test.exs"
+      ],
+      "exunit_tests": [
+        "a synchronization commits a syncing marker before the provider call and finalizes once",
+        "concurrent synchronizations produce a single winner and a stale loser that cannot overwrite it",
+        "a failed provider call replaces the in-flight marker with failed synchronization",
+        "an archived project rolls the in-flight marker back to the resource's previous state",
+        "the periodic syncer notifies completion once after the in-flight marker finalizes"
+      ],
+      "go_package": null,
+      "go_tests": null,
+      "id": "focused-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    },
+    {
+      "argv": [
+        "mix",
+        "test",
+        "test/symmetry_control/provider_broker_e2e_test.exs"
+      ],
+      "cwd": "control",
+      "env": {
+        "SYMMETRY_PROVIDER_BROKER_E2E": "1"
+      },
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": 0,
+      "exunit_files": [
+        "test/symmetry_control/provider_broker_e2e_test.exs"
+      ],
+      "exunit_tests": [
+        "GitHub Issue reaches GitHub pull request, review, and Actions projection",
+        "Azure Boards work item reaches GitHub changes and Azure Pipelines projection",
+        "Azure Boards work item reaches Azure Repos, review, and Pipelines projection",
+        "artifact-only Goal validation uses the fixed Git object without a native session"
+      ],
+      "go_package": null,
+      "go_tests": null,
+      "id": "provider-broker-e2e",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    },
+    {
+      "argv": [
+        "mix",
+        "test"
+      ],
+      "cwd": "control",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "full-suite",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null
+    }
+  ],
+  "cost": {
+    "accounting_complete": false,
+    "estimated_cost": 0.8367779,
+    "incomplete_reasons": [
+      "missing price version in 3 model phase(s)",
+      "no provider-reported cost in 3 model phase(s)"
+    ],
+    "known_estimated_cost_subtotal": 0.8367779,
+    "known_reported_cost_subtotal": 0,
+    "price_versions": [],
+    "reported_cost": null
+  },
+  "environment": {
+    "git_version": "git version 2.56.0.windows.4",
+    "machine": "AMD64",
+    "measured": {
+      "elixir_version": "Elixir 1.20.4 (compiled with Erlang/OTP 29)",
+      "gates_host": "this Windows host only; no cross-platform extrapolation is claimed",
+      "host_os": "Windows NT 10.0.26300 x64",
+      "mix_build_path": "C:/Users/lhan/AppData/Local/Temp/symmetry-0008c-eval/runs/b-strong/build (outside the checkout)",
+      "mix_deps_path": "C:/Users/lhan/AppData/Local/Temp/symmetry-0008c-eval/deps (outside the checkout)",
+      "otp_version": "Erlang/OTP 29 erts-17.1.1",
+      "portal_bundle": "repository frontend build staged at control/priv/static/portal; index.html sha256:6ac43ef4f6ab4b35e8af21136b8c02f6b7765e52aae3ad0d1a65f0147b75a463",
+      "postgres_db": "symmetry_0008c_b_strong",
+      "postgres_route": "Docker container symmetry-0008c-postgres from postgres:18.6-alpine, published on 127.0.0.1:55461",
+      "postgres_server_version": "PostgreSQL 18.6 on x86_64-pc-linux-musl",
+      "pwsh_route": "portable PowerShell 7.7.0 on PATH for the gate processes (required by the existing provider command tests)",
+      "toolchain_route": "mise shims with MISE_ELIXIR_VERSION=1.20.4-otp-29 and MISE_ERLANG_VERSION=29.1.2 exported for the gate processes; go 1.27.4 for the integration gates' Go builds"
+    },
+    "platform": "win32",
+    "python_version": "3.12.10"
+  },
+  "evidence": {
+    "check_attempt": {
+      "attempt_id": "attempt-0001",
+      "attempt_sha256": "sha256:0cc6cb621c0a52e9f40c8002827225fa6c3f7b83c8f23b3506f2326244628bc1",
+      "complete": true,
+      "gates": [
+        {
+          "id": "goal-receipt-e2e",
+          "passed": true,
+          "result_sha256": "sha256:045938c214559af58aaf388223971fc226490ebc1515c13a128c01b6ff87e459",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:bc5f9dafd24991e84ac68e3b8836d0b637bb968afa68e86b2028182cef672309",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "format",
+          "passed": true,
+          "result_sha256": "sha256:5204c9bf218ff825f163d8212baa96b966285236d72d02d9a89127c6e2416d7c",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "compile",
+          "passed": true,
+          "result_sha256": "sha256:2b112e6235745eb9582ce86461c385fff601b4e559ef2442a7aaa26c5a71b204",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:942db8cd82ac110f58adc37d9d60768e5817da4b500b03027a3cae114f2dd13d",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "focused-tests",
+          "passed": true,
+          "result_sha256": "sha256:64643ec693477f0261bbed9e39de5bcd12dd13d49e803cef629e64a2d675e0ed",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:9327bea5063d0c6f33a3e8c93754e187b592459cd21344d62fba62c2417f013c",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "provider-broker-e2e",
+          "passed": true,
+          "result_sha256": "sha256:cdb418d1c65b85e1bdd32e05eef8433972f7b0fbbf7e7328f8cce043304f99f2",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:ef77644b7623ecd3d6779092edefef3a185d6e342624d52f659919de2df08fbc",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "full-suite",
+          "passed": true,
+          "result_sha256": "sha256:9a5ca66f3ad98ae4dfcb05ebc97f5d7e86cf9853aa5673f510d2baa1ca39c5ee",
+          "stderr_sha256": "sha256:40b1f04ed5ee691d473384b9f9b82f6b9e5acc48d40f3b190ce67e51bd7ae472",
+          "stdout_sha256": "sha256:2f0fe55101e62a835f4c68b38b02ef66d86852614d235bad6b6874cb7da6b163",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        }
+      ],
+      "passed": true,
+      "routes_sha256": "sha256:7e43051f313012e4804dbd4a3adffc4d85576d1137a37421de157ce353a327eb",
+      "subject_hash": "sha256:2d98eaec565495be3bafc12559b99f9bc4beb51837fc8faf2ab3b0630bf3f2e1",
+      "task_sha256": "sha256:4bf7eb0c7bb81dc73cd535e714ee067afd006b175c2c88fff6184742094bb7b3"
+    },
+    "frozen_review_sha256": "sha256:2918a91d424e19957edde4df87317aa90b73b1bcd4f6562c5e939367c722136f",
+    "frozen_routes_sha256": "sha256:7e43051f313012e4804dbd4a3adffc4d85576d1137a37421de157ce353a327eb",
+    "frozen_task_sha256": "sha256:4bf7eb0c7bb81dc73cd535e714ee067afd006b175c2c88fff6184742094bb7b3",
+    "frozen_usage_sha256": "sha256:dc8d8efe95e9974d576fc7a681fcfbf7fa557811d716548d2c6900b67a99de47",
+    "tooling_sources": {
+      "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+      "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+      "model-routing-evaluation.py": "sha256:932290d7f76f5bd18e2778cd468b88b6852ba9a10721ae997bc10325db190ef5"
+    }
+  },
+  "explanations": [
+    "Explain why the in-flight marker is committed before any provider network call, why it must not be authoritative, and how the refused-finalization path rolls it back without weakening the lock/CAS guarantees.",
+    "Explain exactly how a losing concurrent writer is prevented from overwriting the winner, naming the lock/CAS mechanism and the code path that maps its failure to {:error, :stale}."
+  ],
+  "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+  "language": "elixir",
+  "later_defects": [],
+  "model_ids": [
+    {
+      "api": "openai-completions",
+      "model": "deepseek-v4.1-flash-fast",
+      "provider": "tencent-litellm"
+    },
+    {
+      "api": "openai-responses",
+      "model": "gpt-6.1-sol",
+      "provider": "ghc"
+    }
+  ],
+  "outcome": "A resource synchronization must commit an in-flight marker - sync_status \"syncing\" with last_checked_at updated on the locked resource - before any provider network call for that resource, and then finalize exactly once: \"synced\" on success and the existing failure classification (\"failed\", or \"stale\" only if that classification already exists at the frozen base) on failure. The provider call must stay outside every database transaction, and the marker must be explicitly non-authoritative: no reaper or timeout is added, any later finalization overwrites it, and a run that dies after the marker leaves no authority behind. If a finalization is refused because the project is no longer active (the existing :state_conflict path), the resource must not be left advertising the in-flight marker: that refused sync rolls the marker back to the resource's own pre-sync sync_status and last_checked_at under the same optimistic-lock/CAS rules, without touching any other resource field, so the existing protected archive-race test keeps passing unchanged. Two concurrent synchronizations of the same resource must produce exactly one winner: the loser either observes the newer lock version or fails with {:error, :stale}, and a losing writer must not overwrite the winner's sync_status, status, status_message, metadata, last_checked_at or last_synced_at. The periodic SymmetryControl.Integrations.Syncer must notify completion exactly once per run, only after the run's work has finished. Existing tests, error codes, gates and the named project_resources_sync_status_check constraint stay intact. The five tests must be declared at module level, outside any `describe` block, because the frozen named-test acceptance binds their printed ExUnit descriptions exactly.",
+  "phases": [
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "the coordinating primary session is shared across all four runs and the wider working session, so this run has no separable exploration model session; the sealed packet bytes and their digests are the exploration artifact",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "exploration",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.4618031,
+      "known_subtotals": {
+        "assistant_messages": 18,
+        "assistant_messages_with_cost_total": 18,
+        "assistant_messages_with_usage": 18,
+        "cacheRead": {
+          "messages": 18,
+          "sum": 1057626
+        },
+        "cacheWrite": {
+          "messages": 18,
+          "sum": 73073
+        },
+        "cached": {
+          "messages": 18,
+          "sum": 1130699
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 18,
+            "sum": 0.10576260000000001
+          },
+          "cacheWrite": {
+            "messages": 18,
+            "sum": 0.1826825
+          },
+          "input": {
+            "messages": 18,
+            "sum": 0.00010799999999999997
+          },
+          "output": {
+            "messages": 18,
+            "sum": 0.17325000000000002
+          },
+          "total": {
+            "messages": 18,
+            "sum": 0.4618031
+          }
+        },
+        "input": {
+          "messages": 18,
+          "sum": 54
+        },
+        "output": {
+          "messages": 18,
+          "sum": 17325
+        },
+        "reasoningTokens": {
+          "messages": 16,
+          "sum": 9829
+        },
+        "totalTokens": {
+          "messages": 18,
+          "sum": 1148078
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 18,
+        "assistant_messages_with_cost_total": 18,
+        "assistant_messages_with_usage": 18,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-existing-ghc-provider-route",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 64,
+          "message": 80,
+          "model_change": 1,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          }
+        ],
+        "records": 148,
+        "resolved_model_identity": null,
+        "routing_provenance": "modelRoles.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:81a40149d4b54ad5ae7c23c40c946ec964d756835a1af3f2b8614de12e0f907f",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 18,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:8cbe7fd500e53f70375e5903998543e882dd9e815d03cb477eba1e966179e173"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e62a-7f60-76c6-8df5-1cb45f5cf059",
+      "stage": "implementation",
+      "tokens": {
+        "cached": 1130699,
+        "input": 54,
+        "output": 17325
+      },
+      "wall_time": 428.553
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "the six frozen gates are local processes (mix, python, dockerized PostgreSQL) executed by scripts/ci/model-routing-evaluation.py; no model session participates",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "verification",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 672.1
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.07585649999999998,
+      "known_subtotals": {
+        "assistant_messages": 41,
+        "assistant_messages_with_cost_total": 41,
+        "assistant_messages_with_usage": 41,
+        "cacheRead": {
+          "messages": 41,
+          "sum": 2583296
+        },
+        "cacheWrite": {
+          "messages": 41,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 41,
+          "sum": 2583296
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 41,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 41,
+            "sum": 0
+          },
+          "input": {
+            "messages": 41,
+            "sum": 0.017600099999999997
+          },
+          "output": {
+            "messages": 41,
+            "sum": 0.05825639999999999
+          },
+          "total": {
+            "messages": 41,
+            "sum": 0.07585649999999998
+          }
+        },
+        "input": {
+          "messages": 41,
+          "sum": 58667
+        },
+        "output": {
+          "messages": 41,
+          "sum": 48547
+        },
+        "reasoningTokens": {
+          "messages": 34,
+          "sum": 33535
+        },
+        "totalTokens": {
+          "messages": 41,
+          "sum": 2690510
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 41,
+        "assistant_messages_with_cost_total": 41,
+        "assistant_messages_with_usage": 41,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-existing-tencent-provider-route",
+        "custom_messages": 1,
+        "entry_types": {
+          "custom": 62,
+          "custom_message": 1,
+          "message": 101,
+          "model_change": 1,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          }
+        ],
+        "records": 168,
+        "resolved_model_identity": null,
+        "routing_provenance": "launch.omp-run.explicitModel.reviewer",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:10b883fe9adc560979aa8cae2cf03fe18ab82e418be69090222e2dee7c6c3822",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 41,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:270a471613e942b2056aa4d43d660d7c78735407e56f46f15f035676aaa89514"
+        },
+        {
+          "index": 0,
+          "kind": "custom_message",
+          "sha256": "sha256:1bc677cad56b442055b83a2064877eb4116e559bef5c148b2b482d73df48a403"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e658-7809-7394-8127-72dcb770fca6",
+      "stage": "review",
+      "tokens": {
+        "cached": 2583296,
+        "input": 58667,
+        "output": 48547
+      },
+      "wall_time": 339.121
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "no repair round was run: the first completed implementation attempt was accepted",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "repair",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.2991183,
+      "known_subtotals": {
+        "assistant_messages": 14,
+        "assistant_messages_with_cost_total": 14,
+        "assistant_messages_with_usage": 14,
+        "cacheRead": {
+          "messages": 14,
+          "sum": 679743
+        },
+        "cacheWrite": {
+          "messages": 14,
+          "sum": 72480
+        },
+        "cached": {
+          "messages": 14,
+          "sum": 752223
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 14,
+            "sum": 0.0679743
+          },
+          "cacheWrite": {
+            "messages": 14,
+            "sum": 0.18120000000000003
+          },
+          "input": {
+            "messages": 14,
+            "sum": 8.399999999999998e-05
+          },
+          "output": {
+            "messages": 14,
+            "sum": 0.04986
+          },
+          "total": {
+            "messages": 14,
+            "sum": 0.2991183
+          }
+        },
+        "input": {
+          "messages": 14,
+          "sum": 42
+        },
+        "output": {
+          "messages": 14,
+          "sum": 4986
+        },
+        "reasoningTokens": {
+          "messages": 11,
+          "sum": 2161
+        },
+        "totalTokens": {
+          "messages": 14,
+          "sum": 757251
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 14,
+        "assistant_messages_with_cost_total": 14,
+        "assistant_messages_with_usage": 14,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-existing-ghc-provider-route",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 45,
+          "message": 57,
+          "model_change": 1,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          }
+        ],
+        "records": 106,
+        "resolved_model_identity": null,
+        "routing_provenance": "modelRoles.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:a1c8fd6328abbd657167ffec3c86a14bbc47ffe0007f67584393b31a36c7e26c",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 14,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:4e5741703497381a840bbf2326db836ead86aa543e6190e16e269ccb9f6c7bad"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e626-9776-7152-9583-c918dd0137ed",
+      "stage": "failed_attempt",
+      "tokens": {
+        "cached": 752223,
+        "input": 42,
+        "output": 4986
+      },
+      "wall_time": 171.581
+    }
+  ],
+  "prompt_hashes": [
+    {
+      "kind": "custom_message",
+      "sha256": "sha256:1bc677cad56b442055b83a2064877eb4116e559bef5c148b2b482d73df48a403"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:270a471613e942b2056aa4d43d660d7c78735407e56f46f15f035676aaa89514"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:4e5741703497381a840bbf2326db836ead86aa543e6190e16e269ccb9f6c7bad"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:8cbe7fd500e53f70375e5903998543e882dd9e815d03cb477eba1e966179e173"
+    }
+  ],
+  "repair_count": 0,
+  "review": {
+    "check_attempt_id": "attempt-0001",
+    "evidence_sha256": "sha256:2918a91d424e19957edde4df87317aa90b73b1bcd4f6562c5e939367c722136f",
+    "gate_weakening": false,
+    "model_id": "deepseek-v4.1-flash-fast",
+    "routes_sha256": "sha256:7e43051f313012e4804dbd4a3adffc4d85576d1137a37421de157ce353a327eb",
+    "session_ref": "01a1e658-7809-7394-8127-72dcb770fca6",
+    "subject_hash": "sha256:2d98eaec565495be3bafc12559b99f9bc4beb51837fc8faf2ab3b0630bf3f2e1",
+    "verdict": "pass"
+  },
+  "review_time": 339.121,
+  "reviewed_explanations": {
+    "Explain exactly how a losing concurrent writer is prevented from overwriting the winner, naming the lock/CAS mechanism and the code path that maps its failure to {:error, :stale}.": "Mechanism: the ProjectResource optimistic lock on lock_version. Finalization persist_sync/4 (integrations.ex:857) builds ProjectResource.sync_changeset/2 (workspaces/schemas.ex:186-200), which casts the sync fields and applies optimistic_lock(:lock_version), then calls update_with_stale_error/1 (:1942) = Repo.update(changeset, stale_error_field: :lock_version, stale_error_message: \"is stale\"), so the UPDATE carries WHERE lock_version = <the version the loser observed> and writes zero rows once the winner has finalized. normalize_stale_result/1 (:1947-1955) converts the resulting :lock_version changeset error into {:error, :stale}; the update inside persist_sync's transaction is a no-op and the transaction returns :stale, which the transaction wrapper maps to {:error, :stale} (:907-910). sync_marked_resource/1 then maps {:error, :stale} -> {:error, :stale} (:737) and sync_resource/1 surfaces it unchanged (sync_all_resources/0 counts it failed). The other writes a losing writer could attempt are guarded the same way: (a) the failure finalization record_resource_failure/3 (:1640-1685) re-locks (Project FOR SHARE, resource FOR UPDATE) and requires matches_version(resource, resource_snapshot.lock_version) before writing status \"degraded\"/sync_status \"failed\", returning :stale -> {:error, :stale} (:1681-1685) without writing, and its write also goes through sync_changeset |> update_with_stale_error; (b) the marker and the refused-finalization rollback use update_sync_marker/2 (:708-719), whose CAS WHERE id/lock_version returns {:error, :stale} on {0, _}, so a late marker or rollback cannot clobber a finalized row; (c) the marker write itself consumes no lock_version, so it can never make a legitimate later finalization fail - it only ever loses. Executed evidence: the frozen test 'concurrent synchronizations produce a single winner and a stale loser that cannot overwrite it' runs all four loser shapes (loser success vs {:error, {:http, 503, ...}} x archived vs active) and passes; it asserts {:error, :stale} for each loser and Repo.get!(ProjectResource, id) == synced on the whole struct, i.e. the winner's sync_status, status, status_message, metadata, last_checked_at and last_synced_at are intact. Sensitivity was proven in a scratch copy: with only the refusal branch removed, that test fails with the loser returning {:error, :state_conflict} instead of {:error, :stale}; with the whole production change reverted, 0/5 focused tests pass and every one fails at the missing pre-call marker (marker.sync_status stays \"failed\"). The frozen focused gate was also re-run in place on the sealed revision: 5/5 passed, and the stored ExUnit trace's L#74/96/130/149/169 line anchors match the real test declarations.",
+    "Explain why the in-flight marker is committed before any provider network call, why it must not be authoritative, and how the refused-finalization path rolls it back without weakening the lock/CAS guarantees.": "Commit-before-call: Integrations.sync_resource/1 (integrations.ex:274-279) now dispatches into sync_connected_resource/1 (:664), which first calls mark_resource_syncing/1 (:682). That function opens Repo.transaction/1, takes Project FOR SHARE first (data.md's global lock order: Project -> ... -> resource), re-checks require_active_project/1, re-reads the resource FOR UPDATE, verifies matches_version/2 against the caller's lock_version, and then writes the marker with update_sync_marker/1 (:708) as a CAS update (WHERE id = ^id AND lock_version = ^lock_version; SET sync_status = \"syncing\", last_checked_at = now()). The provider boundary runs only after that transaction has returned, inside sync_marked_resource/1 (:722): provider.authenticate, provider.sync_resource and delivery_updates are outside every transaction, and persist_sync/4 (:857) opens its own transaction later. I confirmed by execution, not by reading alone: in a scratch copy of the sealed revision I wrapped only the provider.sync_resource call in Repo.transaction/1 and the focused suite failed 5/5 ('no matching message') because the provider callback asserts Repo.in_transaction?() == false; conversely my in-place re-run of the frozen focused gate passed 5/5 (3.8s), and the tests' await_provider/2 observes the committed marker through a separate connection (Sandbox.unboxed_run) while the provider callback is still blocked in its receive, which is only possible if the marker committed before the call. Non-authority: the marker consumes no lock_version, writes only presentation fields (sync_status, last_checked_at), adds no reaper/timeout/Oban job, and nothing branches on \"syncing\" for scheduling or authority - the only consumer is the read-model presentation synchronization_health/1 (workspaces/read_model.ex:539-549). Because the marker does not consume the version, a later finalization still matches the old version through ProjectResource.sync_changeset/2 + optimistic_lock(:lock_version) and simply overwrites the marker; a run that dies after the marker leaves a row the next run's CAS rewrite replaces, as documented by the new moduledoc paragraph (integrations.ex:7-10). Refused finalization: persist_sync/4 (:857-910) and record_resource_failure/3 (:1640-1685) both lock Project FOR SHARE and call require_active_project/1; when the project is no longer active they Repo.rollback(:state_conflict), which sync_marked_resource/1 maps to {:error, :state_conflict} (:738). sync_connected_resource/1 (:667-674) then calls the same CAS-guarded update_sync_marker/2 with the pre-sync values captured under the FOR UPDATE lock (previous.sync_status, previous.last_checked_at) - only those two columns, no other field - so the resource stops advertising \"syncing\". The rollback cannot weaken the CAS: it is conditional on the marker's own lock_version, returns {:error, :stale} without writing if another writer moved the row, and never bypasses the version check. Evidence: the protected archive tests integrations_test.exs:1038/:1062 still assert {:error, :state_conflict}/unchanged rows and pass (I re-ran the protected suites: 30 passed, 0 failures); in scratch, deleting only the rollback branch makes 2/5 focused tests fail, with the archived loser returning {:error, :state_conflict} instead of the required {:error, :stale} and Repo.get! showing the leftover marker row (sync_status \"syncing\", marker last_checked_at) instead of the resource's previous state."
+  },
+  "reviewer_findings": [
+    {
+      "description": "The goal-authorized accepted-sync path (Integrations.execute_accepted_resource_sync/2, integrations.ex:637, and execute_accepted_resource_sync_unprojected/2, integrations.ex:502) still performs provider.authenticate/sync_resource with no in-flight marker and no refusal rollback. It is reachable only from control/lib/symmetry_control/integrations/provider_access.ex:1569 and :1808, a file outside the frozen allowed_paths and absent from all five frozen tests and from the named archive-race tests (integrations_test.exs:1038, :1062). The frozen requirement binds the manual/periodic synchronization path (sync_resource/1 -> sync_connected_resource/1, sync_project/1, sync_all_resources/0, Syncer), which is fully covered. Recorded as an intentional scope boundary, not a defect.",
+      "id": "accepted-sync-boundary",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "The refused-finalization rollback is itself CAS-bound: if a concurrent non-sync edit bumps ProjectResource.lock_version while the marker is committed, update_sync_marker/2 (integrations.ex:708-719) returns {:error, :stale} and writes nothing, so the row keeps sync_status \"syncing\" until the next synchronization rewrites it (Workspaces update path workspaces/schemas.ex:161-183 preserves sync_status while bumping lock_version). This is the frozen design, not a hole: the marker is declared explicitly non-authoritative (moduledoc, integrations.ex:7-10), no reaper or timeout is added, any later finalization overwrites it, and the frozen outcome requires the rollback to obey the same optimistic-lock/CAS rules, i.e. a losing writer must not overwrite a newer row. No action required.",
+      "id": "marker-rollback-cas",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "update_sync_marker/2 writes through Repo.update_all(set: attrs), bypassing changeset validation and updated_at. Safe in the reviewed revision: the only values written are the literal \"syncing\" (listed in @sync_statuses, workspaces/schemas.ex:105, and permitted by the unmodified DB constraint project_resources_sync_status_check, priv/repo/migrations/20260904010000_complete_engineering_workspace.exs:18-20) or previously stored values, and the rollback intentionally must not touch any other column or timestamp. The database check constraint therefore remains the authority for the marker value. Noted for the record.",
+      "id": "raw-update-all-bypass",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "The sealed subject bundles three gitignored, harness-prestaged portal bundle files: control/priv/static/portal/index.html (sha256:6ac43ef4f6ab4b35e8af21136b8c02f6b7765e52aae3ad0d1a65f0147b75a463, matching run.json environment.measured.portal_bundle), assets/index-B9P0gq7Y.css and assets/index-BctcJ1zX.js. Their mtime is 2026-11-17 05:01:40, before the worker edits at 05:07:34 (integrations.ex) and 05:07:53 (test file), and .gitignore:77 ignores /control/priv/static/portal/. So the worker-authored change under review is control/lib/symmetry_control/integrations.ex (62 added lines, 0 deleted, appending a moduledoc paragraph plus sync_connected_resource/mark_resource_syncing/update_sync_marker/sync_marked_resource) plus the new test file; the portal assets are environment artifacts and cannot be committed. No defect.",
+      "id": "subject-scope",
+      "severity": "info",
+      "status": "resolved"
+    }
+  ],
+  "risk_class": "db-concurrency-authority",
+  "routes": {
+    "reviewer": {
+      "authorization_ref": "0008c reuse_existing: independent review invocation of the existing configured reviewer route; no new profile, credential or spend cap.",
+      "credential_route": "Existing configured tencent-litellm provider route via the openai-completions API; authenticated by the existing harness provider configuration. Route metadata only; no credential value was read or recorded.",
+      "model_id": "deepseek-v4.1-flash-fast",
+      "provenance": "Configured reviewer route: task.agentModelOverrides.reviewer -> modelRoles.flash_max (tencent-litellm/deepseek-v4.1-flash-fast:max), invoked as a separate headless OMP session that did not implement the task."
+    },
+    "worker": {
+      "authorization_ref": "0008c reuse_existing: the existing configured strong route and its authorization, unchanged; no new profile, credential, spend cap or per-call model override.",
+      "credential_route": "Existing configured ghc provider route via the openai-responses API; authenticated by the existing harness provider configuration. Route metadata only; no credential value was read or recorded.",
+      "model_id": "gpt-6.1-sol",
+      "provenance": "Configured strong route: modelRoles.sol_high (ghc/gpt-6.1-sol:high, thinking high), the configured default/strong reasoning route, invoked as a separate headless OMP session in the run's isolated checkout. Effort suffix high recorded from the resolved role value."
+    }
+  },
+  "schema": "symmetry-model-routing-evaluation/v1",
+  "subject": {
+    "base": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+    "changed_paths": [
+      {
+        "path": "control/lib/symmetry_control/integrations.ex",
+        "status": "M"
+      },
+      {
+        "path": "control/priv/static/portal/assets/index-B9P0gq7Y.css",
+        "status": "A"
+      },
+      {
+        "path": "control/priv/static/portal/assets/index-BctcJ1zX.js",
+        "status": "A"
+      },
+      {
+        "path": "control/priv/static/portal/index.html",
+        "status": "A"
+      },
+      {
+        "path": "control/test/symmetry_control/resource_sync_inflight_marker_test.exs",
+        "status": "A"
+      }
+    ],
+    "content_revision": "uncommitted:sha256:3d11768d56977486e12938af64fe0b38496f19a9d5c391de02955cf67373d295",
+    "head": "5c2e0ada6a3fd669c5ed2d2bc4b50ff9fed3b12a",
+    "manifest_digest": "sha256:3d11768d56977486e12938af64fe0b38496f19a9d5c391de02955cf67373d295",
+    "subject_hash": "sha256:2d98eaec565495be3bafc12559b99f9bc4beb51837fc8faf2ab3b0630bf3f2e1"
+  },
+  "subject_hash": "sha256:2d98eaec565495be3bafc12559b99f9bc4beb51837fc8faf2ab3b0630bf3f2e1",
+  "task_id": "0008c-elixir-sync-inflight-marker",
+  "tokens": {
+    "cached": 4466218,
+    "input": 58763,
+    "known_cached_subtotal": 4466218,
+    "known_input_subtotal": 58763,
+    "known_output_subtotal": 70858,
+    "output": 70858
+  },
+  "wall_time": 1611.355,
+  "workflow": "reuse_existing"
+}

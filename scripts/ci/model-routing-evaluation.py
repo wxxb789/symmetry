@@ -4,7 +4,11 @@
 Operations:
   prepare  fresh isolated clone of --source at the frozen task base, materialized
            without host-dependent end-of-line conversion, then freeze the exact
-           task and routes bytes in an external run directory
+           task and routes bytes in an external run directory; optional
+           --environment-json records measured, non-secret execution-surface facts
+           alongside the host environment in the run record, with every
+           host-specific absolute path in a value recorded as a sha256: token
+           instead of the raw path
   seal     refuse a checkout whose Git index carries assume-unchanged,
            skip-worktree or other nonstandard entries, whose Git view carries
            checkout-local attribute/filter machinery, or whose object store
@@ -15,10 +19,12 @@ Operations:
            the worktree
   check    execute every frozen gate argv without a shell inside an owned process
            group (POSIX session / Windows process tree), terminate and reap that
-           whole tree on timeout, capture outputs, bind the Subject before and
-           after, and require named Go tests through the
-           existing assert-go-test-json.py event gate plus a derived
-           `go test -list` run that proves the named package really lists them
+           whole tree on timeout, apply the gate's frozen environment overrides,
+           capture outputs, bind the Subject before and after, and require named
+           Go tests through the existing assert-go-test-json.py event gate plus a
+           derived `go test -list` run that proves the named package really lists
+           them, and named ExUnit tests through a derived `mix test --trace` run
+           that proves every named test finished exactly once without failures
   review   import the coordinator's independent review record for the sealed
            Subject and the latest sealed-subject check attempt; that attempt must
            be complete and passing, and a later failing or incomplete attempt
@@ -93,6 +99,7 @@ MAX_CAPTURE_BYTES = 256 << 20
 DEFAULT_TIMEOUT = 1800.0
 PROCESS_TREE_REAP_SECONDS = 10.0
 GO_LIST_FAILURE_PREFIX = "the package test binary did not list the named Go tests: "
+EXUNIT_FAILURE_PREFIX = "the traced ExUnit run did not execute every named test: "
 SOURCE_CHANGED_SUFFIX = "source changed while executing this gate"
 
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -104,6 +111,38 @@ SECRET_KEY_PATTERN = re.compile(
     r"|private[_-]?key|access[_-]?key)([^a-z0-9]|$)",
     re.IGNORECASE,
 )
+# Recorded measured-surface values must not republish the operator profile or a
+# disposable evaluation root. These are the shapes a host-specific absolute path
+# actually takes: Windows drive-rooted and UNC paths, and POSIX home or temporary
+# roots. System paths such as /usr or /etc are not host-specific and stay readable.
+HOST_PATH_PATTERNS = (
+    re.compile(r'[A-Za-z]:[\\/][^\s"\']*'),
+    re.compile(r'\\\\[^\s\\"\']+\\[^\s"\']*'),
+    re.compile(r'(?<![\w./-])/(?:home|Users|root|tmp|var/(?:tmp|folders)|private/(?:var|tmp))(/[^\s"\']*)?'),
+)
+GATE_ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+MEASURED_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+# Elixir 1.20.4 rewrites one trace line per finished test, preceded by a carriage
+# return; ANSI escapes wrap the description on color terminals. The measured shape is
+# `  * test <description> (<n>.<d>ms) [L#<line>]` for a finished test and
+# `  * test <description> (skipped|excluded) [L#<line>]` otherwise, where a test
+# declared inside a `describe` block renders as `<describe> <name>`, so a named test
+# must be declared at module level to match its frozen description exactly.
+EXUNIT_ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+EXUNIT_OBSERVATION_PATTERN = re.compile(
+    r"^  \* test (?P<name>.+?) \((?P<descriptor>[^()]*)\) \[L#[0-9]+\]$"
+)
+EXUNIT_FINISHED_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+)?ms$")
+# `mix test` owns the summary, not ExUnit: the measured shapes are `Result: 3 passed`,
+# `Result: 2 passed, 1 skipped`, `Result: 1/2 passed` (with a following `Failed: 1 test`)
+# and `Result: 1 passed, 10 excluded`. Only the `N/M passed` form carries the failure
+# count directly; the restated `Failed:` line must not be counted twice.
+EXUNIT_RESULT_PATTERN = re.compile(
+    r"^\s*Result:\s*(?P<passed>[0-9]+)(?:/(?P<total>[0-9]+))?\s+passed\b(?P<tail>[^\r\n]*)",
+    re.MULTILINE,
+)
+EXUNIT_FAILED_LINE_PATTERN = re.compile(r"^\s*Failed:\s*([0-9]+)\s+tests?\b", re.MULTILINE)
+EXUNIT_TAIL_FAILED_PATTERN = re.compile(r"([0-9]+)\s+failed\b")
 
 TEST_SEGMENTS = {"test", "tests", "__tests__"}
 TEST_FILE_PATTERN = re.compile(
@@ -117,7 +156,7 @@ TASK_KEYS = {
     "task_id", "base", "language", "risk_class", "workflow", "outcome",
     "explanations", "allowed_paths", "protected_paths", "gates",
 }
-GATE_KEYS = {"id", "cwd", "argv", "go_tests", "go_package"}
+GATE_KEYS = {"id", "cwd", "argv", "go_tests", "go_package", "exunit_tests", "exunit_files", "env"}
 REQUIRED_GATE_KEYS = {"id", "cwd", "argv"}
 ROUTES_KEYS = {"worker", "reviewer"}
 ROLE_KEYS = {"model_id", "provenance", "credential_route", "authorization_ref"}
@@ -178,6 +217,9 @@ RESULT_KEYS = {
     "error", "stdout_sha256", "stderr_sha256", "stdout_bytes", "stderr_bytes",
     "go_list_argv", "go_list_exit_code", "go_list_stdout_sha256", "go_list_stderr_sha256",
     "go_list_stdout_bytes", "go_list_stderr_bytes",
+    "env", "exunit_tests", "exunit_files", "exunit_argv", "exunit_exit_code",
+    "exunit_timed_out", "exunit_stdout_sha256", "exunit_stderr_sha256",
+    "exunit_stdout_bytes", "exunit_stderr_bytes", "exunit_error",
     "validator", "subject_hash_before", "subject_hash_after", "passed",
 }
 VALIDATOR_KEYS = {"argv", "exit_code", "stdout_sha256", "stderr_sha256", "stdout_bytes", "stderr_bytes"}
@@ -991,6 +1033,24 @@ def require_current_subject(
 # Frozen input validation
 
 
+def validate_gate_env(value: Any, source: str) -> dict[str, str]:
+    """Validate one gate's frozen environment overrides; refuse secret-shaped names."""
+    if not isinstance(value, dict):
+        raise Refused(f"{source} env must be a JSON object")
+    if len(value) > 8:
+        raise Refused(f"{source} env must hold at most 8 entries")
+    env: dict[str, str] = {}
+    for name, item in value.items():
+        if not isinstance(name, str) or not GATE_ENV_NAME_PATTERN.fullmatch(name):
+            raise Refused(f"{source} env names must match {GATE_ENV_NAME_PATTERN.pattern}")
+        if SECRET_KEY_PATTERN.search(name):
+            raise Refused(f"{source} env name {name!r} looks like a secret")
+        if not isinstance(item, str) or not item or len(item) > 128 or "\0" in item:
+            raise Refused(f"{source} env {name} must be a non-empty string without NUL, at most 128 characters")
+        env[name] = item
+    return {name: env[name] for name in sorted(env)}
+
+
 def validate_gate(value: Any, index: int) -> dict[str, Any]:
     source = f"task JSON gate #{index + 1}"
     require_object(value, source, GATE_KEYS, REQUIRED_GATE_KEYS)
@@ -1012,7 +1072,39 @@ def validate_gate(value: Any, index: int) -> dict[str, Any]:
         go_package = require_text(value["go_package"], source + " go_package", max_length=500)
         if go_tests is None:
             raise Refused(f"{source} go_package requires go_tests")
-    return {"id": gate_id, "cwd": cwd, "argv": argv, "go_tests": go_tests, "go_package": go_package}
+    exunit_tests = None
+    if "exunit_tests" in value:
+        exunit_tests = require_text_list(
+            value["exunit_tests"], source + " exunit_tests", minimum=1, unique=True, max_length=300
+        )
+        if len(exunit_tests) > 50:
+            raise Refused(f"{source} exunit_tests must list at most 50 tests")
+        if any("\0" in name for name in exunit_tests):
+            raise Refused(f"{source} exunit_tests must not contain NUL")
+    exunit_files = None
+    if "exunit_files" in value:
+        exunit_files = require_path_list(value["exunit_files"], source + " exunit_files", allow_glob=False)
+        if not exunit_files:
+            raise Refused(f"{source} exunit_files must list at least 1 file")
+        if len(exunit_files) > 20:
+            raise Refused(f"{source} exunit_files must list at most 20 files")
+    if exunit_files is not None and exunit_tests is None:
+        raise Refused(f"{source} exunit_files requires exunit_tests")
+    if exunit_tests is not None:
+        if exunit_files is None:
+            raise Refused(f"{source} exunit_tests requires exunit_files")
+        if pathlib.PurePath(argv[0]).name.lower() not in ("mix", "mix.exe", "mix.bat", "mix.cmd"):
+            raise Refused(f"{source} exunit_tests requires a mix gate command")
+    return {
+        "id": gate_id,
+        "cwd": cwd,
+        "argv": argv,
+        "go_tests": go_tests,
+        "go_package": go_package,
+        "exunit_tests": exunit_tests,
+        "exunit_files": exunit_files,
+        "env": validate_gate_env(value["env"], source) if "env" in value else {},
+    }
 
 
 def validate_task(value: Any) -> dict[str, Any]:
@@ -1057,9 +1149,58 @@ def validate_routes(value: Any) -> dict[str, dict[str, str]]:
     return routes
 
 
-def validate_environment(value: Any) -> dict[str, str]:
-    block = require_object(value, "run record environment", ENVIRONMENT_KEYS, ENVIRONMENT_KEYS)
-    return {key: require_text(block[key], f"run record environment {key}", max_length=300) for key in sorted(ENVIRONMENT_KEYS)}
+def redact_host_paths(value: str) -> str:
+    """Replace every host-specific absolute path in a recorded value with a hashed token.
+
+    The token is ``sha256:<digest of the matched path bytes>``: two records that name
+    the same path still agree, and no operator profile or disposable root is published
+    by the record itself.
+    """
+    for pattern in HOST_PATH_PATTERNS:
+        value = pattern.sub(lambda match: sha256_hex(match.group(0).encode("utf-8")), value)
+    return value
+
+
+def validate_measured_mapping(value: Any, source: str, redact: bool = False) -> dict[str, str]:
+    """Validate one measured execution-surface mapping (run record or environment JSON).
+
+    ``redact`` is set on the recording path (``prepare --environment-json``), so raw
+    host paths never enter the run record or the receipts derived from it. Re-reading a
+    run record validates recorded values unchanged, which keeps run directories written
+    before this extension re-derivable byte for byte.
+    """
+    if not isinstance(value, dict):
+        raise Refused(f"{source} must be a JSON object")
+    if len(value) > 24:
+        raise Refused(f"{source} must hold at most 24 entries")
+    measured: dict[str, str] = {}
+    for name, item in value.items():
+        if not isinstance(name, str) or not MEASURED_NAME_PATTERN.fullmatch(name):
+            raise Refused(f"{source} names must match {MEASURED_NAME_PATTERN.pattern}")
+        if SECRET_KEY_PATTERN.search(name):
+            raise Refused(f"{source} name {name!r} looks like a secret")
+        if (
+            not isinstance(item, str) or not item or len(item) > 300
+            or "\0" in item or "\r" in item or "\n" in item
+        ):
+            raise Refused(
+                f"{source} {name} must be a non-empty single-line string without NUL, at most 300 characters"
+            )
+        measured[name] = redact_host_paths(item) if redact else item
+    return {name: measured[name] for name in sorted(measured)}
+
+
+def validate_environment(value: Any) -> dict[str, Any]:
+    block = require_object(value, "run record environment", ENVIRONMENT_KEYS | {"measured"}, ENVIRONMENT_KEYS)
+    environment: dict[str, Any] = {
+        key: require_text(block[key], f"run record environment {key}", max_length=300)
+        for key in sorted(ENVIRONMENT_KEYS)
+    }
+    if "measured" in block:
+        environment["measured"] = validate_measured_mapping(
+            block["measured"], "run record environment measured"
+        )
+    return environment
 
 
 def load_run(run_dir: pathlib.Path) -> dict[str, Any]:
@@ -1281,6 +1422,70 @@ def go_list_detail(expected: list[str], exit_code: int | None, stdout_raw: bytes
     return None
 
 
+def exunit_trace_argv(gate: dict[str, Any]) -> list[str] | None:
+    """Derive the `mix test --trace` cross-check argv for a named-ExUnit-test gate, if any."""
+    if not gate["exunit_tests"]:
+        return None
+    return [gate["argv"][0], "test", "--trace", "--seed", "0", *gate["exunit_files"]]
+
+
+def exunit_trace_observations(expected: list[str], stdout_raw: bytes) -> list[dict[str, Any]]:
+    """Count finished `mix test --trace` observations for each expected test name.
+
+    ANSI escapes are stripped and CR-separated progress lines are split apart first,
+    because ExUnit rewrites one trace line per finished test. A passing or failing
+    test prints `* <name> (<n>.<d>ms) [L#<line>]`; `(skipped)` and `(excluded)`
+    lines are not finished observations.
+    """
+    text = EXUNIT_ANSI_PATTERN.sub("", stdout_raw.decode("utf-8", "replace"))
+    observed: list[str] = []
+    for line in text.splitlines():
+        match = EXUNIT_OBSERVATION_PATTERN.fullmatch(line)
+        if match and EXUNIT_FINISHED_PATTERN.fullmatch(match.group("descriptor")):
+            observed.append(match.group("name"))
+    return [
+        {"name": name, "count": observed.count(name.replace("\n", " "))}
+        for name in expected
+    ]
+
+
+def exunit_trace_failures(stdout_raw: bytes) -> int | None:
+    """Failure count from the last `mix test` result summary, or None without one."""
+    text = EXUNIT_ANSI_PATTERN.sub("", stdout_raw.decode("utf-8", "replace"))
+    matches = list(EXUNIT_RESULT_PATTERN.finditer(text))
+    if not matches:
+        return None
+    last = matches[-1]
+    if last.group("total") is not None:
+        # `Result: N/M passed` is a complete count; the restated `Failed: K test` line
+        # below it must not be added again.
+        return int(last.group("total")) - int(last.group("passed"))
+    tail = EXUNIT_TAIL_FAILED_PATTERN.search(last.group("tail"))
+    if tail is not None:
+        return int(tail.group(1))
+    failed_lines = EXUNIT_FAILED_LINE_PATTERN.findall(text[last.end():])
+    return int(failed_lines[-1]) if failed_lines else 0
+
+
+def exunit_trace_detail(expected: list[str], exit_code: int | None, stdout_raw: bytes) -> str | None:
+    """First problem with one derived `mix test --trace` run, or None when acceptable."""
+    if exit_code is None:
+        return "the traced run timed out"
+    if exit_code != 0:
+        return f"the traced run exited with {exit_code}"
+    for observation in exunit_trace_observations(expected, stdout_raw):
+        if observation["count"] == 0:
+            return f"missing {observation['name']}"
+        if observation["count"] > 1:
+            return f"{observation['name']} was observed {observation['count']} times"
+    failures = exunit_trace_failures(stdout_raw)
+    if failures is None:
+        return "the traced run reported no ExUnit summary"
+    if failures != 0:
+        return f"the traced run reported {failures} failures"
+    return None
+
+
 def validator_argv(gate_dir: pathlib.Path, gate: dict[str, Any]) -> list[str]:
     argv = [sys.executable, str(VALIDATOR_SCRIPT), str(gate_dir / "stdout.bin")]
     if gate["go_package"]:
@@ -1289,10 +1494,12 @@ def validator_argv(gate_dir: pathlib.Path, gate: dict[str, Any]) -> list[str]:
     return argv
 
 
-def run_validator(gate_dir: pathlib.Path, gate: dict[str, Any]) -> dict[str, Any]:
+def run_validator(
+    gate_dir: pathlib.Path, gate: dict[str, Any], env: dict[str, str] | None = None
+) -> dict[str, Any]:
     argv = validator_argv(gate_dir, gate)
     try:
-        completed = subprocess.run(argv, capture_output=True, check=False)
+        completed = subprocess.run(argv, capture_output=True, check=False, env=env)
     except OSError as error:
         raise Refused(f"could not run the Go event validator: {error}")
     write_bytes(gate_dir / "validator.stdout.bin", completed.stdout)
@@ -1329,10 +1536,12 @@ def terminate_owned_process_tree(process: subprocess.Popen) -> None:
 
 
 def run_owned_command(
-    argv: list[str], cwd: str, timeout: float | None
+    argv: list[str], cwd: str, timeout: float | None, env: dict[str, str] | None = None
 ) -> tuple[int | None, bytes, bytes, bool]:
     """Run one command in an owned process group; return (exit_code, stdout, stderr, timed_out).
 
+    A given `env` replaces the inherited environment for the command; None means the
+    command inherits the runner's own environment.
     On timeout the whole tree is terminated and reaped before returning, so a later
     gate never runs next to survivors that could write into the checkout. A
     descendant that escaped the owned group (or the platform process tree) and still
@@ -1344,7 +1553,9 @@ def run_owned_command(
         created["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         created["start_new_session"] = True
-    process = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **created)
+    process = subprocess.Popen(
+        argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, **created
+    )
     try:
         stdout, stderr = process.communicate(timeout=timeout)
         return process.returncode, stdout, stderr, False
@@ -1378,6 +1589,8 @@ def execute_gate(
 ) -> dict[str, Any]:
     gate_dir.mkdir(parents=True, exist_ok=True)
     cwd = pathlib.Path(checkout, *gate["cwd"].split("/"))
+    gate_env = dict(os.environ)
+    gate_env.update(gate["env"])
     stdout_raw = b""
     stderr_raw = b""
     exit_code: int | None = None
@@ -1388,10 +1601,13 @@ def execute_gate(
     else:
         try:
             exit_code, stdout_raw, stderr_raw, timed_out = run_owned_command(
-                gate["argv"], str(cwd), timeout
+                gate["argv"], str(cwd), timeout, gate_env
             )
         except OSError as failure:
             error = f"could not execute gate argv: {failure}"
+    # The derived cross-checks below run exactly when the gate command itself ran and
+    # exited 0, so keep its error before a reported list failure is appended.
+    gate_command_error = error
     write_bytes(gate_dir / "stdout.bin", stdout_raw)
     write_bytes(gate_dir / "stderr.bin", stderr_raw)
     list_argv = go_list_argv(gate)
@@ -1405,7 +1621,7 @@ def execute_gate(
         # must also list every named test when asked for it.
         try:
             list_exit_code, list_stdout_raw, list_stderr_raw, _list_timed_out = run_owned_command(
-                list_argv, str(cwd), timeout
+                list_argv, str(cwd), timeout, gate_env
             )
         except OSError as failure:
             raise Refused(f"could not run the Go package test list for gate {gate['id']}: {failure}")
@@ -1414,8 +1630,32 @@ def execute_gate(
         list_detail = go_list_detail(gate["go_tests"], list_exit_code, list_stdout_raw)
         if list_detail is not None:
             error = (error + "; " if error else "") + GO_LIST_FAILURE_PREFIX + list_detail
+    exunit_argv = exunit_trace_argv(gate)
+    exunit_ran = (
+        exunit_argv is not None and gate_command_error is None and not timed_out and exit_code == 0
+    )
+    exunit_exit_code: int | None = None
+    exunit_timed_out = False
+    exunit_stdout_raw = b""
+    exunit_stderr_raw = b""
+    exunit_error: str | None = None
+    if exunit_ran:
+        # A module can print a passing test name and exit before running it, so the
+        # derived `mix test --trace` run must finish every named test exactly once,
+        # in the same cwd and environment as the gate command.
+        try:
+            exunit_exit_code, exunit_stdout_raw, exunit_stderr_raw, exunit_timed_out = run_owned_command(
+                exunit_argv, str(cwd), timeout, gate_env
+            )
+        except OSError as failure:
+            raise Refused(f"could not run the ExUnit trace for gate {gate['id']}: {failure}")
+        write_bytes(gate_dir / "exunit.stdout.bin", exunit_stdout_raw)
+        write_bytes(gate_dir / "exunit.stderr.bin", exunit_stderr_raw)
+        detail = exunit_trace_detail(gate["exunit_tests"], exunit_exit_code, exunit_stdout_raw)
+        if detail is not None:
+            exunit_error = EXUNIT_FAILURE_PREFIX + detail
     if gate["go_tests"] is not None:
-        validator = run_validator(gate_dir, gate)
+        validator = run_validator(gate_dir, gate, gate_env)
     else:
         validator = None
     passed = (
@@ -1423,6 +1663,7 @@ def execute_gate(
         and not timed_out
         and exit_code == 0
         and (validator is None or validator["exit_code"] == 0)
+        and exunit_error is None
     )
     return {
         "gate_id": gate["id"],
@@ -1430,6 +1671,9 @@ def execute_gate(
         "argv": gate["argv"],
         "go_tests": gate["go_tests"],
         "go_package": gate["go_package"],
+        "env": gate["env"],
+        "exunit_tests": gate["exunit_tests"],
+        "exunit_files": gate["exunit_files"],
         "exit_code": exit_code,
         "timed_out": timed_out,
         "error": error,
@@ -1443,6 +1687,14 @@ def execute_gate(
         "go_list_stderr_sha256": sha256_hex(list_stderr_raw) if list_ran else None,
         "go_list_stdout_bytes": len(list_stdout_raw) if list_ran else None,
         "go_list_stderr_bytes": len(list_stderr_raw) if list_ran else None,
+        "exunit_argv": exunit_argv,
+        "exunit_exit_code": exunit_exit_code if exunit_ran else None,
+        "exunit_timed_out": exunit_timed_out,
+        "exunit_stdout_sha256": sha256_hex(exunit_stdout_raw) if exunit_ran else None,
+        "exunit_stderr_sha256": sha256_hex(exunit_stderr_raw) if exunit_ran else None,
+        "exunit_stdout_bytes": len(exunit_stdout_raw) if exunit_ran else None,
+        "exunit_stderr_bytes": len(exunit_stderr_raw) if exunit_ran else None,
+        "exunit_error": exunit_error,
         "validator": validator,
         "subject_hash_before": None,
         "subject_hash_after": None,
@@ -1460,6 +1712,9 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         ("argv", gate["argv"]),
         ("go_tests", gate["go_tests"]),
         ("go_package", gate["go_package"]),
+        ("env", gate["env"]),
+        ("exunit_tests", gate["exunit_tests"]),
+        ("exunit_files", gate["exunit_files"]),
     ):
         if result[key] != expected:
             raise Refused(f"the stored result for gate {gate['id']} does not match the frozen gate {key}")
@@ -1471,7 +1726,11 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
     list_argv = go_list_argv(gate)
     if result["go_list_argv"] != list_argv:
         raise Refused(f"the stored result for gate {gate['id']} does not match the derived Go test list command")
-    # The derived list run happens exactly when the gate command itself ran and exited 0.
+    exunit_argv = exunit_trace_argv(gate)
+    if result["exunit_argv"] != exunit_argv:
+        raise Refused(f"the stored result for gate {gate['id']} does not match the derived ExUnit trace command")
+    # The derived list and trace runs happen exactly when the gate command itself ran and
+    # exited 0.
     # The stored error conflates the gate command error, a reported list failure and the
     # post-execution "source changed" note, so peel those off before deciding. The note is
     # appended bare when the gate command itself reported no error.
@@ -1485,11 +1744,14 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         if not without_note or without_note.startswith(GO_LIST_FAILURE_PREFIX):
             gate_command_error = None
     list_expected = list_argv is not None and exit_code == 0 and gate_command_error is None and not timed_out
+    exunit_expected = exunit_argv is not None and exit_code == 0 and gate_command_error is None and not timed_out
     expected_files = {"result.json", "stdout.bin", "stderr.bin"}
     if gate["go_tests"] is not None:
         expected_files |= {"validator.stdout.bin", "validator.stderr.bin"}
     if list_expected:
         expected_files |= {"go-list.stdout.bin", "go-list.stderr.bin"}
+    if exunit_expected:
+        expected_files |= {"exunit.stdout.bin", "exunit.stderr.bin"}
     actual_files = sorted(entry.name for entry in gate_dir.iterdir())
     if actual_files != sorted(expected_files):
         raise Refused(f"the stored evidence for gate {gate['id']} contains unexpected files")
@@ -1517,8 +1779,10 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
             or validator["stderr_sha256"] != sha256_hex(stored_stderr)
         ):
             raise Refused(f"the stored Go event validation for gate {gate['id']} changed after it ran")
+        gate_env = dict(os.environ)
+        gate_env.update(gate["env"])
         try:
-            rerun = subprocess.run(validator_argv(gate_dir, gate), capture_output=True, check=False)
+            rerun = subprocess.run(validator_argv(gate_dir, gate), capture_output=True, check=False, env=gate_env)
         except OSError as failure:
             raise Refused(f"could not re-run the Go event validator: {failure}")
         if (
@@ -1573,6 +1837,55 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         ):
             if result[key] is not None:
                 raise Refused(f"gate {gate['id']} records Go test list evidence without an executed list run")
+    exunit_error: str | None = None
+    exunit_exit_code: int | None = None
+    if exunit_expected:
+        exunit_stdout_raw = read_bytes(
+            gate_dir / "exunit.stdout.bin", MAX_CAPTURE_BYTES, f"gate {gate['id']} ExUnit trace stdout"
+        )
+        exunit_stderr_raw = read_bytes(
+            gate_dir / "exunit.stderr.bin", MAX_CAPTURE_BYTES, f"gate {gate['id']} ExUnit trace stderr"
+        )
+        if (
+            result["exunit_stdout_sha256"] is None
+            or result["exunit_stdout_bytes"] is None
+            or result["exunit_stderr_sha256"] is None
+            or result["exunit_stderr_bytes"] is None
+        ):
+            raise Refused(f"gate {gate['id']} does not record the executed ExUnit trace output")
+        if (
+            require_digest(result["exunit_stdout_sha256"], f"gate {gate['id']} exunit_stdout_sha256")
+            != sha256_hex(exunit_stdout_raw)
+            or require_integer(result["exunit_stdout_bytes"], f"gate {gate['id']} exunit_stdout_bytes")
+            != len(exunit_stdout_raw)
+            or require_digest(result["exunit_stderr_sha256"], f"gate {gate['id']} exunit_stderr_sha256")
+            != sha256_hex(exunit_stderr_raw)
+            or require_integer(result["exunit_stderr_bytes"], f"gate {gate['id']} exunit_stderr_bytes")
+            != len(exunit_stderr_raw)
+        ):
+            raise Refused(f"the stored ExUnit trace output for gate {gate['id']} changed after it was captured")
+        exunit_exit_code = require_optional_integer(
+            result["exunit_exit_code"], f"gate {gate['id']} exunit_exit_code", -4096
+        )
+        exunit_timed_out = require_bool(result["exunit_timed_out"], f"gate {gate['id']} exunit_timed_out")
+        if exunit_timed_out != (exunit_exit_code is None):
+            raise Refused(f"the stored ExUnit trace run for gate {gate['id']} disagrees with its exit code")
+        detail = exunit_trace_detail(gate["exunit_tests"], exunit_exit_code, exunit_stdout_raw)
+        exunit_error = None if detail is None else EXUNIT_FAILURE_PREFIX + detail
+        passed = passed and exunit_error is None
+    else:
+        for key in (
+            "exunit_exit_code",
+            "exunit_stdout_sha256",
+            "exunit_stderr_sha256",
+            "exunit_stdout_bytes",
+            "exunit_stderr_bytes",
+            "exunit_error",
+        ):
+            if result[key] is not None:
+                raise Refused(f"gate {gate['id']} records ExUnit trace evidence without an executed trace run")
+        if result["exunit_timed_out"] is not False:
+            raise Refused(f"gate {gate['id']} records ExUnit trace evidence without an executed trace run")
     if result["passed"] is not passed:
         raise Refused(f"the stored result for gate {gate['id']} claims passed={result['passed']} but its evidence says {passed}")
     return {
@@ -1581,9 +1894,14 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         "argv": gate["argv"],
         "go_tests": gate["go_tests"],
         "go_package": gate["go_package"],
+        "env": gate["env"],
+        "exunit_tests": gate["exunit_tests"],
+        "exunit_files": gate["exunit_files"],
         "exit_code": exit_code,
         "timed_out": timed_out,
         "error": error,
+        "exunit_exit_code": exunit_exit_code,
+        "exunit_error": exunit_error,
         "subject_bound": subject_bound,
         "passed": passed,
         "stdout_sha256": result["stdout_sha256"],
@@ -2037,6 +2355,11 @@ def build_receipt(
             "go_tests": gate["go_tests"],
             "go_package": gate["go_package"],
             "validator_exit_code": gate["validator_exit_code"],
+            "env": gate["env"],
+            "exunit_tests": gate["exunit_tests"],
+            "exunit_files": gate["exunit_files"],
+            "exunit_exit_code": gate["exunit_exit_code"],
+            "exunit_error": gate["exunit_error"],
         }
         for gate in (attempt["gates"] if attempt is not None else [])
     ]
@@ -2165,6 +2488,8 @@ def derive_receipt(run_dir: pathlib.Path, candidate_usage: bytes | None = None) 
                     detail = f"the named Go event gate refused it (validator exit code {gate['validator_exit_code']})"
                 elif gate["error"] is not None:
                     detail = gate["error"]
+                elif gate["exunit_error"] is not None:
+                    detail = gate["exunit_error"]
                 else:
                     detail = f"exit code {gate['exit_code']}"
                 blockers.append(f"check attempt {attempt['attempt_id']} gate {gate['id']} did not pass ({detail})")
@@ -2255,6 +2580,15 @@ def command_prepare(arguments: argparse.Namespace) -> int:
     routes_value = strict_json(routes_raw, "routes JSON", MAX_ROUTES_BYTES)
     scan_no_secret_keys(routes_value, "routes JSON")
     validate_routes(routes_value)
+    measured = None
+    if arguments.environment_json is not None:
+        environment_raw = read_bytes(
+            pathlib.Path(arguments.environment_json), MAX_RECORD_BYTES, "environment JSON"
+        )
+        measured = validate_measured_mapping(
+            strict_json(environment_raw, "environment JSON", MAX_RECORD_BYTES), "environment JSON",
+            redact=True,
+        )
 
     created_here = not run_dir.exists()
     if created_here:
@@ -2263,7 +2597,7 @@ def command_prepare(arguments: argparse.Namespace) -> int:
         except OSError as error:
             raise Refused(f"cannot create the run directory: {error}")
     try:
-        return finish_prepare(arguments, run_dir, task, task_raw, routes_raw)
+        return finish_prepare(arguments, run_dir, task, task_raw, routes_raw, measured)
     except Refused:
         if created_here:
             shutil.rmtree(run_dir, ignore_errors=True)
@@ -2272,7 +2606,7 @@ def command_prepare(arguments: argparse.Namespace) -> int:
 
 def finish_prepare(
     arguments: argparse.Namespace, run_dir: pathlib.Path, task: dict[str, Any],
-    task_raw: bytes, routes_raw: bytes,
+    task_raw: bytes, routes_raw: bytes, measured: dict[str, str] | None = None,
 ) -> int:
     source = str(arguments.source)
     checkout = run_dir / "checkout"
@@ -2306,6 +2640,9 @@ def finish_prepare(
     frozen = run_dir / "frozen"
     write_bytes(frozen / "task.json", task_raw)
     write_bytes(frozen / "routes.json", routes_raw)
+    environment = environment_record()
+    if measured is not None:
+        environment["measured"] = measured
     run = {
         "schema": SCHEMA,
         "task_id": task["task_id"],
@@ -2315,7 +2652,7 @@ def finish_prepare(
         "base_tree_digest": base_subject["tree_digest"],
         "task_sha256": sha256_hex(task_raw),
         "routes_sha256": sha256_hex(routes_raw),
-        "environment": environment_record(),
+        "environment": environment,
     }
     write_json(run_dir / "run.json", run)
     print(json.dumps({
@@ -2552,13 +2889,16 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--task", required=True, help="frozen task JSON file")
     prepare.add_argument("--routes", required=True, help="worker/reviewer route metadata JSON file")
     prepare.add_argument("--source", required=True, help="git repository path or URL to clone")
+    prepare.add_argument("--environment-json", help="measured non-secret execution-surface facts JSON file")
     prepare.set_defaults(handler=command_prepare)
 
     seal = subparsers.add_parser("seal", help="bind the checkout into one exact evaluation Subject")
     seal.add_argument("--run-dir", required=True)
     seal.set_defaults(handler=command_seal)
 
-    check = subparsers.add_parser("check", help="execute the frozen gates and require named Go tests")
+    check = subparsers.add_parser(
+        "check", help="execute the frozen gates and require the named Go and ExUnit tests"
+    )
     check.add_argument("--run-dir", required=True)
     check.add_argument("--gate", action="append", help="run only this gate id (repeatable; attempt becomes incomplete)")
     check.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="per-gate timeout seconds; 0 disables")

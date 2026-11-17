@@ -2,6 +2,31 @@
 
 Manual tasks and deferred maintenance discovered during scoped changes.
 
+## Model-routing evaluation records
+
+- [ ] Decide whether the four 0008c receipts ever need re-production under the current evaluation
+      tooling. They bind the produced revision, preserved as the annotated tag
+      `0008c-produced-tooling` (commit `cab222b`): all four re-verify with that revision's
+      bytes (`git archive 0008c-produced-tooling scripts/ci`, then `accept`, exit 0 each), while
+      the post-audit tooling refuses them for submission (`accept` exit 1 at
+      `$.evidence.tooling_sources.model-routing-evaluation.py`) — the documented fail-closed
+      consequence of changing receipt-bound tooling, labelled in the evidence record with both
+      digests. Nothing must change unless a future submission requires receipts produced by the
+      current bytes, in which case the runs have to be re-executed, never re-derived by editing a
+      receipt.
+
+- [ ] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
+      receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
+      `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
+      temp root (the `symmetry-0008c-eval` run store under the local user profile). They are produced,
+      committed evidence bound by digests other records name, so the 0008c audit recorded them as
+      an open item instead of rewriting history. The runner's sanitisation extension
+      (`validate_measured_mapping(..., redact=True)`) now records every host-specific absolute path
+      in a measured value as a `sha256:` token, so run records and receipts written from now on
+      cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
+      never edit a receipt whose digests other records bind.
+
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
