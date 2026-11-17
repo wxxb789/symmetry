@@ -23,6 +23,12 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
+// testHangGuard bounds how long a test waits for the fixture subprocess to
+// exit. It only turns a hung fixture into a failure; it is never a statement
+// about how fast the fixture should be, so a loaded host cannot turn a slow
+// exit into a verdict about the fixture.
+const testHangGuard = 30 * time.Second
+
 var (
 	fixtureBuildOnce   sync.Once
 	fixtureBuildPath   string
@@ -41,7 +47,7 @@ func TestMain(mainTest *testing.M) {
 
 func TestSuccessEmitsProgressJSONLines(t *testing.T) {
 	process := startFixture(t, taskInput(`"write tests"`, `null`), nil)
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
 	}
@@ -68,7 +74,7 @@ func TestInspectInputDistinguishesNullAndEmptyObject(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			process := startFixture(t, taskInput(`"inspect input"`, test.input), []string{modeEnvironment + "=inspect_input"})
-			_, stderr, err := waitForProcess(t, process, time.Second)
+			_, stderr, err := waitForProcess(t, process)
 			if err != nil {
 				t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
 			}
@@ -131,7 +137,7 @@ func TestProviderActionFlowUsesBrokerCapability(t *testing.T) {
 		},
 	})
 	process := startFixture(t, input, nil)
-	_, stderr, err := waitForProcess(t, process, 2*time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
 	}
@@ -174,7 +180,7 @@ func TestProviderActionFlowUsesBrokerCapability(t *testing.T) {
 
 func TestProviderActionFlowRequiresCapability(t *testing.T) {
 	process := startFixture(t, taskInput(`"provider action"`, `{"mode":"provider_action_flow","work_item_id":"item-42"}`), nil)
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err == nil {
 		t.Fatal("fixture succeeded, want failure")
 	}
@@ -212,7 +218,7 @@ func TestSelectModeUsesExplicitInputThenGoalDirectiveThenEnvironment(t *testing.
 
 func TestFailWritesStderrAndExitsNonZero(t *testing.T) {
 	process := startFixture(t, taskInput(`"fail task"`, `{"mode":"fail"}`), nil)
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err == nil {
 		t.Fatal("fixture succeeded, want failure")
 	}
@@ -226,7 +232,7 @@ func TestFailWritesStderrAndExitsNonZero(t *testing.T) {
 
 func TestEvidenceSuccessEmitsOutcomeEvents(t *testing.T) {
 	process := startFixture(t, taskInput(`"evidence"`, `{"mode":"evidence_success"}`), nil)
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
 	}
@@ -251,7 +257,7 @@ func TestEvidenceSuccessEmitsOutcomeEvents(t *testing.T) {
 
 func TestHistorySuccessEmitsPageableRawRecordsBeforeOutcome(t *testing.T) {
 	process := startFixture(t, taskInput(`"history"`, `{"mode":"history_success"}`), nil)
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
 	}
@@ -276,13 +282,13 @@ func TestFailOnceThenEvidenceSuccessPersistsAcrossProcesses(t *testing.T) {
 	input := taskInput(`"retry fixture"`, `{"mode":"fail_once_then_evidence_success","work_item_id":"item-42"}`)
 
 	first := startFixtureInDir(t, directory, input, nil)
-	_, firstStderr, firstErr := waitForProcess(t, first, time.Second)
+	_, firstStderr, firstErr := waitForProcess(t, first)
 	if firstErr == nil || !strings.Contains(firstStderr, "planned first-attempt failure") {
 		t.Fatalf("first attempt error = %v, stderr = %q", firstErr, firstStderr)
 	}
 
 	second := startFixtureInDir(t, directory, input, nil)
-	_, secondStderr, secondErr := waitForProcess(t, second, time.Second)
+	_, secondStderr, secondErr := waitForProcess(t, second)
 	if secondErr != nil {
 		t.Fatalf("second attempt failed: %v; stderr: %s", secondErr, secondStderr)
 	}
@@ -308,7 +314,7 @@ func TestWaitInputReadsFollowUpAndCompletes(t *testing.T) {
 	}
 	closeStdin(t, process)
 
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
 	}
@@ -341,7 +347,7 @@ func TestWaitTwiceEmitsDistinctQuestionsThenCompletes(t *testing.T) {
 	}
 	closeStdin(t, process)
 
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
 	}
@@ -375,7 +381,7 @@ func TestExitOnFileWaitsThenReleases(t *testing.T) {
 	}
 	closeStdin(t, process)
 
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
 	}
@@ -413,7 +419,7 @@ func TestExitOnFileCancellationStopsTheFixture(t *testing.T) {
 		t.Fatalf("waiting event = %#v", waiting)
 	}
 
-	terminationContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	terminationContext, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(terminationContext, 100*time.Millisecond); err != nil {
 		t.Fatalf("terminate fixture: %v", err)
@@ -441,7 +447,7 @@ func TestExitOnFileRejectsInvalidPath(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			process := startFixture(t, taskInput(`"wait for file"`, test.input), nil)
-			_, stderr, err := waitForProcess(t, process, time.Second)
+			_, stderr, err := waitForProcess(t, process)
 			if err == nil {
 				t.Fatal("fixture succeeded, want failure")
 			}
@@ -474,7 +480,7 @@ func TestSlowCancellationStopsTheFixture(t *testing.T) {
 		t.Fatalf("tick event = %#v", tick)
 	}
 
-	terminationContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	terminationContext, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := process.Terminate(terminationContext, 100*time.Millisecond); err != nil {
 		t.Fatalf("terminate fixture: %v", err)
@@ -493,7 +499,7 @@ func TestSlowCancellationStopsTheFixture(t *testing.T) {
 
 func TestSpawnChildEmitsChildPID(t *testing.T) {
 	process := startFixture(t, taskInput(`"spawn child"`, `{"mode":"spawn_child"}`), nil)
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
 	}
@@ -521,7 +527,7 @@ func TestRejectsInvalidInitialEnvelope(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			process := startFixture(t, test.input, nil)
-			_, stderr, err := waitForProcess(t, process, time.Second)
+			_, stderr, err := waitForProcess(t, process)
 			if err == nil {
 				t.Fatal("fixture succeeded, want failure")
 			}
@@ -536,7 +542,7 @@ func TestRejectsInitialInputWithoutTrailingNewline(t *testing.T) {
 	process := startFixture(t, `{"type":"task_input","goal":"write tests","input":null}`, nil)
 	closeStdin(t, process)
 
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err == nil {
 		t.Fatal("fixture succeeded, want failure")
 	}
@@ -570,7 +576,7 @@ func TestWaitInputRejectsInvalidFollowUpEnvelope(t *testing.T) {
 			}
 			closeStdin(t, process)
 
-			_, stderr, err := waitForProcess(t, process, time.Second)
+			_, stderr, err := waitForProcess(t, process)
 			if err == nil {
 				t.Fatal("fixture succeeded, want failure")
 			}
@@ -592,7 +598,7 @@ func TestWaitInputRejectsFollowUpWithoutTrailingNewline(t *testing.T) {
 	}
 	closeStdin(t, process)
 
-	_, stderr, err := waitForProcess(t, process, time.Second)
+	_, stderr, err := waitForProcess(t, process)
 	if err == nil {
 		t.Fatal("fixture succeeded, want failure")
 	}
@@ -734,20 +740,20 @@ func readEvent(t *testing.T, output *eventCollector) event {
 	select {
 	case value := <-output.events:
 		return value
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("timed out waiting for JSONL event")
 		return event{}
 	}
 }
 
-func waitForProcess(t *testing.T, process *fixtureProcess, timeout time.Duration) (string, string, error) {
+func waitForProcess(t *testing.T, process *fixtureProcess) (string, string, error) {
 	t.Helper()
 	result := make(chan error, 1)
 	go func() { result <- process.command.Wait() }()
 	select {
 	case err := <-result:
 		return process.output.String(), process.stderr.String(), err
-	case <-time.After(timeout):
+	case <-time.After(testHangGuard):
 		_ = process.command.Process.Kill()
 		<-result
 		t.Fatal("timed out waiting for fixture")

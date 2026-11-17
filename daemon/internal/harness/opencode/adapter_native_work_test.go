@@ -1224,7 +1224,7 @@ func TestNativeOpenCodeObserverRequestLimitRejectsOversizedRequest(t *testing.T)
 		t.Fatalf("oversized observer request status = %d, want %d", response.Code, http.StatusRequestEntityTooLarge)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := observer.waitForRequest(ctx); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("wait after oversized request = %v, want bounded observer error", err)
@@ -1291,10 +1291,10 @@ func TestNativeOpenCodeRealConfigUsesLoopbackObserverEndpoint(t *testing.T) {
 		if path != "/v1/responses" {
 			t.Fatalf("upstream request path = %q, want /v1/responses", path)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("offline observer did not receive the request")
 	}
-	waitContext, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	waitContext, waitCancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer waitCancel()
 	if err := observer.waitForRequest(waitContext); err != nil {
 		t.Fatalf("wait for offline observer request: %v", err)

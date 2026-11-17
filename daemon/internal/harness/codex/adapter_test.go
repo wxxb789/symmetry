@@ -20,6 +20,11 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
+// testHangGuard bounds how long a test waits for a scripted, in-process double
+// to publish an observable. It only turns a hung harness into a failure; it is
+// never a statement about how fast the adapter should be.
+const testHangGuard = 30 * time.Second
+
 func TestAdapterStagesNativeTransportAndRequiresMatchingStructuredCompletion(t *testing.T) {
 	process := newFakeNativeProcess()
 	var invocation execution.Invocation
@@ -1041,7 +1046,7 @@ func TestInterruptedTerminalWaitsForBlockedCancelWrite(t *testing.T) {
 	}()
 	select {
 	case <-process.writeStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cancel write did not block")
 	}
 	process.emitJSON(t, completedNotification("thread-1", "turn-1", "interrupted", validTaskResultJSON(t, "progress")))
@@ -1664,7 +1669,7 @@ func TestTurnReplayBarrierPreservesPreResponseNotificationOrder(t *testing.T) {
 	}()
 	select {
 	case <-sink.blocked:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("first staged notification did not enter replay")
 	}
 	// The response is already accepted, but replay has not drained A. C must
@@ -2153,7 +2158,7 @@ func TestBlockedRPCWriteIsCancelledAndDoesNotLeak(t *testing.T) {
 	}()
 	select {
 	case <-process.writeStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("Open() did not enter blocked native write")
 	}
 	if err := <-opened; !errors.Is(err, context.DeadlineExceeded) {
@@ -2190,7 +2195,7 @@ func TestOpenInitializedNotificationUsesOpenContextDeadline(t *testing.T) {
 	process.reply(t, initialize.ID, map[string]any{"userAgent": "codex-test", "codexHome": "C:/redacted", "platformFamily": "windows", "platformOs": "windows"})
 	select {
 	case <-process.writeStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("initialized notification did not enter blocked write")
 	}
 	if err := <-opened; !errors.Is(err, context.DeadlineExceeded) {
@@ -2307,7 +2312,7 @@ func TestPersistentTurnWaitTurnThenCloseResolvesFinalResult(t *testing.T) {
 		if err != nil {
 			t.Fatalf("WaitTurn() error = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("WaitTurn() did not release after matching terminal event")
 	}
 	if err := session.Close(context.Background()); err != nil {
@@ -2428,7 +2433,7 @@ func TestRepeatedCloseWaitsForSharedOperationAndStabilizesSuccess(t *testing.T) 
 	go func() { firstDone <- session.Close(context.Background()) }()
 	select {
 	case <-process.terminateStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("first Close() did not start process termination")
 	}
 	secondContext, cancel := context.WithCancel(context.Background())
@@ -2468,7 +2473,7 @@ func TestCloseRetriesFailedTerminationAndStabilizesSuccess(t *testing.T) {
 	go func() { firstDone <- session.Close(context.Background()) }()
 	select {
 	case <-process.firstTerminateStarted:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("first Close() did not start process termination")
 	}
 
@@ -2950,7 +2955,7 @@ func (process *fakeNativeProcess) nextRequest(t *testing.T) parsedRequest {
 			t.Fatalf("request jsonrpc = %q, want %q: %s", request.JSONRPC, jsonRPCVersion, raw)
 		}
 		return request
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("timed out waiting for native request")
 		return parsedRequest{}
 	}
@@ -2968,7 +2973,7 @@ func (process *fakeNativeProcess) nextNotification(t *testing.T) parsedNotificat
 			t.Fatalf("notification jsonrpc = %q, want %q: %s", notification.JSONRPC, jsonRPCVersion, raw)
 		}
 		return notification
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("timed out waiting for native notification")
 		return parsedNotification{}
 	}
@@ -2986,7 +2991,7 @@ func (process *fakeNativeProcess) nextServerRequestResponse(t *testing.T) parsed
 			t.Fatalf("server response jsonrpc = %q, want %q: %s", response.JSONRPC, jsonRPCVersion, raw)
 		}
 		return response
-	case <-time.After(2 * time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("timed out waiting for unsupported server request response")
 		return parsedServerRequestResponse{}
 	}

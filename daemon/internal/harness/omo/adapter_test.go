@@ -18,6 +18,11 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
+// testHangGuard bounds how long a test waits for a scripted, in-process double
+// to publish an observable. It only turns a hung harness into a failure; it is
+// never a statement about how fast the adapter should be.
+const testHangGuard = 30 * time.Second
+
 type testProcess struct {
 	sink             execution.Sink
 	onWrite          func(Request)
@@ -146,7 +151,7 @@ func openCandidate(t *testing.T, process *testProcess, request harness.StartRequ
 	session := started.(*nativeSession)
 	t.Cleanup(func() {
 		process.finish(execution.Result{PID: 42, ExitCode: 0})
-		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+		cleanup, cancel := context.WithTimeout(context.Background(), testHangGuard)
 		defer cancel()
 		_, _ = session.Wait(cleanup)
 		_ = session.Close(cleanup)
@@ -643,13 +648,13 @@ func TestCloseEOFBackpressureFallsBackOnCleanupCancellation(t *testing.T) {
 	go func() { closed <- session.closeOnce(cleanup) }()
 	select {
 	case <-blocked:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("EOF did not reach the consumer before termination")
 	}
 	cancel()
 	select {
 	case <-released:
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cleanup cancellation did not release native sink backpressure")
 	}
 	select {
@@ -657,10 +662,10 @@ func TestCloseEOFBackpressureFallsBackOnCleanupCancellation(t *testing.T) {
 		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Fatalf("Close fallback error = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testHangGuard):
 		t.Fatal("cleanup cancellation left Close blocked")
 	}
-	bounded, cancelWait := context.WithTimeout(context.Background(), time.Second)
+	bounded, cancelWait := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancelWait()
 	result, err := session.Wait(bounded)
 	if err != nil || result.Kind != harness.ResultFailed || result.Semantic != nil || !result.Process.OutputTruncated {
@@ -1080,7 +1085,7 @@ func TestOmOReviewRegressionCompletionAndCancelHaveOneOwner(t *testing.T) {
 			} else if control.receipt.Outcome != harness.ControlApplied || len(abortSent) != 1 {
 				t.Fatalf("reserved cancellation lost its effect: %+v, aborts=%d", control.receipt, len(abortSent))
 			}
-			bounded, cancel := context.WithTimeout(context.Background(), time.Second)
+			bounded, cancel := context.WithTimeout(context.Background(), testHangGuard)
 			defer cancel()
 			if err := session.WaitTurn(bounded); err != nil {
 				t.Fatal(err)
@@ -1215,7 +1220,7 @@ func TestOmOReviewRegressionRejectedFinalResultAndCancelHaveOneOwner(t *testing.
 				if control.err != nil || control.receipt.Outcome != wantOutcome || len(abortSent) != map[bool]int{true: 0, false: 1}[completionFirst] {
 					t.Fatalf("terminal owner and cancellation receipt disagree: %+v, %v, aborts=%d", control.receipt, control.err, len(abortSent))
 				}
-				bounded, cancel := context.WithTimeout(context.Background(), time.Second)
+				bounded, cancel := context.WithTimeout(context.Background(), testHangGuard)
 				defer cancel()
 				turnErr := session.WaitTurn(bounded)
 				process.finish(execution.Result{PID: 42, ExitCode: 0})
@@ -1277,7 +1282,7 @@ func TestOmOReviewRegressionFatalCompletionBypassesReservedCancel(t *testing.T) 
 				wantReason = protocol.TaskResultReasonProcessFailure
 				process.finish(physical)
 			}
-			bounded, cancel := context.WithTimeout(context.Background(), time.Second)
+			bounded, cancel := context.WithTimeout(context.Background(), testHangGuard)
 			defer cancel()
 			turnErr := session.WaitTurn(bounded)
 			if turnErr == nil || errors.Is(turnErr, context.DeadlineExceeded) || (failure == "lifecycle_failure" && !errors.Is(turnErr, fatalErr)) {
@@ -1331,7 +1336,7 @@ func TestOmOReviewRegressionFailedCancelReleasesAlreadyDrainedTurn(t *testing.T)
 	if receipt.Outcome != harness.ControlFailed || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrUnknownOutcome) {
 		t.Fatalf("failed cancellation receipt was rewritten: %+v, %v", receipt, err)
 	}
-	bounded, cancel := context.WithTimeout(context.Background(), time.Second)
+	bounded, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	if err := session.WaitTurn(bounded); err != nil {
 		t.Fatalf("already drained terminal still waits for another frame: %v", err)

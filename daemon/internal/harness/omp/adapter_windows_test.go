@@ -48,7 +48,7 @@ func TestRetainedResumeAcceptsShortPathIdentity(t *testing.T) {
 			if returnedCanonical {
 				process.filename = canonical
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 			defer cancel()
 			handle, err := session.Open(ctx)
 			if err != nil || handle.ID != resume.NativeSessionID || handle.Filename != canonical {

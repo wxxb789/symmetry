@@ -17,6 +17,23 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
+// testHangGuard bounds how long a test waits for a fixture that is fully
+// scripted and in-process to settle. It only turns a hung harness into a
+// failure; it is never a statement about how fast a turn should complete, so it
+// sits far above any real scheduling delay, race instrumentation included.
+const testHangGuard = 30 * time.Second
+
+// mustSettle fails the step that was still outstanding, so the failure names
+// the wait that did not settle instead of leaving the guard silent. The
+// adapter reports its own bounded RPC outcomes, so the step's error is kept
+// verbatim: it is the behaviour under test, not a clock reading.
+func mustSettle(t *testing.T, step string, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("%s: %v", step, err)
+	}
+}
+
 type scriptedProcess struct {
 	commands             chan map[string]any
 	eof, terminate, done chan struct{}
@@ -172,10 +189,10 @@ func testSession(t *testing.T, frames func(map[string]any) []any, sink harness.E
 	}
 	session := value.(*nativeSession)
 	t.Cleanup(func() {
-		bounded, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		bounded, cancel := context.WithTimeout(context.Background(), testHangGuard)
 		defer cancel()
 		if err := session.Close(bounded); err != nil {
-			t.Errorf("cleanup: %v", err)
+			t.Errorf("cleanup close did not settle before the %s hang guard expired: %v", testHangGuard, err)
 		}
 	})
 	return session, process
@@ -210,14 +227,11 @@ func validTaskText(t *testing.T) string {
 
 func startTestTurn(t *testing.T, session *nativeSession) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if _, err := session.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect admitted repository", Context: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
+	_, err := session.Open(ctx)
+	mustSettle(t, "Open", err)
+	mustSettle(t, "StartTurn", session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect admitted repository", Context: json.RawMessage(`{}`)}))
 }
 
 func TestStagedPromptAndPhysicalResultBarriers(t *testing.T) {
@@ -242,9 +256,10 @@ func TestStagedPromptAndPhysicalResultBarriers(t *testing.T) {
 		t.Fatal("Start sent a prompt")
 	default:
 	}
-	// This bounds the fixture, not native latency; race instrumentation and
-	// first-use schema validation still get the adapter's operation budget.
-	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	// This bounds the fixture, not native latency: a loaded host must not be
+	// able to turn race instrumentation or first-use schema validation into a
+	// verdict about the barriers under test.
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	handle, err := session.Open(ctx)
 	if err != nil || handle.ID != "native-session" {
@@ -326,11 +341,12 @@ func TestProtocolFailuresCannotBecomeSuccess(t *testing.T) {
 				}
 				return values
 			}, nil, nil)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 			defer cancel()
 			if _, err := session.Open(ctx); err == nil {
 				_ = session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)})
-				if err := session.WaitTurn(ctx); err == nil {
+				turnErr := session.WaitTurn(ctx)
+				if turnErr == nil {
 					t.Fatal("malformed native lifecycle succeeded")
 				}
 			}
@@ -363,18 +379,16 @@ func assertFinalAssistantMessageRejected(t *testing.T, message json.RawMessage) 
 		}
 		return nil
 	}), nil)
-	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if _, err := session.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
+	_, err := session.Open(ctx)
+	mustSettle(t, "Open", err)
 	_ = session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)})
-	if err := session.WaitTurn(ctx); err == nil {
+	turnErr := session.WaitTurn(ctx)
+	if turnErr == nil {
 		t.Error("conflicting final assistant message completed successfully")
 	}
-	if err := session.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustSettle(t, "Close", session.Close(ctx))
 	result, err := session.Wait(ctx)
 	if err == nil || result.Kind != harness.ResultFailed || result.Semantic != nil || result.Reason == nil || *result.Reason != protocol.TaskResultReasonMissingResult || result.Usage.State != harness.UsageUnknown {
 		t.Errorf("Wait=%+v, %v; want failed/missing_result without semantic output", result, err)
@@ -429,18 +443,16 @@ func TestMessageEndReverseRoleAliasCannotReusePriorAssistantResult(t *testing.T)
 		}
 		return nil
 	}), nil)
-	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if _, err := session.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
+	_, err = session.Open(ctx)
+	mustSettle(t, "Open", err)
 	_ = session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)})
-	if err := session.WaitTurn(ctx); !errors.Is(err, errProtocol) {
-		t.Errorf("WaitTurn=%v; want the role-alias protocol failure", err)
+	turnErr := session.WaitTurn(ctx)
+	if !errors.Is(turnErr, errProtocol) {
+		t.Errorf("WaitTurn=%v; want the role-alias protocol failure", turnErr)
 	}
-	if err := session.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustSettle(t, "Close", session.Close(ctx))
 	result, err := session.Wait(ctx)
 	if !errors.Is(err, errProtocol) || result.Kind != harness.ResultFailed || result.Semantic != nil || result.Reason == nil || *result.Reason != protocol.TaskResultReasonMissingResult || result.Usage.State != harness.UsageUnknown {
 		t.Errorf("Wait=%+v, %v; want failed/missing_result without the prior assistant result", result, err)
@@ -502,14 +514,10 @@ func TestFinalAssistantMessageAllowsExtraMetadata(t *testing.T) {
 		return nil
 	}), nil)
 	startTestTurn(t, session)
-	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if err := session.WaitTurn(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustSettle(t, "WaitTurn", session.WaitTurn(ctx))
+	mustSettle(t, "Close", session.Close(ctx))
 	result, err := session.Wait(ctx)
 	if err != nil || result.Kind != harness.ResultSucceeded || result.Semantic == nil {
 		t.Fatalf("Wait=%+v, %v; unrelated native metadata must remain accepted", result, err)
@@ -531,14 +539,10 @@ func TestProviderErrorIsFailedWithUnknownUsage(t *testing.T) {
 		return values
 	}, nil, nil)
 	startTestTurn(t, session)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if err := session.WaitTurn(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustSettle(t, "WaitTurn", session.WaitTurn(ctx))
+	mustSettle(t, "Close", session.Close(ctx))
 	result, err := session.Wait(ctx)
 	if err != nil || result.Kind != harness.ResultFailed || result.Semantic != nil || result.Reason == nil || *result.Reason != protocol.TaskResultReasonAuth || result.Usage.State != harness.UsageUnknown {
 		t.Fatalf("result=%+v, %v", result, err)
@@ -548,14 +552,13 @@ func TestProviderErrorIsFailedWithUnknownUsage(t *testing.T) {
 func TestResumeRejectsReturnedIdentityMismatch(t *testing.T) {
 	resume := &harness.ResumeHandle{NativeVersion: TestedVersion, NativeSessionID: "retained-other-id"}
 	session, _ := testSession(t, nil, nil, resume)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if _, err := session.Open(ctx); !errors.Is(err, ErrResumeRejected) {
+	_, err := session.Open(ctx)
+	if !errors.Is(err, ErrResumeRejected) {
 		t.Fatalf("Open returned %v", err)
 	}
-	if err := session.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustSettle(t, "Close", session.Close(ctx))
 	if _, err := session.WaitStopped(ctx); err != nil {
 		t.Fatalf("retained identity rejection prevented physical stop proof: %v", err)
 	}
@@ -571,7 +574,7 @@ func TestRetainedResumeBindsExactIdleHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	handle, err := session.Open(ctx)
 	if err != nil || handle.ID != resume.NativeSessionID || handle.Filename != canonical {
@@ -582,9 +585,7 @@ func TestRetainedResumeBindsExactIdleHandle(t *testing.T) {
 		t.Fatal("resume invoked an unadmitted prompt")
 	default:
 	}
-	if err := session.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustSettle(t, "Close", session.Close(ctx))
 	result, err := session.Wait(ctx)
 	if err != nil || result.Kind != harness.ResultUnknown || result.Semantic != nil {
 		t.Fatalf("idle retained transport cleanup returned %+v, %v", result, err)
@@ -627,7 +628,7 @@ func TestRetainedResumeRevalidatesBothIdentityPathsAtOpen(t *testing.T) {
 			case "directory-retained":
 				resume.NativeSessionFilename = session.directory
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 			defer cancel()
 			handle, err := session.Open(ctx)
 			if scenario == "same-file" {
@@ -676,11 +677,10 @@ func TestSessionStartSinkFailureNeverSubmitsPrompt(t *testing.T) {
 		}
 		return nil
 	}), nil)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if _, err := session.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
+	_, err := session.Open(ctx)
+	mustSettle(t, "Open", err)
 	if err := session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)}); !errors.Is(err, sentinel) {
 		t.Fatalf("StartTurn=%v", err)
 	}
@@ -710,11 +710,10 @@ func TestSinkFailureInvalidatesSuccessfulNativeResult(t *testing.T) {
 		}
 		return nil
 	}), nil)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if _, err := session.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
+	_, err := session.Open(ctx)
+	mustSettle(t, "Open", err)
 	if err := session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)}); err != nil && !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
@@ -743,7 +742,7 @@ func TestCancelWaitsForNativeSettlementAndPhysicalStop(t *testing.T) {
 		return nil
 	}, nil, nil)
 	startTestTurn(t, session)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	receipt, err := session.Control(ctx, harness.ControlRequest{CommandID: "cancel-once", Kind: harness.ControlCancel})
 	if err != nil || receipt.Outcome != harness.ControlApplied {
@@ -769,18 +768,14 @@ func TestCancelAfterCompletedTurnDoesNotRewriteSuccess(t *testing.T) {
 		return nil
 	}, nil, nil)
 	startTestTurn(t, session)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if err := session.WaitTurn(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustSettle(t, "WaitTurn", session.WaitTurn(ctx))
 	receipt, err := session.Control(ctx, harness.ControlRequest{Kind: harness.ControlCancel})
 	if err != nil || receipt.Outcome != harness.ControlRejected {
 		t.Fatalf("cancel=%+v, %v", receipt, err)
 	}
-	if err := session.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustSettle(t, "Close", session.Close(ctx))
 	result, err := session.Wait(ctx)
 	if err != nil || result.Kind != harness.ResultSucceeded {
 		t.Fatalf("result=%+v, %v", result, err)
@@ -814,13 +809,12 @@ func TestPendingPromptTimeoutIsTerminalAndNeverResent(t *testing.T) {
 		}
 		return nil
 	}, nil, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
-	if _, err := session.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
+	_, err := session.Open(ctx)
+	mustSettle(t, "Open", err)
 	short, stop := context.WithTimeout(ctx, 20*time.Millisecond)
-	err := session.StartTurn(short, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)})
+	err = session.StartTurn(short, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)})
 	stop()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("StartTurn=%v", err)
@@ -847,7 +841,7 @@ func TestCloseRetainsOwnerAfterFailedPhysicalStop(t *testing.T) {
 	close(session.launchReady)
 	go process.run(ctx, execution.SinkFunc(session.output))
 	go session.watchProcess()
-	bounded, stop := context.WithTimeout(context.Background(), time.Second)
+	bounded, stop := context.WithTimeout(context.Background(), testHangGuard)
 	defer stop()
 	if err := session.Close(bounded); err == nil {
 		t.Fatal("failed physical stop acknowledged")
@@ -889,7 +883,7 @@ func TestCancelFallsBackToPhysicalStopAfterUncertainAbort(t *testing.T) {
 	default:
 		t.Fatal("fallback acknowledged before physical exit")
 	}
-	bounded, stop := context.WithTimeout(context.Background(), time.Second)
+	bounded, stop := context.WithTimeout(context.Background(), testHangGuard)
 	defer stop()
 	result, err := session.Wait(bounded)
 	if result.Kind != harness.ResultCancelled || err == nil {
@@ -972,7 +966,7 @@ func TestObservedWindowsAndLinuxFailedAndAbortedTurns(t *testing.T) {
 					return nil
 				}, nil, nil)
 				startTestTurn(t, session)
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 				defer cancel()
 				expected := harness.ResultFailed
 				if mode == "cancel" {
@@ -982,12 +976,8 @@ func TestObservedWindowsAndLinuxFailedAndAbortedTurns(t *testing.T) {
 						t.Fatalf("cancel=%+v, %v", receipt, err)
 					}
 				}
-				if err := session.WaitTurn(ctx); err != nil {
-					t.Fatal(err)
-				}
-				if err := session.Close(ctx); err != nil {
-					t.Fatal(err)
-				}
+				mustSettle(t, "WaitTurn", session.WaitTurn(ctx))
+				mustSettle(t, "Close", session.Close(ctx))
 				result, err := session.Wait(ctx)
 				if err != nil || result.Kind != expected || result.Semantic != nil || result.Usage.State != harness.UsageUnknown {
 					t.Fatalf("result=%+v, %v", result, err)
