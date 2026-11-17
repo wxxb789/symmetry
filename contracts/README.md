@@ -41,6 +41,13 @@ endpoints return under the same names. It carries the server-owned provider
 catalog (allowed auth type and capability ids) plus each connection's bound
 resources, and keeps presentation values as open strings so an unknown status,
 capability or auth type stays renderable. Consume it as `ConnectionsRead`.
+`chat-read.schema.json` describes the consumed fields of `/portal/api/chat`
+(goal 0007g). It carries the resolved scope, the page's durable messages with
+the command receipt each written intent recorded, and the scope's work rows with
+the execution projection the run selector and the shared-work panel read; the
+served member names are the server's own (`acknowledgement_outcome`,
+`latest_command`, `next_before`, `waiting`), and every object stays open so an
+unconsumed presentation member remains additive. Consume it as `ChatRead`.
 `ContextSnapshot.content_hash` is the SHA-256 of canonical UTF-8 JSON for the
 schema-valid snapshot with its top-level `content_hash` omitted; keys sort
 recursively and arrays retain order.
@@ -76,7 +83,11 @@ so their positive fixtures are sanitized captures of a running server's own
 output (identifiers, labels and timestamps replaced; member names and shapes
 untouched), and their member names are the server's spellings — including the
 suffixed `required?`, `accepted?`, `satisfied?`, `cycle_detected?`,
-`usage_cost_unknown?` and `ready_to_achieve?` booleans. Two gates keep that
+`usage_cost_unknown?` and `ready_to_achieve?` booleans. `chat-read.schema.json`
+follows the same rule: its positive fixtures are sanitized captures of
+`Chat.conversation/1`'s own response, and the chat controller test "the real
+served conversation read validates against the contract bundle" serves a real
+conversation and validates it against this bundle. Two gates keep that
 honest: the portal controller test "the real served attention and goal reads
 validate against the contract bundle" builds a real Goal with a dependency
 edge, an integration work item, a settlement receipt and an unknown-cost usage

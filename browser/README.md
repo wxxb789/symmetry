@@ -1,20 +1,55 @@
 # Browser acceptance tests
 
-These tests exercise the authenticated React shell and the retained classic
-workspace against a running Phoenix control plane. Classic acceptance keeps its
-resource and control flows and fixture semantics at `/portal/classic` (its
-classic resource binding, synchronization and assignment checks moved to the
-new-route resource flows in `tests/portal-connections.spec.mjs`, 0007e); project
-and work-item planning moved to the planning suite below (0007c).
-The classic Chat walk that `/portal/classic#chat` owned moved to the scoped
-conversation suite below (0007g): the per-scope draft/selection/scroll walk,
-the question-versus-control separation, the uncertain-send retry, the cursored
-history walk and the unsafe-content walk now run on `/portal/chat` against the
-real Portal API, and the classic live Chat walk moved to the same route against
-a real daemon. The classic surface keeps its own markup until the 0007i
-cutover, but no acceptance checks it any more; the retired assertions and their
-successors are listed in
+These tests exercise the authenticated React workspace at `/portal` against a
+running Phoenix control plane. The classic workspace presentation is gone as of
+the 0007i cutover: the EEx workspace renderer, its client-side script and its
+stylesheet under `control/priv/portal_assets` were deleted, the classic route is
+a real 404, and only the server-rendered login template and its extracted
+`login.css` remain. `tests/portal.spec.mjs` is deleted with its last classic
+surfaces; its coverage moved as follows:
+
+- resource attach/update/detach and the truthful health read (including the
+  degraded health the classic rail surfaced) ->
+  `tests/portal-connections.spec.mjs` (0007e), whose degraded badge assertion
+  was added for it;
+- browser session boundary (login, logout, signed-out deep link) ->
+  `tests/workspace-shell.spec.mjs`; its invalid-token alert and missing-CSRF
+  header 403 probe are migrated there in the same cutover revision;
+- keyboard/dialog walk -> `tests/portal-work-planning.spec.mjs`,
+  `tests/portal-work-views.spec.mjs` and `tests/workspace-shell.spec.mjs`
+  (navigation palette), and its no-horizontal-overflow assertion ->
+  `tests/portal-compose-daemon.spec.mjs` on the SPA board;
+- the classic Compose halves (daemon and restart) were migrated in place onto
+  `/portal/projects/:projectId`, `/portal/work/:workItemId` and
+  `/portal/connections?projectId=`, with every retired classic control named
+  at its replacement in the spec.
+
+The paragraphs below record where each earlier goal's classic check went; they
+are history, and every named successor still runs.
+
+Chat was the last surface the classic renderer served, and it is goal 0007g's
+scoped conversation that covers it on `/portal/chat` (delivered on `main` as
+`ca29a8e`): the per-scope draft/selection/scroll walk, the
+question-versus-control separation, the uncertain-send retry under one action
+identity, the cursored history walk, the run-scope decision packet with durable
+receipts and the inert unsafe-output walk run against the real Portal API, and
+the classic live Chat walk moved to the same route against a real daemon. Both
+specs lose their classic halves with this cutover; the retired assertions and
+their successors are listed in
 `docs/evidence/goal-0007g-scoped-engineering-chat-*.md`.
+
+`tests/portal-cutover.spec.mjs` is the cutover's own acceptance spec: six cases
+on the release instance. The legacy `/portal#...` hash table (board, activity,
+chat with its scope and run, health, unknown anchors) lands exactly once on the
+new routes with the classic document and `/assets/portal.js` absent, keeping the
+`project_id` scope on the anchors whose classic view was project-scoped; a connected
+surface refreshes from the operator invalidation channel without a reload; a
+disconnected surface reconnects and catches its receipts up from the served
+event cursor; polling keeps a surface fresh when the socket cannot be
+established; a `prefers-reduced-motion: reduce` client renders no running
+animation; and the 390 px width with the navigation palette's Escape focus
+return stays usable.
+
 The 0007f execution-control and runtime checks that the new
 `/portal/work/:workItemId` and `/portal/runtimes` surfaces replace — the
 classic work-detail control walk (Cancel run -> Cancelled, Retry availability,
@@ -38,7 +73,9 @@ cursor load and exhaustion stay in the live suite). The migratable half of the
 classic draft/focus case moved; the classic raw-execution expander has no
 equivalent on the new surface and is recorded as retired, not migrated, in the
 goal receipt. The classic Resources view and its registered-runtime reference
-selection stay classic-owned under goal 0007e.
+selection moved to the new-route resource flows in
+`tests/portal-connections.spec.mjs` (0007e) and were deleted with the classic
+document in the 0007i cutover.
 The 0007b list, board, detail and history read checks that the new
 `/portal/projects/:projectId` and `/portal/work/:workItemId` surfaces replace -
 including the classic detail-security probe and the delayed-detail,
@@ -90,7 +127,7 @@ POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55442 POSTGRES_DB=symmetry_control_dev \
 mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test \
   tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs \
   tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs \
-  tests/portal-chat.spec.mjs
+  tests/portal-cutover.spec.mjs tests/portal-chat.spec.mjs
 ```
 
 It renders desktop/mobile navigation, keyboard focus, loading, empty, network
@@ -113,8 +150,9 @@ The expiry URL must serve the same release and fixture database with
 `SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2`; without it the true-TTL expiry cases
 are explicitly skipped, not passed. The focused suite also checks Attention
 scope through selection, history, navigation and login with real fractional
-resource metadata, legacy project board links through real logout and login,
-plus logout after another shared-cookie tab renews its
+resource metadata, legacy `/portal` project-board links repaired to their SPA
+destination through real logout and login, plus logout after another
+shared-cookie tab renews its
 session. CI starts both release instances and saves the render report.
 Fixture-only project/work/resource creation uses the existing
 authenticated APIs; the React shell's own mutation surfaces are connection
@@ -161,7 +199,7 @@ synthetic fault injection; it takes no capture and is never counted as real
 history evidence. Genuine cursor-paginated execution history requires real
 daemon records, so `tests/portal-live-daemon.spec.mjs` loads older pages on
 `/portal/work/:workItemId` and the Compose runners read the same surface after
-their classic mutations.
+their daemon flows.
 
 The release serves `/portal/work/:workItemId` as the authenticated shell
 document, the same way it serves the project routes, and the login allowlist
@@ -388,10 +426,10 @@ land in the Playwright output directory
 `symmetry-playwright-results`), and the harness prints that run's spec and
 control-plane log paths.
 
-The classic planning dialogs are retired from `tests/portal.spec.mjs`, which
-still owns resource attach/update/detach, the Activity and run-control walk,
-the browser session boundary and background-refresh drawer retention. Two item
-kinds cannot come from the portal API - Goal admission is 0007h's surface and
+The classic planning dialogs were retired from the classic suite earlier; the
+0007i cutover deletes that suite (`tests/portal.spec.mjs`) entirely with the
+migration list at the top of this file. Two item kinds cannot come from the
+portal API - Goal admission is 0007h's surface and
 provider sync is 0007e's - so `scripts/ci/portal-planning-fixture.exs` applies
 them through Control's own changesets: `--goal-managed <work_item_id>
 <repository_resource_id>` writes the Goal, its first revision, the repository
@@ -440,8 +478,9 @@ pwsh -NoProfile -File .\browser\scripts\run-compose-daemon-tests.ps1
 ```
 
 This scenario uses the Compose runtime's `default` agent profile and `primary`
-workspace, then verifies task completion, generation, durable events, Activity,
-and the final Kanban move.
+workspace, then verifies task completion, generation, durable events and the
+final board move on the SPA project/work surfaces (the classic Activity rail's
+rows are asserted there; see the migration list above).
 
 ## Live Chat acceptance
 

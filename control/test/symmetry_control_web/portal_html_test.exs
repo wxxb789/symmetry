@@ -27,12 +27,4 @@ defmodule SymmetryControlWeb.PortalHTMLTest do
     assert shell == ~s(<meta name="csrf-token" content="#{escaped}">)
     refute shell =~ "__SYMMETRY_CSRF__"
   end
-
-  test "escapes csrf tokens in every classic workspace interpolation" do
-    csrf_token = "\"csrf\"&<"
-    escaped = "&quot;csrf&quot;&amp;&lt;"
-    index = PortalHTML.index(%{csrf_token: csrf_token})
-
-    assert length(String.split(index, escaped)) == 3
-  end
 end

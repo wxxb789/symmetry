@@ -270,7 +270,17 @@ export interface WorkItemReceipt extends WriteReceipt {
   disposition: string;
 }
 
-const Session = Schema.Struct({ csrf_token: Schema.NonEmptyString });
+// The same-origin bootstrap carries the CSRF token for commands and the
+// short-lived, audience-scoped token for the operator invalidation socket. The
+// operator credential itself never reaches this read.
+const Session = Schema.Struct({
+  csrf_token: Schema.NonEmptyString,
+  // Additive: this release's server always serves it (pinned by the control
+  // session test and by the real socket connect in the browser gate), and an
+  // older partial bootstrap would leave the invalidation socket unconnectable
+  // while the visible client keeps polling.
+  socket_token: Schema.optionalWith(Schema.String, { default: () => "" }),
+});
 export type Session = typeof Session.Type;
 const ServerError = Schema.Struct({
   error: Schema.Struct({

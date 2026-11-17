@@ -2,9 +2,9 @@ defmodule SymmetryControlWeb.PortalSession do
   @moduledoc false
 
   @default_max_age_seconds 8 * 60 * 60
-  @shell_path ~r{\A/portal(?:/(?:attention|connections|chat|goals/[A-Za-z0-9_-]+|projects(?:/[A-Za-z0-9_-]+)?|runtimes|work/[A-Za-z0-9_-]+))?\z}
+  @shell_path ~r{\A/portal(?:/(?:attention|chat|connections|goals/[A-Za-z0-9_-]+|projects(?:/[A-Za-z0-9_-]+)?|runtimes|work/[A-Za-z0-9_-]+))?\z}
   @connection_identifier_param ~r{\AconnectionId=[A-Za-z0-9_-]+\z}
-  @classic_identifier_param ~r{\A(?:project_id|run_id)=[A-Za-z0-9_-]+\z}
+  @legacy_identifier_param ~r{\A(?:project_id|run_id)=[A-Za-z0-9_-]+\z}
   # Work-surface search state the shell itself writes into its own URLs: the
   # view, the text filters, and the JSON-encoded blocked flag. Values stay
   # anchored to that encoding, so an unencoded control character or an
@@ -15,16 +15,11 @@ defmodule SymmetryControlWeb.PortalSession do
   @work_text_param ~r{\A(?:q|state|owner)=(?:[A-Za-z0-9*.+_-]|%(?:09|[2-9A-Fa-f][0-9A-Fa-f]))*\z}
   @work_blocked_param ~r{\Ablocked=(?:1|%221%22)\z}
   @work_project_param ~r{\AprojectId=[A-Za-z0-9_-]+\z}
-  # The chat document carries the member scope it was opened with plus the
-  # project or run it is bound to; those are the only parameters the shell
-  # writes into its own URLs, so the query allowlist accepts nothing else.
-  @chat_scope_param ~r{\Ascope=(?:workspace|project|run)\z}
-  @chat_run_param ~r{\ArunId=[A-Za-z0-9_-]+\z}
   @work_search_params [@work_view_param, @work_text_param, @work_blocked_param]
   @work_item_search_params @work_search_params ++ [@work_project_param]
 
   def return_to(path) when is_binary(path) do
-    if shell_return_to?(path) or classic_return_to?(path), do: path, else: "/portal"
+    if shell_return_to?(path), do: path, else: "/portal"
   end
 
   def return_to(_path), do: "/portal"
@@ -42,7 +37,15 @@ defmodule SymmetryControlWeb.PortalSession do
 
   defp shell_query?(_path, nil), do: true
 
-  defp shell_query?("/portal", query), do: classic_query?(query)
+  # `/portal` is the one-time legacy hash redirect's carrier: the browser's hash
+  # never reaches the server, so the retired classic search parameters
+  # (`project_id`, `run_id`, `chat_scope`) must survive login for the redirect to
+  # run once the SPA document loads at `/portal`.
+  defp shell_query?("/portal", query), do: legacy_hash_query?(query)
+
+  # `/portal/chat` is the migrated conversation surface; its URL state is the
+  # scope selection, never a destination of its own.
+  defp shell_query?("/portal/chat", query), do: chat_query?(query)
 
   defp shell_query?("/portal/attention", query),
     do: Regex.match?(~r{\AprojectId=[A-Za-z0-9_-]+\z}, query)
@@ -55,9 +58,6 @@ defmodule SymmetryControlWeb.PortalSession do
   # runtimes page to /portal.
   defp shell_query?("/portal/runtimes", query),
     do: Regex.match?(@work_project_param, query)
-
-  defp shell_query?("/portal/chat", query),
-    do: work_query?(query, [@chat_scope_param, @work_project_param, @chat_run_param])
 
   defp shell_query?("/portal/projects/" <> _project_id, query),
     do: work_query?(query, @work_search_params)
@@ -73,26 +73,20 @@ defmodule SymmetryControlWeb.PortalSession do
     |> Enum.all?(fn param -> Enum.any?(patterns, &Regex.match?(&1, param)) end)
   end
 
-  defp classic_return_to?("/portal/classic" <> _rest = path) do
-    case URI.parse(path) do
-      %URI{scheme: nil, host: nil, path: "/portal/classic", query: query, fragment: fragment} ->
-        fragment in [nil, "board", "chat", "activity", "resources", "connections", "health"] and
-          classic_query?(query)
-
-      _ ->
-        false
-    end
-  end
-
-  defp classic_return_to?(_path), do: false
-
-  defp classic_query?(nil), do: true
-
-  defp classic_query?(query) do
+  defp chat_query?(query) do
     query
     |> String.split("&")
     |> Enum.all?(fn param ->
-      Regex.match?(@classic_identifier_param, param) or
+      Regex.match?(~r{\Ascope=(?:workspace|project|run)\z}, param) or
+        Regex.match?(~r{\A(?:projectId|runId)=[A-Za-z0-9_-]+\z}, param)
+    end)
+  end
+
+  defp legacy_hash_query?(query) do
+    query
+    |> String.split("&")
+    |> Enum.all?(fn param ->
+      Regex.match?(@legacy_identifier_param, param) or
         param in ["chat_scope=workspace", "chat_scope=project", "chat_scope=run"]
     end)
   end

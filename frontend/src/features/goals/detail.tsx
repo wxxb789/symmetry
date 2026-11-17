@@ -3,6 +3,7 @@ import { useParams, useRouteContext } from "@tanstack/react-router";
 import { AlertCircle, CircleCheck, Inbox, ScrollText, ShieldAlert } from "lucide-react";
 import { useState } from "react";
 import { goalEventsOptions, goalOptions, sessionOptions, workspaceOptions } from "../../app/application";
+import { useRealtimeEpoch } from "../../app/realtime";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
 import { servedMember, servedText } from "./served-text";
 import { errorMessage, postGoalCommand, type GoalDecision, type GoalEvent, type GoalGraph, type GoalProjection, type GoalWorkItem, type Workspace } from "../../services/api";
@@ -43,6 +44,30 @@ export function GoalDetailPage() {
   const [refusal, setRefusal] = useState<MutationRefused | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  /**
+   * The server acknowledges a command before its worker applies it, and the
+   * applied write lands a moment later. Every command envelope carries the
+   * versions this page holds, so the acceptance notice waits for the served goal
+   * to settle on the version the applied write produced instead of announcing
+   * acceptance while the page still holds the pre-application version, which
+   * would make the operator's next command stale. Bounded: a command with no
+   * further write is not delayed beyond the bound.
+   */
+  const settleGoalRead = async (acknowledged: GoalProjection | undefined) => {
+    const deadline = Date.now() + 2_500;
+    const before = acknowledged === undefined ? null : [acknowledged.version, acknowledged.state, acknowledged.current_revision].join("|");
+    let previous: string | null = null;
+    while (Date.now() < deadline) {
+      const served = await application.api.goal(goalId, new AbortController().signal).catch(() => null);
+      const marker = served === null ? null : [served.version, served.state, served.current_revision].join("|");
+      if (marker !== null && marker !== before && previous === marker) return;
+      previous = marker;
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 120);
+      await promise;
+    }
+  };
+
   const command = useMutation({
     mutationFn: async ({ kind, payload }: { kind: CommandKind; payload: ActionPayload }) => {
       const goal = query.data;
@@ -54,10 +79,15 @@ export function GoalDetailPage() {
     },
     onSuccess: async (_body, variables) => {
       setRefusal(null);
-      setNotice(`${actionLabel(variables.kind)} accepted by the server.`);
+      // The acceptance notice appears once the served goal has settled on the
+      // state this command produced, so the next command's envelope carries the
+      // version the server has actually written.
+      const acknowledged = query.data;
       await queryClient.invalidateQueries({ queryKey: ["goal", { goalId }] });
-      await queryClient.invalidateQueries({ queryKey: ["goal-events", { goalId }] });
-      await queryClient.invalidateQueries({ queryKey: ["attention"] });
+      await settleGoalRead(acknowledged);
+      setNotice(`${actionLabel(variables.kind)} accepted by the server.`);
+      void queryClient.invalidateQueries({ queryKey: ["goal-events", { goalId }] });
+      void queryClient.invalidateQueries({ queryKey: ["attention"] });
     },
     onError: (error: unknown) => {
       setNotice(null);
@@ -98,10 +128,14 @@ export function GoalDetailPage() {
     },
     onSuccess: async () => {
       setRefusal(null);
-      setNotice("The server admitted the plan.");
+      // Same ordering as the generic command: the notice is the page's statement
+      // that the served goal now reflects this command.
+      const acknowledged = query.data;
       await queryClient.invalidateQueries({ queryKey: ["goal", { goalId }] });
-      await queryClient.invalidateQueries({ queryKey: ["goal-events", { goalId }] });
-      await queryClient.invalidateQueries({ queryKey: ["attention"] });
+      await settleGoalRead(acknowledged);
+      setNotice("The server admitted the plan.");
+      void queryClient.invalidateQueries({ queryKey: ["goal-events", { goalId }] });
+      void queryClient.invalidateQueries({ queryKey: ["attention"] });
     },
     onError: (error: unknown) => {
       setNotice(null);
@@ -562,19 +596,36 @@ function Receipts({ goalId }: { goalId: string }) {
   const firstPageError = pages[0]?.error ?? null;
   const firstPagePending = pages[0]?.isPending ?? false;
   const fetching = pages.some((page) => page.isFetching);
+  // A list that had reached the end of the log continues from the last sequence
+  // it rendered when the connection is (re)established: the receipts recorded
+  // while the browser was disconnected arrive contiguously. The continuation is
+  // an ordinary read keyed by the connection epoch, so a reconnect issues
+  // exactly one of them and a page that grows the list cannot re-trigger it.
+  const epoch = useRealtimeEpoch();
+  const tail = entries.at(-1)?.sequence ?? 0;
+  const continuation = useQuery({
+    queryKey: ["goal-events-catch-up", { goalId, epoch }],
+    queryFn: ({ signal }) => application.api.goalEvents(goalId, tail, signal),
+    enabled: epoch > 0 && nextAfter === null && tail > 0,
+  });
+  const extended = continuation.data?.entries ?? [];
+  const seen = new Set(entries.map((entry) => entry.sequence));
+  const continuationEntries = extended.filter((entry) => !seen.has(entry.sequence));
+  const loaded = continuationEntries.length > 0 ? [...entries, ...continuationEntries] : entries;
+  const loadedTail = continuation.data === undefined ? nextAfter : continuation.data.next_after;
 
   return <section className="goal-section" aria-labelledby="receipts-heading">
-    <div className="section-heading"><h2 id="receipts-heading">Receipts</h2><span className="muted text-small">{entries.length} loaded</span></div>
+    <div className="section-heading"><h2 id="receipts-heading">Receipts</h2><span className="muted text-small">{loaded.length} loaded</span></div>
     {firstPagePending && entries.length === 0 && <LoadingState label="Loading receipts…" />}
     {firstPageError && <ErrorState error={firstPageError} retry={() => { void pages[0]?.refetch(); }} stale={entries.length > 0} />}
-    {entries.length === 0 && !firstPagePending && !firstPageError && <EmptyState title="No receipts">This goal has no recorded audit event.</EmptyState>}
-    {entries.length > 0 && <ul className="receipt-list">{entries.map((entry: GoalEvent) => <li key={entry.sequence}>
+    {loaded.length === 0 && !firstPagePending && !firstPageError && <EmptyState title="No receipts">This goal has no recorded audit event.</EmptyState>}
+    {loaded.length > 0 && <ul className="receipt-list">{loaded.map((entry: GoalEvent) => <li key={entry.sequence}>
       <span className="item-key">#{entry.sequence}</span>
       <span className="goal-row-title">{entry.kind}</span>
       <span className="muted text-small">{entry.actor_ref ?? "actor not recorded"} · revision {entry.revision ?? "not recorded"} · {entry.inserted_at ?? "time not recorded"}</span>
     </li>)}</ul>}
-    {nextAfter !== null && nextAfter > 0 && <button className="button" type="button" disabled={fetching} onClick={() => setBoundaries([...boundaries, nextAfter])}>{fetching ? "Loading…" : "Load older receipts"}</button>}
-    {nextAfter === null && entries.length > 0 && <p className="text-small muted"><Inbox size={14} aria-hidden="true" /> All recorded receipts are loaded.</p>}
-    {fetching && entries.length > 0 && <p className="sr-only" role="status">Refreshing receipts</p>}
+    {loadedTail !== null && loadedTail > 0 && <button className="button" type="button" disabled={fetching} onClick={() => setBoundaries([...boundaries, loadedTail])}>{fetching ? "Loading…" : "Load older receipts"}</button>}
+    {loadedTail === null && loaded.length > 0 && <p className="text-small muted"><Inbox size={14} aria-hidden="true" /> All recorded receipts are loaded.</p>}
+    {fetching && loaded.length > 0 && <p className="sr-only" role="status">Refreshing receipts</p>}
   </section>;
 }

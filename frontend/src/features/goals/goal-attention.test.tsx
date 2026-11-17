@@ -276,7 +276,9 @@ describe("goal detail surface", () => {
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Operator pause");
     await user.click(screen.getByRole("button", { name: "Send Pause" }));
-    expect(await screen.findByText("Pause accepted by the server.")).toBeVisible();
+    // The surface states acceptance only after the served goal settles on the
+    // applied state (bounded), so this wait allows for that bound.
+    expect(await screen.findByText("Pause accepted by the server.", {}, { timeout: 5_000 })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Operator pause again");
     await user.click(screen.getByRole("button", { name: "Send Pause" }));

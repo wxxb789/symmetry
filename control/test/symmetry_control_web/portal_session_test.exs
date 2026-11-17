@@ -40,7 +40,9 @@ defmodule SymmetryControlWeb.PortalSessionTest do
     assert is_integer(issued_at)
     assert is_binary(fingerprint)
 
-    portal_page = authenticated |> recycle() |> get("/portal/classic")
+    # The login document carries the session-bound CSRF token the logout POST
+    # needs; the classic workspace document is retired with the cutover.
+    portal_page = authenticated |> recycle() |> get("/portal/login")
 
     [_, logout_token] =
       Regex.run(~r/name="_csrf_token" value="([^"]+)"/, html_response(portal_page, 200))
@@ -62,9 +64,12 @@ defmodule SymmetryControlWeb.PortalSessionTest do
       |> put_req_header("accept", "application/json")
       |> get("/portal/api/session")
 
-    assert %{"csrf_token" => logout_token} = session = json_response(bootstrap, 200)
-    assert Map.keys(session) == ["csrf_token"]
+    assert %{"csrf_token" => logout_token, "socket_token" => socket_token} =
+             session = json_response(bootstrap, 200)
+
+    assert Enum.sort(Map.keys(session)) == ["csrf_token", "socket_token"]
     assert is_binary(logout_token) and byte_size(logout_token) > 0
+    assert SymmetryControlWeb.PortalSocketToken.verify(socket_token) == {:ok, "portal:operator"}
     assert get_resp_header(bootstrap, "cache-control") == ["no-store"]
     refute bootstrap.resp_body =~ "test-operator-token"
 
@@ -155,7 +160,7 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/runtimes",
           "/portal/runtimes?projectId=project-123",
           "/portal/goals/goal-123",
-          "/portal/classic"
+          "/portal?project_id=project-123&chat_scope=run&run_id=run-456"
         ] do
       redirect_response = conn |> get(path)
 
@@ -196,21 +201,26 @@ defmodule SymmetryControlWeb.PortalSessionTest do
     end
   end
 
-  test "classic login preserves validated project, run, and hash destinations", %{conn: conn} do
+  test "the legacy hash redirect carrier survives login without a classic destination", %{
+    conn: conn
+  } do
+    # The browser's hash never reaches the server, so `/portal` with the retired
+    # classic search parameters is the carrier the one-time legacy hash redirect
+    # needs after login. It is the only place those parameters are accepted; the
+    # classic document itself is gone.
     query = "project_id=project-123&chat_scope=run&run_id=run-456"
-    target = "/portal/classic?" <> query
+    target = "/portal?" <> query
     unauthenticated = conn |> get(target)
     login_location = redirected_to(unauthenticated, 302)
     login_query = login_location |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
     assert %{"return_to" => ^target} = login_query
 
-    return_to = target <> "#chat"
-    login_page = conn |> enforce_csrf() |> get("/portal/login", %{"return_to" => return_to})
+    login_page = conn |> enforce_csrf() |> get("/portal/login", %{"return_to" => target})
     login_html = html_response(login_page, 200)
     [_, csrf_token] = Regex.run(~r/name="_csrf_token" value="([^"]+)"/, login_html)
 
     assert login_html =~
-             ~s(name="return_to" value="/portal/classic?project_id=project-123&amp;chat_scope=run&amp;run_id=run-456#chat")
+             ~s(name="return_to" value="/portal?project_id=project-123&amp;chat_scope=run&amp;run_id=run-456")
 
     authenticated =
       login_page
@@ -219,15 +229,28 @@ defmodule SymmetryControlWeb.PortalSessionTest do
       |> post("/portal/login", %{
         "_csrf_token" => csrf_token,
         "operator_token" => "test-operator-token",
-        "return_to" => return_to
+        "return_to" => target
       })
 
-    assert redirected_to(authenticated, 302) == return_to
+    assert redirected_to(authenticated, 302) == target
 
-    for view <- ["board", "chat", "activity", "resources", "connections", "health"] do
-      destination = "/portal/classic#" <> view
-      assert PortalSession.return_to(destination) == destination
-    end
+    # The conversation surface keeps its own URL state (scope, project and run),
+    # and the retired classic document is no longer a login destination at all.
+    assert PortalSession.return_to("/portal/chat") == "/portal/chat"
+
+    assert PortalSession.return_to("/portal/chat?scope=run&runId=run-456") ==
+             "/portal/chat?scope=run&runId=run-456"
+
+    assert PortalSession.return_to("/portal/chat?scope=project&projectId=project-123") ==
+             "/portal/chat?scope=project&projectId=project-123"
+
+    assert PortalSession.return_to("/portal/classic") == "/portal"
+    assert PortalSession.return_to("/portal/classic#board") == "/portal"
+
+    # A carrier that carries a fragment is not accepted: the browser keeps the
+    # hash it already has, and a caller-chosen fragment never becomes a
+    # destination the server echoes back into the login form.
+    assert PortalSession.return_to(target <> "#chat") == "/portal"
   end
 
   test "login accepts only explicit internal shell return paths", %{conn: conn} do
@@ -252,13 +275,14 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal?project_id=project-123%0d%0alocation%3ahttps://example.com",
           "/portal?chat_scope=admin",
           "/portal?project_id=project-123#not-a-view",
-          "/portal/classic?return_to=//example.com",
-          "/portal/classic?project_id=//example.com",
-          "/portal/classic?project_id=project-123%0d%0alocation%3ahttps://example.com",
-          "/portal/classic?chat_scope=admin",
-          "/portal/classic#not-a-view",
+          "/portal/classic",
+          "/portal/classic?project_id=project-123",
+          "/portal/classic#board",
+          "/portal/chat?scope=admin",
+          "/portal/chat?runId=//example.com",
+          "/portal/chat?unknown=1",
+          "/portal/chat#not-a-view",
           "/portal/classic/../login",
-          "/portal/projects/project-123?return_to=//example.com",
           "/portal/projects/project-123?projectId=project-123",
           "/portal/projects/project-123?q=//example.com",
           "/portal/projects/project-123?q=a%0ab",

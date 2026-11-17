@@ -1,12 +1,19 @@
 defmodule SymmetryControlWeb.PortalSessionController do
   use SymmetryControlWeb, :controller
 
-  alias SymmetryControlWeb.{PortalHTML, PortalSession, Protocol}
+  alias SymmetryControlWeb.{PortalHTML, PortalSession, PortalSocketToken, Protocol}
 
   def new(conn, params), do: render_login(conn, :ok, nil, params["return_to"])
 
   def show(conn, _params) do
-    json(conn, %{csrf_token: Plug.CSRFProtection.get_csrf_token()})
+    # The same-origin bootstrap is the only minter of the short-lived,
+    # audience-scoped socket token. The operator credential stays in the login
+    # POST and the session cookie; what the browser receives here is usable only
+    # to join the operator invalidation topic, and only for its short lifetime.
+    json(conn, %{
+      csrf_token: Plug.CSRFProtection.get_csrf_token(),
+      socket_token: PortalSocketToken.sign()
+    })
   end
 
   def create(conn, %{"operator_token" => token} = params) when is_binary(token) do

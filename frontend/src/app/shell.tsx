@@ -144,6 +144,16 @@ export function WorkspaceRoot() {
   const { application } = useRouteContext({ from: "__root__" });
   const signedOut = useSyncExternalStore(application.auth.subscribe, application.auth.getSnapshot);
   const session = useQuery({ ...sessionOptions(application.api), enabled: !signedOut });
+  // The bootstrap read is the only minter of the short-lived socket token, so the
+  // invalidation client connects when that token arrives (and re-connects with a
+  // fresh one after a logout/login rotation). Until it is connected the same
+  // client polls, so no surface depends on the socket being up.
+  const socketToken = session.data?.socket_token ?? "";
+  useEffect(() => {
+    if (socketToken === "" || signedOut) return;
+    application.rememberSocketToken(socketToken);
+    application.realtime.connect();
+  }, [application, socketToken, signedOut]);
   // Route changes own the heading reset. Search-parameter updates (the
   // URL-backed filters) are not route changes: keying the reset on the full
   // href moved focus to the heading on every keystroke of a filter input.
@@ -167,7 +177,7 @@ export function WorkspaceRoot() {
       <aside className="sidebar"><Link className="brand" to="/attention" search={{}}><span className="brand-mark" aria-hidden="true">S</span>Symmetry</Link><p className="sidebar-label">Workspace</p><NavigationLinks /><div className="sidebar-footer"><span className="state-dot" aria-hidden="true" />Reads and execution control; applied state comes from the server</div></aside>
       <div className="workspace-body"><header className="topbar"><div className="topbar-start"><MobileNavigation /><ProjectPicker /></div><div className="topbar-actions"><CommandPalette /><LogoutForm application={application} cachedToken={csrf ?? ""} /></div></header>
         <main id="main-content" className="workspace-content"><SessionTokenProvider token={csrf ?? ""}><Outlet /></SessionTokenProvider></main>
-        <footer className="content-footer">Reads and applied changes come from the server; a refused change shows the server's current state. Work detail carries the execution controls this shell dispatches; guidance and pause are dispatched from Chat. <a href="/portal/classic">Classic workspace</a></footer>
+        <footer className="content-footer">Reads and applied changes come from the server; a refused change shows the server's current state. Work detail carries the execution controls this shell dispatches; guidance and pause are dispatched from Chat.</footer>
       </div>
     </div>
   </>;

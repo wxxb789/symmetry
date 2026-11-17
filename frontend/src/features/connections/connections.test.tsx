@@ -612,6 +612,35 @@ describe("connection management", () => {
     expect(harness.history.location.search).toContain(second.id);
   });
 
+  it("states a removal refusal whose connection the change-discovery re-read removed first", async () => {
+    const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
+    const harness = renderConnections(({ method }) =>
+      method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: "Remove connection" }));
+    expect(screen.getByRole("button", { name: "Removing…" })).toBeDisabled();
+
+    // Another operator's removal reaches this page as an invalidation, and the
+    // re-read settles before this removal's own refused answer: the served list
+    // no longer holds the connection, so the reconcile has already cleared the
+    // selection when the refusal arrives. The operator issued the removal, so
+    // its reason and next step must still be stated instead of dropped with the
+    // vanished detail.
+    harness.setConnections([]);
+    await act(async () => {
+      await harness.application.queryClient.invalidateQueries({ queryKey: ["connections"] });
+    });
+    await waitFor(() => expect(harness.history.location.search).not.toContain(connectionId));
+    await act(async () => {
+      release(refusal(404, "not_found", "this connection no longer exists"));
+      await pending;
+    });
+    expect(await screen.findByText(/this connection no longer exists \(not_found\)/)).toBeVisible();
+    expect(screen.getByText(/The server's current state is shown instead\./)).toBeVisible();
+  });
+
   it("does not navigate back when the operator selects another connection during the save's re-read", async () => {
     const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
     const harness = renderConnections(({ method }) => method === "PATCH"

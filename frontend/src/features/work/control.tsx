@@ -15,7 +15,7 @@
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import { cancelWorkMutation, provideInputMutation, retryWorkMutation, startWorkMutation } from "../../app/application";
 import { useSessionToken } from "../../app/session";
 import { clearActionId, readActionId, readOrMintActionId, type ActionKind } from "../../services/control-actions";
@@ -49,9 +49,6 @@ type WorkWaitingRow = NonNullable<WorkExecutionRow["waiting"]>;
 
 /** The placeholder key of an attempt the browser could not give an identity. */
 const unavailableActionId = "unavailable";
-
-/** The background read of the classic surface, kept for this route only. */
-const refreshIntervalMs = 5_000;
 
 interface PendingState {
   readonly pending: boolean;
@@ -241,19 +238,6 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
     retry: { pending: retryMutation.isPending, paused: retryMutation.isPaused },
     input: { pending: inputMutation.isPending, paused: inputMutation.isPaused },
   };
-
-  // The retired classic surface refreshed its workspace while visible; this
-  // surface keeps the served execution just as current, and every pass is a
-  // read of the server's own snapshot. A pass yields to a read already in
-  // flight instead of cancelling it, and the loop stops with the detail.
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      if (queryClient.getQueryState(["work-item", { workItemId }])?.fetchStatus === "fetching") return;
-      void queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId }] });
-    }, refreshIntervalMs);
-    return () => { window.clearInterval(timer); };
-  }, [queryClient, workItemId]);
 
   const value: ControlSurfaceValue = {
     workItemId,

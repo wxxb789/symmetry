@@ -823,6 +823,9 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   expect(failed.sync_status).toBe("failed");
   expect(failed.status_message).toBe("Provider returned HTTP 500");
   expect(failed.last_synced_at).toBe(issuesSynced.last_synced_at);
+  // The degraded resource health the retired classic health rail surfaced is
+  // served by the row's own health badge (moved from portal.spec.mjs).
+  await expect(issuesRow.getByText("Degraded", { exact: true })).toBeVisible();
   await capture(page, testInfo, "provider-failure", {
     injected: "provider read answered HTTP 500",
     served: { status: failed.status, sync_status: failed.sync_status, status_message: failed.status_message },
@@ -1299,15 +1302,16 @@ test("external work items keep their identity, their provider-owned lock and the
   expect(refusedTitle.body.error.code).toBe("provider_owned");
   expect(await detail.getByRole("textbox", { name: /title/i }).count()).toBe(0);
 
-  // The read-only `/portal/work/:id` detail renders no execution control for
-  // any item, so the "no execution entry point" clause is asserted on the
-  // classic surface — the same gate the retired classic assertion pinned —
-  // which does render `Start run` for this item while it is available. Before
-  // the readback omits it:
-  await page.goto(`/portal/classic?project_id=${projectId}#board`);
-  await page.locator(".work-card", { hasText: subject.title }).click();
-  await expect(page.getByRole("button", { name: "Start run" })).toBeVisible();
-  await page.getByRole("button", { name: "Close details" }).click();
+  // The execution entry point for an available item is asserted on the work
+  // detail the project surface opens: the served `can_start` renders
+  // `Start run`, and the readback that omits the item must remove it (below).
+  await page.goto(`/portal/projects/${projectId}`);
+  await page.getByRole("link", { name: subject.title }).click();
+  const availableDetail = isMobile
+    ? page.locator("#main-content")
+    : page.getByRole("dialog", { name: subject.title });
+  await expect(availableDetail.getByRole("button", { name: "Start run" })).toBeVisible();
+  await page.keyboard.press("Escape");
 
   // A readback that omits the item marks it unavailable: the detail renders it
   // unavailable, no run or retry control exists, and the readback refuses it.
@@ -1333,14 +1337,16 @@ test("external work items keep their identity, their provider-owned lock and the
     executionControl: "none rendered"
   });
 
-  // The same classic surface now hides its execution entry point for the item
-  // the readback omitted — the assertion the tautological new-route check
-  // cannot make.
-  await page.goto(`/portal/classic?project_id=${projectId}#board`);
-  await page.locator(".work-card", { hasText: subject.title }).click();
-  await expect(page.locator("#detail-content")).toContainText("Unavailable in provider");
-  await expect(page.getByRole("button", { name: "Start run" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Close details" }).click();
+  // The project surface now opens the omitted item with no execution entry
+  // point: the served availability removes `Start run` for the same item.
+  await page.goto(`/portal/projects/${projectId}`);
+  await page.getByRole("link", { name: subject.title }).click();
+  const omittedDetail = isMobile
+    ? page.locator("#main-content")
+    : page.getByRole("dialog", { name: subject.title });
+  await expect(omittedDetail.getByText(/unavailable/i).first()).toBeVisible();
+  await expect(omittedDetail.getByRole("button", { name: /^(start run|run|retry)$/i })).toHaveCount(0);
+  await page.keyboard.press("Escape");
 
   await resetFixtureState();
   await assertNoCredentials(page, recorded);

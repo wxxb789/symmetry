@@ -11,10 +11,12 @@ defmodule SymmetryControlWeb.Router do
 
   pipeline :machine do
     plug SymmetryControlWeb.Plugs.MachineAuth
+    plug SymmetryControlWeb.Plugs.PortalInvalidations
   end
 
   pipeline :operator do
     plug SymmetryControlWeb.Plugs.OperatorAuth
+    plug SymmetryControlWeb.Plugs.PortalInvalidations
   end
 
   pipeline :portal_browser do
@@ -32,6 +34,7 @@ defmodule SymmetryControlWeb.Router do
     plug :put_secure_browser_headers
     plug :put_portal_no_store
     plug SymmetryControlWeb.Plugs.PortalAuth, format: :json
+    plug SymmetryControlWeb.Plugs.PortalInvalidations
   end
 
   pipeline :portal_authenticated do
@@ -91,14 +94,13 @@ defmodule SymmetryControlWeb.Router do
 
     get "/", PortalController, :index
     get "/attention", PortalController, :index
+    get "/chat", PortalController, :index
     get "/connections", PortalController, :index
     get "/projects", PortalController, :index
     get "/projects/:project_id", PortalController, :index
     get "/work/:work_item_id", PortalController, :index
-    get "/chat", PortalController, :index
     get "/runtimes", PortalController, :index
     get "/goals/:goal_id", PortalController, :index
-    get "/classic", PortalController, :classic
   end
 
   defp put_portal_no_store(conn, _options), do: put_resp_header(conn, "cache-control", "no-store")

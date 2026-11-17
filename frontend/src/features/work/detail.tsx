@@ -228,11 +228,20 @@ function WorkDetailBody({ workItemId, scopedProjectId, backSearch, editable, ope
   drawer?: boolean;
 }) {
   const { application } = useRouteContext({ from: "__root__" });
+  const queryClient = useQueryClient();
   const query = useQuery(workDetailOptions(application.api, workItemId));
   const detail = query.data;
   const item = detail?.work_item;
   const backToProjectId = item?.project_id ?? scopedProjectId;
-  const refresh = () => { if (!query.isFetching) void query.refetch(); };
+  const refresh = () => {
+    if (query.isFetching) return;
+    void query.refetch();
+    // This page also renders the project surface behind the drawer from its own
+    // workspace read, so the operator's refresh refreshes both: refreshing only
+    // the work item would leave the background read's failure on screen after
+    // the connection the refresh was meant to recover has already recovered.
+    void queryClient.refetchQueries({ queryKey: ["workspace"], type: "active" });
+  };
   return <>
     {drawer && <>
       <Dialog.Title className="sr-only">{item?.title ?? "Work item"}</Dialog.Title>

@@ -46,7 +46,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     append_events(run.id, fence, [
       event(2, 1, "progress", %{"message" => "Implementing portal"}),
       event(3, 2, "finding", %{"message" => "Fixed stale response race", "severity" => "high"}),
-      event(4, 3, "artifact", %{"path" => "control/priv/portal_assets/portal.js"}),
+      event(4, 3, "artifact", %{"path" => "control/priv/portal_assets/login.css"}),
       event(5, 4, "test", %{"name" => "portal workflow", "status" => "passed"}),
       event(6, 5, "pull_request", %{"url" => "https://github.com/acme/symmetry/pull/42"}),
       event(7, 6, "ci", %{"status" => "passed"}),
@@ -64,7 +64,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     assert Enum.map(projection.evidence.findings, & &1.message) == ["Fixed stale response race"]
 
     assert Enum.map(projection.evidence.artifacts, & &1.path) == [
-             "control/priv/portal_assets/portal.js"
+             "control/priv/portal_assets/login.css"
            ]
 
     assert Enum.map(projection.evidence.tests, &{&1.name, &1.status}) == [
