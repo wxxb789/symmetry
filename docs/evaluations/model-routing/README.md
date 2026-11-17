@@ -108,6 +108,72 @@ Host prerequisites for the Elixir carrier (measured, not assumed): a real Postgr
 
 `prepare --environment-json PATH` records the measured execution surface of the run (host, toolchain, PostgreSQL identity and route, database, bundle digest) under the run record's `environment.measured`, which every receipt row then states. Keys and values are validated, secret-shaped names are refused, and each recorded value has every host-specific absolute path these patterns recognise — drive-rooted and UNC Windows paths, and POSIX home, root and temp roots — replaced by a `sha256:` token, so from this revision onward a record does not republish a disposable root or the operator profile. The four committed `0008c` receipts predate the redaction and keep their recorded roots unedited because their digests are bound (see `docs/TODO.md`). Recording a credential value is a policy prohibition on the caller: the guard refuses secret-shaped *names*, not arbitrary values, so an ordinary-looking secret cannot be detected by shape.
 
+## TypeScript carrier
+
+A task whose language is `typescript` declares the frontend's own commands, but as direct tool
+invocations rather than pnpm script aliases, because the sealed checkout deliberately carries no
+`node_modules`: the pnpm workspace's dependencies are installed once, hoisted, one level above
+every run directory (`<store>/runs/node_modules` for runs at `<store>/runs/<name>`), and Node
+resolves them by walking the ancestor `node_modules` chain. From a gate cwd of `frontend/` the
+entries are `node ../../../node_modules/...`; from the repository root they are
+`node ../../node_modules/...`. The measured entries (pnpm 12.17.0 workspace, Node v26.13.1,
+vitest 5.1.0, vite 8.3.6, eslint 10.14.0 with typescript-eslint 8.72.1, TypeScript 7.0.2 through
+the frontend's `@typescript/native` alias for `typecheck` and the unaliased root `typescript` for
+`contracts/tsconfig.json`, `@playwright/test` 1.64.1) are:
+
+- `contracts-typecheck`: `node ../../node_modules/typescript/bin/tsc --project contracts/tsconfig.json`
+- `contracts-generated-drift` / `contracts-effect-drift`: `node contracts/scripts/check.mjs` and
+  `node contracts/scripts/check-effect.mjs`
+- `contracts-tests`: `node --test contracts/scripts/` (the repository's own
+  `node --test contracts/scripts/*.test.mjs` with the same top-level file set)
+- `frontend-typecheck`: `node ../../../node_modules/@typescript/native/bin/tsc --noEmit`
+- `frontend-lint`: `node ../../../node_modules/eslint/bin/eslint.js . --max-warnings 0`
+- `frontend-tests`: `node ../../../node_modules/vitest/vitest.mjs run`
+- `frontend-build`, `frontend-stage-assets`: `node ../../../node_modules/vite/bin/vite.js build`
+  and then `node scripts/stage-assets.mjs` (the two steps of the frontend's own `build` script)
+- `browser-acceptance`:
+  `node ../../../node_modules/@playwright/test/cli.js test tests/workspace-shell.spec.mjs
+  tests/portal-execution-control.spec.mjs`, with the frozen `env` naming the run's own Control
+  dev server (`SYMMETRY_PORTAL_URL`) and its expiry instance (`SYMMETRY_SHELL_EXPIRY_URL`) so the
+  two session-expiry cases run instead of skipping
+
+One optional gate field carries the TypeScript-specific evidence:
+
+- `vitest_tests` (with `vitest_files`): exact module-level `it(...)` names. After a passing gate
+  command the runner derives
+  `vitest run --reporter=json --outputFile <gate dir>/vitest-report.json <vitest_files>` in the
+  gate's cwd and environment and parses that structured document instead of printed text. Every
+  named test must appear exactly once with `status: "passed"` and an empty `ancestorTitles` array
+  (so a frozen name binds one top-level declaration), the report's `numTotalTests` must be at
+  least the named-test count, `numFailedTests` must be 0 and `success` must be true; a missing,
+  empty, unparsable, summary-less or failing report fails closed, and a named test reported twice,
+  renamed, or hidden inside a `describe` block is refused. The measured shape is vitest's own JSON
+  reporter document: `numTotalTestSuites`, `numTotalTests`, `numPassedTests`, `numFailedTests`,
+  `success` and `testResults[].assertionResults[]` entries carrying `fullName`, `title`, `status`
+  and `ancestorTitles` (a module-level test has `fullName == title` and no ancestor titles). The
+  gate command itself must run the vitest entry point (`node .../vitest.mjs`), so the derived run
+  reuses the frozen program rather than an arbitrary one.
+
+Host prerequisites for the TypeScript carrier (measured, not assumed): the shared hoisted install
+above, whose provisioning lockfile copy substitutes the unreachable `registry.npmjs.org` host with
+the configured package feed while every package is still verified against the frozen lockfile's
+own integrity value; that tree is not bound by any record - no provisioning log and no digest of it
+was stored, so the integrity statement is asserted rather than re-verifiable by an auditor, and the
+`docs/TODO.md` entry proposes a recorded provisioning step that binds it; a real PostgreSQL instance and a Phoenix dev server started from the run's
+own sealed checkout (ports 4040/4041) with `MIX_DEPS_PATH`/`MIX_BUILD_PATH` outside the checkout;
+Chromium through Playwright's own browser cache; and the pre-staged generated trees. Because the
+seal refuses generated content that appears after it, the task must list both generated trees in
+`allowed_paths` (`frontend/dist/**` and `control/priv/static/portal/**`) and the coordinator stages
+them before the seal; the frozen build gates then reproduce them byte for byte (measured:
+`vite build` plus `stage-assets.mjs` produced the same three-entry tree digest
+`sha256:ca2cd8873b4acd89cef75c3400e95d96eb8070a4c55e15167540d78dd6b4c2e6` on two consecutive runs,
+so the per-gate subject check still holds). The html reporter would write `playwright-report/` into the gate's cwd, which would
+change the sealed revision during the gate; the coordinator exports `PLAYWRIGHT_HTML_OUTPUT_DIR`
+outside the checkout while running `check`, so the repository's own command and test selection
+stay unchanged and the report set lands next to the run as `rendered-report/`. Playwright's
+per-test captures and attachments land under `SYMMETRY_PLAYWRIGHT_OUTPUT` (or the platform temp
+directory by default) and are copied into the run store as `rendered/` after the check.
+
 ## Two-arm class evaluation (0008b)
 
 A class evaluation runs one frozen task under two workflow arms and derives one receipt per arm. The arms are intended to differ only in which configured route does the work; as run, the 0008b mixed arm additionally carries one coordinator-caused reviewer invocation that was discarded and charged as its `failed_attempt` phase (published with an explicit verdict and reason in `0008b-go-bounded-regression-mixed.review-attempts.json`):
@@ -153,6 +219,7 @@ From the repository root:
 python scripts/ci/test-model-routing-evaluation.py
 python scripts/ci/test-model-routing-omp-usage.py
 python scripts/ci/test-model-routing-record-sanitize.py
+python scripts/ci/test-model-routing-source-subject.py
 python scripts/ci/test-linux-v2-source-subject.py
 ```
 
@@ -176,6 +243,7 @@ When capturing argv or output into a published record, render host-specific abso
 Rejection controls may deliberately corrupt a disposable copy of a real run; they are controls, not additional live-model samples.
 Parser regression fixtures establish parser behavior only and never replace the real Go/Elixir work required by the goal.
 The 0008b class evidence is [go-bounded-regression mixed](0008b-go-bounded-regression-mixed.json) and [strong-only](0008b-go-bounded-regression-strong.json), [go-native-ownership-settlement mixed](0008b-go-native-ownership-settlement-mixed.json) and [strong-only](0008b-go-native-ownership-settlement-strong.json), their review records, the [candidate policy record](0008b-policy.json) and the [refusal controls](0008b-controls.json); the narrative closure record is [`docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`](../../evidence/goal-0008b-go-model-routing-2026-11-17.md).
+The 0008d class evidence is [ts-runtime-capability-rows mixed](0008d-a-mixed.json) and [strong-only](0008d-a-strong.json), [ts-command-receipt-truth mixed](0008d-b-mixed.json) and [strong-only](0008d-b-strong.json), their four review records, the [candidate policy record](0008d-candidate-policy.json) with its [human rendering](0008d-candidate-policy.md); the narrative closure record is [`docs/evidence/goal-0008d-typescript-model-routing-2026-11-17.md`](../../evidence/goal-0008d-typescript-model-routing-2026-11-17.md) and the series-closing [`docs/evidence/goal-0008d-series-release-receipt-2026-11-17.md`](../../evidence/goal-0008d-series-release-receipt-2026-11-17.md) binds the letter's Subject and maps every clause of the 0008a acceptance contract to its evidence with the revision each row came from.
 
 ## Explicit local limits
 

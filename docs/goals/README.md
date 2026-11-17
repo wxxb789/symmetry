@@ -57,6 +57,45 @@ Billing and price versions remain unknown, with actual model identities, usage
 and explicit partial-coordinator accounting retained; no routing policy,
 model-family independence, native capability or owner `achieve` is promoted.
 
+Goal [0008d](archive/0008d-typescript-model-routing.md) closed the series with
+the TypeScript carrier and the single 0008 release receipt, and is archived with
+its contract bytes unchanged. The evaluation runner grew the two vitest gate
+fields and the parsed structured-report cross-check in place, with regression
+tests for the report, its fail-closed paths and the manifest's tool-cache
+boundary; no second measurement mechanism was added. Two frozen TypeScript
+classes (`ts-runtime-capability-rows` and `ts-command-receipt-truth`) each ran
+once per arm against identical frozen task and packet bytes, eleven gates per
+arm including the parsed vitest report and the browser suite at both widths, and
+all four arms were accepted with an independent review bound to their attempt
+and evidence digest. Both classes are recorded **strong-only**: the
+capability-rows mixed arm is worse in every token row, in accounted wall time
+and in review effort, and the command-receipt-truth mixed arm, although better
+on output, cached tokens, wall time and review effort at a 4.4x lower estimate,
+is worse in input tokens - so the fixed not-worse precondition fails and the
+asymmetry is published rather than smoothed. The candidate policy record and its
+human rendering, the four receipts, the four review records, the closure record
+and the [series release receipt](../evidence/goal-0008d-series-release-receipt-2026-11-17.md)
+live under
+[`docs/evaluations/model-routing/`](../evaluations/model-routing/README.md) and
+[`docs/evidence/goal-0008d-typescript-model-routing-2026-11-17.md`](../evidence/goal-0008d-typescript-model-routing-2026-11-17.md);
+the series receipt maps all fifteen 0008a clauses to the record that carries each
+one with the revision that row came from, and keeps unmet
+`go-native-ownership-settlement`'s missing accepted arm, incomplete billing in
+every usage-era receipt, the 0008c records' raw host paths and the browser-level
+coverage boundary of the new rows. Billing and price versions remain unknown,
+each class is one sample per arm, and the series result stays **produced and
+awaiting the owner's verdict**: no model signs for the owner, and no routing
+policy is promoted here.
+
+A pre-publication audit then reviewed the published records rather than the tree alone and its
+findings were dispositioned at the cause before this increment was offered for the owner's verdict:
+the release receipt's source-subject row was recomputed from the delivered tree (it had paired the
+delivered runner with a subject computed before that runner's last edit), the refusal-coverage
+statement was replaced by a derived classification pinned by a new suite case, the policy's
+attempt-accounting finding was corrected to the stored gate evidence, and the audit's remaining
+findings - including two it confirmed and could not fix - are listed with their disposition in the
+closure record's *Series-closing repair* section and in the release receipt's unresolved items.
+
 Goal [0008b](archive/0008b-go-model-routing.md) produced its per-class routing
 evidence and is archived with its contract bytes unchanged. Two frozen Go classes
 (`go-bounded-regression` and `go-native-ownership-settlement`) each ran once per
@@ -294,7 +333,7 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 | [0008a](archive/0008a-auditable-acceptance-workflow.md) | Auditable model-independent acceptance workflow |
 | [0008b](archive/0008b-go-model-routing.md) | Archived per-class Go routing evidence; produced and awaiting the owner's verdict |
 | [0008c](archive/0008c-elixir-model-routing.md) | Evidence-based Elixir model routing |
-| [0008d](0008d-typescript-model-routing.md) | TypeScript model routing and the 0008 series release receipt |
+| [0008d](archive/0008d-typescript-model-routing.md) | Archived TypeScript routing evidence and the 0008 series release receipt; produced and awaiting the owner's verdict |
 
 ## Achieve-contract amendments
 

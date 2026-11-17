@@ -1,0 +1,1283 @@
+{
+  "classes": [
+    {
+      "arms": {
+        "mixed": {
+          "acceptance_blockers": [],
+          "accepted": true,
+          "accounting_complete": false,
+          "accounting_incomplete_reasons": [
+            "missing price version in 3 model phase(s)",
+            "no provider-reported cost in 3 model phase(s)"
+          ],
+          "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+          "changed_paths": [
+            "control/priv/static/portal/assets/index-CSSn0BN8.js",
+            "control/priv/static/portal/assets/index-CcD5vOfx.css",
+            "control/priv/static/portal/index.html",
+            "frontend/dist/assets/index-CSSn0BN8.js",
+            "frontend/dist/assets/index-CcD5vOfx.css",
+            "frontend/dist/index.html",
+            "frontend/src/features/runtimes/capability-rows.test.tsx",
+            "frontend/src/features/runtimes/runtimes.tsx"
+          ],
+          "checks": [
+            {
+              "argv": [
+                "node",
+                "../../node_modules/typescript/bin/tsc",
+                "--project",
+                "contracts/tsconfig.json"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-typecheck",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "contracts/scripts/check.mjs"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-generated-drift",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "contracts/scripts/check-effect.mjs"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-effect-drift",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "--test",
+                "contracts/scripts/"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/@typescript/native/bin/tsc",
+                "--noEmit"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-typecheck",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/eslint/bin/eslint.js",
+                ".",
+                "--max-warnings",
+                "0"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-lint",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vitest/vitest.mjs",
+                "run",
+                "src/features/runtimes/capability-rows.test.tsx"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "focused-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": 0,
+              "vitest_tests": [
+                "renders the four served boolean capabilities of an adapter-less runtime as rows",
+                "renders a capability member the record does not carry as Not advertised rather than Not supported",
+                "keeps the adapter facts and operation rows when adapter metadata is served"
+              ]
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vitest/vitest.mjs",
+                "run"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vite/bin/vite.js",
+                "build"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-build",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "scripts/stage-assets.mjs"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-stage-assets",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/@playwright/test/cli.js",
+                "test",
+                "tests/workspace-shell.spec.mjs",
+                "tests/portal-execution-control.spec.mjs"
+              ],
+              "cwd": "browser",
+              "env": {
+                "SYMMETRY_PORTAL_URL": "http://127.0.0.1:4040",
+                "SYMMETRY_SHELL_EXPIRY_URL": "http://127.0.0.1:4041"
+              },
+              "exit_code": 0,
+              "id": "browser-acceptance",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            }
+          ],
+          "content_revision": "uncommitted:sha256:ee4bf9a435e7c77fabcb14364f6144f3e9173419e685490ca17bda44d761916e",
+          "cost_estimated_usd": 0.1725042,
+          "cost_known_estimated_subtotal_usd": 0.1725042,
+          "cost_reported_usd": null,
+          "failed_attempts": [
+            {
+              "estimated_cost_usd": 0.04919609999999999,
+              "limitations": [
+                "unrecognized_record_types",
+                "assistant_usage_fields_missing",
+                "session_init_absent",
+                "price_version_absent",
+                "provider_billing_not_observed"
+              ],
+              "session_ref": "01a1e82d-00e6-7342-b79e-7c8fe77c5049",
+              "tokens": {
+                "cached": 1157248,
+                "input": 26211,
+                "output": 34444
+              },
+              "wall_time_s": 345.634
+            }
+          ],
+          "head": "dacec45034abc667ae65d41e1f778a896ec340c7",
+          "known_token_subtotals": {
+            "cached": 4950400,
+            "input": 178066,
+            "output": 99237
+          },
+          "model_ids": [
+            "deepseek-v4.1-flash-fast"
+          ],
+          "price_versions": [],
+          "prompt_hashes": [
+            "sha256:118eeab0b6a373c8a8b0f844ffa954832fe7471e8b590b17a8930466565db28b",
+            "sha256:22a618e74260fa12fc738e1e6957c24b70dc88f6e1dc84eaabbe81bfd36b2e22",
+            "sha256:518c7d3941d3840832e1c90bfb5cb70ea37f0941e8d795505705b55dced12678",
+            "sha256:92824855ad1a965e99b92f478827d6a9e63dfdc640ddb0f901653817ea31182e",
+            "sha256:aa726d438d5f8f049bbc6b7beedc4cf907db43807387afdd80e0edc2e28a73f6"
+          ],
+          "receipt_ref": "0008d-a-mixed.json",
+          "receipt_sha256": "sha256:3d47521316fe771557572acca210060b61eb3d96aed0acbf16e01ae878a2a613",
+          "repair_count": 0,
+          "review": {
+            "findings": [
+              {
+                "id": "adapter-path-preservation",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "browser-rows-coverage",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "mutation-nonvacuity",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "scope-and-report-integrity",
+                "severity": "info",
+                "status": "resolved"
+              }
+            ],
+            "gate_weakening": false,
+            "open_findings": [],
+            "reviewer_model": "deepseek-v4.1-flash-fast",
+            "session_ref": "01a1e851-cd1c-7239-8620-d3e9f4dadbb4",
+            "verdict": "pass"
+          },
+          "review_time_s": 168.29,
+          "reviewer_model_route": "deepseek-v4.1-flash-fast",
+          "run": "a-mixed",
+          "subject_hash": "sha256:03309e00d13932f9ba1f06344a6f1ef5951ff272f2a757d9262459c3411723db",
+          "tokens": {
+            "cached": 4950400,
+            "input": 178066,
+            "output": 99237
+          },
+          "wall_time_s": 1166.105,
+          "worker_model": "deepseek-v4.1-flash-fast",
+          "workflow": "reuse_existing"
+        },
+        "strong": {
+          "acceptance_blockers": [],
+          "accepted": true,
+          "accounting_complete": false,
+          "accounting_incomplete_reasons": [
+            "missing price version in 3 model phase(s)",
+            "no provider-reported cost in 3 model phase(s)"
+          ],
+          "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+          "changed_paths": [
+            "control/priv/static/portal/assets/index-CECOR9TS.js",
+            "control/priv/static/portal/assets/index-CcD5vOfx.css",
+            "control/priv/static/portal/index.html",
+            "frontend/dist/assets/index-CECOR9TS.js",
+            "frontend/dist/assets/index-CcD5vOfx.css",
+            "frontend/dist/index.html",
+            "frontend/src/features/runtimes/capability-rows.test.tsx",
+            "frontend/src/features/runtimes/runtimes.tsx"
+          ],
+          "checks": [
+            {
+              "argv": [
+                "node",
+                "../../node_modules/typescript/bin/tsc",
+                "--project",
+                "contracts/tsconfig.json"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-typecheck",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "contracts/scripts/check.mjs"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-generated-drift",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "contracts/scripts/check-effect.mjs"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-effect-drift",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "--test",
+                "contracts/scripts/"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/@typescript/native/bin/tsc",
+                "--noEmit"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-typecheck",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/eslint/bin/eslint.js",
+                ".",
+                "--max-warnings",
+                "0"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-lint",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vitest/vitest.mjs",
+                "run",
+                "src/features/runtimes/capability-rows.test.tsx"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "focused-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": 0,
+              "vitest_tests": [
+                "renders the four served boolean capabilities of an adapter-less runtime as rows",
+                "renders a capability member the record does not carry as Not advertised rather than Not supported",
+                "keeps the adapter facts and operation rows when adapter metadata is served"
+              ]
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vitest/vitest.mjs",
+                "run"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vite/bin/vite.js",
+                "build"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-build",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "scripts/stage-assets.mjs"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-stage-assets",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/@playwright/test/cli.js",
+                "test",
+                "tests/workspace-shell.spec.mjs",
+                "tests/portal-execution-control.spec.mjs"
+              ],
+              "cwd": "browser",
+              "env": {
+                "SYMMETRY_PORTAL_URL": "http://127.0.0.1:4040",
+                "SYMMETRY_SHELL_EXPIRY_URL": "http://127.0.0.1:4041"
+              },
+              "exit_code": 0,
+              "id": "browser-acceptance",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            }
+          ],
+          "content_revision": "uncommitted:sha256:dc03503a36310fdeffb9fba32a63291e83b72fb98af1c0611d5a82485610d9f5",
+          "cost_estimated_usd": 0.6868291000000002,
+          "cost_known_estimated_subtotal_usd": 0.6868291000000002,
+          "cost_reported_usd": null,
+          "failed_attempts": [
+            {
+              "estimated_cost_usd": 0.2865996,
+              "limitations": [
+                "unrecognized_record_types",
+                "assistant_usage_fields_missing",
+                "session_init_absent",
+                "price_version_absent",
+                "provider_billing_not_observed"
+              ],
+              "session_ref": "01a1e82d-068b-70d1-8b22-fcc2354ae353",
+              "tokens": {
+                "cached": 597528,
+                "input": 36,
+                "output": 7557
+              },
+              "wall_time_s": 183.234
+            }
+          ],
+          "head": "dacec45034abc667ae65d41e1f778a896ec340c7",
+          "known_token_subtotals": {
+            "cached": 2888136,
+            "input": 101204,
+            "output": 44968
+          },
+          "model_ids": [
+            "deepseek-v4.1-flash-fast",
+            "gpt-6.1-sol"
+          ],
+          "price_versions": [],
+          "prompt_hashes": [
+            "sha256:518c7d3941d3840832e1c90bfb5cb70ea37f0941e8d795505705b55dced12678",
+            "sha256:8c28c9163d134b4c4d67012f0293c00d41e086a8842d1a8b414703c67b3676ed",
+            "sha256:92824855ad1a965e99b92f478827d6a9e63dfdc640ddb0f901653817ea31182e"
+          ],
+          "receipt_ref": "0008d-a-strong.json",
+          "receipt_sha256": "sha256:96dbe59790cac848765a5e1e64e96c1b1741ec6fea55d72903cddd62070b8659",
+          "repair_count": 0,
+          "review": {
+            "findings": [
+              {
+                "id": "browser-coverage-boundary",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "scope-and-protected-paths",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "test-strength-boundaries",
+                "severity": "info",
+                "status": "resolved"
+              }
+            ],
+            "gate_weakening": false,
+            "open_findings": [],
+            "reviewer_model": "deepseek-v4.1-flash-fast",
+            "session_ref": "01a1e856-c826-7641-b862-6a69ef5d9469",
+            "verdict": "pass"
+          },
+          "review_time_s": 127.7,
+          "reviewer_model_route": "deepseek-v4.1-flash-fast",
+          "run": "a-strong",
+          "subject_hash": "sha256:6519aefe65750295973a07e365ae9c41e83f3117bace5626e5f1a0de79a7217e",
+          "tokens": {
+            "cached": 2888136,
+            "input": 101204,
+            "output": 44968
+          },
+          "wall_time_s": 1024.428,
+          "worker_model": "gpt-6.1-sol",
+          "workflow": "reuse_existing"
+        }
+      },
+      "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+      "class": "ts-runtime-capability-rows",
+      "compared_dimensions": [
+        "input tokens",
+        "output tokens",
+        "cached tokens",
+        "accounted wall time",
+        "review effort",
+        "repairs",
+        "failed attempts"
+      ],
+      "criteria": [
+        "promote-lightweight for a class only when the mixed arm's accepted revision passed every frozen gate with its named tests executed, its independent review recorded no open finding and no gate weakening, the strong-only arm was also accepted on the same class (so the comparison exists), and the mixed arm's total accounting (input/output/cached tokens, wall time, review effort, repairs and failed attempts) is not worse than the strong-only arm's.",
+        "strong-only for a class when the mixed arm failed acceptance or was not cheaper by that same accounting, or when the strong-only arm's acceptance is the only accepted result for that class.",
+        "insufficient evidence when either arm's acceptance, review or accounting is incomplete enough that the comparison cannot support a verdict."
+      ],
+      "focused_test_file": "frontend",
+      "risk_class": "established-component-edit",
+      "task_id": "0008d-ts-runtime-capability-rows",
+      "task_sha256": "sha256:7733759022c4c874468f51106bdca6a6176e959a3c7c528dcf706146b394b5cf",
+      "verdict": "strong-only",
+      "verdict_reasons": [
+        "the mixed arm's accounting is worse than the strong-only arm's: input tokens 178066 vs 101204; output tokens 99237 vs 44968; cached tokens 4950400 vs 2888136; accounted wall time 1166.105s vs 1024.428s; review effort 168.29s vs 127.7s"
+      ]
+    },
+    {
+      "arms": {
+        "mixed": {
+          "acceptance_blockers": [],
+          "accepted": true,
+          "accounting_complete": false,
+          "accounting_incomplete_reasons": [
+            "missing price version in 3 model phase(s)",
+            "no provider-reported cost in 3 model phase(s)"
+          ],
+          "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+          "changed_paths": [
+            "control/priv/static/portal/assets/index-CcD5vOfx.css",
+            "control/priv/static/portal/assets/index-DKLiyHmL.js",
+            "control/priv/static/portal/index.html",
+            "frontend/dist/assets/index-CcD5vOfx.css",
+            "frontend/dist/assets/index-DKLiyHmL.js",
+            "frontend/dist/index.html",
+            "frontend/src/services/api.ts",
+            "frontend/src/services/command-receipts.test.ts"
+          ],
+          "checks": [
+            {
+              "argv": [
+                "node",
+                "../../node_modules/typescript/bin/tsc",
+                "--project",
+                "contracts/tsconfig.json"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-typecheck",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "contracts/scripts/check.mjs"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-generated-drift",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "contracts/scripts/check-effect.mjs"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-effect-drift",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "--test",
+                "contracts/scripts/"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/@typescript/native/bin/tsc",
+                "--noEmit"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-typecheck",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/eslint/bin/eslint.js",
+                ".",
+                "--max-warnings",
+                "0"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-lint",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vitest/vitest.mjs",
+                "run",
+                "src/services/command-receipts.test.ts"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "focused-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": 0,
+              "vitest_tests": [
+                "rejects an unreadable command success body instead of returning a placeholder receipt",
+                "forwards an aborted command request as a cancellation rather than a network failure",
+                "keeps a JSON command body its decoded payload and a refusal its own status error"
+              ]
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vitest/vitest.mjs",
+                "run"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vite/bin/vite.js",
+                "build"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-build",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "scripts/stage-assets.mjs"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-stage-assets",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/@playwright/test/cli.js",
+                "test",
+                "tests/workspace-shell.spec.mjs",
+                "tests/portal-execution-control.spec.mjs"
+              ],
+              "cwd": "browser",
+              "env": {
+                "SYMMETRY_PORTAL_URL": "http://127.0.0.1:4040",
+                "SYMMETRY_SHELL_EXPIRY_URL": "http://127.0.0.1:4041"
+              },
+              "exit_code": 0,
+              "id": "browser-acceptance",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            }
+          ],
+          "content_revision": "uncommitted:sha256:0a25c6d8b39c508d16f8ad6ccd3843dc56810caf3c2a8df60ff239c2f98d0cc4",
+          "cost_estimated_usd": 0.2040753,
+          "cost_known_estimated_subtotal_usd": 0.2040753,
+          "cost_reported_usd": null,
+          "failed_attempts": [
+            {
+              "estimated_cost_usd": 0.05204340000000001,
+              "limitations": [
+                "unrecognized_record_types",
+                "assistant_usage_fields_missing",
+                "session_init_absent",
+                "price_version_absent",
+                "provider_billing_not_observed"
+              ],
+              "session_ref": "01a1e82d-11c6-70f4-9899-7aafae2e85d1",
+              "tokens": {
+                "cached": 1461056,
+                "input": 28614,
+                "output": 36216
+              },
+              "wall_time_s": 298.534
+            }
+          ],
+          "head": "dacec45034abc667ae65d41e1f778a896ec340c7",
+          "known_token_subtotals": {
+            "cached": 6968256,
+            "input": 190067,
+            "output": 122546
+          },
+          "model_ids": [
+            "deepseek-v4.1-flash-fast"
+          ],
+          "price_versions": [],
+          "prompt_hashes": [
+            "sha256:7846d7de264bb6491a35de2b44d6dd4c9d22aa469b7807ad1547e3b6f7b76b97",
+            "sha256:d1d2b2dd28a3c2789fabff27b62ac031bcdd4b35dd9f44dc41822bd3de83bce7",
+            "sha256:dc416a4ac32a132489ad73915c65076cdab6d3ed7d59842c2b33e7cd272d638d"
+          ],
+          "receipt_ref": "0008d-b-mixed.json",
+          "receipt_sha256": "sha256:126fa92f747496786281024be30621ba7b05a7f69f398d06835470e0b504e84e",
+          "repair_count": 0,
+          "review": {
+            "findings": [
+              {
+                "id": "browser-coverage-boundary",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "case-3-pins-unchanged-path-on-base",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "named-report-is-executed-not-fabricated",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "revert-and-mutants-fail-named-cases",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "staged-bundle-matches-revision",
+                "severity": "info",
+                "status": "resolved"
+              }
+            ],
+            "gate_weakening": false,
+            "open_findings": [],
+            "reviewer_model": "deepseek-v4.1-flash-fast",
+            "session_ref": "01a1e85b-f7f2-72df-a547-fc18f48f1c10",
+            "verdict": "pass"
+          },
+          "review_time_s": 223.409,
+          "reviewer_model_route": "deepseek-v4.1-flash-fast",
+          "run": "b-mixed",
+          "subject_hash": "sha256:d2c533c19e605f15546714083fbdec0de5e031138390fca0e5c83b8829a3e32a",
+          "tokens": {
+            "cached": 6968256,
+            "input": 190067,
+            "output": 122546
+          },
+          "wall_time_s": 1358.614,
+          "worker_model": "deepseek-v4.1-flash-fast",
+          "workflow": "reuse_existing"
+        },
+        "strong": {
+          "acceptance_blockers": [],
+          "accepted": true,
+          "accounting_complete": false,
+          "accounting_incomplete_reasons": [
+            "missing price version in 3 model phase(s)",
+            "no provider-reported cost in 3 model phase(s)"
+          ],
+          "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+          "changed_paths": [
+            "control/priv/static/portal/assets/index-CcD5vOfx.css",
+            "control/priv/static/portal/assets/index-DMUUAcAe.js",
+            "control/priv/static/portal/index.html",
+            "frontend/dist/assets/index-CcD5vOfx.css",
+            "frontend/dist/assets/index-DMUUAcAe.js",
+            "frontend/dist/index.html",
+            "frontend/src/services/api.ts",
+            "frontend/src/services/command-receipts.test.ts"
+          ],
+          "checks": [
+            {
+              "argv": [
+                "node",
+                "../../node_modules/typescript/bin/tsc",
+                "--project",
+                "contracts/tsconfig.json"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-typecheck",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "contracts/scripts/check.mjs"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-generated-drift",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "contracts/scripts/check-effect.mjs"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-effect-drift",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "--test",
+                "contracts/scripts/"
+              ],
+              "cwd": ".",
+              "env": {},
+              "exit_code": 0,
+              "id": "contracts-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/@typescript/native/bin/tsc",
+                "--noEmit"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-typecheck",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/eslint/bin/eslint.js",
+                ".",
+                "--max-warnings",
+                "0"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-lint",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vitest/vitest.mjs",
+                "run",
+                "src/services/command-receipts.test.ts"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "focused-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": 0,
+              "vitest_tests": [
+                "rejects an unreadable command success body instead of returning a placeholder receipt",
+                "forwards an aborted command request as a cancellation rather than a network failure",
+                "keeps a JSON command body its decoded payload and a refusal its own status error"
+              ]
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vitest/vitest.mjs",
+                "run"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-tests",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/vite/bin/vite.js",
+                "build"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-build",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "scripts/stage-assets.mjs"
+              ],
+              "cwd": "frontend",
+              "env": {},
+              "exit_code": 0,
+              "id": "frontend-stage-assets",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            },
+            {
+              "argv": [
+                "node",
+                "../../../node_modules/@playwright/test/cli.js",
+                "test",
+                "tests/workspace-shell.spec.mjs",
+                "tests/portal-execution-control.spec.mjs"
+              ],
+              "cwd": "browser",
+              "env": {
+                "SYMMETRY_PORTAL_URL": "http://127.0.0.1:4040",
+                "SYMMETRY_SHELL_EXPIRY_URL": "http://127.0.0.1:4041"
+              },
+              "exit_code": 0,
+              "id": "browser-acceptance",
+              "passed": true,
+              "vitest_error": null,
+              "vitest_exit_code": null,
+              "vitest_tests": null
+            }
+          ],
+          "content_revision": "uncommitted:sha256:23ac1dd1d90136f22f76523847a8db2ad569915cb7c810c8c3dac6b354c4fedd",
+          "cost_estimated_usd": 0.8930115000000001,
+          "cost_known_estimated_subtotal_usd": 0.8930115000000001,
+          "cost_reported_usd": null,
+          "failed_attempts": [
+            {
+              "estimated_cost_usd": 0.3749992,
+              "limitations": [
+                "unrecognized_record_types",
+                "assistant_usage_fields_missing",
+                "session_init_absent",
+                "price_version_absent",
+                "provider_billing_not_observed"
+              ],
+              "session_ref": "01a1e82d-1bf2-7740-894f-ab5bc6bc3d92",
+              "tokens": {
+                "cached": 897508,
+                "input": 45,
+                "output": 9684
+              },
+              "wall_time_s": 340.037
+            }
+          ],
+          "head": "dacec45034abc667ae65d41e1f778a896ec340c7",
+          "known_token_subtotals": {
+            "cached": 8876103,
+            "input": 101752,
+            "output": 125689
+          },
+          "model_ids": [
+            "deepseek-v4.1-flash-fast",
+            "gpt-6.1-sol"
+          ],
+          "price_versions": [],
+          "prompt_hashes": [
+            "sha256:c28d56e276a3e5a50ce1d06133fb9bca546836c013c27c3147a88369dc174e0d",
+            "sha256:d1d2b2dd28a3c2789fabff27b62ac031bcdd4b35dd9f44dc41822bd3de83bce7",
+            "sha256:dc416a4ac32a132489ad73915c65076cdab6d3ed7d59842c2b33e7cd272d638d"
+          ],
+          "receipt_ref": "0008d-b-strong.json",
+          "receipt_sha256": "sha256:c6429b48379698df9b5b68b8108e7def57ef63bfc41ea01ddc2ce13de18cb6e3",
+          "repair_count": 0,
+          "review": {
+            "findings": [
+              {
+                "id": "abort-vs-transport",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "browser-coverage-boundary",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "named-test-evidence",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "preserved-contracts",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "receipt-truth",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "review-hygiene",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "scope-sealed-paths",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "utf8-lossy-boundary",
+                "severity": "info",
+                "status": "resolved"
+              },
+              {
+                "id": "vitest-run-caches",
+                "severity": "info",
+                "status": "resolved"
+              }
+            ],
+            "gate_weakening": false,
+            "open_findings": [],
+            "reviewer_model": "deepseek-v4.1-flash-fast",
+            "session_ref": "01a1e861-f89a-772f-940d-b5a1b8057221",
+            "verdict": "pass"
+          },
+          "review_time_s": 462.866,
+          "reviewer_model_route": "deepseek-v4.1-flash-fast",
+          "run": "b-strong",
+          "subject_hash": "sha256:d7dbee102448a942957280980f9d4eea2a70b2afad09fb7c998271b226db9f06",
+          "tokens": {
+            "cached": 8876103,
+            "input": 101752,
+            "output": 125689
+          },
+          "wall_time_s": 1575.81,
+          "worker_model": "gpt-6.1-sol",
+          "workflow": "reuse_existing"
+        }
+      },
+      "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+      "class": "ts-command-receipt-truth",
+      "compared_dimensions": [
+        "input tokens",
+        "output tokens",
+        "cached tokens",
+        "accounted wall time",
+        "review effort",
+        "repairs",
+        "failed attempts"
+      ],
+      "criteria": [
+        "promote-lightweight for a class only when the mixed arm's accepted revision passed every frozen gate with its named tests executed, its independent review recorded no open finding and no gate weakening, the strong-only arm was also accepted on the same class (so the comparison exists), and the mixed arm's total accounting (input/output/cached tokens, wall time, review effort, repairs and failed attempts) is not worse than the strong-only arm's.",
+        "strong-only for a class when the mixed arm failed acceptance or was not cheaper by that same accounting, or when the strong-only arm's acceptance is the only accepted result for that class.",
+        "insufficient evidence when either arm's acceptance, review or accounting is incomplete enough that the comparison cannot support a verdict."
+      ],
+      "focused_test_file": "frontend",
+      "risk_class": "decoder-async-receipt-truth",
+      "task_id": "0008d-ts-command-receipt-truth",
+      "task_sha256": "sha256:480eef71bb356133fb004bd97b30bad67df89b38be1202618e70a20cc8529809",
+      "verdict": "strong-only",
+      "verdict_reasons": [
+        "the mixed arm's accounting is worse than the strong-only arm's: input tokens 190067 vs 101752"
+      ]
+    }
+  ],
+  "criteria": [
+    "promote-lightweight for a class only when the mixed arm's accepted revision passed every frozen gate with its named tests executed, its independent review recorded no open finding and no gate weakening, the strong-only arm was also accepted on the same class (so the comparison exists), and the mixed arm's total accounting (input/output/cached tokens, wall time, review effort, repairs and failed attempts) is not worse than the strong-only arm's.",
+    "strong-only for a class when the mixed arm failed acceptance or was not cheaper by that same accounting, or when the strong-only arm's acceptance is the only accepted result for that class.",
+    "insufficient evidence when either arm's acceptance, review or accounting is incomplete enough that the comparison cannot support a verdict."
+  ],
+  "frozen_classes": {
+    "arms": [
+      "mixed",
+      "strong"
+    ],
+    "classes": [
+      {
+        "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+        "class": "ts-runtime-capability-rows",
+        "task_id": "0008d-ts-runtime-capability-rows",
+        "task_sha256": "sha256:7733759022c4c874468f51106bdca6a6176e959a3c7c528dcf706146b394b5cf"
+      },
+      {
+        "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+        "class": "ts-command-receipt-truth",
+        "task_id": "0008d-ts-command-receipt-truth",
+        "task_sha256": "sha256:480eef71bb356133fb004bd97b30bad67df89b38be1202618e70a20cc8529809"
+      }
+    ],
+    "note": "The class list, both task files and both arm packets were sealed before the first arm started; each class's two arms received byte-identical packet bytes, so the route, not the prompt, is the only difference between arms.",
+    "packets": {
+      "ts-command-receipt-truth": {
+        "note": "byte-identical for both arms of this class",
+        "sha256": "sha256:a16250f404d843cf6f0a2c0571ac29f67da8773761530e99eec0d6d9561a1c50"
+      },
+      "ts-runtime-capability-rows": {
+        "note": "byte-identical for both arms of this class",
+        "sha256": "sha256:261db602625b31fcdd758cff2288d7bceeba076e0f102d2290bb7ef1945ce586"
+      }
+    }
+  },
+  "limitations": [
+    "The class-A task's own protected-path clause referred to control/** while the gates rebuild control/priv/static/portal/**: the first frozen bytes were internally contradictory and were corrected before measurement; the corrected bytes are the sealed ones, the contradiction and its cost are recorded, and no gate was weakened by the correction.",
+    "Class-A arms were checked on four attempts, not one: attempt-0001 was refused by the carrier's own vitest run state, the interrupted attempt-0002 and attempt-0003 by EPERM write denials inside the excluded node_modules/.vite-temp cache directory (attempt-0003 also failed the session-expiry browser case at 1 failed / 25 passed), none of them by the implementations themselves, and only the accepted attempt-0004 is cited as evidence.",
+    "The two implementations inside a class differ in shape (class A: +46/-19 against +19/-1 in runtimes.tsx; class B: +37/-7 against +18/-4 in api.ts) with no requirement that they match, so the comparison is of two accepted solutions of the same contract, not of one solution produced twice.",
+    "Reviewer effort differed sharply between the b-* arms (223.4 s against 462.9 s, nine findings against five), so review cost is part of the measured accounting for this route comparison.",
+    "No variance, no repeated runs and no second reviewer per arm: an independent semantic review exists for each accepted revision exactly once.",
+    "Billing is unknown in provenance terms (no provider-reported cost or price version on these routes), so all cost figures are harness estimates and are labelled as such.",
+    "Nothing in this increment re-measured Go or Elixir work, and no untested TypeScript class is characterised."
+  ],
+  "negative_findings": [
+    {
+      "detail": "Three check attempts were refused before the accepted ones and every charged session is recorded, not hidden: class A's a-mixed arm consumed four check attempts - attempt-0001 lost its checkout source to the vitest run state (`source changed while executing this gate`); the interrupted attempt-0002 was quarantined with its own note (the runner refuses to derive from a partial attempt directory) after its own `frontend-tests` gate failed with `EPERM ... runs/a-mixed/checkout/frontend/node_modules/.vite-temp/vitest.config.ts.timestamp-*.mjs`; attempt-0003 failed the same way in `focused-tests`, `frontend-tests` and `frontend-build` - three write denials inside a tool-cache directory the sealed manifest excludes, with the subject hashes unchanged - and its `browser-acceptance` gate failed the session-expiry case `expired authentication clears private content and recovers the deep link` at `1 failed / 25 passed`; attempt-0004 accepted all eleven gates. The origin of those write denials is not established by any stored artifact (no probe, provisioning or ACL log was kept, and the four accepted check attempts' gate windows do not overlap), and the earlier rendering of this finding attributed attempt-0003 to an 'expiry-server TTL boundary', which the stored gate evidence does not carry; that attribution is corrected here. a-strong, b-mixed and b-strong accepted on their first check attempt. The four first-attempt implementation sessions (the contradictory protected-path clause, described in the closure record) are charged as failed_attempt phases with observed usage.",
+      "kind": "attempt-accounting"
+    },
+    {
+      "detail": "For ts-runtime-capability-rows the mixed arm's harness estimate is 4.0x cheaper (USD 0.1725042 against 0.6868291) yet the mixed arm is worse in input (178,066 against 101,204), output (99,237 against 44,968) and cached tokens (4,950,400 against 2,888,136), in accounted wall time (1,166.1 s against 1,024.4 s) and in review effort (168.3 s against 127.7 s). For ts-command-receipt-truth the mixed arm is better on output (122,546 against 125,689), cached tokens (6,968,256 against 8,876,103), wall time (1,358.6 s against 1,575.8 s) and review effort (223.4 s against 462.9 s) but worse in input (190,067 against 101,752), and its estimate is 4.4x cheaper (USD 0.2040753 against 0.8930115). Both classes therefore fail the fixed promote-lightweight precondition: the criteria's own wording, 'the mixed arm's total accounting (input/output/cached tokens, wall time, review effort, repairs and failed attempts) is not worse than the strong-only arm's'. A cheaper estimate alone is not a promotion, and the asymmetry is published rather than smoothed.",
+      "kind": "not-cheaper-class"
+    },
+    {
+      "detail": "No provider-reported cost and no price version are available on these routes; every receipt records cost_provenance 'estimated' with the harness version, tokens are provider-unreported for cached input, and both receipts set accounting_complete false. Unknown billing is recorded as unknown with token counts, never as zero.",
+      "kind": "cost-provenance"
+    },
+    {
+      "detail": "The new capability rows are proved by the focused component test's three named cases (each verified non-vacuous by the reviewers through mutation and revert in throwaway copies) plus the existing frozen browser case for the runtimes page; no new browser case was added for the two rows, and all four review records carry that boundary as an explicit finding (a-mixed browser-rows-coverage; a-strong, b-mixed and b-strong browser-coverage-boundary). The review records of b-strong add further boundary findings (utf8-lossy-boundary, vitest-run-caches), all resolved as recorded statements.",
+      "kind": "coverage-boundary"
+    },
+    {
+      "detail": "Each class is one sample per arm. Nothing here estimates run-to-run variance, and a single cheaper estimate cannot establish a promotion even where the token rows favour the mixed arm.",
+      "kind": "one-sample"
+    },
+    {
+      "detail": "The isolated checkouts omit the manifests' tool-cache paths (.vite, .vite-temp, .vitest-cache) so the recorded run state cannot be mistaken for source; the package manifests stay bound, and the exclusion is the one documented substitution relative to the frozen manifest. The browser gate's HTML report is redirected out of the checkout and the shared capture directory is cleared before each attempt, both recorded rather than silent.",
+      "kind": "environment-substitution"
+    },
+    {
+      "detail": "No host-specific absolute path ships in any published 0008d record: the four receipts are published as the runner's derived bytes (`accept` re-derives each one byte for byte) and both narrative records name the private store root only as `<store>`. scripts/ci/model-routing-record-sanitize.py --root <store> --check still exits 1 on the records that deliberately keep non-host absolute text, because the tool renders every absolute path and not only host ones: the literal route /portal/runtimes in the a-* receipts' frozen `outcome` claim and in this record's prose, and the already-rendered `path-sha256:` tokens inside the class-A records (`019ba55f...` for the fragment /|| in the a-mixed pair; `e11f3495...`, `810a366d...` and `523fbab2...` for the a-strong pair's quoted contract paths). Re-rendering a receipt would break byte-for-byte re-derivation, so the tokens stay as they are; docs/TODO.md records the correlation aid and this boundary.",
+      "kind": "record-rendering"
+    }
+  ],
+  "schema": "symmetry-model-routing-candidate-policy/v1",
+  "scope_statement": "This policy record covers exactly two TypeScript classes at base commit dacec45034abc667ae65d41e1f778a896ec340c7: ts-runtime-capability-rows (frontend/src/features/runtimes/runtimes.tsx plus its focused test) and ts-command-receipt-truth (frontend/src/services/api.ts plus its focused test), each run twice with identical frozen task and packet bytes, gates, permissions, budgets, evidence shapes and review route. It makes no claim about any other TypeScript surface, about Go work (0008b) or about Elixir work (0008c); it adopts no routing policy by itself, changes no configured route, cap or credential, and is produced and awaiting the owner's verdict.",
+  "status": "produced and awaiting the owner's verdict"
+}

@@ -1,0 +1,155 @@
+{
+  "task_id": "0008d-ts-runtime-capability-rows",
+  "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+  "language": "typescript",
+  "risk_class": "established-component-edit",
+  "workflow": "reuse_existing",
+  "outcome": "The `/portal/runtimes` page must render the adapter-independent capability members the workspace read already serves - `structured_input`, `provider_access`, `interactive` and `supervisory_control` - as readable rows inside the existing 'Advertised capabilities' section of every served runtime card, using the page's existing vocabulary and no new one: a served `true` renders 'Supported', a served `false` renders 'Not supported', and a member the record does not carry renders 'Not advertised' with the existing `unknown` chip tone. The rows must render for a runtime whose `capabilities.adapter` member is absent as well as for one that carries it: an adapter-less runtime keeps its existing 'Adapter record not advertised. This runtime reports no verified capability model, so no operation is claimed.' sentence and gains the four rows below it, because a legacy registration without adapter metadata serves only the boolean subset. A member the record does not carry must never be rendered from a substituted default (in particular, a missing `provider_access` is 'Not advertised', never 'Not supported'), and the rows must be readable without colour alone: each row stays addressable by its member name and the section keeps the heading that labels it. Nothing else changes: the adapter facts and the ten adapter operation rows, the page's empty states, the compatibility-filter copy and the refresh behaviour keep their current behaviour, and no existing test may be modified. Add your new cases in `frontend/src/features/runtimes/capability-rows.test.tsx`; the three cases must be declared at module level, outside any `describe` block, because the frozen named-test acceptance binds the reporter's full test name exactly: 'renders the four served boolean capabilities of an adapter-less runtime as rows', 'renders a capability member the record does not carry as Not advertised rather than Not supported' and 'keeps the adapter facts and operation rows when adapter metadata is served'.",
+  "explanations": [
+    "Explain why the adapter-independent boolean members must render for a runtime whose adapter member is absent, and name the served projection and the frontend type member that carry them.",
+    "Explain how a member the record does not carry is rendered, and why that path cannot produce 'Not supported' for an absent member."
+  ],
+  "allowed_paths": [
+    "frontend/src/features/runtimes/runtimes.tsx",
+    "frontend/dist/**",
+    "frontend/src/features/runtimes/capability-rows.test.tsx",
+    "control/priv/static/portal/**"
+  ],
+  "protected_paths": [
+    "frontend/src/features/runtimes/presentation.ts",
+    "frontend/src/features/runtimes/presentation.test.ts",
+    "frontend/src/features/runtimes/runtimes.test.tsx",
+    "frontend/src/services/api.ts",
+    "frontend/src/app/application.ts",
+    "frontend/src/app/router.tsx",
+    "frontend/src/components/workspace.tsx",
+    "frontend/src/styles.css",
+    "contracts/**",
+    "browser/**",
+    "daemon/**",
+    "control/lib/**",
+    "control/test/**",
+    "control/config/**",
+    "control/mix.exs",
+    "control/mix.lock",
+    "control/priv/repo/**",
+    "control/priv/static/assets/**",
+    "control/assets/**"
+  ],
+  "gates": [
+    {
+      "id": "contracts-typecheck",
+      "cwd": ".",
+      "argv": [
+        "node",
+        "../../node_modules/typescript/bin/tsc",
+        "--project",
+        "contracts/tsconfig.json"
+      ]
+    },
+    {
+      "id": "contracts-generated-drift",
+      "cwd": ".",
+      "argv": [
+        "node",
+        "contracts/scripts/check.mjs"
+      ]
+    },
+    {
+      "id": "contracts-effect-drift",
+      "cwd": ".",
+      "argv": [
+        "node",
+        "contracts/scripts/check-effect.mjs"
+      ]
+    },
+    {
+      "id": "contracts-tests",
+      "cwd": ".",
+      "argv": [
+        "node",
+        "--test",
+        "contracts/scripts/"
+      ]
+    },
+    {
+      "id": "frontend-typecheck",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/@typescript/native/bin/tsc",
+        "--noEmit"
+      ]
+    },
+    {
+      "id": "frontend-lint",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/eslint/bin/eslint.js",
+        ".",
+        "--max-warnings",
+        "0"
+      ]
+    },
+    {
+      "id": "focused-tests",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/vitest/vitest.mjs",
+        "run",
+        "src/features/runtimes/capability-rows.test.tsx"
+      ],
+      "vitest_files": [
+        "src/features/runtimes/capability-rows.test.tsx"
+      ],
+      "vitest_tests": [
+        "renders the four served boolean capabilities of an adapter-less runtime as rows",
+        "renders a capability member the record does not carry as Not advertised rather than Not supported",
+        "keeps the adapter facts and operation rows when adapter metadata is served"
+      ]
+    },
+    {
+      "id": "frontend-tests",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/vitest/vitest.mjs",
+        "run"
+      ]
+    },
+    {
+      "id": "frontend-build",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "../../../node_modules/vite/bin/vite.js",
+        "build"
+      ]
+    },
+    {
+      "id": "frontend-stage-assets",
+      "cwd": "frontend",
+      "argv": [
+        "node",
+        "scripts/stage-assets.mjs"
+      ]
+    },
+    {
+      "id": "browser-acceptance",
+      "cwd": "browser",
+      "argv": [
+        "node",
+        "../../../node_modules/@playwright/test/cli.js",
+        "test",
+        "tests/workspace-shell.spec.mjs",
+        "tests/portal-execution-control.spec.mjs"
+      ],
+      "env": {
+        "SYMMETRY_PORTAL_URL": "http://127.0.0.1:4040",
+        "SYMMETRY_SHELL_EXPIRY_URL": "http://127.0.0.1:4041"
+      }
+    }
+  ]
+}

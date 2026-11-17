@@ -1,0 +1,1037 @@
+{
+  "acceptance_blockers": [],
+  "accepted": true,
+  "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+  "checks": [
+    {
+      "argv": [
+        "node",
+        "../../node_modules/typescript/bin/tsc",
+        "--project",
+        "contracts/tsconfig.json"
+      ],
+      "cwd": ".",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "contracts-typecheck",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "contracts/scripts/check.mjs"
+      ],
+      "cwd": ".",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "contracts-generated-drift",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "contracts/scripts/check-effect.mjs"
+      ],
+      "cwd": ".",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "contracts-effect-drift",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "--test",
+        "contracts/scripts/"
+      ],
+      "cwd": ".",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "contracts-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/@typescript/native/bin/tsc",
+        "--noEmit"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-typecheck",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/eslint/bin/eslint.js",
+        ".",
+        "--max-warnings",
+        "0"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-lint",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/vitest/vitest.mjs",
+        "run",
+        "src/features/runtimes/capability-rows.test.tsx"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "focused-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": 0,
+      "vitest_files": [
+        "src/features/runtimes/capability-rows.test.tsx"
+      ],
+      "vitest_tests": [
+        "renders the four served boolean capabilities of an adapter-less runtime as rows",
+        "renders a capability member the record does not carry as Not advertised rather than Not supported",
+        "keeps the adapter facts and operation rows when adapter metadata is served"
+      ]
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/vitest/vitest.mjs",
+        "run"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-tests",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/vite/bin/vite.js",
+        "build"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-build",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "scripts/stage-assets.mjs"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "frontend-stage-assets",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    },
+    {
+      "argv": [
+        "node",
+        "../../../node_modules/@playwright/test/cli.js",
+        "test",
+        "tests/workspace-shell.spec.mjs",
+        "tests/portal-execution-control.spec.mjs"
+      ],
+      "cwd": "browser",
+      "env": {
+        "SYMMETRY_PORTAL_URL": "http://127.0.0.1:4040",
+        "SYMMETRY_SHELL_EXPIRY_URL": "http://127.0.0.1:4041"
+      },
+      "exit_code": 0,
+      "exunit_error": null,
+      "exunit_exit_code": null,
+      "exunit_files": null,
+      "exunit_tests": null,
+      "go_package": null,
+      "go_tests": null,
+      "id": "browser-acceptance",
+      "passed": true,
+      "timed_out": false,
+      "validator_exit_code": null,
+      "vitest_error": null,
+      "vitest_exit_code": null,
+      "vitest_files": null,
+      "vitest_tests": null
+    }
+  ],
+  "cost": {
+    "accounting_complete": false,
+    "estimated_cost": 0.6868291000000002,
+    "incomplete_reasons": [
+      "missing price version in 3 model phase(s)",
+      "no provider-reported cost in 3 model phase(s)"
+    ],
+    "known_estimated_cost_subtotal": 0.6868291000000002,
+    "known_reported_cost_subtotal": 0,
+    "price_versions": [],
+    "reported_cost": null
+  },
+  "environment": {
+    "git_version": "git version 2.56.0.windows.4",
+    "machine": "AMD64",
+    "measured": {
+      "base_commit": "dacec45034abc667ae65d41e1f778a896ec340c7",
+      "browser_route": "Playwright 1.64.1 desktop-chromium and mobile-chromium against the run's own staged bundle; captures copied into the run store after the check",
+      "control_route": "Phoenix dev server from each run's sealed checkout on 127.0.0.1:4040 plus an expiry instance on 127.0.0.1:4041 (SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2); PostgreSQL 18.6-alpine container on 127.0.0.1:55464, database symmetry_control_dev",
+      "eval_host": "Windows NT 10.0.26300 x64; one host and one execution surface for all four runs",
+      "js_deps_route": "shared hoisted pnpm 12.17.0 install at <store>/runs/node_modules, one level above every run dir, resolved by ancestor node_modules walking; the provisioning lockfile copy substitutes the unreachable npmjs host with the configured feed; integrity values are the frozen lockfile's own",
+      "node_version": "v26.13.1",
+      "toolchain_route": "Elixir 1.20.4 / OTP 29 for the Control server (MIX_DEPS_PATH/MIX_BUILD_PATH outside the checkout); TypeScript and vitest entries pinned to lockfile package paths"
+    },
+    "platform": "win32",
+    "python_version": "3.12.10"
+  },
+  "evidence": {
+    "check_attempt": {
+      "attempt_id": "attempt-0001",
+      "attempt_sha256": "sha256:05a3ebe3c5c999cb97b29b8c35f136bf6a263e133d740d7a2e0d2c23988bb562",
+      "complete": true,
+      "gates": [
+        {
+          "id": "contracts-typecheck",
+          "passed": true,
+          "result_sha256": "sha256:eefe7a90b8383cc0359a2b6932112e6a303914d3b232c993f3db3af796f35186",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "contracts-generated-drift",
+          "passed": true,
+          "result_sha256": "sha256:0cdf3e1b8188b01ce687d61c5e1d0ff091ef25552f0674b82d426ba5945d377d",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:013a777fb714705f416fc034886eee69beccff317ca957f0457ef8581e601898",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "contracts-effect-drift",
+          "passed": true,
+          "result_sha256": "sha256:66ffd66060c19e95c6a84e34491e80223a334b44f331430432f3bdbdddc07dde",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:587a43cfbe35220771676b4c9c023951628583dbe40d5351bbdc959cab36b590",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "contracts-tests",
+          "passed": true,
+          "result_sha256": "sha256:7a868316c19ff17f0cfdb7896b592aed4b5acc3ff2f05e49d8f7636c2a55fe04",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:2f78713ea3a01b899d2e34b970c6cc344645cf056154292a159fdcb985bec9c1",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-typecheck",
+          "passed": true,
+          "result_sha256": "sha256:d601087dd9ae8d3f12e96c123b105ed7c227c8f1d466a99a140a0a52562fcdeb",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-lint",
+          "passed": true,
+          "result_sha256": "sha256:39a0258e861c77b3b9ba2cf019622523a2d3334bf16b496b4f2b1e19ef6cb9aa",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "focused-tests",
+          "passed": true,
+          "result_sha256": "sha256:e0bc89c167fae4cc94b451f277e0c6f7d52a63f483f64b6942dd2a9afc1aa90d",
+          "stderr_sha256": "sha256:64c7543c4f1eb4dd4d3e277c0914ca0ea17121298ff2834076c708d16d108bc8",
+          "stdout_sha256": "sha256:b2ee8b8d54f7cd18f07f41db4963f164797f1418bbf5c05ff80b5f2be0231703",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-tests",
+          "passed": true,
+          "result_sha256": "sha256:ae667397b14ae717d6a633c7f4a1c82dd916eaa37af33ed9fadfb1ab365a73d3",
+          "stderr_sha256": "sha256:a40cb1aeb1259601847cba9267355938ce3a0d7f36c0a5d1a062f11a4a90873c",
+          "stdout_sha256": "sha256:e03ca00ad45224528cec5cd6b3c232e171adb77ae7285a59c26231c241044a0b",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-build",
+          "passed": true,
+          "result_sha256": "sha256:ad7219e6a2adc294ec6ccbfce0d5cbcf2e68e35d886dbd468ff283c5275cdb47",
+          "stderr_sha256": "sha256:351b524197fb492920789369e7f1a271420c757633fbb553b280a181ac4c31a4",
+          "stdout_sha256": "sha256:5f150a78dc4509217b23fbcb229a451cbfd2045c3f0ecbe85bfe1be35c53b26e",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "frontend-stage-assets",
+          "passed": true,
+          "result_sha256": "sha256:d4c819f425f2c3e852c03e2f458ebe984d57b2e7ac0802058e97f18fc4fc2920",
+          "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        },
+        {
+          "id": "browser-acceptance",
+          "passed": true,
+          "result_sha256": "sha256:6843adf6bab4722ea6ed91451a7285952135ae035160beb9d6d2d6b71cbcf91c",
+          "stderr_sha256": "sha256:b7714163fe191a371f3661f76214ec58cc48ff16e42b16677bcc9d92f25ef63c",
+          "stdout_sha256": "sha256:13a3b28ce6550dcd5ac36ab47d583bfd6c01bce3efe4d74e848ccd9ab087c0c5",
+          "validator_exit_code": null,
+          "validator_stderr_sha256": null,
+          "validator_stdout_sha256": null
+        }
+      ],
+      "passed": true,
+      "routes_sha256": "sha256:80c9763b153d22f007deb0cec63fddb0afdd0c018d44117ab02ba9d132c4ef5f",
+      "subject_hash": "sha256:6519aefe65750295973a07e365ae9c41e83f3117bace5626e5f1a0de79a7217e",
+      "task_sha256": "sha256:7733759022c4c874468f51106bdca6a6176e959a3c7c528dcf706146b394b5cf"
+    },
+    "frozen_review_sha256": "sha256:32ac5a284d6a9ba8b152f7e4509d49e335a0d738a04d15147abd1eeea2f0723a",
+    "frozen_routes_sha256": "sha256:80c9763b153d22f007deb0cec63fddb0afdd0c018d44117ab02ba9d132c4ef5f",
+    "frozen_task_sha256": "sha256:7733759022c4c874468f51106bdca6a6176e959a3c7c528dcf706146b394b5cf",
+    "frozen_usage_sha256": "sha256:0fbedc02ec12ad4041bc629d421f22bdb02fc6a38e1e642b401237887aa5d584",
+    "tooling_sources": {
+      "assert-go-test-json.py": "sha256:14e658cab38af077348ff3c74f1786d38eb91b59dfee0f80e805ff51440a2e0a",
+      "linux-v2-source-subject.py": "sha256:18ed26fdc97316ea3361cc05f8ac855836e4da130e2284c826d45c6ae2b5294e",
+      "model-routing-evaluation.py": "sha256:8150471596dee8cf88cedd2778f77b8d20fc37633972dc3d7b59df50cf123ee5"
+    }
+  },
+  "explanations": [
+    "Explain why the adapter-independent boolean members must render for a runtime whose adapter member is absent, and name the served projection and the frontend type member that carry them.",
+    "Explain how a member the record does not carry is rendered, and why that path cannot produce 'Not supported' for an absent member."
+  ],
+  "head": "dacec45034abc667ae65d41e1f778a896ec340c7",
+  "language": "typescript",
+  "later_defects": [],
+  "model_ids": [
+    {
+      "api": "openai-completions",
+      "model": "deepseek-v4.1-flash-fast",
+      "provider": "tencent-litellm"
+    },
+    {
+      "api": "openai-responses",
+      "model": "gpt-6.1-sol",
+      "provider": "ghc"
+    }
+  ],
+  "outcome": "The `/portal/runtimes` page must render the adapter-independent capability members the workspace read already serves - `structured_input`, `provider_access`, `interactive` and `supervisory_control` - as readable rows inside the existing 'Advertised capabilities' section of every served runtime card, using the page's existing vocabulary and no new one: a served `true` renders 'Supported', a served `false` renders 'Not supported', and a member the record does not carry renders 'Not advertised' with the existing `unknown` chip tone. The rows must render for a runtime whose `capabilities.adapter` member is absent as well as for one that carries it: an adapter-less runtime keeps its existing 'Adapter record not advertised. This runtime reports no verified capability model, so no operation is claimed.' sentence and gains the four rows below it, because a legacy registration without adapter metadata serves only the boolean subset. A member the record does not carry must never be rendered from a substituted default (in particular, a missing `provider_access` is 'Not advertised', never 'Not supported'), and the rows must be readable without colour alone: each row stays addressable by its member name and the section keeps the heading that labels it. Nothing else changes: the adapter facts and the ten adapter operation rows, the page's empty states, the compatibility-filter copy and the refresh behaviour keep their current behaviour, and no existing test may be modified. Add your new cases in `frontend/src/features/runtimes/capability-rows.test.tsx`; the three cases must be declared at module level, outside any `describe` block, because the frozen named-test acceptance binds the reporter's full test name exactly: 'renders the four served boolean capabilities of an adapter-less runtime as rows', 'renders a capability member the record does not carry as Not advertised rather than Not supported' and 'keeps the adapter facts and operation rows when adapter metadata is served'.",
+  "phases": [
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "the coordinating primary session is shared across all four runs and the wider working session, so this run has no separable exploration model session; the sealed packet bytes and their digests are the exploration artifact",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "exploration",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.33613120000000013,
+      "known_subtotals": {
+        "assistant_messages": 17,
+        "assistant_messages_with_cost_total": 17,
+        "assistant_messages_with_usage": 17,
+        "cacheRead": {
+          "messages": 17,
+          "sum": 898017
+        },
+        "cacheWrite": {
+          "messages": 17,
+          "sum": 61391
+        },
+        "cached": {
+          "messages": 17,
+          "sum": 959408
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 17,
+            "sum": 0.0898017
+          },
+          "cacheWrite": {
+            "messages": 17,
+            "sum": 0.15347750000000004
+          },
+          "input": {
+            "messages": 17,
+            "sum": 0.00010199999999999997
+          },
+          "output": {
+            "messages": 17,
+            "sum": 0.09275000000000001
+          },
+          "total": {
+            "messages": 17,
+            "sum": 0.33613120000000013
+          }
+        },
+        "input": {
+          "messages": 17,
+          "sum": 51
+        },
+        "output": {
+          "messages": 17,
+          "sum": 9275
+        },
+        "reasoningTokens": {
+          "messages": 14,
+          "sum": 3050
+        },
+        "totalTokens": {
+          "messages": 17,
+          "sum": 968734
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 17,
+        "assistant_messages_with_cost_total": 17,
+        "assistant_messages_with_usage": 17,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-existing-provider",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 62,
+          "message": 77,
+          "model_change": 1,
+          "model_usage": 1,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          }
+        ],
+        "records": 144,
+        "resolved_model_identity": null,
+        "routing_provenance": "modelRoles.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:84c3914b328a96500c69737a0b6693a0ee8751eb6004ad58813c0834bc661b58",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 17,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:518c7d3941d3840832e1c90bfb5cb70ea37f0941e8d795505705b55dced12678"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e833-e544-71a0-b746-9c0dcc2657a6",
+      "stage": "implementation",
+      "tokens": {
+        "cached": 959408,
+        "input": 51,
+        "output": 9275
+      },
+      "wall_time": 380.824
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "the eleven frozen gates are local processes (node, vitest, vite, the contracts checkers, Playwright against the run's own Control server) executed by scripts/ci/model-routing-evaluation.py; no model session participates",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "verification",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 332.67
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.06409830000000001,
+      "known_subtotals": {
+        "assistant_messages": 29,
+        "assistant_messages_with_cost_total": 29,
+        "assistant_messages_with_usage": 29,
+        "cacheRead": {
+          "messages": 29,
+          "sum": 1331200
+        },
+        "cacheWrite": {
+          "messages": 29,
+          "sum": 0
+        },
+        "cached": {
+          "messages": 29,
+          "sum": 1331200
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 29,
+            "sum": 0
+          },
+          "cacheWrite": {
+            "messages": 29,
+            "sum": 0
+          },
+          "input": {
+            "messages": 29,
+            "sum": 0.030335099999999997
+          },
+          "output": {
+            "messages": 29,
+            "sum": 0.03376319999999999
+          },
+          "total": {
+            "messages": 29,
+            "sum": 0.06409830000000001
+          }
+        },
+        "input": {
+          "messages": 29,
+          "sum": 101117
+        },
+        "output": {
+          "messages": 29,
+          "sum": 28136
+        },
+        "reasoningTokens": {
+          "messages": 27,
+          "sum": 17606
+        },
+        "totalTokens": {
+          "messages": 29,
+          "sum": 1460453
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 29,
+        "assistant_messages_with_cost_total": 29,
+        "assistant_messages_with_usage": 29,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-existing-provider",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 54,
+          "message": 81,
+          "model_change": 1,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "tencent-litellm/deepseek-v4.1-flash-fast",
+            "record": 2
+          }
+        ],
+        "records": 139,
+        "resolved_model_identity": null,
+        "routing_provenance": "task.agentModelOverrides.reviewer",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:5f4e54b72f06d614814de0218afeac3fa5d636a237b3c972810213110a162f79",
+        "thinking_level_changes": [
+          {
+            "level": "max",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-completions",
+          "assistant_messages": 29,
+          "model": "deepseek-v4.1-flash-fast",
+          "provider": "tencent-litellm"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:8c28c9163d134b4c4d67012f0293c00d41e086a8842d1a8b414703c67b3676ed"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e856-c826-7641-b862-6a69ef5d9469",
+      "stage": "review",
+      "tokens": {
+        "cached": 1331200,
+        "input": 101117,
+        "output": 28136
+      },
+      "wall_time": 127.7
+    },
+    {
+      "cost_provenance": null,
+      "estimated_cost": null,
+      "model_ids": [],
+      "non_model_reason": "no repair round was run: the first completed implementation attempt was accepted",
+      "price_version": null,
+      "prompt_hashes": [],
+      "reported_cost": null,
+      "session_ref": null,
+      "stage": "repair",
+      "tokens": {
+        "cached": null,
+        "input": null,
+        "output": null
+      },
+      "wall_time": 0
+    },
+    {
+      "cost_provenance": "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof",
+      "estimated_cost": 0.2865996,
+      "known_subtotals": {
+        "assistant_messages": 12,
+        "assistant_messages_with_cost_total": 12,
+        "assistant_messages_with_usage": 12,
+        "cacheRead": {
+          "messages": 12,
+          "sum": 534526
+        },
+        "cacheWrite": {
+          "messages": 12,
+          "sum": 63002
+        },
+        "cached": {
+          "messages": 12,
+          "sum": 597528
+        },
+        "cost": {
+          "cacheRead": {
+            "messages": 12,
+            "sum": 0.05345260000000001
+          },
+          "cacheWrite": {
+            "messages": 12,
+            "sum": 0.157505
+          },
+          "input": {
+            "messages": 12,
+            "sum": 7.199999999999999e-05
+          },
+          "output": {
+            "messages": 12,
+            "sum": 0.07557
+          },
+          "total": {
+            "messages": 12,
+            "sum": 0.2865996
+          }
+        },
+        "input": {
+          "messages": 12,
+          "sum": 36
+        },
+        "output": {
+          "messages": 12,
+          "sum": 7557
+        },
+        "reasoningTokens": {
+          "messages": 10,
+          "sum": 1603
+        },
+        "totalTokens": {
+          "messages": 12,
+          "sum": 605121
+        }
+      },
+      "limitations": [
+        "unrecognized_record_types",
+        "assistant_usage_fields_missing",
+        "session_init_absent",
+        "price_version_absent",
+        "provider_billing_not_observed"
+      ],
+      "metadata": {
+        "accounting_complete": false,
+        "assistant_messages": 12,
+        "assistant_messages_with_cost_total": 12,
+        "assistant_messages_with_usage": 12,
+        "assistant_messages_without_model_identity": 0,
+        "credential_route": "omp-existing-provider",
+        "custom_messages": 0,
+        "entry_types": {
+          "custom": 52,
+          "message": 62,
+          "model_change": 1,
+          "session": 1,
+          "thinking_level_change": 1,
+          "title": 1
+        },
+        "fallback_records": [],
+        "model_changes": [
+          {
+            "model": "ghc/gpt-6.1-sol",
+            "record": 2
+          }
+        ],
+        "records": 118,
+        "resolved_model_identity": null,
+        "routing_provenance": "modelRoles.sol_high",
+        "served_model_differs_from_resolved_model": null,
+        "session_init": null,
+        "session_init_records": 0,
+        "session_records": 1,
+        "session_ref_source": "observed_id",
+        "source_format": "omp-session-jsonl",
+        "source_sha256": "sha256:ca9584775b7e5292d889bef21ae79017a2f9673e30d0ee76a1e253f634f8693f",
+        "thinking_level_changes": [
+          {
+            "level": "high",
+            "record": 3
+          }
+        ],
+        "usage_includes_all_assistant_attempts": false,
+        "user_messages": 1
+      },
+      "model_ids": [
+        {
+          "api": "openai-responses",
+          "assistant_messages": 12,
+          "model": "gpt-6.1-sol",
+          "provider": "ghc"
+        }
+      ],
+      "non_model_reason": null,
+      "price_version": null,
+      "prompt_hashes": [
+        {
+          "index": 0,
+          "kind": "user_message",
+          "sha256": "sha256:92824855ad1a965e99b92f478827d6a9e63dfdc640ddb0f901653817ea31182e"
+        }
+      ],
+      "reported_cost": null,
+      "session_ref": "01a1e82d-068b-70d1-8b22-fcc2354ae353",
+      "stage": "failed_attempt",
+      "tokens": {
+        "cached": 597528,
+        "input": 36,
+        "output": 7557
+      },
+      "wall_time": 183.234
+    }
+  ],
+  "prompt_hashes": [
+    {
+      "kind": "user_message",
+      "sha256": "sha256:518c7d3941d3840832e1c90bfb5cb70ea37f0941e8d795505705b55dced12678"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:8c28c9163d134b4c4d67012f0293c00d41e086a8842d1a8b414703c67b3676ed"
+    },
+    {
+      "kind": "user_message",
+      "sha256": "sha256:92824855ad1a965e99b92f478827d6a9e63dfdc640ddb0f901653817ea31182e"
+    }
+  ],
+  "repair_count": 0,
+  "review": {
+    "check_attempt_id": "attempt-0001",
+    "evidence_sha256": "sha256:32ac5a284d6a9ba8b152f7e4509d49e335a0d738a04d15147abd1eeea2f0723a",
+    "gate_weakening": false,
+    "model_id": "deepseek-v4.1-flash-fast",
+    "routes_sha256": "sha256:80c9763b153d22f007deb0cec63fddb0afdd0c018d44117ab02ba9d132c4ef5f",
+    "session_ref": "01a1e856-c826-7641-b862-6a69ef5d9469",
+    "subject_hash": "sha256:6519aefe65750295973a07e365ae9c41e83f3117bace5626e5f1a0de79a7217e",
+    "verdict": "pass"
+  },
+  "review_time": 127.7,
+  "reviewed_explanations": {
+    "Explain how a member the record does not carry is rendered, and why that path cannot produce 'Not supported' for an absent member.": "Rendering: runtimes.tsx:70-72 calls `booleanCapability(runtime.capabilities[member])` for each of the four members, and presentation.ts:30-33 (`export function booleanCapability(value: boolean | undefined)`) returns the module constant `notAdvertised = { label: \"Not advertised\", tone: \"unknown\" }` when `value === undefined`, otherwise `value ? supported : notSupported`. The guard ordering is what makes the false conclusion unreachable: 'Not supported' is produced only by a literal `false` (tone `failed`), inside the branch that runs after the undefined check, so no input that is absent can yield it. Nothing between the wire and the row synthesises a default: the workspace boundary is a validation filter, not a normalising decoder (contracts/generated/effect/index.ts:1132-1139 wraps RuntimeCapabilities in openObject with each member `S.optionalWith(S.Boolean, { exact: true })`, and openObject is `fromSchema(schema, preserveExcessPropertyOptions)` in contracts/ts/schema-helpers.ts:72), so a member the server omitted stays absent on the decoded object; the server itself serves the stored map verbatim (orchestration.ex:724). Presentation of absence also does not rely on colour alone: the chip renders the existing `unknown` tone as `chip-unknown`, styled dashed (frontend/src/styles.css:214), and the row keeps its member name text and `data-capability` attribute. Executed evidence: named test 'renders a capability member the record does not carry as Not advertised rather than Not supported' serves `capabilities: {}` through the same real fetch/decode/render path and asserts all four rows read 'Not advertised' with class chip-unknown, and that `queryByText(\"Not supported\")` finds nothing inside the section; the stored focused report records it as passed (3/3).",
+    "Explain why the adapter-independent boolean members must render for a runtime whose adapter member is absent, and name the served projection and the frontend type member that carry them.": "A legacy registration declares no adapter, so the adapter facts block and the ten operation rows cannot render any capability truth for it; the only capability data such a runtime serves is the four-boolean subset, and the page's own contract (frontend/src/features/runtimes/runtimes.tsx header: 'Every row renders a served member or an explicit absence label') means omitting them would silently drop served truth and leave an adapter-less card with a bare absence sentence. The open question of what may legally be served is closed on the server: Orchestration.runtime_read_model/1 projects `capabilities: runtime.capabilities` verbatim from the stored Protocol.runtime/1 registration (control/lib/symmetry_control/orchestration.ex:724, reached via runtime_snapshots/0), and valid_runtime_capabilities_schema?path-sha256:e11f3495a68ec262cb2a0d2554d7c7f7117d46607941f61df5118bf85d9f10a8 (orchestration.ex:4140-4173) admits exactly :structured_input, :provider_access, :interactive, :supervisory_control (atom or string keys, boolean values) when the registration carries no adapter metadata, so an adapter-less registration serves only that boolean subset. Served projection: `GET path-sha256:810a366d2c2015260438c1d13f04adadc3a5c9830cd26b878a34d499f5725675`, the runtimes/registered_runtimes snapshot list built by SymmetryControl.Workspaces.ReadModel (control/lib/symmetry_control/workspaces/read_model.ex:40-41) whose per-runtime `capabilities` object is the registered capability map. Frontend type member: `Runtime[\"capabilities\"]`, where `export type Runtime = NonNullable<Workspace[\"runtimes\"]>[number]` (frontend/src/services/api.ts:121) and `RuntimeCapabilities` (contracts/generated/ts/workspace-read.ts:268-275, from contracts/v1/workspace-read.schema.json#path-sha256:523fbab2dec35bee76871b6d3da9e2194517771463763c1936d88db39a821bfc) declares `structured_input?`, `provider_access?`, `interactive?`, `supervisory_control?` as optional booleans; the value arrives through WorkspaceRead.decodeJson (api.ts:560). Executed evidence: named test 'renders the four served boolean capabilities of an adapter-less runtime as rows' serves {structured_input:true, provider_access:false, interactive:true, supervisory_control:false} with no `adapter` member, then asserts the four rows inside the section located as role region named 'Advertised capabilities', keeps the 'Adapter record not advertised...' sentence visible, asserts 4 [data-capability] rows and 0 [data-operation] rows; the stored focused report records it as passed (3/3)."
+  },
+  "reviewer_findings": [
+    {
+      "description": "No real-browser assertion covers the new rows, and none is required by the frozen acceptance: the browser gate argv is the two baseline specs (tests/workspace-shell.spec.mjs, tests/portal-execution-control.spec.mjs), which contain no capability-row selector (grep for 'capabilit' in browser/tests matches only portal-connections specs and the Runtime-visibility empty-state test at tests/portal-execution-control.spec.mjs:293). Stored output shows 26 passed in 2.7m across desktop-chromium and mobile-chromium (checks/attempt-0001/browser-acceptance/stdout.bin), i.e. regression evidence only. The new behaviour and its accessibility claim are carried by the focused jsdom test against the real component and decoder: it locates the section by role 'region' resolved from the h3's aria-labelledby and asserts each member's name text and chip label, so heading association, member addressability and the non-colour label are asserted, though only in jsdom (environment: jsdom, frontend/vitest.config.ts). No defect found; stated as a coverage boundary.",
+      "id": "browser-coverage-boundary",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Scope holds. `git status --porcelain` in the sealed checkout is exactly ` M frontend/src/features/runtimes/runtimes.tsx` plus untracked `frontend/src/features/runtimes/capability-rows.test.tsx`; `git diff HEAD --stat` is 19 insertions/1 deletion in runtimes.tsx alone. No protected path is modified: runtimes.test.tsx, presentation.test.ts, presentation.ts, services/api.ts, styles.css, contracts/**, browser/** and control/lib/** have no worktree diff, and presentation.ts's booleanCapability already exists in the base commit (git show dacec45:frontend/src/features/runtimes/presentation.ts:30-33). The remaining sealed changed paths are the gitignored build outputs (frontend/dist/** and control/priv/static/portal/**), which on disk are byte-identical to each other (cmp) and referenced by both index.html copies; every one of the 11 declared gates recorded subject_hash_before == subject_hash_after == sha256:6519aefe... , so evidence binds the sealed subject and no gate mutated source.",
+      "id": "scope-and-protected-paths",
+      "severity": "info",
+      "status": "resolved"
+    },
+    {
+      "description": "Two assertions the named tests do not make, verified in code instead. (a) Row order: the task requires the four rows below the adapter-absence sentence; production code places the new <ul> after the sentence/operation-block ternary (frontend/src/features/runtimes/runtimes.tsx:71-81) so the order holds, but the tests assert presence only. (b) Row count in the adapter-present case: test 3 asserts each of the four member rows plus exactly 10 [data-operation] rows but not the count of [data-capability]; test 1 does pin that count to 4 for the adapter-less case. Both are test-strength nits, not defects; the focused report shows 3/3 passed (checks/attempt-0001/focused-tests/vitest-report.json).",
+      "id": "test-strength-boundaries",
+      "severity": "info",
+      "status": "resolved"
+    }
+  ],
+  "risk_class": "established-component-edit",
+  "routes": {
+    "reviewer": {
+      "authorization_ref": "0008d reuse_existing: independent review invocation of the existing configured reviewer route; no new profile, credential or spend cap.",
+      "credential_route": "Existing configured tencent-litellm provider route via the openai-completions API, authenticated by the existing harness provider configuration. Route metadata only; no credential value was read.",
+      "model_id": "deepseek-v4.1-flash-fast",
+      "provenance": "Configured reviewer route: task.agentModelOverrides.reviewer -> modelRoles.flash_max (tencent-litellm/deepseek-v4.1-flash-fast:max), invoked as a separate headless OMP session that did not implement the task."
+    },
+    "worker": {
+      "authorization_ref": "0008d reuse_existing: the existing configured strong-route worker invocation used by the 0008b/0008c class evaluations; no new profile, credential or spend cap.",
+      "credential_route": "Existing configured ghc provider route via the openai-responses API, authenticated by the existing harness provider configuration. Route metadata only; no credential value was read.",
+      "model_id": "gpt-6.1-sol",
+      "provenance": "Configured strong route: modelRoles.sol_high (ghc/gpt-6.1-sol:high, thinking high), the configured default strong route value, invoked as a separate headless OMP session through the gdd omp-run launcher in the run's isolated checkout."
+    }
+  },
+  "schema": "symmetry-model-routing-evaluation/v1",
+  "subject": {
+    "base": "dacec45034abc667ae65d41e1f778a896ec340c7",
+    "changed_paths": [
+      {
+        "path": "control/priv/static/portal/assets/index-CECOR9TS.js",
+        "status": "A"
+      },
+      {
+        "path": "control/priv/static/portal/assets/index-CcD5vOfx.css",
+        "status": "A"
+      },
+      {
+        "path": "control/priv/static/portal/index.html",
+        "status": "A"
+      },
+      {
+        "path": "frontend/dist/assets/index-CECOR9TS.js",
+        "status": "A"
+      },
+      {
+        "path": "frontend/dist/assets/index-CcD5vOfx.css",
+        "status": "A"
+      },
+      {
+        "path": "frontend/dist/index.html",
+        "status": "A"
+      },
+      {
+        "path": "frontend/src/features/runtimes/capability-rows.test.tsx",
+        "status": "A"
+      },
+      {
+        "path": "frontend/src/features/runtimes/runtimes.tsx",
+        "status": "M"
+      }
+    ],
+    "content_revision": "uncommitted:sha256:dc03503a36310fdeffb9fba32a63291e83b72fb98af1c0611d5a82485610d9f5",
+    "head": "dacec45034abc667ae65d41e1f778a896ec340c7",
+    "manifest_digest": "sha256:dc03503a36310fdeffb9fba32a63291e83b72fb98af1c0611d5a82485610d9f5",
+    "subject_hash": "sha256:6519aefe65750295973a07e365ae9c41e83f3117bace5626e5f1a0de79a7217e"
+  },
+  "subject_hash": "sha256:6519aefe65750295973a07e365ae9c41e83f3117bace5626e5f1a0de79a7217e",
+  "task_id": "0008d-ts-runtime-capability-rows",
+  "tokens": {
+    "cached": 2888136,
+    "input": 101204,
+    "known_cached_subtotal": 2888136,
+    "known_input_subtotal": 101204,
+    "known_output_subtotal": 44968,
+    "output": 44968
+  },
+  "wall_time": 1024.428,
+  "workflow": "reuse_existing"
+}
