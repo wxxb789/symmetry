@@ -491,3 +491,22 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       `fetchStatus` at click time (`queryClient.getQueryState(key)?.fetchStatus`) or whether a
       user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
       the injected-failure design.
+
+## Release-shell render failures leave no diagnosable evidence
+
+- [ ] The `control` job's step "Render authenticated release shell on desktop and mobile" starts the
+      production release with
+      `PORT=4000 RELEASE_NODE=symmetry_shell "$bin" start > "$RUNNER_TEMP/shell-release.log" 2>&1 &`
+      (and a second one on 4001 for the expiry flow), waits
+      `curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4000/healthz`, and never
+      uploads either log file. On `44045766116` job `control` that wait exhausted with **curl exit 7**
+      (no TCP listener — not a 503, which `--fail` would report as 22), and the run's artifacts contain
+      nothing that says why the release did not boot. The step also runs immediately after the job's
+      `mix test`, `MIX_ENV=test mix compile --warnings-as-errors` and the folded Linux Pi E2E gates all
+      passed, and the `control-release-linux` artifact of that run is byte-comparable in size to the
+      passing run's `44043789372` (main `0220f2a`, same step green 14 minutes earlier), while no file in
+      #46's 52-file delta touches the release's boot path. Upload both `$RUNNER_TEMP/*.log` files as
+      artifacts on failure and echo the tail of `shell-release.log` into the annotation, so the next
+      occurrence is diagnosable instead of inferred; then fix whatever the log shows (candidate
+      mechanisms: an eager Postgres connection in a boot child, or a first-bind window the 30 s retry
+      cannot cover).
