@@ -3627,10 +3627,7 @@ func joinContainmentSupervisorConnectTermination(terminationErr, cancelErr, drai
 }
 
 func terminateAndObserveSupervisorJob(job syscall.Handle) (uint32, error) {
-	if err := terminateJob(job); err != nil {
-		return 0, fmt.Errorf("terminate containment Job: %w", err)
-	}
-	if err := waitForEmptyJob(job, time.Now().Add(containmentCloseDeadline), queryJobActiveProcesses); err != nil {
+	if err := terminateJobAndProveStop(job, time.Now().Add(containmentCloseDeadline)); err != nil {
 		return 0, err
 	}
 	active, err := queryJobActiveProcesses(job)

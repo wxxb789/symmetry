@@ -980,8 +980,12 @@ func TestCloseStopsOwnedChildAfterLeaderExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse child PID %q: %v", line, err)
 	}
-	if exists, details := windowsProcessExists(childPID); !exists {
-		t.Fatalf("owned child %d was not running before leader exit; tasklist output: %q", childPID, details)
+	childIdentity, err := ProcessIdentity(childPID)
+	if err != nil {
+		t.Fatalf("record owned child %d identity: %v", childPID, err)
+	}
+	if running, details := windowsOwnedProcessRunning(childPID, childIdentity); !running {
+		t.Fatalf("owned child %d was not running before leader exit; %s", childPID, details)
 	}
 	if _, err := stdin.Write([]byte{1}); err != nil {
 		t.Fatalf("allow leader exit: %v", err)
@@ -992,30 +996,108 @@ func TestCloseStopsOwnedChildAfterLeaderExit(t *testing.T) {
 	if err := command.Wait(); err != nil {
 		t.Fatalf("wait for leader exit: %v", err)
 	}
-	if exists, details := windowsProcessExists(childPID); !exists {
-		t.Fatalf("owned child %d was not running after leader exit; tasklist output: %q", childPID, details)
+	if running, details := windowsOwnedProcessRunning(childPID, childIdentity); !running {
+		t.Fatalf("owned child %d was not running after leader exit; %s", childPID, details)
 	}
 
 	if err := containment.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 	closed = true
-	if exists, details := windowsProcessExists(childPID); exists {
-		t.Fatalf("owned child %d survived Close(); tasklist output: %q", childPID, details)
+	if running, details := windowsOwnedProcessRunning(childPID, childIdentity); running {
+		t.Fatalf("owned child %d survived Close(); %s", childPID, details)
 	}
 }
 
+// The survived-child observation must bind the process object, not a PID.
+// Windows recycles PIDs, so a same-PID process with another creation time is not
+// the owned child, and a process-list row cannot say whether the recorded
+// process object has stopped. This pins both halves of that observation.
+func TestOwnedChildObservationBindsCreationTimeIdentity(t *testing.T) {
+	child := exec.Command("cmd", "/c", "ping", "-t", "127.0.0.1")
+	if err := ConfigureProcess(child); err != nil {
+		t.Fatalf("ConfigureProcess() error = %v", err)
+	}
+	if err := child.Start(); err != nil {
+		t.Fatalf("start owned child: %v", err)
+	}
+	pid := child.Process.Pid
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	})
+	identity, err := ProcessIdentity(pid)
+	if err != nil {
+		t.Fatalf("record owned child identity: %v", err)
+	}
+	if running, details := windowsOwnedProcessRunning(pid, identity); !running {
+		t.Fatalf("live owned child %d was not observed running: %s", pid, details)
+	}
+	// A recycled PID carries the same number and a new creation time. The
+	// observation must reject it instead of reporting the owned child as alive,
+	// which is what PID-only matching ("tasklist /FI PID eq") cannot do.
+	recycled, err := recycledWindowsIdentity(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running, details := windowsOwnedProcessRunning(pid, recycled); running {
+		t.Fatalf("recycled identity %s was accepted as the live owned child: %s", recycled, details)
+	}
+	if err := child.Process.Kill(); err != nil {
+		t.Fatalf("terminate owned child: %v", err)
+	}
+	if _, err := child.Process.Wait(); err != nil {
+		t.Fatalf("wait for owned child: %v", err)
+	}
+	deadline := time.Now().Add(containmentCloseDeadline)
+	for {
+		running, details := windowsOwnedProcessRunning(pid, identity)
+		if !running {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("terminated owned child %d was still observed running after %s: %s", pid, containmentCloseDeadline, details)
+		}
+		time.Sleep(containmentCloseProbeInterval)
+	}
+}
+
+// recycledWindowsIdentity returns the identity a recycled PID would carry: the
+// same PID with a later creation FILETIME.
+func recycledWindowsIdentity(identity string) (string, error) {
+	kind, rest, ok := strings.Cut(identity, ":")
+	if !ok || kind != "windows" {
+		return "", fmt.Errorf("identity %q is not a Windows process identity", identity)
+	}
+	pid, creation, ok := strings.Cut(rest, ":")
+	if !ok {
+		return "", fmt.Errorf("identity %q has no creation time", identity)
+	}
+	fILETIME, err := strconv.ParseUint(creation, 16, 64)
+	if err != nil {
+		return "", fmt.Errorf("identity %q creation time: %w", identity, err)
+	}
+	return fmt.Sprintf("windows:%s:%016x", pid, fILETIME+1), nil
+}
+
+// restoreJobCalls binds the Job primitives a fake-handle containment drives and
+// restores them afterwards. Such a handle owns no processes, so the stop
+// proof's owned-process sample is empty here; the settlement half of the proof
+// is exercised against a real Job Object by TestCloseStopsOwnedChildAfterLeaderExit.
 func restoreJobCalls(t *testing.T, terminate func(syscall.Handle) error, query func(syscall.Handle) (uint32, error), closeHandle func(syscall.Handle) error) {
 	t.Helper()
 	previousTerminate := terminateJob
 	previousQuery := queryJobActiveProcesses
+	previousProcessIDs := queryJobProcessIDs
 	previousClose := closeJob
 	terminateJob = terminate
 	queryJobActiveProcesses = query
+	queryJobProcessIDs = func(syscall.Handle) ([]ownedJobProcess, error) { return nil, nil }
 	closeJob = closeHandle
 	t.Cleanup(func() {
 		terminateJob = previousTerminate
 		queryJobActiveProcesses = previousQuery
+		queryJobProcessIDs = previousProcessIDs
 		closeJob = previousClose
 	})
 }
@@ -1178,14 +1260,36 @@ func (*blockingContainmentSupervisor) RenewLease(time.Duration, uint64) error {
 	return nil
 }
 
-func windowsProcessExists(pid int) (bool, string) {
-	command := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH")
-	if err := ConfigureProcess(command); err != nil {
-		return false, err.Error()
+// windowsOwnedProcessRunning reports whether the process with the recorded
+// creation-time identity is still running. A process-list row or a bare PID is
+// not that observation: Windows recycles PIDs, so the number alone cannot say
+// whether the owned process is still running, and a listing follows the host's
+// reap timing rather than the process object's termination. The containment
+// close proof is about the process object the Job Object owned, so this
+// observation binds the platform's own creation-time identity and waits on that
+// process object.
+func windowsOwnedProcessRunning(pid int, identity string) (bool, string) {
+	if identity == "" {
+		return false, "no recorded process identity"
 	}
-	output, err := command.Output()
+	handle, err := openProcessForIdentity(pid, syscall.SYNCHRONIZE)
 	if err != nil {
-		return false, err.Error()
+		return false, fmt.Sprintf("the recorded process is no longer openable: %v", err)
 	}
-	return strings.Contains(string(output), fmt.Sprintf("\"%d\"", pid)), string(output)
+	defer syscall.CloseHandle(handle)
+	actual, err := processIdentityFromHandle(pid, handle)
+	if err != nil {
+		return false, fmt.Sprintf("read the creation time of PID %d: %v", pid, err)
+	}
+	if actual != identity {
+		return false, fmt.Sprintf("PID %d now has identity %s instead of the recorded %s", pid, actual, identity)
+	}
+	status, err := syscall.WaitForSingleObject(handle, 0)
+	if err != nil {
+		return false, fmt.Sprintf("wait for the recorded process: %v", err)
+	}
+	if status == syscall.WAIT_OBJECT_0 {
+		return false, fmt.Sprintf("the recorded process object has terminated (wait status 0x%x)", status)
+	}
+	return true, fmt.Sprintf("the recorded process is still running (wait status 0x%x)", status)
 }

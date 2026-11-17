@@ -4270,7 +4270,7 @@ func TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt(t *testing.T) 
 	t.Cleanup(func() {
 		releaseGate()
 		releaseTurnReturn()
-		app.workers.Wait()
+		stopTestDaemon(t, app)
 		_ = store.Close()
 	})
 	session.turnReturnGate = turnReturn
@@ -4282,7 +4282,7 @@ func TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt(t *testing.T) 
 	select {
 	case <-session.turnStarted:
 	case <-time.After(time.Second):
-		t.Fatal("native turn did not start")
+		t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
 	}
 	releaseTurnReturn()
 	select {
@@ -4504,7 +4504,7 @@ func TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability(t *testing
 	select {
 	case <-session.turnStarted:
 	case <-time.After(5 * time.Second):
-		t.Fatal("native Pi provider turn did not start")
+		t.Fatalf("native Pi provider turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
 	}
 	request := session.request
 	if request.ProviderAccess == nil || request.ProviderAccess.Path != "/api/v1/provider-actions" || request.ProviderAccess.Token != controlClient.providerAccess.Token {
@@ -4598,7 +4598,7 @@ func TestGoalAdmissionLeavesProviderAccessNilForNativeHarness(t *testing.T) {
 	select {
 	case <-session.turnStarted:
 	case <-time.After(time.Second):
-		t.Fatal("native turn did not start")
+		t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
 	}
 	if session.request.ProviderAccess != nil {
 		t.Fatalf("native start provider access = %#v, want nil", session.request.ProviderAccess)
@@ -4715,6 +4715,31 @@ func runAdmissionAssignment(t *testing.T, input json.RawMessage) (state.RunJourn
 
 func nativeAdmissionDaemon(t *testing.T, admission protocol.Admission, result protocol.TaskResult, waitGate <-chan struct{}) (*daemon, *state.Store, *fakeNativeGoalSession, *nativeAdmissionControl) {
 	return nativeAdmissionDaemonForHarness(t, admission, result, waitGate, harness.KindCodex, config.RuntimeHarnessCodex, verifiedCodexCapabilities())
+}
+
+// nativeStartFailureDetail reports the failure the daemon has already made
+// durable for this run. A start wait that only says "the turn did not start"
+// cannot distinguish a refused launch from a slow host, while the Store usually
+// holds the product's own reason.
+func nativeStartFailureDetail(store *state.Store, key state.RunKey) string {
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		return "journal unavailable: " + err.Error()
+	}
+	for _, transition := range journal.PendingTransitions {
+		if transition.State != "failed" {
+			continue
+		}
+		var failure map[string]string
+		if err := json.Unmarshal(transition.Payload, &failure); err != nil {
+			return "unreadable failed transition: " + err.Error()
+		}
+		return fmt.Sprintf("recorded stage=%q error=%q", failure["stage"], failure["error"])
+	}
+	if journal.TerminalState != "" {
+		return fmt.Sprintf("journal terminal state=%q verdict=%q", journal.TerminalState, journal.TerminalVerdict)
+	}
+	return fmt.Sprintf("no durable failure recorded (local state=%q, pending transitions=%d)", journal.LocalState, len(journal.PendingTransitions))
 }
 
 func forEachRetainedNativeHarness(t *testing.T, run func(*testing.T, harness.Kind)) {
@@ -5720,7 +5745,7 @@ func TestNativeAdapterStartPublicationLinearizesCancellation(t *testing.T) {
 				default:
 					close(turnRelease)
 				}
-				app.workers.Wait()
+				stopTestDaemon(t, app)
 			})
 
 			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
@@ -5833,14 +5858,14 @@ func TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn(t *testing.T) {
 		default:
 			close(startRelease)
 		}
-		app.workers.Wait()
+		stopTestDaemon(t, app)
 	})
 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
 	case <-startEntered:
 	case <-time.After(time.Second):
-		t.Fatal("native Adapter.Start did not enter")
+		t.Fatalf("native Adapter.Start did not enter: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
 	}
 	now := time.Now().UTC()
 	key := state.RunKey{RunID: "run-1", Generation: 1}

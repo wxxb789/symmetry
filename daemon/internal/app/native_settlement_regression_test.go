@@ -36,7 +36,7 @@ func TestNativeStartCancellationAcrossBlockingPublicationStagesIsAcknowledged(t 
 			var releaseOnce sync.Once
 			t.Cleanup(func() {
 				releaseOnce.Do(func() { close(release) })
-				app.workers.Wait()
+				stopTestDaemon(t, app)
 				_ = store.Close()
 			})
 			switch stage {
@@ -777,7 +777,7 @@ func TestStartTurnObservedTerminalTransfersLeaseToNativeSettlement(t *testing.T)
 			releaseTurn := func() { releaseOnce.Do(func() { close(turnRelease) }) }
 			t.Cleanup(func() {
 				releaseTurn()
-				app.workers.Wait()
+				stopTestDaemon(t, app)
 			})
 
 			key := state.RunKey{RunID: "00000000-0000-4000-8000-000000000100", Generation: 1}

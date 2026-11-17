@@ -151,6 +151,10 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
       green in run 43715830442 and on rerun job 132834151127. Revalidate the close/settle
       window; keep the survived-child assertion.
+      Closed by the identity-bound close/settle proof
+      recorded in the `daemon/internal/platform` flake-class entry below (the second occurrence,
+      run 44055523619 job 133943809688, is classified there); the observation above stays as the
+      record, and only the wider 0008b settlement contract recorded there remains open.
 - [ ] Investigate the load-sensitive omp harness failure
       `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
       `daemon/internal/harness/omp` (`adapter_final_message_test.go:44`,
@@ -328,6 +332,87 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       132834151127; this change makes no claim about it, so this entry stays open. The Linux
       supervisor helper-witness flake
       (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry above.
+      **Windows owned-child — fixed at the cause; verification is CI on the new revision, not a
+      local green.** `TestCloseStopsOwnedChildAfterLeaderExit` failed again in run 44055523619 job
+      133943809688 (push of main `ca1bdad`) with `process_windows_test.go:1004: owned child 7824
+      survived Close(); tasklist output: "\"cmd.exe\",\"7824\",\"Console\",\"2\",\"4,540 K\""`
+      (0.19 s), on a tree whose `daemon-windows` job passed minutes earlier in run 44054200088
+      (PR #48, head `95b9fa1`); the earlier occurrence was run 43720680428 job 132831780245
+      (docs-only diff), green in run 43715830442 and on rerun job 132834151127. Discriminator: the
+      shipped assertion observed `tasklist /FI "PID eq <pid>"` membership, which is neither the
+      owned process's creation-time identity nor its termination state — a same-PID process with a
+      new creation time satisfies it, and a process already dropped from the process snapshot
+      satisfies its negation. On this host (Windows 10.0.26300) the shipped test with the *old*
+      assertion passed while `OpenProcess`+`WaitForSingleObject(0)` on the same PID returned `0x102`
+      (WAIT_TIMEOUT): the child was still running when `Close()` returned success, so the old
+      assertion could not fail for its claimed reason. Cause (product): `jobContainment.Close`
+      published a stop proof built from `JobObjectBasicAccountingInformation.ActiveProcesses == 0`
+      alone, and that accounting reaches zero when the Job starts terminating its members, not when
+      they have stopped. `terminateJobAndProveStop` (`process_windows.go`) now samples the processes
+      the Job owned through `JobObjectBasicProcessIdList`, binds each to `ProcessIdentity`
+      (pid + creation FILETIME), and reports success only after every sampled process object
+      signals within the existing `containmentCloseDeadline`, failing closed otherwise;
+      `terminateAndObserveSupervisorJob` shares that proof, so the supervisor's recovery stop is no
+      longer accounting-only. In the test, `windowsOwnedProcessRunning` binds the same identity and
+      waits on the same process object. Evidence: with the identity-bound assertion and the
+      unpatched product the shipped test failed `owned child 47564 survived Close(); the recorded
+      process is still running (wait status 0x102)`; with the proof in place the shipped test, the
+      whole `internal/platform` package on this host (`go test -count=1 ./internal/platform`,
+      exit 0, 9.5 s) and the new `TestOwnedChildObservationBindsCreationTimeIdentity` pass, and that
+      new test fails `recycled identity windows:<pid>:<creation+1> was accepted as the live owned
+      child` when the observer ignores the creation time (PID-only matching, as shipped). Open: a
+      repeat is now a hard, correctly-attributed failure — `Close() error = owned process <pid>
+      (<identity>) was still running after the containment close deadline` (the product refusing an
+      unproven stop) or the same text from the test's observation — and would mean a process that
+      really outlived its Job rather than a listing or recycled-PID artifact. The wider contract
+      (`docs/evaluations/model-routing/tasks/0008b-go-close-owned-settle.json`) still owns the
+      supervisor protocol's escaped-descendant semantics; this change settles the daemon-side and
+      supervisor-side stop proofs only. The same PID-only membership observation still verifies
+      child liveness in `internal/execution` (`runner_windows_test.go`, its own
+      `windowsProcessExists`); it produced none of today's failures and was not touched here.
+      **Today's other occurrences in run 44055523619 (daemon job 133943809650 / daemon-windows job
+      133943809688; identical tree green in run 44054200088).**
+      `TestPIDFDGroupSupportProbeReleasesProcessHandle` (`process_unix_linux_test.go:60`,
+      `capability probes retained pidfds: before=2 after=1`, 0.00 s) — test-design defect. The
+      assertion counted every pidfd in the process before and after 16 probes, so a baseline pidfd
+      no probe ever created plus an unrelated release during the loop moved the count; the failure
+      text is its own discriminator (a probe that retained handles would show `after > before`).
+      The test now attributes pidfds to this process through `/proc/self/fdinfo` (`Pid:`) and fails
+      only on a pidfd that did not exist before the probes, with an unrelated mid-loop release part
+      of the scenario. Evidence (WSL Linux, go1.27.0, the only Linux available here): with the probe
+      deliberately not releasing its handle the new assertion fails `capability probe retained
+      pidfd 10 for process 430 across 16 probes`; with the retired count assertion and only the
+      unrelated release it failed `before=1 after=0` against the unchanged product. CI verifies this
+      Linux-only test on the new revision.
+      `TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt` (1.84 s),
+      `TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability` (5.16 s) and
+      `TestGoalAdmissionLeavesProviderAccessNilForNativeHarness` (1.09 s) in `internal/app` failed
+      as `native turn did not start` / `native Pi provider turn did not start` — environment,
+      load-bound. Each is a bare 1 s/5 s wall-clock wait for an in-process fake adapter; this is the
+      family 0007b recorded failing only while the host also ran the browser suite, live daemon
+      fixtures and another agent's work and passing alone afterwards
+      (`docs/evidence/goal-0007b-readable-work-views-2026-11-15.md`), and the same tree passed in
+      run 44054200088, where that package took 120.8 s against the 600 s timeout seen here.
+      Resource: hosted-runner CPU/disk for ~230 in-process daemon starts that fsync a journal each
+      — what would make it deterministic is waiting on the product's own state transition instead
+      of host speed, which belongs in the test, not in the product or the job setup; a longer
+      budget is explicitly not the fix, so the waits are unchanged. Instead each of these three
+      waits now reports the durable reason (`nativeStartFailureDetail`), which the CI artifact
+      lacked because those test daemons discard their log. Only CI can judge a repeat.
+      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s` (`panic: test timed out after
+      10m0s`, `running tests: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (8m4s)`) —
+      test-design defect, fixed. These tests built a `daemon` with no background context, so
+      `rootContext` fell back to `context.Background()` and a worker whose terminal transition could
+      not be persisted — here because the test's deferred `store.Close()` runs before `t.Cleanup` —
+      retried forever while the cleanup joined it, killing the package at the go-test timeout with
+      the test's own failure unrecorded. `stopTestDaemon` now performs the daemon's own shutdown
+      ordering (cancel the background context, `stopAll`, then join the workers under the
+      documented 30 s `testHangGuard`) at the eight cleanup joins in this package; no assertion
+      changed. Evidence: with the pre-fix cleanup join and an expired start wait the package
+      reproduced `panic: test timed out after 25s` (bounded demo) with the test's own failure
+      unreported; with the fix the same scenario reports
+      `--- FAIL: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (0.21s)` and the package
+      completes. The Linux supervisor helper-witness flake
 
 - [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
       43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
@@ -336,6 +421,14 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       green on rerun. This is the same loaded-runner family as the Windows `internal/workspace`
       180 s package timeout: decide whether the package needs a longer explicit budget or fewer
       load-sensitive waits, and keep the tests themselves.
+      The second occurrence
+      (`FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s`, run 44055523619 job
+      133943809688) is classified and fixed in the `daemon/internal/platform` flake-class entry
+      below: a test cleanup joined a worker that retried an unpersistable terminal transition
+      forever, so the package died at the go-test timeout instead of failing the test.
+      The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
+      in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
+      wait on the product's own state transition rather than on host speed.
 
 - [ ] Remove or justify the unreferenced CSS rules `.chip-failed` and `.chip-pending` in
       `frontend/src/styles.css:170-171`. A sweep of all 137 class selectors in that file against
