@@ -2,7 +2,7 @@
   "attempts": [
     {
       "discarded": true,
-      "discarded_reason": "Attestations were written in Chinese; the repository artifact language for a published record is English, so this record was not imported as acceptance evidence. A fresh reviewer invocation was made for the same sealed revision.",
+      "discarded_reason": "Attestations were written in Chinese; the coordinator re-issued the reviewer packet for this arm with an explicit English-attestation requirement for published review records (packet `review-boundary-validator-coverage-mixed.md`, lines 102-103, in the coordinator's private packet store; a coordinator convention, not a repository rule; the packet used for this first invocation lacked the requirement), so this record was not imported as acceptance evidence. A fresh reviewer invocation was made for the same sealed revision.",
       "findings": [],
       "gate_weakening": false,
       "reviewed_check_attempt_id": "attempt-0001",
@@ -45,6 +45,6 @@
       "verdict": "pass"
     }
   ],
-  "note": "Independent review records for this arm in the order they were produced. Attempt 1 returned verdict pass with no findings, but its attestations were written in Chinese while the repository artifact language for a published record is English, so it was not imported as acceptance evidence: the run charged it as the failed_attempt phase (session 01a1e601-18e1-77bb-a9c0-bf7ed6a27e37, 0.277918 USD) and a fresh reviewer invocation was made. Attempt 2 is the imported review record bound by the receipt's evidence.frozen_review_sha256 and the policy record's frozen_input_digests.review_sha256. The diffstat and wall seconds are those of the single reviewed revision (attempt-0001), computed from its sealed bytes and the coordinator's recorded check wall; the sealed bytes were re-sealed to reproduce the recorded subject_hash before recording.",
+  "note": "Independent review records for this arm in the order they were produced. Attempt 1 returned verdict pass with no findings, but its attestations were written in Chinese while the reviewer packet the coordinator re-issued for the second invocation carries an explicit English-attestation requirement for published review records (packet `review-boundary-validator-coverage-mixed.md`, lines 102-103, in the coordinator's private packet store; a coordinator convention, not a repository rule; the packet used for the first invocation lacked the requirement), so it was not imported as acceptance evidence: the run charged it as the failed_attempt phase (session 01a1e601-18e1-77bb-a9c0-bf7ed6a27e37, 0.277918 USD) and a fresh reviewer invocation was made. Attempt 2 is the imported review record bound by the receipt's evidence.frozen_review_sha256 and the policy record's frozen_input_digests.review_sha256. The diffstat and wall seconds are those of the single reviewed revision (attempt-0001), computed from its sealed bytes and the coordinator's recorded check wall; the sealed bytes were re-sealed to reproduce the recorded subject_hash before recording.",
   "schema": "symmetry-model-routing-review-attempts/v1"
 }

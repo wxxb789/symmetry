@@ -151,10 +151,14 @@ The mixed total includes the coordinator-caused review redo (0.277918 USD); excl
 arm's accepted work is `0.310666` USD (0.0384198 + 0.2722457, rounded half-up).
 Cache-neutral sensitivity, recomputed from the two receipts by summing only
 `known_subtotals.cost.input.sum` and `known_subtotals.cost.output.sum` per phase (dropping
-cached-token charges): implementation 0.038420 USD versus 0.059908 USD, equal-treatment total
-0.120512 USD versus 0.138090 USD. The mixed arm stays lower, with a margin of 0.017578 USD instead of
-the as-run 0.190526 USD, whose bulk is the strong route's billed cache-read/cache-write against a
-lightweight route that prices cached tokens at zero.
+cached-token charges): implementation 0.038420 USD versus 0.059908 USD; review 0.082092 USD versus
+0.078182 USD, inverting the near-equal as-run review row (mixed 0.272246 USD versus strong 0.276626
+USD, mixed cheaper by 0.004380 USD; cache-neutral strong-only cheaper by 0.003910 USD, mixed/strong
+review ratio 1.050012); equal-treatment total 0.120512 USD versus 0.138090 USD. The mixed arm stays
+lower on the class totals, with a margin of 0.017578 USD instead of the as-run 0.190526 USD, so no
+decision changes; that margin's bulk is the strong route's billed cache-read/cache-write against a
+lightweight route that prices cached tokens at zero, and the as-run review row is itself a
+cache-pricing artifact.
 
 ### `go-native-ownership-settlement`
 
@@ -193,7 +197,7 @@ Windows-only surface and the explicit statement that no claim is made for untest
 TypeScript work.
 
 Artifact digests over the repository's LF line endings: candidate policy
-`sha256:e4eb362a04759a8edc4790fc0984b0b107016252df41677aec9f5e7d75229307`, controls record
+`sha256:d017f59cce90850dede5e1ba480a8d0994e4f9248e701da8225a570a9c975f85`, controls record
 `sha256:19603ee483bd148d80f3a2f657c4e7b0b08c0c0c8a6020a8db9033eed403e883`. The four receipts are
 bound by the policy record's per-arm `receipt_sha256`; the class A review records by
 `evidence.frozen_review_sha256` inside each receipt and by the policy record's
