@@ -21,9 +21,9 @@ revision are in "Rebase onto `main` `ca29a8e`".
 | Repository | `Q:/repos/wt-0007i/symmetry` |
 | Branch | `feat/0007i-portal-cutover` |
 | Base revision | `ca29a8e8150f84a02b5bd88232e65452c09114ea` (`main`, goal 0007g: scoped engineering conversation) |
-| Delivery commit | `cf00b1ded9e2ac1a9fbc4a49d0dbbfeaa12be5c8` on top of `ca29a8e`; every run below on "this revision" ran on the source paths that commit carries. `git diff cf00b1d..HEAD -- ':!docs'` is empty — the commit that carries this file is documentation-only and changes no executed byte — and `node .tmp/0007i-subject-digest.mjs ca29a8e` reprints the digest below on the committed tree |
+| Delivery commit | `c2eb529d743feb53a910abff42bc96b62e2a197b` (the lockfile repair) on top of `cf00b1ded9e2ac1a9fbc4a49d0dbbfeaa12be5c8` (the rebased delivery) on top of `ca29a8e`; every run on "this revision" ran on the source paths that commit carries. `git diff c2eb529..HEAD -- ':!docs'` is empty — the commit that carries this file is documentation-only and changes no executed byte — and `node .tmp/0007i-subject-digest.mjs ca29a8e` reprints the digest below on the committed tree |
 | Changed paths | **58** changed paths outside `docs/**` — `git diff --name-only ca29a8e` lists 63 paths, five of them under `docs/`; 54 present, 4 deleted |
-| Changed-path manifest digest | `sha256:00f8a4a6c9044095aa2069c05b4995906ed852e5353234f7a0c37b9e5e7a945d` — reproduction `node .tmp/0007i-subject-digest.mjs ca29a8e` prints `paths=58 present=54 deleted=4 crlf_folded=0`. The construction is unchanged from the 0007 series procedure (each path hashed, deletions listed as `deleted  <path>`, lines sorted in ordinal byte order, UTF-8 manifest plus trailing newline); editing this receipt or any other `docs/**` file cannot change the value |
+| Changed-path manifest digest | `sha256:09b79cdd37896463e0b5673452d33105abd752f4ac6a17a81bab6961600a53c3` — reproduction `node .tmp/0007i-subject-digest.mjs ca29a8e` prints `paths=58 present=54 deleted=4 crlf_folded=0`. The path set did **not** move with the lockfile repair (`pnpm-lock.yaml` and `frontend/package.json` were both already delivered paths); the digest changed because `pnpm-lock.yaml`'s bytes did (see "CI repair" below). The earlier value for the same path set before that repair was `sha256:00f8a4a6c9044095aa2069c05b4995906ed852e5353234f7a0c37b9e5e7a945d` The construction is unchanged from the 0007 series procedure (each path hashed, deletions listed as `deleted  <path>`, lines sorted in ordinal byte order, UTF-8 manifest plus trailing newline); editing this receipt or any other `docs/**` file cannot change the value |
 | Served SPA document | `control/priv/static/portal/index.html` `sha256:b74ada21f606002ba24ede7736d45d06cc751acdba735211019b08895bd0daca`, assets `index-_tTQ2W1j.css` `sha256:7550bd3984d6e73a9618f11d2c58f0e8c4b7cc595b68d3af4dc41e98c0b6051e` and `index-DzOatb2U.js` `sha256:02973e5dd8e9c31e0cc5979d7b5c64b07cad5389ecc6c3a24a489839dfa9c2f0` (the bundle this revision builds; it differs from the pre-rebase bundle because 0007g's chat surface is part of the frontend now) |
 | Contract bundle | `contracts/v1` 21 schemas / 240 fixtures; `daemon/internal/contracts/schema_bundle.json` regenerated and byte-identical to `main`'s |
 
@@ -161,6 +161,67 @@ All documentation-only, and all recorded because the cutover's own claim
   recorded on, and dropping the `chat-conversation` coverage entry the surviving
   family closes (its fixtures include a run-scoped waiting-decision capture).
 
+### CI repair: the lockfile's tarball-URL provenance (run `44050937524`)
+
+Run `44050937524` failed the `contracts` and `compose` jobs at
+`pnpm install --frozen-lockfile` with `ERR_PNPM_TARBALL_URL_MISMATCH` — `96
+lockfile entries failed verification` — while `main` (`ca29a8e`) passes both jobs.
+
+Cause, measured rather than inferred: the pre-rebase delivery regenerated
+`pnpm-lock.yaml` on this host, whose user-level `~/.npmrc` sets
+`registry=https://packagefeedproxy.microsoft.io/npm/`, and that feed's metadata
+records tarballs at
+`https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/…`.
+The branch's lockfile carried **96** such URLs (`ca29a8e`: 0, `7235708`: 96), the
+CI policy admits the canonical registry host, and every rewritten entry
+therefore failed verification. The delivery's *intended* dependency change is one
+line — `frontend/package.json` adds `"phoenix": "1.8.16"`, the socket client
+`frontend/src/services/realtime.ts:2` imports — and it does require lockfile
+movement, so restoring `main`'s lockfile alone would fail a frozen install as an
+outdated lockfile.
+
+Fix: `main`'s `pnpm-lock.yaml` byte-for-byte plus exactly the entries a pinned
+`12.17.0` install adds for that dependency — the importer
+`phoenix: {specifier: 1.8.16, version: 1.8.16}`, the `packages` entry with
+`integrity: sha512-bNNJkYBn…` and the canonical tarball
+`https://registry.npmjs.org/phoenix/-/phoenix-1.8.16.tgz`, and the `snapshots`
+entry `phoenix@1.8.16: {}` (no transitive entries: the package has no
+dependencies). Diff against `main`'s lockfile: **8 added lines, 0 removed, no
+other entry touched, no reordering**, and `grep -c ms-feed pnpm-lock.yaml` = 0.
+
+One deviation is named rather than silent: `registry.npmjs.org` is **not
+reachable from this host** — `pnpm install --lockfile-only
+--registry=https://registry.npmjs.org/` fails with `received fatal alert:
+HandshakeFailure` fetching `phoenix` metadata — so the canonical URL was not
+re-resolved from npm here. It is npm's fixed pattern for this package
+(`https://registry.npmjs.org/<name>/-/<file>.tgz`), which the 316 pre-existing
+entries of `main`'s lockfile show for every other package, and the recorded
+integrity is the registry's own `dist.integrity` for `phoenix@1.8.16`, which the
+local install already verified (a mirror serves npm's bytes). The arbiter for the
+URL form is CI's own policy check, which is why the proof below is the exact CI
+command with the pinned version.
+
+Proof, measured on this host:
+
+1. **Structural** — every one of the lockfile's **317** `tarball:` URLs is on
+   `https://registry.npmjs.org` and matches that registry's canonical
+   `<name>/-/<file>.tgz` pattern (`ms-feed` and `visualstudio` occurrences: 0),
+   which is the property the policy verifies.
+2. **Freeze** — a `pnpm install --frozen-lockfile` attempt left `pnpm-lock.yaml`
+   byte-identical (`sha256:70a58a1aee1e498054e74c10aa51d92f96d31e4df2eff6490b431af05ff5ff60`
+   before and after) — the property the steer's `--lockfile-only` fallback names.
+3. **The exact CI command cannot complete on this host after the repair, and the
+   reason is egress, not the lockfile**: pnpm now resolves the lockfile's own
+   canonical URLs, so its fresh supply-chain verification fetches
+   `https://registry.npmjs.org` metadata and fails with
+   `ERR_PNPM_RESOLVING_NPM_RESOLVER_NETWORK_ERROR … received fatal alert:
+   HandshakeFailure` (`@exodus/bytes`), the same TLS failure a direct
+   `--registry=https://registry.npmjs.org/` resolve hits. Before the repair the
+   same command returned in 110 ms because the verdict was **cached** for the old
+   lockfile hash — which is how this divergence reached CI in the first place.
+   `main`'s own lockfile is canonical like this one and passes that check in CI,
+   so the local substitute was to run the checks unwrapped (run table).
+
 ### Which revision carries each series clause's evidence
 
 This goal's receipt is also the 0007 series release receipt, so the revision a
@@ -176,6 +237,8 @@ clause's evidence lives on is stated rather than assumed:
 | Owner acceptance | not a series clause this run can satisfy; recorded when the owner's verdict arrives |
 
 ### Re-established evidence on this revision (one pass per suite)
+
+These runs are on the **lockfile-repair revision**: the repair changed only `pnpm-lock.yaml` (the contract, frontend and audit inputs are untouched), and the four contract commands and four frontend commands were re-run after it. Their pnpm-wrapped forms could not run on this host after the repair because pnpm's fresh lockfile verification needs `registry.npmjs.org`, which this host cannot reach — so they were run **unwrapped**: the same commands, binaries and versions `pnpm contracts:check` and `pnpm --filter @symmetry/frontend <script>` invoke, and CI still runs the pnpm forms.
 
 **The browser gate is not in this table** — it was not run on this revision; "Not measured on this revision" below says why and what that leaves open.
 
@@ -199,6 +262,8 @@ below was re-run to make a gate green, and no row hides a red run. `pnpm` is `pn
 | Control compile (test env) | `MIX_ENV=test mix compile --warnings-as-errors` (control) | exit 0 — `Compiling 6 files (.ex)` / `Generated symmetry_control app` |
 | Focused Control tests (this cutover's files + 0007g's chat suite) | `POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55463 POSTGRES_DB=symmetry_control_test mix test test/symmetry_control_web/portal_session_test.exs test/symmetry_control_web/portal_html_test.exs test/symmetry_control_web/portal_realtime_test.exs test/symmetry_control_web/controllers/portal_controller_test.exs test/symmetry_control_web/controllers/chat_controller_test.exs test/symmetry_control/goals/contract_fixture_manifest_test.exs test/symmetry_control/workspaces_read_model_test.exs test/symmetry_control/chat_test.exs` (control) | `Result: 60 passed` in 15.0 s — includes the served-document check against `chat-read`, the realtime channel/token, the SPA document, the login template and 0007g's chat suite. The status was read through a pipe; the ExUnit summary is the evidence |
 | Full Control suite (second invocation; the first was stopped while still progressing and produced no summary) | `POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55463 POSTGRES_DB=symmetry_control_test mix test` (control; MIX_ENV=test, log `.tmp/gates/rebase-control-full2.log`) | **exit 2** (direct capture) — `897/898 passed, 21 skipped`, 621.9 s, **one failure: `test/symmetry_control/integrations/command_test.exs:18` `provider token commands can keep stderr diagnostics out of stdout` → `{:error, {:command_unavailable, "pwsh"}}`**, the pre-existing bare-`pwsh` host limitation `docs/TODO.md` already names. The load-sensitive `GoalsTest` checkout timeout the pre-rebase record carries did **not** reproduce. Totals moved 886→898 because 0007g's chat suite is part of this revision |
+| Contract gate, unwrapped (the four commands `pnpm contracts:check` runs) | `node_modules/.bin/tsc --project contracts/tsconfig.json`; `node --test contracts/scripts/*.test.mjs`; `node contracts/scripts/check.mjs`; `node contracts/scripts/check-effect.mjs` (root) | **exit 0, 0, 0, 0** (direct capture) — `ℹ pass 33 / fail 0`; `Generated contract DTOs are up to date.`; `Validated 21 Draft 7 schemas and 240 fixtures.`; `Effect decoded all 240 raw fixtures; 236 parsed documents reached Schema validation` |
+| Frontend typecheck / lint / test / build, unwrapped | `frontend/node_modules/.bin/tsc --noEmit`; `eslint . --max-warnings 0`; `vitest run`; `vite build` + `node scripts/stage-assets.mjs` (frontend) | **exit 0, 0, 0, 0** and stage 0 (direct capture) — 18 files, **312 passed**; the rebuilt bundle restages to the same `index-DzOatb2U.js` (`sha256:02973e5d…`) |
 | Go build / vet | `go build ./...`, `go vet ./...` (daemon) | exit 0 — no output on either |
 | Go contract fixtures (the daemon's envelope registry) | `go test -count=1 -run TestGoalTransportParsesContractFixtures ./...` (daemon) | `ok github.com/wxxb789/symmetry/daemon/internal/protocol 18.859s`, every other package `no tests to run`; the status was read through a pipe, which is why the failing pre-rebase run above is quoted by its own output rather than by a status |
 | Go contracts package | `go test -count=1 ./internal/contracts/...` (daemon) | `ok github.com/wxxb789/symmetry/daemon/internal/contracts 21.504s` (status read through a pipe; `go test` prints `ok` only on success) |
@@ -206,7 +271,7 @@ below was re-run to make a gate green, and no row hides a red run. `pnpm` is `pn
 | Legacy-route audit's own suite (the same job's second step) | `python scripts/ci/test-no-legacy-routes-audit.py` (root, under Git Bash) | **exit 0** (direct capture) — `Ran 6 tests in 18.132s` / `OK` |
 | Legacy-route audit fence under this session's nested bash | `bash scripts/audit-no-legacy-routes.sh` (root) | exit 2 — the script's own fail-closed check: `pwd -P` resolves the worktree to `/mnt/q/...`, which the Windows `git` cannot resolve, so `git ls-files` fails and the fence refuses to audit a tree it cannot enumerate. A harness path-mapping limit, not a fence or tree defect; the row above is the same command under a real Git Bash |
 | No main line dropped | `git diff origin/main..HEAD -- docs/TODO.md | rg '^-' | rg -v '^---'` (root) | prints nothing (`docs/TODO.md` is main's blob plus this delivery's own section, `+46 −0`) |
-| Subject digest | `node .tmp/0007i-subject-digest.mjs ca29a8e` (root) | `paths=58 present=54 deleted=4 crlf_folded=0`, digest as in "Subject" — recomputed on the committed tree |
+| Subject digest (before and after the lockfile repair) | `node .tmp/0007i-subject-digest.mjs ca29a8e` (root) | `paths=58 present=54 deleted=4 crlf_folded=0` both times; digest `sha256:00f8a4a6…` before and `sha256:09b79cdd37896463e0b5673452d33105abd752f4ac6a17a81bab6961600a53c3` after the `pnpm-lock.yaml` repair — the path set did not move |
 
 ### Not measured on this revision
 
