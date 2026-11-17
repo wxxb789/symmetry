@@ -147,11 +147,12 @@ marker exists by repository convention (no tags, releases or changelog), so
 none was invented. The final matrix and Subject record live in
 [`docs/evidence/goal-0006i-exact-subject-release-acceptance-2026-11-15.md`](../evidence/goal-0006i-exact-subject-release-acceptance-2026-11-15.md).
 Pending predicates that this closure does not claim: the operator must dispatch
-workflow "CI" on `main` at `8ded771` to run the environment-gated
-`linux-native-v2-acceptance` job on the unchanged Subject tree, and operator
-acceptance with the authorized `achieve` (bound to the same subject hash,
-integration outcome and evidence IDs) remains unissued. A model recorded the
-receipt; it did not grant authority or declare the goal achieved.
+workflow "Linux native v2 acceptance"
+(`.github/workflows/linux-native-v2-acceptance.yml`) on `main` at `8ded771` to
+run the environment-gated `linux-native-v2-acceptance` job on the unchanged
+Subject tree, and operator acceptance with the authorized `achieve` (bound to the
+same subject hash, integration outcome and evidence IDs) remains unissued. A model
+recorded the receipt; it did not grant authority or declare the goal achieved.
 
 Goal [0006h](archive/0006h-credentialed-provider-accounting.md) completed its
 owner-scoped 2026-11-14 closure and is archived. Approved provider effects are
