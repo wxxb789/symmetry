@@ -696,27 +696,44 @@ func TestSessionStartSinkFailureNeverSubmitsPrompt(t *testing.T) {
 	}
 }
 
+// TestSinkFailureInvalidatesSuccessfulNativeResult drives a journal sink failure
+// through an otherwise successful native turn. The sink holds its error until the
+// prompt call has observed the response the process already sent: releasing the
+// failure first would tear the session and the process down while that call is
+// still outstanding, which turns the call's own error into a race between its
+// delivered response and the physical exit instead of a verdict about the sink.
 func TestSinkFailureInvalidatesSuccessfulNativeResult(t *testing.T) {
 	text := validTaskText(t)
 	sentinel := errors.New("journal storage unavailable")
+	taskResultDelivered := make(chan struct{}, 1)
+	releaseSinkFailure := make(chan struct{})
 	session, _ := testSession(t, func(request map[string]any) []any {
 		if request["type"] == "prompt" {
 			return terminalFrames(request, text, "completed")
 		}
 		return nil
 	}, harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
-		if event.Kind == harness.EventTaskResult {
-			return sentinel
+		if event.Kind != harness.EventTaskResult {
+			return nil
 		}
-		return nil
+		select {
+		case taskResultDelivered <- struct{}{}:
+		default:
+		}
+		<-releaseSinkFailure
+		return sentinel
 	}), nil)
 	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	_, err := session.Open(ctx)
 	mustSettle(t, "Open", err)
-	if err := session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)}); err != nil && !errors.Is(err, sentinel) {
-		t.Fatal(err)
+	mustSettle(t, "StartTurn", session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)}))
+	select {
+	case <-taskResultDelivered:
+	case <-time.After(testHangGuard):
+		t.Fatal("the sink never received the task result: the scripted turn did not reach its terminal frame")
 	}
+	close(releaseSinkFailure)
 	if err := session.WaitTurn(ctx); !errors.Is(err, sentinel) {
 		t.Fatalf("WaitTurn=%v", err)
 	}
