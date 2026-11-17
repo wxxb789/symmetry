@@ -2548,6 +2548,48 @@
         "read-projection",
         "wrong-type"
       ]
+    },
+    {
+      "id": "chat-read.workspace",
+      "schema": "chat-read",
+      "path": "valid/chat-read.workspace.json",
+      "valid": true,
+      "tags": ["read-projection", "chat-read", "workspace-scope", "nullable"]
+    },
+    {
+      "id": "chat-read.run-waiting-decision",
+      "schema": "chat-read",
+      "path": "valid/chat-read.run-waiting-decision.json",
+      "valid": true,
+      "tags": ["read-projection", "chat-read", "run-scope", "waiting-decision", "command-receipt"]
+    },
+    {
+      "id": "chat-read.paged",
+      "schema": "chat-read",
+      "path": "valid/chat-read.paged.json",
+      "valid": true,
+      "tags": ["read-projection", "chat-read", "project-scope", "pagination"]
+    },
+    {
+      "id": "chat-read.empty",
+      "schema": "chat-read",
+      "path": "valid/chat-read.empty.json",
+      "valid": true,
+      "tags": ["read-projection", "chat-read", "empty"]
+    },
+    {
+      "id": "chat-read.unknown-scope",
+      "schema": "chat-read",
+      "path": "invalid/chat-read.unknown-scope.json",
+      "valid": false,
+      "tags": ["read-projection", "unknown-enum"]
+    },
+    {
+      "id": "chat-read.messages-not-array",
+      "schema": "chat-read",
+      "path": "invalid/chat-read.messages-not-array.json",
+      "valid": false,
+      "tags": ["read-projection", "wrong-type"]
     }
   ]
 }

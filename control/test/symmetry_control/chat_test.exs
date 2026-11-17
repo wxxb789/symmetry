@@ -3,8 +3,9 @@ defmodule SymmetryControl.ChatTest do
 
   alias SymmetryControl.{Chat, Orchestration, Workspaces}
   alias SymmetryControl.Chat.{Action, Message}
-  alias SymmetryControl.Orchestration.{Command, Task}
-  alias SymmetryControl.Workspaces.WorkItem
+  alias SymmetryControl.Orchestration.{Command, Machine, Run, Runtime, Task}
+  alias SymmetryControl.Workspaces.{Project, WorkItem}
+  alias Ecto.Adapters.SQL.Sandbox
 
   test "reading a conversation does not create durable conversation state" do
     assert {:ok, %{messages: [], runs: [], next_before: nil}} =
@@ -58,6 +59,202 @@ defmodule SymmetryControl.ChatTest do
              Chat.post_message(%{params | target_project_id: other_project.id})
 
     assert Repo.aggregate(WorkItem, :count) == 1
+  end
+
+  test "a native-only execution binding admits Chat work through the required native operations" do
+    project = project("NATIVE")
+    now = DateTime.utc_now()
+    runtime = register_native_runtime(now)
+
+    assert {:ok, response, :created} =
+             Chat.post_message(%{
+               scope: "workspace",
+               target_project_id: project.id,
+               intent: "start_work",
+               action_id: "native-start",
+               content: "Implement the native start path",
+               work: %{title: "Native start"}
+             })
+
+    item = Repo.get!(WorkItem, response.work_item_id)
+    task = Repo.get!(Task, item.orchestration_task_id)
+
+    assert task.required_capabilities == %{
+             "adapter" => %{
+               "operations" => %{
+                 "start" => true,
+                 "events" => true,
+                 "cancel" => true,
+                 "pause" => "unsupported"
+               }
+             }
+           }
+
+    assert {:ok, run} = Orchestration.assign_one(now: now)
+    assert run.task_id == task.id
+    assert run.runtime_id == runtime.id
+  end
+
+  test "a registered legacy runtime keeps the supervisory requirement and excludes native runtimes" do
+    project = project("MIXED")
+    now = DateTime.utc_now()
+    register_native_runtime(now)
+    legacy_runtime = register_legacy_runtime(now)
+
+    assert {:ok, response, :created} =
+             Chat.post_message(%{
+               scope: "workspace",
+               target_project_id: project.id,
+               intent: "start_work",
+               action_id: "mixed-start",
+               content: "Implement the legacy start path",
+               work: %{title: "Mixed start"}
+             })
+
+    item = Repo.get!(WorkItem, response.work_item_id)
+    task = Repo.get!(Task, item.orchestration_task_id)
+    assert task.required_capabilities == %{"supervisory_control" => true}
+
+    assert {:ok, run} = Orchestration.assign_one(now: now)
+    assert run.task_id == task.id
+    assert run.runtime_id == legacy_runtime.id
+  end
+
+  test "a native harness kind outside the Chat vocabulary is admitted natively" do
+    project = project("SHARED")
+    now = DateTime.utc_now()
+    # `omo` is native for Orchestration's own admission vocabulary, while the
+    # Chat start used to keep its own four-kind copy of that list. The
+    # derivation asks `Orchestration.native_harness_kind?/1` now, so every
+    # registered runtime of this binding is native and the start is admitted
+    # through the adapter operations.
+    omo = register_native_runtime(now, harness_kind: "omo", runtime_key: "omo-chat")
+    codex = register_native_runtime(now, harness_kind: "codex", runtime_key: "codex-chat")
+    assert Orchestration.native_harness_kind?("omo")
+    refute Orchestration.native_harness_kind?(nil)
+    refute Orchestration.native_harness_kind?("generic")
+
+    assert {:ok, response, :created} =
+             Chat.post_message(%{
+               scope: "workspace",
+               target_project_id: project.id,
+               intent: "start_work",
+               action_id: "shared-vocabulary",
+               content: "Start through the shared native vocabulary",
+               work: %{title: "Shared vocabulary"}
+             })
+
+    item = Repo.get!(WorkItem, response.work_item_id)
+    task = Repo.get!(Task, item.orchestration_task_id)
+
+    assert task.required_capabilities == %{
+             "adapter" => %{
+               "operations" => %{
+                 "start" => true,
+                 "events" => true,
+                 "cancel" => true,
+                 "pause" => "unsupported"
+               }
+             }
+           }
+
+    # The stored requirement is the claimable one. `omo` itself can never claim
+    # a goal-less task — the claim query excludes it — and the native
+    # requirement lets the binding's other native runtime claim it instead of
+    # stranding it behind the legacy supervisory flag no native runtime
+    # advertises.
+    assert {:ok, run} = Orchestration.assign_one(now: now)
+    assert run.task_id == task.id
+    assert run.runtime_id == codex.id
+    refute run.runtime_id == omo.id
+  end
+
+  test "a binding change while the launch waits for the work item lock cannot desynchronise the stored requirement" do
+    # The admission requirement comes from the work item's execution binding, and
+    # the launch reads the work item before it locks it. The derivation must run
+    # inside the launch transaction on the locked row, so this test holds that
+    # row's lock, lets a real launcher reach the lock, changes the binding, and
+    # then asserts the stored requirement describes the row the launch locked.
+    Sandbox.unboxed_run(Repo, fn ->
+      now = DateTime.utc_now()
+      project = project("BIND", %{default_agent_profile: "native-binding"})
+      register_native_runtime(now, agent_profile: "native-binding", runtime_key: "binding-native")
+
+      legacy_runtime =
+        register_legacy_runtime(now,
+          agent_profile: "legacy-binding",
+          runtime_key: "binding-legacy"
+        )
+
+      assert {:ok, item} =
+               Workspaces.create_work_item(project.id, %{
+                 title: "Derive under the lock",
+                 description: "The stored requirement must describe the locked work item.",
+                 agent_profile: "native-binding",
+                 status: "ready",
+                 assignee_type: "agent"
+               })
+
+      # Registered before the risky section: these rows are committed outside the
+      # sandbox so the launcher's own connection can see them, and a later
+      # assertion failure must not leave them behind for the suite's counts.
+      on_exit(fn -> purge_binding_race_fixture(project.key) end)
+
+      parent = self()
+
+      # The launcher runs outside this test's sandbox transaction on its own
+      # connection: the row locks have to be real for the launch to wait on one.
+      launcher =
+        Elixir.Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+            send(parent, {:launcher_backend, backend})
+
+            Chat.post_message(%{
+              scope: "workspace",
+              target_project_id: project.id,
+              work_item_id: item.id,
+              generation: 0,
+              intent: "start_work",
+              action_id: "binding-lock",
+              content: "Start after the binding changed"
+            })
+          end)
+        end)
+
+      assert_receive {:launcher_backend, launcher_backend}, 15_000
+
+      assert {:ok, _} =
+               Repo.transaction(fn ->
+                 [[locker_backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+
+                 assert Repo.one!(
+                          from work_item in WorkItem,
+                            where: work_item.id == ^item.id,
+                            lock: "FOR UPDATE"
+                        )
+
+                 # The launcher has read the work item, and is now waiting for
+                 # this lock: the row it will lock is the legacy binding.
+                 assert_launch_waiting_on_work_item(launcher_backend, locker_backend)
+
+                 Repo.get!(WorkItem, item.id)
+                 |> WorkItem.changeset(%{agent_profile: "legacy-binding"})
+                 |> Repo.update!()
+               end)
+
+      assert {:ok, response, :created} = Elixir.Task.await(launcher, 30_000)
+      launched_item = Repo.get!(WorkItem, response.work_item_id)
+      task = Repo.get!(Task, launched_item.orchestration_task_id)
+
+      assert launched_item.agent_profile == "legacy-binding"
+      assert task.agent_profile == "legacy-binding"
+      assert task.required_capabilities == %{"supervisory_control" => true}
+
+      assert {:ok, run} = Orchestration.assign_one(now: now)
+      assert run.task_id == task.id
+      assert run.runtime_id == legacy_runtime.id
+    end)
   end
 
   test "an invalid work request leaves no partial work or conversation records" do
@@ -716,14 +913,89 @@ defmodule SymmetryControl.ChatTest do
              Chat.conversation(%{scope: "workspace", before: "invalid"})
   end
 
-  defp project(key) do
+  # Bounded wait on observable server state, never a sleep: the launcher is
+  # blocked on the locker's `work_items` row lock when PostgreSQL reports an
+  # ungranted lock for the launcher's own backend, names the locker in
+  # `pg_blocking_pids/1`, and shows that blocker holding a lock on `work_items`.
+  # (The launcher's statement text is not usable evidence here:
+  # `pg_stat_activity.query` truncates the long column list before the table.)
+  defp assert_launch_waiting_on_work_item(backend, blocker, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 10_000
+
+    [[waiting?]] =
+      Repo.query!(
+        """
+        SELECT EXISTS (
+                 SELECT 1 FROM pg_locks
+                 WHERE pid = $1 AND NOT granted
+               )
+               AND EXISTS (
+                 SELECT 1 FROM pg_locks held
+                 WHERE held.pid = $2 AND held.granted AND held.relation = 'work_items'::regclass
+               )
+               AND $2::integer = ANY(pg_blocking_pids($1))
+        """,
+        [backend, blocker]
+      ).rows
+
+    if waiting? do
+      :ok
+    else
+      assert System.monotonic_time(:millisecond) < deadline,
+             "the launch never waited for the locked WorkItem"
+
+      assert_launch_waiting_on_work_item(backend, blocker, deadline)
+    end
+  end
+
+  # Removes the committed rows the lock-race fixture writes outside the sandbox.
+  # Keyed by identity, so it deletes exactly this fixture whether the test
+  # reached its assertions or failed before them.
+  defp purge_binding_race_fixture(project_key) do
+    Sandbox.unboxed_run(Repo, fn ->
+      project = Repo.one(from project in Project, where: project.key == ^project_key)
+
+      items =
+        if project,
+          do: Repo.all(from item in WorkItem, where: item.project_id == ^project.id),
+          else: []
+
+      item_ids = Enum.map(items, & &1.id)
+      task_ids = items |> Enum.map(& &1.orchestration_task_id) |> Enum.filter(&is_binary/1)
+      project_ids = if project, do: [project.id], else: []
+
+      Repo.delete_all(from action in Action, where: action.action_id == "binding-lock")
+      Repo.delete_all(from message in Message, where: message.work_item_id in ^item_ids)
+      Repo.delete_all(from run in Run, where: run.task_id in ^task_ids)
+      Repo.delete_all(from task in Task, where: task.id in ^task_ids)
+      Repo.delete_all(from item in WorkItem, where: item.project_id in ^project_ids)
+      Repo.delete_all(from project_row in Project, where: project_row.id in ^project_ids)
+
+      Repo.delete_all(
+        from machine in Machine,
+          where:
+            machine.id in subquery(
+              from runtime in Runtime,
+                where: runtime.runtime_key in ^["binding-native", "binding-legacy"],
+                select: runtime.machine_id
+            )
+      )
+    end)
+  end
+
+  defp project(key, attrs \\ %{}) do
     assert {:ok, project} =
-             Workspaces.create_project(%{
-               name: "Project #{key}",
-               key: key,
-               default_agent_profile: "codex",
-               default_workspace: "primary"
-             })
+             Workspaces.create_project(
+               Map.merge(
+                 %{
+                   name: "Project #{key}",
+                   key: key,
+                   default_agent_profile: "codex",
+                   default_workspace: "primary"
+                 },
+                 attrs
+               )
+             )
 
     project
   end
@@ -806,6 +1078,105 @@ defmodule SymmetryControl.ChatTest do
              )
 
     {project, item, run, fence, now}
+  end
+
+  defp register_native_runtime(now, opts \\ []) do
+    kind = Keyword.get(opts, :harness_kind, "codex")
+    runtime_key = Keyword.get(opts, :runtime_key, "native-chat")
+    agent_profile = Keyword.get(opts, :agent_profile, "codex")
+    %{machine: machine} = enroll_machine("Native runtime #{runtime_key}", now)
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(
+               machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: runtime_key,
+                   name: "Native runtime #{runtime_key}",
+                   capacity: 1,
+                   agent_profile: agent_profile,
+                   workspace: "primary",
+                   harness_kind: kind,
+                   harness_version: "0.153.4",
+                   adapter_version: "symmetry-#{kind}-1",
+                   adapter_protocol_version: 1,
+                   capabilities: native_runtime_capabilities(kind),
+                   heartbeat_interval_ms: 60_000
+                 }
+               ],
+               now: now
+             )
+
+    runtime
+  end
+
+  defp native_runtime_capabilities(kind) do
+    %{
+      "interactive" => false,
+      "adapter" => %{
+        "kind" => kind,
+        "native_version" => "0.153.4",
+        "implementation_version" => "symmetry-#{kind}-1",
+        "protocol_version" => 1,
+        "operations" => %{
+          "start" => true,
+          "events" => true,
+          "cancel" => true,
+          "resume" => false,
+          "handoff" => false,
+          "guidance" => "next_turn",
+          "pause" => "unsupported",
+          "approval_response" => false,
+          "usage" => "reported",
+          "hard_cost_limit" => false
+        }
+      }
+    }
+  end
+
+  defp register_legacy_runtime(now, opts \\ []) do
+    runtime_key = Keyword.get(opts, :runtime_key, "legacy-chat")
+    agent_profile = Keyword.get(opts, :agent_profile, "codex")
+    %{machine: machine} = enroll_machine("Legacy runtime #{runtime_key}", now)
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(
+               machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: runtime_key,
+                   name: "Legacy runtime #{runtime_key}",
+                   capacity: 1,
+                   agent_profile: agent_profile,
+                   workspace: "primary",
+                   capabilities: %{
+                     "supervisory_control" => true,
+                     "structured_input" => true,
+                     "interactive" => true
+                   }
+                 }
+               ],
+               now: now
+             )
+
+    runtime
+  end
+
+  defp enroll_machine(name, now) do
+    key = Ecto.UUID.generate()
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(
+               %{name: name, machine_token: "token-#{key}"},
+               key,
+               enrollment_token: "enroll",
+               expected_enrollment_token: "enroll",
+               now: now
+             )
+
+    enrolled
   end
 
   defp append_event(run, fence, now, kind, payload, sequence) do

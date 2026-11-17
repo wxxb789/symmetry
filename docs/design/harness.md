@@ -273,8 +273,26 @@ this design. A container on macOS can run the Linux deployment as today.
 ## Existing chat compatibility
 
 The current Chat start path requires generic supervisory_control. Replace that
-blanket requirement for native admissions with required start/events/result
+blanket requirement for native admissions with required start/events/cancel
 capabilities and operation-specific checks. Preserve the legacy generic path.
 Show next-turn guidance separately from native steering, and hide or explain
 unavailable run-pause controls. Scheduling a goal pause does not require native
 pause. Existing chat intent and command acknowledgement tests must remain valid.
+
+Amendment (2026-11-17, scoped engineering chat). The operation list above is
+corrected in place, not silently reinterpreted: the fixed adapter-operation
+vocabulary has no `result` member, so no native admission can require one. The
+evidence is the contract and both producers of it — `contracts/v1/common.schema.json`
+declares `AdapterOperations` with `additionalProperties: false` and no `result`
+member, `daemon/internal/harness/types.go` defines no result capability, and
+`daemon/internal/app/app.go` admits exactly `start`/`events`/`cancel` at launch —
+while the terminal result already travels on the `events` stream this sentence
+requires. The smallest amendment is therefore that the admission requirement is
+`start` + `events` + `cancel` with `pause: "unsupported"`, which is exactly the
+map Control's pre-existing native Goal admission requires
+(`Orchestration.native_goal_adapter_requirement/0`), so Chat admission and Goal
+admission now demand one vocabulary. Adding a `result` operation instead would
+duplicate `events` in every adapter record and needs its own contract change.
+`docs/evidence/goal-0007g-scoped-engineering-chat-2026-11-17.md` records the
+conflict, this amendment and the fact that no test can observe a `result`
+operation, because no contract or daemon surface can produce one.

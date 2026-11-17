@@ -502,7 +502,7 @@ defmodule SymmetryControl.Workspaces do
        when is_binary(task_id) do
     case Orchestration.task_snapshot(task_id) do
       {:ok, task} ->
-        required = Keyword.get(opts, :required_capabilities, %{})
+        required = required_capabilities_for(work_item, opts)
 
         unless is_map(required) and
                  Enum.all?(required, fn {key, value} ->
@@ -528,7 +528,7 @@ defmodule SymmetryControl.Workspaces do
     workspace = present(work_item.workspace) || project.default_workspace
 
     attrs = execution_attrs(work_item, agent_profile, workspace)
-    required = Keyword.get(opts, :required_capabilities, %{})
+    required = required_capabilities_for(work_item, opts)
     unless is_map(required), do: Repo.rollback(:invalid_request)
     attrs = Map.update!(attrs, :required_capabilities, &Map.merge(required, &1))
 
@@ -553,6 +553,20 @@ defmodule SymmetryControl.Workspaces do
 
       {:error, reason} ->
         Repo.rollback(reason)
+    end
+  end
+
+  # `required_capabilities` is a map, or a one-argument function of the locked
+  # work item returning one. The function form is evaluated by the launch
+  # transaction, after `lock_work_item_with_project/1`, so a requirement derived
+  # from the work item's execution binding reads the row the launch commits
+  # against: a concurrent profile, project or runtime-registry change between an
+  # earlier read and the lock cannot make the stored requirement disagree with
+  # the locked row it came from.
+  defp required_capabilities_for(work_item, opts) do
+    case Keyword.get(opts, :required_capabilities, %{}) do
+      derive when is_function(derive, 1) -> derive.(work_item)
+      required -> required
     end
   end
 

@@ -10,7 +10,7 @@ defmodule SymmetryControl.Chat do
 
   alias SymmetryControl.Chat.{Action, Message, ReadModel}
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Notifier, Run, Scheduler, Task}
+  alias SymmetryControl.Orchestration.{Notifier, Run, Runtime, Scheduler, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
@@ -181,7 +181,7 @@ defmodule SymmetryControl.Chat do
       end
 
     case Workspaces.launch_work_item(work_item.id, params["action_id"],
-           required_capabilities: %{"supervisory_control" => true},
+           required_capabilities: &start_admission_requirement/1,
            notify: false
          ) do
       {:ok, snapshot, _disposition} ->
@@ -237,6 +237,55 @@ defmodule SymmetryControl.Chat do
 
       {:error, reason} ->
         Repo.rollback(reason)
+    end
+  end
+
+  # A Chat start launches a goal-less task, and the daemon refuses supervisory
+  # commands on a native runtime (`@supervisory_commands` in
+  # `create_new_command!` requires a legacy supervisory runtime), so a native
+  # runtime can never satisfy the legacy requirement. When every runtime
+  # registered for the work item's execution binding runs a native harness —
+  # `Orchestration.native_harness_kind?/1`, the one vocabulary native Goal
+  # admission selects on, asked rather than restated here — admit the start
+  # through the operations a native admission needs: start one turn, stream the
+  # events that carry its terminal result, and remain cancellable. Every other
+  # binding (no registered runtime, or any runtime without harness metadata)
+  # keeps the legacy supervisory requirement. A native kind that cannot claim a
+  # goal-less task is unaffected: `next_assignable_legacy_task_and_runtime/1`
+  # excludes `omp`/`omo` from such a claim and `commit_new_claim!` rolls back,
+  # so the exclusion — not the requirement — decides there, while a mixed
+  # binding keeps the requirement its claimable sibling runtime can satisfy.
+  #
+  # Called by `Workspaces.launch_work_item/3` inside its transaction, after the
+  # work item's row lock, so the derived requirement reads exactly the row the
+  # launch commits against: a concurrent profile or registry change between an
+  # earlier read and the lock cannot desynchronise the two.
+  defp start_admission_requirement(work_item) do
+    work_item = Repo.preload(work_item, :project)
+    project = work_item.project
+    agent_profile = work_item.agent_profile || project.default_agent_profile
+    workspace = work_item.workspace || project.default_workspace
+
+    harness_kinds =
+      Repo.all(
+        from runtime in Runtime,
+          where: runtime.agent_profile == ^agent_profile and runtime.workspace == ^workspace,
+          select: runtime.harness_kind
+      )
+
+    if harness_kinds != [] and Enum.all?(harness_kinds, &Orchestration.native_harness_kind?/1) do
+      %{
+        "adapter" => %{
+          "operations" => %{
+            "start" => true,
+            "events" => true,
+            "cancel" => true,
+            "pause" => "unsupported"
+          }
+        }
+      }
+    else
+      %{"supervisory_control" => true}
     end
   end
 

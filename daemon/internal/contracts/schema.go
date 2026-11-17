@@ -27,6 +27,7 @@ const (
 	EnvelopeAdapterCapabilities          Envelope = "adapter-capabilities"
 	EnvelopeAdmission                    Envelope = "admission"
 	EnvelopeAttentionRead                Envelope = "attention-read"
+	EnvelopeChatRead                     Envelope = "chat-read"
 	EnvelopeConnectionsRead              Envelope = "connections-read"
 	EnvelopeContextSnapshot              Envelope = "context-snapshot"
 	EnvelopeDecision                     Envelope = "decision"
@@ -50,6 +51,7 @@ const (
 // instead of canonical command-envelope number lexemes.
 var presentationEnvelopes = map[Envelope]bool{
 	EnvelopeAttentionRead:    true,
+	EnvelopeChatRead:         true,
 	EnvelopeConnectionsRead:  true,
 	EnvelopeGoalRead:         true,
 	EnvelopeWorkDetailRead:   true,
@@ -181,6 +183,7 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		EnvelopeEvidenceBatchConflictDetails,
 		EnvelopeEvidenceBatchResponse,
 		EnvelopeAttentionRead,
+		EnvelopeChatRead,
 		EnvelopeGoalCommand,
 		EnvelopeGoalCreate,
 		EnvelopeGoalRead,

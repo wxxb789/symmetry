@@ -297,6 +297,23 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       CI because it needs `SYMMETRY_GOALS_OFF_URL`, and the retained `:goal_admission_disabled` inline branch
       is unreachable in production because the attention read is not admission-gated.
 
+## Deferred review findings (0007g)
+
+- [ ] Give the work detail an entry point into a run's conversation. The classic workspace drawer
+      offered "Open Chat" and "Review decision in Chat" for a work item whose execution carries a
+      `run_id`; the migrated `/portal/chat` is reachable from the shell's Chat entry (whose run
+      picker lists the served runs) but the React work detail added by 0007f has no such link, so a
+      waiting decision is only reachable by picking the run in Chat. Adding the link is work-detail
+      surface work (0007f's file) and was outside the 0007g diff; `browser/tests/portal.spec.mjs`
+      keeps the classic drawer's own buttons until the 0007i cutover.
+
+- [ ] Redirect the documented `#chat` hash location to `/portal/chat`. The frontend design fixes
+      "old `/portal#chat` … redirect once to the new equivalent URL", and
+      `frontend/src/app/legacy.ts` still maps the fragment to `/portal/classic#chat` (the classic
+      surface's own in-page entry points write that hash). The one-time hash mapping belongs to the
+      0007i cutover, which retires the classic writable UI; changing it earlier would split the
+      classic page's own navigation from its hash.
+
 ## CI consolidation owner decisions (2026-11-17)
 
 - [ ] Decide whether `linux-native-v2-acceptance.yml` is dispatched against a current subject or its gap
@@ -319,6 +336,45 @@ Manual tasks and deferred maintenance discovered during scoped changes.
   digests in `docs/evidence/goal-0007c-safe-work-planning-2026-11-16.md` name it as the algorithm of
   record, so that receipt can no longer be recomputed from the tree; the file remains in git history.
 
+## Control instances sharing one worktree's build
+
+- [ ] Two Control instances started from the same worktree share `control/_build`, so a foreign
+      session's dev server can answer this worktree's browser runs with `# unhandled` error pages
+      (observed 2026-11-17 as console-500 assertions and render-wait timeouts during 0007g's
+      suite-context repetitions, with zero offset-assertion failures in the same runs). Give each
+      instance its own `MIX_BUILD_PATH` when several run at once; the runs that need isolation
+      should do it explicitly rather than relying on nobody else being active.
+
+## Browser acceptance under host load
+
+- [ ] Re-measure the pre-existing browser suites on a quiesced host and take their verdicts off
+      wall-clock budgets. Clause 8's re-run exposed the class: six full runs of the three
+      pre-existing suites `tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs
+      tests/portal-execution-control.spec.mjs` (~48 cases) produced `45 passed`, `3 skipped` twice (in
+      4.7 m and 7.9 m) and `43`, `42`, `43` and `39` passed with 2–6 failures and the same
+      `3 skipped` in 9.2 m, 10.0 m, 10.9 m and 21.9 m. The failing set is not stable either:
+      the list/board case fails at desktop width in three runs and its mobile sibling in another, the
+      two deep-link cases in others, and the five mobile failures of the 21.9 m run all pass
+      `5 passed`, exit 0, in 45.5 s in isolation on those same bytes. A revision therefore has two
+      available verdicts from this suite and which one a run produces tracks how saturated the host is
+      (other sessions' servers, browsers and a concurrently running suite share it), not the
+      revision — which is why this is a class and not a one-off: every one of these suites decides
+      its verdict from wall-clock waits sized for an idle host (`browser/playwright.config.mjs`:
+      `timeout: 60_000`, `expect.timeout: 30_000`), so any revision can be reported red without a
+      code change, and neither a red full run nor a green isolation pass can be read as the surface's
+      own property. The class is not confined to the pre-existing suites: a render wait in this
+      delivery's own deterministic suite timed out once under load too, and the same load exposed a
+      real defect in it — a restored `scrollTop` observed as 0 in its round-trip and scope-switch
+      cases — which this delivery repairs (`frontend/src/features/chat/chat.tsx`: a browser pinning
+      `scrollTop` at the pane's maximum under a replaced transcript is no longer recorded as the
+      reader's own move), with the regression test, the falsification and the re-measured suite rows
+      in the receipt; the timeout half is this class and stays open. Hosted CI does not reproduce it
+      because the job is not saturated the same way — the runner gives the suite a dedicated machine —
+      so a green hosted run neither explains nor retires a red local run, and a local failure must not
+      be cited as a regression without the isolation pass beside it. The fix belongs to the
+      observations (waits that end when the served response or the rendered state ends, instead of a
+      load-sized maximum) or to a serialized suite on a freed host; either way it must be measured in
+      both directions and name the bytes it was measured on.
 ## Open findings from the 0008b model-routing review
 
 - [ ] Revalidate the open class B finding against

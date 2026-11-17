@@ -29,6 +29,7 @@ const MANIFEST_PATH = path.join(ROOT_DIR, "contracts", "fixtures", "manifest.jso
 // transport envelopes remain closed and canonical.
 const presentationReadSchemas = new Set([
   "attention-read",
+  "chat-read",
   "goal-read",
   "work-detail-read",
   "work-timeline-read",
@@ -121,8 +122,8 @@ const main = async () => {
     .filter((file) => file.endsWith(".schema.json") && file !== "common.schema.json")
     .sort();
 
-  if (schemaFiles.length !== 20)
-    throw new Error(`expected 20 v1 schemas, found ${schemaFiles.length}`);
+  if (schemaFiles.length !== 21)
+    throw new Error(`expected 21 v1 schemas, found ${schemaFiles.length}`);
   if (common.$schema !== "http://json-schema.org/draft-07/schema#")
     throw new Error("common schema must be Draft 7");
 

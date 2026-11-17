@@ -62,6 +62,18 @@ defmodule SymmetryControl.Orchestration do
   @max_history_limit 500
   @timeline_source_ranks %{"event" => 0, "transition" => 1, "command" => 2}
 
+  @doc """
+  Whether `kind` names a native harness kind.
+
+  One list, two readers: native Goal admission selects runtimes on
+  `@native_harness_kinds`, and `SymmetryControl.Chat` asks this predicate to
+  decide whether a Chat-launched (goal-less) start is admitted through the
+  adapter operations rather than the legacy supervisory flag. A call site that
+  restates the vocabulary instead of asking here is how two lists drift.
+  """
+  @spec native_harness_kind?(term()) :: boolean()
+  def native_harness_kind?(kind), do: kind in @native_harness_kinds
+
   @spec enroll_machine(map(), String.t(), keyword()) ::
           {:ok, %{machine: Machine.t(), token: String.t()}, :created | :replayed}
           | {:error, atom() | Ecto.Changeset.t()}

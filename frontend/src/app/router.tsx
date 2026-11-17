@@ -1,6 +1,7 @@
 import { createRootRouteWithContext, createRoute, createRouter, Link, redirect } from "@tanstack/react-router";
 import type { Router, RouterHistory } from "@tanstack/react-router";
 import { AttentionPage } from "../features/attention/attention";
+import { ChatPage } from "../features/chat/chat";
 import { ConnectionsPage } from "../features/connections/connections";
 import { GoalDetailPage } from "../features/goals/detail";
 import { workItemSearch, workSearch } from "../features/projects/filters";
@@ -24,6 +25,23 @@ const attentionRoute = createRoute({
     ...(typeof search["unavailable"] === "string" && search["unavailable"] ? { unavailable: search["unavailable"] } : {}),
   }),
   component: AttentionPage,
+});
+/** The scope members the conversation URL carries; a value the server's scope vocabulary does not name is dropped. */
+type ChatScopeSearch = "workspace" | "project" | "run";
+const chatScopeSearchValues: readonly string[] = ["workspace", "project", "run"];
+const isChatScopeSearch = (value: unknown): value is ChatScopeSearch => typeof value === "string" && chatScopeSearchValues.includes(value);
+const chatRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/chat",
+  // The URL keeps the asked-for scope so a session expiry returns to the same
+  // conversation; the read's own answer still owns the interpretation, and an
+  // empty or unknown member is dropped rather than sent.
+  validateSearch: (search: Record<string, unknown>): { scope?: ChatScopeSearch; projectId?: string; runId?: string } => ({
+    ...(isChatScopeSearch(search["scope"]) ? { scope: search["scope"] } : {}),
+    ...(typeof search["projectId"] === "string" && search["projectId"] ? { projectId: search["projectId"] } : {}),
+    ...(typeof search["runId"] === "string" && search["runId"] ? { runId: search["runId"] } : {}),
+  }),
+  component: ChatPage,
 });
 const projectsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/projects", component: ProjectsPage });
 const projectRoute = createRoute({ getParentRoute: () => rootRoute, path: "/projects/$projectId", validateSearch: workSearch, component: ProjectPage });
@@ -49,7 +67,7 @@ const runtimesRoute = createRoute({
   component: RuntimesPage,
 });
 const goalRoute = createRoute({ getParentRoute: () => rootRoute, path: "/goals/$goalId", component: GoalDetailPage });
-const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, projectsRoute, projectRoute, workItemRoute, connectionsRoute, runtimesRoute, goalRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, chatRoute, projectsRoute, projectRoute, workItemRoute, connectionsRoute, runtimesRoute, goalRoute]);
 
 export type AppRouter = Router<typeof routeTree, "never", false, RouterHistory>;
 

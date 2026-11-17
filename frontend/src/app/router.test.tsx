@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { savedViewStorageKey } from "../features/projects/saved-views";
 import type { Project } from "../services/api";
 import { readAttention, readWorkDetail, readWorkItem } from "../services/api.fixtures";
-import { createApplication, type Application } from "./application";
+import { createApplication, safeReturnTo, type Application } from "./application";
 import { createAppRouter } from "./router";
 
 const firstProjectId = "11111111-1111-4111-8111-111111111111";
@@ -902,5 +902,51 @@ describe("execution history boundaries", () => {
     expect(reads.details).toBe(1);
     expect(await screen.findByText("older entry")).toBeVisible();
     expect(screen.getByText("No older history recorded.")).toBeVisible();
+  });
+});
+
+describe("chat route", () => {
+  const chatFetcher = () => vi.fn<typeof fetch>().mockImplementation((input) => {
+    const requestPath = input instanceof Request ? input.url : String(input);
+    const url = new URL(requestPath, "http://localhost");
+    if (url.pathname === "/portal/api/session") return Promise.resolve(new Response('{"csrf_token":"session-token"}'));
+    if (url.pathname === "/portal/api/chat") {
+      const scope = url.searchParams.get("scope");
+      return Promise.resolve(new Response(JSON.stringify({
+        scope,
+        project_id: scope === "project" ? url.searchParams.get("project_id") : null,
+        run_id: scope === "run" ? url.searchParams.get("run_id") : null,
+        messages: [],
+        runs: [],
+        next_before: null,
+      })));
+    }
+    return Promise.resolve(new Response(JSON.stringify({ selected_project_id: firstProjectId, projects })));
+  });
+
+  it("subscribes /chat and carries the shell's project scope in its navigation", async () => {
+    const user = userEvent.setup();
+    const { history } = renderWorkspace(`/portal/chat?scope=workspace&projectId=${firstProjectId}`, chatFetcher());
+    expect(await screen.findByRole("heading", { level: 1, name: "Chat" })).toBeVisible();
+    await screen.findByText("Workspace conversation");
+    // The scope member and the project travel with the route, so the shell's
+    // navigation links and a session-expiry return target keep the conversation.
+    expect(screen.getByRole("link", { name: "Chat" })).toHaveAttribute("href", `/portal/chat?projectId=${firstProjectId}`);
+
+    await user.click(screen.getByRole("button", { name: /Search or navigate/ }));
+    const palette = await screen.findByRole("dialog", { name: "Command palette" });
+    const paletteChat = within(palette).getByRole("link", { name: "Chat" });
+    expect(paletteChat).toHaveAttribute("href", `/portal/chat?projectId=${firstProjectId}`);
+    await user.click(paletteChat);
+    await waitFor(() => expect(new URL(history.location.href, "http://localhost").searchParams.get("projectId")).toBe(firstProjectId));
+    expect(new URL(history.location.href, "http://localhost").searchParams.has("scope")).toBe(false);
+    await screen.findByText("Workspace conversation");
+  });
+
+  it("returns a session expiry to the chat scope it was holding", () => {
+    const runScope = "33333333-3333-4333-8333-333333333333";
+    expect(safeReturnTo(`http://localhost/portal/chat?scope=run&runId=${runScope}`)).toBe(`/portal/chat?scope=run&runId=${runScope}`);
+    expect(safeReturnTo("http://localhost/portal/chat/elsewhere")).toBe("/portal/attention");
+    expect(safeReturnTo("http://localhost/portal/logout")).toBe("/portal/attention");
   });
 });
