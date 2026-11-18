@@ -169,11 +169,16 @@ At launch, the control plane snapshots only the work item's connected resource
 ids; manual resources are excluded and a later connection cannot widen the task.
 At claim time it validates every snapshotted resource and returns a signed broker
 token plus the exact operations the run may use. The token is bound to the run,
-task, runtime epoch, generation and claim id, and is delivered only in the
-agent's initial stdin envelope — never in the process environment, command
-arguments, logs or the daemon journal. Each broker request revalidates the current
-database lease; renewal keeps the capability usable, while lease expiry,
-cancellation, completion, a newer generation or daemon re-registration revokes it.
+task, runtime epoch, generation and claim id. On the legacy task path it is
+delivered only in the agent's initial stdin envelope — never in the process
+environment, command arguments, logs or the daemon journal. A native harness takes
+its broker capability out of band on the Goal path instead, and a runtime
+advertises native provider access only when its adapter verifies the bridge — the
+Pi capability gate and its provider-bridge launch validation — so enabling
+`provider_access` on a profile is not by itself evidence that a native broker is
+ready. Each broker request revalidates the current database lease; renewal keeps
+the capability usable, while lease expiry, cancellation, completion, a newer
+generation or daemon re-registration revokes it.
 
 Connected change operations use server-owned scope. The source branch is the work
 item's branch snapshot and the target branch is the repository's synced default
@@ -253,14 +258,18 @@ Run the control-plane gates listed in
 including `MIX_ENV=prod mix release --overwrite`, and then the browser suites
 documented in [`browser/README.md`](../../browser/README.md):
 
+The pinned package manager is `package.json`'s `packageManager` field; the
+commands below show its current value.
+
 ```sh
 mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile
 mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test
 ```
 
 The deterministic provider tests do not require live GitHub or Azure DevOps
-sessions. A live smoke test should use non-production accounts with the minimum
-read permissions needed by the selected capabilities. The provider evidence
-boundary is `fixtures_only`: real portal API and database behavior with
-controlled provider fixtures, never fixture success reported as live provider
-integration.
+sessions. A live smoke test exercises synchronization only, so it should use
+non-production accounts with the read access the selected capabilities need;
+connected change delivery writes to the provider and is not part of that smoke.
+The provider evidence boundary is `fixtures_only`: real portal API and database
+behavior with controlled provider fixtures, never fixture success reported as
+live provider integration.

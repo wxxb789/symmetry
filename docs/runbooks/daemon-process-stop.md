@@ -114,11 +114,12 @@ and fail the existing process-absence assertion even after its stdout descriptor
 closed. Do not weaken the assertion to hide an incorrect test-container setup.
 
 CI runs its own forms of these gates (see *Commands and gates* in
-[`../design/quality.md`](../design/quality.md) and `.github/workflows/ci.yml`):
-the daemon job runs `go vet`, a scoped ordinary Go pass and the full `-race`
-suite on Linux, and the `daemon-windows` job runs the full Windows suite. Native
-OpenCode transport checks are opt-in and documented beside their versioned
-fixtures under `daemon/internal/harness/testdata/opencode/`; the
+[`../design/quality.md`](../design/quality.md)): the `daemon` job owns the Linux
+`gofmt`, `go vet` and Go-test passes, the `daemon-windows` job owns the Windows
+suite, and `.github/workflows/ci.yml` is the owner of the exact step inventory
+rather than the summary here. Native OpenCode transport checks are opt-in and
+documented beside their versioned fixtures under
+`daemon/internal/harness/testdata/opencode/`; the
 [peer-ownership recipe](daemon-opencode-peer-ownership.md) covers the transport's
 loopback boundary.
 

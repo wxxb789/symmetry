@@ -31,12 +31,12 @@ The composer makes execution intent explicit:
   retrying work stay on the work-detail surface, not in the composer.
 
 Guidance, pause and resume are supervisory control, and the composer offers them
-only while the run serves `can_guide`/`can_pause`/`can_resume`: those flags exist
-for a runtime that advertises the `supervisory_control` capability, so a
-native-harness run serves none of them (`pause` is `unsupported` in the
-operations a native admission advertises) and offers no guidance, pause or
-resume. Its start, event stream and cancellation come from the native adapter
-instead.
+only while the run serves `can_guide`/`can_pause`/`can_resume` as true: those
+flags are true only for a runtime that advertises the `supervisory_control`
+capability, so a native-harness run serves them as `false` (and `pause` is
+`unsupported` in the operations a native admission advertises) and the composer
+offers no guidance, pause or resume. Its start, event stream and cancellation
+come from the native adapter instead.
 
 Run context shows concise progress and delivery state. A human decision presents
 the question, context, reason, options and consequences, and a recommendation
@@ -148,6 +148,9 @@ and *Commands and gates* in [quality.md](../design/quality.md)), then the browse
 suites at desktop and mobile widths. Browser setup and the full fixture inventory
 are documented in [`browser/README.md`](../../browser/README.md); the
 conversation-specific pieces are:
+
+The pinned package manager is `package.json`'s `packageManager` field; the
+commands below show its current value.
 
 ```sh
 mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile

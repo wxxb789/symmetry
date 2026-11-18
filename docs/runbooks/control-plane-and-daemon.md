@@ -52,6 +52,15 @@ hosts must run it through Docker. Kubernetes deployments use the same Linux
 container image; non-Linux control-plane hosts are not native deployment
 targets.
 
+Start here on Windows or macOS: the supported control plane is the Linux
+container — the trusted-local `compose.yaml` for a local stack,
+`compose.production.yaml` behind the TLS edge for production — not a native
+release. A Windows daemon is a separate execution host, not a control plane, and
+CI's Windows jobs are tests rather than a deployment. A release serves the
+workspace only after the SPA has been staged ([Portal operations](portal.md)),
+and the first daemon start needs `-config` and an enrollment environment of its
+own (*Daemon configuration*).
+
 These commands start the control service as a private HTTP backend. Run it only
 behind a trusted TLS-terminating proxy or load balancer, and prevent port `4000`
 from being reachable outside that private network. Exposing this listener
@@ -91,6 +100,9 @@ SYMMETRY_ASSIGNMENT_DURATION_MS (30000)
 SYMMETRY_REAPER_INTERVAL_MS (5000)
 ```
 
+`control/config/runtime.exs` owns these settings and their minimums; the values
+above are its fallbacks at this revision.
+
 The daemon starts lease renewal when 90 seconds remain, or at three quarters of a
 shorter granted lease.
 
@@ -102,6 +114,14 @@ versions, so pre-migration application nodes can coexist without changing
 idempotency replay behavior. It is safe to apply the request-hash migration
 before the rolling deployment because its database defaults remain
 legacy-compatible.
+
+The shipped production Compose service forwards only the environment it declares
+(`compose.production.yaml`): it forwards neither
+`SYMMETRY_REQUEST_HASH_WRITE_MODE` nor `SYMMETRY_GOALS_ROLLOUT_ENABLED`, so
+exporting either on the host and rebuilding leaves the container on runtime's
+defaults (`legacy`, and goals rollout off). Set the variable on the service's own
+environment — the deployment environment or an untracked env file — and deploy
+that configuration.
 
 Enable `SYMMETRY_REQUEST_HASH_WRITE_MODE=canonical` only after every old
 control-plane node has exited and cannot return to traffic — draining a node is
@@ -227,6 +247,10 @@ Replace the placeholder paths with local absolute paths. The
 runnable local profiles. Use HTTPS outside a trusted local or container network
 and omit `allow_insecure_http`.
 
+The daemon takes its configuration path from `-config`, with no default, and its
+first start needs `SYMMETRY_ENROLLMENT_TOKEN` in the daemon process's own
+environment, not only in the control plane's.
+
 The daemon writes one initial stdin record for every launch:
 
 - `input_mode: "goal"` writes the task goal as plain text followed by a newline,
@@ -318,8 +342,15 @@ go test -v ./e2e
 ```
 
 The live suite covers dispatch, capacity, cancellation, waiting for input,
-failure isolation, polling fallback, stale fencing and daemon restart. Run the
-real Codex smoke test separately against the same running control plane:
+failure isolation, polling fallback, stale fencing and daemon restart.
+
+Run the control plane for this suite with `SYMMETRY_LEASE_DURATION_MS=30000`: the
+terminal-retry case skips while the remaining lease exceeds 45 seconds and names
+that setting in its skip message, so a package-level pass without it is not that
+case's evidence. CI sets 30 seconds on the release it drives and asserts the named
+cases individually (`scripts/ci/go-test-json-gate.py --assert`).
+
+Run the real Codex smoke test separately against the same running control plane:
 
 ```sh
 cd daemon
@@ -340,10 +371,11 @@ cancellable.
 
 ### Claude Code local transport smoke (opt-in)
 
-The repository includes an opt-in Windows smoke check for Claude Code `2.1.281`
-(`scripts/claude-code-local-transport-smoke.ps1`; the script-local version guard
-is `-ExpectedClaudeVersion 2.1.281`, which is not the daemon's promoted Claude
-pin):
+The repository includes an opt-in Windows smoke check for the Claude Code build
+its `-ExpectedClaudeVersion` guard pins
+(`scripts/claude-code-local-transport-smoke.ps1`; its `-ExpectedClaudeVersion`
+default is the guard's only owner, and it is not the daemon's promoted Claude pin
+— the Claude Code row in [`../design/harness.md`](../design/harness.md)):
 
 ```powershell
 pwsh -NoLogo -NoProfile -File .\scripts\claude-code-local-transport-smoke.ps1 -ClaudeExecutable claude.exe
@@ -427,3 +459,9 @@ go test ./...
 changes on supported runners, and requires real Windows tests for Windows
 behavior. The live checks above stay opt-in; a skipped suite is unavailable
 evidence, never a pass.
+
+A green ordinary CI run does not replace that evidence: documentation-only pull
+requests skip the heavy matrix by design, the goal-receipt gate asserts its
+selector so a skipped case cannot be read as that evidence, and the Linux native
+acceptance workflow is dispatch-only on a host that proves its prerequisites
+first.

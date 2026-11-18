@@ -14,6 +14,9 @@ documented in [`browser/README.md`](../../browser/README.md); gates are in
 
 The SPA must be built before Phoenix serves it. From the repository root:
 
+The pinned package manager is `package.json`'s `packageManager` field; the
+commands below show its current value.
+
 ```sh
 mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile
 mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build
@@ -33,6 +36,11 @@ cd control
 mix setup
 mix phx.server
 ```
+
+`mix setup` reaches a PostgreSQL on the host (`control/config/dev.exs`:
+`POSTGRES_HOST`/`POSTGRES_PORT`, default `localhost:5432`). The trusted-local
+Compose database publishes no host port, so use a host-reachable instance here or
+run the whole stack through Compose.
 
 For the default development configuration, sign in with
 `development-operator-token`. Production uses `SYMMETRY_OPERATOR_TOKEN`; the token
@@ -80,8 +88,9 @@ protocol without a separate portal execution path.
 
 **Start run**, **Cancel run** and **Retry** belong to a legacy work item. A
 Goal-managed item renders a **Goal-managed work** panel instead — its run, retry
-and move paths go through Goal admission — and the `run`, `cancel` and `retry`
-endpoints answer `403 goal_authority_required`.
+and move state go through Goal admission, and no equivalent board move or legacy
+write entry exists — and the `run`, `cancel` and `retry` endpoints answer
+`403 goal_authority_required`.
 
 Execution-defining fields remain editable before launch, are locked while a task
 is queued or active, and become editable again after failure or cancellation. The
@@ -102,6 +111,8 @@ The workspace read serves four health signals for the selected project:
 only when at least one *compatible* runtime is online), **executions** (active
 work, human input waits, execution faults) and **synchronization** (degraded or
 offline external resources; failed or stale synchronization reports attention).
+The field names and their values live in `health/4` of
+`control/lib/symmetry_control/workspaces/read_model.ex`.
 The classic health rail no longer renders in the SPA — read these signals from
 the project, connections and runtimes surfaces or from the API. This keeps an
 offline runtime or broken connection from looking like an agent that is merely
@@ -157,7 +168,7 @@ authority for the full list. The machine and external operator APIs under
   stale cards after successful mutations, duplicate linked tasks, or rising
   database latency. Connected documents refresh through the operator invalidation
   channel; a disconnected surface falls back to a five-second poll while the
-  document is visible.
+  document is visible (`frontend/src/services/realtime.ts` owns that interval).
 - The release operator owns validation for the first 30 minutes after deploy.
   Roll back the application release on repeated `5xx` or a broken task launch.
   Portal migrations extend the orchestration `tasks` and `commands` tables and add
@@ -174,6 +185,9 @@ Run the control-plane gates listed in
 and *Commands and gates* in [quality.md](../design/quality.md), then the browser
 suites. Browser setup, the suite inventory and each fixture harness are in
 [`browser/README.md`](../../browser/README.md); the canonical commands are:
+
+The pinned package manager is `package.json`'s `packageManager` field; the
+commands below show its current value.
 
 ```sh
 mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile

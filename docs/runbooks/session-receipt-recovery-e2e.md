@@ -33,15 +33,21 @@ rollback transaction. The normal test suite continues using its existing sandbox
 ## Isolation
 
 Use a new disposable database named
-`symmetry_receipt_e2e_<32 lowercase hexadecimal characters>`. The test checks the
-effective database name, requires initially empty fixture tables before writing
-committed state, and fails before fixture writes against a non-isolated database.
-Never point it at a shared development or test database.
+`symmetry_receipt_e2e_<32 lowercase hexadecimal characters>`, and confirm the
+*effective* name before the run: `config/test.exs` appends `MIX_TEST_PARTITION` to
+the configured name, so an inherited partition makes the guard compare a
+different name and the test fails after the database has already been created and
+migrated. The guard itself checks the name and requires the fixture tables to be
+empty before writing committed state, so it protects the fixture writes and
+nothing else — creation, migration and cleanup happen outside it. Never point it
+at a shared development or test database.
 
-Goal history and session receipts have immutable DELETE guards. Cleanup drops
-only the database created for this invocation after the test process exits; it
-does not disable triggers, truncate shared tables or delete immutable rows. CI
-uses a unique database within its disposable PostgreSQL service.
+Goal history and session receipts have immutable DELETE guards. A cleanup may drop
+only the database this invocation created: the recipes below generate the name,
+reject an inherited partition, and drop it only while the variable still names
+that exact database. Dropping does not disable triggers, truncate shared tables or
+delete immutable rows. CI does not rely on this local path: it runs the same test
+against a disposable PostgreSQL service and a freshly generated database name.
 
 The Go driver reads a temporary private JSON file containing generated fixture
 authentication and fence values; those values never appear in command arguments
@@ -57,32 +63,50 @@ instance where the test account can create and drop databases. From `control/`:
 $previousDatabase = $env:POSTGRES_DB
 $previousMixEnv = $env:MIX_ENV
 $previousGate = $env:SYMMETRY_GOAL_RECEIPT_E2E
-$env:POSTGRES_DB = 'symmetry_receipt_e2e_' + [guid]::NewGuid().ToString('N')
+$previousPartition = $env:MIX_TEST_PARTITION
+$database = 'symmetry_receipt_e2e_' + [guid]::NewGuid().ToString('N')
+$env:POSTGRES_DB = $database
 $env:MIX_ENV = 'test'
 $env:SYMMETRY_GOAL_RECEIPT_E2E = '1'
+$env:MIX_TEST_PARTITION = $null
 try {
     mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e
     if ($LASTEXITCODE -ne 0) { throw 'Goal receipt E2E failed' }
 } finally {
-    mix ecto.drop --force
+    if ($env:POSTGRES_DB -eq $database -and $database -match '^symmetry_receipt_e2e_[0-9a-f]{32}$') {
+        mix ecto.drop --force
+    } else {
+        Write-Error "refusing to drop a database this run did not create: $($env:POSTGRES_DB)"
+    }
     $env:POSTGRES_DB = $previousDatabase
     $env:MIX_ENV = $previousMixEnv
     $env:SYMMETRY_GOAL_RECEIPT_E2E = $previousGate
+    $env:MIX_TEST_PARTITION = $previousPartition
 }
 ```
 
 ```bash
 (
-  export POSTGRES_DB="symmetry_receipt_e2e_$(openssl rand -hex 16)"
-  export SYMMETRY_GOAL_RECEIPT_E2E=1
-  trap 'MIX_ENV=test mix ecto.drop --force' EXIT
+  database="symmetry_receipt_e2e_$(openssl rand -hex 16)"
+  export POSTGRES_DB="$database" MIX_ENV=test SYMMETRY_GOAL_RECEIPT_E2E=1
+  unset MIX_TEST_PARTITION   # config/test.exs appends it to the configured name
+  drop_owned_database() {
+    if [ "$POSTGRES_DB" = "$database" ] && [[ "$database" =~ ^symmetry_receipt_e2e_[0-9a-f]{32}$ ]]; then
+      mix ecto.drop --force
+    else
+      printf 'refusing to drop a database this run did not create: %s\n' "$POSTGRES_DB" >&2
+    fi
+  }
+  trap drop_owned_database EXIT
   mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e
 )
 ```
 
 `mix test` creates and migrates the selected database through the existing test
-alias. The test builds its Go driver from the current checkout before creating
-the claimed run; it does not accept an externally supplied driver binary.
+alias, before the test's isolation guard can run — which is why the recipes above
+own the generated name and refuse to drop anything else. The test builds its Go
+driver from the current checkout before creating the claimed run; it does not
+accept an externally supplied driver binary.
 
 Without the opt-in, the test skips and supplies no committed-recovery evidence.
 An enabled test fails on missing prerequisites, invalid database isolation,

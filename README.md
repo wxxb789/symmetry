@@ -322,6 +322,10 @@ symmetry/
 
 ## Documentation
 
+`docs/runbooks/` is current operations, `docs/design/` and `docs/protocol-v1.md`
+are normative, `docs/goals/archive/` holds archived contracts, and
+`docs/evidence/` is valid only for its own date, Subject and proof scope.
+
 | Document | Contents |
 | --- | --- |
 | [Protocol v1](docs/protocol-v1.md) | Wire contract, lifecycle, authorization and recovery |
