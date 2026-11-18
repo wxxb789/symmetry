@@ -1087,6 +1087,41 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       `control_capabilities/4` in `control/lib/symmetry_control/orchestration.ex`
       and the daemon's autonomy envelope in `daemon/internal/app/app.go`).
 
+      Third pass (the `gpt-6.2-sol` findings, each re-verified against its
+      artifact). Closed by restating them against their owners rather than
+      re-asserting them: the receipt recipe's cleanup now owns the generated
+      database name and refuses an inherited `MIX_TEST_PARTITION` when the
+      effective name is derived (`config/test.exs`), and says the guard covers
+      the fixture writes only, not create/migrate/drop; the live-E2E recipe names
+      `SYMMETRY_LEASE_DURATION_MS=30000` as the terminal-retry case's prerequisite
+      and CI's per-case assertion; the request-hash recipe distinguishes the
+      release's environment from the production Compose service, which forwards
+      neither `SYMMETRY_REQUEST_HASH_WRITE_MODE` nor
+      `SYMMETRY_GOALS_ROLLOUT_ENABLED`; the broker paragraph scopes stdin delivery
+      to the legacy task path and says native provider access needs a verified
+      adapter bridge; the OpenCode recipe labels the Linux-v2 verifier as the
+      installed-owner verification path while production registers the
+      unavailable adapter; `portal.md` no longer implies a Goal-side board move
+      and states the native run's supervisory flags as `false` rather than
+      absent; `connections.md` scope its live smoke to synchronization reads; the
+      index rule cites the contract's record-the-conflict requirement; and the
+      rot-prone restatements (pnpm pin, Claude guard, CI step inventory, cadence
+      and poll defaults, GitHub API version, health fields) now name the file that
+      owns each value (`package.json`, the smoke script, `ci.yml`,
+      `control/config/runtime.exs`, `frontend/src/services/realtime.ts`,
+      `integrations/auth.ex`, `workspaces/read_model.ex`). The `README.md`
+      documentation index carries the one convention line for the whole `docs/`
+      tree.
+
+      Still revalidatable, with no artifact that can pre-empt a future edit: the
+      generated-name regex and the `MIX_TEST_PARTITION` behaviour (Ecto/Ecto
+      test-config side), the 45-second skip bound in
+      `daemon/e2e/core_test.go`, the list of variables the production Compose
+      service forwards, the Pi/native provider-bridge gate's exact shape, the
+      installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
+      convention paragraph itself (it restates the precedence the design and
+      protocol documents already carry).
+
 - [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
       evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
       instead of rewriting history:

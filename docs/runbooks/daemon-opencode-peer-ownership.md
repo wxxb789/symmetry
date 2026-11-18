@@ -31,9 +31,11 @@ Every new connection is verified, not only the first.
   its creation identity and liveness, and matches the established four-tuple and
   owning PID from `GetExtendedTcpTable`, then rechecks process liveness before
   returning.
-- **Linux** (v2 verifier, the production path): the launch retains a pidfd and the
-  duplicated socket identity; the verifier checks `/proc/<pid>/fdinfo` inodes and
-  duplicates the exact socket with `pidfd_getfd`, rechecking the reversed
+- **Linux** (v2 verifier, the installed-owner path — production registers an
+  explicitly unavailable OpenCode adapter, so no deployed run reaches this
+  verifier): the launch retains a pidfd and the duplicated socket identity; the
+  verifier checks `/proc/<pid>/fdinfo` inodes and duplicates the exact socket
+  with `pidfd_getfd`, rechecking the reversed
   four-tuple, the socket inode and the network namespace. Process identity and the
   shared network namespace are checked before and after the inode/FD
   observations, and the tuple/inode are rechecked. Unavailable `pidfd_getfd`
