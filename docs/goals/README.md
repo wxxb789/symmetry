@@ -284,7 +284,7 @@ recorded above.
 | Series | Default serial order |
 | --- | --- |
 | 0006 | 0006d through 0006k, then 0006-final (0006a, 0006b and 0006c archived) |
-| 0007 | 0007a through 0007i; 0007i produces the series release receipt |
+| 0007 | 0007a through 0007i; 0007i produces the series release receipt (all nine archived at the owner's verdict, 2026-11-18) |
 | 0008 | 0008a through 0008d; 0008d produces the series release receipt |
 | 0009 (single goal) | Independent achieve-contract amendments; prerequisite only for 0007h |
 
@@ -300,6 +300,8 @@ authorized acceptance actions. Missing evidence or unresolved requirements keep
 the receipt incomplete; owner verdicts are recorded separately when they arrive.
 
 **0006g, 0006j and 0006k — administrative recording closure (2026-11-17).** These three goals are archived with the rest of the series. This is recording closure only and **does not satisfy the completion contract**: 0006g's delivered outcome is the unsupported decision recorded at `daemon/internal/harness/testdata/opencode/2.3.0/README.md:1-3`; 0006j's receipt states `Status: incomplete; no operational capability promoted on either platform` (`docs/evidence/goal-0006j-omp-native-capability-2026-11-14.md:3`) with a later addendum recording an authorized Windows acceptance and a Linux partial; 0006k's implementation reached the release Subject via PR #22, but no goal receipt or credentialed Control/daemon witness execution was recorded, and its closure paragraph was missing until this line. Their unmet requirements remain unmet.
+
+**0007a-0007i - archived at the owner's verdict (2026-11-18).** All nine goals are merged; `0007i` carries the series release receipt, whose rows name the revision their evidence came from and list their non-green attempts honestly. The limits that receipt records stand as recorded: the locally observed `pwsh` host limitation in the full Control run, the live work-detail matrix and the live scoped-conversation walk not re-run on the final revision, and native admission observed at the Control layer only. The goals' own documents moved into `archive/`; their content is unchanged.
 
 ## Durable engineering work
 
@@ -319,22 +321,22 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0007a](0007a-deployable-workspace-shell.md) | Deployable authenticated workspace shell |
-| [0007b](0007b-readable-work-views.md) | Readable project, board and work-detail views |
-| [0007c](0007c-safe-work-planning.md) | Safe project and work-item editing |
-| [0007d](0007d-connection-management.md) | GitHub and Azure DevOps connection management |
-| [0007e](0007e-resource-binding-and-sync.md) | Project resource binding and truthful synchronization |
-| [0007f](0007f-runtime-control.md) | Runtime visibility and trustworthy execution control |
-| [0007g](0007g-scoped-engineering-chat.md) | Scoped, recoverable engineering conversation |
-| [0007h](0007h-goal-attention-workspace.md) | Goal, attention and decision workspace |
-| [0007i](0007i-portal-cutover.md) | Single real-time Portal cutover and the 0007 series release receipt |
+| [0007a](archive/0007a-deployable-workspace-shell.md) | Deployable authenticated workspace shell |
+| [0007b](archive/0007b-readable-work-views.md) | Readable project, board and work-detail views |
+| [0007c](archive/0007c-safe-work-planning.md) | Safe project and work-item editing |
+| [0007d](archive/0007d-connection-management.md) | GitHub and Azure DevOps connection management |
+| [0007e](archive/0007e-resource-binding-and-sync.md) | Project resource binding and truthful synchronization |
+| [0007f](archive/0007f-runtime-control.md) | Runtime visibility and trustworthy execution control |
+| [0007g](archive/0007g-scoped-engineering-chat.md) | Scoped, recoverable engineering conversation |
+| [0007h](archive/0007h-goal-attention-workspace.md) | Goal, attention and decision workspace |
+| [0007i](archive/0007i-portal-cutover.md) | Single real-time Portal cutover and the 0007 series release receipt; **accepted by the owner** (wxxb789, 2026-11-18) |
 
 ## Model-independent quality
 
 | Goal | Desired outcome |
 | --- | --- |
 | [0008a](archive/0008a-auditable-acceptance-workflow.md) | Auditable model-independent acceptance workflow |
-| [0008b](archive/0008b-go-model-routing.md) | Archived per-class Go routing evidence; produced and awaiting the owner's verdict |
+| [0008b](archive/0008b-go-model-routing.md) | Archived per-class Go routing evidence; **accepted by the owner** (wxxb789, 2026-11-18); the class-B finding it kept open was fixed by #56 |
 | [0008c](archive/0008c-elixir-model-routing.md) | Evidence-based Elixir model routing |
 | [0008d](archive/0008d-typescript-model-routing.md) | Archived TypeScript routing evidence and the 0008 series release receipt; **accepted by the owner** (wxxb789, 2026-11-17) with the limits its receipt records |
 
