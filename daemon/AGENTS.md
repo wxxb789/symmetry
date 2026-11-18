@@ -22,3 +22,7 @@ Follow the root contract and `docs/design/harness.md`.
 From daemon/: `gofmt` on changed files; `go vet ./...`; `go test ./...`;
 `go test -race ./...` for concurrency/execution changes on supported runners.
 Actual native Windows behavior requires Windows tests, not only cross-compilation.
+
+Daemon-side recipes: `docs/runbooks/daemon-process-stop.md` (process-stop and
+terminal-cleanup contract) and `docs/runbooks/daemon-opencode-peer-ownership.md`
+(loopback peer ownership).

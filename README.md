@@ -140,15 +140,15 @@ with outcome-first detail while retaining paginated raw execution history.
 - **Runs and supervision** — start explicitly, then provide input, deliver
   durable guidance, answer consequential decisions, pause, resume, cancel or
   retry failed and cancelled work.
-- **Chat at `/portal#chat`** — workspace, project and run conversations. Start
+- **Chat at `/portal/chat`** — workspace, project and run conversations. Start
   work, inspect progress and deliver guidance. Ordinary questions are answered
   from recorded evidence and do **not** interrupt execution; the control plane
   does not make an extra language-model call.
 - **Attention workspace** — a single place for goals, blockers and pending
   decisions.
 
-See [`docs/goal-02-runbook.md`](docs/goal-02-runbook.md) and
-[`docs/goal-04-runbook.md`](docs/goal-04-runbook.md).
+See [`docs/runbooks/portal.md`](docs/runbooks/portal.md) and
+[`docs/runbooks/chat-and-supervisory-control.md`](docs/runbooks/chat-and-supervisory-control.md).
 
 ## Engineering connections
 
@@ -159,7 +159,7 @@ Credentials are deliberately **not stored by Symmetry**. The control plane runs
 where the authenticated `gh` and `az` CLIs are available, requests tokens at call
 time, and keeps them inside the provider request process. Nothing is written to
 PostgreSQL or sent to execution daemons. See
-[`docs/goal-03-runbook.md`](docs/goal-03-runbook.md).
+[`docs/runbooks/connections.md`](docs/runbooks/connections.md).
 
 ## Tech stack
 
@@ -220,7 +220,8 @@ operator token. A daemon using a plain HTTP URL must set
 `allow_insecure_http: true`; use that only for an explicitly trusted local or
 container network. Agent commands, workspace paths and allowed environment
 variables remain machine-local configuration. Start from the daemon
-configuration example in [`docs/goal-01-runbook.md`](docs/goal-01-runbook.md)
+configuration example in
+[`docs/runbooks/control-plane-and-daemon.md`](docs/runbooks/control-plane-and-daemon.md)
 and replace its paths with local absolute paths. The
 `cmd/symmetry-daemon/testdata` configuration is validation test data, not a
 runnable local profile.
@@ -232,7 +233,7 @@ only public service, terminating TLS on ports `80` and `443`, while the control
 plane remains on a private Docker network. It requires deployment-provided
 database, application, enrollment, operator and TLS credentials. See the
 production deployment section in
-[`docs/goal-01-runbook.md`](docs/goal-01-runbook.md).
+[`docs/runbooks/control-plane-and-daemon.md`](docs/runbooks/control-plane-and-daemon.md).
 
 ## Configuration and protocol
 
@@ -269,7 +270,7 @@ response semantics.
 - **Time** — execution machines must synchronize with NTP. Clock skew beyond the
   lease safety margin is reported as a diagnostic warning.
 
-See [`docs/goal-process-stop-testing.md`](docs/goal-process-stop-testing.md) for
+See [`docs/runbooks/daemon-process-stop.md`](docs/runbooks/daemon-process-stop.md) for
 the owned process-group/Windows Job boundary and restart-recovery limitations.
 
 ## Project status
@@ -325,10 +326,11 @@ symmetry/
 | --- | --- |
 | [Protocol v1](docs/protocol-v1.md) | Wire contract, lifecycle, authorization and recovery |
 | [Design decisions](docs/design/README.md) | Fixed core architecture and boundaries |
-| [Goal 1 runbook](docs/goal-01-runbook.md) | Control-plane and daemon configuration, operations |
-| [Goal 2 runbook](docs/goal-02-runbook.md) | Portal, projects, Kanban and run workflows |
-| [Goal 3 runbook](docs/goal-03-runbook.md) | GitHub and Azure DevOps connections and synchronization |
-| [Goal 4 runbook](docs/goal-04-runbook.md) | Chat, durable guidance and supervisory controls |
+| [Runbooks](docs/runbooks/README.md) | Operator procedures and opt-in verification recipes |
+| [Control plane and daemon](docs/runbooks/control-plane-and-daemon.md) | Release build, production Compose edge, configuration, operator API |
+| [Portal](docs/runbooks/portal.md) | Engineering workspace, projects, Kanban and run workflows |
+| [Connections](docs/runbooks/connections.md) | GitHub and Azure DevOps authentication, binding and synchronization |
+| [Chat and supervisory control](docs/runbooks/chat-and-supervisory-control.md) | Chat, durable guidance, pause/resume and decisions |
 | [Harness design](docs/design/harness.md) | Native adapter contract and capability verification |
 | [Quality policy](docs/design/quality.md) | Risk routing, evidence and acceptance standards |
 

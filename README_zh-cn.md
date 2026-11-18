@@ -94,16 +94,16 @@ Symmetry 通过 Go 守护进程中的原生适配器与编码智能体集成。�
 
 - **项目与看板** —— 创建、编辑、移动与运行工作项；分配智能体配置与机器本地工作区绑定。
 - **运行与监督** —— 显式启动，然后提供输入、传递持久指导、回答关键决策、暂停、恢复、取消或重试失败与已取消的工作。
-- **`/portal#chat` 聊天** —— 工作区、项目与运行会话。启动工作、查看进度并传递指导。普通问题基于已记录证据回答，**不会**中断执行；控制平面不会额外调用语言模型。
+- **`/portal/chat` 聊天** —— 工作区、项目与运行会话。启动工作、查看进度并传递指导。普通问题基于已记录证据回答，**不会**中断执行；控制平面不会额外调用语言模型。
 - **注意力工作区** —— 集中查看目标、阻塞与待决决策。
 
-参见 [`docs/goal-02-runbook.md`](docs/goal-02-runbook.md) 与 [`docs/goal-04-runbook.md`](docs/goal-04-runbook.md)。
+参见 [`docs/runbooks/portal.md`](docs/runbooks/portal.md) 与 [`docs/runbooks/chat-and-supervisory-control.md`](docs/runbooks/chat-and-supervisory-control.md)。
 
 ## 工程连接
 
 GitHub 与 Azure DevOps 连接可导入外部拥有的工作，把代码与 CI 资源绑定到项目，并刷新拉取请求、评审与流水线状态。
 
-凭据被刻意**不由 Symmetry 存储**。控制平面运行在已认证 `gh` 与 `az` CLI 可用的位置，在调用时请求令牌，并将其保留在 provider 请求进程内。任何内容都不会写入 PostgreSQL，也不会发送给执行守护进程。参见 [`docs/goal-03-runbook.md`](docs/goal-03-runbook.md)。
+凭据被刻意**不由 Symmetry 存储**。控制平面运行在已认证 `gh` 与 `az` CLI 可用的位置，在调用时请求令牌，并将其保留在 provider 请求进程内。任何内容都不会写入 PostgreSQL，也不会发送给执行守护进程。参见 [`docs/runbooks/connections.md`](docs/runbooks/connections.md)。
 
 ## 技术栈
 
@@ -151,11 +151,11 @@ go test ./...
 go run ./cmd/symmetry-daemon -config /absolute/path/to/daemon.json
 ```
 
-本地控制平面使用端口 `4000`，`/portal` 接受开发操作者令牌。使用明文 HTTP URL 的守护进程必须设置 `allow_insecure_http: true`；仅可在明确受信的本地或容器网络中使用。智能体命令、工作区路径与允许的环境变量仍为机器本地配置。请从 [`docs/goal-01-runbook.md`](docs/goal-01-runbook.md) 的守护进程配置示例开始，并将其路径替换为本地绝对路径。`cmd/symmetry-daemon/testdata` 配置是验证测试数据，不是可运行的本地配置。
+本地控制平面使用端口 `4000`，`/portal` 接受开发操作者令牌。使用明文 HTTP URL 的守护进程必须设置 `allow_insecure_http: true`；仅可在明确受信的本地或容器网络中使用。智能体命令、工作区路径与允许的环境变量仍为机器本地配置。请从 [`docs/runbooks/control-plane-and-daemon.md`](docs/runbooks/control-plane-and-daemon.md) 的守护进程配置示例开始，并将其路径替换为本地绝对路径。`cmd/symmetry-daemon/testdata` 配置是验证测试数据，不是可运行的本地配置。
 
 ### 生产拓扑
 
-`compose.production.yaml` 是独立的生产拓扑：Nginx 是唯一对外服务，在端口 `80` 与 `443` 上终止 TLS，而控制平面保持在私有 Docker 网络中。它需要由部署方提供的数据库、应用、注册、操作者与 TLS 凭据。参见 [`docs/goal-01-runbook.md`](docs/goal-01-runbook.md) 的生产部署章节。
+`compose.production.yaml` 是独立的生产拓扑：Nginx 是唯一对外服务，在端口 `80` 与 `443` 上终止 TLS，而控制平面保持在私有 Docker 网络中。它需要由部署方提供的数据库、应用、注册、操作者与 TLS 凭据。参见 [`docs/runbooks/control-plane-and-daemon.md`](docs/runbooks/control-plane-and-daemon.md) 的生产部署章节。
 
 ## 配置与协议
 
@@ -173,7 +173,7 @@ go run ./cmd/symmetry-daemon -config /absolute/path/to/daemon.json
 - **要求** —— Linux 执行需要 `PIDFD_SIGNAL_PROCESS_GROUP`（Linux 6.9 或更高版本，且主机安全策略允许）。守护进程在启动前检查该能力，并在缺少时以失败关闭，且不回退到数字 PID。
 - **时间** —— 执行机器必须与 NTP 同步。超出租约安全边距的时钟偏差会作为诊断警告报告。
 
-参见 [`docs/goal-process-stop-testing.md`](docs/goal-process-stop-testing.md) 了解自有的进程组/Windows Job 边界与重启恢复限制。
+参见 [`docs/runbooks/daemon-process-stop.md`](docs/runbooks/daemon-process-stop.md) 了解自有的进程组/Windows Job 边界与重启恢复限制。
 
 ## 项目状态
 
@@ -215,10 +215,11 @@ symmetry/
 | --- | --- |
 | [Protocol v1](docs/protocol-v1.md) | 线上契约、生命周期、授权与恢复 |
 | [设计决策](docs/design/README.md) | 固定核心架构与边界 |
-| [Goal 1 runbook](docs/goal-01-runbook.md) | 控制平面与守护进程配置、运维 |
-| [Goal 2 runbook](docs/goal-02-runbook.md) | 门户、项目、看板与运行工作流 |
-| [Goal 3 runbook](docs/goal-03-runbook.md) | GitHub 与 Azure DevOps 连接及同步 |
-| [Goal 4 runbook](docs/goal-04-runbook.md) | 聊天、持久指导与监督控制 |
+| [运行手册](docs/runbooks/README.md) | 运维流程与可选验证方法 |
+| [控制平面与守护进程](docs/runbooks/control-plane-and-daemon.md) | 发布构建、生产 Compose 边缘、配置与操作者 API |
+| [门户](docs/runbooks/portal.md) | 工程工作区、项目、看板与运行控制 |
+| [连接](docs/runbooks/connections.md) | GitHub 与 Azure DevOps 认证、绑定与同步 |
+| [聊天与监督控制](docs/runbooks/chat-and-supervisory-control.md) | 聊天、持久指导、暂停/恢复与决策 |
 | [Harness 设计](docs/design/harness.md) | 原生适配器契约与能力验证 |
 | [质量策略](docs/design/quality.md) | 风险路由、证据与验收标准 |
 

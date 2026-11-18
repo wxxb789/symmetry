@@ -71,19 +71,20 @@ remains enabled. Use the same hostname for both origins.
 In production, do not publish Phoenix directly. It must receive private HTTP
 only from the trusted TLS edge; the public boundary terminates HTTPS before
 requests reach this service. See the repository [README](../README.md) for the
-topology and [`docs/goal-01-runbook.md`](../docs/goal-01-runbook.md) for
-deployment and operational steps. The API contract is
+topology and
+[`docs/runbooks/control-plane-and-daemon.md`](../docs/runbooks/control-plane-and-daemon.md)
+for deployment and operational steps. The API contract is
 [`docs/protocol-v1.md`](../docs/protocol-v1.md).
 
 Portal project, Kanban, health, and execution workflows are documented in
-[`docs/goal-02-runbook.md`](../docs/goal-02-runbook.md). Assigning a work item
+[`docs/runbooks/portal.md`](../docs/runbooks/portal.md). Assigning a work item
 to an agent records its execution settings; `Start run` explicitly creates the
 durable task, after which the portal supports input, cancellation, and legal
 failed/cancelled retries.
 
 GitHub and Azure DevOps connection setup, credential handling, resource binding,
 external ownership rules, and synchronization are documented in
-[`docs/goal-03-runbook.md`](../docs/goal-03-runbook.md).
+[`docs/runbooks/connections.md`](../docs/runbooks/connections.md).
 
 ## Subject-bound GitHub Goal effects
 
@@ -130,7 +131,8 @@ daemon/native harness. Its timeout fault withholds an actual provider response
 after acknowledgement; it does not claim a naturally occurring GitHub timeout.
 Monetary values remain `null`/`unknown` without provider-owned billing evidence;
 rate-limit counters do not establish money or zero billing. See the
-[0006h completion contract](../docs/goals/0006h-credentialed-provider-accounting.md).
+[0006h completion contract](../docs/goals/archive/0006h-credentialed-provider-accounting.md).
 
 Chat, durable instructions, decision packets, and cooperative worker controls
-are documented in [`docs/goal-04-runbook.md`](../docs/goal-04-runbook.md).
+are documented in
+[`docs/runbooks/chat-and-supervisory-control.md`](../docs/runbooks/chat-and-supervisory-control.md).
