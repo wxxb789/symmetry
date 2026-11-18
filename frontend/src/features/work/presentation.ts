@@ -442,6 +442,23 @@ export function timelineItemKey(item: TimelineItemLike): string {
   return `${asText(item.source) ?? "event"}:${identity}:${typeof item.generation === "number" ? item.generation : ""}`;
 }
 
+/**
+ * The boundary a served timeline page ends at, named the way the cursor's own
+ * position is: the entry's source and the id that source owns. The served
+ * `next_before` is that entry's position, and the server signs a fresh token for
+ * it on every read, so the token cannot witness that two reads paginate from the
+ * same boundary while this pair can. An entry that does not carry the id its
+ * source owns has no provable boundary, and a read must not bind pages to one.
+ */
+export function timelineBoundary(item: TimelineItemLike | undefined): string | null {
+  if (item === undefined) return null;
+  const source = asText(item.source);
+  const data = asRecord(item.data);
+  if (source === null || data === null) return null;
+  const id = asText(data[`${source}_id`]);
+  return id === null ? null : `${source}:${id}`;
+}
+
 const timestampFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
 export interface TimestampView {

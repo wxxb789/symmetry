@@ -257,77 +257,112 @@ describe("control receipts", () => {
     expect(screen.queryByText("Failed")).toBeNull();
   });
 
-  it("keeps the older pages' command receipts after a detail refresh re-keys the timeline", async () => {
+  it("keeps the receipts of the older pages a refresh re-served at the same boundary", async () => {
     const user = userEvent.setup();
-    let detailReads = 0;
-    const firstPageCommand = {
-      source: "command",
-      run_id: null,
-      generation: 1,
-      recorded_at: "2026-11-16T10:00:00Z",
-      data: {
-        command_id: "aaaaaaa1-0000-4000-8000-000000000001",
-        task_id: taskId,
-        kind: "cancel",
-        payload: {},
-        state: "applied",
-        issued_at: "2026-11-16T10:00:00Z",
-        applied_at: null,
-        acknowledgement_id: null,
-        acknowledgement_outcome: null,
-        acknowledged_at: null,
-      },
-    };
-    const olderPageCommand = {
-      source: "command",
-      run_id: null,
-      generation: 1,
-      recorded_at: "2026-11-16T09:00:00Z",
-      data: {
-        command_id: "bbbbbbb2-0000-4000-8000-000000000002",
-        task_id: taskId,
-        kind: "guidance",
-        payload: {},
-        state: "acknowledged",
-        issued_at: "2026-11-16T09:00:00Z",
-        applied_at: null,
-        acknowledgement_id: null,
-        acknowledgement_outcome: "applied",
-        acknowledged_at: null,
-      },
-    };
-    const respond = (input: string | Request | URL): Response => {
-      const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
-      if (url.pathname === "/portal/api/session") return new Response(JSON.stringify({ csrf_token: "session-token" }));
-      if (url.pathname === `/portal/api/work-items/${subjectId}/timeline`) {
-        expect(url.searchParams.get("before")).toBeTruthy();
-        return new Response(JSON.stringify({ items: [olderPageCommand], next_before: null }));
-      }
-      if (url.pathname === `/portal/api/work-items/${subjectId}`) {
-        detailReads += 1;
-        return new Response(JSON.stringify(detailBody({
-          execution: { task_id: taskId, run_id: null, generation: 1, state: "running", can_cancel: true },
-          timeline: [firstPageCommand],
-          nextBefore: `cursor-${detailReads}`,
-        })));
-      }
-      if (url.pathname === "/portal/api/workspace") return new Response(JSON.stringify(workspaceBody()));
-      return new Response("{}", { status: 404 });
-    };
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => Promise.resolve(respond(input)));
-    const application = createApplication({ fetcher, location: { href: `http://localhost/portal/work/${subjectId}`, replace: vi.fn() } });
-    applications.push(application);
-    const history: RouterHistory = createMemoryHistory({ initialEntries: [`/portal/work/${subjectId}`] });
-    const router = createAppRouter(application, history);
-    render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    const newest = commandEntry("aaaaaaa1-0000-4000-8000-000000000001", "2026-11-16T10:00:00Z", "cancel", "applied", null);
+    const older = commandEntry("bbbbbbb2-0000-4000-8000-000000000002", "2026-11-16T09:00:00Z", "guidance", "acknowledged", "applied");
+    const harness = renderTimelineHarness({
+      // Every read mints its own token for the same boundary entry, exactly as
+      // the server's signed cursor does; the boundary is what the pages hang on.
+      detail: (readIndex) => detailBody({ timeline: [newest], nextBefore: `cursor-${readIndex}` }),
+      timeline: () => ({ items: [older], next_before: null }),
+    });
     await openDetail();
-    // The first page's own command renders in the receipt list.
     expect(await screen.findByText("Queued for the runtime")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Load older history" }));
     expect(await screen.findByText("Applied")).toBeInTheDocument();
-    // The refresh serves a new boundary, re-keying the disabled timeline query.
     await user.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(detailReads).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(harness.detailReads()).toBeGreaterThanOrEqual(2));
+    // The refreshed read re-keys the query, so its own control replaces the
+    // exhausted one — which is what proves this render is the refreshed one.
+    await screen.findByRole("button", { name: "Load older history" });
+    // The refreshed read ends at the entry the older page was fetched from, so
+    // that page still belongs to the chain this detail serves.
     expect(receiptCards("Applied")).toHaveLength(1);
   });
+
+  it("does not render the pages a replaced first-page boundary did not serve", async () => {
+    const user = userEvent.setup();
+    const servedBoundary = commandEntry("aaaaaaa1-0000-4000-8000-000000000001", "2026-11-16T10:00:00Z", "cancel", "applied", null);
+    const replacedBoundary = commandEntry("ccccccc3-0000-4000-8000-000000000003", "2026-11-16T11:00:00Z", "start", "pending", null);
+    const retained = commandEntry("bbbbbbb2-0000-4000-8000-000000000002", "2026-11-16T09:00:00Z", "guidance", "acknowledged", "applied");
+    const harness = renderTimelineHarness({
+      detail: (readIndex) => detailBody({ timeline: [readIndex === 1 ? servedBoundary : replacedBoundary], nextBefore: `cursor-${readIndex}` }),
+      timeline: () => ({ items: [retained], next_before: null }),
+    });
+    await openDetail();
+    expect(await screen.findByText("Queued for the runtime")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("Applied")).toBeInTheDocument();
+    expect(harness.cursors).toEqual(["cursor-1"]);
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(harness.detailReads()).toBeGreaterThanOrEqual(2));
+    // The refreshed read's own first page renders before the page it did not
+    // serve is judged: nothing else proves the render is the refreshed one.
+    expect(await screen.findByText("Awaiting agent acknowledgement")).toBeInTheDocument();
+    // The refreshed read paginates from its own boundary, so the page the reader
+    // fetched under the replaced one is not served beside it.
+    expect(screen.queryByText("Applied")).toBeNull();
+    // The reader's next read continues from the served boundary, and the older
+    // page renders under the cursor that actually serves it.
+    await user.click(await screen.findByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("Applied")).toBeInTheDocument();
+    expect(harness.cursors).toEqual(["cursor-1", "cursor-2"]);
+  });
 });
+
+/** One served command entry of a task's timeline, in the shape both reads carry. */
+function commandEntry(commandId: string, recordedAt: string, kind: string, state: string, acknowledgement: string | null) {
+  return {
+    source: "command",
+    run_id: null,
+    generation: 1,
+    recorded_at: recordedAt,
+    data: {
+      command_id: commandId,
+      task_id: taskId,
+      kind,
+      payload: {},
+      state,
+      issued_at: recordedAt,
+      applied_at: null,
+      acknowledgement_id: null,
+      acknowledgement_outcome: acknowledgement,
+      acknowledged_at: null,
+    },
+  };
+}
+
+/**
+ * The work detail with a scripted timeline read: one served first page per
+ * detail read, and one older page per `before` cursor the surface asks for.
+ */
+function renderTimelineHarness(options: {
+  detail: (readIndex: number) => Record<string, unknown>;
+  timeline: (before: string) => { items: unknown[]; next_before: string | null };
+}) {
+  let detailReads = 0;
+  const cursors: string[] = [];
+  const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
+    if (url.pathname === `/portal/api/work-items/${subjectId}/timeline`) {
+      const before = url.searchParams.get("before");
+      expect(before).toBeTruthy();
+      cursors.push(before ?? "");
+      return Promise.resolve(new Response(JSON.stringify(options.timeline(before ?? ""))));
+    }
+    if (url.pathname === `/portal/api/work-items/${subjectId}`) {
+      detailReads += 1;
+      return Promise.resolve(new Response(JSON.stringify(options.detail(detailReads))));
+    }
+    if (url.pathname === "/portal/api/session") return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+    if (url.pathname === "/portal/api/workspace") return Promise.resolve(new Response(JSON.stringify(workspaceBody())));
+    return Promise.resolve(new Response("{}", { status: 404 }));
+  });
+  const application = createApplication({ fetcher, location: { href: `http://localhost/portal/work/${subjectId}`, replace: vi.fn() } });
+  applications.push(application);
+  const history: RouterHistory = createMemoryHistory({ initialEntries: [`/portal/work/${subjectId}`] });
+  const router = createAppRouter(application, history);
+  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+  return { cursors, detailReads: () => detailReads };
+}

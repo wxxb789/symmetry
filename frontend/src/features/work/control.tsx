@@ -33,7 +33,7 @@ import {
   type WorkDetail,
   type WorkTimeline,
 } from "../../services/api";
-import { asRecord, asText, executionStateLabel, timelineItemKey, timestamp, type TimelineItemLike } from "./presentation";
+import { asRecord, asText, executionStateLabel, timelineBoundary, timelineItemKey, timestamp, type TimelineItemLike } from "./presentation";
 import {
   attemptReceiptView,
   receiptLabel,
@@ -55,6 +55,20 @@ interface PendingState {
   readonly paused: boolean;
 }
 
+/**
+ * The older timeline pages the reader expanded, under the boundary of the first
+ * page they were fetched from: the identity a served read has to still end at
+ * for those pages to belong to its chain.
+ */
+interface RetainedPages {
+  readonly workItemId: string;
+  /** The boundary entry the chain starts at, when the read that fetched the pages proved one. */
+  readonly boundary: string | null;
+  /** The served cursor the pages were fetched with; the whole identity when no boundary entry is provable. */
+  readonly cursor: string | null;
+  readonly entries: readonly TimelineItem[];
+}
+
 interface ControlSurfaceValue {
   readonly workItemId: string;
   readonly attempts: readonly ControlAttempt[];
@@ -62,7 +76,7 @@ interface ControlSurfaceValue {
   readonly latestCommandId: string | null;
   readonly execution: AttemptExecution | null;
   readonly pending: Record<ActionKind, PendingState>;
-  /** The older timeline entries the reader expanded, shared by the history and the receipt list. */
+  /** The older timeline entries the served first page's boundary still chains to, shared by the history and the receipt list. */
   readonly olderEntries: readonly TimelineItem[];
   readonly retainTimelinePages: (data: { readonly pages: readonly WorkTimeline[] } | undefined) => void;
   readonly start: () => void;
@@ -86,7 +100,9 @@ export function useControlSurface(): ControlSurfaceValue {
  * are separate mount points that must agree about one attempt's state, and the
  * receipt list also renders the older timeline pages the history section
  * expanded. A detail refresh re-keys the disabled timeline query, so those
- * pages are retained here rather than read from the current key's data.
+ * pages are retained here rather than read from the current key's data — under
+ * the boundary they were fetched from, so a read that ends elsewhere never
+ * serves them.
  */
 export function WorkControlSurface({ detail, cursor, children }: { detail: WorkDetail; cursor: string | null; children: ReactNode }) {
   const { application } = useRouteContext({ from: "__root__" });
@@ -99,24 +115,34 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
 
   const snapshotVersion = () => queryClient.getQueryState(["work-item", { workItemId }])?.dataUpdatedAt ?? 0;
   const [attempts, setAttempts] = useState<ControlAttempt[]>(() => (goalManaged ? [] : mountAttempts(item, snapshotVersion())));
+  // The boundary this detail read's first page ends at. The pages a reader loads
+  // are fetched from exactly this boundary, and the server signs a fresh cursor
+  // for it on every read, so the boundary entry — not the token — is the identity
+  // they are retained under: a served read that ends somewhere else does not
+  // chain where they begin, and serving them beside it would present a gap as
+  // contiguous history.
+  const firstPage = detail.raw.timeline;
+  const servedBoundary = cursor === null ? null : timelineBoundary(firstPage[firstPage.length - 1]);
   // Reopening the detail inside the freshness window remounts this component
   // while the disabled query still holds the pages the reader expanded.
-  const [older, setOlder] = useState<{ workItemId: string; entries: readonly TimelineItem[] }>(() => ({
+  const [older, setOlder] = useState<RetainedPages>(() => ({
     workItemId,
+    boundary: servedBoundary,
+    cursor,
     entries: queryClient.getQueryData<{ pages: readonly WorkTimeline[] }>(["work-item-timeline", { workItemId, cursor }])?.pages.flatMap((page) => page.items) ?? [],
   }));
   // Every older page is served by a reader action, so the merge runs when that
-  // fetch resolves; a refresh that re-keys the query keeps the expanded entries.
+  // fetch resolves, under the boundary the render that issued the fetch served.
   const retainTimelinePages = (data: { readonly pages: readonly WorkTimeline[] } | undefined) => {
     const fetched = data?.pages.flatMap((page) => page.items) ?? [];
     if (fetched.length === 0) return;
     setOlder((previous) => {
-      const retained = previous.workItemId === workItemId ? previous.entries : [];
-      const entries = mergeOlderEntries(fetched, retained);
-      return entries === retained && previous.workItemId === workItemId ? previous : { workItemId, entries };
+      const bound = retainedForServedChain(previous, workItemId, servedBoundary, cursor);
+      const entries = mergeOlderEntries(fetched, bound ? previous.entries : []);
+      return bound && entries === previous.entries ? previous : { workItemId, boundary: servedBoundary, cursor, entries };
     });
   };
-  const olderEntries = older.workItemId === workItemId ? older.entries : [];
+  const olderEntries = retainedForServedChain(older, workItemId, servedBoundary, cursor) ? older.entries : [];
 
   const replace = (kind: ActionKind, attempt: ControlAttempt) => {
     setAttempts((previous) => [...previous.filter((candidate) => candidate.kind !== kind), attempt]);
@@ -313,8 +339,9 @@ export function WorkWaitingInput({ detail }: { detail: WorkDetail }) {
 export function WorkReceipts({ firstPage }: { firstPage: readonly TimelineItemLike[] }) {
   const surface = useControlSurface();
   // The history section owns the timeline query and the pages the reader
-  // expanded; the receipt list renders that same retained state, so a refresh
-  // that re-keys the disabled query cannot silently drop their rows.
+  // expanded; the receipt list renders that same retained state, bounded the
+  // same way, so no row is served from a page the detail read no longer chains
+  // to and none is dropped while the boundary still serves it.
   const olderPages = surface.olderEntries.length === 0 ? [] : [surface.olderEntries];
   const carried = new Set<string>();
   for (const entry of [...firstPage, ...olderPages.flat()]) {
@@ -388,6 +415,18 @@ function mergeOlderEntries(fetched: readonly TimelineItem[], retained: readonly 
   const fetchedKeys = new Set(fetched.map(timelineItemKey));
   const merged = [...fetched, ...retained.filter((item) => !fetchedKeys.has(timelineItemKey(item)))];
   return merged.length === retained.length && merged.every((item, index) => item === retained[index]) ? retained : merged;
+}
+
+/**
+ * Whether retained pages were fetched for the chain the served read is on. Two
+ * reads prove they are on the same chain by ending at the same boundary entry —
+ * the entry the cursor's own position names. When neither read proves one, only
+ * the very same served cursor does: the server mints a fresh token per read, so
+ * an equal token means the detail was not re-served at all.
+ */
+function retainedForServedChain(retained: RetainedPages, workItemId: string, servedBoundary: string | null, cursor: string | null): boolean {
+  return retained.workItemId === workItemId
+    && (retained.boundary === null ? servedBoundary === null && retained.cursor === cursor : retained.boundary === servedBoundary);
 }
 
 /**

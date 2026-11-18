@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asRecord, asText, attributionOf, ciLabel, ciResourcesOf, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, failureText, nextActionLabel, ownerKey, ownerLabel, reportedResult, reportedText, timelineItemKey, timelineItemView, timestamp, type TimelineItemLike } from "./presentation";
+import { asRecord, asText, attributionOf, ciLabel, ciResourcesOf, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, failureText, nextActionLabel, ownerKey, ownerLabel, reportedResult, reportedText, timelineBoundary, timelineItemKey, timelineItemView, timestamp, type TimelineItemLike } from "./presentation";
 
 const workItemId = "11111111-1111-4111-8111-111111111111";
 const taskId = "22222222-2222-4222-8222-222222222222";
@@ -176,5 +176,22 @@ describe("evidence and timeline presentation", () => {
       .toEqual({ label: "transition · failed", headline: "boom", link: null });
     expect(timelineItemView({ source: "command", generation: 1, data: { command_id: taskId, kind: "pause", state: "acknowledged", acknowledgement_outcome: "applied" } }))
       .toEqual({ label: "command · pause", headline: "Command acknowledged · acknowledged applied", link: null });
+  });
+
+  it("names the boundary a served page ends at by the id its own source carries", () => {
+    expect(timelineBoundary({ source: "event", recorded_at: "2026-03-01T09:00:00Z", data: { event_id: taskId } })).toBe(`event:${taskId}`);
+    expect(timelineBoundary({ source: "transition", recorded_at: "2026-03-01T09:00:00Z", data: { transition_id: taskId } })).toBe(`transition:${taskId}`);
+    expect(timelineBoundary({ source: "command", recorded_at: "2026-03-01T09:00:00Z", data: { command_id: taskId } })).toBe(`command:${taskId}`);
+  });
+
+  it("claims no boundary for an entry that does not carry the id its source owns", () => {
+    // A page cannot be bound to a boundary the read did not serve, so anything
+    // the entry does not prove stays unbound rather than falling back to a
+    // timestamp two different entries can share.
+    expect(timelineBoundary(undefined)).toBeNull();
+    expect(timelineBoundary({ source: "command", recorded_at: "2026-03-01T09:00:00Z", data: {} })).toBeNull();
+    expect(timelineBoundary({ source: "command", recorded_at: "2026-03-01T09:00:00Z", data: { transition_id: taskId } })).toBeNull();
+    expect(timelineBoundary({ source: "command", recorded_at: "2026-03-01T09:00:00Z", data: { command_id: null } })).toBeNull();
+    expect(timelineBoundary({ source: "command", recorded_at: "2026-03-01T09:00:00Z", data: null })).toBeNull();
   });
 });

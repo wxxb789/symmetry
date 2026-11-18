@@ -11,14 +11,26 @@ export function AttentionPage() {
   const { application } = useRouteContext({ from: "__root__" });
   const search = useSearch({ from: "/attention" });
   const projectId = search.projectId ?? null;
-  const [cursors, setCursors] = useState<string[]>([]);
+  // The chain the reader expanded: the served cursor the feed's first page ended
+  // at when the first older page was loaded, and the cursors of the pages loaded
+  // from it. The cursor IS the boundary (it encodes the last Goal's position and
+  // is not re-minted per read), so the served value is the identity to compare.
+  const [expanded, setExpanded] = useState<{ readonly start: string | null; readonly cursors: readonly string[] }>({ start: null, cursors: [] });
   const workspace = useQuery(workspaceOptions(application.api, projectId ?? null));
-  // One hook for every loaded cursor page: the page count grows as the reader
-  // loads more, and hooks must not be called in a loop over that state.
-  const queries = useQueries({
-    queries: [null, ...cursors].map((cursor) => attentionOptions(application.api, projectId, cursor)),
+  // The first page is its own read; the feed's chain starts at the cursor it
+  // serves, so only its own read can name that start.
+  const first = useQuery(attentionOptions(application.api, projectId, null));
+  const servedStart = first.data?.goal_attention.next_cursor ?? null;
+  // The reader's pages belong to the chain they were fetched for: a re-read that
+  // ends somewhere else does not serve them, because the entries between its
+  // first page and them were never loaded and the list would present the jump as
+  // contiguous. One hook for every loaded cursor page, since the page count grows
+  // as the reader loads more and hooks must not be called in a loop over it.
+  const cursors = expanded.start !== null && expanded.start === servedStart ? expanded.cursors : [];
+  const older = useQueries({
+    queries: cursors.map((cursor) => attentionOptions(application.api, projectId, cursor)),
   });
-  const first = queries[0];
+  const queries = [first, ...older];
   const goalEntries = queries.flatMap((query) => query.data?.goal_attention.entries ?? []);
   const projectBlocked = first?.data?.project_blocked.entries ?? [];
   const selectedProjectName = workspace.data?.projects.find((project) => project.id === (projectId ?? first?.data?.selected_project_id))?.name ?? null;
@@ -32,7 +44,7 @@ export function AttentionPage() {
   // The served feed names its own project; the picker alone does not state the scope.
   const scopedProject = projectBlocked[0]?.project_name ?? projectBlocked[0]?.project_key ?? selectedProjectName ?? null;
   const refresh = () => {
-    setCursors([]);
+    setExpanded({ start: null, cursors: [] });
     if (workspace.isError) void workspace.refetch();
     for (const query of queries) void query.refetch();
   };
@@ -49,7 +61,7 @@ export function AttentionPage() {
     {(first?.isPending || workspace.isPending) && <LoadingState label="Loading blocked work…" />}
     {surfaceError !== null && <ErrorState error={surfaceError} retry={refresh} stale={first?.data !== undefined} />}
     {first?.data && <>
-      <GoalAttention entries={goalEntries} unavailable={goalUnavailable} nextCursor={nextCursor} fetching={fetching} onLoadMore={() => nextCursor && setCursors([...cursors, nextCursor])} />
+      <GoalAttention entries={goalEntries} unavailable={goalUnavailable} nextCursor={nextCursor} fetching={fetching} onLoadMore={() => { if (nextCursor !== null) setExpanded({ start: servedStart, cursors: [...cursors, nextCursor] }); }} />
       <ProjectBlocked entries={projectBlocked} unavailable={projectUnavailable} />
     </>}
     <p className="sr-only" role="status">{fetching && !first?.isPending ? "Refreshing attention" : ""}</p>

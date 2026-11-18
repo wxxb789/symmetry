@@ -784,6 +784,15 @@ describe("execution history boundaries", () => {
   it("keeps already expanded older history when the detail refresh re-issues the boundary", async () => {
     const user = userEvent.setup();
     const reads = { details: 0, timelineBefore: [] as string[] };
+    // The refreshed read ends at the entry the first read ended at: the boundary
+    // is re-issued under a new token, which is what a signed cursor does.
+    const boundaryEntry = {
+      source: "transition",
+      run_id: timelineItemId,
+      generation: 1,
+      recorded_at: "2026-03-01T10:00:00Z",
+      data: { transition_id: "77777777-7777-4777-8777-777777777777", state: "running", payload: { reason: "newest entry" } },
+    };
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
       const requestPath = input instanceof Request ? input.url : String(input);
       if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
@@ -798,6 +807,7 @@ describe("execution history boundaries", () => {
           id: subjectId,
           projectId: firstProjectId,
           title: subjectTitle,
+          timeline: [boundaryEntry],
           nextBefore: reads.details === 1 ? "cursor-1" : "cursor-2",
         }))));
       }
@@ -818,11 +828,76 @@ describe("execution history boundaries", () => {
     await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["work-item", { workItemId: subjectId }], exact: true }); });
     expect(reads.details).toBe(2);
     // The refreshed boundary re-keys the timeline query, so the exhausted state
-    // belongs to the superseded boundary and the control returns; the page loaded
-    // from that boundary still belongs to the reader and stays rendered.
+    // belongs to the superseded cursor token and the control returns; the page
+    // loaded from that boundary still chains where this read ends, so it stays
+    // rendered.
     await screen.findByRole("button", { name: "Load older history" });
     expect(screen.getByText("older entry")).toBeVisible();
     expect(reads.timelineBefore).toEqual(["cursor-1"]);
+  });
+
+  it("retires already expanded older history when the refresh serves another boundary", async () => {
+    const user = userEvent.setup();
+    const reads = { details: 0, timelineBefore: [] as string[] };
+    // The refreshed read ends at a different entry, so its cursor does not chain
+    // where the page the reader loaded begins: the entries between the two were
+    // never loaded, and rendering the page beside it would claim they were.
+    const servedBoundary = {
+      source: "transition",
+      run_id: timelineItemId,
+      generation: 1,
+      recorded_at: "2026-03-01T10:00:00Z",
+      data: { transition_id: "77777777-7777-4777-8777-777777777777", state: "running", payload: { reason: "newest entry" } },
+    };
+    const refreshedBoundary = {
+      source: "transition",
+      run_id: timelineItemId,
+      generation: 1,
+      recorded_at: "2026-03-01T11:00:00Z",
+      data: { transition_id: "88888888-8888-4888-8888-888888888888", state: "running", payload: { reason: "later entry" } },
+    };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const requestPath = input instanceof Request ? input.url : String(input);
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
+      if (requestPath.includes("/portal/api/work-items/")) {
+        const url = new URL(requestPath, "http://localhost");
+        if (url.pathname.endsWith("/timeline")) {
+          reads.timelineBefore.push(url.searchParams.get("before") ?? "");
+          return Promise.resolve(new Response(JSON.stringify({ items: [olderEntry], next_before: null })));
+        }
+        reads.details += 1;
+        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
+          id: subjectId,
+          projectId: firstProjectId,
+          title: subjectTitle,
+          timeline: [reads.details === 1 ? servedBoundary : refreshedBoundary],
+          nextBefore: reads.details === 1 ? "cursor-1" : "cursor-2",
+        }))));
+      }
+      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
+      return Promise.resolve(new Response(JSON.stringify({
+        selected_project_id: null,
+        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
+        health: { status: "unknown" },
+      })));
+    });
+    const { application } = renderWorkspace(`/portal/work/${subjectId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: subjectTitle });
+
+    await user.click(screen.getByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("older entry")).toBeVisible();
+    expect(reads.timelineBefore).toEqual(["cursor-1"]);
+
+    await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["work-item", { workItemId: subjectId }], exact: true }); });
+    expect(reads.details).toBe(2);
+    // The refreshed read's own first page renders before the page it did not
+    // serve is judged: nothing else proves the render is the refreshed one.
+    expect(await screen.findByText("later entry")).toBeVisible();
+    expect(screen.queryByText("older entry")).toBeNull();
+    // The reader's own control continues from the boundary this read serves.
+    await user.click(await screen.findByRole("button", { name: "Load older history" }));
+    expect(await screen.findByText("older entry")).toBeVisible();
+    expect(reads.timelineBefore).toEqual(["cursor-1", "cursor-2"]);
   });
 
   it("does not paginate a loaded older page against a superseded detail boundary", async () => {

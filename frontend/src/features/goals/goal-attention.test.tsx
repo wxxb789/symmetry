@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { jsonResponse, recordingFetcher, renderRoute } from "../../app/test-harness";
@@ -96,6 +96,49 @@ describe("attention entry point", () => {
     expect(await screen.findByRole("link", { name: "Older goal attention" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Newest goal attention" })).toBeVisible();
     expect(calls.some((call) => call.path.includes("cursor=cursor-one"))).toBe(true);
+  });
+
+  it("does not render the feed pages a replaced first-page cursor did not serve", async () => {
+    const olderGoalId = "55555555-5555-4555-8555-555555555555";
+    const replacedChainGoalId = "66666666-6666-4666-8666-666666666666";
+    let firstPageReads = 0;
+    const { fetcher } = recordingFetcher((path) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/portal/api/attention") {
+        const cursor = url.searchParams.get("cursor");
+        if (cursor === "cursor-one") {
+          return jsonResponse(readAttention({ selectedProjectId: projectId, goals: [{ goalId: olderGoalId, projectId, title: "Older goal attention" }], nextCursor: null }));
+        }
+        if (cursor === "cursor-two") {
+          return jsonResponse(readAttention({ selectedProjectId: projectId, goals: [{ goalId: replacedChainGoalId, projectId, title: "Replaced-chain goal attention" }], nextCursor: null }));
+        }
+        firstPageReads += 1;
+        // The second first-page read ends at another Goal, so its cursor does
+        // not name the boundary the reader's page was fetched from.
+        return jsonResponse(readAttention({
+          selectedProjectId: projectId,
+          goals: [{ goalId, projectId, title: "Newest goal attention" }],
+          nextCursor: firstPageReads === 1 ? "cursor-one" : "cursor-two",
+        }));
+      }
+      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
+      return jsonResponse(workspaceResponse(projectId));
+    });
+
+    const user = userEvent.setup();
+    const route = render("/portal/attention", fetcher);
+    expect(await screen.findByRole("link", { name: "Newest goal attention" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Load more Goal attention" }));
+    expect(await screen.findByRole("link", { name: "Older goal attention" })).toBeVisible();
+    // A realtime invalidation re-reads the feed without the reader's Refresh, so
+    // only the served cursor can retire the page that no longer chains under it.
+    await act(async () => { await route.application.queryClient.invalidateQueries({ queryKey: ["attention"] }); });
+    expect(await screen.findByRole("link", { name: "Newest goal attention" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Older goal attention" })).toBeNull();
+    // The reader's next page is the one the served cursor names.
+    await user.click(await screen.findByRole("button", { name: "Load more Goal attention" }));
+    expect(await screen.findByRole("link", { name: "Replaced-chain goal attention" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Older goal attention" })).toBeNull();
   });
 
   it("offers goal creation only against a selected project and keeps the server's refusal", async () => {
