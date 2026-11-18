@@ -813,6 +813,89 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       publishing `subscribed from here`, the way it publishes connection status — after which
       the case could wait on that mark plus the read it causes. The window's deterministic proof
       stays the frontend case above, where both the drop and the join are held.
+      **Both remaining cases converted** (branch `feat/visible-refresh-marks`). The product now
+      publishes the one fact both cases needed, and it is state an operator reads: the invalidation
+      client records every every-read pass it issues — which of its own events caused it, when it
+      issued its reads and when those reads finished — and the shell states that record beside its
+      connection status (`frontend/src/services/realtime.ts`: `RefreshPass`, `lastRefresh()`, and
+      `invalidateReads(source)` writing the record at the same call that issues the reads;
+      `frontend/src/app/shell.tsx`: `.reads-status` in the topbar with `data-connection`,
+      `data-refresh-source`, `data-refresh-issued-at` and `data-refresh-settled-at`, rendering e.g.
+      `Offline, polling · refreshed 14:03:12 (the polling fallback)`). The record is written where
+      the work happens — the fallback's own tick, the join's `ok` hook, the socket-open snapshot,
+      the tab's return, and the every-read pass an unclassified invalidation takes — so no mark can
+      exist without the pass that issues the reads, and only an every-read pass is recorded: a
+      change classified to specific keys refreshes those reads alone and cannot speak for the reads
+      on screen as a whole. Its completion is the promise `invalidateQueries` returns, so no timer
+      was added, and a pass a newer one superseded never records a completion; polling is not
+      reinstated (`syncPolling` still stops on `connected`). Frontend coverage: the record's
+      sources, its completion, the superseded-pass guard and the classified-change exclusion in
+      `src/services/realtime.test.ts`, and the shell's `.reads-status` attributes asserted in
+      `src/app/router.test.tsx`'s `channel-join read epoch` case.
+      `portal-cutover.spec.mjs`'s polling-fallback case (read at `:338` on this branch) now routes
+      the **reader's own** socket (`controlSocket(reader)` with every attempt closed) instead of one
+      page's socket standing in for it, and decides on the shell's record plus the state that pass
+      served: a fallback pass whose reads finished after the write was requested
+      (`data-refresh-source="fallback"`, `settledAt >= createdAt`, both in the reader's own clock)
+      and then the new state rendered — no elapsed budget anywhere in the decision.
+      `FALLBACK_CADENCE_GUARD_MS` (20 s) is renamed `FALLBACK_READ_GUARD_MS`, its value unchanged
+      and its comment now says it is a backstop over a missing pass, never a verdict. The old case
+      routed the *writer's* page, so its `established === 0` never spoke for the reader: with the
+      reader's socket live the convergence it observed was the push path rather than the fallback
+      its note claimed.
+      `portal-work-views.spec.mjs`'s disconnected-read case (read at `:1119`) now exercises the
+      product's join epoch instead of its own refresh control. The harness holds the browser's own
+      connection (`controlSocket(page)` with `hold` set: the page's WebSocket is opened as a mock
+      and **no upstream connection is made**, `withheld` counts the bytes that stay with the
+      harness, and `release()` connects and replays them in order — the bytes are never parsed, and
+      a Phoenix 1.8 frame is a JSON array on the wire, which is why an object-shaped join matcher
+      forwarded the join in the first attempt at this hold). The browser therefore is `connected`
+      with the server's join clause unrun: the run posts through the API, the server pushes its
+      invalidation down a socket with no subscription to address (`pushed === 0`,
+      `established === 0` at that moment, `withheld > 0`), and the surface still renders the pre-run
+      document — the hosted failure's own observation, now the case's deterministic precondition.
+      Releasing the connection then decides on two product facts in order: the shell's record that
+      the pass which refreshed the reads is `join` and issued them after the run was published
+      (`issuedAt > publishedAt`), and the read that pass caused, served by the server (the detail
+      read the case armed before the release). Nothing else can reconcile that surface: the
+      fallback is stopped while the transport is open, the frame is gone, and the case dispatches no
+      tab return and presses no refresh control. `JOIN_EPOCH_GUARD_MS` (20 s) is a new named
+      backstop over the client's ten-second join timeout and its rejoin backoff; it decides nothing.
+      The harness hold answers this entry's own earlier objection — that a routed websocket
+      withholding join frames only re-makes the precondition timing-dependent — in the only way that
+      holds: the hold is set before the shell starts and released by the case after it has observed
+      the product's own states, and a hold that failed to apply turns the case red (the surface
+      renders the run early), never green.
+      Affected suites on the delivered bytes, the render step's own command form
+      (`pnpm --filter symmetry-browser-acceptance test tests/portal-cutover.spec.mjs
+      tests/portal-work-views.spec.mjs`, both projects, against a `mix phx.server` of this revision
+      on a `postgres:18.6` container): the two files, both projects,
+      `33 passed`, `1 skipped`, exit 0 (2.9 m), the converted cases green on both: the cutover
+      fallback case (desktop 9.6 s, mobile 10.7 s) and the disconnected-read case (desktop 8.0 s,
+      mobile 5.2 s). This host cannot boot the packaged release (recorded above), so the runs used
+      `mix phx.server` of this revision against a `postgres:18.6` container with
+      `SYMMETRY_PORTAL_URL` pointed at it and a private `SYMMETRY_PLAYWRIGHT_OUTPUT` directory —
+      the shared results directory is what wedged two earlier attempts at the rehearsal, and the
+      private one is what let the suite report at all.
+      Gates on the delivered bytes, exit codes: `pnpm --filter @symmetry/frontend typecheck` 0,
+      `lint` 0, `test` 0 (18 files, 322 tests), `build` 0.
+      Sabotage evidence: first, the fallback tick was made to refresh
+      nothing at all (`syncPolling`'s tick body emptied): the converted cutover case failed for its
+      own stated reason on both projects (`2 failed`, exit 1: `the fallback pass completed and
+      refreshed the reads after the write`, `Received: false`, `Timeout 20000ms exceeded`), while
+      the pre-change version of the same case — which routed the *writer's* page and waited on the
+      surface — passed the same sabotaged bytes (`2 passed`, exit 0), because its reader's live
+      socket delivered the frame. Second, the join's `ok` hook was made to issue nothing
+      (`onJoined` emptied): the converted disconnected-read case failed for its own stated reason on
+      both projects (`2 failed`, exit 1: `the completed join's pass refreshed the reads`,
+      `Received has value: null`, `Timeout 20000ms exceeded`), while the pre-change (#58) version of
+      the case passed the same sabotaged bytes (`2 passed`, exit 0) through its own refresh control.
+      Both sabotages were reverted and the bundle rebuilt to the delivered asset name
+      (`index-BNKze5Le.js`), so the green suite verdict above stands for the restored bytes.
+      Still not converted, and not part of this change: the four cases #58 moved onto product state
+      stay as they are; the other guards in these suites stay as named backstops; the other four
+      render-step specs were not re-run here, and this entry's first clause (re-measure the
+      pre-existing suites on a quiesced host) stays open.
 ## Open findings from the 0008b model-routing review
 
 - [ ] Revalidate the open class B finding against

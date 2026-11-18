@@ -1181,6 +1181,21 @@ describe("channel-join read epoch", () => {
       expect(await screen.findByText("Queued")).toBeInTheDocument();
       expect(screen.queryByText("No execution recorded")).toBeNull();
       expect(detailReads, "the completed join reconciled with exactly one read").toBe(preRunReads + 2);
+
+      // The shell states the same epoch from the client's own record: the reads
+      // were refreshed by the completed join, and the pass names when it issued
+      // its reads. A surface cannot show this state without the join's read
+      // having issued, because the pass writes it where the read is issued.
+      const status = document.querySelector(".reads-status");
+      expect(status, "the shell states the reads' connection and freshness").not.toBeNull();
+      expect(status).toHaveAttribute("data-connection", "connected");
+      expect(status).toHaveAttribute("data-refresh-source", "join");
+      expect(Number(status?.getAttribute("data-refresh-issued-at"))).toBeGreaterThan(0);
+      await waitFor(() => expect(status?.getAttribute("data-refresh-settled-at")).toMatch(/^\d+$/));
+      expect(Number(status?.getAttribute("data-refresh-settled-at"))).toBeGreaterThanOrEqual(
+        Number(status?.getAttribute("data-refresh-issued-at")),
+      );
+      expect(screen.getByText(/the channel join/)).toBeInTheDocument();
     } finally {
       unmount();
     }

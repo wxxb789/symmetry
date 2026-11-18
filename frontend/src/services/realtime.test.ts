@@ -220,6 +220,77 @@ describe("operator invalidation client", () => {
     expect(invalidate).toHaveBeenCalledTimes(4);
   });
 
+  it("records the every-read pass that issues the reads, and its completion", async () => {
+    // The record is written where the pass is: a surface states its freshness from
+    // the client's own act, so it cannot be set without the reads having issued.
+    const { fake, invalidate, realtime } = harness();
+    expect(realtime.lastRefresh()).toBeNull();
+    const snapshot = Promise.withResolvers<void>();
+    const reconcile = Promise.withResolvers<void>();
+    invalidate.mockReturnValueOnce(snapshot.promise).mockReturnValueOnce(reconcile.promise);
+
+    realtime.connect();
+    fake.open();
+    expect(realtime.lastRefresh()).toMatchObject({ source: "connection", settledAt: null });
+    expect(realtime.lastRefresh()?.issuedAt).toBeTypeOf("number");
+
+    fake.joinOk();
+    const issued = realtime.lastRefresh();
+    expect(issued).toMatchObject({ source: "join", settledAt: null });
+    expect(issued?.issuedAt).toBeTypeOf("number");
+
+    // A pass that a newer one replaced records no completion: its settle speaks
+    // for reads that are no longer the ones on screen.
+    snapshot.resolve();
+    await Promise.resolve();
+    expect(realtime.lastRefresh()).toBe(issued);
+    expect(realtime.lastRefresh()?.settledAt).toBeNull();
+
+    // The current pass records when the reads it issued finished.
+    reconcile.resolve();
+    await Promise.resolve();
+    expect(realtime.lastRefresh()?.source).toBe("join");
+    expect(realtime.lastRefresh()?.issuedAt).toBe(issued?.issuedAt);
+    expect(realtime.lastRefresh()?.settledAt).toBeTypeOf("number");
+  });
+
+  it("names the fallback tick, the returning tab and an unclassified change as the sources of their passes", () => {
+    let visible = true;
+    const { fake, invalidate, realtime } = harness({ pollIntervalMs: 50, visibility: () => visible });
+    realtime.connect();
+    invalidate.mockClear();
+
+    // While the socket is down the fallback's own tick is the pass that refreshed
+    // every read, and the record says so.
+    vi.advanceTimersByTime(50);
+    expect(realtime.lastRefresh()).toMatchObject({ source: "fallback" });
+
+    // A hidden document refreshes nothing, so nothing is recorded for it.
+    fake.open();
+    expect(realtime.lastRefresh()).toMatchObject({ source: "connection" });
+    visible = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(realtime.lastRefresh()).toMatchObject({ source: "connection" });
+
+    visible = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(realtime.lastRefresh()).toMatchObject({ source: "visibility" });
+
+    fake.deliver({ kind: "something_new" });
+    vi.advanceTimersByTime(10);
+    expect(realtime.lastRefresh()).toMatchObject({ source: "invalidation" });
+
+    // A change classified to specific keys refreshes those reads alone and cannot
+    // speak for the reads on screen as a whole, so the record keeps the every-read
+    // pass it already names.
+    const everyRead = realtime.lastRefresh();
+    fake.deliver({ kind: "work_item", id: "w1" });
+    vi.advanceTimersByTime(10);
+    expect(invalidate.mock.calls.map((call) => JSON.stringify(call[0]?.queryKey)))
+      .toContain('["work-item",{"workItemId":"w1"}]');
+    expect(realtime.lastRefresh()).toBe(everyRead);
+  });
+
   it("maps a resource invalidation onto the query keys that read it", () => {
     expect(invalidationKeys({ kind: "work_item", id: "w1" })).toEqual([
       ["work-item", { workItemId: "w1" }],

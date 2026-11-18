@@ -10,9 +10,11 @@ import { allowBrowserError, expect, test } from "./fixtures.mjs";
 import {
   api,
   capture,
+  controlSocket,
   createProject,
   createWorkItem,
   login,
+  readsStatus,
   uniqueKey
 } from "./readable-fixtures.mjs";
 
@@ -51,10 +53,11 @@ const historyWrites = (page) => page.evaluate(() => window.__historyWrites);
 // wait is a backstop over the client's retry schedule rather than a tighter
 // observation.
 const RECONNECT_GUARD_MS = 30_000;
-// The polling fallback's cadence is five seconds; four of them is the backstop
-// over the client's own reads. The pass still requires a real read and a real
-// render — the guard only decides when a missing one is declared missing.
-const FALLBACK_CADENCE_GUARD_MS = 20_000;
+// The polling fallback's cadence is five seconds, so four of them is the backstop
+// over the client's own pass and the state it renders. A maximum, never a verdict:
+// the case below decides on the pass the shell records and on the state that pass
+// served, and this guard only says when a missing pass is a missing pass.
+const FALLBACK_READ_GUARD_MS = 20_000;
 const executionPolicy = () => ({
   automatic_execution: false,
   max_parallel_tasks: 1,
@@ -163,48 +166,6 @@ async function goalCommand(page, goalId, kind, payload) {
     kind,
     payload
   });
-}
-
-/**
- * Routes the operator socket the way the cutover contract needs: while `mode` is
- * "live" messages are forwarded to the real server in both directions; while it
- * is "blocked" every connection attempt is closed, so the browser observes a real
- * disconnection and reconnects through this same handler.
- */
-async function controlSocket(page) {
-  // `attempts` counts every connection the browser opened; `established` counts
-  // the ones this handler let reach the real server, so a case can state that a
-  // convergence happened while no socket carried a single message; `pushed` and
-  // `pushedAt` count and time the server-to-browser frames that carried an
-  // invalidation, so a case can attribute a read to the push path instead of
-  // assuming it.
-  const state = { mode: "live", attempts: 0, established: 0, pushed: 0, pushedAt: null };
-  await page.routeWebSocket(/\/portal\/socket\//, (ws) => {
-    state.attempts += 1;
-    if (state.mode === "blocked") {
-      ws.close();
-      return;
-    }
-    state.established += 1;
-    const server = ws.connectToServer();
-    ws.onMessage((message) => server.send(message));
-    server.onMessage((message) => {
-      if (String(message).includes('"invalidation"')) {
-        state.pushed += 1;
-        if (state.pushedAt === null) state.pushedAt = Date.now();
-      }
-      ws.send(message);
-    });
-  });
-  await page.route("**/portal/api/session*", async (route) => {
-    const response = await route.fetch();
-    const body = await response.json();
-    // The run reads the bootstrap directly: record the served token so the
-    // scenario can state that a real token was minted, never a substituted one.
-    state.socketTokenMinted = typeof body.socket_token === "string" && body.socket_token.length > 0;
-    await route.fulfill({ response, json: body });
-  });
-  return state;
 }
 
 test.describe("portal cutover", () => {
@@ -375,40 +336,65 @@ test.describe("portal cutover", () => {
   });
 
   test("the polling fallback keeps a surface converging while the socket is unavailable", async ({ page, browser }, testInfo) => {
-    allowBrowserError(page, /WebSocket|socket/);
-    const socket = await controlSocket(page);
-    socket.mode = "blocked";
     await login(page);
     const project = await createProject(page, { key: uniqueKey("PF"), name: "Polling fallback project" });
     const readerContext = await browser.newContext();
     const reader = await readerContext.newPage();
+    // The unavailable socket has to be the reader's own: a routed socket on any
+    // other page would leave this browser connected, and a connected browser stops
+    // polling (`syncPolling`) and receives the frame instead of converging on its
+    // own reads. Every attempt below is closed before it reaches the server.
+    const socket = await controlSocket(reader);
+    socket.mode = "blocked";
     await login(reader, `/portal/projects/${project.id}`);
     const title = `Fallback work ${project.key}`;
     await expect(reader.getByRole("link", { name: title })).toHaveCount(0);
 
     // Every read the reader issues is recorded, so the convergence below can be
-    // attributed to a client-initiated read rather than to a pushed message:
-    // this handler never establishes a connection at all.
+    // attributed to a client-initiated read rather than to a pushed message: this
+    // handler never establishes a connection at all, so no pushed message exists.
     const readerReads = [];
     reader.on("request", (request) => {
       if (request.url().includes("/portal/api/")) readerReads.push({ url: request.url(), at: Date.now() });
     });
 
+    // The reader's own clock, read before the write: the fallback pass below must
+    // have completed after this instant for its reads to be able to carry the
+    // change at all.
+    const createdAt = await reader.evaluate(() => Date.now());
     const createdBefore = Date.now();
     await createWorkItem(page, project.id, { title, status: "ready", priority: "medium" });
-    await expect(reader.getByRole("link", { name: title })).toBeVisible({ timeout: FALLBACK_CADENCE_GUARD_MS });
-    // The reader converged with no established operator socket, so the fallback
-    // cadence is the only thing that could have refreshed it.
-    expect(socket.attempts).toBeGreaterThan(0);
-    expect(socket.established).toBe(0);
+    // The wait is the client's own pass, recorded by the shell where the pass
+    // issues its reads: the polling fallback refreshed every read, and the reads
+    // that pass issued finished after the write. This replaces the elapsed budget
+    // that used to stand in for the cadence — the record is the observation, and
+    // FALLBACK_READ_GUARD_MS only decides when a missing pass is missing.
+    await expect.poll(async () => {
+      const mark = await readsStatus(reader);
+      return mark !== null && mark.source === "fallback" && mark.settledAt !== null && mark.settledAt >= createdAt;
+    }, {
+      message: "the fallback pass completed and refreshed the reads after the write",
+      timeout: FALLBACK_READ_GUARD_MS
+    }).toBe(true);
+    await expect(reader.getByRole("link", { name: title })).toBeVisible();
+    // The reader converged with no established operator socket, so its own client
+    // is the only thing that could have read the change, and the pass it recorded
+    // is a fallback pass — a browser that is connected does not poll.
+    const mark = await readsStatus(reader);
+    expect(mark, "the shell states the reads' refresh record").not.toBeNull();
+    expect(mark.connection, "the client reports the socket unavailable").toBe("disconnected");
+    expect(socket.attempts, "the browser kept trying to connect").toBeGreaterThan(0);
+    expect(socket.established, "no socket of the reader's ever reached the server").toBe(0);
+    expect(socket.pushed, "no invalidation frame crossed the reader's socket").toBe(0);
     const afterCreate = readerReads.filter((read) => read.at >= createdBefore);
     expect(afterCreate.length).toBeGreaterThan(0);
     await capture(reader, testInfo, "polling-fallback", {
       workItem: title,
+      refreshRecord: mark,
       readerReadsAfterCreate: afterCreate.map((read) => new URL(read.url).pathname + new URL(read.url).search),
       socketAttempts: socket.attempts,
       establishedSockets: socket.established,
-      note: "With every operator-socket attempt closed by the browser, the reader converged on the writer's change through its own polling reads and never through a pushed message"
+      note: "With every operator-socket attempt closed before the server, the reader converged on the writer's change through its own polling pass — the shell's own record names the fallback and the reads it issued — and never through a pushed message"
     });
     await readerContext.close();
   });

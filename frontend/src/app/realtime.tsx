@@ -1,5 +1,6 @@
 import { useRouteContext } from "@tanstack/react-router";
 import { useCallback, useSyncExternalStore } from "react";
+import type { RefreshPass, RealtimeStatus } from "../services/realtime";
 
 /**
  * The established-connection counter of the operator invalidation socket.
@@ -22,7 +23,7 @@ export function useRealtimeEpoch(): number {
 }
 
 /** The live connection status, for surfaces that must state degraded freshness. */
-export function useRealtimeStatus(): string {
+export function useRealtimeStatus(): RealtimeStatus {
   const { application } = useRouteContext({ from: "__root__" });
   const realtime = application.realtime;
   const subscribe = useCallback(
@@ -30,4 +31,20 @@ export function useRealtimeStatus(): string {
     [realtime],
   );
   return useSyncExternalStore(subscribe, () => realtime.status());
+}
+
+/**
+ * The reads the client last refreshed, for surfaces that state how current what
+ * they render is. The pass is the client's own act — it issues the reads — so a
+ * surface can say which of the client's events refreshed the reads on screen and
+ * when those reads finished.
+ */
+export function useRealtimeRefresh(): RefreshPass | null {
+  const { application } = useRouteContext({ from: "__root__" });
+  const realtime = application.realtime;
+  const subscribe = useCallback(
+    (listener: () => void) => realtime.subscribe(listener),
+    [realtime],
+  );
+  return useSyncExternalStore(subscribe, () => realtime.lastRefresh());
 }
