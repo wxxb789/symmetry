@@ -1060,14 +1060,32 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       `control/lib/symmetry_control/workspaces/read_model.ex:471`); and
       `session-receipt-recovery-e2e.md`'s `mix ecto.drop --force` uses the Ecto
       option meaning "do not ask for confirmation", not `--force-drop`, so an
-      Ecto-side change to that option would change what the cleanup line does. One
-      claim has no artifact to re-derive it against: the
-      `connections.md` Azure DevOps `vso.code`/`vso.work`/`vso.build` scope mapping,
-      while the shipped code requests a resource token
-      (`control/lib/symmetry_control/integrations/auth.ex:41-46`) and never names a
-      scope. The runbooks also cite *Commands and gates* in `docs/design/quality.md`
-      as the checks CI actually runs while that section still carries the stale
-      frontend rows tracked under *Deferred review findings (0007i)* below.
+      Ecto-side change to that option would change what the cleanup line does. The
+      runbooks also cite *Commands and gates* in `docs/design/quality.md` as the
+      checks CI actually runs while that section still carries the stale frontend
+      rows tracked under *Deferred review findings (0007i)* below.
+
+      Closed in the second pass (the review findings of `gpt-6.1-sol` on `#70`,
+      each re-verified against its artifact): `connections.md` no longer asserts
+      the `vso.code`/`vso.work`/`vso.build` scope mapping it could not support —
+      the shipped code requests an Entra resource token
+      (`control/lib/symmetry_control/integrations/auth.ex:41-46`) and names no
+      scope — and instead states the read-versus-write requirement the code does
+      establish (`change.upsert`/`change.update` create or update pull requests in
+      `integrations/providers/{github,azure_devops}.ex`), with the scope and
+      permission names explicitly left to the provider. Still rot-prone after that
+      pass, with no artifact that can re-derive them: the runbooks index's
+      precedence rule (it now mirrors `AGENTS.md:24`'s record-the-conflict
+      requirement instead of "the code wins", so a change to that contract
+      bullet invalidates it), `portal.md`'s board-move sentence (the keyboard
+      bindings follow `frontend/src/features/projects/work-surface.tsx:115` and
+      the Goal-managed refusal follows `ensure_legacy_work_item/1`), `portal.md`'s
+      `playwright-report/` location (follows `browser/playwright.config.mjs` and
+      `browser/README.md`), `portal.md`'s CSRF sentence (follows Plug's
+      `@unprotected_methods ~w(HEAD GET OPTIONS)`), and
+      `chat-and-supervisory-control.md`'s supervisory/intent scoping (follows
+      `control_capabilities/4` in `control/lib/symmetry_control/orchestration.ex`
+      and the daemon's autonomy envelope in `daemon/internal/app/app.go`).
 
 - [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
       evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`

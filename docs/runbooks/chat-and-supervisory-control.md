@@ -30,6 +30,14 @@ The composer makes execution intent explicit:
   autonomous progress; **Resume** continues the same live process. Cancelling and
   retrying work stay on the work-detail surface, not in the composer.
 
+Guidance, pause and resume are supervisory control, and the composer offers them
+only while the run serves `can_guide`/`can_pause`/`can_resume`: those flags exist
+for a runtime that advertises the `supervisory_control` capability, so a
+native-harness run serves none of them (`pause` is `unsupported` in the
+operations a native admission advertises) and offers no guidance, pause or
+resume. Its start, event stream and cancellation come from the native adapter
+instead.
+
 Run context shows concise progress and delivery state. A human decision presents
 the question, context, reason, options and consequences, and a recommendation
 when justified; its answer is bound to that specific waiting transition. Raw
@@ -64,11 +72,12 @@ runtime does not receive unsupported commands: the daemon settles them as
 supports the capability; production adapters must implement the contract before
 opting in.
 
-The initial task envelope communicates high autonomy: handle ordinary
-implementation choices, tool selection, temporary uncertainty and recoverable
-errors independently, and escalate genuine blockers or consequential,
-irreversible, security, business/policy, unexpected-cost or material product
-decisions.
+A profile that opts in with `supervisory_control` receives an initial task
+envelope that communicates high autonomy: handle ordinary implementation choices,
+tool selection, temporary uncertainty and recoverable errors independently, and
+escalate genuine blockers or consequential, irreversible, security,
+business/policy, unexpected-cost or material product decisions. A profile without
+the capability keeps the legacy task/input envelope.
 
 The daemon sends `guidance`, `pause` and `resume` records with a durable
 `command_id`, the original `goal` and an `input` payload. The adapter consumes

@@ -54,10 +54,15 @@ runtimes and provider connections. Each resource reports `healthy`, `degraded`,
 maintained separately. A project also records the default agent profile and
 machine-local workspace binding used when an agent-owned work item is started.
 
-Work items move through `backlog -> ready -> in_progress -> review -> done`, by
-dragging a card or in the work detail. Priority, human or agent ownership,
-blockers, repository and branch context, pull request, CI and review state stay
-on the work item rather than being encoded into low-level run events.
+Work items move through `backlog -> ready -> in_progress -> review -> done`: on
+the board, **Shift + ←/→** moves the focused card between columns and
+**Shift + ↑/↓** reorders it inside its column, and the work detail edits state
+directly. A Goal-managed item has no writable path here — the board refuses its
+move and the work detail records its current state only — and
+`/portal/api/work-items/:id/move` answers `403 goal_authority_required`. Priority,
+human or agent ownership, blockers, repository and branch context, pull request,
+CI and review state stay on the work item rather than being encoded into low-level
+run events.
 
 The work detail is outcome-first: it leads with current state chips, the outcome,
 the latest accepted evidence and any blocker or decision, then the next action,
@@ -72,6 +77,11 @@ moves the card to `in_progress`; project defaults are used when the item does no
 override `agent_profile` or `workspace`. The scheduler and daemon then use the
 existing durable assignment, claim, lease, fencing, event, transition and command
 protocol without a separate portal execution path.
+
+**Start run**, **Cancel run** and **Retry** belong to a legacy work item. A
+Goal-managed item renders a **Goal-managed work** panel instead — its run, retry
+and move paths go through Goal admission — and the `run`, `cancel` and `retry`
+endpoints answer `403 goal_authority_required`.
 
 Execution-defining fields remain editable before launch, are locked while a task
 is queued or active, and become editable again after failure or cancellation. The
@@ -99,8 +109,12 @@ working.
 
 ## Portal HTTP API
 
-All portal routes require the signed operator session and the Phoenix CSRF token.
-Project and work-item endpoints:
+All portal routes require the signed operator session. Mutating requests also
+carry the Phoenix CSRF token; Plug exempts `HEAD`, `GET` and `OPTIONS` from token
+verification, so the reads below need the session alone. The work-item write
+entries (`run`, `cancel`, `retry`, `move`) are the legacy path: a Goal-managed item
+is refused with `403 goal_authority_required` and is driven through the Goal
+surface below. Project and work-item endpoints:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -169,9 +183,10 @@ mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test
 ```
 
 The suite runs desktop and mobile Chromium projects against
-`http://127.0.0.1:4000` with the development operator token; failure artifacts
-and the HTML report are written outside the checkout unless
-`SYMMETRY_PLAYWRIGHT_OUTPUT` overrides the directory. Then run the real daemon
+`http://127.0.0.1:4000` with the development operator token; failure screenshots,
+videos and traces are written under the system temporary directory unless
+`SYMMETRY_PLAYWRIGHT_OUTPUT` overrides the directory, and the HTML report is
+written under `playwright-report/`. Then run the real daemon
 lifecycle matrix from the repository root while the control plane is still
 running:
 
