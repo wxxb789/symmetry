@@ -52,6 +52,7 @@
   .workspace-body { min-width: 0; display: flex; flex-direction: column; }
   .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 76px; padding: 16px 32px; border-bottom: 1px solid var(--color-line); background: var(--color-surface); }
   .topbar-start, .topbar-actions { display: flex; align-items: center; gap: 16px; min-width: 0; }
+  .reads-status { margin: 0; color: var(--color-muted); font-size: 12px; min-width: 0; }
   .topbar-form { display: contents; }
   .topbar-form .logout-error { margin: 0 0 0 8px; padding: 8px 12px; }
   .project-picker { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -368,6 +369,9 @@
 }
 @media (max-width: 900px) {
   .topbar { padding: 16px 24px; }
+  /* The source of the last refresh is the first thing to give up when the header
+     runs out of room; the connection and the time it refreshed at stay. */
+  .reads-status .reads-source { display: none; }
   .connection-layout { grid-template-columns: minmax(0, 1fr); }
   .resource-row { flex-wrap: wrap; }
   .resource-main { flex: 1 0 100%; }
@@ -382,7 +386,9 @@
   .workspace-shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { display: none; }
   .mobile-nav-trigger { display: inline-flex; }
-  .topbar { padding: 12px 16px; min-height: 68px; gap: 8px; }
+  .topbar { padding: 12px 16px; min-height: 68px; gap: 8px; flex-wrap: wrap; }
+  /* Too narrow for the status beside the controls: it takes its own line. */
+  .reads-status { order: 3; flex-basis: 100%; }
   .topbar-start, .topbar-actions { gap: 8px; }
   .project-picker label { display: none; }
   .project-picker select { min-width: 0; max-width: 42vw; width: 180px; }

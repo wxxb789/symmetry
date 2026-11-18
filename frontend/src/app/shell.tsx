@@ -4,12 +4,64 @@ import { Link, Outlet, useMatch, useNavigate, useRouteContext, useRouterState } 
 import { Cable, Command, Folder, Inbox, LogOut, Menu, MessageSquare, MonitorCog, Search, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { errorMessage } from "../services/api";
+import type { RefreshSource, RealtimeStatus } from "../services/realtime";
 import { ErrorState, LoadingState } from "../components/workspace";
 import { sessionOptions, workDetailOptions, workspaceOptions, type Application } from "./application";
+import { useRealtimeRefresh, useRealtimeStatus } from "./realtime";
 import { SessionTokenProvider } from "./session";
 
 function focusContent() {
   requestAnimationFrame(() => { document.getElementById("content-heading")?.focus({ preventScroll: true }); });
+}
+
+/** How the invalidation client's own status reads to an operator. */
+const connectionLabels: Record<RealtimeStatus, string> = {
+  connected: "Connected",
+  connecting: "Connecting…",
+  disconnected: "Offline, polling"
+};
+
+/** Which of the client's own events refreshed every read on screen. */
+const refreshLabels: Record<RefreshSource, string> = {
+  connection: "the connection opening",
+  join: "the channel join",
+  fallback: "the polling fallback",
+  visibility: "the tab's return",
+  invalidation: "a published change"
+};
+
+/**
+ * The reads' connection and freshness, stated from the invalidation client's own
+ * state: which connection serves the reads, which of the client's own events last
+ * refreshed every read, and when the reads that pass issued finished computing.
+ * A degraded connection is what an operator needs to see before blaming the data.
+ *
+ * Every member here is written where the work happens — the status by the client's
+ * own socket hooks, the refresh record by the pass that issues the reads — so the
+ * element cannot claim a refresh that no read pass performed, and it names the
+ * pass rather than guessing at its outcome: a refused read is the surface's own
+ * `Refresh failed — showing last loaded data`. It is deliberately not a live
+ * region: it advances on every fallback tick, and a screen reader should not read
+ * a timestamp every five seconds.
+ */
+function ReadsStatus() {
+  const status = useRealtimeStatus();
+  const refresh = useRealtimeRefresh();
+  const freshness = refresh === null
+    ? "no reads refreshed yet"
+    : refresh.settledAt === null
+      ? "refreshing reads"
+      : `refreshed ${new Date(refresh.settledAt).toLocaleTimeString()}`;
+  return <p className="reads-status" data-connection={status}
+    data-refresh-source={refresh?.source ?? ""}
+    data-refresh-issued-at={refresh === null ? "" : String(refresh.issuedAt)}
+    data-refresh-settled-at={refresh === null || refresh.settledAt === null ? "" : String(refresh.settledAt)}
+    title={refresh === null
+      ? "The reads on screen have not been refreshed by the invalidation client yet"
+      : `Every read was last refreshed by ${refreshLabels[refresh.source]}`}>
+    {connectionLabels[status]} · <span className="reads-freshness">{freshness}</span>
+    {refresh !== null && <span className="reads-source"> ({refreshLabels[refresh.source]})</span>}
+  </p>;
 }
 
 function useProjectScope() {
@@ -183,7 +235,7 @@ export function WorkspaceRoot() {
     <a className="skip-link" href="#content-heading">Skip to content</a>
     <div className="workspace-shell">
       <aside className="sidebar"><Link className="brand" to="/attention" search={{}}><span className="brand-mark" aria-hidden="true">S</span>Symmetry</Link><p className="sidebar-label">Workspace</p><NavigationLinks /><div className="sidebar-footer"><span className="state-dot" aria-hidden="true" />Reads and execution control; applied state comes from the server</div></aside>
-      <div className="workspace-body"><header className="topbar"><div className="topbar-start"><MobileNavigation /><ProjectPicker /></div><div className="topbar-actions"><CommandPalette /><LogoutForm application={application} cachedToken={csrf ?? ""} /></div></header>
+      <div className="workspace-body"><header className="topbar"><div className="topbar-start"><MobileNavigation /><ProjectPicker /></div><ReadsStatus /><div className="topbar-actions"><CommandPalette /><LogoutForm application={application} cachedToken={csrf ?? ""} /></div></header>
         <main id="main-content" className="workspace-content"><SessionTokenProvider token={csrf ?? ""}><Outlet /></SessionTokenProvider></main>
         <footer className="content-footer">Reads and applied changes come from the server; a refused change shows the server's current state. Work detail carries the execution controls this shell dispatches; guidance and pause are dispatched from Chat.</footer>
       </div>

@@ -151,3 +151,121 @@ export function recordKeys() {
   };
   return { actions, press };
 }
+
+/**
+ * The shell's own statement of the invalidation client's refresh record: which
+ * connection serves the reads, which of the client's own passes last refreshed
+ * every read, when that pass issued its reads and when those reads finished.
+ *
+ * Every value is the element's own attribute, written where the work happens —
+ * the status by the client's socket hooks, the pass by the code that issues the
+ * reads — so a case that waits on it waits on product state, never on a hook
+ * beside the product. `null` members are the states the element states as empty:
+ * no pass yet, or a pass whose reads are still in flight.
+ */
+export function readsStatus(page) {
+  return page.evaluate(() => {
+    const status = document.querySelector(".reads-status");
+    if (status === null) return null;
+    const number = (name) => {
+      const raw = status.getAttribute(name);
+      return raw === null || raw === "" ? null : Number(raw);
+    };
+    return {
+      connection: status.getAttribute("data-connection"),
+      source: status.getAttribute("data-refresh-source") || null,
+      issuedAt: number("data-refresh-issued-at"),
+      settledAt: number("data-refresh-settled-at")
+    };
+  });
+}
+
+/**
+ * Routes the operator socket the way the cutover and readable-work suites need:
+ * while `mode` is "live" messages are forwarded to the real server in both
+ * directions; while it is "blocked" every connection attempt is closed, so the
+ * browser observes a real disconnection and reconnects through this same
+ * handler. `attempts` counts every connection the browser opened; `established`
+ * counts the ones this handler let reach the real server, so a case can state
+ * that a convergence happened while no socket carried a single message; `pushed`
+ * and `pushedAt` count and time the server-to-browser frames that carried an
+ * invalidation, so a case can attribute a read to the push path instead of
+ * assuming it.
+ *
+ * While `hold` is set, the page's WebSocket is opened by Playwright as a mock —
+ * so the browser sees an open transport, reports `connected` and stops its
+ * polling fallback — but this handler makes **no upstream connection at all**,
+ * keeps the browser's own bytes (`withheld` counts them) and connects to the
+ * server only when the case calls `release()`, replaying the withheld bytes in
+ * order. That is the window the product's join epoch exists for, held open
+ * deterministically: the server has run no join clause for this browser, so a
+ * frame published now is addressed to no subscriber at all, and nothing this
+ * handler does can forward it. The hold is released by the case, never by
+ * elapsed time, and the withheld count is the case's own evidence that the
+ * browser's request never reached the server.
+ */
+export async function controlSocket(page) {
+  const state = {
+    mode: "live",
+    hold: false,
+    attempts: 0,
+    established: 0,
+    pushed: 0,
+    pushedAt: null,
+    withheld: 0,
+    held: [],
+    release: () => {}
+  };
+  await page.routeWebSocket(/\/portal\/socket\//, (ws) => {
+    state.attempts += 1;
+    if (state.mode === "blocked") {
+      ws.close();
+      return;
+    }
+    let upstream = null;
+    const connect = () => {
+      if (upstream !== null) return upstream;
+      upstream = ws.connectToServer();
+      state.established += 1;
+      upstream.onMessage((message) => {
+        if (String(message).includes('"invalidation"')) {
+          state.pushed += 1;
+          if (state.pushedAt === null) state.pushedAt = Date.now();
+        }
+        ws.send(message);
+      });
+      return upstream;
+    };
+    ws.onMessage((message) => {
+      if (state.hold) {
+        state.withheld += 1;
+        // The browser's bytes are replayed in order on release, exactly as sent:
+        // the harness never parses them, so it cannot hold the wrong one (a
+        // Phoenix frame is a JSON array on the wire, not an object). The cap keeps
+        // a wedged hold bounded; a replayed request the client has since abandoned
+        // is answered by the server and ignored by the client.
+        state.held.push(message);
+        if (state.held.length > 16) state.held.shift();
+        return;
+      }
+      connect().send(message);
+    });
+    state.release = () => {
+      state.hold = false;
+      const held = state.held;
+      state.held = [];
+      const server = connect();
+      for (const message of held) server.send(message);
+    };
+    if (!state.hold) connect();
+  });
+  await page.route("**/portal/api/session*", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    // The run reads the bootstrap directly: record the served token so the
+    // scenario can state that a real token was minted, never a substituted one.
+    state.socketTokenMinted = typeof body.socket_token === "string" && body.socket_token.length > 0;
+    await route.fulfill({ response, json: body });
+  });
+  return state;
+}

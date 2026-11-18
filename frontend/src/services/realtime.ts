@@ -9,8 +9,9 @@ import { Socket } from "phoenix";
  * transcript, never business authority), and this client turns that into
  * TanStack Query invalidations so every surface refetches the authoritative read
  * it already owns. There is no client-side event log, no cursor store and no
- * policy: the only durable state here is the connection status and the
- * reconnect epoch.
+ * policy: the only durable state here is the connection status, the reconnect
+ * epoch and the record of the last every-read pass — which the shell states as
+ * the reads' freshness.
  *
  * Loss recovery is structural rather than message-based: on every (re)connect the
  * client refetches every read — at the socket opening, and again when the channel
@@ -37,6 +38,37 @@ export interface InvalidationPayload {
 }
 
 export type RealtimeStatus = "connecting" | "connected" | "disconnected";
+
+/**
+ * Which of the client's own events refreshed every read a surface is showing.
+ *
+ * The client refreshes every read on four of its own events — the connection
+ * opening (`connection`), a completed channel join (`join`), a tick of the
+ * polling fallback while the socket is unavailable (`fallback`) and a document
+ * returning to the visible state (`visibility`) — plus the every-read pass an
+ * unclassified invalidation takes (`invalidation`).
+ */
+export type RefreshSource = "connection" | "join" | "fallback" | "visibility" | "invalidation";
+
+/**
+ * The reads the client last refreshed, and the pass that refreshed them.
+ *
+ * `issuedAt` is when the pass issued its reads — the read epoch of a completed
+ * join, for `join` — and `settledAt` is when the reads that one pass issued
+ * finished, `null` while they are still in flight. Only an every-read pass is
+ * recorded: a change classified to specific keys refreshes those reads alone and
+ * cannot speak for the reads on screen as a whole.
+ *
+ * The record states the pass, not its outcome: a read that was refused did end,
+ * and the surface that owns it states that itself (`Refresh failed — showing
+ * last loaded data`). Only the pass that is still current records its own
+ * completion, so a late settle can never speak for reads a newer pass replaced.
+ */
+export interface RefreshPass {
+  readonly source: RefreshSource;
+  readonly issuedAt: number;
+  readonly settledAt: number | null;
+}
 
 /** The subset of the Phoenix client this module drives (a test seam, not a wrapper). */
 export interface RealtimePush {
@@ -75,6 +107,8 @@ export interface RealtimeHandle {
   status(): RealtimeStatus;
   /** Bumped on every established connection; surfaces holding a served cursor catch up on change. */
   epoch(): number;
+  /** The reads this client last refreshed, and the pass that refreshed them. */
+  lastRefresh(): RefreshPass | null;
   subscribe(listener: () => void): () => void;
 }
 
@@ -142,15 +176,40 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let batchTimer: ReturnType<typeof setTimeout> | null = null;
   let pending: InvalidationPayload[] = [];
+  let lastRefresh: RefreshPass | null = null;
 
   const notify = () => {
     for (const listener of listeners) listener();
   };
 
-  const invalidateReads = () => {
-    // Every portal read refetches; the session read is excluded because it is a
-    // bootstrap document with its own lifetime, not a workspace read.
-    void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] !== "session" });
+  /**
+   * The one pass an every-read refresh takes: every portal read refetches, and
+   * the session read is excluded because it is a bootstrap document with its own
+   * lifetime, not a workspace read.
+   *
+   * The pass records itself — the source that caused it, when it issued its
+   * reads, and when those reads finished — because that record is the only place
+   * the browser can state what it refreshed and when: nothing else on this side
+   * observes those reads, and a mark written anywhere else could be set without
+   * the pass having happened. The record is published with the same `notify` the
+   * connection status uses, so a surface renders it as the state it is.
+   */
+  const invalidateReads = (source: RefreshSource) => {
+    const pass: RefreshPass = { source, issuedAt: Date.now(), settledAt: null };
+    lastRefresh = pass;
+    notify();
+    const settled = () => {
+      // Only the pass that is still current records its own completion: a newer
+      // pass has replaced these reads, so its own settle is the one that counts.
+      if (lastRefresh !== pass) return;
+      lastRefresh = { source: pass.source, issuedAt: pass.issuedAt, settledAt: Date.now() };
+      notify();
+    };
+    // The pass's reads end either way — a refused read ended too — so both arms
+    // record the completion and no rejection is left unhandled.
+    void queryClient
+      .invalidateQueries({ predicate: (query) => query.queryKey[0] !== "session" })
+      .then(settled, settled);
   };
 
   const flush = () => {
@@ -165,7 +224,7 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
       for (const key of payloadKeys) keys.set(JSON.stringify(key), key);
     }
     if (allReads) {
-      invalidateReads();
+      invalidateReads("invalidation");
       return;
     }
     for (const key of keys.values()) void queryClient.invalidateQueries({ queryKey: key });
@@ -196,7 +255,7 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
     // A hidden document refreshes nothing; the visibility handler refreshes once
     // when it returns, exactly like the retired classic surface.
     pollTimer = setInterval(() => {
-      if (visible()) invalidateReads();
+      if (visible()) invalidateReads("fallback");
     }, pollIntervalMs);
   };
 
@@ -218,7 +277,7 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
   const onVisibilityChange = () => {
     if (!visible()) return;
     syncPolling();
-    invalidateReads();
+    invalidateReads("visibility");
   };
 
   if (typeof document !== "undefined") {
@@ -245,7 +304,7 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
       setStatus("connected");
       // Snapshot refetch: a reconnect loses no state because every read is a
       // server document that is fetched again here.
-      invalidateReads();
+      invalidateReads("connection");
       notify();
     });
 
@@ -289,10 +348,13 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
      * Phoenix resends this same push on every rejoin (`channel.js` `rejoin` ->
      * `joinPush.resend`, whose `reset` keeps its receive hooks), so a reconnect's
      * rejoin — the frames published while the channel was errored are dropped just
-     * the same — reconciles through this hook too.
+     * the same — reconciles through this hook too. The pass also records itself as
+     * the `join` pass, so the reads a completed join refreshed are the reads the
+     * shell reports as refreshed by the join, and a browser case can wait on that
+     * record instead of on a subscription it cannot see.
      */
     const onJoined = () => {
-      invalidateReads();
+      invalidateReads("join");
     };
 
     const channel = client.channel(REALTIME_TOPIC);
@@ -329,6 +391,7 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
     close,
     status: () => status,
     epoch: () => connectionEpoch,
+    lastRefresh: () => lastRefresh,
     subscribe: (listener: () => void) => {
       listeners.add(listener);
       return () => {

@@ -17,18 +17,27 @@ import { allowBrowserError, assertNoBrowserErrors, expect, monitorBrowserErrors,
 import {
   attachResource,
   capture,
+  controlSocket,
   createProject,
   createWorkItem,
   login,
   moveWorkItem,
   operatorToken,
   projectItem,
+  readsStatus,
   recordKeys,
   snapshotMetrics,
   uniqueKey,
   updateWorkItem,
   workspace
 } from "./readable-fixtures.mjs";
+
+// The client's own rejoin schedule bounds the wait below: a join push times out
+// after ten seconds and the rejoin timer backs off to ten more, so twenty seconds
+// is the backstop over the epoch the case's own release must produce. A maximum,
+// never a verdict: the case decides on the pass the shell records and on the read
+// that pass is served, and this guard only says when a missing epoch is missing.
+const JOIN_EPOCH_GUARD_MS = 20_000;
 
 // Exact accessible names implemented by the frontend contract; they live in one
 // place so a wording change is a one-line edit, not a hunt through assertions.
@@ -1108,6 +1117,15 @@ test.describe("Readable work views", () => {
   });
 
   test("a disconnected read recovers and reconciles with the server's own snapshot", async ({ page, isMobile }, testInfo) => {
+    // The browser's own connection is held before the shell starts: the page's
+    // WebSocket is open to the harness and none of its bytes reach the server, so
+    // this browser is connected without being a subscriber — the window the
+    // product's join epoch exists for, held open by the harness and released by
+    // the case, never by elapsed time. The poll fallback cannot cover the change
+    // the other way either: the transport is open, so the client reports
+    // `connected` and does not poll.
+    const socket = await controlSocket(page);
+    socket.hold = true;
     await login(page);
     const seeded = await seedProject(page, {
       prefix: "RC",
@@ -1125,6 +1143,26 @@ test.describe("Readable work views", () => {
     const detailUrl = workUrl(item.id);
 
     await page.goto(detailUrl);
+    const detail = detailSurface(page, isMobile, item.title);
+    await expect(detail.getByRole("heading", { level: 1, name: item.title })).toBeVisible();
+    // The client's own state says the transport is open and the polling fallback
+    // has therefore stopped: from here the only pass that can refresh this surface
+    // is the channel's.
+    await expect(page.locator(".reads-status")).toHaveAttribute("data-connection", "connected");
+
+    // The run is issued through the API rather than through the surface, so the
+    // surface has no reason of its own to re-read it. The server publishes its
+    // invalidation and this browser is not on the topic yet: the server has run no
+    // join clause for it, so the frame is addressed to no subscriber at all and is
+    // never replayed. That is the window this case was repaired for — hosted
+    // occurrence: CI run 44128369103, `control` job, this case, 31.5 s, failing
+    // with the drawer rendering the run's pre-run document (`No execution
+    // recorded`) for the whole `expect` budget while a client that believes it is
+    // connected does not poll. Waiting on the invalidation channel without holding
+    // the window made this case's precondition a property of the host's delivery
+    // timing; the window is held here, and the epoch below is the product's own.
+    const publishedAt = await page.evaluate(() => Date.now());
+    socket.pushed = 0;
     const executing = await page.evaluate(async (workItemId) => {
       const csrf = document.querySelector('meta[name="csrf-token"]')?.content || "";
       const response = await fetch(`/portal/api/work-items/${workItemId}/run`, {
@@ -1137,25 +1175,46 @@ test.describe("Readable work views", () => {
       return { status: response.status, body };
     }, item.id);
     expect(executing.status, JSON.stringify(executing.body)).toBe(202);
-    // The run is issued through the API rather than through the surface, so the
-    // surface has no reason of its own to re-read it: the refresh control below
-    // drives that read, and the precondition this case needs — the served run
-    // rendered as queued before the read is disconnected — is the state that
-    // read serves. Waiting on the operator invalidation channel instead made
-    // this case's precondition a property of the host's delivery timing: a
-    // frame published before the channel finished joining is never
-    // re-delivered, and a client that believes it is connected does not poll,
-    // so a stale surface stays stale for the whole expect budget with nothing
-    // left to observe. Hosted occurrence: CI run 44128369103, `control` job,
-    // this case, 31.5 s, failing here with the drawer rendering the pre-run
-    // "No execution recorded" and no refresh ever delivered.
-    const detail = detailSurface(page, isMobile, item.title);
-    const queuedRead = page.waitForResponse((response) => {
+    // The change reached no reader: the server pushed nothing down this socket
+    // (there was no subscription to address), and the surface still renders the
+    // document its own read served.
+    expect(socket.pushed, "no invalidation crossed this socket while it held no subscription").toBe(0);
+    expect(socket.established, "no connection of this browser's reached the server").toBe(0);
+    expect(socket.withheld, "the browser's bytes never reached the server").toBeGreaterThan(0);
+    await expect(detail.getByText("No execution recorded").first()).toBeVisible();
+    await expect(page.getByText("Queued", { exact: true })).toHaveCount(0);
+
+    // The join completes: the browser's own request now reaches the server, the
+    // server runs its join clause and subscribes it, and the completed join is a
+    // read epoch — the pass every read refetch takes. Nothing else can reconcile
+    // this surface: the frame is gone, the fallback is stopped, and this case
+    // dispatches no tab return and presses no refresh control.
+    const reconcile = page.waitForResponse((response) => {
       const url = new URL(response.url());
       return url.pathname === `/portal/api/work-items/${item.id}` && response.status() === 200;
-    });
-    await detail.getByRole("button", { name: ui.refresh, exact: true }).click();
-    expect((await queuedRead).status()).toBe(200);
+    }, { timeout: JOIN_EPOCH_GUARD_MS });
+    socket.release();
+    // The first wait is the product state itself: the shell's own record that the
+    // pass which refreshed the reads is `join`, and that it issued its reads after
+    // the run was published. The record is written where the pass issues the reads,
+    // so it cannot be a mark beside a reconcile that never happened.
+    let joinPass = null;
+    await expect.poll(async () => {
+      const mark = await readsStatus(page);
+      if (mark?.source !== "join" || mark.settledAt === null) return null;
+      joinPass = mark;
+      return mark;
+    }, {
+      message: "the completed join's pass refreshed the reads",
+      timeout: JOIN_EPOCH_GUARD_MS
+    }).toMatchObject({ connection: "connected", source: "join" });
+    expect(joinPass.issuedAt, "the join's pass issued its reads after the run was published").toBeGreaterThan(publishedAt);
+    expect(joinPass.settledAt).toBeGreaterThanOrEqual(joinPass.issuedAt);
+    // And then the read that pass caused, served by the server: the epoch's own
+    // read is the one this case observes, armed before the release.
+    expect((await reconcile).status(), "the completed join's read is served").toBe(200);
+    // The surface reconciled with the server's own snapshot, which the epoch's
+    // read served: the run renders as queued from the server, not from a frame.
     await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
 
     // The read is disconnected: the surface must say so and must not invent a
