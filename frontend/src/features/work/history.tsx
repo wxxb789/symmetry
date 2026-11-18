@@ -8,18 +8,20 @@ import { timelineItemKey, timelineItemView, timestamp } from "./presentation";
 /**
  * Execution history for one work item. The newest page arrives with the detail
  * read; older pages load on demand through the served `before` cursor only, and
- * the loaded pages belong to the reader rather than to one cursor generation.
- * The control surface owns that retained state, because the receipt list beside
- * this section renders the same pages; the disabled timeline query re-keys on
- * every refresh, so a page is never read back from its current key's data.
+ * the pages the reader loaded belong to the boundary of the first page they were
+ * fetched from. The control surface owns that retained state, because the receipt
+ * list beside this section renders the same pages, and it hands them over only
+ * while the detail read still ends at that boundary: a served read that ends
+ * somewhere else does not chain where those pages begin, so it renders its own
+ * first page alone and the reader loads older history from its cursor.
  */
 export function WorkHistory({ workItemId, firstPage, cursor }: { workItemId: string; firstPage: readonly TimelineItem[]; cursor: string | null }) {
   const { application } = useRouteContext({ from: "__root__" });
   const surface = useControlSurface();
   const query = useInfiniteQuery(workTimelineOptions(application.api, workItemId, cursor));
   const retained = surface.olderEntries;
-  // A refreshed first page can re-serve an entry the retained pages already
-  // hold; the newest page owns it then, so no entry renders twice.
+  // A first page the same boundary serves again can carry an entry the retained
+  // pages already hold; the newest page owns it then, so no entry renders twice.
   const firstPageKeys = new Set(firstPage.map(timelineItemKey));
   const items = [...firstPage, ...retained.filter((item) => !firstPageKeys.has(timelineItemKey(item)))];
   const exhausted = query.isSuccess && query.hasNextPage === false;

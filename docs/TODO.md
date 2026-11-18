@@ -1190,3 +1190,45 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       `go vet ./...` rc 0 on windows, `GOOS=linux go vet ./...` rc 0, `go test -count=1` rc 0 over the six
       touched packages, and the guard was demonstrated to fire with its named step in a byte-identical
       scratch copy whose only difference was a fixture that never wrote its readiness marker.
+
+## Paginated reads must be bound to the cursor that served their pages
+
+- [ ] The work detail's execution history retained the older pages a reader had expanded without
+      binding them to the served first-page cursor, so a read that re-served a different boundary
+      rendered those pages beside the new first page: `WorkControlSurface` kept them as
+      `{ workItemId, entries }` (`frontend/src/features/work/control.tsx`) and `WorkHistory` rendered
+      `[...firstPage, ...retained]` (`frontend/src/features/work/history.tsx`), which presents the
+      region between the two as contiguous history. A timeline cursor is signed afresh on every GET
+      (`Plug.Crypto.encode/2` embeds `signed_at_ms` in the signed term), so the token cannot witness
+      that two reads paginate from the same boundary; the entry the cursor's position names can, and
+      it is the last entry of the page the read served (`Orchestration.page_with_next/3` takes
+      `List.last(page) |> entry_position()`). The attention feed had the same shape: its loaded
+      cursor list outlived the served first-page `next_cursor` the list chains from
+      (`frontend/src/features/attention/attention.tsx`), so a re-read of the feed served older pages
+      of a replaced cursor beside its new first page.
+
+      **Fixed (2026-11-18, `fix/history-cache-cursor-reset`):** `timelineBoundary`
+      (`frontend/src/features/work/presentation.ts`) derives that boundary from the entry's own
+      `source` and `<source>_id` and returns null when the entry does not carry the id its source
+      owns, so an unprovable boundary never binds pages; `WorkControlSurface` retains the pages under
+      the boundary the read that fetched them served — or, when an empty first page proves no
+      boundary, under the served cursor's own identity — and returns them only while the served read
+      is still on that chain, and `WorkHistory` and `WorkReceipts` render that same bounded state;
+      `AttentionPage` renders its loaded pages only while the served `next_cursor` equals the cursor
+      its chain was expanded from. No timer, poll or automatic read was added: the pages a moved
+      boundary retires are loaded again by the reader's own "Load older history" / "Load more Goal
+      attention", which continues from the served boundary.
+
+- [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
+      construction: its pages are keyed by their own `after` sequence numbers
+      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
+      re-read under their own keys, so a page is never served under a boundary it was not fetched
+      from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
+      gap in `frontend/src/features/chat/presentation.ts`, rendered by
+      `frontend/src/features/chat/chat.tsx`) and therefore still differs from this fix: it keeps the
+      pages a moved boundary left behind and states the unloaded region, while the work history and
+      the attention feed retire them. Unifying the two changes one surface's reader-visible
+      behaviour, so it needs its own decision. Retiring a page is reader-visible too (an expanded
+      page disappears when a live run moves the boundary), and it is covered by the frontend suite
+      only: the browser suites, which CI runs, carry the live-daemon pagination case and were not
+      run on this host.
