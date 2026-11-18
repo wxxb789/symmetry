@@ -98,6 +98,14 @@ served-read fixtures import these documents
 (`frontend/src/services/api.fixtures.ts`), so a test override cannot
 reintroduce a member name the server does not send. Update a served-read
 fixture by re-capturing the response, never by editing the expected names.
+Every member a surface consumes that these two projections always emit is
+`required` there (a served `null` stays nullable), so renaming one on the
+serving side fails the bundle gate, the Elixir served-document test and the
+Effect boundary instead of decoding into a silent fallback on the page. Members
+no surface consumes stay optional and additive, and
+`contracts/scripts/boundary.test.mjs` pins both directions: a renamed consumed
+member of the served Goal and attention reads is refused, while a renamed
+unconsumed member still decodes.
 
 `goal-create.schema.json`, `goal-command.schema.json`, and
 `plan-proposal.schema.json` are the canonical input authority for the Goal

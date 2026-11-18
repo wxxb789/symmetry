@@ -529,6 +529,45 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       Two smaller residuals from the same review live here too: the rollout-off browser case skips in hosted
       CI because it needs `SYMMETRY_GOALS_OFF_URL`, and the retained `:goal_admission_disabled` inline branch
       is unreachable in production because the attention read is not admission-gated.
+      Resolved in `fix/served-read-required-members` (2026-11-18). Every member a surface consumes that
+      the projection always emits is now `required` in the schema that describes it, so a rename on the
+      serving side fails the bundle gate, the Elixir served-document test and the Effect boundary instead
+      of decoding into a silent fallback: `goal-read.schema.json` gained 46 required members — root
+      `project_key`, `revision`, `settlement_attention`, `accepted_outcomes`, `external_waits`; revision
+      `objective`, `non_goals`, `acceptance_contract`, `authority_policy`, `execution_policy`,
+      `context_manifest`, `inserted_at`; work item `number`, `accepted_outcome`, `execution`, `blockers`;
+      graph node `number`, `blockers`, `accepted?`; graph edge `blocker`; decision `goal_revision`,
+      `question`, `options`, `resolution`; outcome `work_item_id`, `candidate_subject`, `subject_hash`,
+      `evidence_ids`, `inserted_at`; accounting `settled_reservation_count`, `released_reservation_count`,
+      `known_usage_cost_microusd`, `usage_cost_microusd`; external wait `reason`, `resource_id`,
+      `external_ref`, `next_check_at`, `check_seq`; settlement attention `event_id`, `task_id`,
+      `goal_revision`, `reason`, `proposed_next_action`, `proposed_next_action_status`; blocker `ids`,
+      `details` — and `attention-read.schema.json` gained 19 — root `selected_project_id`, feed
+      `next_cursor`, entry `project_id`, `attention_reasons`, `active_tasks`, `nonterminal_tasks`, blocked
+      row `project_key`, `project_name`, `project_status`, `work_item_key`, `blocker`, plus the same
+      `GoalBlocker` (`ids`, `details`) and `SettlementAttention` (`event_id`, `task_id`, `goal_revision`,
+      `reason`, `proposed_next_action`, `proposed_next_action_status`) members, because the Effect
+      generator keeps one graph per shared definition name and refuses two spellings of it. Every newly required
+      member stays nullable where the projection can serve `null`; no scalar constraint moved.
+      `pnpm contracts:generate` regenerated the TypeScript, Effect, Go DTOs and the daemon schema bundle
+      (21 schemas, 219 fixtures, both unchanged), and `contracts/scripts/boundary.test.mjs` pins the class:
+      a renamed consumed member of the served Goal or attention read is refused, a renamed unconsumed
+      member still decodes.
+      Still optional, by design rather than by omission: the workspace-read row's consumed members
+      (`resources[].id`/`status`/`sync_status`, project `version`/`default_agent_profile`/
+      `default_workspace`, the runtime rows) stay optional under `contracts/README.md`'s "keeps accepting
+      older partial projections" rule, and the work-detail/chat-read `WorkItemWaitingDecision` packet stays
+      optional because it is carried verbatim from the agent's `waiting_for_input` payload and its options
+      are advisory display data. Unconsumed members stay optional and additive: goal-read root
+      `project_name`, `updated_at`, `lifecycle`, `history`, `execution`, `planning`, `attention_reasons`;
+      the goal work item's planning/assignee fields, which the work surfaces read from their own read's
+      definition; and the attention read's entry `blockers`/`settlement_attention`/`updated_at` plus its
+      `GoalBlocker` and `SettlementAttention` members, which no surface consumes there.
+      Remaining open: the two residuals above stay open; the legacy surfaces that read workspace-read
+      members still render their own fallbacks instead of refusing, which is per-surface work outside this
+      class; and the captures for `accepted_outcomes`, `settlement_attention` and `external_waits` are
+      empty arrays, so those members are pinned by the boundary test and the real-served controller gate
+      rather than by a fixture-level rename probe.
 
 ## Deferred review findings (0007g)
 

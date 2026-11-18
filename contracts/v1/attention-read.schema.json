@@ -2,10 +2,10 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "contracts/v1/attention-read.schema.json",
   "title": "Symmetry Attention Read v1",
-  "description": "Consumed members of the Portal attention read: the existing server-side Goal attention feed merged with the project-level blocked work items the workspace read already serves. Unconsumed presentation members remain additive, and every policy member (attention reasons, blockers, readiness) is the server's own projection, never a client derivation.",
+  "description": "Consumed members of the Portal attention read: the existing server-side Goal attention feed merged with the project-level blocked work items the workspace read already serves. Every member a surface consumes that the served projection always emits is required (a served null stays nullable), so renaming one cannot pass every gate while the page silently renders a zero or a fallback; unconsumed presentation members remain additive, and every policy member (attention reasons, blockers, readiness) is the server's own projection, never a client derivation.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["goal_attention", "project_blocked"],
+  "required": ["selected_project_id", "goal_attention", "project_blocked"],
   "properties": {
     "selected_project_id": {
       "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
@@ -17,7 +17,7 @@
     "GoalAttentionFeed": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["entries", "unavailable"],
+      "required": ["entries", "next_cursor", "unavailable"],
       "properties": {
         "entries": {
           "type": "array",
@@ -33,7 +33,7 @@
       "type": "object",
       "additionalProperties": true,
       "description": "Goals.ReadModel.attention/1 entry as served; the goal surface re-reads the full projection for detail.",
-      "required": ["goal_id", "title", "state", "current_revision", "blocker_reasons", "ready_to_achieve?"],
+      "required": ["goal_id", "project_id", "title", "state", "current_revision", "blocker_reasons", "attention_reasons", "active_tasks", "nonterminal_tasks", "ready_to_achieve?"],
       "properties": {
         "goal_id": {"$ref": "common.schema.json#/definitions/UUID"},
         "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
@@ -71,7 +71,7 @@
       "type": "object",
       "additionalProperties": true,
       "description": "The shell's existing project-level blocked item, plus the project identity needed to render it beside Goal attention.",
-      "required": ["project_id", "work_item_id", "title", "status", "blocked"],
+      "required": ["project_id", "project_key", "project_name", "project_status", "work_item_id", "work_item_key", "title", "status", "blocked", "blocker"],
       "properties": {
         "project_id": {"$ref": "common.schema.json#/definitions/UUID"},
         "project_key": {"oneOf": [{"type": "string"}, {"type": "null"}]},
@@ -89,7 +89,7 @@
     "GoalBlocker": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["reason", "count"],
+      "required": ["reason", "count", "ids", "details"],
       "properties": {
         "reason": {"type": "string"},
         "count": {"type": "integer"},
@@ -100,7 +100,7 @@
     "SettlementAttention": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["settlement", "required?"],
+      "required": ["event_id", "goal_revision", "task_id", "required?", "settlement", "reason", "proposed_next_action", "proposed_next_action_status"],
       "properties": {
         "event_id": {"oneOf": [{"type": "string"}, {"type": "null"}]},
         "event_sequence": {"oneOf": [{"type": "integer"}, {"type": "null"}]},

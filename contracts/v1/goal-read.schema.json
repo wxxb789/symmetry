@@ -2,24 +2,29 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "contracts/v1/goal-read.schema.json",
   "title": "Symmetry Goal Read v1",
-  "description": "Consumed members of the Portal Goal detail read: the existing Goal projection with objective, accepted progress, blockers, the server's own allowed actions, settlement attention, budget reservation and consumption, waiting-external boundaries and the read-only dependency projection. Unconsumed presentation members remain additive; the client never derives a Goal policy member and never offers an action the served allowed_actions does not list.",
+  "description": "Consumed members of the Portal Goal detail read: the existing Goal projection with objective, accepted progress, blockers, the server's own allowed actions, settlement attention, budget reservation and consumption, waiting-external boundaries and the read-only dependency projection. Every member a surface consumes that the projection always serves is required (a served null stays nullable), so renaming one cannot pass every gate while the client silently reads undefined; unconsumed presentation members remain additive, and the client never derives a Goal policy member and never offers an action the served allowed_actions does not list.",
   "type": "object",
   "additionalProperties": true,
   "required": [
     "id",
     "project_id",
+    "project_key",
     "title",
     "state",
     "current_revision",
     "version",
-    "allowed_actions",
+    "revision",
     "blockers",
     "blocker_reasons",
+    "settlement_attention",
     "completion",
+    "allowed_actions",
     "work_items",
     "graph",
     "decisions",
-    "accounting"
+    "accepted_outcomes",
+    "accounting",
+    "external_waits"
   ],
   "properties": {
     "id": {
@@ -192,7 +197,14 @@
       "additionalProperties": true,
       "description": "PortalJSON revision projection: the approved contract members with the revision stamp. The read projection omits the write-side reason/actor_ref and never carries the write schema_version.",
       "required": [
-        "revision"
+        "revision",
+        "objective",
+        "non_goals",
+        "acceptance_contract",
+        "authority_policy",
+        "execution_policy",
+        "context_manifest",
+        "inserted_at"
       ],
       "properties": {
         "revision": {
@@ -236,7 +248,9 @@
       "additionalProperties": true,
       "required": [
         "reason",
-        "count"
+        "count",
+        "ids",
+        "details"
       ],
       "properties": {
         "reason": {
@@ -263,8 +277,14 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
+        "event_id",
+        "goal_revision",
+        "task_id",
+        "required?",
         "settlement",
-        "required?"
+        "reason",
+        "proposed_next_action",
+        "proposed_next_action_status"
       ],
       "properties": {
         "event_id": {
@@ -459,8 +479,12 @@
       "additionalProperties": true,
       "required": [
         "id",
+        "number",
         "title",
         "status",
+        "accepted_outcome",
+        "execution",
+        "blockers",
         "required?",
         "accepted?",
         "integration"
@@ -667,7 +691,10 @@
       "additionalProperties": true,
       "required": [
         "id",
-        "title"
+        "number",
+        "title",
+        "blockers",
+        "accepted?"
       ],
       "properties": {
         "id": {
@@ -711,7 +738,8 @@
         "id",
         "from",
         "to",
-        "satisfied?"
+        "satisfied?",
+        "blocker"
       ],
       "properties": {
         "id": {
@@ -780,9 +808,13 @@
       "additionalProperties": true,
       "required": [
         "id",
+        "goal_revision",
         "kind",
         "state",
-        "open?"
+        "open?",
+        "question",
+        "options",
+        "resolution"
       ],
       "properties": {
         "id": {
@@ -880,7 +912,12 @@
       "additionalProperties": true,
       "required": [
         "id",
-        "disposition"
+        "work_item_id",
+        "candidate_subject",
+        "subject_hash",
+        "evidence_ids",
+        "disposition",
+        "inserted_at"
       ],
       "properties": {
         "id": {
@@ -1024,6 +1061,10 @@
       "required": [
         "held_microusd",
         "unknown_reservation_count",
+        "settled_reservation_count",
+        "released_reservation_count",
+        "known_usage_cost_microusd",
+        "usage_cost_microusd",
         "unknown_usage_count",
         "usage_cost_unknown?"
       ],
@@ -1086,7 +1127,12 @@
       "additionalProperties": true,
       "required": [
         "id",
-        "state"
+        "state",
+        "reason",
+        "resource_id",
+        "external_ref",
+        "next_check_at",
+        "check_seq"
       ],
       "properties": {
         "id": {

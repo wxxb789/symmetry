@@ -6,7 +6,9 @@ import addFormats from "ajv-formats";
 import { Effect, Either, Schema } from "effect";
 import {
   Admission,
+  AttentionRead,
   ConnectionsRead,
+  GoalRead,
   GoalCreate,
   PlanProposal,
   TaskResult,
@@ -200,6 +202,127 @@ test("work detail and timeline reads decode presentation numbers and validate co
   );
   assert.ok(Either.isLeft(timelineResult));
   assert.equal(timelineResult.left._tag, "ParseError");
+});
+
+/** Replace `member` with a renamed member on a served document, as a server rename would. */
+function renameMember(target, member) {
+  assert.ok(Object.hasOwn(target, member), `the served document must carry ${member}`);
+  target[`${member}_renamed`] = target[member];
+  delete target[member];
+}
+
+/**
+ * The served reads mark every consumed member the projection always serves as
+ * required. Renaming one on the serving side must fail this boundary instead of
+ * decoding into a silent fallback on the surface; a member no surface consumes
+ * stays optional, so an additive presentation member is still accepted.
+ */
+test("Goal reads refuse a renamed consumed member and keep unconsumed members additive", async () => {
+  const document = await fixture("goal-read.active");
+  const served = {
+    ...document,
+    accepted_outcomes: [
+      {
+        id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        work_item_id: "44444444-4444-4444-8444-444444444444",
+        candidate_subject: {
+          resource_id: "88888888-8888-4888-8888-888888888888",
+          commit: "a".repeat(40),
+          tree_digest: `sha256:${"b".repeat(64)}`,
+        },
+        subject_hash: `sha256:${"c".repeat(64)}`,
+        evidence_ids: ["99999999-9999-4999-8999-999999999999"],
+        disposition: "accepted",
+        inserted_at: "2026-11-16T09:50:00Z",
+      },
+    ],
+    settlement_attention: [
+      {
+        event_id: "77777777-7777-4777-8777-777777777777",
+        goal_revision: 1,
+        task_id: "66666666-6666-4666-8666-666666666666",
+        "required?": true,
+        settlement: "awaiting_validation",
+        reason: null,
+        proposed_next_action: "Run the bound validation profile",
+        proposed_next_action_status: "proposal_only",
+      },
+    ],
+    external_waits: [
+      {
+        id: "12121212-1212-4212-8212-121212121212",
+        state: "waiting",
+        reason: null,
+        resource_id: "88888888-8888-4888-8888-888888888888",
+        external_ref: "wxxb789/symmetry",
+        next_check_at: "2026-11-16T11:00:00Z",
+        check_seq: 3,
+      },
+    ],
+  };
+
+  const decoded = await Effect.runPromise(
+    Effect.either(GoalRead.decodeJson(JSON.stringify(served))),
+  );
+  assert.ok(
+    Either.isRight(decoded),
+    `the served document must decode before any rename: ${String(decoded.left)}`,
+  );
+
+  const goalRenames = [
+    ["the root project label", (value) => renameMember(value, "project_key")],
+    ["the approved revision", (value) => renameMember(value.revision, "context_manifest")],
+    ["a work item", (value) => renameMember(value.work_items[0], "accepted_outcome")],
+    ["a graph node", (value) => renameMember(value.graph.nodes[0], "blockers")],
+    ["a graph edge", (value) => renameMember(value.graph.edges[0], "blocker")],
+    ["a decision", (value) => renameMember(value.decisions[0], "resolution")],
+    ["an accepted outcome", (value) => renameMember(value.accepted_outcomes[0], "candidate_subject")],
+    ["settlement attention", (value) => renameMember(value.settlement_attention[0], "proposed_next_action")],
+    ["an external wait", (value) => renameMember(value.external_waits[0], "next_check_at")],
+    ["the accounting", (value) => renameMember(value.accounting, "known_usage_cost_microusd")],
+  ];
+  for (const [label, rename] of goalRenames) {
+    const renamed = structuredClone(served);
+    rename(renamed);
+    const result = await Effect.runPromise(
+      Effect.either(GoalRead.decodeJson(JSON.stringify(renamed))),
+    );
+    assert.ok(Either.isLeft(result), `${label}: a renamed consumed member must be refused`);
+    assert.equal(result.left._tag, "ParseError", `${label}: the refusal is a parse failure`);
+  }
+
+  // Control: the same document with an unconsumed member renamed still decodes.
+  const additive = structuredClone(served);
+  renameMember(additive, "updated_at");
+  const additiveResult = await Effect.runPromise(
+    Effect.either(GoalRead.decodeJson(JSON.stringify(additive))),
+  );
+  assert.ok(
+    Either.isRight(additiveResult),
+    `an unconsumed presentation member stays additive: ${String(additiveResult.left)}`,
+  );
+
+  const attention = structuredClone(await fixture("attention-read.basic"));
+  const attentionDecoded = await Effect.runPromise(
+    Effect.either(AttentionRead.decodeJson(JSON.stringify(attention))),
+  );
+  assert.ok(
+    Either.isRight(attentionDecoded),
+    `the served attention read must decode before any rename: ${String(attentionDecoded.left)}`,
+  );
+  for (const [label, rename] of [
+    ["the feed cursor", (value) => renameMember(value.goal_attention, "next_cursor")],
+    ["an attention entry", (value) => renameMember(value.goal_attention.entries[0], "nonterminal_tasks")],
+    ["a blocked project row", (value) => renameMember(value.project_blocked.entries[0], "project_status")],
+  ]) {
+    const renamed = structuredClone(attention);
+    rename(renamed);
+    const result = await Effect.runPromise(
+      Effect.either(AttentionRead.decodeJson(JSON.stringify(renamed))),
+    );
+    assert.ok(Either.isLeft(result), `${label}: a renamed consumed member must be refused`);
+    assert.equal(result.left._tag, "ParseError", `${label}: the refusal is a parse failure`);
+  }
 });
 
 test("raw decoding classifies malformed JSON before schema validation", async () => {

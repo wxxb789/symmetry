@@ -143,12 +143,12 @@ describe("goal detail surface", () => {
           objective: "Merge Goal attention with the project blocked items",
           allowedActions: ["pause", "amend", "cancel"],
           workItems: [
-            { id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Merge the attention feed", status: "in_progress", "required?": true, integration: false, "accepted?": true, accepted_outcome: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject }, execution: { state: "completed" }, blockers: [] },
+            { id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Merge the attention feed", status: "in_progress", "required?": true, integration: false, "accepted?": true, accepted_outcome: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject, inserted_at: "2026-11-16T09:50:00Z" }, execution: { state: "completed" }, blockers: [] },
             { id: "55555555-5555-4555-8555-555555555555", number: 2, title: "Render the Goal detail surface", status: "queued", "required?": true, integration: true, "accepted?": false, accepted_outcome: null, execution: null, blockers: ["waiting_dependency"] },
           ],
           acceptedOutcomes: [{ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject, inserted_at: "2026-11-16T09:50:00Z" }],
           blockers: [{ reason: "waiting_dependency", count: 1, ids: ["55555555-5555-4555-8555-555555555555"], details: [] }],
-          settlementAttention: [{ settlement: "awaiting_validation", "required?": true, task_id: "66666666-6666-4666-8666-666666666666", goal_revision: 2, proposed_next_action: "Run the bound validation profile", proposed_next_action_status: "proposal_only" }],
+          settlementAttention: [{ settlement: "awaiting_validation", "required?": true, event_id: "77777777-7777-4777-8777-777777777777", task_id: "66666666-6666-4666-8666-666666666666", goal_revision: 2, proposed_next_action: "Run the bound validation profile", proposed_next_action_status: "proposal_only" }],
           graph: {
             nodes: [
               { id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Merge the attention feed", "required?": true, board_status: "in_progress", "accepted?": true, blockers: [] },
@@ -305,9 +305,9 @@ describe("goal detail surface", () => {
           // `integration` designation.
           workItems: [
             { id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Implementation", status: "done", "required?": true, integration: false, "accepted?": false, accepted_outcome: null, execution: null, blockers: [] },
-            { id: "55555555-5555-4555-8555-555555555555", number: 2, title: "Integration", status: "done", "required?": true, integration: true, "accepted?": true, accepted_outcome: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", disposition: "accepted", evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject }, execution: null, blockers: [] },
+            { id: "55555555-5555-4555-8555-555555555555", number: 2, title: "Integration", status: "done", "required?": true, integration: true, "accepted?": true, accepted_outcome: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "55555555-5555-4555-8555-555555555555", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject, inserted_at: "2026-11-16T09:50:00Z" }, execution: null, blockers: [] },
           ],
-          acceptedOutcomes: [{ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject }],
+          acceptedOutcomes: [{ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject, inserted_at: "2026-11-16T09:50:00Z" }],
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
@@ -450,7 +450,7 @@ describe("goal detail surface", () => {
   });
 
   it("offers no plan approval when the served plan decision carries no acceptance option", async () => {
-    const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", kind: "plan", state: "open", "open?": true, version: 3, question: "Accept the proposed plan?", options: [{ id: "reject", label: "Reject", consequence: "Keep the current approved state." }], resolution: null };
+    const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", goal_revision: 1, kind: "plan", state: "open", "open?": true, version: 3, question: "Accept the proposed plan?", options: [{ id: "reject", label: "Reject", consequence: "Keep the current approved state." }], resolution: null };
     const { fetcher } = recordingFetcher((path: string) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {

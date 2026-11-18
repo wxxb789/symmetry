@@ -7,12 +7,12 @@ export type LongText = string;
 export type Microusd = string;
 
 /**
- * Consumed members of the Portal Goal detail read: the existing Goal projection with objective, accepted progress, blockers, the server's own allowed actions, settlement attention, budget reservation and consumption, waiting-external boundaries and the read-only dependency projection. Unconsumed presentation members remain additive; the client never derives a Goal policy member and never offers an action the served allowed_actions does not list.
+ * Consumed members of the Portal Goal detail read: the existing Goal projection with objective, accepted progress, blockers, the server's own allowed actions, settlement attention, budget reservation and consumption, waiting-external boundaries and the read-only dependency projection. Every member a surface consumes that the projection always serves is required (a served null stays nullable), so renaming one cannot pass every gate while the client silently reads undefined; unconsumed presentation members remain additive, and the client never derives a Goal policy member and never offers an action the served allowed_actions does not list.
  */
 export interface SymmetryGoalReadV1 {
   id: UUID;
   project_id: UUID;
-  project_key?: string | null;
+  project_key: string | null;
   project_name?: string | null;
   title: string;
   state: string;
@@ -23,10 +23,10 @@ export interface SymmetryGoalReadV1 {
   version: number;
   updated_at?: string | null;
   lifecycle?: {} | null;
-  revision?: GoalReadRevision | null;
+  revision: GoalReadRevision | null;
   blockers: GoalBlocker[];
   blocker_reasons: string[];
-  settlement_attention?: SettlementAttention[];
+  settlement_attention: SettlementAttention[];
   attention_reasons?: string[];
   completion: GoalCompletion;
   /**
@@ -36,9 +36,9 @@ export interface SymmetryGoalReadV1 {
   work_items: GoalReadWorkItem[];
   graph: GoalReadGraph;
   decisions: GoalReadDecision[];
-  accepted_outcomes?: GoalReadOutcome[];
+  accepted_outcomes: GoalReadOutcome[];
   accounting: GoalReadAccounting;
-  external_waits?: GoalReadExternalWait[];
+  external_waits: GoalReadExternalWait[];
   history?: {} | null;
   execution?: {} | null;
   planning?: {} | null;
@@ -49,37 +49,37 @@ export interface SymmetryGoalReadV1 {
  */
 export interface GoalReadRevision {
   revision: Revision;
-  objective?: LongText;
-  non_goals?: LongText[];
-  acceptance_contract?: {};
-  authority_policy?: {};
-  execution_policy?: {};
-  context_manifest?: {};
-  inserted_at?: string | null;
+  objective: LongText;
+  non_goals: LongText[];
+  acceptance_contract: {};
+  authority_policy: {};
+  execution_policy: {};
+  context_manifest: {};
+  inserted_at: string | null;
   [k: string]: unknown | undefined;
 }
 export interface GoalBlocker {
   reason: string;
   count: number;
-  ids?: string[];
-  details?: {}[];
+  ids: string[];
+  details: {}[];
   [k: string]: unknown | undefined;
 }
 export interface SettlementAttention {
-  event_id?: string | null;
+  event_id: string | null;
   event_sequence?: number | null;
-  goal_revision?: number | null;
+  goal_revision: number | null;
   work_item_id?: string | null;
-  task_id?: string | null;
+  task_id: string | null;
   run_id?: string | null;
   generation?: number | null;
   "required?": boolean;
   settlement: string;
-  reason?: string | null;
+  reason: string | null;
   decision_id?: string | null;
   blocker?: {} | null;
-  proposed_next_action?: string | null;
-  proposed_next_action_status?: string | null;
+  proposed_next_action: string | null;
+  proposed_next_action_status: string | null;
   subject_hash?: string | null;
   evidence_refs?: {}[];
   [k: string]: unknown | undefined;
@@ -101,7 +101,7 @@ export interface GoalCompletion {
 }
 export interface GoalReadWorkItem {
   id: UUID;
-  number?: number | null;
+  number: number | null;
   title: string;
   description?: string | null;
   status: string;
@@ -116,9 +116,9 @@ export interface GoalReadWorkItem {
   repository_resource_id?: string | null;
   baseline?: {} | null;
   change_target?: {} | null;
-  accepted_outcome?: GoalReadOutcome | null;
-  execution?: {} | null;
-  blockers?: string[];
+  accepted_outcome: GoalReadOutcome | null;
+  execution: {} | null;
+  blockers: string[];
   "required?": boolean;
   "accepted?": boolean;
   integration: boolean;
@@ -128,18 +128,18 @@ export interface GoalReadOutcome {
   id: UUID;
   goal_id?: string | null;
   goal_revision?: number | null;
-  work_item_id?: string | null;
+  work_item_id: string | null;
   producing_task_id?: string | null;
   producing_run_id?: string | null;
   producing_result_id?: string | null;
   validation_task_id?: string | null;
-  candidate_subject?: {} | null;
-  subject_hash?: string | null;
-  evidence_ids?: string[];
+  candidate_subject: {} | null;
+  subject_hash: string | null;
+  evidence_ids: string[];
   disposition: string;
   reason?: string | null;
   decision_id?: string | null;
-  inserted_at?: string | null;
+  inserted_at: string | null;
   [k: string]: unknown | undefined;
 }
 /**
@@ -153,12 +153,12 @@ export interface GoalReadGraph {
 }
 export interface GoalReadGraphNode {
   id: UUID;
-  number?: number | null;
+  number: number | null;
   title: string;
   board_status?: string;
-  blockers?: string[];
+  blockers: string[];
   "required?"?: boolean;
-  "accepted?"?: boolean;
+  "accepted?": boolean;
   [k: string]: unknown | undefined;
 }
 /**
@@ -171,20 +171,20 @@ export interface GoalReadGraphEdge {
   from: string;
   to: string;
   "satisfied?": boolean;
-  blocker?: string | null;
+  blocker: string | null;
   revision?: number | null;
   [k: string]: unknown | undefined;
 }
 export interface GoalReadDecision {
   id: UUID;
-  goal_revision?: number | null;
+  goal_revision: number | null;
   work_item_id?: string | null;
   kind: string;
   state: string;
   "open?": boolean;
-  question?: string | null;
-  options?: {}[];
-  resolution?: {} | null;
+  question: string | null;
+  options: {}[];
+  resolution: {} | null;
   expires_at?: string | null;
   inserted_at?: string | null;
   updated_at?: string | null;
@@ -196,12 +196,12 @@ export interface GoalReadDecision {
 export interface GoalReadAccounting {
   held_microusd: Microusd | null;
   unknown_reservation_count: number;
-  settled_reservation_count?: number;
-  released_reservation_count?: number;
+  settled_reservation_count: number;
+  released_reservation_count: number;
   usage_records?: number;
   usage_leaf_count?: number;
-  known_usage_cost_microusd?: Microusd | null;
-  usage_cost_microusd?: Microusd | null;
+  known_usage_cost_microusd: Microusd | null;
+  usage_cost_microusd: Microusd | null;
   "usage_cost_unknown?": boolean;
   unknown_usage_count: number;
   [k: string]: unknown | undefined;
@@ -215,13 +215,13 @@ export interface GoalReadExternalWait {
   generation?: number | null;
   result_id?: string | null;
   state: string;
-  reason?: string | null;
-  resource_id?: string | null;
-  external_ref?: string | null;
+  reason: string | null;
+  resource_id: string | null;
+  external_ref: string | null;
   subject?: {} | null;
   source_ref?: {} | null;
-  next_check_at?: string | null;
-  check_seq?: number | null;
+  next_check_at: string | null;
+  check_seq: number | null;
   receipt_event_id?: string | null;
   inserted_at?: string | null;
   updated_at?: string | null;
