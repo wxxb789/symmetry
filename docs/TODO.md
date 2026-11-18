@@ -100,6 +100,45 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
       never edit a receipt whose digests other records bind.
 
+- [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
+      review. `receipt` in `scripts/ci/model-routing-evaluation.py` derived the candidate usage and published
+      `frozen/usage.json` and `run.json` before `write_json(receipt.json)` serialized the receipt, so a valid
+      JSON usage row carrying a lone surrogate (`\ud800` in the opaque `metadata` passthrough: `strict_json` and
+      `validate_usage` accept it, `canonical_json` refuses it at `encode("utf-8")`) left the frozen usage bytes
+      and the run record at the candidate revision while `receipt.json` stayed at the previous one; `accept`
+      then refused at `$.evidence.frozen_usage_sha256` and the run could not be re-derived. Fix:
+      `command_receipt` serializes the derived receipt and the run record (`run_record_bytes`, shared with
+      `save_run`) before the first write, so no document is published unless the receipt for the candidate has
+      been serialized; on any refusal the three files stay byte-identical. Reproduction:
+      `python3 scripts/ci/test-model-routing-evaluation.py -v EvaluationTests.test_serialization_refusal_publishes_nothing`
+      (red before the fix on the `frozen/usage.json` byte equality, green after; re-broken on demand by moving
+      `canonical_json(receipt)` back after the writes, which reproduces the same failure). Validation was not
+      relaxed: the surrogate document is still refused.
+
+- [x] Rebound the 0008a audit's source manifest to the delivered revision `1c6c715` (audit finding F12) after
+      the final rebase left its previous binding unreachable. The manifest and the repair list named the
+      pre-rebase feature tip `c45db2c` and the pre-rebase repair commit `1baf76c`; once the branch was rebased
+      onto `7a92ca4` and delivered as `1c6c715`, `git show c45db2c:<path>` failed for a reader and eight entries
+      described no published revision - including `docs/goals/README.md` (16713 bytes `sha256:aac4ca76…` ->
+      17578 bytes `sha256:b764dabf…`) and `.github/workflows/ci.yml` (103330 `sha256:a0ad0020…` -> 103379
+      `sha256:4e73a080…`). Rebinding was chosen over marking history because the manifest's own method is
+      `git show <bound commit>:<path>`, and only main's history is durable for a reader. All 17 entries now
+      re-derive with `git show 1c6c715:<path>`; the scoped digest is `sha256:9dc95d2f…` (was `sha256:34cc3198…`);
+      the pre-rebase values, the moved list and the delivered commit mapping (`e4a91c1` F1-F3, `bdbcdc7` F4-F9,
+      `abf8210` F10-F11, `993870e` post-audit repairs, squashed as `1c6c715`) are retained in F12; the evidence
+      record's quoted audit digest (`sha256:dc878099…`) and manifest digest are updated, and its delivery
+      narrative now names the delivered commits. Run-time observations (gate results, link checks, receipt
+      re-derivations recorded in the audit) remain bound to the pre-rebase reviewed revision and are labelled as
+      history.
+
+- [ ] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
+      how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
+      resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
+      against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
+      `scripts/ci/test-model-routing-evaluation.py` again, so the 0008b/0008c/0008d receipts stay fail-closed
+      for submission under the current bytes exactly as their entries below describe; re-execute the runs, never
+      re-derive by editing a receipt.
+
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
@@ -1054,6 +1093,23 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       tooling-digest mismatches and nothing else (`checks: 99, failures: 4`). Re-execute the runs if a
       future submission requires receipts produced by the current bytes; never re-derive by editing a
       receipt.
+
+- [ ] Verified, no change needed: the 0007b repair receipt's source subject
+      `sha256:4a28f41446d2a057e355fffcf2f4c06e8c49475867e26ce66038f66a6502256f` (393 source entries) has not
+      silently drifted. Recomputing the receipt's own documented algorithm (recursive roots plus the direct
+      files in `frontend/`, `browser/` and `contracts/` plus the explicit file list, every `docs/**` path
+      excluded; entry `sha256 + two spaces + path + LF`, PowerShell invariant-culture sort) reproduces it
+      exactly on the delivered 0007b merge revision `7a92ca4` and on the published branch commit `efe0fdf`, and
+      the same script reproduces the receipt's own historical anchors (`01eb134` full-tree `sha256:1e345643…`,
+      `efe0fdf` full-tree `sha256:705e559d…`). The tree recomputed at this change's revision differs
+      (`sha256:fdf75910…`, 466 entries; 83 moved + 75 added + 2 removed scope paths contributed by later goals),
+      which no `docs/**`-only edit can cause and which no receipt claim asserts as current. The command the
+      receipt names (`.tmp/0007b-subject-digest.ps1`) was a throwaway, so a delivered tool for that scope would
+      need its own increment if a future submission must re-derive it without re-implementing the documented
+      algorithm.
+      Corroboration recorded without action: an independent cancelled review parsed the browser HTML
+      report's embedded results and confirmed the focused 35/1/0 and broad 79/15/0 rows with no flaky cases -
+      evidence for the 0007b receipts' browser rows, not a defect.
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 

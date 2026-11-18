@@ -1571,6 +1571,31 @@ class EvaluationTests(unittest.TestCase):
         refused = self.check("--timeout", "-1", run=run)
         self.assert_refused(refused, "--timeout")
 
+    def test_serialization_refusal_publishes_nothing(self) -> None:
+        run = self.root / "run-serialization-atomic"
+        self.accepted_run(run=run)
+        frozen_usage = self.read(run / "frozen" / "usage.json")
+        run_record = self.read(run / "run.json")
+        receipt_record = self.read(run / "receipt.json")
+        accepted = self.stored_receipt(run)
+
+        usage = self.usage_rows()
+        usage["phases"][0]["metadata"] = {"note": "\ud800"}
+        refused = self.receipt(usage, run=run)
+        self.assert_refused(refused, "not valid UTF-8")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # The candidate rows validated and the receipt derived, but the receipt could
+        # not be serialized: nothing may have been published, or the frozen usage
+        # bytes and run record would name the candidate while the old receipt stays
+        # and no longer verifies against them.
+        self.assertEqual(self.read(run / "frozen" / "usage.json"), frozen_usage)
+        self.assertEqual(self.read(run / "run.json"), run_record)
+        self.assertEqual(self.read(run / "receipt.json"), receipt_record)
+        self.assertEqual(self.stored_receipt(run), accepted)
+        summary = self.assert_ok(self.accept(run=run))
+        self.assertTrue(summary["accepted"], summary)
+
     def test_non_utf8_checkout_paths_are_refused(self) -> None:
         if os.name != "posix":
             self.skipTest("non-UTF-8 file names are only constructible on POSIX hosts")
