@@ -2,7 +2,11 @@
 
 Operator procedures and opt-in verification recipes for the delivered Symmetry
 system. A runbook states what to run on the current tree, what the result means,
-and what it does not prove; when it disagrees with the code, the code wins.
+and what it does not prove. When a runbook disagrees with the code, the code is
+the current behavior: do not follow the stale line, and do not work around the
+conflict silently — record the exact conflict and the smallest correction the
+runbook needs (root `AGENTS.md`, *Non-negotiable boundaries*) and fix or delete
+the stale instruction.
 
 These documents are not contracts. The wire contract is
 [`../protocol-v1.md`](../protocol-v1.md), the fixed architecture and boundaries

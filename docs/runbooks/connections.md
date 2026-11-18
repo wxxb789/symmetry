@@ -61,12 +61,21 @@ The connection account or organization is immutable after creation; create a new
 connection rather than rebinding existing resources to a different GitHub
 account.
 
-Grant read access corresponding to the selected capabilities:
+Grant the access corresponding to the selected capabilities. Every capability
+reads, and connected change delivery also writes through the control plane's own
+authenticated identity:
 
 - `repositories`: repository metadata and contents metadata;
 - `work_items`: Issues;
 - `changes`: pull requests and reviews;
 - `ci`: Actions workflow runs.
+
+`change.upsert` and `change.update` create or update a pull request in the bound
+repository (`control/lib/symmetry_control/integrations/providers/github.ex`), sent
+by the control plane, never by the agent. The authenticated identity therefore
+needs pull-request write access on top of the reads above. The repository pins no
+GitHub scope names for either level; grant the minimum the selected capabilities
+and change delivery require.
 
 Repository, work-tracking and CI resources use `owner/repository` as their
 external reference. GitHub Issues are imported as external work items; pull
@@ -91,13 +100,12 @@ Symmetry requests a short-lived access token for the Azure DevOps resource
 `499b84ac-1321-427f-aa17-267ca6975798` through
 `az account get-access-token`. Azure DevOps PATs are not accepted. Grant the
 signed-in identity only the permissions the connection's capabilities need; the
-capability ids are the same four as GitHub, and the corresponding Azure DevOps
-scopes are:
-
-- `repositories`: `vso.code`;
-- `work_items`: `vso.work`;
-- `changes`: `vso.code`;
-- `ci`: `vso.build`.
+capability ids are the same four as GitHub. Connected change delivery creates or
+updates the pull request through that same identity
+(`control/lib/symmetry_control/integrations/providers/azure_devops.ex`), so it
+needs pull-request write permission on top of the reads above. This repository
+pins no Azure DevOps scope or permission names; grant the identity the minimum the
+selected capabilities and change delivery require.
 
 Work-tracking resources use the Azure DevOps project name as their external
 reference, and repository resources use `project/repository`. Explicit Azure
