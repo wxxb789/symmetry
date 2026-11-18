@@ -148,7 +148,7 @@ describe("goal detail surface", () => {
           ],
           acceptedOutcomes: [{ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject, inserted_at: "2026-11-16T09:50:00Z" }],
           blockers: [{ reason: "waiting_dependency", count: 1, ids: ["55555555-5555-4555-8555-555555555555"], details: [] }],
-          settlementAttention: [{ settlement: "awaiting_validation", "required?": true, event_id: "77777777-7777-4777-8777-777777777777", task_id: "66666666-6666-4666-8666-666666666666", goal_revision: 2, proposed_next_action: "Run the bound validation profile", proposed_next_action_status: "proposal_only" }],
+          settlementAttention: [{ settlement: "awaiting_validation", "required?": true, event_id: "77777777-7777-4777-8777-777777777777", task_id: "66666666-6666-4666-8666-666666666666", goal_revision: 2, reason: null, proposed_next_action: "Run the bound validation profile", proposed_next_action_status: "proposal_only" }],
           graph: {
             nodes: [
               { id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Merge the attention feed", "required?": true, board_status: "in_progress", "accepted?": true, blockers: [] },
@@ -468,7 +468,7 @@ describe("goal detail surface", () => {
   });
 
   it("offers no plan approval for a resolved plan decision", async () => {
-    const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", kind: "plan", state: "resolved", "open?": false, version: 4, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: { option_id: "accept" } };
+    const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", goal_revision: 1, kind: "plan", state: "resolved", "open?": false, version: 4, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: { option_id: "accept" } };
     const { fetcher } = recordingFetcher((path: string) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
