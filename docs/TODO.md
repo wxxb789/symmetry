@@ -8,6 +8,9 @@ Manual tasks and deferred maintenance discovered during scoped changes.
 - When a closed part and an open residual share an item, the closed part moves to the archive and the residual stays here with a line saying where it went.
 - Entries in `docs/archive/CLOSED-TODO.md` older than six months may be deleted.
 
+A bullet that carries no `- [ ]`/`- [x]` marker is a decision note, not a tracked item: it stays
+where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted with it.
+
 ## Model-routing evaluation records
 
 - [ ] Decide whether the four 0008d receipts ever need re-production once the evaluation tooling
