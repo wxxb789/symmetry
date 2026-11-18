@@ -6,7 +6,7 @@ Manual tasks and deferred maintenance discovered during scoped changes.
 
 - Done items move to `docs/archive/CLOSED-TODO.md`; this file holds only undone or in-progress items.
 - When a closed part and an open residual share an item, the closed part moves to the archive and the residual stays here with a line saying where it went.
-- Archive entries older than six months may be deleted.
+- Entries in `docs/archive/CLOSED-TODO.md` older than six months may be deleted.
 
 ## Model-routing evaluation records
 
@@ -181,8 +181,9 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       (`containment_supervisor_windows.go:1486`) has the same create-then-write shape but only
       ordered readers (a same-process `os.Stat` after the handoff returns, and e2e parses after
       the writing process exits), so it carries no observed or reachable race; the adjacent
-      Windows `TestCloseStopsOwnedChildAfterLeaderExit` observation above stays a different
-      defect (an owned child survived `Close()`), not a witness-publication race. Still open for
+      Windows `TestCloseStopsOwnedChildAfterLeaderExit` observation (archived in
+      `docs/archive/CLOSED-TODO.md`) stays a different defect (an owned child survived
+      `Close()`), not a witness-publication race. Still open for
       the owning change: the runner/app resume and stop-receipt barrier markers
       (`daemon/internal/execution/runner.go:1046`, `daemon/internal/app/app.go:2207`) still
       create-then-write documents whose e2e readers poll non-empty and then parse them; no
@@ -392,6 +393,8 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       unreported; with the fix the same scenario reports
       `--- FAIL: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (0.21s)` and the package
       completes. The Linux supervisor helper-witness flake
+      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in
+      `docs/TODO.md` above.
 
 - [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
       43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
@@ -403,8 +406,9 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       The second occurrence
       (`FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s`, run 44055523619 job
       133943809688) is classified and fixed in the `daemon/internal/platform` flake-class entry
-      below: a test cleanup joined a worker that retried an unpersistable terminal transition
-      forever, so the package died at the go-test timeout instead of failing the test.
+      above (closed part archived in `docs/archive/CLOSED-TODO.md`): a test cleanup joined a
+      worker that retried an unpersistable terminal transition forever, so the package died at
+      the go-test timeout instead of failing the test.
       The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
       in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
       wait on the product's own state transition rather than on host speed.
@@ -691,6 +695,8 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       stops once the socket reports connected, and the channel's own join completion
       (`frontend/src/services/realtime.ts`, `channel.join()` in `connect()`) is not treated as a read
       epoch — so the repair belongs to that signal in the product, not to a longer wait.
+      *(Superseded by the archived closure — the product half was fixed; see
+      `docs/archive/CLOSED-TODO.md`.)*
       Closed part moved to `docs/archive/CLOSED-TODO.md`.
       Still not converted, and not part of this change: the four cases #58 moved onto product state
       stay as they are; the other guards in these suites stay as named backstops; the other four
@@ -712,11 +718,14 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       `noopContainmentSupervisorLease` (`containment_supervisor_windows.go:934`),
       and the production daemon's durable-authority path is not affected. Keep the
       finding visible; fix or re-scope in a separate maintenance change.
+      *(Superseded by the archived closure — the finding was fixed; see
+      `docs/archive/CLOSED-TODO.md`; only (a)–(c) below stay open.)*
       Closed part moved to `docs/archive/CLOSED-TODO.md`.
       **Still open, deliberately unchanged.** (a) The wider settlement contract
-      in the `daemon/internal/platform` flake-class entry above keeps the
-      load-sensitive Windows owned-child close window; this change only removes
-      the false-success reporting. (b) A first settlement failure on the
+      for the `daemon/internal/platform` flake class above (the wider-contract note
+      is archived in `docs/archive/CLOSED-TODO.md`) keeps the load-sensitive
+      Windows owned-child close window; this change only removes the false-success
+      reporting. (b) A first settlement failure on the
       non-durable route is terminal for that containment owner: `Close` and
       `Terminate` keep reporting the latched error and no path re-derives a stop
       it cannot demonstrate, because the Job handle a re-proof would need is
@@ -777,6 +786,9 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       `control_capabilities/4` in `control/lib/symmetry_control/orchestration.ex`
       and the daemon's autonomy envelope in `daemon/internal/app/app.go`).
 
+      *(Partly superseded by the archived third-pass closure, which restated several of these
+      against their owners; see `docs/archive/CLOSED-TODO.md`. The revalidatable list below stays
+      open.)*
       Closed part moved to `docs/archive/CLOSED-TODO.md`.
 
       Still revalidatable, with no artifact that can pre-empt a future edit: the

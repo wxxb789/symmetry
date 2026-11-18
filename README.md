@@ -323,10 +323,11 @@ symmetry/
 ## Documentation
 
 `docs/runbooks/` is current operations, `docs/design/` and `docs/protocol-v1.md`
-are normative, `docs/goals/archive/` holds archived contracts, and
-`docs/evidence/` is valid only for its own date, Subject and proof scope;
-`docs/TODO.md` holds only undone or in-progress work, with done items moved to
-`docs/archive/CLOSED-TODO.md`.
+are normative, `docs/goals/archive/` holds archived contracts (distinct from
+`docs/archive/CLOSED-TODO.md`), and `docs/evidence/` is valid only for its own
+date, Subject and proof scope; `docs/TODO.md` holds only undone or in-progress
+work, with done items moved to `docs/archive/CLOSED-TODO.md`, whose entries older
+than six months may be deleted.
 
 | Document | Contents |
 | --- | --- |

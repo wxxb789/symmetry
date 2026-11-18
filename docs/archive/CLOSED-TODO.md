@@ -1,12 +1,13 @@
 # CLOSED TODO
 
-Done items moved out of `docs/TODO.md`, each kept with the closure evidence its own text records: a
-named commit, PR or branch plus the statement that the thing is fixed, enforced, closed or resolved.
-`docs/TODO.md` holds only undone or in-progress items; where a closed part and an open residual share
-an item, the closed part is here and the residual stays in `docs/TODO.md` with a line saying where it
-went. Section names of `docs/TODO.md` are preserved below so context survives the move, and fragments
-of items keep their original indentation. Each entry keeps its closure evidence and any closure date
-it records. Entries older than six months may be deleted.
+Done items moved out of `docs/TODO.md`, each kept with the closure statement its own text records —
+that the thing is fixed, enforced, closed or resolved — and a named commit, PR or branch where one
+is recorded. `docs/TODO.md` holds only undone or in-progress items; where a closed part and an open
+residual share an item, the closed part is here and the residual stays in `docs/TODO.md` with a line
+saying where it went. This file is separate from `docs/goals/archive/`, which holds archived
+contracts. Section names of `docs/TODO.md` are preserved below so context survives the move, and
+fragments of items keep their original indentation. Each entry keeps its closure statement and any
+closure date it records. Entries in this file older than six months may be deleted.
 
 The blocks below were moved on 2026-11-18. Markers (`- [ ]`, `- [x]`) are reproduced as they were,
 not a claim that work remains.
@@ -100,7 +101,7 @@ not a claim that work remains.
       43720680428 job 132831780245 on a docs-only diff, green in run 43715830442 and on rerun job
       132834151127; this change makes no claim about it, so this entry stays open. The Linux
       supervisor helper-witness flake
-      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry above.
+      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in `docs/TODO.md`.
       **Windows owned-child — fixed at the cause; verification is CI on the new revision, not a
       local green.** `TestCloseStopsOwnedChildAfterLeaderExit` failed again in run 44055523619 job
       133943809688 (push of main `ca1bdad`) with `process_windows_test.go:1004: owned child 7824
