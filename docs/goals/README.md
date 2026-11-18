@@ -1,6 +1,6 @@
 # Next goals for local Codex
 
-Goal [0007i](0007i-portal-cutover.md) completed the single real-time Portal
+Goal [0007i](archive/0007i-portal-cutover.md) completed the single real-time Portal
 cutover run on 2026-11-17 and stays in place (the 0007 lettered goals are not
 archived; only their receipts are). The
 [series release receipt](../evidence/goal-0007i-portal-cutover-series-receipt-2026-11-17.md)
@@ -311,7 +311,7 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 | [0006e](archive/0006e-claude-native-capability.md) | Evidence-bounded Claude Code native capability |
 | [0006f](archive/0006f-pi-native-capability.md) | Evidence-bounded pi native continuity |
 | [0006g](archive/0006g-opencode-support-decision.md) | Evidence-backed OpenCode V2 support decision |
-| [0006h](0006h-credentialed-provider-accounting.md) | Credentialed provider reconciliation and accounting |
+| [0006h](archive/0006h-credentialed-provider-accounting.md) | Credentialed provider reconciliation and accounting |
 | [0006i](archive/0006i-exact-subject-release-acceptance.md) | Exact-subject release and authorized acceptance |
 | [0006j](archive/0006j-omp-native-capability.md) | Evidence-bounded Oh My Pi native capability |
 | [0006k](archive/0006k-omo-native-capability.md) | Evidence-bounded OmO native capability |
