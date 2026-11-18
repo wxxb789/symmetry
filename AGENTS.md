@@ -60,3 +60,8 @@ Before completion, perform a scoped simplification review: remove an abstraction
 only when required behavior and clarity survive; repeat affected checks.
 Report what changed, the exact checks executed, their outcomes, and unresolved
 limitations. A green test suite is necessary evidence, not proof of all quality.
+
+- Done items move out of [docs/TODO.md](docs/TODO.md) into
+  [docs/archive/CLOSED-TODO.md](docs/archive/CLOSED-TODO.md) (distinct from
+  `docs/goals/archive/`): TODO holds only undone or in-progress work, and entries in
+  `docs/archive/CLOSED-TODO.md` older than six months may be deleted.
