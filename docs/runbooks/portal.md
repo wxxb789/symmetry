@@ -90,11 +90,12 @@ through the same durable command path.
 The workspace read serves four health signals for the selected project:
 **connections** (derived from attached resource health), **runtimes** (healthy
 only when at least one *compatible* runtime is online), **executions** (active
-work, human input waits, execution faults) and **sync** (degraded or offline
-external resources; failed or stale synchronization reports attention). The
-classic health rail no longer renders in the SPA — read these signals from the
-project, connections and runtimes surfaces or from the API. This keeps an offline
-runtime or broken connection from looking like an agent that is merely working.
+work, human input waits, execution faults) and **synchronization** (degraded or
+offline external resources; failed or stale synchronization reports attention).
+The classic health rail no longer renders in the SPA — read these signals from
+the project, connections and runtimes surfaces or from the API. This keeps an
+offline runtime or broken connection from looking like an agent that is merely
+working.
 
 ## Portal HTTP API
 
