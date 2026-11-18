@@ -442,10 +442,10 @@
       }
     ],
     "owner_routing_verdict_issued": false,
-    "post_review_changes": "As of the bound revision c45db2c: only evidence generation, clarified metric labels and unchanged-goal archival/canonical pointers followed the final executable-source review and 20-case suite. The later repair increments recorded in this audit (F1-F3, delivered as 1baf76c; the DeepSeek-review repairs F4-F9, delivered as bdbcdc7; and the PR-review repairs F10-F11) change files under scripts/ci/ and docs/, so that source review does not bind them.",
+    "post_review_changes": "As of the reviewed pre-rebase revision c45db2c (its commit object was rewritten by the final rebase; the reviewed bytes are retained as history in F12): only evidence generation, clarified metric labels and unchanged-goal archival/canonical pointers followed the final executable-source review and 20-case suite. The later repair increments recorded in this audit (F1-F3, pre-rebase 1baf76c, delivered as e4a91c1; the DeepSeek-review repairs F4-F9, delivered as bdbcdc7; the PR-review repairs F10-F11, delivered as abf8210; and the post-audit repairs delivered in 993870e) change files under scripts/ci/ and docs/, so that source review does not bind them. The increment was delivered on main as 1c6c715 (F12).",
     "reviewed_revision": {
-      "scripts/ci/model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1 (unchanged; my prior source review still binds)",
-      "scripts/ci/test-model-routing-evaluation.py": "sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0 (W6 fixture fix only; no production change)"
+      "scripts/ci/model-routing-evaluation.py": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1 (unchanged; my prior source review still binds) (Pre-rebase reviewed bytes; see F12.)",
+      "scripts/ci/test-model-routing-evaluation.py": "sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0 (W6 fixture fix only; no production change) (Pre-rebase reviewed bytes; see F12.)"
     },
     "reviewer_session_ref": "01a1dfc1-8d1c-73dd-a966-d2244d547b60",
     "source_verdict": "pass",
@@ -511,6 +511,11 @@
         "defect": "an export without a session id got a `session_ref` derived from its filesystem path, so byte-identical copies of one export placed at different paths presented as different sessions; the runner's per-session duplicate refusal could not stop the same tokens and cost from being counted once per phase (reproduced: identical metadata.source_sha256, distinct `hashed_path` refs)",
         "fix": "the fallback identity is derived from the export's own bytes instead (`session_ref_source: \"source_sha256\"`, a domain-separated hash of metadata.source_sha256), so byte-identical copies collapse onto one `session_ref` and the runner refuses the double import as `duplicates a model session`, while genuinely different exports keep distinct identities",
         "id": "F11"
+      },
+      {
+        "defect": "the source manifest and this repair list bound the increment at the pre-rebase feature tip c45db2c (tree 327059d) and at the pre-rebase repair commit 1baf76c; the final rebase onto 7a92ca4 rewrote both (feature 4644fd7, repairs replayed as e4a91c1) and the increment was delivered on main as 1c6c715, so `git show c45db2c:<path>` fails for a reader and eight manifest entries no longer described any published revision: .github/workflows/ci.yml 103330 bytes sha256:a0ad0020e8e8... -> 103379 bytes sha256:4e73a080a8bcffdacb67994a4acc13008d5df2dea5d90126eaece4433e9cd04a; docs/evaluations/model-routing/README.md 11858 bytes sha256:0e20381cd006... -> 16331 bytes sha256:fd4cb649d790175758c73f8e36b566c4b5fb6fd26d27dacf4d1135502dd58d21; docs/evaluations/model-routing/review-instructions.md 1717 bytes sha256:97dbba6ceee4... -> 2153 bytes sha256:bb982d3d901fb1974d35880e5675328f196b83a7731d54e68220260f8c6c1680; docs/goals/README.md 16713 bytes sha256:aac4ca761087... -> 17578 bytes sha256:b764dabf963c01626d3a557fc4e6fea98d39b77b1dd312fb38bd06536609bdc1; scripts/ci/model-routing-evaluation.py 89615 bytes sha256:1420761251e7... -> 123468 bytes sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56; scripts/ci/model-routing-omp-usage.py 23823 bytes sha256:0fbed87aa43b... -> 28756 bytes sha256:5d361246ef10e79d72bdbcb3f984564559d55031d4ca04bdfcf7010928b7923d; scripts/ci/test-model-routing-evaluation.py 42509 bytes sha256:99f0b36f93dc... -> 76219 bytes sha256:fca4adf6e38df63ad35b68178fbe1d162610ac34cb553f14f90f2597e53517e5; scripts/ci/test-model-routing-omp-usage.py 30069 bytes sha256:a39184a92788... -> 42875 bytes sha256:f82a39dcbdd85613006b4b888f2b3dbacf86c595b62c00b397d86be065ae70be",
+        "fix": "the whole manifest was recomputed on the delivered squash commit 1c6c715b57a8694bb447809fc1923edb75fdf56f (tree 54fde273debb31bbd629091661b202e1acbbc3b6), so every entry re-derives with `git show 1c6c715b57a8694bb447809fc1923edb75fdf56f:<path>`; scoped_manifest_sha256 is now sha256:9dc95d2ffe967e529cd810d55a8203a7073dde0d10c73975a65e2b9bab542552 (pre-rebase sha256:34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d); the pre-rebase reviewed tooling bytes (sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1 and sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0) are identical at the published branch commit 4644fd7 while that ref exists; run-time observations (gate results, link checks, receipt re-derivations recorded in this audit) remain bound to the pre-rebase reviewed revision and are labelled as history; the delivered commit mapping is F1-F3 -> e4a91c1 (pre-rebase 1baf76c), F4-F9 -> bdbcdc7, F10-F11 -> abf8210, plus the post-audit repairs delivered in 993870e, all squashed onto main as 1c6c715",
+        "id": "F12"
       }
     ],
     "frozen_receipt_effect": {
@@ -573,7 +578,7 @@
       "contract_checks": {
         "active_contract_path_absent": true,
         "archive_byte_identity": "docs/goals/archive/0008a-auditable-acceptance-workflow.md equals 343dea6a:docs/goals/0008a-auditable-acceptance-workflow.md, 5441 bytes, sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0",
-        "bound_ci_workflow": "git show c45db2c:.github/workflows/ci.yml parses as YAML (12 jobs) and contains the auditable model-routing step, sha256:a0ad0020e8e824e18a43b1bb2a319058a21d263f9160176d70d47cb8603f6a4c",
+        "bound_ci_workflow": "git show 1c6c715b57a8694bb447809fc1923edb75fdf56f:.github/workflows/ci.yml parses as YAML (12 jobs) and contains the auditable model-routing step, sha256:4e73a080a8bcffdacb67994a4acc13008d5df2dea5d90126eaece4433e9cd04a (F12 rebinding; at the pre-rebase reviewed revision c45db2c the same check covered 103330 bytes, sha256:a0ad0020e8e824e18a43b1bb2a319058a21d263f9160176d70d47cb8603f6a4c)",
         "index_pointer_present": true,
         "local_link_targets_checked": 59,
         "local_link_targets_missing": [
@@ -581,7 +586,7 @@
         ]
       },
       "deepseek_review_repairs": {
-        "contract_manifest_recheck": "all 17 source_manifest files match git show c45db2c:<path> (bytes and sha256); scoped_manifest_sha256 recomputes to sha256:34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d; the archived contract equals 343dea6a:docs/goals/0008a-auditable-acceptance-workflow.md (5441 bytes, sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0)",
+        "contract_manifest_recheck": "after the F12 rebinding all 17 source_manifest files match git show 1c6c715b57a8694bb447809fc1923edb75fdf56f:<path> (bytes and sha256); scoped_manifest_sha256 recomputes to sha256:9dc95d2ffe967e529cd810d55a8203a7073dde0d10c73975a65e2b9bab542552; the archived contract equals 343dea6a:docs/goals/0008a-auditable-acceptance-workflow.md (5441 bytes, sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0); the pre-rebase recheck that produced scoped sha256:34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d against git show c45db2c:<path> is retained as history in F12",
         "evaluation_harness": {
           "command": [
             "python",
@@ -623,7 +628,7 @@
             "refusal": "gate result is missing keys: go_list_argv, go_list_exit_code, go_list_stderr_bytes, go_list_stderr_sha256, go_list_stdout_bytes, go_list_stdout_sha256"
           }
         ],
-        "note": "F4-F9 worktree runs on this host; the F1-F3 re-runs above bind the 1baf76c content. The private-store controls also demonstrate that the F4-F9 change-set re-derivation accepts the preserved sealed changed_paths (the refusal happens later, at the attempt-record schema).",
+        "note": "F4-F9 worktree runs on this host; the F1-F3 re-runs above bind the pre-rebase F1-F3 content (delivered as e4a91c1, F12). The private-store controls also demonstrate that the F4-F9 change-set re-derivation accepts the preserved sealed changed_paths (the refusal happens later, at the attempt-record schema).",
         "reused_source_binder": {
           "command": [
             "python",
@@ -915,7 +920,7 @@
       }
     },
     "review_status": "no repair increment has an independent review; the source verdict above binds the bound revision only",
-    "state": "F1-F3 were uncommitted worktree edits when the bound-revision gate results were recorded and are delivered as commit 1baf76c; F4-F9 were delivered as commit bdbcdc7; F10-F11 are uncommitted worktree edits after that commit. No repair increment is covered by the source review or by the frozen receipts"
+    "state": "F1-F3 were uncommitted worktree edits when the bound-revision gate results were recorded and were delivered as e4a91c1 (replayed from the pre-rebase 1baf76c); F4-F9 were delivered as bdbcdc7; F10-F11 as abf8210; the post-audit repairs were delivered in 993870e, and the whole increment was squashed onto main as 1c6c715. No repair increment is covered by the source review or by the frozen receipts"
   },
   "retained_nonblocking_limits": [
     "Incomplete provider billing/prices, unreported helpers/transport usage and post-cutoff coordinator tail remain unknown, never zero.",
@@ -934,9 +939,9 @@
     "base_commit": "343dea6a62484d73e7b577a0be2683ca233510f6",
     "base_commit_role": "frozen task-contract base the receipts below ran against; the rebased increment commit's parent is the base branch tip",
     "bound_revision": {
-      "commit": "c45db2cdaa6ccd47a0b5fc952f874308d3cbe8c0",
-      "method": "git show <bound commit>:<path> for every listed path, recomputed on the rebased feature branch tip; uncommitted worktree edits after this revision are excluded",
-      "tree": "327059d933ea559ffe8a908c7c8784e4fb283c77"
+      "commit": "1c6c715b57a8694bb447809fc1923edb75fdf56f",
+      "method": "git show <bound commit>:<path> for every listed path, recomputed on the delivered squash commit 1c6c715 on main (#34) by the F12 rebinding; the pre-rebase feature tip c45db2c this block previously named was rewritten by the final rebase (feature 4644fd7, repairs replayed as e4a91c1/bdbcdc7/abf8210/993870e) and is unreachable from published refs, so its bytes are retained only as history in F12; uncommitted worktree edits after the bound revision are excluded",
+      "tree": "54fde273debb31bbd629091661b202e1acbbc3b6"
     },
     "files": [
       {
@@ -945,9 +950,9 @@
         "sha256": "sha256:0aa869e81a9f65db4dc5a3388311e8b10c2b80945636162c626df296745e3f5d"
       },
       {
-        "bytes": 103330,
+        "bytes": 103379,
         "path": ".github/workflows/ci.yml",
-        "sha256": "sha256:a0ad0020e8e824e18a43b1bb2a319058a21d263f9160176d70d47cb8603f6a4c"
+        "sha256": "sha256:4e73a080a8bcffdacb67994a4acc13008d5df2dea5d90126eaece4433e9cd04a"
       },
       {
         "bytes": 3533,
@@ -965,14 +970,14 @@
         "sha256": "sha256:f939db62a2bd665801383a7d8485716e277df344c55ab40ffeca99d326428fcb"
       },
       {
-        "bytes": 11858,
+        "bytes": 16331,
         "path": "docs/evaluations/model-routing/README.md",
-        "sha256": "sha256:0e20381cd006ce25f66034827d3a5d47a2c05f9f9aaa87a1f57d91d4857d01ee"
+        "sha256": "sha256:fd4cb649d790175758c73f8e36b566c4b5fb6fd26d27dacf4d1135502dd58d21"
       },
       {
-        "bytes": 1717,
+        "bytes": 2153,
         "path": "docs/evaluations/model-routing/review-instructions.md",
-        "sha256": "sha256:97dbba6ceee459ec357c4429b83b99e7c6bb962bacbfbec1e91b35e9e983af34"
+        "sha256": "sha256:bb982d3d901fb1974d35880e5675328f196b83a7731d54e68220260f8c6c1680"
       },
       {
         "bytes": 2257,
@@ -990,9 +995,9 @@
         "sha256": "sha256:e9cafd283338ff091f3d865ec480b16b95fa34ac7d30a06422323f05677c6926"
       },
       {
-        "bytes": 16713,
+        "bytes": 17578,
         "path": "docs/goals/README.md",
-        "sha256": "sha256:aac4ca761087670a20d6832cf1fccc6a90ed9a406f1651f690a8793a72654d86"
+        "sha256": "sha256:b764dabf963c01626d3a557fc4e6fea98d39b77b1dd312fb38bd06536609bdc1"
       },
       {
         "bytes": 5441,
@@ -1005,30 +1010,30 @@
         "sha256": "sha256:2f263f8b3b394bb437252269873c4c3ba44a2bf5b5d21e6c09d9651df7adb228"
       },
       {
-        "bytes": 89615,
+        "bytes": 123468,
         "path": "scripts/ci/model-routing-evaluation.py",
-        "sha256": "sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1"
+        "sha256": "sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56"
       },
       {
-        "bytes": 23823,
+        "bytes": 28756,
         "path": "scripts/ci/model-routing-omp-usage.py",
-        "sha256": "sha256:0fbed87aa43b5de312857c41adff9db78cfb98e3a980b76930713195ba5dfcf2"
+        "sha256": "sha256:5d361246ef10e79d72bdbcb3f984564559d55031d4ca04bdfcf7010928b7923d"
       },
       {
-        "bytes": 42509,
+        "bytes": 76219,
         "path": "scripts/ci/test-model-routing-evaluation.py",
-        "sha256": "sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0"
+        "sha256": "sha256:fca4adf6e38df63ad35b68178fbe1d162610ac34cb553f14f90f2597e53517e5"
       },
       {
-        "bytes": 30069,
+        "bytes": 42875,
         "path": "scripts/ci/test-model-routing-omp-usage.py",
-        "sha256": "sha256:a39184a9278820cb316cdca9bdd8da059776787d011c51d9f5fceb0f8ea317e1"
+        "sha256": "sha256:f82a39dcbdd85613006b4b888f2b3dbacf86c595b62c00b397d86be065ae70be"
       }
     ],
     "removed_active_contract_path": "docs/goals/0008a-auditable-acceptance-workflow.md",
     "scope": "Explicit changed executable, gate, instruction, plan, index and contract paths. Generated evidence, receipts, private logs and this audit are excluded to avoid self-reference. This is not a fabricated Git tree or commit.",
     "scoped_manifest_method": "sha256 of the canonical JSON (sorted keys, no whitespace) of the files array as listed",
-    "scoped_manifest_sha256": "sha256:34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d"
+    "scoped_manifest_sha256": "sha256:9dc95d2ffe967e529cd810d55a8203a7073dde0d10c73975a65e2b9bab542552"
   },
   "unresolved_acceptance_blockers": []
 }

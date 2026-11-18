@@ -1313,10 +1313,14 @@ def load_run(run_dir: pathlib.Path) -> dict[str, Any]:
     return run
 
 
-def save_run(run_dir: pathlib.Path, run: dict[str, Any], **updates: str) -> None:
+def run_record_bytes(run: dict[str, Any], **updates: str) -> bytes:
     merged = dict(run)
     merged.update(updates)
-    write_json(run_dir / "run.json", merged)
+    return canonical_json(merged)
+
+
+def save_run(run_dir: pathlib.Path, run: dict[str, Any], **updates: str) -> None:
+    write_bytes(run_dir / "run.json", run_record_bytes(run, **updates))
 
 
 def load_frozen_task(run_dir: pathlib.Path, run: dict[str, Any]) -> dict[str, Any]:
@@ -3117,9 +3121,16 @@ def command_receipt(arguments: argparse.Namespace) -> int:
     # Derive the receipt for the candidate rows before publishing anything: a refused
     # import must leave the previous frozen usage rows, run record and receipt intact.
     receipt = derive_receipt(run_dir, usage_raw)
+    # Serialize every document this command publishes before the first write. Deriving
+    # the receipt is not enough: a value the encoder refuses must not leave frozen
+    # usage rows and run record at the candidate revision while receipt.json stays at
+    # the previous one. No write happens unless the receipt for the candidate and the
+    # record that binds it have both been serialized.
+    receipt_raw = canonical_json(receipt)
+    run_raw = run_record_bytes(run, usage_sha256=sha256_hex(usage_raw))
     write_bytes(run_dir / "frozen" / "usage.json", usage_raw)
-    save_run(run_dir, run, usage_sha256=sha256_hex(usage_raw))
-    receipt_raw = write_json(run_dir / "receipt.json", receipt)
+    write_bytes(run_dir / "run.json", run_raw)
+    write_bytes(run_dir / "receipt.json", receipt_raw)
     print(json.dumps({
         "accepted": receipt["accepted"],
         "acceptance_blockers": receipt["acceptance_blockers"],
