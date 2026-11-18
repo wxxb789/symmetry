@@ -1042,6 +1042,33 @@ Manual tasks and deferred maintenance discovered during scoped changes.
 
 ## Record and documentation hygiene
 
+- [ ] Revalidate the runbook claims that are true on this tree but rot without any
+      edit to `docs/runbooks/**` (found while independently resolving every
+      checkable runbook claim on `632b369`). A CI job split or rename invalidates
+      `daemon-process-stop.md`'s "the daemon job runs `go vet`, a scoped ordinary
+      Go pass and the full `-race` suite ... and the `daemon-windows` job runs the
+      full Windows suite"; a harness pin move invalidates
+      `daemon-opencode-peer-ownership.md`'s "OpenCode 2.3.0 is explicitly
+      unsupported" and `control-plane-and-daemon.md`'s "the script-local version
+      guard is `-ExpectedClaudeVersion 2.1.281`, which is not the daemon's
+      promoted Claude pin" (both follow `docs/design/harness.md`); a pnpm bump
+      invalidates every `mise exec pnpm@12.17.0 -- …` command (they follow
+      `package.json`'s `packageManager`); a change to the `development-*` fallbacks
+      invalidates the sign-in and live-check examples (`control/config/runtime.exs`
+      `:63-64`); a rename of the workspace read's health keys invalidates
+      `portal.md`'s four signal names (`health/4` in
+      `control/lib/symmetry_control/workspaces/read_model.ex:471`); and
+      `session-receipt-recovery-e2e.md`'s `mix ecto.drop --force` uses the Ecto
+      option meaning "do not ask for confirmation", not `--force-drop`, so an
+      Ecto-side change to that option would change what the cleanup line does. One
+      claim has no artifact to re-derive it against: the
+      `connections.md` Azure DevOps `vso.code`/`vso.work`/`vso.build` scope mapping,
+      while the shipped code requests a resource token
+      (`control/lib/symmetry_control/integrations/auth.ex:41-46`) and never names a
+      scope. The runbooks also cite *Commands and gates* in `docs/design/quality.md`
+      as the checks CI actually runs while that section still carries the stale
+      frontend rows tracked under *Deferred review findings (0007i)* below.
+
 - [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
       evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
       instead of rewriting history:
