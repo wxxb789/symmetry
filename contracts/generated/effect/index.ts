@@ -527,19 +527,19 @@ export const DefinitionAdapterGraph = S.suspend(() => withObjectPropertyBounds(s
 
 export const DefinitionGoalAttentionFeedGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "entries": arrayConstraints(S.Array(DefinitionGoalAttentionEntryGraph), undefined, undefined, undefined),
-  "next_cursor": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "next_cursor": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "unavailable": exactOneOf(S.Union(DefinitionReadUnavailableGraph, S.Null), DefinitionReadUnavailableGraph, S.Null)
 })), undefined, undefined));
 
 export const DefinitionGoalAttentionEntryGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "active_tasks": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
-  "attention_reasons": S.optionalWith(arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined), { exact: true }),
+  "active_tasks": numberConstraints(S.Int, undefined, undefined),
+  "attention_reasons": arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined),
   "blocker_reasons": arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined),
   "blockers": S.optionalWith(arrayConstraints(S.Array(DefinitionGoalBlockerGraph), undefined, undefined, undefined), { exact: true }),
   "current_revision": DefinitionPositiveIntegerGraph,
   "goal_id": DefinitionUUIDGraph,
-  "nonterminal_tasks": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
-  "project_id": S.optionalWith(DefinitionUUIDGraph, { exact: true }),
+  "nonterminal_tasks": numberConstraints(S.Int, undefined, undefined),
+  "project_id": DefinitionUUIDGraph,
   "ready_to_achieve?": S.Boolean,
   "settlement_attention": S.optionalWith(arrayConstraints(S.Array(DefinitionSettlementAttentionGraph), undefined, undefined, undefined), { exact: true }),
   "state": stringConstraints(S.String, undefined, undefined, undefined),
@@ -554,41 +554,41 @@ export const DefinitionProjectBlockedFeedGraph = S.suspend(() => withObjectPrope
 
 export const DefinitionProjectBlockedEntryGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "blocked": S.Boolean,
-  "blocker": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "blocker": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "project_id": DefinitionUUIDGraph,
-  "project_key": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "project_name": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "project_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "project_key": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "project_name": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "project_status": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "status": stringConstraints(S.String, undefined, undefined, undefined),
   "title": stringConstraints(S.String, undefined, undefined, undefined),
   "updated_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "work_item_id": DefinitionUUIDGraph,
-  "work_item_key": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
+  "work_item_key": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null)
 })), undefined, undefined));
 
 export const DefinitionGoalBlockerGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "count": numberConstraints(S.Int, undefined, undefined),
-  "details": S.optionalWith(arrayConstraints(S.Array(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined)), undefined, undefined, undefined), { exact: true }),
-  "ids": S.optionalWith(arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined), { exact: true }),
+  "details": arrayConstraints(S.Array(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined)), undefined, undefined, undefined),
+  "ids": arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined),
   "reason": stringConstraints(S.String, undefined, undefined, undefined)
 })), undefined, undefined));
 
 export const DefinitionSettlementAttentionGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "blocker": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
   "decision_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "event_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "event_id": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "event_sequence": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
   "evidence_refs": S.optionalWith(arrayConstraints(S.Array(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined)), undefined, undefined, undefined), { exact: true }),
   "generation": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
-  "goal_revision": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
-  "proposed_next_action": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "proposed_next_action_status": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "reason": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "goal_revision": exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null),
+  "proposed_next_action": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "proposed_next_action_status": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "reason": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "required?": S.Boolean,
   "run_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "settlement": stringConstraints(S.String, undefined, undefined, undefined),
   "subject_hash": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "task_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "task_id": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "work_item_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
 })), undefined, undefined));
 
@@ -970,13 +970,13 @@ export const DefinitionObservationSourceRefGraph = S.suspend(() => withObjectPro
 })), undefined, undefined));
 
 export const DefinitionGoalReadRevisionGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "acceptance_contract": S.optionalWith(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), { exact: true }),
-  "authority_policy": S.optionalWith(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), { exact: true }),
-  "context_manifest": S.optionalWith(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), { exact: true }),
-  "execution_policy": S.optionalWith(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), { exact: true }),
-  "inserted_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "non_goals": S.optionalWith(arrayConstraints(S.Array(DefinitionLongTextGraph), undefined, undefined, undefined), { exact: true }),
-  "objective": S.optionalWith(DefinitionLongTextGraph, { exact: true }),
+  "acceptance_contract": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "authority_policy": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "context_manifest": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "execution_policy": withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined),
+  "inserted_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "non_goals": arrayConstraints(S.Array(DefinitionLongTextGraph), undefined, undefined, undefined),
+  "objective": DefinitionLongTextGraph,
   "revision": DefinitionRevisionGraph
 })), undefined, undefined));
 
@@ -994,20 +994,20 @@ export const DefinitionGoalCompletionGraph = S.suspend(() => withObjectPropertyB
 
 export const DefinitionGoalReadWorkItemGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "accepted?": S.Boolean,
-  "accepted_outcome": S.optionalWith(exactOneOf(S.Union(DefinitionGoalReadOutcomeGraph, S.Null), DefinitionGoalReadOutcomeGraph, S.Null), { exact: true }),
+  "accepted_outcome": exactOneOf(S.Union(DefinitionGoalReadOutcomeGraph, S.Null), DefinitionGoalReadOutcomeGraph, S.Null),
   "admitted_revision": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
   "agent_profile": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "assignee_name": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "assignee_type": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "baseline": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
-  "blockers": S.optionalWith(arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined), { exact: true }),
+  "blockers": arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined),
   "board_status": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
   "change_target": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
   "description": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "execution": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
+  "execution": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
   "id": DefinitionUUIDGraph,
   "integration": S.Boolean,
-  "number": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
+  "number": exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null),
   "position": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
   "priority": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "repository_resource_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
@@ -1024,17 +1024,17 @@ export const DefinitionGoalReadGraphGraph = S.suspend(() => withObjectPropertyBo
 })), undefined, undefined));
 
 export const DefinitionGoalReadGraphNodeGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "accepted?": S.optionalWith(S.Boolean, { exact: true }),
-  "blockers": S.optionalWith(arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined), { exact: true }),
+  "accepted?": S.Boolean,
+  "blockers": arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined),
   "board_status": S.optionalWith(stringConstraints(S.String, undefined, undefined, undefined), { exact: true }),
   "id": DefinitionUUIDGraph,
-  "number": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
+  "number": exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null),
   "required?": S.optionalWith(S.Boolean, { exact: true }),
   "title": stringConstraints(S.String, undefined, undefined, undefined)
 })), undefined, undefined));
 
 export const DefinitionGoalReadGraphEdgeGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "blocker": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "blocker": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "depends_on_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "from": stringConstraints(S.String, undefined, undefined, undefined),
   "id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
@@ -1046,61 +1046,61 @@ export const DefinitionGoalReadGraphEdgeGraph = S.suspend(() => withObjectProper
 
 export const DefinitionGoalReadDecisionGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "expires_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "goal_revision": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
+  "goal_revision": exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null),
   "id": DefinitionUUIDGraph,
   "inserted_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "kind": stringConstraints(S.String, undefined, undefined, undefined),
   "open?": S.Boolean,
-  "options": S.optionalWith(arrayConstraints(S.Array(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined)), undefined, undefined, undefined), { exact: true }),
-  "question": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "resolution": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
+  "options": arrayConstraints(S.Array(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined)), undefined, undefined, undefined),
+  "question": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "resolution": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
   "state": stringConstraints(S.String, undefined, undefined, undefined),
   "updated_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "work_item_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
 })), undefined, undefined));
 
 export const DefinitionGoalReadOutcomeGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "candidate_subject": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
+  "candidate_subject": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
   "decision_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "disposition": stringConstraints(S.String, undefined, undefined, undefined),
-  "evidence_ids": S.optionalWith(arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined), { exact: true }),
+  "evidence_ids": arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined),
   "goal_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "goal_revision": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
   "id": DefinitionUUIDGraph,
-  "inserted_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "inserted_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "producing_result_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "producing_run_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "producing_task_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "reason": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "subject_hash": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "subject_hash": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "validation_task_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "work_item_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
+  "work_item_id": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null)
 })), undefined, undefined));
 
 export const DefinitionGoalReadAccountingGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "held_microusd": exactOneOf(S.Union(DefinitionMicrousdGraph, S.Null), DefinitionMicrousdGraph, S.Null),
-  "known_usage_cost_microusd": S.optionalWith(exactOneOf(S.Union(DefinitionMicrousdGraph, S.Null), DefinitionMicrousdGraph, S.Null), { exact: true }),
-  "released_reservation_count": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
-  "settled_reservation_count": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
+  "known_usage_cost_microusd": exactOneOf(S.Union(DefinitionMicrousdGraph, S.Null), DefinitionMicrousdGraph, S.Null),
+  "released_reservation_count": numberConstraints(S.Int, undefined, undefined),
+  "settled_reservation_count": numberConstraints(S.Int, undefined, undefined),
   "unknown_reservation_count": numberConstraints(S.Int, undefined, undefined),
   "unknown_usage_count": numberConstraints(S.Int, undefined, undefined),
-  "usage_cost_microusd": S.optionalWith(exactOneOf(S.Union(DefinitionMicrousdGraph, S.Null), DefinitionMicrousdGraph, S.Null), { exact: true }),
+  "usage_cost_microusd": exactOneOf(S.Union(DefinitionMicrousdGraph, S.Null), DefinitionMicrousdGraph, S.Null),
   "usage_cost_unknown?": S.Boolean,
   "usage_leaf_count": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true }),
   "usage_records": S.optionalWith(numberConstraints(S.Int, undefined, undefined), { exact: true })
 })), undefined, undefined));
 
 export const DefinitionGoalReadExternalWaitGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "check_seq": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
-  "external_ref": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "check_seq": exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null),
+  "external_ref": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "generation": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
   "goal_revision": S.optionalWith(exactOneOf(S.Union(numberConstraints(S.Int, undefined, undefined), S.Null), numberConstraints(S.Int, undefined, undefined), S.Null), { exact: true }),
   "id": DefinitionUUIDGraph,
   "inserted_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "next_check_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "reason": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "next_check_at": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "reason": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "receipt_event_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "resource_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "resource_id": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "result_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "run_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
   "source_ref": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
@@ -1289,7 +1289,7 @@ export const AdmissionSchema: S.Schema<SymmetryAdmissionV1, unknown> = S.Unknown
 export const AttentionReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "goal_attention": DefinitionGoalAttentionFeedGraph,
   "project_blocked": DefinitionProjectBlockedFeedGraph,
-  "selected_project_id": S.optionalWith(exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null), { exact: true })
+  "selected_project_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null)
 })), undefined, undefined));
 
 const matchesAttentionRead = S.is(AttentionReadGraph, strictOptions);
@@ -2026,7 +2026,7 @@ export const isGoalCreate = (value: unknown): value is SymmetryGoalCreateV1 => m
 export const GoalCreateSchema: S.Schema<SymmetryGoalCreateV1, unknown> = S.Unknown.pipe(S.filter(isGoalCreate));
 
 export const GoalReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
-  "accepted_outcomes": S.optionalWith(arrayConstraints(S.Array(DefinitionGoalReadOutcomeGraph), undefined, undefined, undefined), { exact: true }),
+  "accepted_outcomes": arrayConstraints(S.Array(DefinitionGoalReadOutcomeGraph), undefined, undefined, undefined),
   "accounting": DefinitionGoalReadAccountingGraph,
   "allowed_actions": arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined),
   "attention_reasons": S.optionalWith(arrayConstraints(S.Array(stringConstraints(S.String, undefined, undefined, undefined)), undefined, undefined, undefined), { exact: true }),
@@ -2036,17 +2036,17 @@ export const GoalReadGraph = S.suspend(() => withObjectPropertyBounds(openObject
   "current_revision": DefinitionPositiveIntegerGraph,
   "decisions": arrayConstraints(S.Array(DefinitionGoalReadDecisionGraph), undefined, undefined, undefined),
   "execution": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
-  "external_waits": S.optionalWith(arrayConstraints(S.Array(DefinitionGoalReadExternalWaitGraph), undefined, undefined, undefined), { exact: true }),
+  "external_waits": arrayConstraints(S.Array(DefinitionGoalReadExternalWaitGraph), undefined, undefined, undefined),
   "graph": DefinitionGoalReadGraphGraph,
   "history": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
   "id": DefinitionUUIDGraph,
   "lifecycle": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
   "planning": S.optionalWith(exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), { exact: true }),
   "project_id": DefinitionUUIDGraph,
-  "project_key": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "project_key": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
   "project_name": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
-  "revision": S.optionalWith(exactOneOf(S.Union(DefinitionGoalReadRevisionGraph, S.Null), DefinitionGoalReadRevisionGraph, S.Null), { exact: true }),
-  "settlement_attention": S.optionalWith(arrayConstraints(S.Array(DefinitionSettlementAttentionGraph), undefined, undefined, undefined), { exact: true }),
+  "revision": exactOneOf(S.Union(DefinitionGoalReadRevisionGraph, S.Null), DefinitionGoalReadRevisionGraph, S.Null),
+  "settlement_attention": arrayConstraints(S.Array(DefinitionSettlementAttentionGraph), undefined, undefined, undefined),
   "state": stringConstraints(S.String, undefined, undefined, undefined),
   "title": stringConstraints(S.String, undefined, undefined, undefined),
   "updated_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),

@@ -64,8 +64,11 @@ type SymmetryAdmissionV1Subject struct {
 
 // Consumed members of the Portal attention read: the existing server-side Goal attention
 // feed merged with the project-level blocked work items the workspace read already serves.
-// Unconsumed presentation members remain additive, and every policy member (attention
-// reasons, blockers, readiness) is the server's own projection, never a client derivation.
+// Every member a surface consumes that the served projection always emits is required (a
+// served null stays nullable), so renaming one cannot pass every gate while the page
+// silently renders a zero or a fallback; unconsumed presentation members remain additive,
+// and every policy member (attention reasons, blockers, readiness) is the server's own
+// projection, never a client derivation.
 type SymmetryAttentionReadV1 struct {
 	GoalAttention     GoalAttentionFeed  `json:"goal_attention"`
 	ProjectBlocked    ProjectBlockedFeed `json:"project_blocked"`
@@ -81,14 +84,14 @@ type GoalAttentionFeed struct {
 // Goals.ReadModel.attention/1 entry as served; the goal surface re-reads the full
 // projection for detail.
 type GoalAttentionEntry struct {
-	ActiveTasks         *int64                     `json:"active_tasks,omitempty"`
-	AttentionReasons    []string                   `json:"attention_reasons,omitempty"`
+	ActiveTasks         int64                      `json:"active_tasks"`
+	AttentionReasons    []string                   `json:"attention_reasons"`
 	BlockerReasons      []string                   `json:"blocker_reasons"`
 	Blockers            []EntryBlocker             `json:"blockers,omitempty"`
 	CurrentRevision     int64                      `json:"current_revision"`
 	GoalID              string                     `json:"goal_id"`
-	NonterminalTasks    *int64                     `json:"nonterminal_tasks,omitempty"`
-	ProjectID           *string                    `json:"project_id,omitempty"`
+	NonterminalTasks    int64                      `json:"nonterminal_tasks"`
+	ProjectID           string                     `json:"project_id"`
 	ReadyToAchieve      bool                       `json:"ready_to_achieve?"`
 	SettlementAttention []EntrySettlementAttention `json:"settlement_attention,omitempty"`
 	State               string                     `json:"state"`
@@ -98,8 +101,8 @@ type GoalAttentionEntry struct {
 
 type EntryBlocker struct {
 	Count   int64                    `json:"count"`
-	Details []map[string]interface{} `json:"details,omitempty"`
-	IDS     []string                 `json:"ids,omitempty"`
+	Details []map[string]interface{} `json:"details"`
+	IDS     []string                 `json:"ids"`
 	Reason  string                   `json:"reason"`
 }
 
@@ -989,11 +992,13 @@ type InitialRevisionExecutionPolicy struct {
 // Consumed members of the Portal Goal detail read: the existing Goal projection with
 // objective, accepted progress, blockers, the server's own allowed actions, settlement
 // attention, budget reservation and consumption, waiting-external boundaries and the
-// read-only dependency projection. Unconsumed presentation members remain additive; the
-// client never derives a Goal policy member and never offers an action the served
-// allowed_actions does not list.
+// read-only dependency projection. Every member a surface consumes that the projection
+// always serves is required (a served null stays nullable), so renaming one cannot pass
+// every gate while the client silently reads undefined; unconsumed presentation members
+// remain additive, and the client never derives a Goal policy member and never offers an
+// action the served allowed_actions does not list.
 type SymmetryGoalReadV1 struct {
-	AcceptedOutcomes []GoalReadOutcome  `json:"accepted_outcomes,omitempty"`
+	AcceptedOutcomes []GoalReadOutcome  `json:"accepted_outcomes"`
 	Accounting       GoalReadAccounting `json:"accounting"`
 	// The server's exact action list for the rendered version/revision. The surface offers this
 	// list and nothing else.
@@ -1005,7 +1010,7 @@ type SymmetryGoalReadV1 struct {
 	CurrentRevision     int64                                   `json:"current_revision"`
 	Decisions           []GoalReadDecision                      `json:"decisions"`
 	Execution           map[string]interface{}                  `json:"execution"`
-	ExternalWaits       []GoalReadExternalWait                  `json:"external_waits,omitempty"`
+	ExternalWaits       []GoalReadExternalWait                  `json:"external_waits"`
 	Graph               GoalReadGraph                           `json:"graph"`
 	History             map[string]interface{}                  `json:"history"`
 	ID                  string                                  `json:"id"`
@@ -1015,7 +1020,7 @@ type SymmetryGoalReadV1 struct {
 	ProjectKey          *string                                 `json:"project_key"`
 	ProjectName         *string                                 `json:"project_name"`
 	Revision            *GoalReadRevision                       `json:"revision"`
-	SettlementAttention []SymmetryGoalReadV1SettlementAttention `json:"settlement_attention,omitempty"`
+	SettlementAttention []SymmetryGoalReadV1SettlementAttention `json:"settlement_attention"`
 	State               string                                  `json:"state"`
 	Title               string                                  `json:"title"`
 	UpdatedAt           *string                                 `json:"updated_at"`
@@ -1028,7 +1033,7 @@ type GoalReadOutcome struct {
 	CandidateSubject  map[string]interface{} `json:"candidate_subject"`
 	DecisionID        *string                `json:"decision_id"`
 	Disposition       string                 `json:"disposition"`
-	EvidenceIDS       []string               `json:"evidence_ids,omitempty"`
+	EvidenceIDS       []string               `json:"evidence_ids"`
 	GoalID            *string                `json:"goal_id"`
 	GoalRevision      *int64                 `json:"goal_revision"`
 	ID                string                 `json:"id"`
@@ -1047,8 +1052,8 @@ type GoalReadOutcome struct {
 type GoalReadAccounting struct {
 	HeldMicrousd             *string `json:"held_microusd"`
 	KnownUsageCostMicrousd   *string `json:"known_usage_cost_microusd"`
-	ReleasedReservationCount *int64  `json:"released_reservation_count,omitempty"`
-	SettledReservationCount  *int64  `json:"settled_reservation_count,omitempty"`
+	ReleasedReservationCount int64   `json:"released_reservation_count"`
+	SettledReservationCount  int64   `json:"settled_reservation_count"`
 	UnknownReservationCount  int64   `json:"unknown_reservation_count"`
 	UnknownUsageCount        int64   `json:"unknown_usage_count"`
 	UsageCostMicrousd        *string `json:"usage_cost_microusd"`
@@ -1059,8 +1064,8 @@ type GoalReadAccounting struct {
 
 type SymmetryGoalReadV1Blocker struct {
 	Count   int64                    `json:"count"`
-	Details []map[string]interface{} `json:"details,omitempty"`
-	IDS     []string                 `json:"ids,omitempty"`
+	Details []map[string]interface{} `json:"details"`
+	IDS     []string                 `json:"ids"`
 	Reason  string                   `json:"reason"`
 }
 
@@ -1085,7 +1090,7 @@ type GoalReadDecision struct {
 	InsertedAt   *string                  `json:"inserted_at"`
 	Kind         string                   `json:"kind"`
 	Open         bool                     `json:"open?"`
-	Options      []map[string]interface{} `json:"options,omitempty"`
+	Options      []map[string]interface{} `json:"options"`
 	Question     *string                  `json:"question"`
 	Resolution   map[string]interface{}   `json:"resolution"`
 	State        string                   `json:"state"`
@@ -1136,8 +1141,8 @@ type GoalReadGraphEdge struct {
 }
 
 type GoalReadGraphNode struct {
-	Accepted    *bool    `json:"accepted?,omitempty"`
-	Blockers    []string `json:"blockers,omitempty"`
+	Accepted    bool     `json:"accepted?"`
+	Blockers    []string `json:"blockers"`
 	BoardStatus *string  `json:"board_status,omitempty"`
 	ID          string   `json:"id"`
 	Number      *int64   `json:"number"`
@@ -1149,13 +1154,13 @@ type GoalReadGraphNode struct {
 // The read projection omits the write-side reason/actor_ref and never carries the write
 // schema_version.
 type GoalReadRevision struct {
-	AcceptanceContract map[string]interface{} `json:"acceptance_contract,omitempty"`
-	AuthorityPolicy    map[string]interface{} `json:"authority_policy,omitempty"`
-	ContextManifest    map[string]interface{} `json:"context_manifest,omitempty"`
-	ExecutionPolicy    map[string]interface{} `json:"execution_policy,omitempty"`
+	AcceptanceContract map[string]interface{} `json:"acceptance_contract"`
+	AuthorityPolicy    map[string]interface{} `json:"authority_policy"`
+	ContextManifest    map[string]interface{} `json:"context_manifest"`
+	ExecutionPolicy    map[string]interface{} `json:"execution_policy"`
 	InsertedAt         *string                `json:"inserted_at"`
-	NonGoals           []string               `json:"non_goals,omitempty"`
-	Objective          *string                `json:"objective,omitempty"`
+	NonGoals           []string               `json:"non_goals"`
+	Objective          string                 `json:"objective"`
 	Revision           int64                  `json:"revision"`
 }
 
@@ -1186,7 +1191,7 @@ type GoalReadWorkItem struct {
 	AssigneeName         *string                `json:"assignee_name"`
 	AssigneeType         *string                `json:"assignee_type"`
 	Baseline             map[string]interface{} `json:"baseline"`
-	Blockers             []string               `json:"blockers,omitempty"`
+	Blockers             []string               `json:"blockers"`
 	BoardStatus          *string                `json:"board_status,omitempty"`
 	ChangeTarget         map[string]interface{} `json:"change_target"`
 	Description          *string                `json:"description"`

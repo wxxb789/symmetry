@@ -4,17 +4,17 @@ export type UUID = string;
 export type PositiveInteger = number;
 
 /**
- * Consumed members of the Portal attention read: the existing server-side Goal attention feed merged with the project-level blocked work items the workspace read already serves. Unconsumed presentation members remain additive, and every policy member (attention reasons, blockers, readiness) is the server's own projection, never a client derivation.
+ * Consumed members of the Portal attention read: the existing server-side Goal attention feed merged with the project-level blocked work items the workspace read already serves. Every member a surface consumes that the served projection always emits is required (a served null stays nullable), so renaming one cannot pass every gate while the page silently renders a zero or a fallback; unconsumed presentation members remain additive, and every policy member (attention reasons, blockers, readiness) is the server's own projection, never a client derivation.
  */
 export interface SymmetryAttentionReadV1 {
-  selected_project_id?: UUID | null;
+  selected_project_id: UUID | null;
   goal_attention: GoalAttentionFeed;
   project_blocked: ProjectBlockedFeed;
   [k: string]: unknown | undefined;
 }
 export interface GoalAttentionFeed {
   entries: GoalAttentionEntry[];
-  next_cursor?: string | null;
+  next_cursor: string | null;
   unavailable: ReadUnavailable | null;
   [k: string]: unknown | undefined;
 }
@@ -23,16 +23,16 @@ export interface GoalAttentionFeed {
  */
 export interface GoalAttentionEntry {
   goal_id: UUID;
-  project_id?: UUID;
+  project_id: UUID;
   title: string;
   state: string;
   current_revision: PositiveInteger;
   blockers?: GoalBlocker[];
   blocker_reasons: string[];
   settlement_attention?: SettlementAttention[];
-  attention_reasons?: string[];
-  active_tasks?: number;
-  nonterminal_tasks?: number;
+  attention_reasons: string[];
+  active_tasks: number;
+  nonterminal_tasks: number;
   "ready_to_achieve?": boolean;
   updated_at?: string | null;
   [k: string]: unknown | undefined;
@@ -40,25 +40,25 @@ export interface GoalAttentionEntry {
 export interface GoalBlocker {
   reason: string;
   count: number;
-  ids?: string[];
-  details?: {}[];
+  ids: string[];
+  details: {}[];
   [k: string]: unknown | undefined;
 }
 export interface SettlementAttention {
-  event_id?: string | null;
+  event_id: string | null;
   event_sequence?: number | null;
-  goal_revision?: number | null;
+  goal_revision: number | null;
   work_item_id?: string | null;
-  task_id?: string | null;
+  task_id: string | null;
   run_id?: string | null;
   generation?: number | null;
   "required?": boolean;
   settlement: string;
-  reason?: string | null;
+  reason: string | null;
   decision_id?: string | null;
   blocker?: {} | null;
-  proposed_next_action?: string | null;
-  proposed_next_action_status?: string | null;
+  proposed_next_action: string | null;
+  proposed_next_action_status: string | null;
   subject_hash?: string | null;
   evidence_refs?: {}[];
   [k: string]: unknown | undefined;
@@ -81,15 +81,15 @@ export interface ProjectBlockedFeed {
  */
 export interface ProjectBlockedEntry {
   project_id: UUID;
-  project_key?: string | null;
-  project_name?: string | null;
-  project_status?: string | null;
+  project_key: string | null;
+  project_name: string | null;
+  project_status: string | null;
   work_item_id: UUID;
-  work_item_key?: string | null;
+  work_item_key: string | null;
   title: string;
   status: string;
   blocked: boolean;
-  blocker?: string | null;
+  blocker: string | null;
   updated_at?: string | null;
   [k: string]: unknown | undefined;
 }
