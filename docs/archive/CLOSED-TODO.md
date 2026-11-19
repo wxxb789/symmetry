@@ -1437,8 +1437,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       Revalidated in full (2026-11-19, branch `docs/runbook-quality-drift`): every claim above
       was rechecked against its owner, and the claim | owner | verdict | change table with each
       owner's current file:line is in the PR body — the CI inventory sentence against
-      `.github/workflows/ci.yml:1195-1247` (`daemon`: gofmt, `go vet`, the scoped ordinary
-      pass and the full `-race` pass) and `:1357-1415` (`daemon-windows`: `go test ./...`
+      `.github/workflows/ci.yml:1171-1346` (`daemon`: gofmt, `go vet`, the scoped ordinary
+      pass and the full `-race` pass) and `:1357-1474` (`daemon-windows`: `go test ./...`
       plus its named witnesses); OpenCode 2.3.0 against `docs/design/harness.md:15` and
       `daemon/internal/harness/registry.go:154,326-329`; the Claude smoke guard against
       `scripts/claude-code-local-transport-smoke.ps1:14` (default `2.1.281`) versus the
@@ -1446,7 +1446,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `development-*` examples against `control/config/runtime.exs:63-64`; `portal.md`'s four
       health signals against `control/lib/symmetry_control/workspaces/read_model.ex:504-515`
       (the item's `:471` was stale); `mix ecto.drop --force` against
-      `control/deps/ecto/lib/mix/tasks/ecto.drop.ex:35-38` ("do not ask for confirmation",
+      `control/deps/ecto/lib/mix/tasks/ecto.drop.ex:43-46` ("do not ask for confirmation",
       distinct from `--force-drop`); the generated-name regex and `MIX_TEST_PARTITION` against
       `control/config/test.exs:14-15` and
       `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs:1365`;
