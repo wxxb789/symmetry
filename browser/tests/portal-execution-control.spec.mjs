@@ -8,8 +8,9 @@
 // classic work-detail control assertions retired in the same change: a queued
 // run's served state (the classic live timer and Activity-row assertion are
 // retired, not migrated — this surface renders no client-side elapsed time),
-// cancel -> cancelled, retry availability, retry hidden after reassignment, and
-// an idempotent replay of an unconfirmed attempt.
+// cancel -> cancelled, retry withheld while no runtime serves the binding,
+// retry hidden after reassignment, and an idempotent replay of an unconfirmed
+// attempt.
 //
 // Network interception appears in three places only, each named in the case that
 // uses it and each explicitly separated from real-data acceptance:
@@ -86,7 +87,7 @@ async function queuedAgentWork(page, prefix) {
 }
 
 test.describe("Execution control", () => {
-  test("a queued run starts, shows its live state, and cancels into a retryable stopped run", async ({ page }) => {
+  test("a queued run starts, shows its live state, and cancels into a stopped run whose retry no runtime serves", async ({ page }) => {
     await login(page);
     const { item } = await queuedAgentWork(page, "EC");
     await openWorkDetail(page, item.id);
