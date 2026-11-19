@@ -550,12 +550,14 @@ from branch `chore/deadcode-revalidation`.
       distinguish. The gate spawns the descendant with `stdin/stdout/stderr=DEVNULL` so a survivor
       cannot hold the gate's inherited pipes and keep the runner's lingering reap open until its
       own wait cap, and the descendant writes the witness after the release or after that cap, so
-      a survivor can never erase its own evidence. The test polls for the witness once under the
-      runner's own `PROCESS_TREE_REAP_SECONDS` instead of sleeping 2.0 s, and the gate publishes
+      a survivor can never erase its own evidence. A cap-branch write records `late-cap` where the
+      release branch records `late`, so a failure self-identifies the P2 lingering-reap class. The
+      test polls repeatedly for up to the runner's own `PROCESS_TREE_REAP_SECONDS`, then reads the
+      witness once, instead of sleeping 2.0 s, and the gate publishes
       its own spawn marker, so a failure reports what the fixture had established (gate spawned
       descendant / descendant started / witness text) instead of only the assertion; the failure
-      message is platform-neutral (`taskkill /T` and `killpg` are both snapshots). The 0.5 s
-      per-gate timeout, the assertion and the runner's kill path are unchanged.
+      message is platform-neutral (Windows `taskkill /T` and POSIX `killpg` are both snapshots).
+      The 0.5 s per-gate timeout, the assertion and the runner's kill path are unchanged.
       Evidence, platform-labelled. Windows 10.0.26300 host, loaded by the peer regression workers:
       the pristine fixture failed 1 of 5 runs (an earlier loaded pass failed 1 of 3) with `a gate
       descendant survived the per-gate timeout` and no mechanism in its log, while the new fixture
@@ -563,12 +565,14 @@ from branch `chore/deadcode-revalidation`.
       each) never let an in-hierarchy descendant write, while the control that killed only the
       parent let the waiting descendant record 3 of 3 times; a miss simulation (a throwaway copy
       of the runner whose `terminate_owned_process_tree` drops `/T`) fails in 20 s with
-      `witness='late'` and both markers true, and the unmodified fixture passes in 23 s; the full
+      `witness='late'` and both markers true, and the unmodified fixture passes in 23 s; a
+      backstop-path run on Windows (the round-2 review's: wait cap shortened 300 -> 20 s and no
+      release written) fails with the cap-branch witness at 19.1 s; the full
       suite passes (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). WSL Linux (Ubuntu-24.04,
       python3, `/mnt/q` worktree): the same test on the `killpg` path passes
       (`Ran 1 test in 12.740s`, `OK`).
-      Residual: a descendant created after the kill enumerates the tree (`taskkill /T`) or the
-      process group was snapshotted (`killpg`) is still reported as a survivor - correctly, with
+      Residual: a descendant created after the kill enumerates the tree (`taskkill /T`) or after
+      the process group was signalled (`killpg`) is still reported as a survivor - correctly, with
       the markers stating the ambiguity instead of the fixture tolerating it - so the fixture
       keeps the documented quiet-host requirement (the model-routing runbook forbids running this
       workflow beside a full test suite on the same host).

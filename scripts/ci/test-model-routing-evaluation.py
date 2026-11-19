@@ -1077,7 +1077,7 @@ class EvaluationTests(unittest.TestCase):
             "deadline = time.monotonic() + 300.0\n"
             "while not release.exists() and time.monotonic() < deadline:\n"
             "    time.sleep(0.02)\n"
-            "Path('late-descendant.txt').write_text('late', encoding='utf-8')\n"
+            "Path('late-descendant.txt').write_text('late' if release.exists() else 'late-cap', encoding='utf-8')\n"
         )
         gate_code = (
             "import subprocess, sys, time\n"
@@ -1121,8 +1121,8 @@ class EvaluationTests(unittest.TestCase):
             f"gate spawned descendant={(handshake / 'gate-spawned-descendant.txt').exists()}, "
             f"descendant started={(handshake / 'descendant-started.txt').exists()}, "
             f"witness={text!r}; the markers cannot distinguish a descendant the kill missed inside the "
-            "tree from one created after the kill enumerated it (Windows `taskkill /T`) or the process "
-            "group was snapshotted (POSIX `killpg`): neither kill can reach a process it never saw",
+            "tree from one created after the kill enumerated it (Windows `taskkill /T`) or after the "
+            "process group was signalled (POSIX `killpg`): neither kill can reach a process it never saw",
         )
 
     def test_symlink_targets_are_bound(self) -> None:
