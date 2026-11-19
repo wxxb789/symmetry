@@ -13,17 +13,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Model-routing evaluation records
 
-- [ ] Decide whether the four 0008c receipts ever need re-production under the current evaluation
-      tooling. They bind the produced revision, preserved as the annotated tag
-      `0008c-produced-tooling` (commit `cab222b`): all four re-verify with that revision's
-      bytes (`git archive 0008c-produced-tooling scripts/ci`, then `accept`, exit 0 each), while
-      the post-audit tooling refuses them for submission (`accept` exit 1 at
-      `$.evidence.tooling_sources.model-routing-evaluation.py`) — the documented fail-closed
-      consequence of changing receipt-bound tooling, labelled in the evidence record with both
-      digests. Nothing must change unless a future submission requires receipts produced by the
-      current bytes, in which case the runs have to be re-executed, never re-derived by editing a
-      receipt.
-
 - [ ] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
       receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
       `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of

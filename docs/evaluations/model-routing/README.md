@@ -81,6 +81,8 @@ python scripts/ci/model-routing-evaluation.py accept --run-dir "$RUN"
 A TypeScript run also records its resolved dependency tree once, after the shared hoisted install
 exists and before the first gate runs: `bind-dependencies --run-dir "$RUN" --tree
 "$STORE/runs/node_modules" --log "$INSTALL_LOG"` (the carrier section describes what it binds).
+`check` and `receipt` refuse a TypeScript task, or one whose gates declare `vitest_tests`, until
+that step is recorded.
 
 `USAGE` contains `{"repair_count":0,"wall_time":12.0,"phases":[...]}` with all six stages: `exploration`, `implementation`, `verification`, `review`, `repair`, `failed_attempt`.
 The coordinator records the actual repair-attempt count explicitly; a required row saying that no repair occurred does not count as a repair.
@@ -163,11 +165,15 @@ above, whose provisioning lockfile copy substitutes the unreachable `registry.np
 the configured package feed while every package is still verified against the frozen lockfile's
 own integrity value; the tree is bound per run: `bind-dependencies --run-dir "$RUN" --tree "$STORE/runs/node_modules"
 --log "$INSTALL_LOG"` copies the captured install log into the run store as `provisioning/install.log`,
-records its digest and a deterministic digest over every file and link of the resolved tree
-(`--check` recomputes that digest against a preserved tree), and every receipt derived from the run
-states both under `environment.provisioning`; the recorded routes go through the same host-path
-redaction as the measured surface, so the receipt correlates the tree without republishing the store
-root. The coordinator runs that step after provisioning and before the gates; a real PostgreSQL instance and a Phoenix dev server started from the run's
+records the run-relative tree route and a deterministic digest over every file and link of the
+resolved tree - a link whose target resolves outside the tree (pnpm's workspace links such as
+`@symmetry/contracts -> ../../contracts`) contributes that target's own content digest, because the
+gates execute it - and every receipt derived from the run states the block under
+`environment.provisioning`, which `--check` and every later load recompute and refuse on drift; the
+log's source route keeps the measured surface's host-path redaction, while the tree route stays
+run-relative so the digest remains recomputable from the stored run directory. `check` and `receipt`
+refuse a `typescript` task, or one whose gates declare `vitest_tests`, until that step is recorded.
+The coordinator runs the step after provisioning and before the gates; a real PostgreSQL instance and a Phoenix dev server started from the run's
 own sealed checkout (ports 4040/4041) with `MIX_DEPS_PATH`/`MIX_BUILD_PATH` outside the checkout;
 Chromium through Playwright's own browser cache; and the pre-staged generated trees. Because the
 seal refuses generated content that appears after it, the task must list both generated trees in
@@ -184,12 +190,19 @@ directory by default) and are copied into the run store as `rendered/` after the
 
 Tool run state is redirected, not excluded from the manifest: `frontend/vite.config.ts` and
 `frontend/vitest.config.ts` resolve `SYMMETRY_TOOL_CACHE_DIR` as Vite's `cacheDir` and vitest's
-`fsModuleCachePath`, `check` exports that variable for every gate as `<run>/tool-state/<gate id>`,
-and the coordinator exports it for the worker's own runs (for example as `<run>/tool-state/worker`).
+`fsModuleCachePath`, `check` exports that variable for every gate as
+`<run>/tool-state/<attempt>/<gate id>` (a fresh directory per attempt), and the coordinator exports
+it for the worker's own runs (for example as `<run>/tool-state/worker`).
 `prepare` gives the run store an empty `node_modules` directory, so Vite's config-loader temp files
 (`.vite-temp`, written next to the nearest existing `node_modules`) land in the run store rather
 than inside the checkout or the shared dependency tree; an empty directory changes no module
-resolution because Node keeps walking ancestors past it. A gate that still writes
+resolution because Node keeps walking ancestors past it. Redirection alone does not close the
+boundary: vitest's results cache and transformed-module cache execute code written by an earlier
+invocation, so a gate run also exports `SYMMETRY_DISABLE_TOOL_CACHES=1`, which
+`frontend/vitest.config.ts` reads as `cache: false` and `fsModuleCache: false`, and the fresh
+per-attempt directory means nothing a previous attempt wrote can be read. Worker runs keep their
+caches (the variable is the harness's to set), and run state a worker leaves inside the checkout is
+bound by the seal. A gate that still writes
 `node_modules/.vite*` run state into the checkout changes the sealed revision and fails closed,
 which is what replaced the old `node_modules/.vite`, `.vite-temp` and `.vitest-cache` manifest
 exclusions.
