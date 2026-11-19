@@ -148,7 +148,7 @@ export interface WorkItemExecution {
    */
   can_cancel: boolean;
   /**
-   * True when the task state permits a retry, the work item's agent-assignment, external-work and active-project conditions hold, and at least one runtime assignment could select for the task (same binding and capability containment, ignoring transient online state) advertises the adapter `start` operation the fresh retried attempt uses. No such runtime answers false.
+   * True when the task state permits a retry, the work item's agent-assignment, external-work and active-project conditions hold, and at least one runtime assignment could select for the goal-less task — same binding and capability containment, ignoring transient online, heartbeat and capacity state — advertises the adapter `start` operation of the fresh retried attempt. No such runtime answers false.
    */
   can_retry: boolean;
   intent_locked: boolean;
