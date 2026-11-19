@@ -227,6 +227,80 @@ from branch `chore/deadcode-revalidation`.
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
 
+*Closed remainder of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; with the closed part above, nothing of the item stays there.*
+
+- [ ] Close the `daemon/internal/platform` flake class: the Linux descendant-monitor terminal reason
+      and the Windows owned-child close window. A rerun, a longer timeout or a relaxed assertion is
+      not a fix, and neither side may be closed on the other side's evidence.
+      Closed part moved to `docs/archive/CLOSED-TODO.md`.
+      **Today's other occurrences in run 44055523619 (daemon job 133943809650 / daemon-windows job
+      133943809688; identical tree green in run 44054200088).**
+      `TestPIDFDGroupSupportProbeReleasesProcessHandle` (`process_unix_linux_test.go:60`,
+      `capability probes retained pidfds: before=2 after=1`, 0.00 s) — test-design defect. The
+      assertion counted every pidfd in the process before and after 16 probes, so a baseline pidfd
+      no probe ever created plus an unrelated release during the loop moved the count; the failure
+      text is its own discriminator (a probe that retained handles would show `after > before`).
+      The test now attributes pidfds to this process through `/proc/self/fdinfo` (`Pid:`) and fails
+      only on a pidfd that did not exist before the probes, with an unrelated mid-loop release part
+      of the scenario. Evidence (WSL Linux, go1.27.0, the only Linux available here): with the probe
+      deliberately not releasing its handle the new assertion fails `capability probe retained
+      pidfd 10 for process 430 across 16 probes`; with the retired count assertion and only the
+      unrelated release it failed `before=1 after=0` against the unchanged product. CI verifies this
+      Linux-only test on the new revision.
+      `TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt` (1.84 s),
+      `TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability` (5.16 s) and
+      `TestGoalAdmissionLeavesProviderAccessNilForNativeHarness` (1.09 s) in `internal/app` failed
+      as `native turn did not start` / `native Pi provider turn did not start` — environment,
+      load-bound. Each is a bare 1 s/5 s wall-clock wait for an in-process fake adapter; this is the
+      family 0007b recorded failing only while the host also ran the browser suite, live daemon
+      fixtures and another agent's work and passing alone afterwards
+      (`docs/evidence/goal-0007b-readable-work-views-2026-11-15.md`), and the same tree passed in
+      run 44054200088, where that package took 120.8 s against the 600 s timeout seen here.
+      Resource: hosted-runner CPU/disk for ~230 in-process daemon starts that fsync a journal each
+      — what would make it deterministic is waiting on the product's own state transition instead
+      of host speed, which belongs in the test, not in the product or the job setup; a longer
+      budget is explicitly not the fix, so the waits are unchanged. Instead each of these three
+      waits now reports the durable reason (`nativeStartFailureDetail`), which the CI artifact
+      lacked because those test daemons discard their log. Only CI can judge a repeat.
+      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s` (`panic: test timed out after
+      10m0s`, `running tests: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (8m4s)`) —
+      test-design defect, fixed. These tests built a `daemon` with no background context, so
+      `rootContext` fell back to `context.Background()` and a worker whose terminal transition could
+      not be persisted — here because the test's deferred `store.Close()` runs before `t.Cleanup` —
+      retried forever while the cleanup joined it, killing the package at the go-test timeout with
+      the test's own failure unrecorded. `stopTestDaemon` now performs the daemon's own shutdown
+      ordering (cancel the background context, `stopAll`, then join the workers under the
+      documented 30 s `testHangGuard`) at the eight cleanup joins in this package; no assertion
+      changed. Evidence: with the pre-fix cleanup join and an expired start wait the package
+      reproduced `panic: test timed out after 25s` (bounded demo) with the test's own failure
+      unreported; with the fix the same scenario reports
+      `--- FAIL: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (0.21s)` and the package
+      completes. The Linux supervisor helper-witness flake
+      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in
+      this archive above.
+      Closed by `fix/flake-platform-descendant-monitor` (2026-11-19, based on `9192241`): the move
+      changes no code because every occurrence this text records is already fixed in `main`. The
+      fixes were re-read against this revision: `d29fe5a` (#49) for the identity-bound Windows stop
+      proof, the pidfd attribution (`pidfdsForThisProcess` through `/proc/self/fdinfo`),
+      `nativeStartFailureDetail` in the three start waits and `stopTestDaemon`'s shutdown ordering
+      at the package's cleanup joins; the closed part above keeps its own record (`0220f2a` #47,
+      `d29fe5a` #49, `3781c78` #56). Both job logs were re-read from their own run
+      (`gh run view 44055523619 --job 133943809650 --log-failed`: `capability probes retained
+      pidfds: before=2 after=1` at 0.00 s; `--job 133943809688 --log-failed`: `harness_test.go:4285:
+      native turn did not start`, `harness_test.go:4507: native Pi provider turn did not start`,
+      `harness_test.go:4601: native turn did not start`, `panic: test timed out after 10m0s` and
+      `process_windows_test.go:1004: owned child 7824 survived Close()`), and the identical tree's
+      green run 44054200088 (`95b9fa1`: `daemon` and `daemon-windows` both success) was confirmed.
+      Fresh evidence on this revision: WSL Ubuntu-24.04, go1.27.0, `go test -race -count=50 -run
+      'TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven|TestProcessGroupStopRequestKeepsCleanLeaderAbsentTerminalReason|TestPIDFDGroupSupportProbeReleasesProcessHandle'
+      ./internal/platform` — `ok`, 20.091 s, 50 runs per test, 0 failures, exit 0. CI on revisions
+      containing the fixes kept the `daemon` job green with no recurrence of any signature in this
+      class (runs 44147815717 `9c73a05`, 44230735630 `d60d50d`, 44253118123 `9192241`). The three
+      load-bound start waits keep the recorded decision — waits unchanged, and a repeat now names
+      its durable reason — so a further occurrence would be a new finding, not an open action of
+      this item. The cross-reference to the helper-witness item now names this archive, where
+      `fix/flake-linux-wrong-hello` moves that entry.
+
 - [ ] Revalidate and remove the unused `JsonDocument` alias in
       `control/lib/symmetry_control/goals/schemas.ex:1431`
       (`SymmetryControl.Goals.GoalExternalWait`). The 0006h focused Control run
