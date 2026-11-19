@@ -457,7 +457,7 @@ defmodule SymmetryControlWeb.PortalApiController do
         :repository_resource,
         :ci_resource,
         :external_work_item_resource
-      ])
+      ], in_parallel: false)
 
   defp connection_receipt(conn, status, connection, disposition) do
     conn
