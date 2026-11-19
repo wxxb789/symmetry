@@ -154,8 +154,46 @@ class RecordCleanlinessTests(unittest.TestCase):
         self.git("update-ref", "refs/remotes/origin/main", head)
         result = self.run_gate("--base", "0123456789abcdef0123456789abcdef01234567", "--head", head)
         self.assertEqual(result.returncode, 2, result.stdout)
-        self.assertIn("fallback base is the head", result.stderr)
+        self.assertIn("not present in this checkout", result.stderr)
+        self.assertIn("fallback is the head itself", result.stderr)
         self.assertNotIn("nothing to check", result.stdout)
+
+    def test_an_empty_or_zero_base_at_the_main_tip_reports_nothing_to_check(self) -> None:
+        # A tag push or a manual dispatch passes no base or an all-zero one. When the head
+        # is already origin/main's tip the fallback range is empty by construction, which
+        # is the documented pass - even though the head adds a host-path record, because
+        # such a revision is not "this change" compared against an earlier one.
+        self.write("docs/evidence/host-path.md", "the run store was /tmp/symmetry-0008d-eval\n")
+        head = self.commit("tagged record")
+        self.git("update-ref", "refs/remotes/origin/main", head)
+        for requested in ("", ZERO):
+            with self.subTest(base=requested):
+                result = self.run_gate("--base", requested, "--head", head)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("nothing to check", result.stdout)
+
+    def test_an_all_zero_base_on_an_older_main_checks_the_added_records(self) -> None:
+        # The documented fallback with a real range: origin/main is behind the head, so a
+        # tag-like run checks the records the head added.
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
+        self.write("docs/evidence/clean-add.md", "the route /portal/runtimes stays literal\n")
+        head = self.commit("all-zero base on an older main")
+        result = self.run_gate("--base", ZERO, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("1 changed record(s) pass the root-only check", result.stdout)
+
+    def test_a_record_that_is_not_text_is_reported_as_uncheckable(self) -> None:
+        # A UTF-16 record hiding a host path is not text the sanitize tool can check; the
+        # gate must say so instead of claiming the record carries a host absolute path.
+        payload = '{"root":"/tmp/symmetry-0008d-eval"}\n'.encode("utf-16-le")
+        path = self.repo / "docs" / "evidence" / "binary-record.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        head = self.commit("add a non-text record")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("could not be checked at all", result.stderr)
+        self.assertNotIn("still carry a host absolute path", result.stderr)
 
     def test_a_range_with_no_comparison_at_all_is_refused(self) -> None:
         # A repository with a single commit and no origin/main has no base to compare

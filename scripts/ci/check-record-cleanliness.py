@@ -12,15 +12,19 @@ path, or a ``--root`` disposable root still refuses.
 
 Changed-file selection is computed against an explicit comparison base, never from
 the checkout's last commit: CI passes the pull-request base commit, or the pushed
-``before`` commit for a push. An empty or all-zero base - a new branch, a tag, a
-manual run - falls back to the merge base with ``origin/main`` and then to ``HEAD^``,
-and a requested base that is not present in this checkout (a force-push's ``before``)
-takes the same fallback with a hint instead of refusing. The range is then narrowed to
-``git merge-base base head`` when one exists, so commits that belong to the base
-branch are not attributed to this change. Only a range that cannot be compared at all
-refuses, so an unscoped run can never read as a pass. Unchanged records are
-deliberately not checked (the pre-existing 0008-series records are tracked by their own
-TODO entries), and deleted records have nothing to check.
+``before`` commit for a push. An empty or all-zero base - a new branch, a tag push, a
+manual run - names no earlier revision of this branch and falls back to the merge base
+with ``origin/main`` and then to ``HEAD^``; when that range is empty it reports
+``nothing to check`` and passes, because the revision was compared with itself by
+construction, not by omission. A base that was requested and is not present in this
+checkout (a force-push's ``before``) takes the same fallback with a hint, but a
+fallback that would compare the head with itself refuses: the rewritten history now
+sits on ``origin/main``, and a vacuous pass would hide the records such a push adds.
+The range is then narrowed to ``git merge-base base head`` when one exists, so commits
+that belong to the base branch are not attributed to this change. Only a range that
+cannot be compared at all, or a requested base that cannot be, refuses. Unchanged
+records are deliberately not checked (the pre-existing 0008-series records are tracked
+by their own TODO entries), and deleted records have nothing to check.
 
 Usage::
 
@@ -47,6 +51,10 @@ ZERO_COMMIT = "0" * 40
 SELECTED_STATUSES = {"A", "M", "T"}
 
 
+class ComparisonBaseRefused(Exception):
+    """A requested comparison base that cannot yield a comparable range."""
+
+
 def run_git(repository: pathlib.Path, *arguments: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repository), *arguments], capture_output=True, check=False,
@@ -63,17 +71,21 @@ def resolve_commit(repository: pathlib.Path, revision: str) -> str | None:
 def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> str | None:
     """The commit to compare ``head`` against, or None when none can be resolved.
 
-    A requested base that is not present in this checkout - the usual shape of a
-    force-push, where the pushed ``before`` commit is unreachable - falls back to the
-    ``origin/main`` merge base instead of refusing, and says so; only a range that
-    cannot be compared at all refuses. A fallback that resolves to the head itself
-    would compare a revision with itself and report a vacuous pass, so it refuses
-    instead of passing: an unscoped run can never read as a pass.
+    An empty or all-zero base - a tag push, a manual dispatch, a new branch - names no
+    earlier revision of this branch, so it falls back to the ``origin/main`` merge base
+    and then to ``HEAD^``; an empty range after that fallback is a real "nothing to
+    check" pass. A base that was requested and is not present in this checkout - the
+    usual shape of a force-push, where the pushed ``before`` commit is unreachable -
+    takes the same fallback with a hint, but a fallback that would compare the head
+    with itself raises: the rewritten history now sits on ``origin/main``, and a
+    vacuous pass would hide the records such a push adds.
     """
+    requested_unreachable = False
     if requested and requested != ZERO_COMMIT:
         resolved = resolve_commit(repository, requested)
         if resolved is not None:
             return resolved
+        requested_unreachable = True
         print(
             f"check-record-cleanliness: base {requested} is not present in this checkout "
             "(a force-push?); comparing against the origin/main merge base instead",
@@ -82,14 +94,13 @@ def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> 
     merge_base = run_git(repository, "merge-base", head, "origin/main")
     if merge_base.returncode == 0:
         resolved = merge_base.stdout.decode("ascii", "replace").strip()
-        if resolved == head:
-            print(
-                "check-record-cleanliness refused: the origin/main fallback base is the head "
-                "itself, so the range would be empty; pass an explicit --base (a force-push "
-                "rewrites history, so name the revision this change is to be compared against)",
-                file=sys.stderr,
+        if requested_unreachable and resolved == head:
+            raise ComparisonBaseRefused(
+                f"the requested base {requested} is not present in this checkout and the "
+                "origin/main fallback is the head itself, so the range would be empty; a "
+                "force-push rewrites history, so name the revision this change is to be "
+                "compared against"
             )
-            return None
         return resolved
     first_parent = resolve_commit(repository, f"{head}^")
     return first_parent
@@ -120,14 +131,23 @@ def changed_records(repository: pathlib.Path, base: str, head: str) -> list[str]
     return sorted(selected)
 
 
-def check_record(repository: pathlib.Path, relative: str) -> tuple[bool, str]:
-    """Run the sanitize tool's own root-only check over one record."""
+def check_record(repository: pathlib.Path, relative: str) -> tuple[str, str]:
+    """Run the sanitize tool's own root-only check over one record.
+
+    Returns ``(status, detail)``: ``pass`` when the tool exits 0, ``dirty`` when it
+    exits 1 (a host absolute path remains) and ``unreadable`` when it exits 2 (the
+    bytes are not text the tool can check).
+    """
     completed = subprocess.run(
         [sys.executable, str(SANITIZE_TOOL), "--check", "--root-only", relative],
         capture_output=True, cwd=str(repository), check=False,
     )
     detail = (completed.stderr + completed.stdout).decode("utf-8", "replace").strip()
-    return completed.returncode == 0, detail
+    if completed.returncode == 0:
+        return "pass", detail
+    if completed.returncode == 1:
+        return "dirty", detail
+    return "unreadable", detail
 
 
 def main(argv: list[str]) -> int:
@@ -152,7 +172,11 @@ def main(argv: list[str]) -> int:
     if head is None:
         print(f"check-record-cleanliness refused: cannot resolve the head {arguments.head!r}", file=sys.stderr)
         return 2
-    base = resolve_base(repository, arguments.base, head)
+    try:
+        base = resolve_base(repository, arguments.base, head)
+    except ComparisonBaseRefused as refusal:
+        print(f"check-record-cleanliness refused: {refusal}", file=sys.stderr)
+        return 2
     if base is None:
         print(
             "check-record-cleanliness refused: cannot resolve a comparison base "
@@ -166,21 +190,33 @@ def main(argv: list[str]) -> int:
     if not records:
         print(f"check-record-cleanliness: no record added or modified between {base[:12]} and {head[:12]}; nothing to check")
         return 0
-    failures: list[tuple[str, str]] = []
+    dirty: list[tuple[str, str]] = []
+    unreadable: list[tuple[str, str]] = []
     for relative in records:
-        passed, detail = check_record(repository, relative)
-        if not passed:
-            failures.append((relative, detail))
-    if failures:
-        for relative, detail in failures:
+        status, detail = check_record(repository, relative)
+        if status == "dirty":
+            dirty.append((relative, detail))
+        elif status == "unreadable":
+            unreadable.append((relative, detail))
+    if dirty or unreadable:
+        for relative, detail in dirty + unreadable:
             print(f"check-record-cleanliness refused: {relative}: {detail}", file=sys.stderr)
-        print(
-            f"check-record-cleanliness refused: {len(failures)} of {len(records)} changed records "
-            "still carry a host absolute path; render argv/output capture with "
-            f"{SANITIZE_TOOL.name} (its default scope) and keep prose free of host paths "
-            "instead of publishing the path",
-            file=sys.stderr,
-        )
+        if dirty:
+            print(
+                f"check-record-cleanliness refused: {len(dirty)} of {len(records)} changed records "
+                "still carry a host absolute path; render argv/output capture with "
+                f"{SANITIZE_TOOL.name} (its default scope) and keep prose free of host paths "
+                "instead of publishing the path",
+                file=sys.stderr,
+            )
+        if unreadable:
+            print(
+                f"check-record-cleanliness refused: {len(unreadable)} of {len(records)} changed "
+                "records could not be checked at all: the sanitize tool refused their bytes "
+                "(exit 2, not recorded text), so this gate cannot say whether they name a host "
+                "path",
+                file=sys.stderr,
+            )
         return 1
     print(f"check-record-cleanliness: {len(records)} changed record(s) pass the root-only check")
     return 0

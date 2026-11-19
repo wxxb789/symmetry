@@ -41,9 +41,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `fixture-inventory`, `resumed-go-gates` and `surface-qa` of 2026-09-29, and
       `iteration-closure-2026-10-10`); the two `pi-control-e2e-*-2026-09-13.md` files, the five
       `test-ablation-*-2026-09-29.md` files and `windows-opencode-ci-gate-2026-09-14.md`. Each one
-      needs either the heavier render-and-rebind pass (they bind digests other records name) or an
-      explicit decision to leave it as produced; until that decision, the remedy for a touched
-      record is that render pass, never an edit that breaks a binding.
+      needs either an explicit decision to leave it as produced or the render-and-rebind pass
+      (re-render the text and keep every digest another record quotes consistent - of this list,
+      `test-ablation-go-probe-experiment-2026-09-29.md` is the one quoted by another record). Until
+      that decision, a change that merely touches one of these records fails the job by design, and
+      the remedy is that render pass, never an edit that breaks a binding.
 
 ## SEO / repository metadata
 

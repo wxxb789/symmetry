@@ -1155,11 +1155,11 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       changed-path classifier and runs the `record-cleanliness` job whenever those paths or
       the sanitize tool change, independently of the documentation-only fast path, so a
       records-only pull request is exactly the change it checks;
-      `scripts/ci/test-check-record-cleanliness.py` (twelve tests, observed `Ran 12 tests ...
-      OK`) pins the selection and the tool boundary and joins the model-routing suite in the
-      daemon job. The 0008a re-publish remains its own open entry in `docs/TODO.md`, with the
-      argv/output-only scope it asked for; each open item was moved separately, so this entry
-      carries no residual.
+      `scripts/ci/test-check-record-cleanliness.py` (sixteen tests, observed `Ran 16 tests ...
+      OK`) pins the selection, the fallback and refusal cases and the tool boundary, and joins
+      the model-routing suite in the daemon job. The 0008a re-publish remains its own open entry
+      in `docs/TODO.md`, with the argv/output-only scope it asked for; each open item was moved
+      separately, so this entry carries no residual.
 
 *Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stays there.*
 

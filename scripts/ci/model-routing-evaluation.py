@@ -3128,7 +3128,11 @@ def dependency_tree_digest(tree: pathlib.Path) -> tuple[str, int]:
     hoisted tree). Directory links are pruned instead of followed (a cycle refuses);
     empty directories are not entries.
     """
-    resolved_tree = tree.resolve()
+    try:
+        resolved_tree = tree.resolve()
+    except (OSError, RuntimeError) as error:
+        # A tree path that is itself a link loop never resolves: refuse, never crash.
+        raise Refused(f"the dependency tree is not a readable directory: {error}")
     entries = _tree_entries(resolved_tree, frozenset({resolved_tree}))
     digest = hashlib.sha256()
     digest.update(DEPENDENCY_TREE_NAMESPACE + b"\0")
