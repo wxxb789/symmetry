@@ -244,6 +244,101 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     assert expired_execution.timing.finished_at == nil
   end
 
+  test "cancel and retry controls follow the runtime's advertised adapter operations" do
+    project = project_fixture()
+
+    supported = launch_for(project, "cap-supported", "Advertises start and cancel")
+    cancel_unsupported = launch_for(project, "cap-no-cancel", "Advertises start without cancel")
+    retry_unsupported = launch_for(project, "cap-no-start", "Advertises neither operation")
+    unknown = launch_for(project, "cap-unknown", "Serves no adapter record")
+
+    %{machine: machine} = enroll_machine("capability-machine")
+
+    supported_runtime =
+      register_runtime(machine, "cap-supported",
+        agent_profile: "cap-supported",
+        workspace: "cap-supported",
+        metadata: adapter_metadata(),
+        capabilities: adapter_capabilities(start: true, cancel: true)
+      )
+
+    no_cancel_runtime =
+      register_runtime(machine, "cap-no-cancel",
+        agent_profile: "cap-no-cancel",
+        workspace: "cap-no-cancel",
+        metadata: adapter_metadata(),
+        capabilities: adapter_capabilities(start: true, cancel: false)
+      )
+
+    no_start_runtime =
+      register_runtime(machine, "cap-no-start",
+        agent_profile: "cap-no-start",
+        workspace: "cap-no-start",
+        metadata: adapter_metadata(),
+        capabilities: adapter_capabilities(start: false, cancel: false)
+      )
+
+    unknown_runtime =
+      register_runtime(machine, "cap-unknown",
+        agent_profile: "cap-unknown",
+        workspace: "cap-unknown"
+      )
+
+    {supported_run, supported_fence} = assign_and_run(supported_runtime, 40, 101)
+    {no_cancel_run, no_cancel_fence} = assign_and_run(no_cancel_runtime, 41, 102)
+    {no_start_run, no_start_fence} = assign_and_run(no_start_runtime, 42, 103)
+    {unknown_run, unknown_fence} = assign_and_run(unknown_runtime, 43, 104)
+
+    assert {:ok, running_model} = ReadModel.workspace(project.id)
+
+    # state-ok + supported: the running attempt's runtime advertises cancel.
+    assert served_execution(running_model, supported.work_item).can_cancel
+    # state-ok + unsupported: the runtime itself advertises `cancel: false`.
+    refute served_execution(running_model, cancel_unsupported.work_item).can_cancel
+    # state-ok + unknown: a runtime without an adapter record fails closed.
+    refute served_execution(running_model, unknown.work_item).can_cancel
+    # state-not-ok: a running attempt is not retryable.
+    refute served_execution(running_model, supported.work_item).can_retry
+
+    transition(supported_run.id, supported_fence, "failed", 44)
+    transition(no_cancel_run.id, no_cancel_fence, "failed", 45)
+    transition(no_start_run.id, no_start_fence, "failed", 46)
+    transition(unknown_run.id, unknown_fence, "failed", 47)
+
+    assert {:ok, failed_model} = ReadModel.workspace(project.id)
+
+    # state-not-ok: a failed attempt is not cancellable.
+    refute served_execution(failed_model, supported.work_item).can_cancel
+    # state-ok + supported: the runtime advertises `start`, the retried
+    # attempt's operation.
+    assert served_execution(failed_model, supported.work_item).can_retry
+    # A runtime that can start but not cancel keeps retry and drops cancel.
+    assert served_execution(failed_model, cancel_unsupported.work_item).can_retry
+    # state-ok + unsupported/unknown: no advertised start, no retry.
+    refute served_execution(failed_model, retry_unsupported.work_item).can_retry
+    refute served_execution(failed_model, unknown.work_item).can_retry
+
+    queued = launch_for(project, "cap-local", "No runtime matches this binding")
+    assert {:ok, queued_model} = ReadModel.workspace(project.id)
+    queued_execution = served_execution(queued_model, queued.work_item)
+
+    # A cancel of an attempt no runtime holds is applied by the control plane
+    # itself, so no runtime advertisement gates it; retry of a live attempt
+    # stays unavailable.
+    assert queued_execution.can_cancel
+    refute queued_execution.can_retry
+
+    assert {:ok, _snapshot, :created} =
+             Workspaces.cancel_work_item(queued.work_item.id, 1, "cap-local-cancel")
+
+    assert {:ok, cancelled_model} = ReadModel.workspace(project.id)
+    cancelled_execution = served_execution(cancelled_model, queued.work_item)
+
+    # The cancelled attempt carries no run, so retry is a local re-queue.
+    refute cancelled_execution.can_cancel
+    assert cancelled_execution.can_retry
+  end
+
   defp project_fixture do
     assert {:ok, project} =
              Workspaces.create_project(%{
@@ -271,20 +366,23 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     enrolled
   end
 
-  defp register_runtime(machine, key \\ "portal-runtime") do
+  defp register_runtime(machine, key \\ "portal-runtime", opts \\ []) do
     assert {:ok, [runtime]} =
              Orchestration.register_runtimes(
                machine.id,
                Ecto.UUID.generate(),
                [
-                 %{
-                   runtime_key: key,
-                   name: key,
-                   capacity: 1,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   capabilities: %{}
-                 }
+                 Map.merge(
+                   %{
+                     runtime_key: key,
+                     name: key,
+                     capacity: 1,
+                     agent_profile: Keyword.get(opts, :agent_profile, "codex"),
+                     workspace: Keyword.get(opts, :workspace, "primary"),
+                     capabilities: Keyword.get(opts, :capabilities, %{})
+                   },
+                   Keyword.get(opts, :metadata, %{})
+                 )
                ],
                now: @now
              )
@@ -292,7 +390,70 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     runtime
   end
 
-  defp claim(run, runtime) do
+  defp launch_for(project, profile, title) do
+    assert {:ok, item} =
+             Workspaces.create_work_item(project.id, %{
+               title: title,
+               status: "ready",
+               assignee_type: "agent",
+               agent_profile: profile,
+               workspace: profile
+             })
+
+    assert {:ok, launched, :created} = Workspaces.launch_work_item(item.id)
+    launched
+  end
+
+  defp assign_and_run(runtime, transition_number, claim_number) do
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.runtime_id == runtime.id
+    fence = claim(run, runtime, claim_number)
+    transition(run.id, fence, "running", transition_number)
+    {run, fence}
+  end
+
+  # The served control projection: the same merge the portal read applies.
+  defp served_execution(model, work_item) do
+    work_item
+    |> Repo.preload([:project, :repository_resource, :ci_resource])
+    |> PortalJSON.work_item(model.projections)
+    |> Map.fetch!(:execution)
+  end
+
+  # The registered metadata an adapter-backed runtime carries.
+  defp adapter_metadata do
+    %{
+      harness_kind: "generic",
+      harness_version: "generic-v1",
+      adapter_version: "generic-v1",
+      adapter_protocol_version: 1
+    }
+  end
+
+  defp adapter_capabilities(start: start, cancel: cancel) do
+    %{
+      "adapter" => %{
+        "kind" => "generic",
+        "native_version" => "generic-v1",
+        "implementation_version" => "generic-v1",
+        "protocol_version" => 1,
+        "operations" => %{
+          "start" => start,
+          "events" => start,
+          "cancel" => cancel,
+          "resume" => false,
+          "handoff" => false,
+          "guidance" => "unsupported",
+          "pause" => "unsupported",
+          "approval_response" => false,
+          "usage" => "unknown",
+          "hard_cost_limit" => false
+        }
+      }
+    }
+  end
+
+  defp claim(run, runtime, claim_number \\ 100) do
     assert {:ok, claimed} =
              Orchestration.claim(
                run.id,
@@ -300,7 +461,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
                  runtime_id: runtime.id,
                  runtime_epoch: runtime.connection_epoch,
                  generation: run.generation,
-                 claim_id: uuid(100)
+                 claim_id: uuid(claim_number)
                },
                now: @now
              )

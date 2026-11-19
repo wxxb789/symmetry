@@ -71,19 +71,22 @@ defmodule SymmetryControl.Workspaces.ReadModel do
         |> Map.new(&{&1.id, &1})
 
       runs = current_runs(task_ids)
+      runtimes = current_runtimes(runs)
       commands = latest_commands(task_ids)
       waiting = waiting_contexts(tasks, runs)
-      controls = controls(tasks, runs)
+      controls = controls(tasks, runs, runtimes)
       evidence = evidence(task_ids)
 
       Map.new(task_ids, fn task_id ->
         task = Map.fetch!(tasks, task_id)
+        run = Map.get(runs, task_id)
 
         {task_id,
          %{
            execution: %{
              task: task,
-             run: Map.get(runs, task_id),
+             run: run,
+             runtime: run && Map.get(runtimes, run.runtime_id),
              waiting: Map.get(waiting, task_id),
              latest_command: Map.get(commands, task_id),
              controls: Map.fetch!(controls, task_id)
@@ -99,13 +102,17 @@ defmodule SymmetryControl.Workspaces.ReadModel do
     end
   end
 
-  defp controls(tasks, runs) do
+  # The current runs' runtimes, loaded in one query; the per-task capability
+  # projection reads them from this map instead of a query per task.
+  defp current_runtimes(runs) do
     runtime_ids = runs |> Map.values() |> Enum.map(& &1.runtime_id) |> Enum.uniq()
-    run_ids = runs |> Map.values() |> Enum.map(& &1.id)
 
-    runtimes =
-      Repo.all(from runtime in Runtime, where: runtime.id in ^runtime_ids)
-      |> Map.new(&{&1.id, &1})
+    Repo.all(from runtime in Runtime, where: runtime.id in ^runtime_ids)
+    |> Map.new(&{&1.id, &1})
+  end
+
+  defp controls(tasks, runs, runtimes) do
+    run_ids = runs |> Map.values() |> Enum.map(& &1.id)
 
     pending =
       Repo.all(

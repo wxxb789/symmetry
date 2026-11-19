@@ -1,6 +1,7 @@
 defmodule SymmetryControlWeb.PortalJSON do
   @moduledoc false
 
+  alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
   alias SymmetryControlWeb.Protocol
@@ -324,8 +325,18 @@ defmodule SymmetryControlWeb.PortalJSON do
 
   defp execution_summary(%Task{} = task), do: execution_summary(%{task: task, run: nil})
 
+  # `can_cancel` joins the state permission with the run's advertised adapter
+  # `cancel` operation whenever a runtime holds the attempt (claimed and
+  # beyond): that runtime is the one that has to stop the process. A cancel of
+  # an attempt no runtime holds yet (queued, assigned) is applied by the
+  # control plane itself, so no runtime operation is required. `can_retry`
+  # re-queues a terminal attempt locally; a retried attempt starts fresh, so
+  # when a previous attempt exists its runtime must advertise `start`. Unknown
+  # runtime support fails closed — the served read never offers an operation
+  # the runtime cannot perform.
   defp execution_summary(%{task: task_record, run: run} = snapshot) do
     task = Protocol.task(snapshot)
+    runtime = Map.get(snapshot, :runtime)
 
     %{
       task_id: task.task_id,
@@ -343,8 +354,12 @@ defmodule SymmetryControlWeb.PortalJSON do
       can_pause: task.controls.can_pause,
       can_resume: task.controls.can_resume,
       can_cancel:
-        task.state in ["queued", "assigned", "claimed", "running", "paused", "waiting_for_input"],
-      can_retry: task.state in ["failed", "cancelled"],
+        task.state in ["queued", "assigned"] or
+          (task.state in ["claimed", "running", "paused", "waiting_for_input"] and
+             Orchestration.adapter_operation_supported?(runtime, :cancel)),
+      can_retry:
+        task.state in ["failed", "cancelled"] and
+          (is_nil(run) or Orchestration.adapter_operation_supported?(runtime, :start)),
       intent_locked: task.state not in ["failed", "cancelled"]
     }
   end

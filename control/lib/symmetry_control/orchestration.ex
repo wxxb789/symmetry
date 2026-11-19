@@ -536,6 +536,7 @@ defmodule SymmetryControl.Orchestration do
            %{
              task: Task.t(),
              run: Run.t() | nil,
+             runtime: Runtime.t() | nil,
              waiting: map() | nil,
              latest_command: Command.t() | nil
            }}
@@ -551,12 +552,21 @@ defmodule SymmetryControl.Orchestration do
               where: run.task_id == ^task.id and run.generation == ^task.attempt_generation
           )
 
+        runtime = run && Repo.get(Runtime, run.runtime_id)
+
         %{
           task: task,
           run: run,
+          runtime: runtime,
           waiting: current_waiting_context(task, run),
           latest_command: latest_task_command(task.id),
-          controls: control_capabilities(task, run)
+          controls:
+            control_capabilities(
+              task,
+              run,
+              runtime,
+              not is_nil(run) and pending_supervisory_transition?(run.id)
+            )
         }
       end)
       |> case do
@@ -569,12 +579,6 @@ defmodule SymmetryControl.Orchestration do
   end
 
   def task_snapshot(_), do: {:error, :invalid_request}
-
-  def control_capabilities(task, run) do
-    runtime = run && Repo.get(Runtime, run.runtime_id)
-    pending? = not is_nil(run) and pending_supervisory_transition?(run.id)
-    control_capabilities(task, run, runtime, pending?)
-  end
 
   def control_capabilities(task, run, runtime, pending?) do
     supported? =
@@ -593,6 +597,24 @@ defmodule SymmetryControl.Orchestration do
       can_resume: supported? and current? and task.state == "paused" and not pending?
     }
   end
+
+  @doc """
+  Whether `runtime` advertises the boolean adapter operation `operation`.
+
+  Only a runtime registered with the versioned adapter record advertises
+  per-operation support; a runtime without the record, without the operation,
+  or with a non-`true` value is unknown and answers false. The portal
+  projection reads this so a served control is never offered for an operation
+  the runtime cannot perform.
+  """
+  @spec adapter_operation_supported?(Runtime.t() | nil, atom()) :: boolean()
+  def adapter_operation_supported?(%Runtime{} = runtime, operation) when is_atom(operation) do
+    adapter = value(runtime.capabilities, :adapter)
+
+    is_map(adapter) and value(value(adapter, :operations), operation) == true
+  end
+
+  def adapter_operation_supported?(_runtime, _operation), do: false
 
   @spec list_task_events(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, atom()}
   def list_task_events(task_id, opts \\ []) do
