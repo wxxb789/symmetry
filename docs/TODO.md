@@ -352,43 +352,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       stay as they are; the other guards in these suites stay as named backstops; the other four
       render-step specs were not re-run here, and this entry's first clause (re-measure the
       pre-existing suites on a quiesced host) stays open.
-## Open findings from the 0008b model-routing review
-
-- [ ] Revalidate the open class B finding against
-      `daemon/internal/platform/process_windows.go`: the non-durable
-      `containmentSupervisorStopLease` branch of `Close` caches only the handle
-      release, so after a settlement failure a repeated `Close` can return nil
-      without the proof (HEAD `:535-539`; the sibling `!durableAuthority` branch
-      sits at `:506`). Observed at medium severity as `open` in both 0008b class B
-      reviews (`0008b-go-native-ownership-settlement-{mixed,strong}.review-attempts.json`,
-      findings F4/F2, repaired-revision coordinates `:601-605`/`:524-526` and
-      `:607-612`/`:509-511`) and in the candidate policy's negative findings. The
-      branch predates the 0008b revision; it is reachable through the native
-      Go-test-binary `AttachProcess` route, which returns
-      `noopContainmentSupervisorLease` (`containment_supervisor_windows.go:934`),
-      and the production daemon's durable-authority path is not affected. Keep the
-      finding visible; fix or re-scope in a separate maintenance change.
-      *(Superseded by the archived closure — the finding was fixed; see
-      `docs/archive/CLOSED-TODO.md`; only (a)–(c) below stay open.)*
-      Closed part moved to `docs/archive/CLOSED-TODO.md`.
-      **Still open, deliberately unchanged.** (a) The wider settlement contract
-      for the `daemon/internal/platform` flake-class item now in
-      `docs/archive/CLOSED-TODO.md` (the wider-contract note is archived in
-      `docs/archive/CLOSED-TODO.md`) keeps the load-sensitive
-      Windows owned-child close window; this change only removes the false-success
-      reporting. (b) A first settlement failure on the
-      non-durable route is terminal for that containment owner: `Close` and
-      `Terminate` keep reporting the latched error and no path re-derives a stop
-      it cannot demonstrate, because the Job handle a re-proof would need is
-      released best-effort here (retaining it across calls is a different
-      design, not this fix). (c) Two adjacent behaviours stay as recorded
-      rather than altered: the daemon handle is retained for the retrying call
-      when the non-durable lease close itself fails, and the retry branch
-      ignores the local handle-release retry result, so a stale local-cleanup
-      error is still reported after a successful release — fail-closed polarity
-      that can never report success without the proof, the same convention
-      `TestCloseRetriesHandleReleaseWithoutReplayingStop` pins for the sibling
-      branch.
 
 ## Record and documentation hygiene
 
