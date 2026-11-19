@@ -268,16 +268,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Decide whether the client should narrow its filter or the server should accept the extra
       params, and if the client is narrowed, add a test that keeps the two lists aligned.
 
-- [ ] Investigate the intermittent browser failure `project, resource, work-item,
-      filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
-      detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
-      detached" (desktop-chromium). Observed once while implementing goal 0007d
-      (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
-      9 skipped) with two Control compiles running on the same host; the same test passed
-      twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
-      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
-      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
-
 - [ ] Investigate the environment-limited Windows command test. `CommandTest` "provider
       token commands can keep stderr diagnostics out of stdout" fails with
       `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
@@ -295,30 +285,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
       on a clean dedicated test database. The browser harness recreates its own database;
       the suite should use the repository default (`symmetry_control_test`).
-
-- [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
-      legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
-      output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
-      toast and "two browser contexts reject a stale project update" hit the 60 s test timeout;
-      both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
-      and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
-      before changing any budget.
-
-- [ ] Investigate the mobile-chromium classic case `project, resource, work-item, filtering,
-      ordering, and persistence` in `browser/tests/portal.spec.mjs`. After saving the work-item
-      edit dialog, `#toast` stayed hidden with the stale text "Work item created" for the whole
-      10 s expect window, while the update itself persisted: the failure snapshot's detail drawer
-      shows the new pull request URL, CI `passed` and review `required` that the test set. Observed
-      while completing 0007e in the first legacy run (`portal-work-views.spec.mjs` +
-      `portal.spec.mjs` + `workspace-shell.spec.mjs` on both widths, 43 passed / 4 failed /
-      5 skipped) and reproduced alone on the same revision with the desktop case passing (mobile
-      `x` in 17.0 s, desktop `ok` in 12.1 s); it then passed in the second run of the same suites on
-      the unchanged classic files (46 passed / 1 failed / 5 skipped), so the mobile case is
-      intermittent. The classic route is
-      unchanged by 0007e: `control/lib`, `control/priv/portal_assets`,
-      `control/lib/symmetry_control_web/portal_html` and `portal_controller.ex` have no diff
-      against the base revision. Revalidate the classic toast branch that reports an update when
-      the edit dialog was opened from the detail drawer; keep the assertion.
 
 - [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
       `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
