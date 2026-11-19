@@ -430,3 +430,51 @@ not a claim that work remains.
       its chain was expanded from. No timer, poll or automatic read was added: the pages a moved
       boundary retires are loaded again by the reader's own "Load older history" / "Load more Goal
       attention", which continues from the served boundary.
+
+## Deferred review findings (0007g)
+
+*Both items of this section moved here on 2026-11-19; `docs/TODO.md` keeps no residual under it.*
+
+- [ ] Give the work detail an entry point into a run's conversation. The classic workspace drawer
+      offered "Open Chat" and "Review decision in Chat" for a work item whose execution carries a
+      `run_id`; the migrated `/portal/chat` is reachable from the shell's Chat entry (whose run
+      picker lists the served runs) but the React work detail added by 0007f has no such link, so a
+      waiting decision is only reachable by picking the run in Chat. Adding the link is work-detail
+      surface work (0007f's file) and was outside the 0007g diff; `browser/tests/portal.spec.mjs`
+      keeps the classic drawer's own buttons until the 0007i cutover.
+
+      **Closed (2026-11-19, `feat/work-detail-chat-link`):** the React work detail
+      (`frontend/src/features/work/detail.tsx`) now renders "Open in Chat" beside the execution
+      whenever the served read binds that execution to a `run_id`, linking the canonical
+      `/portal/chat?scope=run&projectId=…&runId=…`; the label becomes "Review decision in Chat"
+      while the served waiting context carries a decision packet — the same member the
+      conversation's decision intent is filtered by, and the member the classic drawer's decision
+      button checked, while a waiting request without a packet is answered on the detail itself.
+      Pure navigation: no server member was added or changed. Pinned by
+      `frontend/src/features/work/detail.test.tsx` (exact href, both labels, and no link without a
+      run). The item's closing clause about `browser/tests/portal.spec.mjs` was already stale when
+      written: no file under `browser/tests/` referenced `Open Chat`, `Review decision`,
+      `open-chat-button` or `decision-chat-button` at `ca29a8e`, and the file was deleted by the
+      0007i cutover (`ca1bdad`), so nothing kept the classic buttons either way.
+
+- [ ] Redirect the documented `#chat` hash location to `/portal/chat`. The frontend design fixes
+      "old `/portal#chat` … redirect once to the new equivalent URL", and
+      `frontend/src/app/legacy.ts` still maps the fragment to `/portal/classic#chat` (the classic
+      surface's own in-page entry points write that hash). The one-time hash mapping belongs to the
+      0007i cutover, which retires the classic writable UI; changing it earlier would split the
+      classic page's own navigation from its hash.
+
+      **Closed (2026-11-19, `feat/work-detail-chat-link`):** already implemented at `origin/main`;
+      the premise was stale at the 0007i cutover. `legacy.ts` maps `#chat` — with the classic
+      `project_id`, `run_id` and `chat_scope` members — to
+      `/portal/chat?scope=…&projectId=…&runId=…`, pinned by `frontend/src/app/legacy.test.ts` and
+      run once at bootstrap by `frontend/src/main.tsx` (only for `/portal`), with
+      `control/lib/symmetry_control_web/portal_session.ex` keeping `/portal` as the carrier of the
+      retired search parameters through login. The route is browser-accepted:
+      `browser/tests/portal-cutover.spec.mjs` ("every documented legacy hash location lands on its
+      new route exactly once") proves `#chat` → `/portal/chat?scope=project&projectId=…` with a
+      single document load and exactly one history write, and `/portal/classic` and
+      `/assets/portal.js` answer 404 on this revision. No producer of `/portal/classic#chat`
+      remains: the classic `portal.js` was deleted in `ca1bdad`
+      (`control/priv/portal_assets/` retains only `login.css`), and every other current reference is
+      a migration comment, a 404 or `return_to` assertion, or prose.
