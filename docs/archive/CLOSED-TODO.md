@@ -1355,6 +1355,38 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `docs/evaluations/model-routing/README.md`, "Record rendering exception
       (2026-11-19)".
 
+- [ ] Revalidate the stale 0008-series prerequisite text:
+      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
+      and 0008c results" while the 0008b candidate policy is produced and awaiting
+      the owner's verdict. Pre-existing and not introduced by the 0008b evidence
+      change; correct the wording once the 0008b verdict lands. (The `0006h`
+      index-row dead link above is the same class of stale documentation and is
+      already tracked.)
+
+      **Closed (2026-11-19, `docs/0008-prerequisite-text`):** the frozen-bytes
+      convention resolves this item instead of a wording edit. No file under
+      `docs/goals/archive/` has been modified after placement
+      (`git log --diff-filter=M --name-only -- docs/goals/archive/` prints nothing),
+      the index states the archived documents' content is unchanged and records
+      owner verdicts separately as they arrive (`docs/goals/README.md:313`, `:309`),
+      and `73e083f` moved the goal document into `archive/` byte-identically. The
+      correction therefore lands live: the item's pointer moves to
+      `docs/goals/archive/0008d-typescript-model-routing.md:13`, and a new recording
+      note in `docs/goals/README.md` names the archived sentence and the verdicts
+      that govern it — the owner accepted 0008b on 2026-11-18 (`8a689bd`, row
+      `:348`), while 0008c is produced and awaiting the owner's verdict with no
+      acceptance recorded (`:349`;
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md:3`). The 0008b
+      half of the archived sentence became true when the verdict landed; the 0008c
+      half stays as written, which is the convention's accepted state rather than
+      an open action — no 0008c acceptance is declared, and a future verdict is
+      recorded in the index row like the others. Check run on this branch:
+      `rg -n 'accepted 0008b|0008c'
+      docs/goals/archive/0008d-typescript-model-routing.md docs/goals/README.md`
+      (the archived line is unchanged; `docs/goals/README.md:117-123` is the new
+      note). The cross-referenced `0006h` dead-link item remains open in
+      `docs/TODO.md`.
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Investigate the intermittent Control failure
