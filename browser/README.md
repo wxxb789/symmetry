@@ -454,14 +454,22 @@ external tracker.
 With the control plane running at `http://127.0.0.1:4000`, run the real daemon
 lifecycle matrix from the repository root:
 
-Start that control plane with its own instance build path
-(`MIX_BUILD_PATH=control/_build/instances/<name>`) when another Control
-instance may be running from this worktree: two instances that share
-`control/_build` let one instance's compile decide what the other serves, which
-is what the two harnesses above avoid by pinning a path per port.
-
 ```powershell
 pwsh -NoProfile -File .\browser\scripts\run-live-daemon-tests.ps1
+```
+
+When you start that control plane yourself while another Control instance may
+be running from this worktree, give it its own instance build path: two
+instances that share `control/_build` let one instance's compile decide what
+the other serves, which is what the two harnesses above avoid by pinning a
+path per port. `mix` runs from `control/`, so the path is
+`_build/instances/<name>` there (beside the shared `dev` build), or an
+absolute path:
+
+```powershell
+cd control
+$env:MIX_BUILD_PATH = "$PWD\_build\instances\live-daemon"
+mix phx.server
 ```
 
 The runner builds isolated daemon and fake-agent binaries, starts unique

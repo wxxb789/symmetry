@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -28,14 +29,42 @@ const instanceRoot = path.join(controlRoot, "_build", "instances");
 // process trees with taskkill, so this contract is asserted on Windows only.
 const skipOnNonWindows = process.platform === "win32" ? false : "the harnesses and their recording stub are Windows-only";
 
-// Each harness starts its instance with one of these two mix invocations.
-const serverInvocations = {
-  "run-planning-tests.ps1": /-- mix phx\.server$/,
-  "run-connection-fixture-tests.ps1": /-- mix run --no-halt --no-start [^\s]*portal-connection-fixture\.exs$/
+// Each harness owns one instance name and starts it with one of these two mix
+// invocations.
+const harnesses = {
+  "run-planning-tests.ps1": {
+    instance: "planning",
+    serverInvocation: /-- mix phx\.server$/
+  },
+  "run-connection-fixture-tests.ps1": {
+    instance: "connections",
+    serverInvocation: /-- mix run --no-halt --no-start [^\s]*portal-connection-fixture\.exs$/
+  }
 };
 const databaseInvocations = ["mix ecto.drop", "mix ecto.create", "mix ecto.migrate"];
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+// A bounded wait that never keeps the test process alive once its race is won.
+function rejectAfter(milliseconds, message) {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(message)), milliseconds).unref();
+  });
+}
+
+// A port nothing is serving right now: each harness refuses a port that already
+// answers, and each run needs its own. The OS picks it and it is released again
+// immediately, so the harness still owns its check-then-start window.
+async function freePort() {
+  const probe = net.createServer();
+  await new Promise((resolve, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = probe.address();
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+}
 
 async function waitFor(predicate, timeoutMilliseconds) {
   const deadline = Date.now() + timeoutMilliseconds;
@@ -112,25 +141,31 @@ async function startAndObserveInstance({ script, port, inheritedBuildPath }) {
   let output = "";
   child.stdout.setEncoding("utf8").on("data", (chunk) => (output += chunk));
   child.stderr.setEncoding("utf8").on("data", (chunk) => (output += chunk));
-  let closed = null;
+  let closed = false;
   const closedPromise = new Promise((resolve) => {
-    child.on("close", (code, signal) => {
-      closed = { code, signal };
-      resolve(closed);
+    child.on("close", () => {
+      closed = true;
+      resolve();
     });
   });
 
-  const observed = await waitFor(
-    () => closed !== null || recordedCalls(recorder.logFile).some((call) => serverInvocations[script].test(call.argv)),
+  await waitFor(
+    () => closed || recordedCalls(recorder.logFile).some((call) => harnesses[script].serverInvocation.test(call.argv)),
     180_000
   );
   // Stop this run's process tree - the harness, its cmd launcher and the stub -
   // the moment the recorded invocation is enough to read the contract back.
   spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-  await closedPromise;
+  await Promise.race([
+    closedPromise,
+    rejectAfter(
+      10_000,
+      `${script} left its process tree open 10s after taskkill /T /F on PID ${child.pid} (harness -> cmd launcher -> recording stub):\n${output}`
+    )
+  ]);
   const calls = recordedCalls(recorder.logFile);
   fs.rmSync(recorder.root, { recursive: true, force: true });
-  return { calls, output, closed, observed };
+  return { calls, output };
 }
 
 function assertInstanceBuildPath(run, { script, port, inheritedBuildPath }) {
@@ -143,10 +178,11 @@ function assertInstanceBuildPath(run, { script, port, inheritedBuildPath }) {
     );
   }
   assert.ok(
-    calls.some((call) => serverInvocations[script].test(call.argv)),
+    calls.some((call) => harnesses[script].serverInvocation.test(call.argv)),
     `${script} never started its Control instance through mise:\n${calls.map((call) => call.argv).join("\n")}`
   );
 
+  const expectedBuildPath = normalize(path.join(instanceRoot, `${harnesses[script].instance}-${port}`));
   const buildPaths = new Set();
   for (const call of calls) {
     assert.equal(
@@ -159,13 +195,10 @@ function assertInstanceBuildPath(run, { script, port, inheritedBuildPath }) {
       `${script} ran '${call.argv}' with no MIX_BUILD_PATH set for it:\n${output}`
     );
     const buildPath = normalize(call.mixBuildPath);
-    assert.ok(
-      buildPath.startsWith(`${normalize(instanceRoot)}/`),
-      `${script} ran '${call.argv}' with MIX_BUILD_PATH ${call.mixBuildPath}, outside this worktree's own instance build paths (${instanceRoot}):\n${output}`
-    );
-    assert.ok(
-      buildPath.split("/").pop().endsWith(`-${port}`),
-      `${script} ran '${call.argv}' with MIX_BUILD_PATH ${call.mixBuildPath}, which does not name its own port ${port}:\n${output}`
+    assert.equal(
+      buildPath,
+      expectedBuildPath,
+      `${script} ran '${call.argv}' with MIX_BUILD_PATH ${call.mixBuildPath}, not this instance's own build path ${expectedBuildPath}:\n${output}`
     );
     if (inheritedBuildPath !== undefined) {
       assert.notEqual(
@@ -184,19 +217,16 @@ function assertInstanceBuildPath(run, { script, port, inheritedBuildPath }) {
   return [...buildPaths][0];
 }
 
-// Ports this test owns; the harnesses refuse any port that is already served.
-const freePort = () => 4600 + Math.floor(Math.random() * 340);
-
-for (const script of Object.keys(serverInvocations)) {
+for (const script of Object.keys(harnesses)) {
   test(`${script} gives the Control instance it starts its own build path`, { skip: skipOnNonWindows }, async () => {
     const inherited = "Q:\\foreign-worktree\\symmetry\\control\\_build\\dev";
-    const firstPort = freePort();
+    const firstPort = await freePort();
     const first = assertInstanceBuildPath(
       await startAndObserveInstance({ script, port: firstPort, inheritedBuildPath: inherited }),
       { script, port: firstPort, inheritedBuildPath: inherited }
     );
-    let secondPort = freePort();
-    if (secondPort === firstPort) secondPort = firstPort + 1;
+    let secondPort = await freePort();
+    while (secondPort === firstPort) secondPort = await freePort();
     const second = assertInstanceBuildPath(
       await startAndObserveInstance({ script, port: secondPort }),
       { script, port: secondPort }
@@ -204,7 +234,7 @@ for (const script of Object.keys(serverInvocations)) {
     assert.notEqual(
       first,
       second,
-      `${script} gave two concurrent instances on ports ${firstPort} and ${secondPort} the same build path ${first}`
+      `${script} gave two runs on ports ${firstPort} and ${secondPort} the same build path ${first}`
     );
   });
 }

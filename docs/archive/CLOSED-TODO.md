@@ -755,14 +755,21 @@ from branch `chore/deadcode-revalidation`.
       `browser/scripts/run-connection-fixture-tests.ps1` export
       `MIX_BUILD_PATH=<worktree>/control/_build/instances/<harness>-<port>` for every mix command
       they run and set it again on the server (planning) or fixture (connections) command they
-      start, so two concurrent instances in one worktree - which can never share a port, because
-      each harness refuses an occupied one - can never share compiled output. Deps sources stay
-      shared under `control/deps`; only compiled output moves. An inherited `MIX_BUILD_PATH` is
-      overridden and reported, never trusted, because a stale one from the surrounding shell is the
-      same accident. `browser/scripts/control-instance-isolation.test.mjs`
+      start, so instances from one worktree that both serve compile into different build paths:
+      each harness refuses a port that already answers, and a concurrent start on one port fails
+      closed at bind/readiness. Deps sources stay shared under `control/deps`; only compiled output
+      moves. An inherited `MIX_BUILD_PATH` is overridden and reported, never trusted, because a
+      stale one from the surrounding shell is the same accident.
+      `browser/scripts/control-instance-isolation.test.mjs`
       (`pnpm --filter symmetry-browser-acceptance test:control-isolation`) drives each real harness
       with a recording `mise` stub and asserts that every mix invocation it makes - the database
       tasks and the instance start alike - received the harness's own instance build path, that two
       ports get two paths, and that a foreign inherited value decides nothing; `browser/README.md`
       records the convention, including the path an operator-started Control server needs when
-      another instance may run from the same worktree.
+      another instance may run from the same worktree. The planning harness was run end to end on
+      this branch (desktop `-g restores`, `1 passed`) against
+      `control/_build/instances/planning-<port>`, with its database tasks, server start, readiness,
+      login and staged-asset checks all served from that path (`mix` was reached through this
+      host's `mixwrap` toolchain because its `mise` cannot install the pinned Elixir); the
+      connection-fixture harness is covered by the stub test only on this host, whose fixed fixture
+      database port 55444 has no container here.

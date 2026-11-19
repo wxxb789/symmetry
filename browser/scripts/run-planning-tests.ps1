@@ -60,12 +60,13 @@ $operatorToken = [guid]::NewGuid().ToString("N")
 # loads and reloads - the 2026-11-17 observation was a foreign session's
 # server answering this worktree's browser runs with `# unhandled` error pages.
 # This harness owns the instance it starts and pins its compiled output per
-# port, so two concurrent instances in one worktree - which can never share a
-# port, because the preflight above refuses an occupied one - can never share a
-# build path. Deps sources stay shared under control/deps; only compiled output
-# moves. An inherited MIX_BUILD_PATH is overridden explicitly, never trusted:
-# a stale one from the surrounding shell would point this instance at another
-# directory, which is the isolation this harness must own itself.
+# port, so instances from one worktree that both serve compile into different
+# build paths: the preflight above refuses a port that already answers, and a
+# concurrent start on one port fails closed at bind/readiness. Deps sources
+# stay shared under control/deps; only compiled output moves. An inherited
+# MIX_BUILD_PATH is overridden explicitly, never trusted: a stale one from the
+# surrounding shell would point this instance at another directory, which is
+# the isolation this harness must own itself.
 $instanceBuildPath = Join-Path $controlRoot ("_build/instances/planning-" + $Port)
 if ($env:MIX_BUILD_PATH) {
   Write-Host "ignoring inherited MIX_BUILD_PATH '$env:MIX_BUILD_PATH': this instance compiles into $instanceBuildPath"
