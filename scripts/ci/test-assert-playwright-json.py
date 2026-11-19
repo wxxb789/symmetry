@@ -11,13 +11,21 @@ import unittest
 SCRIPT = pathlib.Path(__file__).with_name("assert-playwright-json.py")
 
 PROJECTS = ["desktop-chromium", "mobile-chromium"]
+SPEC_FILE = "gate.spec.mjs"
+NESTED_FILE = "nested.spec.mjs"
 ROLLOUT_OFF = "with Goal rollout off a present Goal still serves its real attention entry"
 GOAL_MANAGED = "a real Goal-managed work item presents no legacy path, and the server refuses one"
 EXPIRY = "expired authentication clears private content and recovers the deep link"
 
 
-def test_case(project, status="expected"):
-    return {"projectName": project, "status": status, "results": [{"status": status}]}
+def test_case(project, status="expected", expected_status="passed", results=("passed",)):
+    """One test entry as the installed reporter serializes it."""
+    return {
+        "projectName": project,
+        "status": status,
+        "expectedStatus": expected_status,
+        "results": [{"status": result} for result in results],
+    }
 
 
 def spec(title, tests):
@@ -34,18 +42,32 @@ def passing_report(*titles, skipped=1, nested=False):
         # nests as child suites.
         return {
             "config": {"projects": [{"name": project} for project in PROJECTS]},
-            "suites": [{"title": "nested.spec.mjs", "suites": [{"title": "describe", "specs": suites}]}],
+            "suites": [
+                {
+                    "title": NESTED_FILE,
+                    "file": NESTED_FILE,
+                    "suites": [{"title": "describe", "specs": suites}],
+                }
+            ],
             "stats": {"expected": 6, "skipped": skipped, "unexpected": 0, "flaky": 0},
         }
     return {
         "config": {"projects": [{"name": project} for project in PROJECTS]},
-        "suites": [{"title": "gate.spec.mjs", "specs": suites}],
+        "suites": [{"title": SPEC_FILE, "file": SPEC_FILE, "specs": suites}],
         "stats": {"expected": 6, "skipped": skipped, "unexpected": 0, "flaky": 0},
     }
 
 
 class GateTestCase(unittest.TestCase):
-    def run_gate(self, report, *arguments):
+    def gate_command(self, path, files):
+        command = [sys.executable, str(SCRIPT), str(path)]
+        for project in PROJECTS:
+            command += ["--expect-project", project]
+        for file in files:
+            command += ["--expect-file", file]
+        return command
+
+    def run_gate(self, report, *arguments, files=(SPEC_FILE,)):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory, "report.json")
             if isinstance(report, str):
@@ -53,7 +75,7 @@ class GateTestCase(unittest.TestCase):
             else:
                 path.write_text(json.dumps(report), encoding="utf-8")
             return subprocess.run(
-                [sys.executable, str(SCRIPT), str(path), *arguments],
+                [*self.gate_command(path, files), *arguments],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -61,7 +83,7 @@ class GateTestCase(unittest.TestCase):
 
     def run_gate_path(self, path, *arguments):
         return subprocess.run(
-            [sys.executable, str(SCRIPT), str(path), *arguments],
+            [*self.gate_command(path, (SPEC_FILE,)), *arguments],
             capture_output=True,
             text=True,
             check=False,
@@ -84,7 +106,11 @@ class PositiveTests(GateTestCase):
 
     def test_nested_describe_suites_are_searched(self):
         result = self.run_gate(
-            passing_report(EXPIRY, nested=True), "--expect-skipped", "1", EXPIRY
+            passing_report(EXPIRY, nested=True),
+            "--expect-skipped",
+            "1",
+            EXPIRY,
+            files=(NESTED_FILE,),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -110,7 +136,9 @@ class SkipCountTests(GateTestCase):
 class GatedTitleTests(GateTestCase):
     def test_a_title_skipped_in_one_project_fails(self):
         report = passing_report(ROLLOUT_OFF)
-        report["suites"][0]["specs"][0]["tests"][1]["status"] = "skipped"
+        report["suites"][0]["specs"][0]["tests"][1] = test_case(
+            "mobile-chromium", status="skipped", expected_status="skipped", results=("skipped",)
+        )
         report["stats"]["skipped"] = 1
         result = self.run_gate(report, "--expect-skipped", "1", ROLLOUT_OFF)
         self.assertEqual(result.returncode, 1)
@@ -118,10 +146,30 @@ class GatedTitleTests(GateTestCase):
 
     def test_a_flaky_title_fails(self):
         report = passing_report(ROLLOUT_OFF)
-        report["suites"][0]["specs"][0]["tests"][0]["status"] = "flaky"
+        report["suites"][0]["specs"][0]["tests"][0] = test_case(
+            "desktop-chromium", status="flaky", results=("failed", "passed")
+        )
         result = self.run_gate(report, "--expect-skipped", "1", ROLLOUT_OFF)
         self.assertEqual(result.returncode, 1)
         self.assertIn("desktop-chromium: {flaky:1}", result.stderr)
+
+    def test_an_expected_failure_is_not_a_pass(self):
+        # `test.fail()`: the installed reporter serializes the case as status
+        # `expected` with expectedStatus `failed` and a failed result.
+        report = passing_report(ROLLOUT_OFF)
+        report["suites"][0]["specs"][0]["tests"][0] = test_case(
+            "desktop-chromium", expected_status="failed", results=("failed",)
+        )
+        result = self.run_gate(report, "--expect-skipped", "1", ROLLOUT_OFF)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("desktop-chromium: {expected-failed:1}", result.stderr)
+
+    def test_a_case_without_a_passed_result_fails(self):
+        report = passing_report(ROLLOUT_OFF)
+        report["suites"][0]["specs"][0]["tests"][0]["results"] = [{"status": "failed"}]
+        result = self.run_gate(report, "--expect-skipped", "1", ROLLOUT_OFF)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("desktop-chromium: {expected without passed results:1}", result.stderr)
 
     def test_a_title_dropped_from_the_invocation_fails(self):
         result = self.run_gate(
@@ -137,6 +185,26 @@ class GatedTitleTests(GateTestCase):
         result = self.run_gate(report, "--expect-skipped", "1", ROLLOUT_OFF)
         self.assertEqual(result.returncode, 1)
         self.assertIn("desktop-chromium: {expected:2}", result.stderr)
+
+
+class CoverageTests(GateTestCase):
+    def test_a_report_missing_a_required_project_fails(self):
+        # The required projects come from the CLI: a report whose config
+        # declares one project must not satisfy a gate asked for both widths.
+        report = passing_report(ROLLOUT_OFF, skipped=0)
+        report["config"]["projects"] = [{"name": "mobile-chromium"}]
+        report["suites"][0]["specs"][0]["tests"] = [test_case("mobile-chromium")]
+        result = self.run_gate(report, "--expect-skipped", "0", ROLLOUT_OFF)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("desktop-chromium: no result", result.stderr)
+
+    def test_a_report_of_other_files_than_the_invocation_fails(self):
+        report = passing_report(ROLLOUT_OFF)
+        report["suites"][0]["file"] = "other.spec.mjs"
+        result = self.run_gate(report, "--expect-skipped", "1", ROLLOUT_OFF)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("missing gate.spec.mjs", result.stderr)
+        self.assertIn("unexpected other.spec.mjs", result.stderr)
 
 
 class ReportIntegrityTests(GateTestCase):

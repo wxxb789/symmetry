@@ -490,6 +490,7 @@ test.describe("Goal attention workspace", () => {
     // requires all five members, and `subject.resource_id` must equal
     // `repository_resource_id`), so a 409 here is the admission gate's
     // refusal, never a validator's.
+    allowBrowserError(page, /status of 409/);
     const probeRepositoryId = crypto.randomUUID();
     const refused = await goalCommand(page, goalId, "request_plan", {
       model_profile: "codex",

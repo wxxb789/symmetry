@@ -644,16 +644,27 @@ jobs:
               tests/portal-goal-attention.spec.mjs \
               tests/portal-cutover.spec.mjs tests/portal-chat.spec.mjs
       # Playwright exits 0 when a case is merely skipped, so the run's own JSON
-      # report pins the executed set: exactly the one by-design concurrency skip
-      # and every environment-gated case at both widths. A dropped guard, a
-      # dropped SYMMETRY_RENDER_GATE_REQUIRED=1 or a spec file dropped from the
-      # list above shows up here instead of as a silent skip.
+      # report pins the executed set: exactly the spec files of the list above
+      # (the report names each relative to `browser/tests`), exactly the one
+      # by-design concurrency skip, and every environment-gated case at both
+      # widths. A dropped guard, a dropped SYMMETRY_RENDER_GATE_REQUIRED=1 or a
+      # spec file dropped from the render step's list fails here instead of
+      # passing as a silent skip.
       - name: Assert the render gate's executed set
         run: |
           set -Eeuo pipefail
           python3 ../scripts/ci/assert-playwright-json.py \
             "$RUNNER_TEMP/symmetry-render-gate.json" \
             --expect-skipped 1 \
+            --expect-project desktop-chromium \
+            --expect-project mobile-chromium \
+            --expect-file workspace-shell.spec.mjs \
+            --expect-file portal-work-views.spec.mjs \
+            --expect-file portal-execution-control.spec.mjs \
+            --expect-file portal-goal-managed.spec.mjs \
+            --expect-file portal-goal-attention.spec.mjs \
+            --expect-file portal-cutover.spec.mjs \
+            --expect-file portal-chat.spec.mjs \
             "with Goal rollout off a present Goal still serves its real attention entry" \
             "a real Goal-managed work item presents no legacy path, and the server refuses one" \
             "expired authentication clears private content and recovers the deep link"

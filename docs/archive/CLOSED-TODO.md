@@ -1049,8 +1049,7 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       refuses one (1.7s)` and the same case on mobile (`✓ 74`, 1.6s). The render step's own summary
       moved from `73 passed, 3 skipped` on the previous main revision (run `44524043823`, control job
       `135560685485`) to `93 passed (2.6m)`, `1 skipped`; the one remaining skip is the mobile-project
-      concurrency case that is desktop-only by design. The final head's own run is cited in the PR
-      body.
+      concurrency case that is desktop-only by design.
 
 ## Deferred review findings (0007h)
 
@@ -1110,7 +1109,7 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       widths, including `✓ 25 [desktop-chromium] › tests/portal-goal-attention.spec.mjs:454:3 › Goal
       attention workspace › with Goal rollout off a present Goal still serves its real attention entry
       (914ms)` and `✓ 72 [mobile-chromium] › … (832ms)`; the render step reports `93 passed (2.6m)`,
-      `1 skipped`. The final head's own run is cited in the PR body.
+      `1 skipped`.
 
 ## Browser acceptance under host load
 
