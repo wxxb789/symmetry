@@ -913,6 +913,93 @@ defmodule SymmetryControl.ChatTest do
              Chat.conversation(%{scope: "workspace", before: "invalid"})
   end
 
+  test "a workspace conversation read keeps every query on the calling process" do
+    project = project("CHR")
+
+    assert {:ok, connection} =
+             SymmetryControl.Integrations.create_connection(%{
+               provider: "github",
+               name: "chat-read-" <> Ecto.UUID.generate(),
+               account_ref: "acme",
+               auth_type: "gh_cli",
+               capabilities: ["repositories", "work_items", "changes", "ci"]
+             })
+
+    assert {:ok, repository} =
+             Workspaces.create_resource(project.id, %{
+               connection_id: connection.id,
+               kind: "repository",
+               name: "Chat read repository",
+               external_ref: "acme/chat-read"
+             })
+
+    assert {:ok, item} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Conversation read on one connection",
+               status: "ready",
+               repository_resource_id: repository.id
+             })
+
+    reader = self()
+
+    forms = [
+      project.id,
+      Ecto.UUID.dump!(project.id),
+      item.id,
+      Ecto.UUID.dump!(item.id),
+      repository.id,
+      Ecto.UUID.dump!(repository.id)
+    ]
+
+    handler_id = {__MODULE__, :conversation_read, project.id}
+
+    :telemetry.attach(
+      handler_id,
+      [:symmetry_control, :repo, :query],
+      fn _event, _measurements, metadata, %{reader: reader, forms: forms} ->
+        if conversation_read?(metadata.params, forms),
+          do: send(reader, {:conversation_read, self(), to_string(metadata.query)})
+      end,
+      %{reader: reader, forms: forms}
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:ok, conversation} = Chat.conversation(%{scope: "workspace"})
+    assert is_list(conversation.runs)
+
+    reads = conversation_reads([])
+    queries = Enum.map(reads, fn {_pid, query} -> query end)
+    processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
+
+    # Two preloads must have rows for this test to have power: Ecto only
+    # preloads in parallel from two preloads with fetch work, and every parallel
+    # preload would queue for the sandbox connection the test process owns.
+    assert Enum.any?(queries, &String.contains?(&1, "\"projects\""))
+    assert Enum.any?(queries, &String.contains?(&1, "\"project_resources\""))
+
+    assert processes == [reader],
+           "expected every conversation read query on #{inspect(reader)}, got #{inspect(processes)}"
+  end
+
+  defp conversation_reads(reads) do
+    receive do
+      {:conversation_read, pid, query} -> conversation_reads([{pid, query} | reads])
+    after
+      0 -> reads
+    end
+  end
+
+  defp conversation_read?(params, forms) do
+    params
+    |> List.wrap()
+    |> Enum.any?(fn
+      value when is_binary(value) -> value in forms
+      values when is_list(values) -> Enum.any?(values, &(&1 in forms))
+      _value -> false
+    end)
+  end
+
   # Bounded wait on observable server state, never a sleep: the launcher is
   # blocked on the locker's `work_items` row lock when PostgreSQL reports an
   # ungranted lock for the launcher's own backend, names the locker in

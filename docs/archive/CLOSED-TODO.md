@@ -490,6 +490,89 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       presentations; the rules now sit at `styles.css:216-217`) — so the literal-selector sweep's
       "unreferenced" premise was wrong and no rule was removed.
 
+- [ ] Investigate the intermittent browser failure `project, resource, work-item,
+      filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
+      detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
+      detached" (desktop-chromium). Observed once while implementing goal 0007d
+      (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
+      9 skipped) with two Control compiles running on the same host; the same test passed
+      twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
+      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
+      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
+      Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the case no longer
+      exists to revalidate. On main, the file revision introduced by `7a92ca4` (#31, 0007b)
+      still carried it when `5c2e0ad` (#35, 0007c) replaced it in the same file with
+      `classic resource attach, update and detach with truthful health`; the last commit to
+      modify the file (`671525c`) is byte-identical at the cutover's parent `ca29a8e` and
+      holds only that case plus the session-boundary and keyboard walks
+      (`git show 671525c:browser/tests/portal.spec.mjs`). The 0007i cutover then deleted the
+      file with the classic renderer, its bundle and the `/portal/classic` routes
+      (`ca1bdad`); the only server-rendered document left is the script-free login template
+      `control/lib/symmetry_control_web/portal_html/login.html.eex` with its extracted
+      `control/priv/portal_assets/login.css`. No successor carries the name — `browser/tests/`
+      has no `filtering, ordering, and persistence` case (exact-name search and a test-title
+      token search both come back empty) — and the deleted spec's coverage is mapped in
+      `browser/README.md` (resource attach/update/detach and the truthful health read ->
+      `browser/tests/portal-connections.spec.mjs`; the list, board, detail and history reads ->
+      `browser/tests/portal-work-views.spec.mjs`). The `#toast` surface the observation names
+      went with the classic renderer: no `toast` element exists in `frontend/src`, `control/lib`
+      or `control/priv`, and the live receipts are `role="status"` notices — the resource walk's
+      successor asserts `Resource attached — …`, and its successful-unbind leg asserts
+      `Resource detached — Delta.` — in `browser/tests/portal-connections.spec.mjs`. There is no
+      assertion left to keep.
+
+- [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
+      legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
+      output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
+      toast and "two browser contexts reject a stale project update" hit the 60 s test timeout;
+      both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
+      and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
+      before changing any budget.
+      Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): both retired cases are
+      absent from the tree, so there is nothing left to re-measure. `detail output encodes
+      untrusted statuses and rejects unsafe links` left main's `browser/tests/portal.spec.mjs` at
+      `7a92ca4` (#31, 0007b), which retired the classic detail-security probe to the new-route
+      successor `injected malicious detail values are rendered as text and never as markup or
+      unsafe URLs` in `browser/tests/portal-work-views.spec.mjs`; `two browser contexts reject a
+      stale project update` left the same file at `5c2e0ad` (#35, 0007c), whose planning
+      successor is `re-syncs to the newest project after a stale update in two contexts` in
+      `browser/tests/portal-work-planning.spec.mjs`. Neither name exists anywhere under
+      `browser/tests/` (exact-name search), the containing file is deleted with the 0007i cutover
+      (`ca1bdad`), and the successor surfaces are named in the migration record in
+      `browser/README.md` (the 0007b paragraph). The expect windows this item observed were the
+      cases' own; the 60 s test bound is still the global `timeout` at
+      `browser/playwright.config.mjs:15` and is not a budget this closure changes. What remains
+      open about host-load verdicts is the separate quiesced-host re-measure entry in
+      `docs/TODO.md`, which stays open.
+
+- [ ] Investigate the mobile-chromium classic case `project, resource, work-item, filtering,
+      ordering, and persistence` in `browser/tests/portal.spec.mjs`. After saving the work-item
+      edit dialog, `#toast` stayed hidden with the stale text "Work item created" for the whole
+      10 s expect window, while the update itself persisted: the failure snapshot's detail drawer
+      shows the new pull request URL, CI `passed` and review `required` that the test set. Observed
+      while completing 0007e in the first legacy run (`portal-work-views.spec.mjs` +
+      `portal.spec.mjs` + `workspace-shell.spec.mjs` on both widths, 43 passed / 4 failed /
+      5 skipped) and reproduced alone on the same revision with the desktop case passing (mobile
+      `x` in 17.0 s, desktop `ok` in 12.1 s); it then passed in the second run of the same suites on
+      the unchanged classic files (46 passed / 1 failed / 5 skipped), so the mobile case is
+      intermittent. The classic route is
+      unchanged by 0007e: `control/lib`, `control/priv/portal_assets`,
+      `control/lib/symmetry_control_web/portal_html` and `portal_controller.ex` have no diff
+      against the base revision. Revalidate the classic toast branch that reports an update when
+      the edit dialog was opened from the detail drawer; keep the assertion.
+      Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the same retirement as
+      the desktop entry above — main's `browser/tests/portal.spec.mjs` lost `project, resource,
+      work-item, filtering, ordering, and persistence` at `5c2e0ad` (#35, 0007c), and the 0007i
+      cutover deleted the file (`ca1bdad`). The classic toast branch this item asked to
+      revalidate (the detail drawer's work-item update receipt) went with the classic renderer:
+      the SPA renders its own `role="status"` notices from its own state, no `toast` element
+      exists in `frontend/src`, `control/lib` or `control/priv`, and the live detail-surface
+      successor cases assert `statusNotice(detail, "Work item updated.")` in
+      `browser/tests/portal-work-planning.spec.mjs`. The mobile-chromium project's successors for
+      these flows run in `browser/tests/portal-connections.spec.mjs` and
+      `browser/tests/portal-work-views.spec.mjs` per `browser/README.md`; no assertion of this
+      item's remains to keep.
+
 - [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
       the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
       query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
@@ -607,6 +690,54 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `mix ecto.rollback`/`mix ecto.load` refuse the same way, naming the effective
       `symmetry_0007c_shell16`; with `MIX_ENV=test` the guard file reports `Result: 9 passed`,
       and `mix format --check-formatted` and `mix compile --warnings-as-errors` exit 0.
+
+- [ ] Investigate the load-sensitive timeout fixture
+      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
+      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
+      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
+      on the pass whose host was also running four other regression suites and the record
+      re-derivations - the concurrency the model-routing runbook itself warns against. The
+      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
+      assertion 2.0 s later, while the kill path is a snapshot tree kill
+      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
+      kill enumerates the tree is not killed; whether that is what happened in that pass is not
+      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
+      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
+      kill path alone unless it reproduces on a quiet host.
+      **Fixed (2026-11-19, `fix/flake-timeout-fixture`):** the witness is now event-driven. The
+      descendant records its start in a handshake directory outside the checkout, waits for a
+      release the test writes only after the timed-out check returned, and only then writes
+      `late-descendant.txt` into the checkout - so a descendant the kill did reach is dead before
+      it could write during a slow kill, which is the direction the 1.0 s sleep could not
+      distinguish. The gate spawns the descendant with `stdin/stdout/stderr=DEVNULL` so a survivor
+      cannot hold the gate's inherited pipes and keep the runner's lingering reap open until its
+      own wait cap, and the descendant writes the witness after the release or after that cap, so
+      a survivor can never erase its own evidence. A cap-branch write records `late-cap` where the
+      release branch records `late`, so a failure self-identifies the P2 lingering-reap class. The
+      test polls repeatedly for up to the runner's own `PROCESS_TREE_REAP_SECONDS`, then reads the
+      witness once, instead of sleeping 2.0 s, and the gate publishes
+      its own spawn marker, so a failure reports what the fixture had established (gate spawned
+      descendant / descendant started / witness text) instead of only the assertion; the failure
+      message is platform-neutral (Windows `taskkill /T` and POSIX `killpg` are both snapshots).
+      The 0.5 s per-gate timeout, the assertion and the runner's kill path are unchanged.
+      Evidence, platform-labelled. Windows 10.0.26300 host, loaded by the peer regression workers:
+      the pristine fixture failed 1 of 5 runs (an earlier loaded pass failed 1 of 3) with `a gate
+      descendant survived the per-gate timeout` and no mechanism in its log, while the new fixture
+      passed 6 of 6 under the same load; 20 `taskkill /F /T` tree kills under load (2.0-8.6 s
+      each) never let an in-hierarchy descendant write, while the control that killed only the
+      parent let the waiting descendant record 3 of 3 times; a miss simulation (a throwaway copy
+      of the runner whose `terminate_owned_process_tree` drops `/T`) fails in 20 s with
+      `witness='late'` and both markers true, and the unmodified fixture passes in 23 s; a
+      backstop-path run on Windows (the round-2 review's: wait cap shortened 300 -> 20 s and no
+      release written) fails with the cap-branch witness at 19.1 s; the full
+      suite passes (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). WSL Linux (Ubuntu-24.04,
+      python3, `/mnt/q` worktree): the same test on the `killpg` path passes
+      (`Ran 1 test in 12.740s`, `OK`).
+      Residual: a descendant created after the kill enumerates the tree (`taskkill /T`) or after
+      the process group was signalled (`killpg`) is still reported as a survivor - correctly, with
+      the markers stating the ambiguity instead of the fixture tolerating it - so the fixture
+      keeps the documented quiet-host requirement (the model-routing runbook forbids running this
+      workflow beside a full test suite on the same host).
 
 ## Deferred review findings (0007f)
 

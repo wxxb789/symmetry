@@ -97,6 +97,17 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       current bytes, in which case the runs have to be re-executed, never re-derived by editing a
       receipt.
 
+- [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
+      `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
+      `process.communicate(timeout=PROCESS_TREE_REAP_SECONDS)`, which on Windows can keep waiting
+      on the gate's stdout/stderr pipes while a descendant the snapshot tree kill missed still
+      holds the inherited write ends - past the documented reap window and past any caller that
+      expects `check` to return once the kill finished (the timeout-tree fixture's survivor
+      witness was masked this way until the fixture spawned its descendant with `DEVNULL`).
+      Fix direction: close the read ends from a daemon thread, or leave the final handle close to
+      process exit, so a pipe-holding survivor can never extend the reap; add a regression case
+      with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
+
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
@@ -108,20 +119,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 ## Dead-code candidates
 
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
-
-- [ ] Investigate the load-sensitive timeout fixture
-      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
-      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
-      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
-      on the pass whose host was also running four other regression suites and the record
-      re-derivations - the concurrency the model-routing runbook itself warns against. The
-      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
-      assertion 2.0 s later, while the kill path is a snapshot tree kill
-      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
-      kill enumerates the tree is not killed; whether that is what happened in that pass is not
-      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
-      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
-      kill path alone unless it reproduces on a quiet host.
 
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
@@ -167,16 +164,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       constraint and labels, and decide in a separate maintenance change whether the states
       need a writer or the vocabulary needs a migration.
 
-- [ ] Investigate the intermittent browser failure `project, resource, work-item,
-      filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
-      detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
-      detached" (desktop-chromium). Observed once while implementing goal 0007d
-      (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
-      9 skipped) with two Control compiles running on the same host; the same test passed
-      twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
-      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
-      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
-
 - [ ] Investigate the environment-limited Windows command test. `CommandTest` "provider
       token commands can keep stderr diagnostics out of stdout" fails with
       `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
@@ -187,30 +174,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       and putting the `WindowsApps` store alias on PATH makes two cases in that file fail
       instead of one. `Command.run/3` and the test itself are untouched by 0007d.
       Revalidate the Windows shell resolution; keep the assertion.
-
-- [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
-      legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
-      output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
-      toast and "two browser contexts reject a stale project update" hit the 60 s test timeout;
-      both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
-      and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
-      before changing any budget.
-
-- [ ] Investigate the mobile-chromium classic case `project, resource, work-item, filtering,
-      ordering, and persistence` in `browser/tests/portal.spec.mjs`. After saving the work-item
-      edit dialog, `#toast` stayed hidden with the stale text "Work item created" for the whole
-      10 s expect window, while the update itself persisted: the failure snapshot's detail drawer
-      shows the new pull request URL, CI `passed` and review `required` that the test set. Observed
-      while completing 0007e in the first legacy run (`portal-work-views.spec.mjs` +
-      `portal.spec.mjs` + `workspace-shell.spec.mjs` on both widths, 43 passed / 4 failed /
-      5 skipped) and reproduced alone on the same revision with the desktop case passing (mobile
-      `x` in 17.0 s, desktop `ok` in 12.1 s); it then passed in the second run of the same suites on
-      the unchanged classic files (46 passed / 1 failed / 5 skipped), so the mobile case is
-      intermittent. The classic route is
-      unchanged by 0007e: `control/lib`, `control/priv/portal_assets`,
-      `control/lib/symmetry_control_web/portal_html` and `portal_controller.ex` have no diff
-      against the base revision. Revalidate the classic toast branch that reports an update when
-      the edit dialog was opened from the detail drawer; keep the assertion.
 
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
