@@ -282,6 +282,44 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
 
+- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
+      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
+      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
+      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
+      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
+      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
+      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
+      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
+      remaining failure is the environment-limited `CommandTest` above). The build output is
+      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
+      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
+      suite prerequisite; keep the assertions.
+      Closed in `fix/control-staged-assets-dependency` (2026-11-19) as the documented-prerequisite
+      option, kept loud rather than skipped: the four cases are tagged `:portal_assets`, and
+      `SymmetryControlWeb.PortalBundle`, called from `ConnCase` setup for every web test, fails a
+      tagged case before it touches the bundle. The failure states the prerequisite, the staging
+      command (`mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build`), CI's equivalent
+      staging (the `control` job downloads the `contracts` job's `portal-assets` artifact into
+      `control/priv/static/portal/` before `mix test`) and the explicit exclusion
+      (`mix test --exclude portal_assets`) instead of the raw `File.Error`/`File.RenameError` on the
+      staged path; the guard also rejects an entry document that is empty, references no built
+      JavaScript asset or no stylesheet, or names hashed assets that are not staged (an interrupted
+      `frontend/scripts/stage-assets.mjs`, or a build older than the current one). A fixture bundle
+      was rejected because these cases assert against the real built entry, and an ExUnit `skip`
+      would have hidden a broken CI staging step. Assertions are unchanged and nothing is skipped
+      silently: with no staging the four tagged cases failed with the guard's "staged entry
+      document is missing" problem line while the file's other nine cases passed
+      (`mix test test/symmetry_control_web/controllers/portal_controller_test.exs` — 9/13 passed,
+      4 failed), an entry document naming absent hashed assets failed the same four with
+      "references assets that are not staged", `--exclude portal_assets` reported "9 passed,
+      4 excluded", and with the staged build all thirteen passed. The staged path now has one
+      definition, `SymmetryControlWeb.PortalAssets.index_path/0`, read by both
+      `PortalController.index/2` and the tests. The prerequisite is recorded in the Elixir row of
+      `docs/design/quality.md` (which links `docs/runbooks/portal.md`) and in that runbook's local
+      gate list; the limit that a complete but source-stale bundle is not detectable from the
+      gitignored staging alone is stated only in the runbook, so freshness stays CI's guarantee
+      (the `portal-assets` artifact is built from the same revision).
+
 *Closed remainder of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; with the closed part above, nothing of the item stays there.*
 
 - [ ] Close the `daemon/internal/platform` flake class: the Linux descendant-monitor terminal reason

@@ -193,19 +193,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       against the base revision. Revalidate the classic toast branch that reports an update when
       the edit dialog was opened from the detail drawer; keep the assertion.
 
-- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
-      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
-      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
-      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
-      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
-      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
-      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
-      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
-      remaining failure is the environment-limited `CommandTest` above). The build output is
-      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
-      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
-      suite prerequisite; keep the assertions.
-
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
       the server answers that code, but a sync refused for an ungranted capability maps to
