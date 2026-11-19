@@ -12,6 +12,9 @@ closure date it records. Entries in this file older than six months may be delet
 The blocks below were moved on 2026-11-18. Markers (`- [ ]`, `- [x]`) are reproduced as they were,
 not a claim that work remains.
 
+The five dead-code closures appended to `## Dead-code candidates` below were moved on 2026-11-19
+from branch `chore/deadcode-revalidation`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -140,6 +143,94 @@ not a claim that work remains.
       supervisor-side stop proofs only. The same PID-only membership observation still verifies
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
+
+- [ ] Revalidate and remove the unused `JsonDocument` alias in
+      `control/lib/symmetry_control/goals/schemas.ex:1431`
+      (`SymmetryControl.Goals.GoalExternalWait`). The 0006h focused Control run
+      reported the unused alias; a scoped search of that module found only its
+      alias declaration. Leave removal and verification to separate maintenance.
+      Closed by branch `chore/deadcode-revalidation` (2026-11-19): `JsonDocument`
+      was removed from the alias line, which now reads
+      `alias SymmetryControl.Goals.{Goal, GoalEvent}`; the file's other modules
+      (`GoalRevision`, `WorkOutcome`, `GoalDecision`) keep their own aliases and
+      uses. Revalidated with a repository-wide `JsonDocument` token search over
+      every file type including generated artifacts (`rg -uuu`: the source
+      matches are only `schemas.ex` and docs, and the only BEAM artifacts that
+      mention it are the definition and the three modules that use it —
+      `Elixir.SymmetryControl.Goals.GoalExternalWait.beam` does not), a
+      module-span search of `GoalExternalWait` (lines 1427-end of file: no token,
+      and no re-export or alias in that module wraps the type), and a
+      fully-qualified `Goals.JsonDocument` search.
+      `MIX_ENV=test mix compile --force --warnings-as-errors` exits 0 and the goal
+      schema/context suites pass under `--warnings-as-errors`. Elixir 1.20.4 no
+      longer emits the unused-alias warning (probed with a minimal unused alias),
+      so the searches are the primary record.
+
+- [ ] Revalidate the unused `replay_task` binding at
+      `control/test/symmetry_control/orchestration_goal_admission_test.exs:1059`
+      and `task` bindings at lines `2079` and `2170`. The 0007a `mix test` run
+      reported these compiler warnings (`.tmp/0007a-session/control-test.log`).
+      Preserve the fixture calls and leave any binding cleanup to separate
+      maintenance.
+      The 0009 full Control run reports the same bindings at lines `1351`,
+      `2450` and `2541` in `.tmp/0009/control-full.log`; these are current
+      coordinates, not additional cleanup work.
+      Closed by branch `chore/deadcode-revalidation` (2026-11-19): the three
+      destructuring bindings were renamed `_replay_task` (line 1351) and `_task`
+      (lines 2450, 2541), so the side-effecting `insert_goal_task/1` fixture calls
+      stay and only the dead names go. Revalidated with a repository-wide
+      `replay_task` token search (only the binding and docs match), searches for
+      `:replay_task`/`"replay_task"` atoms and strings, a
+      `String.to_atom`/`Task.Supervisor`/`start_child` search in the file, and the
+      compiler itself: with the bindings restored, `mix test --warnings-as-errors`
+      fails on exactly the three unused-variable warnings at 1351/2450/2541; with
+      the renames the file reports 77 passed, 0 warnings.
+
+- [ ] Revalidate the unused default `kind \\ "omp"` on private
+      `register_unverified_omp_runtime/2` in
+      `control/test/symmetry_control/orchestration_goal_admission_test.exs:3651`.
+      The 0009 full Control run reports that the optional default is never used
+      (`.tmp/0009/control-full.log`). Preserve the runtime fixture behavior and
+      leave cleanup and verification to separate maintenance.
+      Closed by branch `chore/deadcode-revalidation` (2026-11-19): the default was
+      removed (`defp register_unverified_omp_runtime(label, kind)`); the function
+      is private, both call sites (lines 109 and 128) pass `kind` explicitly, and
+      an `apply(`/capture search in the file found no dynamic dispatch, so no `/1`
+      call can exist. The compiler confirms: restored,
+      `mix test --warnings-as-errors` fails with `default values for the optional
+      arguments in the private function register_unverified_omp_runtime/2 are
+      never used`; removed, the same command reports 77 passed, 0 warnings.
+
+- [ ] Revalidate and remove the unused `Connection.statuses/0` accessor at
+      `control/lib/symmetry_control/integrations/schemas.ex:92`. A scoped search for
+      `Connection.statuses` and `Integrations.Connection.statuses` in `control/lib` and
+      `control/test` found no caller; the changesets read the `@statuses` module attribute
+      directly. Observed while fixing goal 0007d. Leave removal and verification to separate
+      maintenance.
+      Closed by branch `chore/deadcode-revalidation` (2026-11-19): `def statuses, do:
+      @statuses` was removed; `@statuses` stays (the three changesets read it at
+      lines 48/66/76) and the module's public surface keeps `providers/0`,
+      `capabilities/0` and `auth_types/1`. Revalidated with a repository-wide
+      `statuses` word search (no caller of the accessor anywhere; no `defdelegate`
+      exists in `control/lib`; no `one_of`, OpenAPI/spec or frontend type
+      generation derives from it), a check of every `Connection.` call site
+      (`integrations.ex` and `portal_integrations_test.exs` use
+      providers/capabilities/auth_types and the changesets only), and
+      `MIX_ENV=test mix compile --force --warnings-as-errors` exiting 0 — any
+      remaining Elixir caller of the removed function would fail that gate.
+      `integrations_test.exs` and `portal_integrations_test.exs` pass under
+      `--warnings-as-errors`.
+
+- [ ] Keep the `.chip-failed` and `.chip-pending` rules in `frontend/src/styles.css` (now `:216-217`).
+      Decision from branch `chore/deadcode-revalidation` (2026-11-19): revalidation proved both are
+      referenced through *constructed* class names, so the earlier literal-selector sweep was wrong
+      and nothing is removed. `work-surface.tsx:330` and `detail.tsx:303` render `chip chip-${ci.tone}`
+      and `runtimes.tsx:59` renders `chip chip-${row.tone}`; the tones include `failed` and `pending`
+      (`frontend/src/features/work/presentation.ts:247`, and `runtimes/presentation.ts` for the
+      not-supported, next-turn and estimated capability presentations). Any future unreferenced-selector
+      sweep of that file must follow constructed class names, not literal words.
+      Closed by branch `chore/deadcode-revalidation` (2026-11-19): revalidated as referenced through
+      constructed class names; no rule was removed.
 
 ## Deferred review findings (0007h)
 
