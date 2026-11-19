@@ -885,22 +885,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
       recovery page it checks.
 
-- [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
-      failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
-      pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in
-      6.9 s in the same run, and both projects passed in the 12:10 run on the pre-repair bundle. The
-      retained trace shows the injected `route.abort("internetdisconnected")` never fired (no
-      `/portal/api/workspace` request or failure after the route was installed), and the click's
-      `refresh()` refetched `["connections"]` but not `["workspace"]` because of the page's guard
-      `if (!workspace.isFetching) void workspace.refetch()` (`frontend/src/features/connections/connections.tsx:351-352`;
-      the same guard also sits in `onRefreshProject` at `:501`). `workspace.isFetching` is never read
-      during render, so React Query's automatic change tracking does not watch it and a render taken while
-      a read was in flight leaves the guard snapshot at `true` until something else re-renders the page —
-      a state-snapshot race, not a cutover change. Decide whether the guard should read the query's live
-      `fetchStatus` at click time (`queryClient.getQueryState(key)?.fetchStatus`) or whether a
-      user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
-      the injected-failure design.
-
 ## Lockfiles must carry canonical registry URLs
 
 - [ ] Regenerate `pnpm-lock.yaml` only with the repository-pinned pnpm and a canonical registry, and check the result before
