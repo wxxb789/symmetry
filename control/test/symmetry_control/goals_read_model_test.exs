@@ -20,7 +20,7 @@ defmodule SymmetryControl.GoalsReadModelTest do
       Process.get(:goals_read_model_event_goal, %{id: goal_id})
     end
 
-    def preload(goal, associations) do
+    def preload(goal, associations, _opts) do
       Enum.reduce(associations, goal, fn association, goal ->
         if is_list(Map.get(goal, association)), do: goal, else: Map.put(goal, association, [])
       end)
