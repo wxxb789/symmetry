@@ -154,17 +154,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       constraint and labels, and decide in a separate maintenance change whether the states
       need a writer or the vocabulary needs a migration.
 
-- [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
-      the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
-      query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
-      the project id, while `control/lib/symmetry_control_web/portal_session.ex` validates each
-      path's query against `projectId`, `connectionId` or the work-search patterns and narrows a
-      project id to `[A-Za-z0-9_-]+`. The server stays the authority, so the worst case is a deep
-      link falling back to `/portal` rather than an open redirect; observed while completing the
-      0007d rebase union (0007b's client filter and 0007d's server rule met for the first time).
-      Decide whether the client should narrow its filter or the server should accept the extra
-      params, and if the client is narrowed, add a test that keeps the two lists aligned.
-
 - [ ] Investigate the intermittent browser failure `project, resource, work-item,
       filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
       detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
@@ -272,13 +261,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       so the case reports an environment-named skip there. Either add the setup-beam and
       `mix deps.get`/compile steps to that job, or run the case from a harness job that owns them.
       The local focused-gate run in the 0007f review round executes it for real.
-
-- [ ] Revalidate the `/portal/connections?projectId=…` session return target.
-      `control/lib/symmetry_control_web/portal_session.ex` accepts only `connectionId=…` for the
-      connections shell path while the shell's own navigation writes `?projectId=…`, so a session
-      expiry collapses that page to `/portal`. The identical gap on `/portal/runtimes?projectId=…`
-      was fixed by the 0007f review round (`shell_query?("/portal/runtimes", …)`); extend the
-      connections clause and its accept/reject tests in a separate change.
 
 - [ ] Revalidate the pre-existing capability-vs-state cancel/retry policy in
       `control/lib/symmetry_control_web/portal_json.ex` (`execution_summary/1`): `can_cancel` and
