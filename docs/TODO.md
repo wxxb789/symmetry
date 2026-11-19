@@ -97,26 +97,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       current bytes, in which case the runs have to be re-executed, never re-derived by editing a
       receipt.
 
-- [ ] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
-      receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
-      `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
-      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
-      temp root (the `symmetry-0008c-eval` run store under the local user profile). They are produced,
-      committed evidence bound by digests other records name, so the 0008c audit recorded them as
-      an open item instead of rewriting history. The runner's sanitisation extension
-      (`validate_measured_mapping(..., redact=True)`) now records every host-specific absolute path
-      in a measured value as a `sha256:` token, so run records and receipts written from now on
-      cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
-      never edit a receipt whose digests other records bind.
-
-- [ ] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
-      how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
-      resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
-      against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
-      `scripts/ci/test-model-routing-evaluation.py` again, so the 0008b/0008c/0008d receipts stay fail-closed
-      for submission under the current bytes exactly as their entries below describe; re-execute the runs, never
-      re-derive by editing a receipt.
-
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
@@ -167,17 +147,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
       constraint and labels, and decide in a separate maintenance change whether the states
       need a writer or the vocabulary needs a migration.
-
-- [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
-      the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
-      query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
-      the project id, while `control/lib/symmetry_control_web/portal_session.ex` validates each
-      path's query against `projectId`, `connectionId` or the work-search patterns and narrows a
-      project id to `[A-Za-z0-9_-]+`. The server stays the authority, so the worst case is a deep
-      link falling back to `/portal` rather than an open redirect; observed while completing the
-      0007d rebase union (0007b's client filter and 0007d's server rule met for the first time).
-      Decide whether the client should narrow its filter or the server should accept the extra
-      params, and if the client is narrowed, add a test that keeps the two lists aligned.
 
 - [ ] Investigate the intermittent browser failure `project, resource, work-item,
       filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
@@ -244,15 +213,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
       suite prerequisite; keep the assertions.
 
-- [ ] Revalidate the load-sensitive Go test
-      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
-      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
-      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
-      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
-      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
-      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
-      deadline rather than a longer test timeout.
-
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
       the server answers that code, but a sync refused for an ungranted capability maps to
@@ -286,13 +246,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       so the case reports an environment-named skip there. Either add the setup-beam and
       `mix deps.get`/compile steps to that job, or run the case from a harness job that owns them.
       The local focused-gate run in the 0007f review round executes it for real.
-
-- [ ] Revalidate the `/portal/connections?projectId=…` session return target.
-      `control/lib/symmetry_control_web/portal_session.ex` accepts only `connectionId=…` for the
-      connections shell path while the shell's own navigation writes `?projectId=…`, so a session
-      expiry collapses that page to `/portal`. The identical gap on `/portal/runtimes?projectId=…`
-      was fixed by the 0007f review round (`shell_query?("/portal/runtimes", …)`); extend the
-      connections clause and its accept/reject tests in a separate change.
 
 - [ ] Revalidate the pre-existing capability-vs-state cancel/retry policy in
       `control/lib/symmetry_control_web/portal_json.ex` (`execution_summary/1`): `can_cancel` and
@@ -640,17 +593,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
       convention paragraph itself (it restates the precedence the design and
       protocol documents already carry).
-
-- [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
-      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
-      instead of rewriting history:
-      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
-      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
-      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
-      records with that helper and records the rendering in the record
-      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
-      record's quoted digest consistent when the older records are re-published.
 
 - [ ] Decide whether record cleanliness needs an enforced gate, and keep the sanitising
       tool's argv/output scope with the 0008a re-publish. `scripts/ci/model-routing-record-sanitize.py`
