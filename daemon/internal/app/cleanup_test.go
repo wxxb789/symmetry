@@ -582,6 +582,7 @@ func TestReturnedProcessBlocksCleanupUntilWaitCompletes(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("returned process was not terminated after cancellation")
 	}
+	waitForReturnedProcessPublication(t, daemon, key)
 	journal, err = store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -631,6 +632,26 @@ func TestReturnedProcessBlocksCleanupUntilWaitCompletes(t *testing.T) {
 	case <-cleaned:
 		t.Fatal("cleanup ran more than once after process exit")
 	default:
+	}
+}
+
+// waitForReturnedProcessPublication waits for the start owner to publish the
+// process it returned after cancellation. finishAttachedStart (app.go) clears
+// the starting flag that flushRun reads as its fence (isStarting), and the
+// owner runs it only after terminating the returned process, so a caller that
+// observed the terminate signal can still reach flushRun while the fence is
+// closed - flushRun then returns without resolving the terminal and the caller
+// reads terminal_pending with an empty verdict (CI run 44511730324 job
+// 135518340983; locally reproduced with isStarting sampled true at the flush).
+// testHangGuard bounds a genuinely hung start; it is never a host-speed budget.
+func waitForReturnedProcessPublication(t *testing.T, app *daemon, key state.RunKey) {
+	t.Helper()
+	deadline := time.Now().Add(testHangGuard)
+	for app.isStarting(key) {
+		if time.Now().After(deadline) {
+			t.Fatalf("start owner did not publish the returned process before the %s hang guard expired", testHangGuard)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -730,6 +751,7 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 			case <-time.After(testHangGuard):
 				t.Fatal("startup failure did not terminate returned process")
 			}
+			waitForReturnedProcessPublication(t, daemon, key)
 			journal, err := store.LoadJournal(key)
 			if err != nil {
 				t.Fatal(err)
