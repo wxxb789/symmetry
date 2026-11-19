@@ -1348,7 +1348,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     replay_runtime =
       register_runtime("validation-claim-replay", repository_resource_id: repository.id)
 
-    {replay_task, _replay_goal_id} =
+    {_replay_task, _replay_goal_id} =
       insert_goal_task(
         max_run_attempts: 2,
         purpose: "validate",
@@ -2447,7 +2447,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "Goal machine retries committed events and transitions but rejects changed or new writes after pause" do
-    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    {_task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = register_runtime("lost-ack-authority")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
 
@@ -2538,7 +2538,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "Goal pause revokes nonterminal execution writes before its control worker runs" do
-    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    {_task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = register_runtime("post-command-authority")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     fence = claim(run, runtime)
@@ -3648,7 +3648,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     }
   end
 
-  defp register_unverified_omp_runtime(label, kind \\ "omp") do
+  defp register_unverified_omp_runtime(label, kind) do
     machine = enroll_machine(label)
 
     {native_version, implementation_version, protocol_version} =
