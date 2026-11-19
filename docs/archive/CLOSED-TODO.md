@@ -769,6 +769,34 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `ubuntu-latest` (`.github/workflows/ci.yml:96`, steps at 134-139) — so its evidence above is
       local to this Windows host.
 
+- [ ] Revalidate the unreachable resource synchronization states. `project_resources` has a
+      `project_resources_sync_status_check` constraint admitting `syncing` and `stale`, and
+      `SymmetryControl.Workspaces.ReadModel` maps them to `syncing`/`attention` labels, but no
+      writer sets either value (`Integrations.persist_sync/4`,
+      `Integrations.record_resource_failure/3` and the connection/capability resets in
+      `Integrations.update_connection/2` and `Workspaces.update_resource/2` only write
+      `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
+      constraint and labels, and decide in a separate maintenance change whether the states
+      need a writer or the vocabulary needs a migration.
+      Closed (2026-11-19, `fix/connections-refusal-guidance`): the premise is stale on main —
+      docs-only change, no product code touched. The writers landed on main in `9d9a641` (#42)
+      after the 0007d observation: `Integrations.mark_resource_syncing/1`
+      (`control/lib/symmetry_control/integrations.ex:682`) commits `sync_status: "syncing"`
+      through `update_sync_marker/2` (`:700`, `:708`) before the provider call, and
+      `record_resource_failure/3` (`:1649`) persists
+      `sync_status: if(code == :not_found, do: "stale", else: "failed")` (`:1674`);
+      `ReadModel.synchronization_health/1`
+      (`control/lib/symmetry_control/workspaces/read_model.ex:575-584`) maps `stale` to
+      `attention` and `syncing` to `syncing`. Both states are pinned by tests from the same
+      commit: `control/test/symmetry_control/resource_sync_inflight_marker_test.exs:197,202`
+      assert the committed `syncing` marker, and
+      `control/test/symmetry_control/resource_sync_identity_loss_test.exs:76,130,133` assert a
+      `:not_found` provider answer persists `stale` and the read model reports `attention`.
+      Verification (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`):
+      `mix test test/symmetry_control/resource_sync_inflight_marker_test.exs test/symmetry_control/resource_sync_identity_loss_test.exs`
+      → `Result: 8 passed`, rc 0. The constraint and labels stay as recorded; with real writers
+      for both values, neither an added writer nor a vocabulary migration is needed.
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover

@@ -93,16 +93,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       classifier's skip list against the jobs that actually ran before treating the trim as
       fully accepted.
 
-- [ ] Revalidate the unreachable resource synchronization states. `project_resources` has a
-      `project_resources_sync_status_check` constraint admitting `syncing` and `stale`, and
-      `SymmetryControl.Workspaces.ReadModel` maps them to `syncing`/`attention` labels, but no
-      writer sets either value (`Integrations.persist_sync/4`,
-      `Integrations.record_resource_failure/3` and the connection/capability resets in
-      `Integrations.update_connection/2` and `Workspaces.update_resource/2` only write
-      `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
-      constraint and labels, and decide in a separate maintenance change whether the states
-      need a writer or the vocabulary needs a migration.
-
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
       the server answers that code, but a sync refused for an ungranted capability maps to
