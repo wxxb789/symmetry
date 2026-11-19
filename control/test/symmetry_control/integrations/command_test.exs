@@ -32,8 +32,21 @@ defmodule SymmetryControl.Integrations.CommandTest do
 
   defp shell_command(unix_script, windows_script) do
     case :os.type() do
-      {:win32, _} -> {"pwsh", ["-NoProfile", "-Command", windows_script]}
+      {:win32, _} -> {windows_shell(), ["-NoProfile", "-Command", windows_script]}
       _ -> {"sh", ["-c", unix_script]}
     end
+  end
+
+  # A Microsoft Store PowerShell 7 is exposed on PATH only as a zero-byte
+  # app-execution alias, which Erlang cannot resolve (`File.stat/1` reports
+  # `:eio` for the reparse point), so `System.find_executable("pwsh")` alone
+  # understates a host whose shell runs `pwsh` fine. Prefer a resolvable
+  # PowerShell 7 and otherwise use the Windows PowerShell 5.1 that ships with
+  # Windows, which exercises the same command semantics; if neither resolves,
+  # name the prerequisite instead of reporting an unexplained
+  # `command_unavailable`.
+  defp windows_shell do
+    System.find_executable("pwsh") || System.find_executable("powershell.exe") ||
+      raise "CommandTest requires a shell on Windows: neither \"pwsh\" nor \"powershell.exe\" resolved via System.find_executable/1"
   end
 end
