@@ -141,6 +141,83 @@ not a claim that work remains.
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
 
+- [ ] Investigate the environment-limited Windows command test. `CommandTest` "provider
+      token commands can keep stderr diagnostics out of stdout" fails with
+      `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
+      (observed while implementing goal 0007d: the full control suite reported 828/829
+      passed, 21 skipped, 1 failed on a clean dedicated test database; the current tree
+      (control identical to `bbc9b6f`) reports 844/845 passed with the same single failure).
+      `System.find_executable("pwsh")` returns `nil` here while `powershell.exe` resolves,
+      and putting the `WindowsApps` store alias on PATH makes two cases in that file fail
+      instead of one. `Command.run/3` and the test itself are untouched by 0007d.
+      Revalidate the Windows shell resolution; keep the assertion.
+      Closed (2026-11-19, `fix/windows-command-test`): a test-environment assumption, not a
+      product defect. `Command.run/3` is a generic `System.cmd/3` wrapper and no product code
+      invokes `pwsh`/`powershell` (Control's only spawn site is `Command.run/3`; the daemon's
+      `exec.Command` sites spawn configured harness CLIs, never a shell by that name). On this
+      host PowerShell 7.7.0 exists but only as the Microsoft Store app-execution alias
+      (`pwsh -NoProfile -Command "Write-Output ok"` exits 0 from cmd/bash; the running
+      process is `C:\Program Files\WindowsApps\Microsoft.PowerShell_7.7.0.0_x64__8wekyb3d8bbwe\pwsh.exe`),
+      which Erlang cannot resolve: it is a 0-byte reparse point (`dir` shows 0 bytes;
+      `fsutil reparsepoint query` reports tag `0x8000001b`, `IO_REPARSE_TAG_APPEXECLINK`), so
+      `File.exists?/1` is false, `File.stat/1` reports `{:error, :eio}`,
+      `System.find_executable("pwsh")` is nil and `System.cmd/3` on the alias path raises
+      `:enoent`; `System.find_executable("powershell.exe")` resolves and runs the same scripts
+      with the same stdout/stderr split.
+      `shell_command/2` now resolves `windows_shell/0` at run time — a resolvable `pwsh`, else
+      `powershell.exe`, else a raise naming the prerequisite (ExUnit has no runtime skip, and a
+      compile-time environment skip can freeze in cached BEAM) — with all three assertions
+      unchanged. Evidence (`MIX_TEST_PARTITION=24`): before,
+      `mix test test/symmetry_control/integrations/command_test.exs` → `2/3 passed`, the
+      provider-token case failing with `{:error, {:command_unavailable, "pwsh"}}`, exit 2;
+      after, `3 passed`, exit 0 (first run and repeats), with
+      `mix format --check-formatted <that file>` clean. The recorded "two cases fail instead of
+      one with the WindowsApps alias on PATH" did not reproduce in the current host state (the
+      alias is already on PATH and the focused file failed only its provider-token case; 20/20
+      probes of the timeout case's 10 ms `Task.yield/2` observed no spawn outcome, so it still
+      saw `command_timeout`), and both failure paths are unreachable now that a shell resolves.
+      Two focused-run failures during the repeat sweep were host-load artifacts of the shared
+      PostgreSQL (`connection not available and request was dropped from queue after 4000ms` at
+      the suite's `ecto.create` step), not the case under test.
+
+## Deferred review findings (0007i, rebased onto `ca29a8e`)
+
+- [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover
+      them: the packaged release binary cannot boot on this Windows host because the generated
+      `erts-*/bin/erl` shim calls `erlexec` without the Windows `.exe` name (the browser gate therefore
+      runs the production configuration through `mix phx.server`, the same release-style instance the
+      0007h receipt records), and the browser suite's expiry/mobile projects need the release plus a
+      fixture database that only the two release instances provide.
+      Revalidated and closed (2026-11-19, `fix/windows-command-test`). First limit: the POSIX launcher
+      chain is confirmed broken on Windows — `mix release` (elixir-1.20.4) copies the Windows ERTS bin
+      (`erl.exe` and `erlexec.dll`, no `erlexec` executable) and unconditionally writes
+      `erts-<vsn>/bin/erl` as a POSIX shim ending `exec "$BINDIR/erlexec"`
+      (`Mix.Release.copy_erts/1`); the release assembled here with
+      `MIX_ENV=prod mix release --overwrite` fails through that chain at the shim's line 12:
+      `<…>/erts-17.0.6/bin/erlexec: No such file or directory`, exit 127 (`bash ./bin/symmetry_control
+      eval …`). The release is not un-bootable on Windows, however: the default
+      `include_executables_for: [:unix, :windows]` (`mix/tasks/release.ex`, assembly default) also
+      generates `bin\symmetry_control.bat`, which launches through `erl.exe`, and the packaged release
+      booted here through it — `bin\symmetry_control.bat eval IO.puts(:release_eval_ok)` exits 0 with
+      `release_eval_ok`, and `bin\symmetry_control.bat start` with `PHX_SERVER=true PORT=4610
+      RELEASE_DISTRIBUTION=none` served `GET http://[::1]:4610/healthz` → `200
+      {"status":"ok","checks":{"scheduler":"ok","database":"ok","provider_access":"ok","reaper":"ok"}}`
+      against a migrated scratch database (then stopped). Distribution is the residual host obstacle:
+      the release default is `RELEASE_DISTRIBUTION=sname`, and every node-distributed start on this host
+      fails with `Protocol 'inet_tcp': register/listen error: etimedout` because epmd cannot bind
+      (port 4369 is not bindable here: `:gen_tcp.listen(4369, …)` → `:eaddrinuse`, `epmd` →
+      `failed to bind on ipaddr 0.0.0.0`); a serving gate instance needs no distribution, so
+      `RELEASE_DISTRIBUTION=none` is the usable recipe and no repository script is affected (the sh
+      launcher is used by `docker/control.Dockerfile` and `scripts/ci/linux-v2-native-acceptance.sh` on
+      Linux, not on Windows). Second limit: still accurate and already explicit — the
+      release+fixture-database browser cases skip on a detected condition with the missing environment
+      named (`browser/tests/workspace-shell.spec.mjs:355` `SYMMETRY_SHELL_EXPIRY_URL`;
+      `browser/tests/portal-goal-managed.spec.mjs:23-25` and
+      `browser/tests/portal-work-planning.spec.mjs:37-39` the fixture environment;
+      `browser/tests/portal-goal-attention.spec.mjs:455` `SYMMETRY_GOALS_OFF_URL`), and the mobile
+      project (`browser/playwright.config.mjs` Pixel 7) drives the same release target as desktop, so
+      no case passes silently without the release.
+
 ## Deferred review findings (0007h)
 
 *Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the open residual stays there.*

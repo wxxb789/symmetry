@@ -278,17 +278,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
       0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
 
-- [ ] Investigate the environment-limited Windows command test. `CommandTest` "provider
-      token commands can keep stderr diagnostics out of stdout" fails with
-      `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
-      (observed while implementing goal 0007d: the full control suite reported 828/829
-      passed, 21 skipped, 1 failed on a clean dedicated test database; the current tree
-      (control identical to `bbc9b6f`) reports 844/845 passed with the same single failure).
-      `System.find_executable("pwsh")` returns `nil` here while `powershell.exe` resolves,
-      and putting the `WindowsApps` store alias on PATH makes two cases in that file fail
-      instead of one. `Command.run/3` and the test itself are untouched by 0007d.
-      Revalidate the Windows shell resolution; keep the assertion.
-
 - [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
       the 0007d fixture database, 10 control tests fail because committed fixture rows are
       visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
@@ -861,13 +850,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       commands "do not exist until goal 0007 builds `frontend/`" and line 116 lists them as a goal-0007
       target, while `.github/workflows/ci.yml:67-70` has run them since 0007a. Observed while recording
       the 0007i gate table; update the quality policy in a separate documentation change.
-
-- [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover
-      them: the packaged release binary cannot boot on this Windows host because the generated
-      `erts-*/bin/erl` shim calls `erlexec` without the Windows `.exe` name (the browser gate therefore
-      runs the production configuration through `mix phx.server`, the same release-style instance the
-      0007h receipt records), and the browser suite's expiry/mobile projects need the release plus a
-      fixture database that only the two release instances provide.
 
 - [ ] Investigate the intermittent Control failure
       `control recovery selects pending actions after more than one page of terminal no-op Goals` in
