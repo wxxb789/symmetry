@@ -235,6 +235,44 @@ from branch `chore/deadcode-revalidation`.
       presentations; the rules now sit at `styles.css:216-217`) — so the literal-selector sweep's
       "unreferenced" premise was wrong and no rule was removed.
 
+- [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
+      43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
+      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.061s` on the 0008a head, where the
+      same package had taken 365 s earlier on the same pull request and every other package passed;
+      green on rerun. This is the same loaded-runner family as the Windows `internal/workspace`
+      180 s package timeout: decide whether the package needs a longer explicit budget or fewer
+      load-sensitive waits, and keep the tests themselves.
+      The second occurrence
+      (`FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s`, run 44055523619 job
+      133943809688) is classified and fixed in the `daemon/internal/platform` flake-class entry
+      above (closed part archived in `docs/archive/CLOSED-TODO.md`): a test cleanup joined a
+      worker that retried an unpersistable terminal transition forever, so the package died at
+      the go-test timeout instead of failing the test.
+      The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
+      in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
+      wait on the product's own state transition rather than on host speed.
+      **Fixed (2026-11-19, `fix/flake-app-race-timeout`):** the "fewer load-sensitive waits" answer
+      is implemented for the three start waits. They no longer select on the fixture's turn channel
+      with a wall-clock fallback; they poll the daemon's own durable start publication - the
+      "running" transition `markRunning` queues immediately before `StartTurn` - fail fast with
+      `nativeStartFailureDetail` when the run records a failure, and keep `testHangGuard` as the
+      only bound (a hung start, never host speed). The 30 s timeout messages keep naming the
+      outstanding step; the second wait in the cancellation test now also reports the durable
+      reason. The shared native fixture also sets the logger the other fixtures set, because a
+      start-wait failure outlives the test body and a nil logger panicked the whole package binary
+      while demonstrating the pre-fix budget. The historical hang itself was the cleanup-join class
+      fixed in `d29fe5a` (#49), so the ten-minute package budget is unchanged and was not raised.
+      Evidence on this host: with the pre-fix 1 s start budget under 12-way host load all nine runs
+      of the three tests failed (`native turn did not start before the ... hang guard expired: no
+      durable failure recorded (local state="claimed", pending transitions=0)`); with the guard they
+      pass `go test -count=3 -cpu 1,2` (56.5 s) and the same selection passes under
+      `-race -count=2 -cpu 1,2` in WSL (19.3 s). The full package completes in the ordinary pass on
+      this host (`go test -count=1 -timeout 1200s ./internal/app` - `ok … 297.871s`, exit 0); a
+      full-package `-race` shape was not obtainable here (Windows has no cgo for `-race`, and the
+      WSL guest hangs this package in `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`,
+      a loopback dial that never answers there and passes on Windows in this same tree), so the
+      package-level race gate stays with CI.
+
 ## Deferred review findings (0007h)
 
 *Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the open residual stays there.*

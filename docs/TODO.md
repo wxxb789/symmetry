@@ -371,23 +371,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in
       `docs/TODO.md` above.
 
-- [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
-      43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
-      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.061s` on the 0008a head, where the
-      same package had taken 365 s earlier on the same pull request and every other package passed;
-      green on rerun. This is the same loaded-runner family as the Windows `internal/workspace`
-      180 s package timeout: decide whether the package needs a longer explicit budget or fewer
-      load-sensitive waits, and keep the tests themselves.
-      The second occurrence
-      (`FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s`, run 44055523619 job
-      133943809688) is classified and fixed in the `daemon/internal/platform` flake-class entry
-      above (closed part archived in `docs/archive/CLOSED-TODO.md`): a test cleanup joined a
-      worker that retried an unpersistable terminal transition forever, so the package died at
-      the go-test timeout instead of failing the test.
-      The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
-      in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
-      wait on the product's own state transition rather than on host speed.
-
 ## Deferred review findings (0007f)
 
 - [ ] Give the focused render gate's `browser/tests/portal-goal-managed.spec.mjs` case its fixture
