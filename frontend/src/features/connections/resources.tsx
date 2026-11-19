@@ -591,8 +591,9 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, work
   // again, so returning to it serves the post-write state instead of the
   // pre-write cache. Invalidating the workspace reads refetches the ones this
   // page has open (the server-selected scope included) and marks every other
-  // project's entry stale; unlike an observer `refetch()` it never cancels a
-  // fetch that is already in flight, so one write produces one read.
+  // project's entry stale. The refetch is a manual one: query-core 5.107.1's
+  // `refetchQueries` defaults `cancelRefetch: true`, so a read already in
+  // flight for that key is cancelled and superseded by the write's own read.
   const reconcile = () => { void queryClient.invalidateQueries({ queryKey: ["workspace"] }); };
   const editorTarget = editor === null || editor.kind === "bind" ? undefined : rows.find((row) => row.id === editor.resourceId);
   const editorSubjectRemoved = editor !== null && editor.kind !== "bind" && workspace !== undefined && editorTarget === undefined;
