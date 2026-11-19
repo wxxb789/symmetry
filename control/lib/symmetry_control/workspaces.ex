@@ -476,8 +476,10 @@ defmodule SymmetryControl.Workspaces do
     with {:ok, work_item} <- fetch(WorkItem, work_item_id) do
       # One connection per read: parallel preloads spawn sibling tasks that in
       # the SQL sandbox queue for the caller's single owned connection, where
-      # DBConnection drops a checkout that waits past its queue window (Ecto
-      # itself skips parallel preloads whenever the caller already holds one).
+      # DBConnection drops a checkout that waits past its queue window. Ecto
+      # only skips parallel preloads when `Ecto.Adapters.SQL.checked_out?/1` is
+      # true - an open transaction or explicit checkout - which sandbox
+      # ownership is not, so the read states the rule itself.
       work_item =
         Repo.preload(work_item, [:project, :repository_resource, :ci_resource],
           in_parallel: false
@@ -714,6 +716,7 @@ defmodule SymmetryControl.Workspaces do
         order_by: [asc: work_item.position, desc: work_item.updated_at, asc: work_item.number],
         preload: [:project, :repository_resource, :ci_resource, :external_work_item_resource]
 
+    # Same one-connection rationale as work_item_snapshot/1.
     Repo.preload(project, [resources: resources, work_items: work_items], in_parallel: false)
   end
 

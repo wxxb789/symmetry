@@ -450,16 +450,19 @@ defmodule SymmetryControlWeb.PortalApiController do
 
   def provide_input(conn, _params), do: error(conn, :invalid_request)
 
-  defp hydrate_work_item(work_item),
-    do:
-      SymmetryControl.Repo.preload(
-        work_item,
-        [
-          :project,
-          :repository_resource,
-          :ci_resource,
-          :external_work_item_resource
-        ], in_parallel: false)
+  # Same one-connection rationale as Workspaces.work_item_snapshot/1.
+  defp hydrate_work_item(work_item) do
+    SymmetryControl.Repo.preload(
+      work_item,
+      [
+        :project,
+        :repository_resource,
+        :ci_resource,
+        :external_work_item_resource
+      ],
+      in_parallel: false
+    )
+  end
 
   defp connection_receipt(conn, status, connection, disposition) do
     conn

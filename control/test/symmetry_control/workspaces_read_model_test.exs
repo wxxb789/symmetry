@@ -244,6 +244,74 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     assert expired_execution.timing.finished_at == nil
   end
 
+  test "a workspace snapshot read keeps every query on the calling process" do
+    project = project_fixture()
+
+    assert {:ok, _connection} =
+             Workspaces.create_resource(project.id, %{
+               kind: "connection",
+               name: "Snapshot connection",
+               status: "healthy",
+               sync_status: "synced"
+             })
+
+    assert {:ok, item} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Snapshot on one connection",
+               status: "ready"
+             })
+
+    reader = self()
+    forms = [project.id, Ecto.UUID.dump!(project.id)]
+    handler_id = {__MODULE__, :snapshot_read, project.id}
+
+    :telemetry.attach(
+      handler_id,
+      [:symmetry_control, :repo, :query],
+      fn _event, _measurements, metadata, %{reader: reader, forms: forms} ->
+        if snapshot_read?(metadata.params, forms),
+          do: send(reader, {:snapshot_read, self(), to_string(metadata.query)})
+      end,
+      %{reader: reader, forms: forms}
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:ok, %{work_items: work_items}} = Workspaces.workspace_snapshot(project.id)
+    assert Enum.any?(work_items, &(&1.id == item.id))
+
+    reads = snapshot_reads([])
+    queries = Enum.map(reads, fn {_pid, query} -> query end)
+    processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
+
+    # Two preloads must have rows for this test to have power: Ecto only
+    # preloads in parallel from two preloads with fetch work, and every parallel
+    # preload would queue for the sandbox connection the test process owns.
+    assert Enum.any?(queries, &String.contains?(&1, "\"project_resources\""))
+    assert Enum.any?(queries, &String.contains?(&1, "\"work_items\""))
+
+    assert processes == [reader],
+           "expected every workspace snapshot read query on #{inspect(reader)}, got #{inspect(processes)}"
+  end
+
+  defp snapshot_reads(reads) do
+    receive do
+      {:snapshot_read, pid, query} -> snapshot_reads([{pid, query} | reads])
+    after
+      0 -> reads
+    end
+  end
+
+  defp snapshot_read?(params, forms) do
+    params
+    |> List.wrap()
+    |> Enum.any?(fn
+      value when is_binary(value) -> value in forms
+      values when is_list(values) -> Enum.any?(values, &(&1 in forms))
+      _value -> false
+    end)
+  end
+
   defp project_fixture do
     assert {:ok, project} =
              Workspaces.create_project(%{
