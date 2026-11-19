@@ -566,7 +566,8 @@ from branch `chore/deadcode-revalidation`.
       three. Quoted-digest consistency was kept: the evidence record's quoted
       audit digest was rebound (`dc878099…` -> `832117d0…`), and no other
       document quotes a changed digest (checked across `docs/`, `scripts/`,
-      `contracts/` and `.github/`). The full before/after digest table is in
+      `contracts/` and `.github/`; the README exception record is the one place
+      the replaced values remain, as before/after digests). The full table is in
       `docs/evaluations/model-routing/README.md`, "Record rendering exception
       (2026-11-19)".
 
