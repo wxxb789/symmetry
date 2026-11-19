@@ -170,15 +170,22 @@ export function ChatPage() {
     setLoadingCursor(cursor);
     void application.queryClient
       .fetchQuery(chatOlderPageOptions(application.api, identity, cursor))
-      .then((fetched) => {
-        // The boundary message's id is what later reads compare, because a
-        // cursor is re-signed per response.
-        updateWith(key, (previous) => retainOlderPage(previous, cursor, boundaryId, { messages: fetched.messages, nextBefore: fetched.next_before }));
-      })
-      .catch(() => {
-        // A page that failed is a read the reader re-issues with another press:
-        // the surface keeps the pages it has and the button returns to ready.
-      })
+      .then(
+        (fetched) => {
+          // The boundary message's id is what later reads compare, because a
+          // cursor is re-signed per response.
+          updateWith(key, (previous) => retainOlderPage(previous, cursor, boundaryId, { messages: fetched.messages, nextBefore: fetched.next_before }));
+        },
+        (error: unknown) => {
+          // The failure is the reader's to retry, so the surface names it on
+          // the composer's status line — an expired or replaced cursor arrives
+          // as the read refusal the server sent — and the button returns to
+          // ready. The failure handler is the rejection callback, not a
+          // `catch`: a write that throws must not be reported as a read
+          // failure.
+          update(key, { status: { kind: "notice", message: errorMessage(error) } });
+        },
+      )
       .finally(() => setLoadingCursor((current) => (current === cursor ? null : current)));
   };
 

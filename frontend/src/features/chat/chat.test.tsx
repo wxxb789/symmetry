@@ -901,6 +901,77 @@ describe("history", () => {
     expect(gap).toHaveAttribute("data-boundary-current", messageId(11));
     expect(gap).toHaveAttribute("data-boundary-retained", messageId(8));
     expect(messageIds()).toEqual([7, 8, 11, 12, 13, 14].map(messageId));
+
+    // The continuation still chains from press two's page, not from the page
+    // its press overtook: Load older is still offered, and the next press fills
+    // the region between the two chains and closes the gap.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 9");
+    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12, 13, 14].map(messageId));
+  });
+
+  it("surfaces a failed older page and leaves the button ready to retry", async () => {
+    const user = userEvent.setup();
+    let olderReads = 0;
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before === "cursor-9") {
+          olderReads += 1;
+          return olderReads === 1
+            ? new Response("{}", { status: 409 })
+            : new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(7), message(8)], nextBefore: null })));
+        }
+        return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(9), message(10)], nextBefore: "cursor-9" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+
+    // The refusal is the reader's to see and retry: it is named on the status
+    // line, the surface keeps the pages it has, and the button is ready again.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(statusRegion().textContent).toBe("The workspace changed. Refresh to load its current state."));
+    expect(messageIds()).toEqual([9, 10].map(messageId));
+    expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false");
+
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 7");
+    expect(messageIds()).toEqual([7, 8, 9, 10].map(messageId));
+  });
+
+  it("keeps a page a scope switch overtook in the scope that pressed Load older", async () => {
+    const user = userEvent.setup();
+    const held = Promise.withResolvers<void>();
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before === "cursor-9") {
+          return held.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(7), message(8)], nextBefore: null }))));
+        }
+        return url.searchParams.get("scope") === "project"
+          ? new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(9), message(10)], nextBefore: "cursor-9" })))
+          : new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [message(1, { content: "workspace history" })] })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+
+    // The press belongs to the project scope; the reader leaves for the
+    // workspace before the page arrives.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await user.selectOptions(scopeSelect(), "workspace");
+    await screen.findByText("workspace history");
+    held.resolve();
+
+    // The late page lands in the scope that pressed it, never in the shown one.
+    await user.selectOptions(scopeSelect(), "project");
+    await screen.findByText("message 7");
+    expect(messageIds()).toEqual([7, 8, 9, 10].map(messageId));
+    await user.selectOptions(scopeSelect(), "workspace");
+    await screen.findByText("workspace history");
+    expect(messageIds()).toEqual([messageId(1)]);
   });
 
   it("keeps the loaded conversation visible as stale when a read fails", async () => {
