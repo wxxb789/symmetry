@@ -1202,7 +1202,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
 
 ## Open findings from the 0008b model-routing review
 
-*Closed part of the item “Revalidate the open class B finding against `daemon/internal/platform/process_windows.go` …” in `docs/TODO.md`; the open residual stays there.*
+*Closed part of the item “Revalidate the open class B finding against `daemon/internal/platform/process_windows.go` …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #102).*
 
       **Fixed** (branch `fix/non-durable-close-proof`). `jobContainment.Close`
       now latches the failed physical stop proof into `job.closeErr` in the
