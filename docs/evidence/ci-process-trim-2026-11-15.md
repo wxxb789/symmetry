@@ -2,11 +2,13 @@
 
 Status: locally verified workflow implementation with the hosted observations
 recorded below: the trim revision's after runs, the first docs-only sample
-(PR #29) and the docs-only sample recorded on this branch (PR #99) are
+(PR #29) and the docs-only samples recorded on this branch (PR #99) are
 measured, and the classifier outputs cross-check the executed job sets. One
 limit stays recorded at the end of this record (the legacy-route audit's target
-enumeration). Local checks bind the workflow files of the commit below, not
-that unchanged baseline commit as if it contained these edits.
+enumeration). Local checks bind the workflow files of the trim revision
+`829478aa862138188566dff558d133d85920551e` (merged as
+`f47b0c3e3e01e05a863eff9ae90ea852696305db`), not the unchanged baseline commit
+`5c56c6098583677dabdf92681f7925a8e754b8cd` as if it contained these edits.
 
 ## Subject and scope
 
@@ -99,6 +101,17 @@ Source anchors: `daemon/internal/app/harness_test.go:790-860`;
 The final workflow diff and command-preservation check, not historical line
 numbers in the old workflow, determine whether these owners were retained.
 
+Scope note: every job-inventory statement in this record — this audit table,
+the local-harness coverage and the clause-coverage entries below — describes
+the trim revision's 12 jobs (`changes`, `legacy-route-audit` and the ten
+`run-heavy`-gated owners). `main` has since moved on: #39 (`116e79e`) removed
+`pi-control-e2e-linux`, `opencode-native-synthetic` and
+`opencode-production-unsupported-windows`, and #79 (`21cf326`) added
+`record-cleanliness`, so this branch's HEAD defines 10 jobs. The hosted table
+below therefore shows 12 job records for the baseline and trim revisions and
+10 for this branch's HEAD — different revisions of the workflow, not a
+contradictory count.
+
 ## Build and lockfile audit
 
 - Frontend assets were already produced once by `contracts` and distributed as
@@ -138,9 +151,12 @@ Job count means check records, not billed minutes or cumulative executions.
 | Trim merge commit `f47b0c3e3e01e05a863eff9ae90ea852696305db` / `push` to `main` | [43726189932](https://github.com/wxxb789/symmetry/actions/runs/43726189932) | 1 / success | 12: 12 success | 493 s (`14:46:37Z`–`14:54:50Z`) |
 | First hosted docs-only sample: PR [#29](https://github.com/wxxb789/symmetry/pull/29) / `pull_request`, `docs/TODO.md`-only against the trim revision, head `c78d8edfaf560b4ddf7968bf5e30fe4bd704c0b1` | [43726243703](https://github.com/wxxb789/symmetry/actions/runs/43726243703) | 1 / success | 12: 2 success, 10 skipped | 12 s (`14:47:12Z`–`14:47:24Z`) |
 | Hosted docs-only sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `d6291417e831d921e862d019bdb97f57ae6c2a1a` | [44540158144](https://github.com/wxxb789/symmetry/actions/runs/44540158144) | 1 / success | 10: 2 success, 8 skipped | 12 s (`14:06:18Z`–`14:06:30Z`) |
+| Hosted `run-records=true` sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `0d0e99873b85babb5fa189d7b0dc28c04499df41` | [44540613218](https://github.com/wxxb789/symmetry/actions/runs/44540613218) | 1 / success | 10: 3 success, 7 skipped | 19 s (`14:08:54Z`–`14:09:13Z`) |
+| Hosted `run-records=true` sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `06502b5c0fa459b10c041f27676d2df2f84b34f7` | [44540895110](https://github.com/wxxb789/symmetry/actions/runs/44540895110) | 1 / success | 10: 3 success, 7 skipped | 20 s (`14:10:31Z`–`14:10:51Z`) |
+| Hosted `run-records=true` sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `ad87f9bafe92a6ad91f8a8960aff07093cfc4cff` | [44554983915](https://github.com/wxxb789/symmetry/actions/runs/44554983915) | 1 / success | 10: 3 success, 7 skipped | 26 s (`15:27:25Z`–`15:27:51Z`) |
 
-Predecessor and first-sample timestamps are 2026-11-15 UTC; the sample recorded
-on this branch is 2026-11-19 UTC. The predecessor PR's first attempt ended in
+Predecessor and first-sample timestamps are 2026-11-15 UTC; the samples recorded
+on this branch are 2026-11-19 UTC. The predecessor PR's first attempt ended in
 failure after 478 s (`13:45:46Z`–`13:53:44Z`: 10 success, 1 failure, 1 skipped;
 `daemon-windows` failed). Its successful retry interval was 194 s
 (`13:54:36Z`–`13:57:50Z`, attempt `created_at`→`updated_at`, the wall-clock
@@ -159,16 +175,25 @@ necessarily selects the full automatic matrix, and a push to `main` is never
 documentation-filtered. The first hosted docs-only sample is PR #29's run on
 the trim revision: its `docs/TODO.md`-only diff yields 2 success (`changes`,
 `legacy-route-audit`), the ten `run-heavy`-gated trim jobs skipped, 12 s
-wall-clock. The docs-only sample recorded on this branch is PR #99's run: 2
-success (`changes`, `legacy-route-audit`), 8 skipped (`contracts`, `control`,
-`pi-control-e2e-windows`, `daemon`, `daemon-windows`, `integration` and
-`compose` gated on `run-heavy=false`; `record-cleanliness` gated on
-`run-records=false`), 12 s wall-clock. Cross-check: running the workflow's
-classifier block over each pull request's first-parent diff (PR #29: its
-`docs/TODO.md`-only diff; PR #99: the merge ref's `HEAD^1..HEAD`, the same five
-`docs/**` paths) reports `run-heavy=false` for both and `run-records=false`
-additionally for PR #99, which predicts exactly the executed job sets observed,
-and the ungated `legacy-route-audit` explains the second executed job in each.
+wall-clock. The first docs-only sample recorded on this branch is PR #99's
+run: 2 success (`changes`, `legacy-route-audit`), 8 skipped (`contracts`,
+`control`, `pi-control-e2e-windows`, `daemon`, `daemon-windows`, `integration`
+and `compose` because the `run-heavy` gate evaluated `false`;
+`record-cleanliness` because `run-records` evaluated `false`; every consumer
+condition tests `== 'true'`), 12 s wall-clock. Three later PR #99 samples on
+this branch carried the record itself, so `run-records=true` and the
+`record-cleanliness` job joined the two cheap jobs: runs `44540613218` (head
+`0d0e998`), `44540895110` (head `06502b5`) and `44554983915` (head `ad87f9b`),
+each 10 job records with 3 success and 7 skipped, 19 s / 20 s / 26 s
+wall-clock (rows above). Cross-check: running the workflow's classifier block
+over each pull request's first-parent diff (PR #29: its `docs/TODO.md`-only
+diff; PR #99's first sample: the merge ref's `HEAD^1..HEAD`, the same five
+`docs/**` paths) reports `run-heavy=false` for both, and the current classifier
+reports `run-records=false` for both diffs as well; the executed sets still
+match, because the trim revision has no `record-cleanliness` job — PR #29's ten
+skips are all `run-heavy`-gated trim jobs, while PR #99's eight are its seven
+`run-heavy`-gated jobs plus `record-cleanliness` — and the ungated
+`legacy-route-audit` explains the second executed job in each.
 The local classifier scenarios below are not a substitute for these GitHub run
 metadata rows.
 
@@ -284,7 +309,7 @@ add state/permissions and weaken exact-Subject locality.
 - Path routing: local executable proof covers documentation-only, every named
   code/config category, mixed changes, renames/deletions and NUL-framed paths
   without an API file-count cap. The cheap audit remains on all PRs. Hosted
-  routing is observed by the two recorded samples (PR #29 first; PR #99 on this
+  routing is observed by the recorded samples (PR #29 first; PR #99 on this
   branch), with the classifier outputs cross-checked against the executed job
   sets.
 - Native isolation: independent dispatch-only workflow, original protected job
@@ -294,16 +319,16 @@ add state/permissions and weaken exact-Subject locality.
   assertions remain. Their disposition is recorded in this record.
 - Release reuse: one automatic Linux production-release build; both archive
   consumers verified locally. The published tree's full hosted runs above
-  executed the shared-release startup and migration (Control and integration
-  jobs), the authenticated release-shell render step and the live
-  daemon/integration witnesses; the docs-only rows prove the routing side.
+  executed the shared-release startup (both the Control and integration jobs)
+  and the integration-only `Release.migrate()` step
+  (`.github/workflows/ci.yml:1534`), the authenticated release-shell render
+  step and the live daemon/integration witnesses; the docs-only rows prove the
+  routing side.
 - Lockfiles: existing package-manager verification retained; no matching
   registry-URL grep found in the audited workflow/script scope.
 - Measurements: predecessor PR and merged-commit run IDs/times are measured;
-  the trim revision's after runs (PR #28 retry and merge push `f47b0c3`, both
-  12/12), the first hosted docs-only sample (PR #29, 2 executed / 10 skipped)
-  and the sample recorded on this branch (PR #99, 2 executed / 8 skipped,
-  classifier cross-checked) are recorded above. No generalized speedup or cost
+  every recorded run, retry and classifier cross-check lives in the hosted
+  timing table and its paragraph above. No generalized speedup or cost
   reduction is claimed.
 - Audit-surface limit: the existing legacy-route script explicitly enumerates
   `ci.yml`, not the newly separate native workflow. The moved native block has
@@ -313,9 +338,6 @@ add state/permissions and weaken exact-Subject locality.
   rewriting workaround was introduced.
 
 The hosted-measurement and execution-proof clause is satisfied by the rows
-above: both after runs passed all 12 job records and both docs-only samples
-match the classifier outputs. The audit-surface limit recorded in this
-section stays outside this increment's workflow/evidence scope. At authoring
-time no commit, push, PR creation, history rewrite, remote policy change or
-goal-contract archive had been performed; publication followed as PR #28. The
-external contract artifact was not moved.
+above. At authoring time no commit, push, PR creation, history rewrite, remote
+policy change or goal-contract archive had been performed; publication
+followed as PR #28. The external contract artifact was not moved.

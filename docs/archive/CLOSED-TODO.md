@@ -776,23 +776,33 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       fully accepted.
       Recorded (2026-11-19, branch `docs/runbook-quality-drift`): the first hosted docs-only
       sample is PR #29's run `43726243703` — 12 job records (2 success, 10 skipped), 12 s
-      wall-clock (`14:47:12Z`–`14:47:24Z`) on the trim revision — and the docs-only sample
+      wall-clock (`14:47:12Z`–`14:47:24Z`) on the trim revision — and the first docs-only sample
       recorded on this branch is PR #99's run `44540158144` — 10 job records (2 success, 8
       skipped), 12 s wall-clock (`14:06:18Z`–`14:06:30Z`); the trim revision's after runs
       (PR #28 run `43724904655` attempt 2 and merge push `f47b0c3` run `43726189932`, both
       12/12) are beside them in the record's measurement table, with the status,
-      clause-coverage and limits sections updated. Cross-check: the workflow's classifier
+      clause-coverage and limits sections updated. Three later PR #99 samples on this
+      branch carried the record itself, so `run-records=true` and `record-cleanliness`
+      executed: runs `44540613218` (head `0d0e998`), `44540895110` (head `06502b5`) and
+      `44554983915` (head `ad87f9b`) — 10 job records each, 3 success (`changes`,
+      `legacy-route-audit`, `record-cleanliness`), 7 skipped, 19 s / 20 s / 26 s
+      wall-clock. Cross-check: the workflow's classifier
       block over each pull request's first-parent diff (PR #29: its `docs/TODO.md`-only diff
-      against `f47b0c3`; PR #99: the merge ref's `HEAD^1..HEAD`, the same five `docs/**`
-      paths) reports `run-heavy=false` for both and `run-records=false` additionally for
-      PR #99, which predicts the executed sets exactly — `changes` and the ungated
-      `legacy-route-audit` ran; the ten `run-heavy`-gated trim jobs (PR #29) and the seven
-      `run-heavy`-gated jobs plus `record-cleanliness` (PR #99) were skipped. Evidence:
+      against `f47b0c3`; PR #99's first sample: the merge ref's `HEAD^1..HEAD`, the same five `docs/**`
+      paths) reports `run-heavy=false` for both, and the current classifier reports
+      `run-records=false` for both diffs as well; the executed sets still match, because
+      the trim revision has no `record-cleanliness` job — PR #29's ten skips are all
+      `run-heavy`-gated trim jobs, while PR #99's eight are its seven `run-heavy`-gated
+      jobs plus `record-cleanliness` — and `changes` and the ungated `legacy-route-audit`
+      ran in both. Evidence:
       `gh run view 43726243703 --json jobs,createdAt,updatedAt`; `gh run view
       44540158144 --json jobs,createdAt,updatedAt`; `gh run view 43724904655 --attempt 1|2
       --json jobs`; `gh run view 43726189932 --json jobs`;
       `gh api repos/wxxb789/symmetry/actions/runs?created=2026-11-15T14:40:00Z..2026-11-15T15:10:00Z`
-      shows no pull_request run between the trim merge and PR #29's sample; `python3
+      shows no pull_request run between the trim merge and PR #29's sample;
+      `gh api repos/wxxb789/symmetry/actions/runs/{44540613218,44540895110,44554983915}/jobs?per_page=100`
+      (heads `0d0e998`, `06502b5`, `ad87f9b`; 10 check records each: 3 success, 7 skipped);
+      `python3
       scripts/ci/model-routing-record-sanitize.py --check --root-only
       docs/evidence/ci-process-trim-2026-11-15.md` exit 0; `bash
       scripts/audit-no-legacy-routes.sh` exit 0 (1327 tracked files, 4 exclusions).
@@ -1446,8 +1456,10 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       owner's current file:line is in the PR body — the CI inventory sentence against
       `.github/workflows/ci.yml:1171-1346` (`daemon`: gofmt, `go vet`, the scoped ordinary
       pass and the full `-race` pass) and `:1357-1474` (`daemon-windows`: `go test ./...`
-      plus its named witnesses); OpenCode 2.3.0 against `docs/design/harness.md:15` and
-      `daemon/internal/harness/registry.go:154,326-329`; the Claude smoke guard against
+      plus its named witnesses); OpenCode 2.3.0 against `docs/design/harness.md:15`,
+      `daemon/internal/harness/registry.go:154,326-329` and the mechanical version guard
+      `daemon/internal/harness/opencode/adapter.go:283-284` (TestedVersion `:28`); the
+      Claude smoke guard against
       `scripts/claude-code-local-transport-smoke.ps1:14` (default `2.1.281`) versus the
       promoted `harness.md:11` blob; the pnpm commands against `package.json:5`; the
       `development-*` examples against `control/config/runtime.exs:63-64`; `portal.md`'s four
