@@ -837,7 +837,11 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
          "succeeded", :authentication, nil},
         {"stale exact unknown caller replays committed failure before authentication", :exact,
          "failed", :authentication, "forbidden"},
-        {"stale exact unknown caller replays a stored capability refusal", :exact, "failed",
+        # A stored-row decode pin, not an end-to-end write-then-replay flow:
+        # `authorized_connection/3` widens every execute context's capabilities
+        # before dispatch, so no live flow commits this pair. The case pins
+        # `stored_failure/1`'s decode of the `capability_not_granted` code.
+        {"stale exact unknown caller replays a stored capability refusal row", :exact, "failed",
          :authentication, "capability_not_granted"},
         {"stale generic unknown caller replays committed success before network readback",
          :generic, "succeeded", :transport, nil},

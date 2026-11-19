@@ -781,16 +781,16 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       Closed (2026-11-19, `fix/connections-refusal-guidance`): the premise is stale on main —
       docs-only change, no product code touched. The writers landed on main in `9d9a641` (#42)
       after the 0007d observation: `Integrations.mark_resource_syncing/1`
-      (`control/lib/symmetry_control/integrations.ex:682`) commits `sync_status: "syncing"`
-      through `update_sync_marker/2` (`:700`, `:708`) before the provider call, and
-      `record_resource_failure/3` (`:1650`) persists
-      `sync_status: if(code == :not_found, do: "stale", else: "failed")` (`:1675`);
+      (`control/lib/symmetry_control/integrations.ex:683`) commits `sync_status: "syncing"`
+      through `update_sync_marker/2` (`:701`, `:709`) before the provider call, and
+      `record_resource_failure/3` (`:1651`) persists
+      `sync_status: if(code == :not_found, do: "stale", else: "failed")` (`:1676`);
       `ReadModel.synchronization_health/1`
       (`control/lib/symmetry_control/workspaces/read_model.ex:575-584`) maps `stale` to
       `attention` and `syncing` to `syncing`. Both states are pinned by tests from the same
       commit: `control/test/symmetry_control/resource_sync_inflight_marker_test.exs:197,202`
       assert the committed `syncing` marker, and
-      `control/test/symmetry_control/resource_sync_identity_loss_test.exs:76,130,134` assert a
+      `control/test/symmetry_control/resource_sync_identity_loss_test.exs:76,131,134` assert a
       `:not_found` provider answer persists `stale` and the read model reports `attention`.
       Verification (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`):
       `mix test test/symmetry_control/resource_sync_inflight_marker_test.exs test/symmetry_control/resource_sync_identity_loss_test.exs`
@@ -808,18 +808,30 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       message `connection capability is not granted` (`protocol.ex:21-22`) — the same status
       class as `forbidden`, because the credential is valid but the bound connection does not
       grant the capability; `failure(:capability_not_granted)` now returns the specific code
-      instead of `:forbidden` (`integrations.ex:1703-1704`), the provider-action refusal
-      classification keeps capability refusals state-preserving like `:forbidden`
-      (`integrations.ex:1200`), and `Workspaces.ensure_connection_capability/2`
-      (`workspaces.ex:1012`) serves the same code on the bind/update write path. Pins:
+      instead of `:forbidden` (`integrations.ex:1704-1705`). The live refusals are the
+      read/sync path — `require_capability/2` in `sync_marked_resource/1`
+      (`integrations.ex:726`) — and the bind/update path —
+      `Workspaces.ensure_connection_capability/2` (`workspaces.ex:1000-1014`), called by
+      `prepare_resource_attrs/2` for both create and update (`workspaces.ex:1049`). The
+      provider-action classification entries are defensive, not live:
+      `record_provider_action_failure/3` (`integrations.ex:1201`) and the `:definite` list
+      in `mutation_failure_outcome/1` (`integrations.ex:626-636`) would store a pre-dispatch
+      capability refusal as `failed` with the `capability_not_granted` code, like
+      `:forbidden`, and `stored_failure/1` (`provider_access.ex:2367`) decodes that stored
+      code — but no live flow stores it today, because `authorized_connection/3`
+      (`provider_access.ex:1515-1538`) widens every execute context's capabilities before
+      dispatch. Pins:
       `portal_resources_test.exs:264` (bind and sync answer 403 `capability_not_granted`),
-      `resource_sync_identity_loss_test.exs:113`, `integrations_test.exs:947`, and the frontend
-      test `connections.test.tsx` "renders the served capability refusal with the
-      capability-specific next step" (a 403 `capability_not_granted` sync refusal renders
+      `portal_resources_test.exs:306` (a PATCH moving a work-tracking resource onto a
+      repositories-only connection answers 403 `capability_not_granted`),
+      `resource_sync_identity_loss_test.exs:113`, `integrations_test.exs:947`,
+      `integrations_test.exs:976` (a pre-dispatch capability refusal classifies `:definite`),
+      and the frontend test `connections.test.tsx` "renders the served capability refusal with
+      the capability-specific next step" (a 403 `capability_not_granted` sync refusal renders
       "Grant the connection the capability this resource kind needs, then try again.").
       Red-first: the updated pins failed on the pre-change code with the served `forbidden`
       (`2/5 passed`, 3 failed); after the change the affected control files report `Result:
-      121 passed`, rc 0 (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`: `mix test
+      123 passed`, rc 0 (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`: `mix test
       test/symmetry_control/resource_sync_identity_loss_test.exs
       test/symmetry_control_web/controllers/portal_resources_test.exs
       test/symmetry_control/integrations_test.exs

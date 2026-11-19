@@ -973,6 +973,49 @@ defmodule SymmetryControl.IntegrationsTest do
              })
   end
 
+  test "a pre-dispatch capability refusal is classified definite for the stored outcome" do
+    project = project_fixture()
+
+    assert {:ok, connection} =
+             Integrations.create_connection(%{
+               provider: "github",
+               name: "Repositories without changes",
+               account_ref: "acme",
+               auth_type: "gh_cli",
+               capabilities: ["repositories"]
+             })
+
+    assert {:ok, repository} =
+             Workspaces.create_resource(project.id, %{
+               connection_id: connection.id,
+               kind: "repository",
+               name: "Changes outside scope",
+               external_ref: "acme/symmetry"
+             })
+
+    assert {:ok, item} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Refused change",
+               repository_resource_id: repository.id,
+               pull_request_url: "https://github.com/acme/symmetry/pull/42"
+             })
+
+    # No provider call happens: `require_capabilities/2` refuses between the
+    # projected guards and `provider.authenticate/1`, so the outcome must be
+    # definite (stored `failed` and replayed) like every other pre-dispatch
+    # refusal.
+    assert {:error,
+            {:provider_action_failure, :capability_not_granted, :definite,
+             "Connection capability is not granted"}} =
+             Integrations.execute_unprojected_provider_action(
+               connection,
+               repository,
+               item,
+               "change.upsert",
+               %{}
+             )
+  end
+
   test "renaming a connection with unchanged capabilities preserves health" do
     project = project_fixture()
     connection = connection_fixture("github", "gh_cli")

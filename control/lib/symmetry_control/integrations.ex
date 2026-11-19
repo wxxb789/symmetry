@@ -627,6 +627,7 @@ defmodule SymmetryControl.Integrations do
     if provider_action_error(reason) in [
          :invalid_request,
          :forbidden,
+         :capability_not_granted,
          :not_found,
          :provider_unauthorized
        ],
