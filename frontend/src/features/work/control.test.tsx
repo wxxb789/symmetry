@@ -223,19 +223,26 @@ describe("control mutation boundary", () => {
 });
 
 describe("capability-bound controls", () => {
-  it("keeps cancel and retry off a live attempt whose runtime advertises neither operation", async () => {
+  it("renders cancel and retry only from the served signals, never from the live state", async () => {
+    const user = userEvent.setup();
     renderWorkDetail({
-      detail: () => new Response(JSON.stringify(detailBody({
-        execution: { task_id: taskId, run_id: null, generation: 1, state: "running", can_cancel: false, can_retry: false },
+      detail: (readIndex) => new Response(JSON.stringify(detailBody({
+        // The same live state both reads; only the server's own signals change.
+        execution: { task_id: taskId, run_id: null, generation: 1, state: "running", can_cancel: readIndex === 1, can_retry: readIndex === 1 },
       }))),
     });
     await openDetail();
-    // The served state is a live attempt, but the server withholds both
-    // controls because the runtime advertises neither operation. The surface
-    // never derives a live control from the state.
+    expect(await screen.findByRole("button", { name: "Cancel run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(document.querySelector(".control-bar .chip")).toHaveTextContent("Running");
-    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
+
+    // The refresh serves the same state with both operations withheld (the
+    // runtime advertises neither). A state-derived surface would keep the
+    // controls live; this one renders only the served signal.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull());
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(document.querySelector(".control-bar .chip")).toHaveTextContent("Running");
   });
 });
 
