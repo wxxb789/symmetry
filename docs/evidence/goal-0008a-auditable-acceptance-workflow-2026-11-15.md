@@ -55,7 +55,7 @@ The resulting file has 63 lines and was integrated into the canonical working tr
 
 All commands below were actually executed; model evaluation/measurement did not run concurrently with the full Go suite.
 Raw command output is retained in the private evidence root `symmetry-0008a-8mdb7ctb`.
-For the command paths below, `EVIDENCE_ROOT='C:/Users/lhan/AppData/Local/Temp/symmetry-0008a-8mdb7ctb'`.
+For the command paths below, `EVIDENCE_ROOT='<disposable-root>'`.
 
 | Command and surface | Observed outcome | Exit |
 | --- | --- | --- |
@@ -209,7 +209,7 @@ The checkout was left uncommitted and unpublished at run time; the increment was
 ## Final frozen audit
 
 [`0008a-audit.json`](../evaluations/model-routing/0008a-audit.json) is the final machine-readable audit: 17 scoped source files, eight unique charged model sessions, 13 explicitly listed corrective/rework batches and no unresolved acceptance blocker.
-Its SHA-256 is `dc87809933912acd1ca5c11bed741cb3f0245058cd6c2f17222f0f313a4cf040`; the scoped source-manifest digest is `9dc95d2ffe967e529cd810d55a8203a7073dde0d10c73975a65e2b9bab542552`.
+Its SHA-256 is `832117d0828032ebf1dc731d156bc7ed378ac16e61d41a741b8d4db12b5fa318`; the scoped source-manifest digest is `9dc95d2ffe967e529cd810d55a8203a7073dde0d10c73975a65e2b9bab542552`.
 The source manifest was rebound on the delivered revision `1c6c715` (F12): the pre-rebase feature tip it previously named, `c45db2c`, was rewritten by the final rebase, so all 17 entries now re-derive with `git show 1c6c715:<path>` and `docs/goals/README.md`'s rebased content is bound. The audit records three post-revision repair increments with their repaired path digests, re-run gate results and the tooling-revision effect on the receipts below: F1-F3 (refused-import snapshot preservation, merged/duplicate session refusal, manifest rebinding), delivered as commit `e4a91c1` (replayed from the pre-rebase `1baf76c`); the DeepSeek-review repairs F4-F9 (F4 content-derived change sets with re-verified `changed_paths`, F5 derived `go test -list` execution cross-check, F6 corrected review-record claims and rebound review/receipt digests, F7 exporter redaction and claim scoping, F8 runner accounting/serialization/path-pattern robustness, F9 audit/document reconciliation), delivered as commit `bdbcdc7`; and the PR-review repairs F10-F11 (F10 object-store byte comparison with fail-closed checkout-local filter/attribute refusal and a Git-matching mode rule, F11 evidence-derived identity for ID-less usage exports so byte-identical copies cannot be counted twice), delivered as `abf8210`, with the post-audit repairs delivered in `993870e`; the whole increment was squashed onto main as `1c6c715`. No repair increment is covered by the independent source review.
 The final positive receipt digest is `1fdf4aa86285c79d279657294016a4d01da362c2f8977c09c51b55d203090808` (`receipt` exit 0, `accept` exit 0; the F6 record correction rebinds the delivered copy from the earlier `524e3bee...`); the final negative digest is `a9b7260635f317f2fa66b57ca4587be4b932c79cfe8eb126dd77caf268d40c52` (`receipt` exit 0, `accept` exit 1).
 Review/attempt/ledger/tooling digests are retained in each row's `evidence` block and in the audit.
