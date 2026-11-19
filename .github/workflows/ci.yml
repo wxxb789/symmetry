@@ -151,6 +151,7 @@ jobs:
         working-directory: control
     env:
       POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: symmetry_control_test
@@ -587,6 +588,12 @@ jobs:
         working-directory: .
       - run: pnpm --filter symmetry-browser-acceptance exec playwright install --with-deps chromium
         working-directory: .
+      # The Goal-managed render case runs scripts/ci/portal-planning-fixture.exs
+      # through `mix run` in the fixture's own development build (the release
+      # serves; the fixture only writes the row). Compiling that build here
+      # keeps the case's own fixture guard for the run, not a cold compile.
+      - name: Compile the planning fixture's development build
+        run: mix compile
       - name: Render authenticated release shell on desktop and mobile
         id: render_release_shell
         shell: bash
@@ -605,24 +612,35 @@ jobs:
           # instead of disabling the check.
           export PHX_HOST=127.0.0.1 PHX_SERVER=true
           bin=_build/prod/rel/symmetry_control/bin/symmetry_control
-          PORT=4000 RELEASE_NODE=symmetry_shell "$bin" start > "$RUNNER_TEMP/shell-release.log" 2>&1 &
+          # The primary release carries Goal rollout on: the attention suite's
+          # plan admission cases (accept_plan) are admission-gated. The
+          # rollout-off case below gets its own instance with rollout off.
+          SYMMETRY_GOALS_ROLLOUT_ENABLED=true PORT=4000 RELEASE_NODE=symmetry_shell \
+            "$bin" start > "$RUNNER_TEMP/shell-release.log" 2>&1 &
           primary=$!
           PORT=4001 RELEASE_NODE=symmetry_expiry SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2 \
             "$bin" start > "$RUNNER_TEMP/shell-expiry.log" 2>&1 &
           expiry=$!
-          trap 'kill "$primary" "$expiry" 2>/dev/null || true' EXIT
+          PORT=4002 RELEASE_NODE=symmetry_goals_off SYMMETRY_GOALS_ROLLOUT_ENABLED=false \
+            "$bin" start > "$RUNNER_TEMP/shell-goals-off.log" 2>&1 &
+          goals_off=$!
+          trap 'kill "$primary" "$expiry" "$goals_off" 2>/dev/null || true' EXIT
           curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4000/healthz
           curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4001/healthz
+          curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4002/healthz
           cd ..
           SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
+          SYMMETRY_GOALS_OFF_URL=http://127.0.0.1:4002 \
+          SYMMETRY_FIXTURE_MIX=mix \
             pnpm --filter symmetry-browser-acceptance test \
               tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs \
               tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs \
+              tests/portal-goal-attention.spec.mjs \
               tests/portal-cutover.spec.mjs tests/portal-chat.spec.mjs
       # A release that never binds leaves no evidence anywhere else in the run:
       # the log files are the only record of why it did not start. Surface their
       # tail in the annotation (workflow commands need `%`, CR and LF escaped) and
-      # upload both logs, on the render step's own failure only.
+      # upload the logs, on the render step's own failure only.
       - name: Report release shell boot log
         if: failure() && steps.render_release_shell.outcome == 'failure'
         shell: bash
@@ -648,6 +666,7 @@ jobs:
           path: |
             ${{ runner.temp }}/shell-release.log
             ${{ runner.temp }}/shell-expiry.log
+            ${{ runner.temp }}/shell-goals-off.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
