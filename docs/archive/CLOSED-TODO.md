@@ -136,8 +136,8 @@ from branch `chore/deadcode-revalidation`.
       temporary write and its publish leaves a dot-prefixed `.partial-*` file instead of an
       empty marker, which `ensureFresh` then reports as a non-empty barrier directory; both fail
       loudly and no occurrence is recorded.
-      Closed by `fix/flake-linux-wrong-hello` (2026-11-19, based on `9192241`): the move changes
-      no code because the fix is already in `main`. The publisher this record names
+      Delivered by PR #76 (`docs/close-linux-platform-flakes`, based on `f2a759f`): the move
+      changes no code because the fix is already in `main`. The publisher this record names
       (`publishLinuxSupervisorWitnessFile`,
       `daemon/internal/platform/containment_supervisor_linux.go:2318`) is `3377a7d` (#59), the
       resume/stop-receipt barrier and stage-marker follow-up is `9c73a05` (#62); both are
@@ -149,17 +149,21 @@ from branch `chore/deadcode-revalidation`.
       `containment_supervisor_linux_test.go:1128: decode wrong-session helper witness:
       unexpected end of JSON input` with `--- FAIL: ... (0.01s)`, and run 44133750246 job
       134217597395 carries the same text with `(0.05s)`. Fresh evidence on this revision: WSL
-      Ubuntu-24.04, go1.27.0, `go test -race -count=50 -run
+      `Ubuntu-24.04` (`/usr/local/bin/go` -> `/usr/local/lib/go1.27.0/bin/go`, go1.27.0
+      linux/amd64, `GOTOOLCHAIN=auto`; the default WSL distro's `/usr/bin/go` is go1.26.8 with
+      `GOTOOLCHAIN=local` and refuses this go 1.27 module), `go test -race -count=50 -run
       ^TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec ./internal/platform` — `ok`,
       118.418 s, 50 runs, 0 failures, exit 0. CI on revisions containing the fix kept the
       `daemon` job green with no recurrence (runs 44140380720 `3377a7d`, 44147815717 `9c73a05`,
-      44230735630 and 44253118123 `9192241`; `daemon-windows` too where the trigger ran it). The
-      `.partial-*` crash residual stays recorded and needs no further action: the publish
-      removes its temporary file on every failure it can observe, a crash can leave only the
-      dot-prefixed file, and `ensureFresh` then refuses the non-empty barrier directory loudly
-      instead of reusing it — no occurrence is recorded.
+      44230735630 `d60d50d` and 44253118123 `9192241`; `daemon-windows` too where the trigger ran
+      it). The `.partial-*` crash residual stays recorded and needs no further action: the
+      publish removes its temporary file on every failure it can observe, a crash can leave only
+      the dot-prefixed file, and `ensureFresh` then refuses the non-empty barrier directory
+      loudly instead of reusing it — no occurrence is recorded. The archived flake-class block
+      below keeps its original `docs/TODO.md` pointer for this item; the entry itself now lives
+      in this archive.
 
-*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stays there.*
+*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #76).*
 
       **Linux terminal reason — fixed at the cause; verification is CI on the new revision, not a
       local green.** `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` failed
@@ -187,7 +191,7 @@ from branch `chore/deadcode-revalidation`.
       43720680428 job 132831780245 on a docs-only diff, green in run 43715830442 and on rerun job
       132834151127; this change makes no claim about it, so this entry stays open. The Linux
       supervisor helper-witness flake
-      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in this archive.
+      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in `docs/TODO.md`.
       **Windows owned-child — fixed at the cause; verification is CI on the new revision, not a
       local green.** `TestCloseStopsOwnedChildAfterLeaderExit` failed again in run 44055523619 job
       133943809688 (push of main `ca1bdad`) with `process_windows_test.go:1004: owned child 7824
@@ -277,8 +281,8 @@ from branch `chore/deadcode-revalidation`.
       `--- FAIL: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (0.21s)` and the package
       completes. The Linux supervisor helper-witness flake
       (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in
-      this archive above.
-      Closed by `fix/flake-platform-descendant-monitor` (2026-11-19, based on `9192241`): the move
+      `docs/TODO.md` above.
+      Delivered by PR #76 (`docs/close-linux-platform-flakes`, based on `f2a759f`): the move
       changes no code because every occurrence this text records is already fixed in `main`. The
       fixes were re-read against this revision: `d29fe5a` (#49) for the identity-bound Windows stop
       proof, the pidfd attribution (`pidfdsForThisProcess` through `/proc/self/fdinfo`),
@@ -291,15 +295,20 @@ from branch `chore/deadcode-revalidation`.
       `harness_test.go:4601: native turn did not start`, `panic: test timed out after 10m0s` and
       `process_windows_test.go:1004: owned child 7824 survived Close()`), and the identical tree's
       green run 44054200088 (`95b9fa1`: `daemon` and `daemon-windows` both success) was confirmed.
-      Fresh evidence on this revision: WSL Ubuntu-24.04, go1.27.0, `go test -race -count=50 -run
+      Fresh evidence on this revision: WSL `Ubuntu-24.04` (`/usr/local/bin/go` ->
+      `/usr/local/lib/go1.27.0/bin/go`, go1.27.0 linux/amd64, `GOTOOLCHAIN=auto`; the default WSL
+      distro's `/usr/bin/go` is go1.26.8 with `GOTOOLCHAIN=local` and refuses this go 1.27
+      module), `go test -race -count=50 -run
       'TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven|TestProcessGroupStopRequestKeepsCleanLeaderAbsentTerminalReason|TestPIDFDGroupSupportProbeReleasesProcessHandle'
       ./internal/platform` — `ok`, 20.091 s, 50 runs per test, 0 failures, exit 0. CI on revisions
       containing the fixes kept the `daemon` job green with no recurrence of any signature in this
       class (runs 44147815717 `9c73a05`, 44230735630 `d60d50d`, 44253118123 `9192241`). The three
-      load-bound start waits keep the recorded decision — waits unchanged, and a repeat now names
-      its durable reason — so a further occurrence would be a new finding, not an open action of
-      this item. The cross-reference to the helper-witness item now names this archive, where
-      `fix/flake-linux-wrong-hello` moves that entry.
+      load-bound start waits this text records as "unchanged" were subsequently converted to the
+      package's documented hang guard — `time.After(testHangGuard)`, 30 s at `app_test.go:7281`,
+      applied at `harness_test.go:4284`/`:4290`, `:4506`, `:4600` by `4094624` (#57) — so a
+      further occurrence would be a new finding, not an open action of this item. The moved
+      text's final line keeps its original `docs/TODO.md` pointer; the helper-witness item it
+      names is the entry closed above in this archive.
 
 - [ ] Revalidate and remove the unused `JsonDocument` alias in
       `control/lib/symmetry_control/goals/schemas.ex:1431`
