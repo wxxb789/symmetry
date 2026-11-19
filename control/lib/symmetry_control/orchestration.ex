@@ -618,6 +618,54 @@ defmodule SymmetryControl.Orchestration do
 
   def adapter_operation_supported?(_runtime, _operation), do: false
 
+  @doc """
+  The ids of `task_ids` with at least one runtime assignment could select that
+  advertises the adapter `start` operation.
+
+  A retried attempt starts fresh, so `can_retry` reads what assignment rules
+  select — the non-transient eligibility of the goal-less assignment path
+  (same binding, capability containment, supervisory and harness-kind clauses)
+  intersected with the adapter `start` requirement. Transient online,
+  heartbeat and capacity state is ignored: the served control states that some
+  eligible runtime could start the retried attempt; the scheduler still decides
+  the actual assignment.
+  """
+  @spec retry_runtime_eligible_task_ids([Ecto.UUID.t()]) :: MapSet.t(Ecto.UUID.t())
+  def retry_runtime_eligible_task_ids(task_ids) when is_list(task_ids) do
+    from(task in Task,
+      cross_join: runtime in Runtime,
+      where: ^legacy_task_runtime_eligibility(),
+      where: is_nil(task.goal_id),
+      where: task.id in ^task_ids,
+      where: fragment("? @> ?", runtime.capabilities, type(^retry_adapter_requirement(), :map)),
+      distinct: true,
+      select: task.id
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
+  Whether assignment could select a runtime that advertises the adapter `start`
+  operation for `task`; the single-task reader for
+  `retry_runtime_eligible_task_ids/1`.
+  """
+  @spec retry_runtime_eligible?(Task.t()) :: boolean()
+  def retry_runtime_eligible?(%Task{} = task) do
+    is_nil(task.goal_id) and
+      Repo.exists?(
+        from task in Task,
+          cross_join: runtime in Runtime,
+          where: task.id == ^task.id,
+          where: ^legacy_task_runtime_eligibility(),
+          where:
+            fragment("? @> ?", runtime.capabilities, type(^retry_adapter_requirement(), :map))
+      )
+  end
+
+  # A retried attempt starts a fresh run, so its runtime must advertise `start`.
+  defp retry_adapter_requirement, do: %{"adapter" => %{"operations" => %{"start" => true}}}
+
   @spec list_task_events(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, atom()}
   def list_task_events(task_id, opts \\ []) do
     with_history_task(task_id, opts, :after, fn limit, after_position ->
