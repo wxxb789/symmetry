@@ -797,6 +797,38 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       → `Result: 8 passed`, rc 0. The constraint and labels stay as recorded; with real writers
       for both values, neither an added writer nor a vocabulary migration is needed.
 
+- [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
+      `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
+      the server answers that code, but a sync refused for an ungranted capability maps to
+      `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
+      Either the server should serve the more specific code or the client entry should be removed;
+      decide in a separate maintenance change with a test that pins the served code.
+      Closed (2026-11-19, `fix/connections-refusal-guidance`, PR #96): the owner chose the
+      serve-the-specific-code route. `Protocol` maps `capability_not_granted` to HTTP 403 with
+      message `connection capability is not granted` (`protocol.ex:21-22`) — the same status
+      class as `forbidden`, because the credential is valid but the bound connection does not
+      grant the capability; `failure(:capability_not_granted)` now returns the specific code
+      instead of `:forbidden` (`integrations.ex:1703-1704`), the provider-action refusal
+      classification keeps capability refusals state-preserving like `:forbidden`
+      (`integrations.ex:1200`), and `Workspaces.ensure_connection_capability/2`
+      (`workspaces.ex:1012`) serves the same code on the bind/update write path. Pins:
+      `portal_resources_test.exs:264` (bind and sync answer 403 `capability_not_granted`),
+      `resource_sync_identity_loss_test.exs:113`, `integrations_test.exs:947`, and the frontend
+      test `connections.test.tsx` "renders the served capability refusal with the
+      capability-specific next step" (a 403 `capability_not_granted` sync refusal renders
+      "Grant the connection the capability this resource kind needs, then try again.").
+      Red-first: the updated pins failed on the pre-change code with the served `forbidden`
+      (`2/5 passed`, 3 failed); after the change the affected control files report `Result:
+      120 passed`, rc 0 (`mix test test/symmetry_control/resource_sync_identity_loss_test.exs
+      test/symmetry_control_web/controllers/portal_resources_test.exs
+      test/symmetry_control/integrations_test.exs
+      test/symmetry_control_web/controllers/provider_action_controller_test.exs`), with
+      `mix format --check-formatted` and `mix compile --warnings-as-errors` rc 0, frontend
+      typecheck/lint rc 0 and `vitest run` 413 tests passed, and `pnpm contracts:check` green
+      (no schema or fixture enumerates portal error codes). Neither the Go daemon nor the
+      browser specs branch on the literal `forbidden` for these paths (the daemon acts on the
+      HTTP status and forwards the envelope code), so no other client changed.
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover

@@ -93,13 +93,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       classifier's skip list against the jobs that actually ran before treating the trim as
       fully accepted.
 
-- [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
-      `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
-      the server answers that code, but a sync refused for an ungranted capability maps to
-      `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
-      Either the server should serve the more specific code or the client entry should be removed;
-      decide in a separate maintenance change with a test that pins the served code.
-
 ## Deferred review findings (0007f)
 
 - [ ] Give the focused render gate's `browser/tests/portal-goal-managed.spec.mjs` case its fixture
