@@ -4750,12 +4750,20 @@ func waitForNativeRunning(t *testing.T, store *state.Store, key state.RunKey) {
 			if journal.LocalState == "running" && journal.TerminalState == "" {
 				return
 			}
-			failed := journal.TerminalState != "" || journal.LocalState == "terminal_pending"
-			for _, transition := range journal.PendingTransitions {
-				failed = failed || transition.State == "failed"
+			if journal.TerminalState != "" {
+				t.Fatalf("run reached terminal state %q before the start wait observed running: %s", journal.TerminalState, nativeStartFailureDetail(store, key))
 			}
-			if failed {
+			switch journal.LocalState {
+			case "claiming", "claimed", "running":
+			default:
+				// Any other local state (stale, cleanup_pending, terminal_pending, ...)
+				// is decisive: the start wait must not outlive it.
 				t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, key))
+			}
+			for _, transition := range journal.PendingTransitions {
+				if transition.State == "failed" {
+					t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, key))
+				}
 			}
 		}
 		if time.Now().After(deadline) {
