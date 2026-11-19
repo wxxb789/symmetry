@@ -448,6 +448,12 @@ mix compile --warnings-as-errors
 mix test
 ```
 
+The Control suite's four `:portal_assets` cases assert against the staged portal
+bundle, so `mix test` also needs `control/priv/static/portal/`; without it they
+fail with the staging command rather than a raw file error. Build it with
+`mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build` (see the
+[portal runbook](portal.md)).
+
 ```sh
 cd daemon
 test -z "$(gofmt -l .)"

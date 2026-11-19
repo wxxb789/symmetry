@@ -391,4 +391,70 @@ describe("history view", () => {
     ], "cursor-2");
     expect(overlapping.gap).toBeNull();
   });
+
+  it("keeps the gap when a later page chains from the moved boundary but the retained chain it left behind is not reached", () => {
+    const seeded = (index: number) => message(`11111111-000${index}-4001-8001-0000000000${String(index).padStart(2, "0")}`, { insertedAt: `2026-11-16T09:0${index}:00.000000Z` });
+    const one = seeded(1);
+    const two = seeded(2);
+    const three = seeded(3);
+    const four = seeded(4);
+    const five = seeded(5);
+    const six = seeded(6);
+    // The refreshed read ends at message five; the page loaded from that
+    // boundary reaches message three, but the chain the moved boundary left
+    // behind — fetched from message two — is not reached by it, so the region
+    // between them (nothing here proves message two loaded) stays named.
+    const view = chatHistoryView([
+      page([five, six], { nextBefore: "cursor-refreshed" }),
+      page([three, four], { fetchBefore: "cursor-refreshed", fetchBeforeId: five.id, nextBefore: "cursor-3" }),
+      page([one], { fetchBefore: "cursor-dropped", fetchBeforeId: two.id, nextBefore: null }),
+    ], "cursor-3");
+    expect(view.gap).toEqual({ current: three.id, retained: one.id });
+    expect(view.messages.map((item) => item.id)).toEqual([one.id, three.id, four.id, five.id, six.id]);
+
+    // Loading the skipped region into the chain reaches the older page; only
+    // then does the surface stop naming the region, because the two now touch.
+    const connected = chatHistoryView([
+      page([five, six], { nextBefore: "cursor-refreshed" }),
+      page([three, four], { fetchBefore: "cursor-refreshed", fetchBeforeId: five.id, nextBefore: "cursor-3" }),
+      page([one, two], { fetchBefore: "cursor-3", fetchBeforeId: three.id, nextBefore: null }),
+    ], "cursor-3");
+    expect(connected.gap).toBeNull();
+    expect(connected.messages.map((item) => item.id)).toEqual([one.id, two.id, three.id, four.id, five.id, six.id]);
+  });
+
+  it("keeps naming the next region when the chain reaches only one of several retained pages", () => {
+    const seeded = (index: number) => message(`11111111-00${String(index).padStart(2, "0")}-4001-8001-0000000000${String(index).padStart(2, "0")}`, { insertedAt: `2026-11-16T09:${String(index).padStart(2, "0")}:00.000000Z` });
+    const one = seeded(1);
+    const two = seeded(2);
+    const three = seeded(3);
+    const four = seeded(4);
+    const five = seeded(5);
+    const six = seeded(6);
+    const seven = seeded(7);
+    const eight = seeded(8);
+    const nine = seeded(9);
+    const ten = seeded(10);
+    // The nameable boundary between the chain and the newest page it did not
+    // reach is the region Load older fills first; the older region below stays
+    // named by the same note once the chain reaches it.
+    const beforeReach = chatHistoryView([
+      page([nine, ten], { nextBefore: "cursor-chain" }),
+      page([seven, eight], { fetchBefore: "cursor-chain", fetchBeforeId: nine.id, nextBefore: "cursor-7" }),
+      page([four, five], { fetchBefore: "cursor-dropped-b", fetchBeforeId: six.id, nextBefore: "cursor-4" }),
+      page([one, two], { fetchBefore: "cursor-dropped-a", fetchBeforeId: three.id, nextBefore: null }),
+    ], "cursor-7");
+    expect(beforeReach.gap).toEqual({ current: seven.id, retained: five.id });
+    expect(beforeReach.messages.map((item) => item.id)).toEqual([one.id, two.id, four.id, five.id, seven.id, eight.id, nine.id, ten.id]);
+
+    const afterReach = chatHistoryView([
+      page([nine, ten], { nextBefore: "cursor-chain" }),
+      page([seven, eight], { fetchBefore: "cursor-chain", fetchBeforeId: nine.id, nextBefore: "cursor-7" }),
+      page([five, six], { fetchBefore: "cursor-7", fetchBeforeId: seven.id, nextBefore: "cursor-5" }),
+      page([four, five], { fetchBefore: "cursor-dropped-b", fetchBeforeId: six.id, nextBefore: "cursor-4" }),
+      page([one, two], { fetchBefore: "cursor-dropped-a", fetchBeforeId: three.id, nextBefore: null }),
+    ], "cursor-5");
+    expect(afterReach.gap).toEqual({ current: four.id, retained: two.id });
+    expect(afterReach.messages.map((item) => item.id)).toEqual([one.id, two.id, four.id, five.id, six.id, seven.id, eight.id, nine.id, ten.id]);
+  });
 });
