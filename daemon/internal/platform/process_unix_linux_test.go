@@ -1944,6 +1944,11 @@ func TestProcessGroupDoesNotReadProcBeforeDurableScanAcknowledgement(t *testing.
 	if err := group.waitForInitialDescendantScan(time.Now().Add(time.Second)); !errors.Is(err, ackErr) {
 		t.Fatalf("initial scan without durable begin ack = %v, want %v", err, ackErr)
 	}
+	select {
+	case <-group.monitorDone:
+	default:
+		t.Fatal("barrier returned before the ending monitor stopped")
+	}
 	if statReads != 0 {
 		t.Fatalf("/proc stat reads = %d before pre-scan ack, want zero", statReads)
 	}
@@ -1989,6 +1994,11 @@ func TestProcessGroupAcknowledgesObservedEscapeBeforeRetiringScanFence(t *testin
 	err := group.waitForInitialDescendantScan(time.Now().Add(time.Second))
 	if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
 		t.Fatalf("initial escaped scan = %v, want unproven containment", err)
+	}
+	select {
+	case <-group.monitorDone:
+	default:
+		t.Fatal("barrier returned before the ending monitor stopped")
 	}
 	if len(events) != 2 || events[0].Phase != "begin" || events[1].Phase != "unproven" || events[0].Sequence != events[1].Sequence || events[1].FailureKind != "observed_escape" {
 		t.Fatalf("escape scan events = %#v, want matching begin then durable observed_escape", events)
@@ -2075,8 +2085,11 @@ func TestAttachProcessWaitsForInitialDescendantScan(t *testing.T) {
 	if !ok || group == nil {
 		t.Fatalf("AttachProcess() containment = %T, want *processGroup", attached.containment)
 	}
-	if !group.initialScanComplete || group.descendantScanLost {
-		t.Fatalf("initial scan state = complete:%v lost:%v, want true,false", group.initialScanComplete, group.descendantScanLost)
+	group.mutex.Lock()
+	initialScanComplete, descendantScanLost := group.initialScanComplete, group.descendantScanLost
+	group.mutex.Unlock()
+	if !initialScanComplete || descendantScanLost {
+		t.Fatalf("initial scan state = complete:%v lost:%v, want true,false", initialScanComplete, descendantScanLost)
 	}
 	if err := group.stopDescendantMonitor(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("stopDescendantMonitor() = %v", err)
@@ -2125,8 +2138,11 @@ func TestAttachProcessRejectsImmediateLeaderExitBeforeInitialDescendantScan(t *t
 	if !ok || group == nil {
 		t.Fatalf("AttachProcess() containment = %T, want *processGroup", containment)
 	}
-	if !group.initialScanComplete || !group.descendantScanLost {
-		t.Fatalf("initial exit state = complete:%v lost:%v, want retained scan uncertainty", group.initialScanComplete, group.descendantScanLost)
+	group.mutex.Lock()
+	initialScanComplete, descendantScanLost := group.initialScanComplete, group.descendantScanLost
+	group.mutex.Unlock()
+	if !initialScanComplete || !descendantScanLost {
+		t.Fatalf("initial exit state = complete:%v lost:%v, want retained scan uncertainty", initialScanComplete, descendantScanLost)
 	}
 	if childrenCalls != 0 {
 		t.Fatalf("initial leader-exit scan read children %d times, want 0", childrenCalls)
