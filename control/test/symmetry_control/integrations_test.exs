@@ -1590,45 +1590,84 @@ defmodule SymmetryControl.IntegrationsTest do
     end)
   end
 
-  # The import's ordered prelock is its first WorkItem statement, so the sync is
-  # observed waiting for the WorkItem locks the delivery transaction holds. A
-  # sample can also catch the import before that prelock is issued - run
-  # 43891279765 job 133383740181 captured the repository lookup there - and such
-  # a sample is not the wait under test: keep polling until the WorkItem wait is
-  # observed, and when the deadline passes, name the last sample so the next
-  # occurrence stays traceable.
+  # The sync's wait is read from the lock manager, not from the statement text:
+  # run 43891279765 job 133383740181 put `pg_stat_activity.query` on the import's
+  # repository lookup while the import was in a delivery-attributed lock wait, so
+  # the query field is not usable evidence here. A sample is accepted once the
+  # import's own backend holds an ungranted lock and the delivery backend blocks
+  # it; the accepted sample then asserts that the delivery backend holds a
+  # granted lock on `work_items`, the lock the import's ordered prelock waits
+  # for. Anything else keeps polling until the deadline, which reports the raw
+  # sample.
   defp assert_sync_waiting_on_work_item(backend, blocker, deadline) do
-    case sync_wait_sample(backend, blocker) do
-      {:blocked, query} ->
-        assert String.contains?(query, "\"work_items\"")
+    sample = sync_wait_sample(backend, blocker)
 
-      {:sampled, observation} ->
-        assert System.monotonic_time(:millisecond) < deadline,
-               "import sync did not wait for the delivery WorkItem locks" <>
-                 " (last sample: #{observation})"
+    if sample.ungranted_lock? and sample.blocked_by_delivery? do
+      assert sample.blocker_holds_work_item_lock?
+      :ok
+    else
+      assert System.monotonic_time(:millisecond) < deadline,
+             "import sync did not wait for the delivery WorkItem locks" <>
+               " (last sample: #{format_sync_wait_sample(sample)})"
 
-        assert_sync_waiting_on_work_item(backend, blocker, deadline)
+      assert_sync_waiting_on_work_item(backend, blocker, deadline)
     end
   end
 
   defp sync_wait_sample(backend, blocker) do
     result =
       Repo.query!(
-        "SELECT query, $2::integer = ANY(pg_blocking_pids(pid)), coalesce(wait_event_type, '-'), coalesce(wait_event, '-') FROM pg_stat_activity WHERE pid = $1",
+        """
+        SELECT activity.query,
+               coalesce(activity.wait_event_type, '-'),
+               coalesce(activity.wait_event, '-'),
+               $2::integer = ANY(pg_blocking_pids($1)),
+               EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted),
+               EXISTS (
+                 SELECT 1 FROM pg_locks held
+                 WHERE held.pid = $2 AND held.granted AND held.relation = 'work_items'::regclass
+               )
+        FROM pg_stat_activity AS activity
+        WHERE activity.pid = $1
+        """,
         [backend, blocker]
       )
 
     case result.rows do
-      [[query, true, wait_event_type, wait_event]] when is_binary(query) ->
-        if String.contains?(query, "\"work_items\"") do
-          {:blocked, query}
-        else
-          {:sampled, "#{wait_event_type}/#{wait_event} #{String.slice(query, 0, 160)}"}
-        end
+      [[query, wait_event_type, wait_event, blocked_by_delivery?, ungranted?, holds?]] ->
+        %{
+          query: query,
+          wait_event_type: wait_event_type,
+          wait_event: wait_event,
+          blocked_by_delivery?: blocked_by_delivery?,
+          ungranted_lock?: ungranted?,
+          blocker_holds_work_item_lock?: holds?
+        }
 
-      _not_waiting ->
-        {:sampled, "not waiting"}
+      [] ->
+        %{
+          query: nil,
+          wait_event_type: "absent",
+          wait_event: "absent",
+          blocked_by_delivery?: false,
+          ungranted_lock?: false,
+          blocker_holds_work_item_lock?: false
+        }
     end
+  end
+
+  # The query can be NULL (or held by another backend's activity slot) while the
+  # backend still waits, so the sample always names the wait event too.
+  defp format_sync_wait_sample(sample) do
+    query =
+      case sample.query do
+        nil -> ""
+        value -> " query=" <> String.slice(to_string(value), 0, 160)
+      end
+
+    "#{sample.wait_event_type}/#{sample.wait_event}" <>
+      " ungranted=#{sample.ungranted_lock?}" <>
+      " blocker_holds_work_items=#{sample.blocker_holds_work_item_lock?}" <> query
   end
 
   defp use_credential_leak_provider do
