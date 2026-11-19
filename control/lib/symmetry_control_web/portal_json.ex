@@ -287,6 +287,16 @@ defmodule SymmetryControlWeb.PortalJSON do
   def execution(nil), do: nil
   def execution(task), do: execution_summary(task)
 
+  @doc """
+  The command responses' execution summary: the same projection with the work
+  item's own retry gates applied, so a response serves the `can_retry` the
+  item's read would rather than a state-only one. A work item without its
+  project loaded answers those gates false.
+  """
+  def execution(nil, _work_item), do: nil
+  def execution(task, nil), do: execution(task)
+  def execution(task, work_item), do: task |> execution_summary() |> retry_capability(work_item)
+
   def changeset_errors(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {message, options} ->
       Regex.replace(~r"%{(\w+)}", message, fn _, key ->

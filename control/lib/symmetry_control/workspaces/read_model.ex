@@ -75,7 +75,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
       commands = latest_commands(task_ids)
       waiting = waiting_contexts(tasks, runs)
       pending = pending_supervisory_commands(runs)
-      retry_eligible = Orchestration.retry_runtime_eligible_task_ids(task_ids)
+      retry_eligible = retry_runtime_eligible(work_items, tasks)
       evidence = evidence(task_ids)
 
       Map.new(task_ids, fn task_id ->
@@ -118,6 +118,37 @@ defmodule SymmetryControl.Workspaces.ReadModel do
 
     Repo.all(from runtime in Runtime, where: runtime.id in ^runtime_ids)
     |> Map.new(&{&1.id, &1})
+  end
+
+  # Eligibility reads the binding the retried generation is re-admitted with —
+  # `retry_binding/1` resolves the work item's corrected profile, workspace and
+  # capability requirement — not the failed task row's; only goal-less tasks
+  # can be retried, so Goal-owned tasks never enter the query.
+  defp retry_runtime_eligible(work_items, tasks) do
+    bindings =
+      Enum.flat_map(work_items, fn item ->
+        with task_id when is_binary(task_id) <- item.orchestration_task_id,
+             %Task{goal_id: nil} <- Map.get(tasks, task_id) do
+          binding = Workspaces.retry_binding(item)
+
+          [
+            %{
+              task_id: task_id,
+              agent_profile: binding.agent_profile,
+              workspace: binding.workspace,
+              required_capabilities: binding.required_capabilities
+            }
+          ]
+        else
+          _other -> []
+        end
+      end)
+
+    if bindings == [] do
+      MapSet.new()
+    else
+      Orchestration.retry_runtime_eligible_task_ids(bindings)
+    end
   end
 
   # The runs whose pause/resume command is pending or applied: an attempt at a

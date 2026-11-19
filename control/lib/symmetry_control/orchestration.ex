@@ -559,7 +559,8 @@ defmodule SymmetryControl.Orchestration do
           task: task,
           run: run,
           runtime: runtime,
-          retry_runtime_eligible: retry_runtime_eligible?(task),
+          retry_runtime_eligible:
+            is_nil(task.goal_id) and retry_runtime_eligible?(task_retry_binding(task)),
           waiting: current_waiting_context(task, run),
           latest_command: latest_task_command(task.id),
           controls:
@@ -618,28 +619,47 @@ defmodule SymmetryControl.Orchestration do
 
   def adapter_operation_supported?(_runtime, _operation), do: false
 
+  @typedoc """
+  One retried task's binding: the agent profile, workspace and required
+  capabilities `Workspaces.retry_binding/1` resolves for its work item.
+  """
+  @type retry_binding :: %{
+          task_id: Ecto.UUID.t(),
+          agent_profile: String.t(),
+          workspace: String.t(),
+          required_capabilities: map()
+        }
+
+  @retry_binding_types %{
+    task_id: :binary_id,
+    agent_profile: :string,
+    workspace: :string,
+    required_capabilities: :map
+  }
+
   @doc """
-  The ids of `task_ids` with at least one runtime assignment could select that
+  The ids of `bindings` with at least one runtime assignment could select that
   advertises the adapter `start` operation.
 
-  A retried attempt starts fresh, so `can_retry` reads what assignment rules
-  select — the non-transient eligibility of the goal-less assignment path
-  (same binding, capability containment, supervisory and harness-kind clauses)
-  intersected with the adapter `start` requirement. Transient online,
-  heartbeat and capacity state is ignored: the served control states that some
-  eligible runtime could start the retried attempt; the scheduler still decides
-  the actual assignment.
+  Each binding carries the values the retried generation is re-admitted with —
+  not the failed task row's (`Workspaces.retry_binding/1`) — and eligibility is
+  the non-transient part of the goal-less assignment path: same binding,
+  capability containment, supervisory and harness-kind clauses, intersected
+  with the adapter `start` requirement. Transient online, heartbeat and
+  capacity state is ignored: the served control states that some eligible
+  runtime could start the retried attempt; the scheduler still decides the
+  actual assignment.
   """
-  @spec retry_runtime_eligible_task_ids([Ecto.UUID.t()]) :: MapSet.t(Ecto.UUID.t())
-  def retry_runtime_eligible_task_ids(task_ids) when is_list(task_ids) do
-    from(task in Task,
+  @spec retry_runtime_eligible_task_ids([retry_binding()]) :: MapSet.t(Ecto.UUID.t())
+  def retry_runtime_eligible_task_ids(bindings) when is_list(bindings) do
+    rows = Enum.map(bindings, &retry_binding_row/1)
+
+    from(binding in values(rows, @retry_binding_types),
       cross_join: runtime in Runtime,
-      where: ^legacy_task_runtime_eligibility(),
-      where: is_nil(task.goal_id),
-      where: task.id in ^task_ids,
+      where: ^runtime_matches_binding(),
       where: fragment("? @> ?", runtime.capabilities, type(^retry_adapter_requirement(), :map)),
       distinct: true,
-      select: task.id
+      select: binding.task_id
     )
     |> Repo.all()
     |> MapSet.new()
@@ -647,20 +667,33 @@ defmodule SymmetryControl.Orchestration do
 
   @doc """
   Whether assignment could select a runtime that advertises the adapter `start`
-  operation for `task`; the single-task reader for
+  operation for the retry `binding`; the single-binding reader for
   `retry_runtime_eligible_task_ids/1`.
   """
-  @spec retry_runtime_eligible?(Task.t()) :: boolean()
-  def retry_runtime_eligible?(%Task{} = task) do
-    is_nil(task.goal_id) and
-      Repo.exists?(
-        from task in Task,
-          cross_join: runtime in Runtime,
-          where: task.id == ^task.id,
-          where: ^legacy_task_runtime_eligibility(),
-          where:
-            fragment("? @> ?", runtime.capabilities, type(^retry_adapter_requirement(), :map))
-      )
+  @spec retry_runtime_eligible?(retry_binding()) :: boolean()
+  def retry_runtime_eligible?(binding) when is_map(binding) do
+    Repo.exists?(
+      from binding in values([retry_binding_row(binding)], @retry_binding_types),
+        cross_join: runtime in Runtime,
+        where: ^runtime_matches_binding(),
+        where: fragment("? @> ?", runtime.capabilities, type(^retry_adapter_requirement(), :map))
+    )
+  end
+
+  defp retry_binding_row(binding) do
+    Map.take(binding, [:task_id, :agent_profile, :workspace, :required_capabilities])
+  end
+
+  # The command-response snapshot has no work item, so it reads the task row's
+  # own binding; the workspace projection resolves the work item's corrected
+  # binding instead (`Workspaces.retry_binding/1`).
+  defp task_retry_binding(%Task{} = task) do
+    %{
+      task_id: task.id,
+      agent_profile: task.agent_profile,
+      workspace: task.workspace,
+      required_capabilities: task.required_capabilities
+    }
   end
 
   # A retried attempt starts a fresh run, so its runtime must advertise `start`.
@@ -1349,7 +1382,7 @@ defmodule SymmetryControl.Orchestration do
       from task in Task,
         join: runtime in Runtime,
         on: runtime.status == "online",
-        where: ^legacy_task_runtime_eligibility(),
+        where: ^runtime_matches_binding(),
         where: task.state == "queued" and is_nil(task.goal_id),
         where:
           fragment(
@@ -1373,18 +1406,23 @@ defmodule SymmetryControl.Orchestration do
   end
 
   # The non-transient conditions that make a runtime eligible for a goal-less
-  # task: same binding, the task's capability containment, the supervisory
-  # clause and the harness-kind exclusion. `next_assignable_legacy_task_and_runtime/1`
-  # adds runtime status, heartbeat freshness and free capacity on top; the
-  # retry projection asks only which runtimes assignment rules could select at
-  # all, so it shares exactly these conditions.
-  defp legacy_task_runtime_eligibility do
+  # task: same binding (agent profile, workspace and required capabilities),
+  # capability containment, the supervisory clause and the harness-kind
+  # exclusion. `next_assignable_legacy_task_and_runtime/1` adds runtime status,
+  # heartbeat freshness and free capacity on top; the retry projection asks
+  # only which runtimes assignment rules could select at all, so it shares
+  # exactly these conditions — against the binding the retried generation will
+  # be re-admitted with.
+  defp runtime_matches_binding do
     dynamic(
-      [task, runtime],
-      runtime.agent_profile == task.agent_profile and
-        runtime.workspace == task.workspace and
-        fragment("? @> ?", runtime.capabilities, task.required_capabilities) and
-        (fragment("?->>'supervisory_control' IS DISTINCT FROM 'true'", task.required_capabilities) or
+      [binding, runtime],
+      runtime.agent_profile == binding.agent_profile and
+        runtime.workspace == binding.workspace and
+        fragment("? @> ?", runtime.capabilities, binding.required_capabilities) and
+        (fragment(
+           "?->>'supervisory_control' IS DISTINCT FROM 'true'",
+           binding.required_capabilities
+         ) or
            is_nil(runtime.harness_kind) or runtime.harness_kind == "generic") and
         (is_nil(runtime.harness_kind) or runtime.harness_kind not in ["omp", "omo"])
     )

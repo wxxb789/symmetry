@@ -365,6 +365,51 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     assert {:ok, eligible_model} = ReadModel.workspace(project.id)
     assert served_execution(eligible_model, retry_unsupported.work_item).can_retry
 
+    # The retry re-binds the next generation from the corrected work item, so
+    # the served control follows the item's binding, not the failed task row's.
+    rebound = fetch_item(supported.work_item.id)
+
+    assert {:ok, _edited} =
+             Workspaces.update_work_item(supported.work_item.id, %{
+               version: rebound.lock_version,
+               agent_profile: "cap-unknown",
+               workspace: "cap-unknown"
+             })
+
+    assert {:ok, rebound_model} = ReadModel.workspace(project.id)
+    refute served_execution(rebound_model, rebound).can_retry
+
+    restored = fetch_item(supported.work_item.id)
+
+    assert {:ok, _edited} =
+             Workspaces.update_work_item(supported.work_item.id, %{
+               version: restored.lock_version,
+               agent_profile: "cap-supported",
+               workspace: "cap-supported"
+             })
+
+    assert {:ok, restored_model} = ReadModel.workspace(project.id)
+    assert served_execution(restored_model, restored).can_retry
+
+    # Eligibility ignores the transient state assignment filters on top: the
+    # only eligible runtime is saturated and then goes offline, and the served
+    # control stays offered because the scheduler still has an eligible start.
+    launch_for(project, "cap-supported", "Saturates the supported runtime")
+    assert {:ok, capacity_run} = Orchestration.assign_one(now: @now)
+    assert capacity_run.runtime_id == supported_runtime.id
+    capacity_fence = claim(capacity_run, supported_runtime, 106)
+
+    Repo.update_all(
+      from(runtime in Orchestration.Runtime, where: runtime.id == ^supported_runtime.id),
+      set: [status: "offline"]
+    )
+
+    assert {:ok, transient_model} = ReadModel.workspace(project.id)
+    assert served_execution(transient_model, restored).can_retry
+
+    # Settle the saturating attempt so the project can be archived below.
+    transition(capacity_run.id, capacity_fence, "failed", 54)
+
     # An archived project refuses the retry the endpoint would reject, so the
     # control is withheld even though a selectable runtime advertises `start`.
     assert {:ok, _assigned_snapshot, :created} =
@@ -503,6 +548,11 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     fence = claim(run, runtime, claim_number)
     transition(run.id, fence, "running", transition_number)
     {run, fence}
+  end
+
+  defp fetch_item(work_item_id) do
+    assert {:ok, item} = Workspaces.fetch_work_item(work_item_id)
+    item
   end
 
   # The served control projection: the same merge the portal read applies.

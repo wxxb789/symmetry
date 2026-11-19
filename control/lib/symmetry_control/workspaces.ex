@@ -347,6 +347,9 @@ defmodule SymmetryControl.Workspaces do
     with :ok <- validate_action_id(action_id),
          {:ok, work_item} <- fetch(WorkItem, work_item_id),
          :ok <- ensure_legacy_work_item(work_item),
+         # The command response serves the same retry gates as the read, which
+         # reads the item's project status.
+         work_item <- Repo.preload(work_item, [:project]),
          task_id when is_binary(task_id) <- work_item.orchestration_task_id,
          {:ok, command, disposition} <-
            Orchestration.create_command(
@@ -471,10 +474,41 @@ defmodule SymmetryControl.Workspaces do
 
   def retry_work_item(_, _, _), do: {:error, :invalid_request}
 
+  @doc """
+  The binding a retried generation is re-admitted with: the work item's (or the
+  project default) agent profile and workspace plus the capability requirement
+  its provider-bound resources derive.
+
+  `retry_work_item/3` rebuilds the next generation from the corrected work item
+  through `execution_attrs/1`, so a reader asking whether assignment could
+  serve that generation (the served retry control) resolves the same values
+  here instead of the failed task row's.
+  """
+  @spec retry_binding(WorkItem.t()) :: %{
+          agent_profile: String.t(),
+          workspace: String.t(),
+          required_capabilities: map()
+        }
+  def retry_binding(%WorkItem{} = work_item) do
+    project = work_item.project
+
+    %{
+      agent_profile: present(work_item.agent_profile) || project.default_agent_profile,
+      workspace: present(work_item.workspace) || project.default_workspace,
+      required_capabilities: required_capabilities(provider_resource_ids(work_item))
+    }
+  end
+
   @spec work_item_snapshot(Ecto.UUID.t()) :: {:ok, map()} | {:error, atom()}
   def work_item_snapshot(work_item_id) do
     with {:ok, work_item} <- fetch(WorkItem, work_item_id) do
-      work_item = Repo.preload(work_item, [:project, :repository_resource, :ci_resource])
+      work_item =
+        Repo.preload(work_item, [
+          :project,
+          :repository_resource,
+          :ci_resource,
+          :external_work_item_resource
+        ])
 
       case work_item.orchestration_task_id do
         nil ->
@@ -571,10 +605,8 @@ defmodule SymmetryControl.Workspaces do
   end
 
   defp execution_attrs(work_item) do
-    project = work_item.project
-    agent_profile = present(work_item.agent_profile) || project.default_agent_profile
-    workspace = present(work_item.workspace) || project.default_workspace
-    execution_attrs(work_item, agent_profile, workspace)
+    binding = retry_binding(work_item)
+    execution_attrs(work_item, binding.agent_profile, binding.workspace)
   end
 
   defp execution_attrs(work_item, agent_profile, workspace) do

@@ -477,6 +477,108 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     refute second_cancel["command_id"] == first_cancel["command_id"]
   end
 
+  test "an archived project withholds the retry control the endpoint refuses" do
+    project = create_project("ARCV")
+    key = Ecto.UUID.generate()
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(
+               %{name: "archive-retry-machine", machine_token: "token-#{key}"},
+               key,
+               enrollment_token: "enrollment-secret",
+               expected_enrollment_token: "enrollment-secret",
+               now: @now
+             )
+
+    assert {:ok, [_runtime]} =
+             Orchestration.register_runtimes(
+               enrolled.machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "archive-retry-runtime",
+                   name: "Archive retry runtime",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   harness_kind: "generic",
+                   harness_version: "generic-v1",
+                   adapter_version: "generic-v1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "adapter" => %{
+                       "kind" => "generic",
+                       "native_version" => "generic-v1",
+                       "implementation_version" => "generic-v1",
+                       "protocol_version" => 1,
+                       "operations" => %{
+                         "start" => true,
+                         "events" => true,
+                         "cancel" => true,
+                         "resume" => false,
+                         "handoff" => false,
+                         "guidance" => "unsupported",
+                         "pause" => "unsupported",
+                         "approval_response" => false,
+                         "usage" => "unknown",
+                         "hard_cost_limit" => false
+                       }
+                     }
+                   }
+                 }
+               ],
+               now: @now
+             )
+
+    item =
+      create_work_item(project["id"], "Archived retry", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex"
+      })
+
+    assert %{"execution" => %{"state" => "queued"}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/run", %{"action_id" => "archive-run"})
+             |> json_response(202)
+
+    # The command response serves the same retry gates as the item's read: an
+    # eligible advertised runtime keeps the control, and the archived project
+    # below takes it away.
+    assert %{"execution" => %{"state" => "cancelled", "can_retry" => true}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/cancel", %{
+               "action_id" => "archive-cancel",
+               "generation" => 1
+             })
+             |> json_response(202)
+
+    assert %{"work_item" => %{"execution" => %{"can_retry" => true}}} =
+             api_conn()
+             |> get("/portal/api/work-items/#{item["id"]}")
+             |> json_response(200)
+
+    assert %{"project" => %{"status" => "archived"}} =
+             api_conn()
+             |> patch("/portal/api/projects/#{project["id"]}", %{
+               "version" => project["version"],
+               "status" => "archived"
+             })
+             |> json_response(200)
+
+    assert %{"work_item" => %{"execution" => %{"state" => "cancelled", "can_retry" => false}}} =
+             api_conn()
+             |> get("/portal/api/work-items/#{item["id"]}")
+             |> json_response(200)
+
+    assert %{"error" => %{"code" => "state_conflict"}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/retry", %{
+               "action_id" => "archive-retry",
+               "generation" => 1
+             })
+             |> json_response(409)
+  end
+
   test "retry is hidden and rejected after a failed task is reassigned to a human" do
     project = create_project("RPO")
 
