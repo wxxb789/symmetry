@@ -71,22 +71,34 @@ defmodule SymmetryControl.Workspaces.ReadModel do
         |> Map.new(&{&1.id, &1})
 
       runs = current_runs(task_ids)
+      runtimes = current_runtimes(runs)
       commands = latest_commands(task_ids)
       waiting = waiting_contexts(tasks, runs)
-      controls = controls(tasks, runs)
+      pending = pending_supervisory_commands(runs)
+      retry_eligible = retry_runtime_eligible(work_items, tasks)
       evidence = evidence(task_ids)
 
       Map.new(task_ids, fn task_id ->
         task = Map.fetch!(tasks, task_id)
+        run = Map.get(runs, task_id)
+        runtime = run && Map.get(runtimes, run.runtime_id)
 
         {task_id,
          %{
            execution: %{
              task: task,
-             run: Map.get(runs, task_id),
+             run: run,
+             runtime: runtime,
+             retry_runtime_eligible: MapSet.member?(retry_eligible, task_id),
              waiting: Map.get(waiting, task_id),
              latest_command: Map.get(commands, task_id),
-             controls: Map.fetch!(controls, task_id)
+             controls:
+               Orchestration.control_capabilities(
+                 task,
+                 run,
+                 runtime,
+                 not is_nil(run) and MapSet.member?(pending, run.id)
+               )
            },
            evidence:
              Map.get(
@@ -99,36 +111,57 @@ defmodule SymmetryControl.Workspaces.ReadModel do
     end
   end
 
-  defp controls(tasks, runs) do
+  # The current runs' runtimes, loaded in one query; the per-task capability
+  # projection reads them from this map instead of a query per task.
+  defp current_runtimes(runs) do
     runtime_ids = runs |> Map.values() |> Enum.map(& &1.runtime_id) |> Enum.uniq()
+
+    Repo.all(from runtime in Runtime, where: runtime.id in ^runtime_ids)
+    |> Map.new(&{&1.id, &1})
+  end
+
+  # Eligibility reads the binding the retried generation is re-admitted with —
+  # `retry_binding/2` resolves the work item's corrected profile and workspace
+  # with the attempt's supervisory requirement — not the failed task row's. Only
+  # a goal-less terminal attempt can be retried, so live and Goal-owned tasks
+  # never enter the query.
+  defp retry_runtime_eligible(work_items, tasks) do
+    bindings =
+      Enum.flat_map(work_items, fn item ->
+        case Map.get(tasks, item.orchestration_task_id) do
+          %Task{goal_id: nil, state: state} = task when state in ["failed", "cancelled"] ->
+            [
+              Map.merge(
+                %{task_id: task.id},
+                Workspaces.retry_binding(item, task.required_capabilities)
+              )
+            ]
+
+          _live_goal_owned_or_absent ->
+            []
+        end
+      end)
+
+    if bindings == [] do
+      MapSet.new()
+    else
+      Orchestration.retry_runtime_eligible_task_ids(bindings)
+    end
+  end
+
+  # The runs whose pause/resume command is pending or applied: an attempt at a
+  # supervisory transition the served controls must not duplicate.
+  defp pending_supervisory_commands(runs) do
     run_ids = runs |> Map.values() |> Enum.map(& &1.id)
 
-    runtimes =
-      Repo.all(from runtime in Runtime, where: runtime.id in ^runtime_ids)
-      |> Map.new(&{&1.id, &1})
-
-    pending =
-      Repo.all(
-        from command in Command,
-          where:
-            command.run_id in ^run_ids and command.kind in ["pause", "resume"] and
-              command.state in ["pending", "applied"],
-          select: command.run_id
-      )
-      |> MapSet.new()
-
-    Map.new(tasks, fn {id, task} ->
-      run = Map.get(runs, id)
-      runtime = run && Map.get(runtimes, run.runtime_id)
-
-      {id,
-       Orchestration.control_capabilities(
-         task,
-         run,
-         runtime,
-         not is_nil(run) and MapSet.member?(pending, run.id)
-       )}
-    end)
+    Repo.all(
+      from command in Command,
+        where:
+          command.run_id in ^run_ids and command.kind in ["pause", "resume"] and
+            command.state in ["pending", "applied"],
+        select: command.run_id
+    )
+    |> MapSet.new()
   end
 
   defp current_runs(task_ids) do

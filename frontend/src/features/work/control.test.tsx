@@ -222,6 +222,30 @@ describe("control mutation boundary", () => {
   });
 });
 
+describe("capability-bound controls", () => {
+  it("renders cancel and retry only from the served signals, never from the live state", async () => {
+    const user = userEvent.setup();
+    renderWorkDetail({
+      detail: (readIndex) => new Response(JSON.stringify(detailBody({
+        // The same live state both reads; only the server's own signals change.
+        execution: { task_id: taskId, run_id: null, generation: 1, state: "running", can_cancel: readIndex === 1, can_retry: readIndex === 1 },
+      }))),
+    });
+    await openDetail();
+    expect(await screen.findByRole("button", { name: "Cancel run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(document.querySelector(".control-bar .chip")).toHaveTextContent("Running");
+
+    // The refresh serves the same state with both operations withheld (the
+    // runtime advertises neither). A state-derived surface would keep the
+    // controls live; this one renders only the served signal.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(document.querySelector(".control-bar .chip")).toHaveTextContent("Running");
+  });
+});
+
 describe("control receipts", () => {
   it("renders an accepted start on a queued run with its own headline, never an acknowledgement", async () => {
     const user = userEvent.setup();

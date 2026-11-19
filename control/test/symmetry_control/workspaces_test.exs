@@ -395,6 +395,27 @@ defmodule SymmetryControl.WorkspacesTest do
     assert Repo.aggregate(WorkItem, :count) == count + 3
   end
 
+  test "retry binding fails closed without a loaded project" do
+    item = %WorkItem{
+      agent_profile: nil,
+      workspace: nil,
+      project: %Ecto.Association.NotLoaded{
+        __field__: :project,
+        __owner__: WorkItem,
+        __cardinality__: :belongs_to
+      }
+    }
+
+    # The project's defaults are unreachable, so the item's own blank values
+    # stand alone and match no runtime: the served retry gate withholds the
+    # control instead of the read raising on the missing association.
+    assert %{agent_profile: nil, workspace: nil, required_capabilities: %{}} =
+             Workspaces.retry_binding(item)
+
+    assert %{required_capabilities: %{"supervisory_control" => true}} =
+             Workspaces.retry_binding(item, %{"supervisory_control" => true})
+  end
+
   defp project_fixture do
     assert {:ok, project} =
              Workspaces.create_project(%{

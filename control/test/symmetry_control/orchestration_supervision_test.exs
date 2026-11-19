@@ -250,6 +250,9 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
     assert {:ok, snapshot} = Orchestration.task_snapshot(task.id)
     refute PortalJSON.execution(snapshot).can_guide
     refute PortalJSON.execution(snapshot).can_pause
+    # The legacy capability subset advertises no adapter `cancel` operation, so
+    # the served control fails closed even though the task state permits it.
+    refute PortalJSON.execution(snapshot).can_cancel
   end
 
   test "guidance is durable, generation fenced and acknowledged only when applied" do
@@ -309,7 +312,9 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
     assert {:ok, snapshot} = Orchestration.task_snapshot(task.id)
     execution = PortalJSON.execution(snapshot)
     assert execution.can_resume
-    assert execution.can_cancel
+    # The supervisory runtime carries no adapter metadata, so its unknown
+    # cancel support keeps the served control off (fail-closed).
+    refute execution.can_cancel
     assert execution.can_guide
     refute execution.can_pause
     assert {:ok, %{state: "paused"}} = Orchestration.renew_lease(run.id, fence, now: @now)

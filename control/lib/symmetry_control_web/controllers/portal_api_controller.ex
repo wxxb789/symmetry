@@ -359,7 +359,7 @@ defmodule SymmetryControlWeb.PortalApiController do
         |> json(%{
           disposition: Atom.to_string(disposition),
           work_item: work_item_json(snapshot.work_item),
-          execution: PortalJSON.execution(snapshot.task)
+          execution: PortalJSON.execution(snapshot.task, snapshot.work_item)
         })
 
       {:error, reason} ->
@@ -381,7 +381,7 @@ defmodule SymmetryControlWeb.PortalApiController do
         |> json(%{
           disposition: Atom.to_string(disposition),
           command: Protocol.command(snapshot.command),
-          execution: PortalJSON.execution(snapshot.task)
+          execution: PortalJSON.execution(snapshot.task, snapshot.work_item)
         })
 
       {:error, reason} ->
@@ -405,7 +405,7 @@ defmodule SymmetryControlWeb.PortalApiController do
           disposition: Atom.to_string(disposition),
           command: Protocol.command(snapshot.command),
           work_item: work_item_json(snapshot.work_item),
-          execution: PortalJSON.execution(snapshot.task)
+          execution: PortalJSON.execution(snapshot.task, snapshot.work_item)
         })
 
       {:error, reason} ->
@@ -440,7 +440,7 @@ defmodule SymmetryControlWeb.PortalApiController do
         |> json(%{
           disposition: Atom.to_string(disposition),
           command: Protocol.command(snapshot.command),
-          execution: PortalJSON.execution(snapshot.task)
+          execution: PortalJSON.execution(snapshot.task, snapshot.work_item)
         })
 
       {:error, reason} ->

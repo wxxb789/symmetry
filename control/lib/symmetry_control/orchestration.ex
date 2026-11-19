@@ -536,6 +536,7 @@ defmodule SymmetryControl.Orchestration do
            %{
              task: Task.t(),
              run: Run.t() | nil,
+             runtime: Runtime.t() | nil,
              waiting: map() | nil,
              latest_command: Command.t() | nil
            }}
@@ -551,12 +552,21 @@ defmodule SymmetryControl.Orchestration do
               where: run.task_id == ^task.id and run.generation == ^task.attempt_generation
           )
 
+        runtime = run && Repo.get(Runtime, run.runtime_id)
+
         %{
           task: task,
           run: run,
+          runtime: runtime,
           waiting: current_waiting_context(task, run),
           latest_command: latest_task_command(task.id),
-          controls: control_capabilities(task, run)
+          controls:
+            control_capabilities(
+              task,
+              run,
+              runtime,
+              not is_nil(run) and pending_supervisory_transition?(run.id)
+            )
         }
       end)
       |> case do
@@ -569,12 +579,6 @@ defmodule SymmetryControl.Orchestration do
   end
 
   def task_snapshot(_), do: {:error, :invalid_request}
-
-  def control_capabilities(task, run) do
-    runtime = run && Repo.get(Runtime, run.runtime_id)
-    pending? = not is_nil(run) and pending_supervisory_transition?(run.id)
-    control_capabilities(task, run, runtime, pending?)
-  end
 
   def control_capabilities(task, run, runtime, pending?) do
     supported? =
@@ -593,6 +597,110 @@ defmodule SymmetryControl.Orchestration do
       can_resume: supported? and current? and task.state == "paused" and not pending?
     }
   end
+
+  @doc """
+  Whether `runtime` advertises the boolean adapter operation `operation`.
+
+  Only a runtime registered with the versioned adapter record advertises
+  per-operation support; a runtime without the record, without the operation,
+  or with a non-`true` value is unknown and answers false. The portal
+  projection reads this so a served control is never offered for an operation
+  the runtime cannot perform.
+  """
+  @spec adapter_operation_supported?(Runtime.t() | nil, atom()) :: boolean()
+  def adapter_operation_supported?(%Runtime{} = runtime, operation) when is_atom(operation) do
+    adapter = value(runtime.capabilities, :adapter)
+
+    is_map(adapter) and value(value(adapter, :operations), operation) == true
+  end
+
+  def adapter_operation_supported?(_runtime, _operation), do: false
+
+  @typedoc """
+  One retried task's binding: the agent profile, workspace and required
+  capabilities `Workspaces.retry_binding/2` resolves for its work item,
+  including the requirement the attempt being retried imposed.
+  """
+  @type retry_binding :: %{
+          task_id: Ecto.UUID.t(),
+          agent_profile: String.t(),
+          workspace: String.t(),
+          required_capabilities: map()
+        }
+
+  @retry_binding_types %{
+    task_id: :binary_id,
+    agent_profile: :string,
+    workspace: :string,
+    required_capabilities: :map
+  }
+
+  @doc """
+  The ids of `bindings` with at least one runtime assignment could select that
+  advertises the adapter `start` operation.
+
+  Each binding carries the values the retried generation is re-admitted with —
+  not the failed task row's (`Workspaces.retry_binding/2`) — and eligibility is
+  the non-transient part of the goal-less assignment path: same binding,
+  capability containment, supervisory and harness-kind clauses, intersected
+  with the adapter `start` requirement. Transient online, heartbeat and
+  capacity state is ignored: the served control states that some eligible
+  runtime could start the retried attempt; the scheduler still decides the
+  actual assignment.
+  """
+  @spec retry_runtime_eligible_task_ids([retry_binding()]) :: MapSet.t(Ecto.UUID.t())
+  def retry_runtime_eligible_task_ids(bindings) when is_list(bindings) do
+    rows = Enum.map(bindings, &retry_binding_row/1)
+
+    from(binding in values(rows, @retry_binding_types),
+      cross_join: runtime in Runtime,
+      where: ^runtime_matches_binding(),
+      where: fragment("? @> ?", runtime.capabilities, type(^retry_adapter_requirement(), :map)),
+      distinct: true,
+      select: binding.task_id
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
+  Whether assignment could select a runtime that advertises the adapter `start`
+  operation for the retry `binding`; the single-binding reader for
+  `retry_runtime_eligible_task_ids/1`.
+  """
+  @spec retry_runtime_eligible?(retry_binding()) :: boolean()
+  def retry_runtime_eligible?(binding) when is_map(binding) do
+    Repo.exists?(
+      from binding in values([retry_binding_row(binding)], @retry_binding_types),
+        cross_join: runtime in Runtime,
+        where: ^runtime_matches_binding(),
+        where: fragment("? @> ?", runtime.capabilities, type(^retry_adapter_requirement(), :map))
+    )
+  end
+
+  @doc """
+  The required capabilities a retried generation is re-admitted with: `required`
+  with `supervisory_control: true` restored when the attempt being replaced
+  required it.
+
+  `retry_task/4` never lets a retry drop the supervisory fence of its
+  predecessor, and the served retry control resolves the same value through
+  `Workspaces.retry_binding/2`, so the reader states the assignment the retry
+  would apply.
+  """
+  @spec retry_required_capabilities(map(), map() | nil) :: map()
+  def retry_required_capabilities(required, current_required) when is_map(required) do
+    if value(current_required, :supervisory_control, false) == true,
+      do: Map.put(required, "supervisory_control", true),
+      else: required
+  end
+
+  defp retry_binding_row(binding) do
+    Map.take(binding, [:task_id, :agent_profile, :workspace, :required_capabilities])
+  end
+
+  # A retried attempt starts a fresh run, so its runtime must advertise `start`.
+  defp retry_adapter_requirement, do: %{"adapter" => %{"operations" => %{"start" => true}}}
 
   @spec list_task_events(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, atom()}
   def list_task_events(task_id, opts \\ []) do
@@ -1276,18 +1384,9 @@ defmodule SymmetryControl.Orchestration do
     Repo.one(
       from task in Task,
         join: runtime in Runtime,
-        on:
-          runtime.status == "online" and runtime.agent_profile == task.agent_profile and
-            runtime.workspace == task.workspace and
-            fragment("? @> ?", runtime.capabilities, task.required_capabilities),
+        on: runtime.status == "online",
+        where: ^runtime_matches_binding(),
         where: task.state == "queued" and is_nil(task.goal_id),
-        where: is_nil(runtime.harness_kind) or runtime.harness_kind not in ["omp", "omo"],
-        where:
-          fragment(
-            "?->>'supervisory_control' IS DISTINCT FROM 'true'",
-            task.required_capabilities
-          ) or
-            is_nil(runtime.harness_kind) or runtime.harness_kind == "generic",
         where:
           fragment(
             "? > CAST(? AS timestamp) - (? * INTERVAL '3 milliseconds')",
@@ -1306,6 +1405,29 @@ defmodule SymmetryControl.Orchestration do
         limit: 1,
         lock: "FOR UPDATE SKIP LOCKED",
         select: {task, runtime}
+    )
+  end
+
+  # The non-transient conditions that make a runtime eligible for a goal-less
+  # task: same binding (agent profile, workspace and required capabilities),
+  # capability containment, the supervisory clause and the harness-kind
+  # exclusion. `next_assignable_legacy_task_and_runtime/1` adds runtime status,
+  # heartbeat freshness and free capacity on top; the retry projection asks
+  # only which runtimes assignment rules could select at all, so it shares
+  # exactly these conditions — against the binding the retried generation will
+  # be re-admitted with.
+  defp runtime_matches_binding do
+    dynamic(
+      [binding, runtime],
+      runtime.agent_profile == binding.agent_profile and
+        runtime.workspace == binding.workspace and
+        fragment("? @> ?", runtime.capabilities, binding.required_capabilities) and
+        (fragment(
+           "?->>'supervisory_control' IS DISTINCT FROM 'true'",
+           binding.required_capabilities
+         ) or
+           is_nil(runtime.harness_kind) or runtime.harness_kind == "generic") and
+        (is_nil(runtime.harness_kind) or runtime.harness_kind not in ["omp", "omo"])
     )
   end
 
@@ -2514,14 +2636,11 @@ defmodule SymmetryControl.Orchestration do
         if not is_nil(task.goal_id), do: rollback(:goal_authority_required)
 
         task_attrs =
-          if value(task.required_capabilities, :supervisory_control, false) == true,
-            do:
-              Map.update!(
-                task_attrs,
-                :required_capabilities,
-                &Map.put(&1, "supervisory_control", true)
-              ),
-            else: task_attrs
+          Map.update!(
+            task_attrs,
+            :required_capabilities,
+            &retry_required_capabilities(&1, task.required_capabilities)
+          )
 
         payload = %{work: task_attrs}
         command_hash = command_request_hash("retry", payload, opts)
