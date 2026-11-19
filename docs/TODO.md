@@ -129,20 +129,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
 
-- [ ] Investigate the load-sensitive timeout fixture
-      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
-      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
-      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
-      on the pass whose host was also running four other regression suites and the record
-      re-derivations - the concurrency the model-routing runbook itself warns against. The
-      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
-      assertion 2.0 s later, while the kill path is a snapshot tree kill
-      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
-      kill enumerates the tree is not killed; whether that is what happened in that pass is not
-      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
-      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
-      kill path alone unless it reproduces on a quiet host.
-
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
       `control/test/symmetry_control/integrations_test.exs:1161` (`assert
