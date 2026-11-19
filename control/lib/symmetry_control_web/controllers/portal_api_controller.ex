@@ -452,12 +452,14 @@ defmodule SymmetryControlWeb.PortalApiController do
 
   defp hydrate_work_item(work_item),
     do:
-      SymmetryControl.Repo.preload(work_item, [
-        :project,
-        :repository_resource,
-        :ci_resource,
-        :external_work_item_resource
-      ], in_parallel: false)
+      SymmetryControl.Repo.preload(
+        work_item,
+        [
+          :project,
+          :repository_resource,
+          :ci_resource,
+          :external_work_item_resource
+        ], in_parallel: false)
 
   defp connection_receipt(conn, status, connection, disposition) do
     conn
