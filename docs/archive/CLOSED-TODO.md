@@ -48,6 +48,52 @@ from branch `chore/deadcode-revalidation`.
       re-derivations recorded in the audit) remain bound to the pre-rebase reviewed revision and are labelled as
       history.
 
+- [x] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
+      receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
+      `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
+      temp root (the `symmetry-0008c-eval` run store under the local user profile). They are produced,
+      committed evidence bound by digests other records name, so the 0008c audit recorded them as
+      an open item instead of rewriting history. The runner's sanitisation extension
+      (`validate_measured_mapping(..., redact=True)`) now records every host-specific absolute path
+      in a measured value as a `sha256:` token, so run records and receipts written from now on
+      cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
+      never edit a receipt whose digests other records bind. Decided by rendering rather than
+      keeping the roots: closed 2026-11-19 on branch
+      `chore/eval-record-scrub` under the owner's one-time Q2 authorization (revalidated first, as the entry asked):
+      the four receipts and the evidence record were rendered through `scripts/ci/model-routing-record-sanitize.py`
+      (`sha256:b8b252f3…`) — two substitutions per receipt (`mix_build_path`/`mix_deps_path` ->
+      `<disposable-root>/… (outside the checkout)`) and one in the evidence record — and every digest that binds
+      them was recomputed and rebound: the four receipt digests quoted by `0008c-candidate-policy.md` and by the
+      evidence record (`9432545d…`/`26d8e003…`/`e79fe173…`/`1be7b419…` ->
+      `93050ced…`/`5ee9b87b…`/`ceae34ce…`/`af12819d…`). The tool's `--check` exits 0 on the two receipts whose
+      absolute-path matches were all host paths (`0008c-a-strong.json`, `0008c-b-mixed.json`); the other two keep
+      only repo-relative prose fixtures (`/control/priv/static/portal/`, `/\`, `sync_status`) that rendering would
+      corrupt. Full before/after digest table and the deliberately-left list:
+      `docs/evaluations/model-routing/README.md`, "Record rendering exception (2026-11-19)".
+
+- [x] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
+      how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
+      resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
+      against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
+      `scripts/ci/test-model-routing-evaluation.py` again, so the 0008b/0008c/0008d receipts stay fail-closed
+      for submission under the current bytes exactly as their entries below describe; re-execute the runs, never
+      re-derive by editing a receipt. Closed by the one-time reference-binding audit of 2026-11-19 (branch
+      `chore/eval-record-scrub`; the owner scoped Q5 to a one-time audit, no gate): an uncommitted script parsed
+      every model-routing record and 0008-series evidence document and verified the commit/path bindings (commit
+      resolves, reachable from `origin/main`, a tag, or GitHub; path exists at that commit), the 0008a source
+      manifest (17/17 entries plus bound tree and canonical scoped digest recompute at `1c6c715`), the 0008d
+      landing-tip source subject (recomputed at `73e083f`: 1141 paths, exact), 42 tooling-source digests at their
+      tags/commits, the receipt frozen review/task digests, and every quoted file digest at HEAD — checked 61,
+      broken 0, fixed 0 (this branch's nine-file digest cascade is the only rebinding this audit required),
+      0 mismatches, with 15 sealed subject manifests and the sealed-checkout `HEAD:` references classified
+      unverifiable-private by design. Two referenced pre-rebase commits (`c45db2c`, `1baf76c`) are GitHub-absent
+      and stay labelled history with no main equivalent; five (`4644fd7`, `993870e`, `abf8210`, `bdbcdc7`,
+      `a9f4d93`) are unreachable from local refs but still served by the GitHub API, and `cab222b` is preserved
+      via the tag `0008c-produced-tooling`. No live binding was broken, so no binding needed rebinding beyond
+      this branch's digest cascade (recorded in the README exception section). No CI gate was added; a gate
+      proposal would be a new item.
+
 ## Dead-code candidates
 
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
@@ -496,6 +542,33 @@ from branch `chore/deadcode-revalidation`.
       Corroboration recorded without action: an independent cancelled review parsed the browser HTML
       report's embedded results and confirmed the focused 35/1/0 and broad 79/15/0 rows with no flaky cases -
       evidence for the 0007b receipts' browser rows, not a defect.
+
+- [x] Re-publish the pre-existing personal absolute paths in the committed 0008a
+      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
+      instead of rewriting history:
+      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
+      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
+      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
+      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
+      records with that helper and records the rendering in the record
+      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
+      record's quoted digest consistent when the older records are re-published.
+      Closed 2026-11-19 on branch `chore/eval-record-scrub`: re-published through
+      `scripts/ci/model-routing-record-sanitize.py` (`sha256:b8b252f3…`) as the
+      entry directs — `0008a-controls.json` 32 substitutions (the 14
+      disposable-root strings -> `<disposable-root>`, plus 9 toolchain
+      `C:\ProgramData\...\python.exe` and 9 operator-worktree argv entries -> the
+      deterministic `path-sha256:` tokens), `0008a-audit.json` 5 (3
+      disposable-root values + 2 toolchain entries), and the evidence record's
+      line 58 `EVIDENCE_ROOT='C:/Users/...'` -> `EVIDENCE_ROOT='<disposable-root>'`.
+      No host path remains and no meaningful prose fixture needed leaving
+      unrendered in these three files, so the tool's `--check` exits 0 on all
+      three. Quoted-digest consistency was kept: the evidence record's quoted
+      audit digest was rebound (`dc878099…` -> `832117d0…`), and no other
+      document quotes a changed digest (checked across `docs/`, `scripts/`,
+      `contracts/` and `.github/`). The full before/after digest table is in
+      `docs/evaluations/model-routing/README.md`, "Record rendering exception
+      (2026-11-19)".
 
 ## Paginated reads must be bound to the cursor that served their pages
 

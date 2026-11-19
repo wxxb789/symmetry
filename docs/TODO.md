@@ -97,26 +97,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       current bytes, in which case the runs have to be re-executed, never re-derived by editing a
       receipt.
 
-- [ ] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
-      receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
-      `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
-      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
-      temp root (the `symmetry-0008c-eval` run store under the local user profile). They are produced,
-      committed evidence bound by digests other records name, so the 0008c audit recorded them as
-      an open item instead of rewriting history. The runner's sanitisation extension
-      (`validate_measured_mapping(..., redact=True)`) now records every host-specific absolute path
-      in a measured value as a `sha256:` token, so run records and receipts written from now on
-      cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
-      never edit a receipt whose digests other records bind.
-
-- [ ] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
-      how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
-      resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
-      against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
-      `scripts/ci/test-model-routing-evaluation.py` again, so the 0008b/0008c/0008d receipts stay fail-closed
-      for submission under the current bytes exactly as their entries below describe; re-execute the runs, never
-      re-derive by editing a receipt.
-
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
@@ -768,17 +748,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
       convention paragraph itself (it restates the precedence the design and
       protocol documents already carry).
-
-- [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
-      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
-      instead of rewriting history:
-      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
-      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
-      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
-      records with that helper and records the rendering in the record
-      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
-      record's quoted digest consistent when the older records are re-published.
 
 - [ ] Decide whether record cleanliness needs an enforced gate, and keep the sanitising
       tool's argv/output scope with the 0008a re-publish. `scripts/ci/model-routing-record-sanitize.py`
