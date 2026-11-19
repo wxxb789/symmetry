@@ -285,6 +285,7 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
+  # The work-item-less task view: control affordances only, no retry claim.
   def execution(nil), do: nil
   def execution(task), do: execution_summary(task)
 
@@ -293,9 +294,9 @@ defmodule SymmetryControlWeb.PortalJSON do
   item's own retry gates applied, so a response serves the `can_retry` the
   item's read would rather than a state-only one. Eligibility resolves the work
   item's corrected binding (`Workspaces.retry_binding/2`, including the
-  attempt's supervisory requirement) instead of the task row's own binding the
-  snapshot carries, so a re-bound work item answers the response exactly as it
-  answers the read. A work item without its project and provider resources
+  attempt's supervisory requirement), so a re-bound work item answers the
+  response exactly as it answers the read. A bare task snapshot claims no retry
+  (`execution/1`), and a work item without its project and provider resources
   loaded answers those gates false.
   """
   def execution(nil, _work_item), do: nil
@@ -376,9 +377,11 @@ defmodule SymmetryControlWeb.PortalJSON do
   # control plane itself, so no runtime operation is required. `can_retry`
   # re-queues a terminal attempt, and a retried attempt starts fresh, so it
   # needs some runtime assignment could select for the task that advertises
-  # `start` — the previous attempt's runtime is irrelevant. Unknown runtime
-  # support fails closed: the served read never offers an operation no runtime
-  # could perform.
+  # `start` — the previous attempt's runtime is irrelevant. That eligibility is
+  # a workspace-read projection field, resolved from the work item there and by
+  # `execution/2`; a snapshot without it (the work-item-less task view) claims
+  # no retry. Unknown runtime support fails closed: the served read never
+  # offers an operation no runtime could perform.
   defp execution_summary(%{task: task_record, run: run} = snapshot) do
     task = Protocol.task(snapshot)
     runtime = Map.get(snapshot, :runtime)

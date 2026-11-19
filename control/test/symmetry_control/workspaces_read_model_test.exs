@@ -312,6 +312,9 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     # state-ok + supported: the runtime advertises `start`, the retried
     # attempt's operation.
     assert served_execution(failed_model, supported.work_item).can_retry
+    # The work-item-less task snapshot claims no retry: the read and the
+    # command responses resolve that from the work item's binding.
+    refute snapshot_execution(supported.work_item).can_retry
     # A runtime that can start but not cancel keeps retry and drops cancel.
     assert served_execution(failed_model, cancel_unsupported.work_item).can_retry
     # state-ok + unsupported/unknown: no advertised start, no retry.
@@ -618,7 +621,9 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     |> Map.fetch!(:execution)
   end
 
-  # The single-task read's control projection, as command responses serve it.
+  # The work-item-less task snapshot's control projection: cancel affordances
+  # only, no retry claim — the read and the command responses resolve that from
+  # the work item's binding.
   defp snapshot_execution(work_item) do
     assert {:ok, snapshot} = Orchestration.task_snapshot(work_item.orchestration_task_id)
     PortalJSON.execution(snapshot)

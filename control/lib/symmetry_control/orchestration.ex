@@ -537,7 +537,6 @@ defmodule SymmetryControl.Orchestration do
              task: Task.t(),
              run: Run.t() | nil,
              runtime: Runtime.t() | nil,
-             retry_runtime_eligible: boolean(),
              waiting: map() | nil,
              latest_command: Command.t() | nil
            }}
@@ -559,19 +558,6 @@ defmodule SymmetryControl.Orchestration do
           task: task,
           run: run,
           runtime: runtime,
-          # Eligibility here speaks for the task row — the only binding a
-          # snapshot reader without a work item has; the workspace read and the
-          # command responses resolve the work item's corrected binding
-          # (`Workspaces.retry_binding/2`) instead. Only a terminal attempt can
-          # be retried, so live attempts never pay for the cross-join.
-          retry_runtime_eligible:
-            is_nil(task.goal_id) and task.state in ["failed", "cancelled"] and
-              retry_runtime_eligible?(%{
-                task_id: task.id,
-                agent_profile: task.agent_profile,
-                workspace: task.workspace,
-                required_capabilities: task.required_capabilities
-              }),
           waiting: current_waiting_context(task, run),
           latest_command: latest_task_command(task.id),
           controls:

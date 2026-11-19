@@ -485,6 +485,10 @@ defmodule SymmetryControl.Workspaces do
   could serve that generation (the served retry control, in the workspace read
   and the command responses) resolves the same values here instead of the
   failed task row's.
+
+  A work item whose project is not loaded resolves only its own values: a blank
+  agent profile or workspace then matches no runtime, so the served retry gate
+  fails closed instead of raising on the missing association.
   """
   @spec retry_binding(WorkItem.t(), map() | nil) :: %{
           agent_profile: String.t(),
@@ -492,11 +496,14 @@ defmodule SymmetryControl.Workspaces do
           required_capabilities: map()
         }
   def retry_binding(%WorkItem{} = work_item, current_required_capabilities \\ nil) do
-    project = work_item.project
+    # The project's defaults need the association; without it the item's own
+    # values stand alone, and a blank one matches no runtime.
+    project = if Ecto.assoc_loaded?(work_item.project), do: work_item.project
 
     %{
-      agent_profile: present(work_item.agent_profile) || project.default_agent_profile,
-      workspace: present(work_item.workspace) || project.default_workspace,
+      agent_profile:
+        present(work_item.agent_profile) || (project && project.default_agent_profile),
+      workspace: present(work_item.workspace) || (project && project.default_workspace),
       required_capabilities:
         Orchestration.retry_required_capabilities(
           required_capabilities(provider_resource_ids(work_item)),
