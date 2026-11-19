@@ -49,42 +49,6 @@ from branch `chore/deadcode-revalidation`.
       re-derivations recorded in the audit) remain bound to the pre-rebase reviewed revision and are labelled as
       history.
 
-- [ ] Investigate the load-sensitive timeout fixture
-      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
-      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
-      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
-      on the pass whose host was also running four other regression suites and the record
-      re-derivations - the concurrency the model-routing runbook itself warns against. The
-      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
-      assertion 2.0 s later, while the kill path is a snapshot tree kill
-      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
-      kill enumerates the tree is not killed; whether that is what happened in that pass is not
-      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
-      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
-      kill path alone unless it reproduces on a quiet host.
-      **Fixed (2026-11-19, `fix/flake-timeout-fixture`):** the witness is now event-driven. The
-      descendant records its start in a handshake directory outside the checkout, waits for a
-      release the test writes only after the timed-out check returned, and only then writes
-      `late-descendant.txt` into the checkout - so a descendant the kill did reach is dead before
-      it could write during a slow kill, which is the direction the 1.0 s sleep could not
-      distinguish. The test polls for the witness under a documented 10 s guard instead of
-      sleeping 2.0 s, and the gate publishes its own spawn marker, so a failure now reports what
-      the fixture had established (gate spawned descendant / descendant started / witness text)
-      instead of only the assertion. The 0.5 s per-gate timeout, the assertion and the runner's
-      kill path are unchanged. Evidence on this host under load: the pristine fixture failed 1 of
-      5 runs (`a gate descendant survived the per-gate timeout`, with no mechanism in its log) -
-      with an earlier loaded pass failing 1 of 3 - while the new fixture passed 6 of 6 under the
-      same load; on this host under load, 20 `taskkill /F /T` tree kills (2.0-8.6 s each) never
-      let an in-hierarchy descendant write, while the control that killed only the parent let the
-      waiting descendant record 3 of 3 times - so the tree kill reaches the descendant before it
-      can act, and the witness path itself works. The full evaluation suite passes on the branch
-      (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). Residual, as
-      the entry's premise allows: the fixture still needs the gate to spawn its descendant inside
-      the per-gate timeout, so a host so loaded that the spawn lands after the kill enumerated the
-      tree still records a survivor - the failure message now names that condition, and the
-      model-routing runbook already forbids running this workflow beside a full test suite on the
-      same host.
-
 ## Dead-code candidates
 
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
@@ -455,6 +419,42 @@ from branch `chore/deadcode-revalidation`.
       by both the frontend unit test (`frontend/src/app/application.test.ts`) and the ExUnit test
       (`control/test/symmetry_control_web/portal_session_test.exs`); its enumerated cases are
       pinned on both sides, so every path or query rule change must add a corpus case.
+
+- [ ] Investigate the load-sensitive timeout fixture
+      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
+      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
+      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
+      on the pass whose host was also running four other regression suites and the record
+      re-derivations - the concurrency the model-routing runbook itself warns against. The
+      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
+      assertion 2.0 s later, while the kill path is a snapshot tree kill
+      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
+      kill enumerates the tree is not killed; whether that is what happened in that pass is not
+      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
+      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
+      kill path alone unless it reproduces on a quiet host.
+      **Fixed (2026-11-19, `fix/flake-timeout-fixture`):** the witness is now event-driven. The
+      descendant records its start in a handshake directory outside the checkout, waits for a
+      release the test writes only after the timed-out check returned, and only then writes
+      `late-descendant.txt` into the checkout - so a descendant the kill did reach is dead before
+      it could write during a slow kill, which is the direction the 1.0 s sleep could not
+      distinguish. The test polls for the witness under a documented 10 s guard instead of
+      sleeping 2.0 s, and the gate publishes its own spawn marker, so a failure now reports what
+      the fixture had established (gate spawned descendant / descendant started / witness text)
+      instead of only the assertion. The 0.5 s per-gate timeout, the assertion and the runner's
+      kill path are unchanged. Evidence on this host under load: the pristine fixture failed 1 of
+      5 runs (`a gate descendant survived the per-gate timeout`, with no mechanism in its log) -
+      with an earlier loaded pass failing 1 of 3 - while the new fixture passed 6 of 6 under the
+      same load; on this host under load, 20 `taskkill /F /T` tree kills (2.0-8.6 s each) never
+      let an in-hierarchy descendant write, while the control that killed only the parent let the
+      waiting descendant record 3 of 3 times - so the tree kill reaches the descendant before it
+      can act, and the witness path itself works. The full evaluation suite passes on the branch
+      (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). Residual, as
+      the entry's premise allows: the fixture still needs the gate to spawn its descendant inside
+      the per-gate timeout, so a host so loaded that the spawn lands after the kill enumerated the
+      tree still records a survivor - the failure message now names that condition, and the
+      model-routing runbook already forbids running this workflow beside a full test suite on the
+      same host.
 
 ## Deferred review findings (0007f)
 

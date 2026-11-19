@@ -1107,7 +1107,6 @@ class EvaluationTests(unittest.TestCase):
         )
         self.assertTrue(result["timed_out"])
         release = handshake / "descendant-release.txt"
-        self.addCleanup(lambda: None if release.exists() else release.write_text("release\n", encoding="utf-8"))
         release.write_text("release\n", encoding="utf-8")
         witness = self.checkout(run) / "late-descendant.txt"
         deadline = time.monotonic() + DESCENDANT_WITNESS_GUARD_SECONDS
@@ -1118,9 +1117,9 @@ class EvaluationTests(unittest.TestCase):
             "a gate descendant survived the per-gate timeout: "
             f"gate spawned descendant={(handshake / 'gate-spawned-descendant.txt').exists()}, "
             f"descendant started={(handshake / 'descendant-started.txt').exists()}, "
-            f"witness={witness.read_text(encoding='utf-8') if witness.exists() else None!r}; a descendant "
-            "created after the kill enumerates the tree is beyond the snapshot tree kill, so this host "
-            "must have let the gate spawn its descendant before the per-gate timeout fired",
+            f"witness={witness.read_text(encoding='utf-8') if witness.exists() else None!r}; the markers "
+            "cannot distinguish a descendant the kill missed inside the tree from one created after the "
+            "kill enumerates the tree, which a snapshot tree kill cannot reach",
         )
 
     def test_symlink_targets_are_bound(self) -> None:
