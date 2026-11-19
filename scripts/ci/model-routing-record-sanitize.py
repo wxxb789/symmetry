@@ -131,12 +131,18 @@ def hashed_path_token(path: str) -> str:
 def _render_match(match: re.Match[str]) -> str:
     """Render one matched path, leaving a JSON ``\\"`` escape outside the token.
 
-    A matched path immediately before a recorded quote is spelled ``...\\"``:
-    its final backslash escapes the quote, not a path separator, so consuming
-    it would leave a bare quote and corrupt the record's JSON syntax. An odd
-    trailing run of backslashes is such an escape (its pairs are literal
-    backslashes) and stays outside the token, which still binds the raw path
-    text minus that escape.
+    In JSON-escaped text a matched path immediately before a recorded quote is
+    spelled ``...\\"``: its final backslash escapes the quote, not a path
+    separator, so consuming it would leave a bare quote and corrupt the
+    record's JSON syntax. An odd trailing run of backslashes is such an escape
+    (its pairs are literal backslashes) and stays outside the token, which
+    still binds the raw path text minus that escape.
+
+    The rule is applied by shape, without JSON state, so it also governs
+    literal text that spells a host path with raw backslashes before a quote
+    (a Markdown code span, say): the token binds the path minus its trailing
+    separator and that backslash survives outside it, keeping the render
+    idempotent.
     """
 
     matched = match.group(0)

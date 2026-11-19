@@ -178,6 +178,18 @@ class SanitizeTextTests(unittest.TestCase):
         self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
         self.assertEqual(MODULE.sanitize_text(tail_rendered, [], root_only=True), tail_rendered)
 
+    def test_json_escaped_quote_after_a_path_stays_out_of_the_token_for_odd_runs(self):
+        # An odd run longer than one behaves the same way: a three-backslash run
+        # before the recorded quote keeps its pair inside the token and leaves
+        # the last backslash outside it as the quote's escape, so the quoted
+        # string still decodes and no bare quote is left behind.
+        run3_path = "C:" + _BS * 2 + "dir" + _BS * 2
+        rendered = MODULE.sanitize_text(
+            '{"t": "see ' + _BS + '"' + run3_path + _BS + '", ok"}', [], root_only=True,
+        )
+        self.assertEqual(json.loads(rendered), {"t": 'see "' + digest_of(run3_path) + '", ok'})
+        self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+
     def test_root_only_keeps_https_urls_literal(self):
         text = "https://github.com/wxxb789/symmetry/blob/main/x and https://x/home/y"
         self.assertEqual(MODULE.sanitize_text(text, [], root_only=True), text)

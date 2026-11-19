@@ -279,11 +279,23 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       **Closed (2026-11-19, `chore/render-dirty-records`):** rendered rather than kept as produced.
       A fresh whole-corpus enumeration (`--check --root-only` over `git ls-files docs/evaluations
       docs/evidence`) reproduced exactly the 26 records listed above, and each was rendered in
-      place through `scripts/ci/model-routing-record-sanitize.py` in the `--root-only` scope whose
-      committed end state on #83 (`29462e9`) reproduces byte for byte: 83 host-path substitutions
-      over the 26 files, no disposable root configured for these legacy records, so every host
-      location - scratch roots included - renders as a deterministic `path-sha256:` token while
-      product routes and prose fragments stay literal. One tool fix was required and ships with a
+      place through `scripts/ci/model-routing-record-sanitize.py` in the `--root-only` scope with
+      the #83 run roots configured, which renders #83's (`29462e9`) rendered bytes exactly for
+      `0008a-audit.json` and the four `0008c` receipts; #83's committed bytes additionally carry
+      its own digest rebinds (in `0008a-controls.json` the `stderr_sha256` rebind
+      `c12881ae…` -> `8503bfa2…`, and the receipt and audit digests quoted by
+      `0008c-candidate-policy.md`, `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md`
+      and `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md`). This pass
+      rendered 83 host-path substitutions over the 26 files - no disposable root configured for
+      these legacy records - so every host location, scratch roots included, became a
+      deterministic `path-sha256:` token while product routes stay literal. Host-shaped specimen
+      paths quoted inside reviewer prose were not spared: six of the 83 substitutions tokenized
+      the `//etc/passwd` and `\\dir\\file.go` specimens in
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-mixed.json` (line 627) and its
+      `.review.json` (line 6), and the `C:\\dir\\file` specimen in
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` (line 487) and its
+      `.review.json` (line 6); their pre-render spellings remain recoverable from git history at
+      the base commit (`b33188b`). One tool fix was required and ships with a
       regression test: the renderer consumed the backslash that escapes a quoted path's closing
       quote, leaving a bare quote that made `0008b-go-bounded-regression-strong{,.review}.json`
       invalid JSON; an odd trailing backslash now stays outside the token, old-versus-fixed
@@ -300,7 +312,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `--check --root-only` sweep reports 0 dirty of 111 files,
       `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` exits 0,
       re-running the renderer over all 30 touched files is byte-stable, and
-      `test-model-routing-record-sanitize.py` (27 tests) with `test-check-record-cleanliness.py`
+      `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
       (16 tests) pass.
 
 ## Dead-code candidates
