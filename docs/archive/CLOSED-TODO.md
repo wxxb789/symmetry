@@ -214,23 +214,26 @@ from branch `chore/deadcode-revalidation`.
       `statuses` word search (no caller of the accessor anywhere; no `defdelegate`
       exists in `control/lib`; no `one_of`, OpenAPI/spec or frontend type
       generation derives from it), a check of every `Connection.` call site
-      (`integrations.ex` and `portal_integrations_test.exs` use
-      providers/capabilities/auth_types and the changesets only), and
+      (`integrations.ex:43-49` uses `providers/0`, `capabilities/0` and
+      `auth_types/1`; `portal_integrations_test.exs` uses `Connection.changeset/2`,
+      Ecto queries and the portal API only), and
       `MIX_ENV=test mix compile --force --warnings-as-errors` exiting 0 — any
       remaining Elixir caller of the removed function would fail that gate.
       `integrations_test.exs` and `portal_integrations_test.exs` pass under
       `--warnings-as-errors`.
 
-- [ ] Keep the `.chip-failed` and `.chip-pending` rules in `frontend/src/styles.css` (now `:216-217`).
-      Decision from branch `chore/deadcode-revalidation` (2026-11-19): revalidation proved both are
-      referenced through *constructed* class names, so the earlier literal-selector sweep was wrong
-      and nothing is removed. `work-surface.tsx:330` and `detail.tsx:303` render `chip chip-${ci.tone}`
-      and `runtimes.tsx:59` renders `chip chip-${row.tone}`; the tones include `failed` and `pending`
-      (`frontend/src/features/work/presentation.ts:247`, and `runtimes/presentation.ts` for the
-      not-supported, next-turn and estimated capability presentations). Any future unreferenced-selector
-      sweep of that file must follow constructed class names, not literal words.
-      Closed by branch `chore/deadcode-revalidation` (2026-11-19): revalidated as referenced through
-      constructed class names; no rule was removed.
+- [ ] Remove or justify the unreferenced CSS rules `.chip-failed` and `.chip-pending` in
+      `frontend/src/styles.css:170-171`. A sweep of all 137 class selectors in that file against
+      `frontend/src` found these two unreferenced already at `7a92ca4` (untouched by the 0007b,
+      0007c and 0007d work), so they are pre-existing dead weight rather than a merge artifact.
+      Revalidate before deleting and leave removal to separate maintenance.
+      Closed by branch `chore/deadcode-revalidation` (2026-11-19): kept, because both rules are
+      reached through constructed class names — `work-surface.tsx:330` and `detail.tsx:303` render
+      `chip chip-${ci.tone}` and `runtimes.tsx:59` renders `chip chip-${row.tone}`, with `failed`
+      and `pending` among the tones (`frontend/src/features/work/presentation.ts:247`, and
+      `runtimes/presentation.ts` for the not-supported, next-turn and estimated capability
+      presentations; the rules now sit at `styles.css:216-217`) — so the literal-selector sweep's
+      "unreferenced" premise was wrong and no rule was removed.
 
 ## Deferred review findings (0007h)
 
