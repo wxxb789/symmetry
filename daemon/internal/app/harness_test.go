@@ -4279,16 +4279,12 @@ func TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt(t *testing.T) 
 	session.suppressTaskResult = true
 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
-	select {
-	case <-session.turnStarted:
-	case <-time.After(testHangGuard):
-		t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
-	}
+	waitForNativeRunning(t, store, state.RunKey{RunID: "run-1", Generation: 1})
 	releaseTurnReturn()
 	select {
 	case <-session.waitTurnEntered:
 	case <-time.After(testHangGuard):
-		t.Fatal("native terminal wait did not start")
+		t.Fatalf("native terminal wait did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
 	}
 	command := protocol.Command{RunID: "run-1", Generation: 1, CommandID: "cancel-1", Kind: "cancel"}
 	if !app.handleCommand(context.Background(), command) {
@@ -4501,11 +4497,7 @@ func TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability(t *testing
 	}
 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
-	select {
-	case <-session.turnStarted:
-	case <-time.After(testHangGuard):
-		t.Fatalf("native Pi provider turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
-	}
+	waitForNativeRunning(t, store, state.RunKey{RunID: "run-1", Generation: 1})
 	request := session.request
 	if request.ProviderAccess == nil || request.ProviderAccess.Path != "/api/v1/provider-actions" || request.ProviderAccess.Token != controlClient.providerAccess.Token {
 		t.Fatalf("native provider access = %#v", request.ProviderAccess)
@@ -4595,11 +4587,7 @@ func TestGoalAdmissionLeavesProviderAccessNilForNativeHarness(t *testing.T) {
 	defer store.Close()
 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
-	select {
-	case <-session.turnStarted:
-	case <-time.After(testHangGuard):
-		t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
-	}
+	waitForNativeRunning(t, store, state.RunKey{RunID: "run-1", Generation: 1})
 	if session.request.ProviderAccess != nil {
 		t.Fatalf("native start provider access = %#v, want nil", session.request.ProviderAccess)
 	}
@@ -4740,6 +4728,49 @@ func nativeStartFailureDetail(store *state.Store, key state.RunKey) string {
 		return fmt.Sprintf("journal terminal state=%q verdict=%q", journal.TerminalState, journal.TerminalVerdict)
 	}
 	return fmt.Sprintf("no durable failure recorded (local state=%q, pending transitions=%d)", journal.LocalState, len(journal.PendingTransitions))
+}
+
+// waitForNativeRunning waits for the daemon's own durable start publication
+// instead of the fixture's turn channel: markRunning queues the "running"
+// transition immediately before the daemon calls StartTurn, so the wait ends when
+// the product publishes its state and never when a host-speed budget elapses. A
+// recorded failure ends the wait with the product's own reason, and the package's
+// testHangGuard bounds only a genuinely hung start.
+func waitForNativeRunning(t *testing.T, store *state.Store, key state.RunKey) {
+	t.Helper()
+	deadline := time.Now().Add(testHangGuard)
+	for {
+		journal, err := store.LoadJournal(key)
+		if err != nil && !state.IsNotFound(err) {
+			t.Fatalf("native start wait could not read the run journal: %v", err)
+		}
+		if err == nil {
+			// The daemon writes the run journal when it claims the assignment; a
+			// missing journal is the state before that publication, not a failure.
+			if journal.LocalState == "running" && journal.TerminalState == "" {
+				return
+			}
+			if journal.TerminalState != "" {
+				t.Fatalf("run reached terminal state %q before the start wait observed running: %s", journal.TerminalState, nativeStartFailureDetail(store, key))
+			}
+			switch journal.LocalState {
+			case "claiming", "claimed", "running":
+			default:
+				// Any other local state (stale, cleanup_pending, terminal_pending, ...)
+				// is decisive: the start wait must not outlive it.
+				t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, key))
+			}
+			for _, transition := range journal.PendingTransitions {
+				if transition.State == "failed" {
+					t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, key))
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("native turn did not start before the %s hang guard expired: %s", testHangGuard, nativeStartFailureDetail(store, key))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func forEachRetainedNativeHarness(t *testing.T, run func(*testing.T, harness.Kind)) {
@@ -4900,12 +4931,15 @@ func nativeAdmissionDaemonForHarness(t *testing.T, admission protocol.Admission,
 		workspace:           &fakeWorkspace{},
 		harnessRegistry:     registry,
 		harnessCapabilities: capabilities,
-		options:             options{newID: ids(), clock: time.Now},
-		machineID:           "machine-1",
-		runtimeID:           "runtime-1",
-		runtimeEpoch:        1,
-		running:             make(map[state.RunKey]*runningRun),
-		slots:               make(chan struct{}, 1),
+		// A start-wait failure can outlive the test body and log; a nil logger
+		// would panic the package binary and lose the recorded failure.
+		log:          slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options:      options{newID: ids(), clock: time.Now},
+		machineID:    "machine-1",
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		running:      make(map[state.RunKey]*runningRun),
+		slots:        make(chan struct{}, 1),
 	}
 	if requiresLinuxV2NativeOwner(kind) {
 		app.options.linuxV2NativeOwnerFactory = func(config.Config) (linuxV2NativeOwner, error) {
