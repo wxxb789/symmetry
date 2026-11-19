@@ -821,6 +821,97 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
            end)
   end
 
+  test "a work item detail read keeps every query on the calling process" do
+    project = create_project("PRD")
+
+    assert {:ok, connection} =
+             SymmetryControl.Integrations.create_connection(%{
+               provider: "github",
+               name: "preload-" <> Ecto.UUID.generate(),
+               account_ref: "acme",
+               auth_type: "gh_cli",
+               capabilities: ["repositories", "work_items", "changes", "ci"]
+             })
+
+    assert {:ok, repository} =
+             SymmetryControl.Workspaces.create_resource(project["id"], %{
+               connection_id: connection.id,
+               kind: "repository",
+               name: "Preload repository",
+               external_ref: "acme/preload"
+             })
+
+    assert {:ok, item} =
+             SymmetryControl.Workspaces.create_work_item(project["id"], %{
+               title: "Read on one connection",
+               status: "ready",
+               priority: "medium",
+               repository_resource_id: repository.id
+             })
+
+    reader = self()
+
+    forms = [
+      item.id,
+      Ecto.UUID.dump!(item.id),
+      project["id"],
+      Ecto.UUID.dump!(project["id"]),
+      repository.id,
+      Ecto.UUID.dump!(repository.id)
+    ]
+
+    handler_id = {__MODULE__, :work_item_read, item.id}
+
+    :telemetry.attach(
+      handler_id,
+      [:symmetry_control, :repo, :query],
+      fn _event, _measurements, metadata, %{reader: reader, forms: forms} ->
+        if work_item_read?(metadata.params, forms),
+          do: send(reader, {:work_item_read, self(), to_string(metadata.query)})
+      end,
+      %{reader: reader, forms: forms}
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert %{"work_item" => _detail} =
+             api_conn()
+             |> get("/portal/api/work-items/#{item.id}")
+             |> json_response(200)
+
+    reads = work_item_reads([])
+    queries = Enum.map(reads, fn {_pid, query} -> query end)
+    processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
+
+    # Two preloads must have rows for this test to have power: Ecto only
+    # preloads in parallel from two preloads with fetch work, and every parallel
+    # preload would queue for the sandbox connection the test process owns
+    # (the recorded intermittent checkout-timeout failure).
+    assert Enum.any?(queries, &String.contains?(&1, "\"projects\""))
+    assert Enum.any?(queries, &String.contains?(&1, "\"project_resources\""))
+
+    assert processes == [reader],
+           "expected every work item detail read query on #{inspect(reader)}, got #{inspect(processes)}"
+  end
+
+  defp work_item_reads(reads) do
+    receive do
+      {:work_item_read, pid, query} -> work_item_reads([{pid, query} | reads])
+    after
+      0 -> reads
+    end
+  end
+
+  defp work_item_read?(params, forms) do
+    params
+    |> List.wrap()
+    |> Enum.any?(fn
+      value when is_binary(value) -> value in forms
+      values when is_list(values) -> Enum.any?(values, &(&1 in forms))
+      _value -> false
+    end)
+  end
+
   defp create_project(key) do
     %{"project" => project} =
       api_conn()

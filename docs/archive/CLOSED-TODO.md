@@ -282,6 +282,44 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
 
+- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
+      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
+      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
+      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
+      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
+      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
+      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
+      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
+      remaining failure is the environment-limited `CommandTest` above). The build output is
+      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
+      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
+      suite prerequisite; keep the assertions.
+      Closed in `fix/control-staged-assets-dependency` (2026-11-19) as the documented-prerequisite
+      option, kept loud rather than skipped: the four cases are tagged `:portal_assets`, and
+      `SymmetryControlWeb.PortalBundle`, called from `ConnCase` setup for every web test, fails a
+      tagged case before it touches the bundle. The failure states the prerequisite, the staging
+      command (`mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build`), CI's equivalent
+      staging (the `control` job downloads the `contracts` job's `portal-assets` artifact into
+      `control/priv/static/portal/` before `mix test`) and the explicit exclusion
+      (`mix test --exclude portal_assets`) instead of the raw `File.Error`/`File.RenameError` on the
+      staged path; the guard also rejects an entry document that is empty, references no built
+      JavaScript asset or no stylesheet, or names hashed assets that are not staged (an interrupted
+      `frontend/scripts/stage-assets.mjs`, or a build older than the current one). A fixture bundle
+      was rejected because these cases assert against the real built entry, and an ExUnit `skip`
+      would have hidden a broken CI staging step. Assertions are unchanged and nothing is skipped
+      silently: with no staging the four tagged cases failed with the guard's "staged entry
+      document is missing" problem line while the file's other nine cases passed
+      (`mix test test/symmetry_control_web/controllers/portal_controller_test.exs` — 9/13 passed,
+      4 failed), an entry document naming absent hashed assets failed the same four with
+      "references assets that are not staged", `--exclude portal_assets` reported "9 passed,
+      4 excluded", and with the staged build all thirteen passed. The staged path now has one
+      definition, `SymmetryControlWeb.PortalAssets.index_path/0`, read by both
+      `PortalController.index/2` and the tests. The prerequisite is recorded in the Elixir row of
+      `docs/design/quality.md` (which links `docs/runbooks/portal.md`) and in that runbook's local
+      gate list; the limit that a complete but source-stale bundle is not detectable from the
+      gitignored staging alone is stated only in the runbook, so freshness stays CI's guarantee
+      (the `portal-assets` artifact is built from the same revision).
+
 *Closed remainder of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; with the closed part above, nothing of the item stays there.*
 
 - [ ] Close the `daemon/internal/platform` flake class: the Linux descendant-monitor terminal reason
@@ -452,6 +490,89 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       presentations; the rules now sit at `styles.css:216-217`) — so the literal-selector sweep's
       "unreferenced" premise was wrong and no rule was removed.
 
+- [ ] Investigate the intermittent browser failure `project, resource, work-item,
+      filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
+      detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
+      detached" (desktop-chromium). Observed once while implementing goal 0007d
+      (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
+      9 skipped) with two Control compiles running on the same host; the same test passed
+      twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
+      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
+      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
+      Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the case no longer
+      exists to revalidate. On main, the file revision introduced by `7a92ca4` (#31, 0007b)
+      still carried it when `5c2e0ad` (#35, 0007c) replaced it in the same file with
+      `classic resource attach, update and detach with truthful health`; the last commit to
+      modify the file (`671525c`) is byte-identical at the cutover's parent `ca29a8e` and
+      holds only that case plus the session-boundary and keyboard walks
+      (`git show 671525c:browser/tests/portal.spec.mjs`). The 0007i cutover then deleted the
+      file with the classic renderer, its bundle and the `/portal/classic` routes
+      (`ca1bdad`); the only server-rendered document left is the script-free login template
+      `control/lib/symmetry_control_web/portal_html/login.html.eex` with its extracted
+      `control/priv/portal_assets/login.css`. No successor carries the name — `browser/tests/`
+      has no `filtering, ordering, and persistence` case (exact-name search and a test-title
+      token search both come back empty) — and the deleted spec's coverage is mapped in
+      `browser/README.md` (resource attach/update/detach and the truthful health read ->
+      `browser/tests/portal-connections.spec.mjs`; the list, board, detail and history reads ->
+      `browser/tests/portal-work-views.spec.mjs`). The `#toast` surface the observation names
+      went with the classic renderer: no `toast` element exists in `frontend/src`, `control/lib`
+      or `control/priv`, and the live receipts are `role="status"` notices — the resource walk's
+      successor asserts `Resource attached — …`, and its successful-unbind leg asserts
+      `Resource detached — Delta.` — in `browser/tests/portal-connections.spec.mjs`. There is no
+      assertion left to keep.
+
+- [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
+      legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
+      output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
+      toast and "two browser contexts reject a stale project update" hit the 60 s test timeout;
+      both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
+      and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
+      before changing any budget.
+      Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): both retired cases are
+      absent from the tree, so there is nothing left to re-measure. `detail output encodes
+      untrusted statuses and rejects unsafe links` left main's `browser/tests/portal.spec.mjs` at
+      `7a92ca4` (#31, 0007b), which retired the classic detail-security probe to the new-route
+      successor `injected malicious detail values are rendered as text and never as markup or
+      unsafe URLs` in `browser/tests/portal-work-views.spec.mjs`; `two browser contexts reject a
+      stale project update` left the same file at `5c2e0ad` (#35, 0007c), whose planning
+      successor is `re-syncs to the newest project after a stale update in two contexts` in
+      `browser/tests/portal-work-planning.spec.mjs`. Neither name exists anywhere under
+      `browser/tests/` (exact-name search), the containing file is deleted with the 0007i cutover
+      (`ca1bdad`), and the successor surfaces are named in the migration record in
+      `browser/README.md` (the 0007b paragraph). The expect windows this item observed were the
+      cases' own; the 60 s test bound is still the global `timeout` at
+      `browser/playwright.config.mjs:15` and is not a budget this closure changes. What remains
+      open about host-load verdicts is the separate quiesced-host re-measure entry in
+      `docs/TODO.md`, which stays open.
+
+- [ ] Investigate the mobile-chromium classic case `project, resource, work-item, filtering,
+      ordering, and persistence` in `browser/tests/portal.spec.mjs`. After saving the work-item
+      edit dialog, `#toast` stayed hidden with the stale text "Work item created" for the whole
+      10 s expect window, while the update itself persisted: the failure snapshot's detail drawer
+      shows the new pull request URL, CI `passed` and review `required` that the test set. Observed
+      while completing 0007e in the first legacy run (`portal-work-views.spec.mjs` +
+      `portal.spec.mjs` + `workspace-shell.spec.mjs` on both widths, 43 passed / 4 failed /
+      5 skipped) and reproduced alone on the same revision with the desktop case passing (mobile
+      `x` in 17.0 s, desktop `ok` in 12.1 s); it then passed in the second run of the same suites on
+      the unchanged classic files (46 passed / 1 failed / 5 skipped), so the mobile case is
+      intermittent. The classic route is
+      unchanged by 0007e: `control/lib`, `control/priv/portal_assets`,
+      `control/lib/symmetry_control_web/portal_html` and `portal_controller.ex` have no diff
+      against the base revision. Revalidate the classic toast branch that reports an update when
+      the edit dialog was opened from the detail drawer; keep the assertion.
+      Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the same retirement as
+      the desktop entry above — main's `browser/tests/portal.spec.mjs` lost `project, resource,
+      work-item, filtering, ordering, and persistence` at `5c2e0ad` (#35, 0007c), and the 0007i
+      cutover deleted the file (`ca1bdad`). The classic toast branch this item asked to
+      revalidate (the detail drawer's work-item update receipt) went with the classic renderer:
+      the SPA renders its own `role="status"` notices from its own state, no `toast` element
+      exists in `frontend/src`, `control/lib` or `control/priv`, and the live detail-surface
+      successor cases assert `statusNotice(detail, "Work item updated.")` in
+      `browser/tests/portal-work-planning.spec.mjs`. The mobile-chromium project's successors for
+      these flows run in `browser/tests/portal-connections.spec.mjs` and
+      `browser/tests/portal-work-views.spec.mjs` per `browser/README.md`; no assertion of this
+      item's remains to keep.
+
 - [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
       the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
       query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
@@ -469,6 +590,44 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       by both the frontend unit test (`frontend/src/app/application.test.ts`) and the ExUnit test
       (`control/test/symmetry_control_web/portal_session_test.exs`); its enumerated cases are
       pinned on both sides, so every path or query rule change must add a corpus case.
+
+- [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
+      43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
+      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.061s` on the 0008a head, where the
+      same package had taken 365 s earlier on the same pull request and every other package passed;
+      green on rerun. This is the same loaded-runner family as the Windows `internal/workspace`
+      180 s package timeout: decide whether the package needs a longer explicit budget or fewer
+      load-sensitive waits, and keep the tests themselves.
+      The second occurrence
+      (`FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s`, run 44055523619 job
+      133943809688) is classified and fixed in the `daemon/internal/platform` flake-class entry
+      above (closed part archived in `docs/archive/CLOSED-TODO.md`): a test cleanup joined a
+      worker that retried an unpersistable terminal transition forever, so the package died at
+      the go-test timeout instead of failing the test.
+      The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
+      in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
+      wait on the product's own state transition rather than on host speed.
+      **Fixed (2026-11-19, `fix/flake-app-race-timeout`):** the "fewer load-sensitive waits" answer
+      is implemented for the three start waits. They no longer select on the fixture's turn channel
+      with a wall-clock fallback; they poll the daemon's own durable start publication - the
+      "running" transition `markRunning` queues immediately before `StartTurn` - fail fast with
+      `nativeStartFailureDetail` when the run records a failure, and keep `testHangGuard` as the
+      only bound (a hung start, never host speed). The 30 s timeout messages keep naming the
+      outstanding step; the second wait in the cancellation test now also reports the durable
+      reason. The shared native fixture also sets the logger the other fixtures set, because a
+      start-wait failure outlives the test body and a nil logger panicked the whole package binary
+      while demonstrating the pre-fix budget. The historical hang itself was the cleanup-join class
+      fixed in `d29fe5a` (#49), so the ten-minute package budget is unchanged and was not raised.
+      Evidence on this host: with the pre-fix 1 s start budget under 12-way host load all nine runs
+      of the three tests failed (`native turn did not start before the ... hang guard expired: no
+      durable failure recorded (local state="claimed", pending transitions=0)`); with the guard they
+      pass `go test -count=3 -cpu 1,2` (56.5 s) and the same selection passes under
+      `-race -count=2 -cpu 1,2` in WSL (19.3 s). The full package completes in the ordinary pass on
+      this host (`go test -count=1 -timeout 1200s ./internal/app` - `ok … 297.871s`, exit 0); a
+      full-package `-race` shape was not obtainable here (Windows has no cgo for `-race`, and the
+      WSL guest hangs this package in `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`,
+      a loopback dial that never answers there and passes on Windows in this same tree), so the
+      package-level race gate stays with CI.
 
 - [ ] Revalidate the load-sensitive Go test
       `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
@@ -843,6 +1002,35 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
+- [ ] Investigate the intermittent Control failure
+      `control recovery selects pending actions after more than one page of terminal no-op Goals` in
+      `control/test/symmetry_control/goals_test.exs:4753`. It is recorded from the pre-rebase delivery
+      revision `7235708` (`.tmp/gates/control-test-final.log`, 2026-11-17 11:16,
+      `884/886 passed, 21 skipped`, exit 2) with `** (EXIT from #PID<...>)` /
+      `** (DBConnection.ConnectionError) could not checkout the connection owned by #PID<...>
+      ({:sql_sandbox_owner, ...}) ... request was dropped from queue after 111ms`, raised inside
+      `Ecto.Repo.Preloader`'s supervised `Task`; the same suite's earlier run (09:44) reported
+      `885/886 passed` with the `pwsh` failure alone, so the case is intermittently load-sensitive:
+      it admits 101 Goals and cancels each one before asserting
+      `Goals.recover_pending_goal_control_actions/1`, and the sandbox owner's connection is preempted
+      while the preload tasks queue. This is not the `integrations_test.exs:1161` flake recorded above
+      (different test and call site). Revalidate whether the preload can run without a second supervised
+      task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
+      recovery page it checks.
+      Closed (2026-11-19, branch `fix/flake-control-recovery-page`, commit `3a87d58`): the Goal
+      projection read preloaded its five associations through `Ecto.Repo.Preloader`'s parallel
+      tasks, and under the SQL sandbox every task queued for the test process's single owned
+      connection, where DBConnection drops a checkout that waits past `2 * queue_target` (100ms)
+      when its poll runs - the recorded `dropped from queue after 111ms`. `Goals.ReadModel.load_data/2`
+      now preloads with `in_parallel: false`, so the read keeps every query on the caller's
+      connection and nothing queues; no queue or ownership timeout was changed, and the
+      regression test asserts the mechanism directly: `a Goal projection read keeps every query
+      on the calling process` (`control/test/symmetry_control/goals_test.exs`) was red on the
+      unfixed bytes (the caller plus five preloader pids) and is green with the fix. Evidence:
+      `mix test test/symmetry_control/goals_test.exs:4777` red -> green, `mix test
+      test/symmetry_control/goals_test.exs:4753` 2x green, `mix test
+      test/symmetry_control/goals_read_model_test.exs` 50 passed; the 100-item recovery-page
+      assertion is unchanged.
 - [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
       failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
       pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in

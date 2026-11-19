@@ -132,6 +132,25 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       same job (that run then completed successfully). Revalidate whether the captured SQL can
       be asserted before the sync query is issued; keep the assertion itself and leave the fix
       to separate maintenance.
+
+      Update (2026-11-19, branch `fix/flake-control-reversed-import`): the helper now reads the
+      wait from the lock manager instead of the statement text - the failed attempt-1 log names
+      the repository lookup in `pg_stat_activity.query` while the import was in a
+      delivery-attributed lock wait - accepts a sample only once the import's backend holds an
+      ungranted lock and the delivery backend blocks it, and asserts on the accepted sample
+      that the import's ungranted lock waits on the delivery backend's transaction
+      (`pg_locks.transactionid = (SELECT backend_xid FROM pg_stat_activity WHERE pid = delivery)`)
+      while the delivery backend holds a granted `work_items` lock; the raw sample (query, wait
+      event, all three lock facts) is printed on deadline and in the accepted-path assertion.
+      The waiter-bound xid is the discriminating fact: the `work_items` relation fact alone is
+      invariant (a paused delivery always holds those locks), so it cannot separate the
+      hypotheses - (a) `pg_stat_activity.query` is not the waiting statement for this backend at
+      sample time (prepared-statement/activity reporting under load) while the lock wait is
+      real, or (b) a transient pre-sync lock wait. Not reproduced locally (three pre-fix runs
+      with seed 310068 left the target test green), so the entry stays open; a recurrence now
+      shows the importer's wait event, whether it waited on the delivery transaction, and
+      whether the delivery backend held `work_items`.
+
 - [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
       `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
       states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
@@ -148,16 +167,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       constraint and labels, and decide in a separate maintenance change whether the states
       need a writer or the vocabulary needs a migration.
 
-- [ ] Investigate the intermittent browser failure `project, resource, work-item,
-      filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
-      detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
-      detached" (desktop-chromium). Observed once while implementing goal 0007d
-      (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
-      9 skipped) with two Control compiles running on the same host; the same test passed
-      twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
-      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
-      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
-
 - [ ] Investigate the environment-limited Windows command test. `CommandTest` "provider
       token commands can keep stderr diagnostics out of stdout" fails with
       `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
@@ -169,66 +178,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       instead of one. `Command.run/3` and the test itself are untouched by 0007d.
       Revalidate the Windows shell resolution; keep the assertion.
 
-- [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
-      legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
-      output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
-      toast and "two browser contexts reject a stale project update" hit the 60 s test timeout;
-      both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
-      and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
-      before changing any budget.
-
-- [ ] Investigate the mobile-chromium classic case `project, resource, work-item, filtering,
-      ordering, and persistence` in `browser/tests/portal.spec.mjs`. After saving the work-item
-      edit dialog, `#toast` stayed hidden with the stale text "Work item created" for the whole
-      10 s expect window, while the update itself persisted: the failure snapshot's detail drawer
-      shows the new pull request URL, CI `passed` and review `required` that the test set. Observed
-      while completing 0007e in the first legacy run (`portal-work-views.spec.mjs` +
-      `portal.spec.mjs` + `workspace-shell.spec.mjs` on both widths, 43 passed / 4 failed /
-      5 skipped) and reproduced alone on the same revision with the desktop case passing (mobile
-      `x` in 17.0 s, desktop `ok` in 12.1 s); it then passed in the second run of the same suites on
-      the unchanged classic files (46 passed / 1 failed / 5 skipped), so the mobile case is
-      intermittent. The classic route is
-      unchanged by 0007e: `control/lib`, `control/priv/portal_assets`,
-      `control/lib/symmetry_control_web/portal_html` and `portal_controller.ex` have no diff
-      against the base revision. Revalidate the classic toast branch that reports an update when
-      the edit dialog was opened from the detail drawer; keep the assertion.
-
-- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
-      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
-      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
-      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
-      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
-      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
-      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
-      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
-      remaining failure is the environment-limited `CommandTest` above). The build output is
-      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
-      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
-      suite prerequisite; keep the assertions.
-
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
       the server answers that code, but a sync refused for an ungranted capability maps to
       `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
       Either the server should serve the more specific code or the client entry should be removed;
       decide in a separate maintenance change with a test that pins the served code.
-
-- [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
-      43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
-      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.061s` on the 0008a head, where the
-      same package had taken 365 s earlier on the same pull request and every other package passed;
-      green on rerun. This is the same loaded-runner family as the Windows `internal/workspace`
-      180 s package timeout: decide whether the package needs a longer explicit budget or fewer
-      load-sensitive waits, and keep the tests themselves.
-      The second occurrence
-      (`FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s`, run 44055523619 job
-      133943809688) is classified and fixed in the `daemon/internal/platform` flake-class entry
-      above (closed part archived in `docs/archive/CLOSED-TODO.md`): a test cleanup joined a
-      worker that retried an unpersistable terminal transition forever, so the package died at
-      the go-test timeout instead of failing the test.
-      The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
-      in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
-      wait on the product's own state transition rather than on host speed.
 
 ## Deferred review findings (0007f)
 
@@ -632,22 +587,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       runs the production configuration through `mix phx.server`, the same release-style instance the
       0007h receipt records), and the browser suite's expiry/mobile projects need the release plus a
       fixture database that only the two release instances provide.
-
-- [ ] Investigate the intermittent Control failure
-      `control recovery selects pending actions after more than one page of terminal no-op Goals` in
-      `control/test/symmetry_control/goals_test.exs:4753`. It is recorded from the pre-rebase delivery
-      revision `7235708` (`.tmp/gates/control-test-final.log`, 2026-11-17 11:16,
-      `884/886 passed, 21 skipped`, exit 2) with `** (EXIT from #PID<...>)` /
-      `** (DBConnection.ConnectionError) could not checkout the connection owned by #PID<...>
-      ({:sql_sandbox_owner, ...}) ... request was dropped from queue after 111ms`, raised inside
-      `Ecto.Repo.Preloader`'s supervised `Task`; the same suite's earlier run (09:44) reported
-      `885/886 passed` with the `pwsh` failure alone, so the case is intermittently load-sensitive:
-      it admits 101 Goals and cancels each one before asserting
-      `Goals.recover_pending_goal_control_actions/1`, and the sandbox owner's connection is preempted
-      while the preload tasks queue. This is not the `integrations_test.exs:1161` flake recorded above
-      (different test and call site). Revalidate whether the preload can run without a second supervised
-      task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
-      recovery page it checks.
 
 ## Lockfiles must carry canonical registry URLs
 
