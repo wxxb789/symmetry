@@ -349,15 +349,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   digests in `docs/evidence/goal-0007c-safe-work-planning-2026-11-16.md` name it as the algorithm of
   record, so that receipt can no longer be recomputed from the tree; the file remains in git history.
 
-## Control instances sharing one worktree's build
-
-- [ ] Two Control instances started from the same worktree share `control/_build`, so a foreign
-      session's dev server can answer this worktree's browser runs with `# unhandled` error pages
-      (observed 2026-11-17 as console-500 assertions and render-wait timeouts during 0007g's
-      suite-context repetitions, with zero offset-assertion failures in the same runs). Give each
-      instance its own `MIX_BUILD_PATH` when several run at once; the runs that need isolation
-      should do it explicitly rather than relying on nobody else being active.
-
 ## Browser acceptance under host load
 
 - [ ] Re-measure the pre-existing browser suites on a quiesced host and take their verdicts off

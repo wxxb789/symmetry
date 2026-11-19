@@ -324,7 +324,13 @@ contract is exercised by
 `pnpm --filter symmetry-browser-acceptance test:connection-env`
 (`browser/scripts/connection-spec-env.test.mjs`), which drives the Playwright CLI
 for the absent, documented-override, partial-identity and complete-fixture
-environments. The fixture keeps the application's real supervision topology —
+environments. The instance build path the two Control-starting harnesses pin is
+asserted the same way by
+`pnpm --filter symmetry-browser-acceptance test:control-isolation`
+(`browser/scripts/control-instance-isolation.test.mjs`): it runs each harness
+against a recording `mise` stub and reads back the `MIX_BUILD_PATH` every mix
+invocation received, including an inherited value the harness must override.
+The fixture keeps the application's real supervision topology —
 scheduler, reconciler and provider access stay up — and readiness requires
 `/healthz` to answer `ok`. The harness refuses a `-PortalUrl` whose port
 is not the one it starts the fixture on, refuses an occupied port, and stops only
@@ -363,12 +369,14 @@ SYMMETRY_PORTAL_URL=http://127.0.0.1:4021 SYMMETRY_OPERATOR_TOKEN=<run token> \
 `scripts/run-connection-fixture-tests.ps1` does that whole sequence in one
 command — creates the per-run steering file, recreates and migrates the fixture
 database in this worktree's own container (other portal specs leave projects,
-work items and resources behind in it), starts the fixture control plane, waits
-for the identity file and a healthy `/healthz`, runs the spec (its 22 tests must
-pass on the desktop and mobile projects; a skip or a different count fails the
-run), scans the control logs and the provider-call log for the fixture canaries
-(a missing scan file or an empty provider-call log fails the run), and stops its
-own server:
+work items and resources behind it), starts the fixture control plane in its own
+instance build path (`MIX_BUILD_PATH` under
+`control/_build/instances/connections-<port>`, never the shared
+`control/_build/dev`), waits for the identity file and a healthy `/healthz`,
+runs the spec (its 22 tests must pass on the desktop and mobile projects; a skip
+or a different count fails the run), scans the control logs and the provider-call
+log for the fixture canaries (a missing scan file or an empty provider-call log
+fails the run), and stops its own server:
 
 ```powershell
 pwsh -NoProfile -File .\browser\scripts\run-connection-fixture-tests.ps1
@@ -415,9 +423,13 @@ breakpoint. Every mutation goes through the running control plane; interception
 only holds, aborts or replays a captured request to inject the races the
 contract names.
 `browser/scripts/run-planning-tests.ps1` is its harness: it starts the real
-control plane on a loopback port with a dedicated database and a per-run
-operator token, and the spec skips itself without that environment (the runner
-turns a skipped summary into a failure).
+control plane on a loopback port with a dedicated database, a per-run operator
+token and its own instance build path (`MIX_BUILD_PATH` under
+`control/_build/instances/planning-<port>`, never the shared
+`control/_build/dev`), and the spec skips itself without that environment (the
+runner turns a skipped summary into a failure). That path is per port and
+reused, so a worktree's first run on a port compiles into it once and later
+runs start from the finished build.
 
 The cases with a rendered end state (fourteen of the eighteen) capture a full-page
 screenshot plus an observation JSON through the shared `capture` helper; they
@@ -444,6 +456,20 @@ lifecycle matrix from the repository root:
 
 ```powershell
 pwsh -NoProfile -File .\browser\scripts\run-live-daemon-tests.ps1
+```
+
+When you start that control plane yourself while another Control instance may
+be running from this worktree, give it its own instance build path: two
+instances that share `control/_build` let one instance's compile decide what
+the other serves, which is what the two harnesses above avoid by pinning a
+path per port. `mix` runs from `control/`, so the path is
+`_build/instances/<name>` there (beside the shared `dev` build), or an
+absolute path:
+
+```powershell
+cd control
+$env:MIX_BUILD_PATH = "$PWD\_build\instances\live-daemon"
+mix phx.server
 ```
 
 The runner builds isolated daemon and fake-agent binaries, starts unique
