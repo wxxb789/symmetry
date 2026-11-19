@@ -268,6 +268,12 @@ type descendantMonitorScanResult struct {
 	sealMonitoring  bool
 }
 
+// endsMonitor reports whether a scan result ends the monitor goroutine. It
+// must stay exactly the predicate monitorDescendants evaluates at each of its
+// scan-result returns: waitForInitialDescendantScan joins monitorDone when the
+// initial result satisfies it, so a disjunct here that the monitor's returns
+// do not share (or the reverse) would either let the barrier return before the
+// monitor's final writes or wait for a monitor that keeps running.
 func (result descendantMonitorScanResult) endsMonitor() bool {
 	return result.stopped || result.sealMonitoring || result.terminalReason == descendantMonitorTerminalScanFailure ||
 		result.terminalReason == descendantMonitorTerminalObservedEscape
@@ -656,9 +662,13 @@ func (group *processGroup) waitForInitialDescendantScan(deadline time.Time) erro
 	if !complete {
 		return fmt.Errorf("%w: initial descendant scan did not publish a result", ErrLinuxDescendantContainmentUnproven)
 	}
-	if initialResult.stopped && group.monitorDone != nil {
-		// A stopped initial scan ends the monitor; return only after it exits
-		// so the caller never races its final state writes.
+	if initialResult.endsMonitor() && group.monitorDone != nil {
+		// An initial scan that ends the monitor (a clean leader-absent
+		// proof, a scan failure, an observed escape or a seal) must be
+		// observed to exit before this barrier returns: the monitor
+		// publishes its final scan state and closes monitorDone only
+		// after it signals the initial scan, so the scan result alone
+		// does not order those writes before the caller's reads.
 		select {
 		case <-group.monitorDone:
 		case <-timer.C:
