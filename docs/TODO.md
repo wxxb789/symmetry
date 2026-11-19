@@ -127,36 +127,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Dead-code candidates
 
-- [ ] Revalidate and remove the unused `JsonDocument` alias in
-      `control/lib/symmetry_control/goals/schemas.ex:1431`
-      (`SymmetryControl.Goals.GoalExternalWait`). The 0006h focused Control run
-      reported the unused alias; a scoped search of that module found only its
-      alias declaration. Leave removal and verification to separate maintenance.
-
-- [ ] Revalidate the unused `replay_task` binding at
-      `control/test/symmetry_control/orchestration_goal_admission_test.exs:1059`
-      and `task` bindings at lines `2079` and `2170`. The 0007a `mix test` run
-      reported these compiler warnings (`.tmp/0007a-session/control-test.log`).
-      Preserve the fixture calls and leave any binding cleanup to separate
-      maintenance.
-      The 0009 full Control run reports the same bindings at lines `1351`,
-      `2450` and `2541` in `.tmp/0009/control-full.log`; these are current
-      coordinates, not additional cleanup work.
-
-- [ ] Revalidate the unused default `kind \\ "omp"` on private
-      `register_unverified_omp_runtime/2` in
-      `control/test/symmetry_control/orchestration_goal_admission_test.exs:3651`.
-      The 0009 full Control run reports that the optional default is never used
-      (`.tmp/0009/control-full.log`). Preserve the runtime fixture behavior and
-      leave cleanup and verification to separate maintenance.
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
 
-- [ ] Revalidate and remove the unused `Connection.statuses/0` accessor at
-      `control/lib/symmetry_control/integrations/schemas.ex:92`. A scoped search for
-      `Connection.statuses` and `Integrations.Connection.statuses` in `control/lib` and
-      `control/test` found no caller; the changesets read the `@statuses` module attribute
-      directly. Observed while fixing goal 0007d. Leave removal and verification to separate
-      maintenance.
 - [ ] Investigate the intermittent Linux failure `TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`
       in `daemon/internal/platform` (`containment_supervisor_linux_test.go:1128: decode
       wrong-session helper witness: unexpected end of JSON input`). Observed in run
@@ -407,12 +379,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
       wait on the product's own state transition rather than on host speed.
 
-- [ ] Remove or justify the unreferenced CSS rules `.chip-failed` and `.chip-pending` in
-      `frontend/src/styles.css:170-171`. A sweep of all 137 class selectors in that file against
-      `frontend/src` found these two unreferenced already at `7a92ca4` (untouched by the 0007b,
-      0007c and 0007d work), so they are pre-existing dead weight rather than a merge artifact.
-      Revalidate before deleting and leave removal to separate maintenance.
-
 ## Deferred review findings (0007f)
 
 - [ ] Give the focused render gate's `browser/tests/portal-goal-managed.spec.mjs` case its fixture
@@ -459,23 +425,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       class; and the captures for `accepted_outcomes`, `settlement_attention` and `external_waits` are
       empty arrays, so those members are pinned by the boundary test and the real-served controller gate
       rather than by a fixture-level rename probe.
-
-## Deferred review findings (0007g)
-
-- [ ] Give the work detail an entry point into a run's conversation. The classic workspace drawer
-      offered "Open Chat" and "Review decision in Chat" for a work item whose execution carries a
-      `run_id`; the migrated `/portal/chat` is reachable from the shell's Chat entry (whose run
-      picker lists the served runs) but the React work detail added by 0007f has no such link, so a
-      waiting decision is only reachable by picking the run in Chat. Adding the link is work-detail
-      surface work (0007f's file) and was outside the 0007g diff; `browser/tests/portal.spec.mjs`
-      keeps the classic drawer's own buttons until the 0007i cutover.
-
-- [ ] Redirect the documented `#chat` hash location to `/portal/chat`. The frontend design fixes
-      "old `/portal#chat` … redirect once to the new equivalent URL", and
-      `frontend/src/app/legacy.ts` still maps the fragment to `/portal/classic#chat` (the classic
-      surface's own in-page entry points write that hash). The one-time hash mapping belongs to the
-      0007i cutover, which retires the classic writable UI; changing it earlier would split the
-      classic page's own navigation from its hash.
 
 ## CI consolidation owner decisions (2026-11-17)
 

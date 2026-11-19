@@ -543,6 +543,12 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     // values already proved through the API, without labelling them accepted.
     const retriedItemId = persistedProject.work_items.find((item) => item.title === retryTitle).id;
     const servedDetail = await itemDetail(page, retriedItemId);
+    // The work detail's conversation entry point: the run this execution carries
+    // links into the run scope the chat route serves, scoped to the item's project.
+    const retriedRunId = servedDetail.work_item.execution.run_id;
+    expect(retriedRunId).toBeTruthy();
+    await expect(retriedSurface.getByRole("link", { name: "Open in Chat" }))
+      .toHaveAttribute("href", `/portal/chat?scope=run&projectId=${projectId}&runId=${retriedRunId}`);
     const servedReported = servedDetail.outcome.summary ??
       (servedDetail.work_item.execution?.result?.summary ?? null);
     expect(servedReported).toBeTruthy();
