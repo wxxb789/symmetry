@@ -599,7 +599,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}"
+          export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
           export SECRET_KEY_BASE="$(openssl rand -hex 64)"
           export SYMMETRY_OPERATOR_TOKEN="$(openssl rand -hex 32)"
           export SYMMETRY_ENROLLMENT_TOKEN="$(openssl rand -hex 32)"
@@ -631,35 +631,59 @@ jobs:
           cd ..
           # The environment-gated cases (Goal-managed fixture, rollout-off
           # attention, expiry) throw at collection under this flag instead of
-          # skipping green when the environment below goes missing.
+          # skipping green when the environment below goes missing. The JSON
+          # report is what the next step's executed-set assertion reads back.
           SYMMETRY_RENDER_GATE_REQUIRED=1 \
           SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
           SYMMETRY_GOALS_OFF_URL=http://127.0.0.1:4002 \
           SYMMETRY_FIXTURE_MIX=mix \
+          SYMMETRY_PLAYWRIGHT_JSON_REPORT="$RUNNER_TEMP/symmetry-render-gate.json" \
             pnpm --filter symmetry-browser-acceptance test \
               tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs \
               tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs \
               tests/portal-goal-attention.spec.mjs \
               tests/portal-cutover.spec.mjs tests/portal-chat.spec.mjs
+      # Playwright exits 0 when a case is merely skipped, so the run's own JSON
+      # report pins the executed set: exactly the one by-design concurrency skip
+      # and every environment-gated case at both widths. A dropped guard, a
+      # dropped SYMMETRY_RENDER_GATE_REQUIRED=1 or a spec file dropped from the
+      # list above shows up here instead of as a silent skip.
+      - name: Assert the render gate's executed set
+        run: |
+          set -Eeuo pipefail
+          python3 ../scripts/ci/assert-playwright-json.py \
+            "$RUNNER_TEMP/symmetry-render-gate.json" \
+            --expect-skipped 1 \
+            "with Goal rollout off a present Goal still serves its real attention entry" \
+            "a real Goal-managed work item presents no legacy path, and the server refuses one" \
+            "expired authentication clears private content and recovers the deep link"
       # A release that never binds leaves no evidence anywhere else in the run:
-      # the log files are the only record of why it did not start. Surface their
-      # tail in the annotation (workflow commands need `%`, CR and LF escaped) and
-      # upload the logs, on the render step's own failure only.
-      - name: Report release shell boot log
+      # the log files are the only record of why it did not start. Surface the
+      # tail of every non-empty one — the failing instance is not always the
+      # primary — in the annotation (workflow commands need `%`, CR and LF
+      # escaped) and upload the logs, on the render step's own failure only.
+      - name: Report release shell boot logs
         if: failure() && steps.render_release_shell.outcome == 'failure'
         shell: bash
         run: |
           set -Eeuo pipefail
-          log="$RUNNER_TEMP/shell-release.log"
-          if [[ ! -s "$log" ]]; then
-            echo "::error title=Release shell boot log missing::${log} holds no bytes: the render step failed before the release wrote a log, so this failure has no boot log to read."
+          logs=("$RUNNER_TEMP/shell-release.log" "$RUNNER_TEMP/shell-expiry.log" "$RUNNER_TEMP/shell-goals-off.log")
+          reported=0
+          for log in "${logs[@]}"; do
+            if [[ ! -s "$log" ]]; then
+              continue
+            fi
+            tail_text=$(tail --bytes=8000 "$log")
+            escaped=${tail_text//'%'/'%25'}
+            escaped=${escaped//$'\r'/'%0D'}
+            escaped=${escaped//$'\n'/'%0A'}
+            echo "::error title=Release shell boot log tail (last 8000 bytes of ${log})::${escaped}"
+            reported=1
+          done
+          if (( reported == 0 )); then
+            echo "::error title=Release shell boot logs missing::no instance wrote a log: the render step failed before a release wrote one, so this failure has no boot log to read."
             exit 0
           fi
-          tail_text=$(tail --bytes=8000 "$log")
-          escaped=${tail_text//'%'/'%25'}
-          escaped=${escaped//$'\r'/'%0D'}
-          escaped=${escaped//$'\n'/'%0A'}
-          echo "::error title=Release shell boot log tail (last 8000 bytes of ${log})::${escaped}"
       - name: Upload release shell boot logs
         if: failure() && steps.render_release_shell.outcome == 'failure'
         uses: actions/upload-artifact@v4
@@ -1231,6 +1255,7 @@ jobs:
           python3 ../scripts/ci/test-assert-exunit-json.py
           python3 ../scripts/ci/test-go-test-json-gate.py
           python3 ../scripts/ci/test-assert-folded-gates.py
+          python3 ../scripts/ci/test-assert-playwright-json.py
           python3 ../scripts/ci/test-assert-runner-matches-target.py
           python3 ../scripts/ci/test-check-lockfile-registry.py
       - name: Check auditable model-routing workflow

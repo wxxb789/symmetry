@@ -1042,12 +1042,15 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       fixture's own application copy cannot bind the release-under-test port; and the control job
       compiles the fixture's development build (`mix compile`) before the render step so the case's
       180 s fixture guard covers the run, not a cold compile. Hosted evidence, run `44540137977`,
+      revision `52cb4bb` (the same spec bytes as the docs revision `254f1de`, run `44542025823`;
+      both predate the collection guards, so the quoted `:36:3` is that revision's position),
       control job `135617161165`: `✓ 27 [desktop-chromium] › tests/portal-goal-managed.spec.mjs:36:3 ›
       Goal-managed work › a real Goal-managed work item presents no legacy path, and the server
       refuses one (1.7s)` and the same case on mobile (`✓ 74`, 1.6s). The render step's own summary
       moved from `73 passed, 3 skipped` on the previous main revision (run `44524043823`, control job
       `135560685485`) to `93 passed (2.6m)`, `1 skipped`; the one remaining skip is the mobile-project
-      concurrency case that is desktop-only by design.
+      concurrency case that is desktop-only by design. The final head's own run is cited in the PR
+      body.
 
 ## Deferred review findings (0007h)
 
@@ -1096,12 +1099,18 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       (`PORT=4002 RELEASE_NODE=symmetry_goals_off`, health-probed like the other two), runs the primary
       release with `SYMMETRY_GOALS_ROLLOUT_ENABLED=true` because the attention suite's plan cases admit
       plans through `accept_plan` (admission-gated), adds `tests/portal-goal-attention.spec.mjs` to the
-      render step's spec list and passes `SYMMETRY_GOALS_OFF_URL=http://127.0.0.1:4002`. Hosted
-      evidence, run `44540137977`, control job `135617161165`: all nine attention cases pass at both
+      render step's spec list and passes `SYMMETRY_GOALS_OFF_URL=http://127.0.0.1:4002`. The case is
+      discriminating for the instance's rollout state: creation and the attention read succeed against
+      a rollout-on server too, so the case also sends one contract-valid `request_plan` command to
+      that instance and requires the server's 409 `goal_admission_disabled` refusal, and pointing the
+      URL at a rollout-on server now fails it instead of passing it. Hosted evidence, run `44540137977`,
+      revision `52cb4bb` (the same spec bytes as the docs revision `254f1de`, run `44542025823`; the run
+      predates the collection guards and the discriminating probe, so the quoted `:454:3` is that
+      revision's position), control job `135617161165`: all nine attention cases pass at both
       widths, including `✓ 25 [desktop-chromium] › tests/portal-goal-attention.spec.mjs:454:3 › Goal
       attention workspace › with Goal rollout off a present Goal still serves its real attention entry
       (914ms)` and `✓ 72 [mobile-chromium] › … (832ms)`; the render step reports `93 passed (2.6m)`,
-      `1 skipped`.
+      `1 skipped`. The final head's own run is cited in the PR body.
 
 ## Browser acceptance under host load
 

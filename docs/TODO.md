@@ -122,9 +122,10 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       sets (`frontend/src/features/attention/attention.tsx:80`), and `accepted_outcomes[].candidate_subject`
       and `subject_hash` (`detail.tsx:417`). Marking them `required` — as `integration`, `satisfied?` and the
       unknown-cost member now are — would close the class; additive members staying unvalidated is intended.
-      Two smaller residuals from the same review live here too: the rollout-off browser case skips in hosted
-      CI because it needs `SYMMETRY_GOALS_OFF_URL`, and the retained `:goal_admission_disabled` inline branch
-      is unreachable in production because the attention read is not admission-gated.
+      Two smaller residuals from the same review live here too: the rollout-off browser case went unrun in
+      hosted CI because it needed `SYMMETRY_GOALS_OFF_URL` (closed below), and the retained
+      `:goal_admission_disabled` inline branch is unreachable in production because the attention read is
+      not admission-gated.
       Closed part moved to `docs/archive/CLOSED-TODO.md`.
       The rollout-off browser-case residual is closed (2026-11-19, `fix/ci-render-gate-fixtures`, PR #98):
       the render step starts a rollout-off release instance and runs the attention spec's rollout-off case

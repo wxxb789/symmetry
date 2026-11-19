@@ -465,8 +465,8 @@ test.describe("Goal attention workspace", () => {
     await login(page, "/portal/attention", goalsOffUrl);
     const project = await createProject(page, "J", { blocked: true });
 
-    // Admission is disabled on this instance, but creation is an ordinary
-    // accepted command; the read is what this case binds.
+    // Creation is an ordinary accepted command on this instance; the
+    // admission refusal below and the read are what this case binds.
     const created = await api(page, "POST", `/portal/api/projects/${project.id}/goals`, {
       schema_version: "symmetry.goal_create.v1",
       mutation_id: crypto.randomUUID(),
@@ -483,6 +483,27 @@ test.describe("Goal attention workspace", () => {
     });
     expect(created.status).toBe(201);
     const goalId = created.body.goal.id;
+
+    // Discriminating probe: creation and the read below succeed against a
+    // rollout-on server too, so the case binds this instance's admission gate
+    // directly. The command is contract-valid (the request_plan payload
+    // requires all five members, and `subject.resource_id` must equal
+    // `repository_resource_id`), so a 409 here is the admission gate's
+    // refusal, never a validator's.
+    const probeRepositoryId = crypto.randomUUID();
+    const refused = await goalCommand(page, goalId, "request_plan", {
+      model_profile: "codex",
+      repository_resource_id: probeRepositoryId,
+      subject: {
+        resource_id: probeRepositoryId,
+        commit: "0".repeat(40),
+        tree_digest: `sha256:${"0".repeat(64)}`
+      },
+      session_mode: "fresh",
+      requested_session_id: null
+    });
+    expect(refused.response.status).toBe(409);
+    expect(refused.response.body.error.code).toBe("goal_admission_disabled");
 
     // What the rollout-off server actually serves: the Goal entry beside the
     // project blockers, with no unavailable feed stated.

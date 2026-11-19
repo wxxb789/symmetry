@@ -144,19 +144,24 @@ outcome with the same attempt replayed once; the runtimes list's scoped and
 unscoped empty states; plus the Goal-managed detail, whose row is written by
 `scripts/ci/portal-planning-fixture.exs` through Control's own changesets — the
 `POSTGRES_*` variables above must name the database the release serves, and
-without them that case skips with its missing environment named instead of
-passing. That case asserts the served `goal_id`, no run/cancel/retry control,
+without them that case skips locally with its missing environment named instead
+of passing. That case asserts the served `goal_id`, no run/cancel/retry control,
 the 403 `goal_authority_required` refusals of the legacy paths and a sibling
 legacy item that keeps its control.
 The expiry URL must serve the same release and fixture database with
 `SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2`; without it the true-TTL expiry cases
-are explicitly skipped, not passed. The primary release serves with
+are explicitly skipped locally, not passed. The primary release serves with
 `SYMMETRY_GOALS_ROLLOUT_ENABLED=true` (the attention suite approves plans
 through `accept_plan`, which goal rollout gates) and the Goal-rollout URL must
 serve the same release and database with `SYMMETRY_GOALS_ROLLOUT_ENABLED=false`;
-without that URL the rollout-off attention case is explicitly skipped, not
-passed. Where no `mise` is installed (CI installs the toolchain directly),
-`SYMMETRY_FIXTURE_MIX=mix` points the planning fixture at the `mix` on PATH.
+without that URL the rollout-off attention case is explicitly skipped locally,
+not passed. In CI the render step exports `SYMMETRY_RENDER_GATE_REQUIRED=1`
+for this invocation: a missing `POSTGRES_*`, expiry URL or Goal-rollout URL
+then aborts collection of the whole invocation — before any case runs —
+instead of skipping, and the run's own JSON report is asserted so a gated case
+that still skipped would fail the job. Where no `mise` is installed (CI
+installs the toolchain directly), `SYMMETRY_FIXTURE_MIX=mix` points the
+planning fixture at the `mix` on PATH.
 The focused suite also checks Attention
 scope through selection, history, navigation and login with real fractional
 resource metadata, legacy `/portal` project-board links repaired to their SPA
