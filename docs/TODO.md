@@ -622,22 +622,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       0007h receipt records), and the browser suite's expiry/mobile projects need the release plus a
       fixture database that only the two release instances provide.
 
-- [ ] Investigate the intermittent Control failure
-      `control recovery selects pending actions after more than one page of terminal no-op Goals` in
-      `control/test/symmetry_control/goals_test.exs:4753`. It is recorded from the pre-rebase delivery
-      revision `7235708` (`.tmp/gates/control-test-final.log`, 2026-11-17 11:16,
-      `884/886 passed, 21 skipped`, exit 2) with `** (EXIT from #PID<...>)` /
-      `** (DBConnection.ConnectionError) could not checkout the connection owned by #PID<...>
-      ({:sql_sandbox_owner, ...}) ... request was dropped from queue after 111ms`, raised inside
-      `Ecto.Repo.Preloader`'s supervised `Task`; the same suite's earlier run (09:44) reported
-      `885/886 passed` with the `pwsh` failure alone, so the case is intermittently load-sensitive:
-      it admits 101 Goals and cancels each one before asserting
-      `Goals.recover_pending_goal_control_actions/1`, and the sandbox owner's connection is preempted
-      while the preload tasks queue. This is not the `integrations_test.exs:1161` flake recorded above
-      (different test and call site). Revalidate whether the preload can run without a second supervised
-      task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
-      recovery page it checks.
-
 ## Lockfiles must carry canonical registry URLs
 
 - [ ] Regenerate `pnpm-lock.yaml` only with the repository-pinned pnpm and a canonical registry, and check the result before
