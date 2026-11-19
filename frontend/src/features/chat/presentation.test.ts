@@ -391,4 +391,35 @@ describe("history view", () => {
     ], "cursor-2");
     expect(overlapping.gap).toBeNull();
   });
+
+  it("keeps the gap when a later page chains from the moved boundary but the retained chain it left behind is not reached", () => {
+    const seeded = (index: number) => message(`11111111-000${index}-4001-8001-0000000000${String(index).padStart(2, "0")}`, { insertedAt: `2026-11-16T09:0${index}:00.000000Z` });
+    const one = seeded(1);
+    const two = seeded(2);
+    const three = seeded(3);
+    const four = seeded(4);
+    const five = seeded(5);
+    const six = seeded(6);
+    // The refreshed read ends at message five; the page loaded from that
+    // boundary reaches message three, but the chain the moved boundary left
+    // behind — fetched from message two — is not reached by it, so the region
+    // between them (nothing here proves message two loaded) stays named.
+    const view = chatHistoryView([
+      page([five, six], { nextBefore: "cursor-refreshed" }),
+      page([three, four], { fetchBefore: "cursor-refreshed", fetchBeforeId: five.id, nextBefore: "cursor-3" }),
+      page([one], { fetchBefore: "cursor-dropped", fetchBeforeId: two.id, nextBefore: null }),
+    ], "cursor-3");
+    expect(view.gap).toEqual({ current: three.id, retained: one.id });
+    expect(view.messages.map((item) => item.id)).toEqual([one.id, three.id, four.id, five.id, six.id]);
+
+    // Loading the skipped region into the chain reaches the older page; only
+    // then does the surface stop naming the region, because the two now touch.
+    const connected = chatHistoryView([
+      page([five, six], { nextBefore: "cursor-refreshed" }),
+      page([three, four], { fetchBefore: "cursor-refreshed", fetchBeforeId: five.id, nextBefore: "cursor-3" }),
+      page([one, two], { fetchBefore: "cursor-3", fetchBeforeId: three.id, nextBefore: null }),
+    ], "cursor-3");
+    expect(connected.gap).toBeNull();
+    expect(connected.messages.map((item) => item.id)).toEqual([one.id, two.id, three.id, four.id, five.id, six.id]);
+  });
 });

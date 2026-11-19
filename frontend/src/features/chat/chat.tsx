@@ -496,7 +496,7 @@ export function ChatPage() {
         data-boundary-current={history.gap.current}
         data-boundary-retained={history.gap.retained}
       >
-        Entries between the current page and the loaded older history were not loaded; Load older history continues from the current page's boundary.
+        Entries between the loaded history and the retained older pages were not loaded; Load older history continues from the boundary the loaded history ends at.
       </p>}
       <p id="chat-history-note" className="muted text-small">
         {history.messages.length === 0

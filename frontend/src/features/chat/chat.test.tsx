@@ -746,6 +746,64 @@ describe("history", () => {
     expect(new Set(messageIds())).toEqual(new Set([messageId(1), messageId(2), messageId(5), messageId(6)]));
   });
 
+  it("keeps naming the region a moved boundary skipped until a load reaches the retained chain", async () => {
+    const user = userEvent.setup();
+    let read = 0;
+    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
+    const older: Record<string, ServedMessage[]> = {
+      "cursor-9": [message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })],
+      "cursor-13": [message(11, { insertedAt: at(11) }), message(12, { insertedAt: at(12) })],
+      "cursor-11": [message(9, { insertedAt: at(9) }), message(10, { insertedAt: at(10) })],
+    };
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          const nextBefore = before === "cursor-13" ? "cursor-11" : before === "cursor-11" ? "cursor-9" : "cursor-7";
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: older[before] ?? [], nextBefore })));
+        }
+        read += 1;
+        return new Response(JSON.stringify(read === 1
+          ? conversationBody({ scope: "project", projectId, messages: [message(9, { insertedAt: at(9) }), message(10, { insertedAt: at(10) })], nextBefore: "cursor-9" })
+          : conversationBody({ scope: "project", projectId, messages: [message(13, { insertedAt: at(13) }), message(14, { insertedAt: at(14) })], nextBefore: "cursor-13" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 7");
+    expect(document.querySelector("#chat-history-gap")).toBeNull();
+    expect(messageIds()).toEqual([7, 8, 9, 10].map(messageId));
+
+    // A re-read ends at a later boundary: the retained page was fetched from the
+    // boundary the re-read no longer carries, so the region between them is named.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 13");
+    const moved = document.querySelector("#chat-history-gap");
+    expect(moved).not.toBeNull();
+    expect(moved).toHaveAttribute("data-boundary-current", messageId(13));
+    expect(moved).toHaveAttribute("data-boundary-retained", messageId(8));
+    expect(messageIds()).toEqual([7, 8, 13, 14].map(messageId));
+
+    // A load that only reaches the refreshed boundary does not connect the
+    // chains: messages 9 and 10 are still unloaded, so the surface keeps saying
+    // so — and keeps the retained page the note names.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 11");
+    const still = document.querySelector("#chat-history-gap");
+    expect(still).not.toBeNull();
+    expect(still).toHaveAttribute("data-boundary-current", messageId(11));
+    expect(still).toHaveAttribute("data-boundary-retained", messageId(8));
+    expect(messageIds()).toEqual([7, 8, 11, 12, 13, 14].map(messageId));
+
+    // The reader's next load fills the skipped region; the chains now touch, so
+    // the note goes away and the messages it named render again.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 9");
+    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12, 13, 14].map(messageId));
+  });
+
   it("keeps the loaded conversation visible as stale when a read fails", async () => {
     const user = userEvent.setup();
     let fail = false;
