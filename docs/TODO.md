@@ -190,19 +190,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       against the base revision. Revalidate the classic toast branch that reports an update when
       the edit dialog was opened from the detail drawer; keep the assertion.
 
-- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
-      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
-      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
-      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
-      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
-      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
-      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
-      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
-      remaining failure is the environment-limited `CommandTest` above). The build output is
-      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
-      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
-      suite prerequisite; keep the assertions.
-
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
       the server answers that code, but a sync refused for an ungranted capability maps to
@@ -646,22 +633,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
       recovery page it checks.
 
-- [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
-      failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
-      pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in
-      6.9 s in the same run, and both projects passed in the 12:10 run on the pre-repair bundle. The
-      retained trace shows the injected `route.abort("internetdisconnected")` never fired (no
-      `/portal/api/workspace` request or failure after the route was installed), and the click's
-      `refresh()` refetched `["connections"]` but not `["workspace"]` because of the page's guard
-      `if (!workspace.isFetching) void workspace.refetch()` (`frontend/src/features/connections/connections.tsx:351-352`;
-      the same guard also sits in `onRefreshProject` at `:501`). `workspace.isFetching` is never read
-      during render, so React Query's automatic change tracking does not watch it and a render taken while
-      a read was in flight leaves the guard snapshot at `true` until something else re-renders the page —
-      a state-snapshot race, not a cutover change. Decide whether the guard should read the query's live
-      `fetchStatus` at click time (`queryClient.getQueryState(key)?.fetchStatus`) or whether a
-      user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
-      the injected-failure design.
-
 ## Lockfiles must carry canonical registry URLs
 
 - [ ] Regenerate `pnpm-lock.yaml` only with the repository-pinned pnpm and a canonical registry, and check the result before
@@ -754,16 +725,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Paginated reads must be bound to the cursor that served their pages
 
-- [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
-      construction: its pages are keyed by their own `after` sequence numbers
-      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
-      re-read under their own keys, so a page is never served under a boundary it was not fetched
-      from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
-      gap in `frontend/src/features/chat/presentation.ts`, rendered by
-      `frontend/src/features/chat/chat.tsx`) and therefore still differs from this fix: it keeps the
-      pages a moved boundary left behind and states the unloaded region, while the work history and
-      the attention feed retire them. Unifying the two changes one surface's reader-visible
-      behaviour, so it needs its own decision. Retiring a page is reader-visible too (an expanded
-      page disappears when a live run moves the boundary), and it is covered by the frontend suite
-      only: the browser suites, which CI runs, carry the live-daemon pagination case and were not
-      run on this host.
+- [ ] Residuals of the completed class scan (2026-11-19): (a) the owner's decision on unifying the
+      chat conversation's keep-and-state treatment with the work history's and the attention feed's
+      retirement — an expanded page the chat keeps renders beside a stated unloaded region, while
+      the other two retire it, and unifying changes one surface's reader-visible behaviour; (b) the
+      browser suites, which CI runs, carry the live-daemon pagination cases (an expanded page
+      disappearing when a live run moves the boundary is covered by the frontend suite only) and
+      were not run on this host. The scan and its fixes are archived in
+      `docs/archive/CLOSED-TODO.md`. Pre-existing, left as-is: `retainServedPage` detects a moved
+      boundary by comparing cursor token bytes, so a re-serve that only re-signs the same boundary
+      position still restarts the chain pointer; deciding whether it should compare the boundary
+      message's id instead belongs to (a).

@@ -16,6 +16,9 @@ not a claim that work remains. The two blocks moved on 2026-11-19 (branch
 The five dead-code closures appended to `## Dead-code candidates` below were moved on 2026-11-19
 from branch `chore/deadcode-revalidation`.
 
+The closed class scan appended to `## Paginated reads must be bound to the cursor that served their
+pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-binding`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -278,6 +281,44 @@ from branch `chore/deadcode-revalidation`.
       supervisor-side stop proofs only. The same PID-only membership observation still verifies
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
+
+- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
+      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
+      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
+      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
+      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
+      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
+      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
+      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
+      remaining failure is the environment-limited `CommandTest` above). The build output is
+      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
+      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
+      suite prerequisite; keep the assertions.
+      Closed in `fix/control-staged-assets-dependency` (2026-11-19) as the documented-prerequisite
+      option, kept loud rather than skipped: the four cases are tagged `:portal_assets`, and
+      `SymmetryControlWeb.PortalBundle`, called from `ConnCase` setup for every web test, fails a
+      tagged case before it touches the bundle. The failure states the prerequisite, the staging
+      command (`mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build`), CI's equivalent
+      staging (the `control` job downloads the `contracts` job's `portal-assets` artifact into
+      `control/priv/static/portal/` before `mix test`) and the explicit exclusion
+      (`mix test --exclude portal_assets`) instead of the raw `File.Error`/`File.RenameError` on the
+      staged path; the guard also rejects an entry document that is empty, references no built
+      JavaScript asset or no stylesheet, or names hashed assets that are not staged (an interrupted
+      `frontend/scripts/stage-assets.mjs`, or a build older than the current one). A fixture bundle
+      was rejected because these cases assert against the real built entry, and an ExUnit `skip`
+      would have hidden a broken CI staging step. Assertions are unchanged and nothing is skipped
+      silently: with no staging the four tagged cases failed with the guard's "staged entry
+      document is missing" problem line while the file's other nine cases passed
+      (`mix test test/symmetry_control_web/controllers/portal_controller_test.exs` — 9/13 passed,
+      4 failed), an entry document naming absent hashed assets failed the same four with
+      "references assets that are not staged", `--exclude portal_assets` reported "9 passed,
+      4 excluded", and with the staged build all thirteen passed. The staged path now has one
+      definition, `SymmetryControlWeb.PortalAssets.index_path/0`, read by both
+      `PortalController.index/2` and the tests. The prerequisite is recorded in the Elixir row of
+      `docs/design/quality.md` (which links `docs/runbooks/portal.md`) and in that runbook's local
+      gate list; the limit that a complete but source-stale bundle is not detectable from the
+      gitignored staging alone is stated only in the runbook, so freshness stays CI's guarantee
+      (the `portal-assets` artifact is built from the same revision).
 
 *Closed remainder of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; with the closed part above, nothing of the item stays there.*
 
@@ -886,6 +927,54 @@ from branch `chore/deadcode-revalidation`.
       `docs/evaluations/model-routing/README.md`, "Record rendering exception
       (2026-11-19)".
 
+## Deferred review findings (0007i, rebased onto `ca29a8e`)
+
+- [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
+      failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
+      pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in
+      6.9 s in the same run, and both projects passed in the 12:10 run on the pre-repair bundle. The
+      retained trace shows the injected `route.abort("internetdisconnected")` never fired (no
+      `/portal/api/workspace` request or failure after the route was installed), and the click's
+      `refresh()` refetched `["connections"]` but not `["workspace"]` because of the page's guard
+      `if (!workspace.isFetching) void workspace.refetch()` (`frontend/src/features/connections/connections.tsx:351-352`;
+      the same guard also sits in `onRefreshProject` at `:501`). `workspace.isFetching` is never read
+      during render, so React Query's automatic change tracking does not watch it and a render taken while
+      a read was in flight leaves the guard snapshot at `true` until something else re-renders the page —
+      a state-snapshot race, not a cutover change. Decide whether the guard should read the query's live
+      `fetchStatus` at click time (`queryClient.getQueryState(key)?.fetchStatus`) or whether a
+      user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
+      the injected-failure design.
+      Closed by branch `fix/flake-browser-refresh-guard` (2026-11-19): the decision is that a
+      user-initiated refresh supersedes an in-flight read, so the guards are removed rather than made
+      live. The header refresh now calls `query.refetch()` and `workspace.refetch()` unconditionally,
+      and `onRefreshProject` (the failed-read "Try again" retry in both error states, and the re-read
+      the three resource dialogs issue when their write is refused) issues `workspace.refetch()`
+      without an `isFetching` test; the successful post-write re-read is the resources section's own
+      `reconcile()` -> `queryClient.invalidateQueries({ queryKey: ["workspace"] })`, untouched here.
+      React Query's manual refetch is what makes the click's read happen: with data present it cancels
+      the read it supersedes and starts a new one, and it joins an in-flight initial read instead of
+      duplicating it (query-core `Query.fetch`'s `cancelRefetch` branch), so the case's injected abort
+      is now decided by the click rather than by a fetch state this page cannot see. The retained trace
+      does not discriminate between a stale snapshot and a genuinely in-flight read; the fix is
+      deterministic under both, because the click always issues its read. The live-`fetchStatus`
+      alternative was rejected: it keeps the silent no-op for a genuinely in-flight read and leaves the
+      click depending on a fetch started before the route was installed, which is the race the recorded
+      trace shows. Regression tests in `frontend/src/features/connections/connections.test.tsx`: "issues
+      a new workspace read when a refresh is clicked while a re-read is in flight" (the header Refresh)
+      and "re-reads the project when Try again is clicked while a re-read is in flight" (the stale
+      error's retry) each hold a workspace re-read in flight across a page re-render and assert the
+      click records its own `/portal/api/workspace` request. On the guarded bytes both fail for the
+      recorded reason — no request after the click (`Expected: 3 / Received: 2` for the header
+      refresh; Vitest's inline `expected 5 to be 6` for the retry, whose count includes the refused
+      read's retries); on the fixed bytes the file passes (53 passed, `--no-file-parallelism`) with
+      `tsc --noEmit` and `eslint . --max-warnings 0` exit 0. The browser case keeps its assertions
+      and injected-failure design unchanged. Scope: only this page gated a read whose fetch state it
+      never rendered; the other refresh guards (`projects`, `runtimes`, `work/detail`, `goals/detail`,
+      `chat`) decide on the `isFetching` of the query they pass to `RefreshButton fetching=`, so their
+      field is tracked and their handler snapshots stay fresh, and they are left unchanged. Host
+      note: this host runs ~14 parallel workers, so local browser verdicts are indicative only; CI
+      holds the verdict.
+
 ## Paginated reads must be bound to the cursor that served their pages
 
 - [ ] The work detail's execution history retained the older pages a reader had expanded without
@@ -913,6 +1002,45 @@ from branch `chore/deadcode-revalidation`.
       its chain was expanded from. No timer, poll or automatic read was added: the pages a moved
       boundary retires are loaded again by the reader's own "Load older history" / "Load more Goal
       attention", which continues from the served boundary.
+
+- [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
+      construction: its pages are keyed by their own `after` sequence numbers
+      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
+      re-read under their own keys, so a page is never served under a boundary it was not fetched
+      from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
+      gap in `frontend/src/features/chat/presentation.ts`, rendered by
+      `frontend/src/features/chat/chat.tsx`) and therefore still differs from this fix: it keeps the
+      pages a moved boundary left behind and states the unloaded region, while the work history and
+      the attention feed retire them. Unifying the two changes one surface's reader-visible
+      behaviour, so it needs its own decision. Retiring a page is reader-visible too (an expanded
+      page disappears when a live run moves the boundary), and it is covered by the frontend suite
+      only: the browser suites, which CI runs, carry the live-daemon pagination case and were not
+      run on this host.
+
+      **Closed (2026-11-19, `fix/paginated-reads-cursor-binding`):** the scan enumerated every
+      paginated read with two search strategies — the server-side pagination parameters, the
+      `page_with_next` reads and the generated contract DTOs that carry
+      `next_before`/`next_after`/`next_cursor`, and every client consumer that accumulates pages
+      (`useInfiniteQuery`, `useQueries`, the retained page state) — and decided each: the work
+      detail's execution history (`/portal/api/work-items/:id/timeline`) and the Goal attention feed
+      (`/portal/api/attention`) are bound by #68; the Goal receipt list
+      (`/portal/api/goals/:id/events`) is bound by construction, its pages keyed by their own
+      `after` sequence over an append-only log and re-read under those keys; the chat conversation
+      (`/portal/api/chat`) binds its pages by the boundary message's id, and this branch fixed the
+      two ways that binding could still lie — the gap proof now requires every retained page to be
+      reached from the served boundary, so a later page that did reach the boundary no longer
+      excuses a chain a moved boundary left behind, and the note names the attached chain's
+      boundary and the newest unreached page, naming each further region as loads reach it; and the
+      reader's own "Load older" now reads through the cache under the cursor and boundary captured
+      at press time, so a re-serve that re-keys the surface mid-load neither cancels the press nor
+      binds its page to the boundary that arrived afterwards. The operator API's paged reads
+      (`/api/v1/tasks/:task_id/{timeline,events,transitions,commands}`,
+      `/api/v1/goals/:goal_id/events`, `/api/v1/attention`) have no retaining consumer — bounded
+      cursor-page drains in `scripts/ci/omo-control-native-evidence.py` and
+      `daemon/e2e/core_test.go`, and the browser suites' single reads or cursor drains (e.g.
+      `portal-chat.spec.mjs`) for verification — as is the providers' outbound pagination
+      (`control/lib/symmetry_control/integrations/providers/`), one-shot aggregation. The residual
+      in `docs/TODO.md` is the owner's unification decision and the CI browser runs.
 
 ## Deferred review findings (0007g)
 
