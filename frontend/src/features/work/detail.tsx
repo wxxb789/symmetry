@@ -53,7 +53,7 @@ import {
  *
  * An execution that carries a run is linked into its conversation in Chat:
  * pure navigation into the run scope `/portal/chat` already serves, labeled for
- * review only when the served waiting context carries a decision packet.
+ * review only when the served waiting context carries a decision record.
  */
 export function WorkDetailPage() {
   const { workItemId } = useParams({ from: "/work/$workItemId" });
@@ -238,17 +238,21 @@ function WorkDetailBody({ workItemId, scopedProjectId, backSearch, editable, ope
   const detail = query.data;
   const item = detail?.work_item;
   const execution = item?.execution ?? null;
+  // The project this detail belongs to as far as the surface can tell: the
+  // served projection first, then the URL's scope hint — the rule the Back link
+  // already uses. The chat link accepts either: a run-scoped conversation read
+  // is keyed by the run and drops `project_id`, so the project only scopes the
+  // picker's directory read, whose own answer owns the interpretation.
+  const detailProjectId = item?.project_id ?? scopedProjectId;
   // The current execution's conversation entry point, present only while the
   // served read binds it to a run: the scope and run are the query the chat
-  // route already resolves, and the project travels with it so the picker can
-  // name the run before the conversation read answers.
+  // route already resolves.
   const runId = execution?.run_id ?? null;
   const runChatSearch = runId === null ? null : {
     scope: "run" as const,
-    ...(item?.project_id === undefined ? {} : { projectId: item.project_id }),
+    ...(detailProjectId === null ? {} : { projectId: detailProjectId }),
     runId,
   };
-  const backToProjectId = item?.project_id ?? scopedProjectId;
   const refresh = () => {
     if (query.isFetching) return;
     void query.refetch();
@@ -265,9 +269,9 @@ function WorkDetailBody({ workItemId, scopedProjectId, backSearch, editable, ope
     </>}
     <PageHeading title={item?.title ?? "Work item"} description={item === undefined ? "Loading this work item…" : `${item.key} · ${ownerLabel(item.assignee)}`}>
       <div className="heading-actions">
-        {backToProjectId === null
+        {detailProjectId === null
           ? <Link className="button" to="/projects">Back to projects</Link>
-          : <Link className="button" to="/projects/$projectId" params={{ projectId: backToProjectId }} search={backSearch}>Back to project</Link>}
+          : <Link className="button" to="/projects/$projectId" params={{ projectId: detailProjectId }} search={backSearch}>Back to project</Link>}
         {runChatSearch !== null && <Link className="button" to="/chat" search={runChatSearch}>
           {hasDecisionPacket(execution?.waiting) ? "Review decision in Chat" : "Open in Chat"}
         </Link>}

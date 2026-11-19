@@ -353,19 +353,18 @@ export function decisionView(waiting: unknown, fallbackQuestion: string | null):
 }
 
 /**
- * Whether the served waiting context carries the agent's decision packet. A
- * surface that sends the operator to Chat for a decision checks this member and
- * not the waiting state alone: the conversation offers its decision intent only
- * while the packet is served, and a waiting request without one is answered on
- * the surface that renders it. Both the extraction result and the raw payload
- * are read, exactly as the decision packet itself is.
+ * Whether the served waiting context carries the agent's decision record — the
+ * extraction result or the raw payload's `decision`, read as a record, exactly
+ * the gate `chatDecisionPacket` applies (`features/chat/presentation.ts`). That
+ * module already imports this one, so the reading is kept expression-identical
+ * here rather than shared: a surface that sends the operator to Chat for a
+ * decision must not claim one the conversation would not offer. A waiting
+ * request without a record is answered on the surface that renders it.
  */
 export function hasDecisionPacket(waiting: unknown): boolean {
   const record = asRecord(waiting);
   if (record === null) return false;
-  const decision = record["decision"] ?? null;
-  if (decision !== null) return true;
-  return asRecord(asRecord(record["payload"])?.["decision"]) !== null;
+  return asRecord(record["decision"]) !== null || asRecord(asRecord(record["payload"])?.["decision"]) !== null;
 }
 
 const shortId = (value: string): string => (value.length > 13 ? `${value.slice(0, 8)}…` : value);

@@ -447,9 +447,10 @@ not a claim that work remains.
       (`frontend/src/features/work/detail.tsx`) now renders "Open in Chat" beside the execution
       whenever the served read binds that execution to a `run_id`, linking the canonical
       `/portal/chat?scope=run&projectId=…&runId=…`; the label becomes "Review decision in Chat"
-      while the served waiting context carries a decision packet — the same member the
-      conversation's decision intent is filtered by, and the member the classic drawer's decision
-      button checked, while a waiting request without a packet is answered on the detail itself.
+      while the served waiting context carries a decision record — the extraction result or the
+      payload's `decision`, read exactly as the conversation's own decision intent reads it, the
+      same members the classic drawer's decision button checked — and a waiting request without
+      one is answered on the detail itself.
       Pure navigation: no server member was added or changed. Pinned by
       `frontend/src/features/work/detail.test.tsx` (exact href, both labels, and no link without a
       run). The item's closing clause about `browser/tests/portal.spec.mjs` was already stale when
