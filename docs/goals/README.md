@@ -114,6 +114,14 @@ Billing and price versions remain unknown, single-sample comparisons are reporte
 as such, and the result is **produced and awaiting the owner's verdict**: no model
 signs for the owner, and no routing policy is promoted here.
 
+**0008 prerequisite text — recording note (2026-11-19).** The archived 0008d goal
+document's prerequisite sentence names "the accepted 0008b and 0008c results"
+(`archive/0008d-typescript-model-routing.md:13`). Archived goal documents keep
+their bytes unchanged, so the sentence stays as written; the owner's verdicts,
+recorded in the goal rows below as they arrive, govern: 0008b is **accepted by
+the owner** (wxxb789, 2026-11-18), while 0008c's result is produced and awaiting
+the owner's verdict.
+
 Goal [0006-final](archive/0006-final.md) completed its documentation-only review
 recording on 2026-11-15 and is archived with its text unchanged and its five
 relative link targets rebased for the archive directory; **full-series acceptance
