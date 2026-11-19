@@ -746,6 +746,234 @@ describe("history", () => {
     expect(new Set(messageIds())).toEqual(new Set([messageId(1), messageId(2), messageId(5), messageId(6)]));
   });
 
+  it("keeps naming the region a moved boundary skipped until a load reaches the retained chain", async () => {
+    const user = userEvent.setup();
+    let read = 0;
+    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
+    const older: Record<string, ServedMessage[]> = {
+      "cursor-9": [message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })],
+      "cursor-13": [message(11, { insertedAt: at(11) }), message(12, { insertedAt: at(12) })],
+      "cursor-11": [message(9, { insertedAt: at(9) }), message(10, { insertedAt: at(10) })],
+    };
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          const nextBefore = before === "cursor-13" ? "cursor-11" : before === "cursor-11" ? "cursor-9" : "cursor-7";
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: older[before] ?? [], nextBefore })));
+        }
+        read += 1;
+        return new Response(JSON.stringify(read === 1
+          ? conversationBody({ scope: "project", projectId, messages: [message(9, { insertedAt: at(9) }), message(10, { insertedAt: at(10) })], nextBefore: "cursor-9" })
+          : conversationBody({ scope: "project", projectId, messages: [message(13, { insertedAt: at(13) }), message(14, { insertedAt: at(14) })], nextBefore: "cursor-13" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 7");
+    expect(document.querySelector("#chat-history-gap")).toBeNull();
+    expect(messageIds()).toEqual([7, 8, 9, 10].map(messageId));
+
+    // A re-read ends at a later boundary: the retained page was fetched from the
+    // boundary the re-read no longer carries, so the region between them is named.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 13");
+    const moved = document.querySelector("#chat-history-gap");
+    expect(moved).not.toBeNull();
+    expect(moved).toHaveAttribute("data-boundary-current", messageId(13));
+    expect(moved).toHaveAttribute("data-boundary-retained", messageId(8));
+    expect(messageIds()).toEqual([7, 8, 13, 14].map(messageId));
+
+    // A load that only reaches the refreshed boundary does not connect the
+    // chains: messages 9 and 10 are still unloaded, so the surface keeps saying
+    // so — and keeps the retained page the note names.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 11");
+    const still = document.querySelector("#chat-history-gap");
+    expect(still).not.toBeNull();
+    expect(still).toHaveAttribute("data-boundary-current", messageId(11));
+    expect(still).toHaveAttribute("data-boundary-retained", messageId(8));
+    expect(messageIds()).toEqual([7, 8, 11, 12, 13, 14].map(messageId));
+
+    // The reader's next load fills the skipped region; the chains now touch, so
+    // the note goes away and the messages it named render again.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 9");
+    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12, 13, 14].map(messageId));
+  });
+
+  it("keeps the page a re-serve overtook bound to the boundary its cursor was minted from", async () => {
+    const user = userEvent.setup();
+    let read = 0;
+    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
+    const held = Promise.withResolvers<void>();
+    const older: Record<string, ServedMessage[]> = {
+      "cursor-13": [message(11, { insertedAt: at(11) }), message(12, { insertedAt: at(12) })],
+      "cursor-11": [message(9, { insertedAt: at(9) }), message(10, { insertedAt: at(10) })],
+    };
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before === "cursor-9") {
+          return held.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })], nextBefore: null }))));
+        }
+        if (before !== null) {
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: older[before] ?? [], nextBefore: before === "cursor-13" ? "cursor-11" : null })));
+        }
+        read += 1;
+        return new Response(JSON.stringify(read === 1
+          ? conversationBody({ scope: "project", projectId, messages: [message(9, { insertedAt: at(9) }), message(10, { insertedAt: at(10) })], nextBefore: "cursor-9" })
+          : conversationBody({ scope: "project", projectId, messages: [message(13, { insertedAt: at(13) }), message(14, { insertedAt: at(14) })], nextBefore: "cursor-13" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+
+    // The press captures cursor-9, minted relative to message 9; the re-serve
+    // lands before the page does and moves the surface to a later boundary.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 13");
+    held.resolve();
+    await screen.findByText("message 7");
+
+    // The page was fetched from message 9's chain, not from the re-served
+    // boundary: the region between the two is unloaded and stays named.
+    const gap = document.querySelector("#chat-history-gap");
+    expect(gap).not.toBeNull();
+    expect(gap).toHaveAttribute("data-boundary-current", messageId(13));
+    expect(gap).toHaveAttribute("data-boundary-retained", messageId(8));
+    expect(messageIds()).toEqual([7, 8, 13, 14].map(messageId));
+
+    // The reader's own loads fill it from the served boundary.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 11");
+    expect(document.querySelector("#chat-history-gap")).toHaveAttribute("data-boundary-current", messageId(11));
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 9");
+    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12, 13, 14].map(messageId));
+  });
+
+  it("keeps two in-flight loads each on the boundary its own cursor was minted from", async () => {
+    const user = userEvent.setup();
+    let read = 0;
+    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
+    const held = Promise.withResolvers<void>();
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before === "cursor-9") {
+          return held.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })], nextBefore: null }))));
+        }
+        if (before === "cursor-13") {
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(11, { insertedAt: at(11) }), message(12, { insertedAt: at(12) })], nextBefore: "cursor-11" })));
+        }
+        if (before === "cursor-11") {
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(9, { insertedAt: at(9) }), message(10, { insertedAt: at(10) })], nextBefore: null })));
+        }
+        read += 1;
+        return new Response(JSON.stringify(read === 1
+          ? conversationBody({ scope: "project", projectId, messages: [message(9, { insertedAt: at(9) }), message(10, { insertedAt: at(10) })], nextBefore: "cursor-9" })
+          : conversationBody({ scope: "project", projectId, messages: [message(13, { insertedAt: at(13) }), message(14, { insertedAt: at(14) })], nextBefore: "cursor-13" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+
+    // Press one leaves through cursor-9 and is held; the re-serve re-keys the
+    // read; press two then leaves through cursor-13 and lands first.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 13");
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 11");
+    held.resolve();
+    await screen.findByText("message 7");
+
+    // Press two chains from the re-served boundary; press one's page belongs to
+    // the chain its own cursor was minted from, so the region it skips stays
+    // named instead of being excused by the boundary the press never saw.
+    const gap = document.querySelector("#chat-history-gap");
+    expect(gap).not.toBeNull();
+    expect(gap).toHaveAttribute("data-boundary-current", messageId(11));
+    expect(gap).toHaveAttribute("data-boundary-retained", messageId(8));
+    expect(messageIds()).toEqual([7, 8, 11, 12, 13, 14].map(messageId));
+
+    // The continuation still chains from press two's page, not from the page
+    // its press overtook: Load older is still offered, and the next press fills
+    // the region between the two chains and closes the gap.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 9");
+    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12, 13, 14].map(messageId));
+  });
+
+  it("surfaces a failed older page and leaves the button ready to retry", async () => {
+    const user = userEvent.setup();
+    let olderReads = 0;
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before === "cursor-9") {
+          olderReads += 1;
+          return olderReads === 1
+            ? new Response("{}", { status: 409 })
+            : new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(7), message(8)], nextBefore: null })));
+        }
+        return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(9), message(10)], nextBefore: "cursor-9" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+
+    // The refusal is the reader's to see and retry: it is named on the status
+    // line, the surface keeps the pages it has, and the button is ready again.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(statusRegion().textContent).toBe("The workspace changed. Refresh to load its current state."));
+    expect(messageIds()).toEqual([9, 10].map(messageId));
+    expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false");
+
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 7");
+    expect(messageIds()).toEqual([7, 8, 9, 10].map(messageId));
+  });
+
+  it("keeps a page a scope switch overtook in the scope that pressed Load older", async () => {
+    const user = userEvent.setup();
+    const held = Promise.withResolvers<void>();
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before === "cursor-9") {
+          return held.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(7), message(8)], nextBefore: null }))));
+        }
+        return url.searchParams.get("scope") === "project"
+          ? new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(9), message(10)], nextBefore: "cursor-9" })))
+          : new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [message(1, { content: "workspace history" })] })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+
+    // The press belongs to the project scope; the reader leaves for the
+    // workspace before the page arrives.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await user.selectOptions(scopeSelect(), "workspace");
+    await screen.findByText("workspace history");
+    held.resolve();
+
+    // The late page lands in the scope that pressed it, never in the shown one.
+    await user.selectOptions(scopeSelect(), "project");
+    await screen.findByText("message 7");
+    expect(messageIds()).toEqual([7, 8, 9, 10].map(messageId));
+    await user.selectOptions(scopeSelect(), "workspace");
+    await screen.findByText("workspace history");
+    expect(messageIds()).toEqual([messageId(1)]);
+  });
+
   it("keeps the loaded conversation visible as stale when a read fails", async () => {
     const user = userEvent.setup();
     let fail = false;

@@ -13,25 +13,16 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Model-routing evaluation records
 
-- [ ] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
-      receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
-      `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
-      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
-      temp root (the `symmetry-0008c-eval` run store under the local user profile). They are produced,
-      committed evidence bound by digests other records name, so the 0008c audit recorded them as
-      an open item instead of rewriting history. The runner's sanitisation extension
-      (`validate_measured_mapping(..., redact=True)`) now records every host-specific absolute path
-      in a measured value as a `sha256:` token, so run records and receipts written from now on
-      cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
-      never edit a receipt whose digests other records bind.
-
-- [ ] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
-      how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
-      resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
-      against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
-      `scripts/ci/test-model-routing-evaluation.py` again, so the 0008b/0008c/0008d receipts stay fail-closed
-      for submission under the current bytes exactly as their entries below describe; re-execute the runs, never
-      re-derive by editing a receipt.
+- [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
+      `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
+      `process.communicate(timeout=PROCESS_TREE_REAP_SECONDS)`, which on Windows can keep waiting
+      on the gate's stdout/stderr pipes while a descendant the snapshot tree kill missed still
+      holds the inherited write ends - past the documented reap window and past any caller that
+      expects `check` to return once the kill finished (the timeout-tree fixture's survivor
+      witness was masked this way until the fixture spawned its descendant with `DEVNULL`).
+      Fix direction: close the read ends from a daemon thread, or leave the final handle close to
+      process exit, so a pipe-holding survivor can never extend the reap; add a regression case
+      with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
 
 ## SEO / repository metadata
 
@@ -45,20 +36,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
 
-- [ ] Investigate the load-sensitive timeout fixture
-      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
-      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
-      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
-      on the pass whose host was also running four other regression suites and the record
-      re-derivations - the concurrency the model-routing runbook itself warns against. The
-      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
-      assertion 2.0 s later, while the kill path is a snapshot tree kill
-      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
-      kill enumerates the tree is not killed; whether that is what happened in that pass is not
-      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
-      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
-      kill path alone unless it reproduces on a quiet host.
-
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
       `control/test/symmetry_control/integrations_test.exs:1161` (`assert
@@ -68,6 +45,25 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       same job (that run then completed successfully). Revalidate whether the captured SQL can
       be asserted before the sync query is issued; keep the assertion itself and leave the fix
       to separate maintenance.
+
+      Update (2026-11-19, branch `fix/flake-control-reversed-import`): the helper now reads the
+      wait from the lock manager instead of the statement text - the failed attempt-1 log names
+      the repository lookup in `pg_stat_activity.query` while the import was in a
+      delivery-attributed lock wait - accepts a sample only once the import's backend holds an
+      ungranted lock and the delivery backend blocks it, and asserts on the accepted sample
+      that the import's ungranted lock waits on the delivery backend's transaction
+      (`pg_locks.transactionid = (SELECT backend_xid FROM pg_stat_activity WHERE pid = delivery)`)
+      while the delivery backend holds a granted `work_items` lock; the raw sample (query, wait
+      event, all three lock facts) is printed on deadline and in the accepted-path assertion.
+      The waiter-bound xid is the discriminating fact: the `work_items` relation fact alone is
+      invariant (a paused delivery always holds those locks), so it cannot separate the
+      hypotheses - (a) `pg_stat_activity.query` is not the waiting statement for this backend at
+      sample time (prepared-statement/activity reporting under load) while the lock wait is
+      real, or (b) a transient pre-sync lock wait. Not reproduced locally (three pre-fix runs
+      with seed 310068 left the target test green), so the entry stays open; a recurrence now
+      shows the importer's wait event, whether it waited on the delivery transaction, and
+      whether the delivery backend held `work_items`.
+
 - [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
       `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
       states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
@@ -84,16 +80,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       constraint and labels, and decide in a separate maintenance change whether the states
       need a writer or the vocabulary needs a migration.
 
-- [ ] Investigate the intermittent browser failure `project, resource, work-item,
-      filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
-      detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
-      detached" (desktop-chromium). Observed once while implementing goal 0007d
-      (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
-      9 skipped) with two Control compiles running on the same host; the same test passed
-      twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
-      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
-      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
-
 - [ ] Investigate the environment-limited Windows command test. `CommandTest` "provider
       token commands can keep stderr diagnostics out of stdout" fails with
       `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
@@ -105,82 +91,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       instead of one. `Command.run/3` and the test itself are untouched by 0007d.
       Revalidate the Windows shell resolution; keep the assertion.
 
-- [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
-      the 0007d fixture database, 10 control tests fail because committed fixture rows are
-      visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
-      controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
-      on a clean dedicated test database. The browser harness recreates its own database;
-      the suite should use the repository default (`symmetry_control_test`).
-
-- [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
-      legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
-      output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
-      toast and "two browser contexts reject a stale project update" hit the 60 s test timeout;
-      both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
-      and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
-      before changing any budget.
-
-- [ ] Investigate the mobile-chromium classic case `project, resource, work-item, filtering,
-      ordering, and persistence` in `browser/tests/portal.spec.mjs`. After saving the work-item
-      edit dialog, `#toast` stayed hidden with the stale text "Work item created" for the whole
-      10 s expect window, while the update itself persisted: the failure snapshot's detail drawer
-      shows the new pull request URL, CI `passed` and review `required` that the test set. Observed
-      while completing 0007e in the first legacy run (`portal-work-views.spec.mjs` +
-      `portal.spec.mjs` + `workspace-shell.spec.mjs` on both widths, 43 passed / 4 failed /
-      5 skipped) and reproduced alone on the same revision with the desktop case passing (mobile
-      `x` in 17.0 s, desktop `ok` in 12.1 s); it then passed in the second run of the same suites on
-      the unchanged classic files (46 passed / 1 failed / 5 skipped), so the mobile case is
-      intermittent. The classic route is
-      unchanged by 0007e: `control/lib`, `control/priv/portal_assets`,
-      `control/lib/symmetry_control_web/portal_html` and `portal_controller.ex` have no diff
-      against the base revision. Revalidate the classic toast branch that reports an update when
-      the edit dialog was opened from the detail drawer; keep the assertion.
-
-- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
-      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
-      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
-      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
-      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
-      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
-      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
-      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
-      remaining failure is the environment-limited `CommandTest` above). The build output is
-      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
-      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
-      suite prerequisite; keep the assertions.
-
-- [ ] Revalidate the load-sensitive Go test
-      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
-      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
-      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
-      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
-      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
-      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
-      deadline rather than a longer test timeout.
-
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
       the server answers that code, but a sync refused for an ungranted capability maps to
       `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
       Either the server should serve the more specific code or the client entry should be removed;
       decide in a separate maintenance change with a test that pins the served code.
-
-- [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
-      43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
-      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.061s` on the 0008a head, where the
-      same package had taken 365 s earlier on the same pull request and every other package passed;
-      green on rerun. This is the same loaded-runner family as the Windows `internal/workspace`
-      180 s package timeout: decide whether the package needs a longer explicit budget or fewer
-      load-sensitive waits, and keep the tests themselves.
-      The second occurrence
-      (`FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s`, run 44055523619 job
-      133943809688) is classified and fixed in the `daemon/internal/platform` flake-class entry
-      above (closed part archived in `docs/archive/CLOSED-TODO.md`): a test cleanup joined a
-      worker that retried an unpersistable terminal transition forever, so the package died at
-      the go-test timeout instead of failing the test.
-      The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
-      in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
-      wait on the product's own state transition rather than on host speed.
 
 ## Deferred review findings (0007f)
 
@@ -313,15 +229,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   prints a digest, compares nothing and cannot fail, and no job or script invoked it. The recorded
   digests in `docs/evidence/goal-0007c-safe-work-planning-2026-11-16.md` name it as the algorithm of
   record, so that receipt can no longer be recomputed from the tree; the file remains in git history.
-
-## Control instances sharing one worktree's build
-
-- [ ] Two Control instances started from the same worktree share `control/_build`, so a foreign
-      session's dev server can answer this worktree's browser runs with `# unhandled` error pages
-      (observed 2026-11-17 as console-500 assertions and render-wait timeouts during 0007g's
-      suite-context repetitions, with zero offset-assertion failures in the same runs). Give each
-      instance its own `MIX_BUILD_PATH` when several run at once; the runs that need isolation
-      should do it explicitly rather than relying on nobody else being active.
 
 ## Browser acceptance under host load
 
@@ -539,17 +446,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       convention paragraph itself (it restates the precedence the design and
       protocol documents already carry).
 
-- [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
-      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
-      instead of rewriting history:
-      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
-      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
-      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
-      records with that helper and records the rendering in the record
-      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
-      record's quoted digest consistent when the older records are re-published.
-
 - [ ] Revalidate the stale 0008-series prerequisite text:
       `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
       and 0008c results" while the 0008b candidate policy is produced and awaiting
@@ -571,38 +467,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       runs the production configuration through `mix phx.server`, the same release-style instance the
       0007h receipt records), and the browser suite's expiry/mobile projects need the release plus a
       fixture database that only the two release instances provide.
-
-- [ ] Investigate the intermittent Control failure
-      `control recovery selects pending actions after more than one page of terminal no-op Goals` in
-      `control/test/symmetry_control/goals_test.exs:4753`. It is recorded from the pre-rebase delivery
-      revision `7235708` (`.tmp/gates/control-test-final.log`, 2026-11-17 11:16,
-      `884/886 passed, 21 skipped`, exit 2) with `** (EXIT from #PID<...>)` /
-      `** (DBConnection.ConnectionError) could not checkout the connection owned by #PID<...>
-      ({:sql_sandbox_owner, ...}) ... request was dropped from queue after 111ms`, raised inside
-      `Ecto.Repo.Preloader`'s supervised `Task`; the same suite's earlier run (09:44) reported
-      `885/886 passed` with the `pwsh` failure alone, so the case is intermittently load-sensitive:
-      it admits 101 Goals and cancels each one before asserting
-      `Goals.recover_pending_goal_control_actions/1`, and the sandbox owner's connection is preempted
-      while the preload tasks queue. This is not the `integrations_test.exs:1161` flake recorded above
-      (different test and call site). Revalidate whether the preload can run without a second supervised
-      task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
-      recovery page it checks.
-
-- [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
-      failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
-      pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in
-      6.9 s in the same run, and both projects passed in the 12:10 run on the pre-repair bundle. The
-      retained trace shows the injected `route.abort("internetdisconnected")` never fired (no
-      `/portal/api/workspace` request or failure after the route was installed), and the click's
-      `refresh()` refetched `["connections"]` but not `["workspace"]` because of the page's guard
-      `if (!workspace.isFetching) void workspace.refetch()` (`frontend/src/features/connections/connections.tsx:351-352`;
-      the same guard also sits in `onRefreshProject` at `:501`). `workspace.isFetching` is never read
-      during render, so React Query's automatic change tracking does not watch it and a render taken while
-      a read was in flight leaves the guard snapshot at `true` until something else re-renders the page —
-      a state-snapshot race, not a cutover change. Decide whether the guard should read the query's live
-      `fetchStatus` at click time (`queryClient.getQueryState(key)?.fetchStatus`) or whether a
-      user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
-      the injected-failure design.
 
 ## Lockfiles must carry canonical registry URLs
 
@@ -696,16 +560,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Paginated reads must be bound to the cursor that served their pages
 
-- [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
-      construction: its pages are keyed by their own `after` sequence numbers
-      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
-      re-read under their own keys, so a page is never served under a boundary it was not fetched
-      from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
-      gap in `frontend/src/features/chat/presentation.ts`, rendered by
-      `frontend/src/features/chat/chat.tsx`) and therefore still differs from this fix: it keeps the
-      pages a moved boundary left behind and states the unloaded region, while the work history and
-      the attention feed retire them. Unifying the two changes one surface's reader-visible
-      behaviour, so it needs its own decision. Retiring a page is reader-visible too (an expanded
-      page disappears when a live run moves the boundary), and it is covered by the frontend suite
-      only: the browser suites, which CI runs, carry the live-daemon pagination case and were not
-      run on this host.
+- [ ] Residuals of the completed class scan (2026-11-19): (a) the owner's decision on unifying the
+      chat conversation's keep-and-state treatment with the work history's and the attention feed's
+      retirement — an expanded page the chat keeps renders beside a stated unloaded region, while
+      the other two retire it, and unifying changes one surface's reader-visible behaviour; (b) the
+      browser suites, which CI runs, carry the live-daemon pagination cases (an expanded page
+      disappearing when a live run moves the boundary is covered by the frontend suite only) and
+      were not run on this host. The scan and its fixes are archived in
+      `docs/archive/CLOSED-TODO.md`. Pre-existing, left as-is: `retainServedPage` detects a moved
+      boundary by comparing cursor token bytes, so a re-serve that only re-signs the same boundary
+      position still restarts the chain pointer; deciding whether it should compare the boundary
+      message's id instead belongs to (a).

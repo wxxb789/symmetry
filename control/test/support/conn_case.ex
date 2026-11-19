@@ -32,6 +32,7 @@ defmodule SymmetryControlWeb.ConnCase do
   end
 
   setup tags do
+    SymmetryControlWeb.PortalBundle.require_staged!(tags)
     SymmetryControl.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end

@@ -12,7 +12,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRouteApi, Link, useNavigate, useRouteContext, useRouter } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useRef, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import {
   chatConversationOptions,
   chatMessageMutation,
@@ -155,19 +155,38 @@ export function ChatPage() {
     updateWith(key, (previous) => retainServedPage(previous, { messages: served.messages, nextBefore: served.next_before }, served));
   }, [conversation.data, key, updateWith]);
 
-  // `Load older` reads one page through the served cursor and retains it; the
-  // disabled query is keyed by that cursor, so a press can never duplicate one.
-  const olderQuery = useQuery({ ...chatOlderPageOptions(application.api, identity, history.loadCursor ?? ""), enabled: false });
+  // `Load older` reads one page through the served cursor and retains it. The
+  // read runs through the cache rather than a mounted query: a re-serve that
+  // re-keys the surface's cursor while the page is in flight must neither
+  // cancel the reader's press nor land the page under a boundary that arrived
+  // afterwards — the page belongs to the chain its own cursor was minted
+  // relative to, so the cursor and that boundary are captured together at
+  // press time and the press that is already loading its cursor never repeats.
+  const [loadingCursor, setLoadingCursor] = useState<string | null>(null);
   const loadOlder = () => {
     const cursor = history.loadCursor;
-    if (cursor === null || olderQuery.isFetching) return;
-    void olderQuery.refetch().then((result) => {
-      const fetched = result.data;
-      if (fetched === undefined) return;
-      // The cursor was relative to the boundary `${state.nextBoundaryId}` names;
-      // the id is what later reads compare, because a cursor is re-signed.
-      updateWith(key, (previous) => retainOlderPage(previous, cursor, previous.nextBoundaryId, { messages: fetched.messages, nextBefore: fetched.next_before }));
-    });
+    const boundaryId = state.nextBoundaryId;
+    if (cursor === null || loadingCursor === cursor) return;
+    setLoadingCursor(cursor);
+    void application.queryClient
+      .fetchQuery(chatOlderPageOptions(application.api, identity, cursor))
+      .then(
+        (fetched) => {
+          // The boundary message's id is what later reads compare, because a
+          // cursor is re-signed per response.
+          updateWith(key, (previous) => retainOlderPage(previous, cursor, boundaryId, { messages: fetched.messages, nextBefore: fetched.next_before }));
+        },
+        (error: unknown) => {
+          // The failure is the reader's to retry, so the surface names it on
+          // the composer's status line — an expired or replaced cursor arrives
+          // as the read refusal the server sent — and the button returns to
+          // ready. The failure handler is the rejection callback, not a
+          // `catch`: a write that throws must not be reported as a read
+          // failure.
+          update(key, { status: { kind: "notice", message: errorMessage(error) } });
+        },
+      )
+      .finally(() => setLoadingCursor((current) => (current === cursor ? null : current)));
   };
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -496,7 +515,7 @@ export function ChatPage() {
         data-boundary-current={history.gap.current}
         data-boundary-retained={history.gap.retained}
       >
-        Entries between the current page and the loaded older history were not loaded; Load older history continues from the current page's boundary.
+        Entries between the loaded history and the retained older pages were not loaded; Load older history loads the missing entries.
       </p>}
       <p id="chat-history-note" className="muted text-small">
         {history.messages.length === 0
@@ -507,7 +526,7 @@ export function ChatPage() {
         id="chat-load-older"
         className="button"
         type="button"
-        aria-disabled={olderQuery.isFetching}
+        aria-disabled={loadingCursor === history.loadCursor}
         onClick={loadOlder}
       >Load older</button>}
     </div>

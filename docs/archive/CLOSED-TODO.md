@@ -16,6 +16,9 @@ not a claim that work remains. The two blocks moved on 2026-11-19 (branch
 The five dead-code closures appended to `## Dead-code candidates` below were moved on 2026-11-19
 from branch `chore/deadcode-revalidation`.
 
+The closed class scan appended to `## Paginated reads must be bound to the cursor that served their
+pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-binding`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -48,6 +51,204 @@ from branch `chore/deadcode-revalidation`.
       narrative now names the delivered commits. Run-time observations (gate results, link checks, receipt
       re-derivations recorded in the audit) remain bound to the pre-rebase reviewed revision and are labelled as
       history.
+
+- [x] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
+      receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
+      `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
+      temp root (the `symmetry-0008c-eval` run store under the local user profile). They are produced,
+      committed evidence bound by digests other records name, so the 0008c audit recorded them as
+      an open item instead of rewriting history. The runner's sanitisation extension
+      (`validate_measured_mapping(..., redact=True)`) now records every host-specific absolute path
+      in a measured value as a `sha256:` token, so run records and receipts written from now on
+      cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
+      never edit a receipt whose digests other records bind. Decided by rendering rather than
+      keeping the roots: closed 2026-11-19 on branch
+      `chore/eval-record-scrub` under the owner's one-time Q2 authorization (revalidated first, as the entry asked):
+      the four receipts and the evidence record were rendered through `scripts/ci/model-routing-record-sanitize.py`
+      (`sha256:b8b252f3…`) — two substitutions per receipt (`mix_build_path`/`mix_deps_path` ->
+      `<disposable-root>/… (outside the checkout)`) and one in the evidence record — and every digest that binds
+      them was recomputed and rebound: the four receipt digests quoted by `0008c-candidate-policy.md` and by the
+      evidence record (`9432545d…`/`26d8e003…`/`e79fe173…`/`1be7b419…` ->
+      `93050ced…`/`5ee9b87b…`/`ceae34ce…`/`af12819d…`). The tool's `--check` exits 0 on the two receipts whose
+      absolute-path matches were all host paths (`0008c-a-strong.json`, `0008c-b-mixed.json`); the other two keep
+      only repo-relative prose fixtures (`/control/priv/static/portal/`, `/\`, `sync_status`) that rendering would
+      corrupt. Full before/after digest table (including a later second-generation rebind of
+      `0008a-controls.json`'s rendered `missing-gate` stderr digest) and the deliberately-left list:
+      `docs/evaluations/model-routing/README.md`, "Record rendering exception (2026-11-19)".
+
+- [x] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
+      how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
+      resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
+      against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
+      `scripts/ci/test-model-routing-evaluation.py` again, so the 0008b/0008c/0008d receipts stay fail-closed
+      for submission under the current bytes exactly as their entries below describe; re-execute the runs, never
+      re-derive by editing a receipt. Closed by the one-time reference-binding audit of 2026-11-19 (branch
+      `chore/eval-record-scrub`; the owner scoped Q5 to a one-time audit, no gate): an uncommitted script parsed
+      every model-routing record and 0008-series evidence document and verified the commit/path bindings (commit
+      resolves, reachable from `origin/main`, a tag, or GitHub; path exists at that commit), the 0008a source
+      manifest (17/17 entries plus bound tree and canonical scoped digest recompute at `1c6c715`), the 0008d
+      landing-tip source subject (recomputed at `73e083f`: 1141 paths, exact), 42 tooling-source digests at their
+      tags/commits, the receipt frozen review/task digests, and every quoted file digest at HEAD — checked 61,
+      broken 0, fixed 0 (this branch's nine-file digest cascade is the only rebinding this audit required),
+      0 mismatches, with 15 sealed subject manifests and the sealed-checkout `HEAD:` references classified
+      unverifiable-private by design. Two referenced pre-rebase commits (`c45db2c`, `1baf76c`) are GitHub-absent
+      and stay labelled history with no main equivalent; five (`4644fd7`, `993870e`, `abf8210`, `bdbcdc7`,
+      `a9f4d93`) are unreachable from local refs but still served by the GitHub API, and `cab222b` is preserved
+      via the tag `0008c-produced-tooling`. No live binding was broken, so no binding needed rebinding beyond
+      this branch's digest cascade (recorded in the README exception section). No CI gate was added; a gate
+      proposal would be a new item.
+
+- [ ] Decide whether the four 0008d receipts ever need re-production once the evaluation tooling
+      changes again. The TypeScript carrier added gate fields `vitest_tests`/`vitest_files` and the
+      derived structured-report cross-check, so `scripts/ci/model-routing-evaluation.py` and its
+      regression suite changed after the 0008a/0008b/0008c receipts were produced. Those three
+      letters' receipts already refused re-derivation under the 0008c-era bytes (recorded in the
+      entry below); the 0008d receipts re-verify with the current bytes only, and any future tooling
+      edit invalidates them for submission in exactly the same fail-closed way. Nothing must change
+      unless a submission requires re-derivation, in which case the affected runs are re-executed,
+      never re-derived by editing a receipt.
+      The letter's own runner then changed once before publication (the `vitest_report_detail`
+      refusal order that the first full suite pass rejected, described in the closure record), and
+      the four receipts were re-derived to the corrected bytes without re-executing a gate or
+      re-importing a review, three times: first for the refusal-order fix, then for the cache-predicate
+      wiring that the independent reviews asked for, and a third time for a docstring-only change
+      (the refusal-order paragraph now names the walk's structural branches). Superseded history:
+      runner `sha256:d80e49ca…` then `sha256:3f3b0975…` then `sha256:619f0d37…`, source subject
+      `sha256:5abd13ec…` then `sha256:5e1e4e6c…` (both before the subject scope was narrowed to a
+      declared set that excludes generated bytecode caches and a worktree `.git` pointer file). The
+      published receipts bind the delivered runner `sha256:81504715…` (and the auxiliary tool
+      digests); the delivered suite `sha256:dbe1a0fe…` is named in the series receipt's subject
+      table rather than bound by a receipt.
+      The source subject is now computed by a delivered, reader-runnable tool
+      (`python scripts/ci/model-routing-source-subject.py`, scope and entry formula in its
+      docstring). Two values are current, each on its own revision: the *evaluated* revision
+      (`dacec450` plus this delivery's source paths) is `sha256:e333bb85…` over 1120 source paths,
+      and the landing tip after the rebase onto `ca1bdad` (`ca1bdad` plus this delivery, where `main`
+      added 21 source paths under `contracts/`, `browser/` and `frontend/`) is
+      `sha256:70e03853…` over 1141. History, in the order the run computed it: `sha256:5abd13ec…` (1121 paths, first scope), `sha256:5e1e4e6c…`
+      (with the `sha256:3f3b0975…` runner bytes), `sha256:e0976262…` (1123 paths,
+      `sha256:619f0d37…` runner) and `sha256:4db67385…` (1118 paths, same runner) - and it was the
+      last of those that was published, which a pre-publication audit showed to be stale: it was
+      computed before the runner's final docstring edit, so the delivered tree hashed to
+      `sha256:245edc15…` (1118 paths, delivered runner `sha256:81504715…`; derived by that audit, and
+      a value the run's own records and session transcript do not carry). The repair republished the subject and added the derivation
+      test to the suite and the subject tool with its test, which is why the delivered count is two
+      paths higher than the tree that value bound.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the decision is recorded in
+      `docs/design/quality.md` (Model-cost evaluation, closing paragraph): a receipt is re-produced
+      only by re-executing the evaluation under the current tooling and never by editing a receipt,
+      an older receipt stays verifiable against the revision that produced it, and the current
+      runner refuses it for submission - so the 0008d receipts need re-production only if a
+      submission requires it, and then the affected runs are re-executed. This very change moves
+      the evaluation runner again, which invalidates the four 0008d receipts for submission under
+      the new bytes in exactly that fail-closed way.
+
+- [ ] Decide whether the 0008d published records need a second rendering pass. No host-specific
+      absolute path ships in any of them: the four receipts are published as the runner's derived
+      bytes (`accept` re-derives each one byte for byte) and both narrative records name the private
+      store root only as `<store>`. The store's stored session text was rendered through
+      `scripts/ci/model-routing-record-sanitize.py --root <store>` before the runner read it, so the
+      derived receipts still carry `path-sha256:` tokens for the text that was rendered (the fragment
+      `/||` became `path-sha256:019ba55f…` inside the `0008d-a-mixed.*` pair; the `0008d-a-strong.*`
+      pair carries `…e11f3495…`, `…810a366d…` and `…523fbab2…` for its quoted contract paths), and
+      the frozen `outcome` claim keeps the literal route `/portal/runtimes`, which is what keeps the
+      token correlatable. `--check` therefore still exits 1 for those records - the tool renders
+      every absolute path, not only host ones, which its docstring names as its boundary - and it
+      exits 0 for the four review records and the `0008d-b-*` receipts. Nothing must change unless a
+      future audit wants literal routes in reviewer prose, which needs a root-only rendering mode in
+      the tool, never an edit to a bound record.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the sanitize tool gained the requested
+      root-only mode (`--root-only`): it renders or flags only host absolute paths (Windows drive and
+      UNC roots, POSIX home/root/temp/mount roots) plus any `--root` disposable root, so product
+      routes such as `/portal/runtimes` stay literal, and a bare root token with no following
+      separator or segment stays literal too. `--check --root-only` exits 0 for every committed
+      `0008d-*` record - the four receipts, their four review records and the candidate policy pair -
+      which is the second rendering pass the entry asked for: no record was edited, and the
+      pre-existing raw host paths in the older 0008-series records stay with their own open entries.
+
+- [ ] Decide whether the shared hoisted dependency tree should be bound. The 0008d TypeScript gates
+      resolve their tools through a hoisted pnpm install one level above the run directories (the
+      run's `environment.json` records the route), whose bytes sit outside every sealed checkout and
+      outside the source subject. The receipts record that route and state that the integrity values
+      are the frozen lockfile's own, but the store keeps no provisioning log, no install output and
+      no digest of the resolved tree, so that claim cannot be re-verified and a file placed in that
+      tree is unbound for a whole run. The honest fix is a recorded provisioning step - log the
+      install and bind a digest of the tree the gates resolve - which is its own increment because
+      it changes what a receipt binds, not an edit to this letter's records.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the runner gained `bind-dependencies`
+      (`--run-dir`, `--tree`, `--log`, `--check`): it refuses a tree inside the run's sealed
+      checkout, computes a deterministic digest over every file and link of the resolved tree,
+      copies the install log into the run store (`provisioning/install.log`) and records both - tree
+      route, tree digest, entry count, log route, log digest and byte count - in `run.json`'s
+      `environment.provisioning` block, which every receipt derived from the run states and which
+      every `load_run` re-verifies against the stored log bytes; `--check` recomputes the tree
+      digest so a preserved tree still re-verifies. Regression tests cover determinism, a changed
+      tree, an in-checkout tree, a missing or empty log and a tampered record. The 0008d records
+      themselves were not edited; a future TypeScript run executed under this tooling carries the
+      bound provisioning step.
+
+- [ ] Decide whether the manifest's tool-cache exclusion should be narrowed. The Source manifest
+      excludes `node_modules/.vite`, `node_modules/.vite-temp` and `node_modules/.vitest-cache` so
+      that vitest's run state cannot change the revision a gate just verified. Files inside those
+      directories are therefore unbound - the seal records no digest for them - so in principle a
+      worker could hide code there that a relative import reaches during a gate. No run has written
+      such a file and the boundary is stated in the runner docstring, the closure record, the series
+      receipt and the candidate policy. The honest narrowing is vitest run state outside the
+      checkout (`cacheDir`/`VITEST_CACHE_DIR` or a gate-level redirect, the way the Playwright html
+      report is already redirected), which changes a frozen gate's environment and therefore needs
+      its own increment with re-derived evidence, not an edit to this letter's records.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** vitest run state is redirected outside
+      the sealed checkout instead of excluded from the manifest. `frontend/vite.config.ts` and
+      `frontend/vitest.config.ts` resolve `SYMMETRY_TOOL_CACHE_DIR` as Vite's `cacheDir` and
+      vitest's `fsModuleCachePath`, the runner exports that variable for every gate it executes and
+      records the run-relative redirect (`tool-state/<gate id>`) in the gate result and the receipt,
+      and `prepare` gives the run store an empty `node_modules` so Vite's config-loader temp files
+      (`.vite-temp`) land in the run store rather than inside the checkout or the shared dependency
+      tree. The `TOOL_CACHE_DIRECTORIES` exclusion was removed from the Source manifest, so run
+      state written into the checkout is now bound and fails the gate (fail-closed) instead of
+      staying unbound; the runner and manifest tests cover both directions.
+
+- [ ] Decide whether the four 0008c receipts ever need re-production under the current evaluation
+      tooling. They bind the produced revision, preserved as the annotated tag
+      `0008c-produced-tooling` (commit `cab222b`): all four re-verify with that revision's
+      bytes (`git archive 0008c-produced-tooling scripts/ci`, then `accept`, exit 0 each), while
+      the post-audit tooling refuses them for submission (`accept` exit 1 at
+      `$.evidence.tooling_sources.model-routing-evaluation.py`) — the documented fail-closed
+      consequence of changing receipt-bound tooling, labelled in the evidence record with both
+      digests. Nothing must change unless a future submission requires receipts produced by the
+      current bytes, in which case the runs have to be re-executed, never re-derived by editing a
+      receipt.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** same decision as the 0008d
+      re-production entry above, now codified in `docs/design/quality.md`: the four 0008c receipts
+      stay verifiable against the `0008c-produced-tooling` revision and are refused for submission
+      by the current runner by design; if a submission requires current bytes, the runs are
+      re-executed, never re-derived by editing a receipt.
+
+- [ ] Decide whether the 0008b receipts need re-production under the current shared runner. They bind
+      `scripts/ci/model-routing-evaluation.py` as produced —
+      `sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56` — while `main`'s #42
+      extended that runner for the Elixir carrier
+      (`sha256:8ae5b2b6ba961924f7702aa4181e8488913b4d63171922bf1cf760e62142db50`), so the current bytes
+      refuse the 0008b records for submission at `$.evidence.tooling_sources.model-routing-evaluation.py`,
+      exactly as they refuse the committed 0008c receipts (see the model-routing entry above). The
+      producing bytes stay reachable from the annotated tag `0008b-produced-tooling` (commit `253a701`,
+      the head this branch was rebased from, tagged and pushed so the reference survives the rebase), and
+      the post-rebase audit recomputation reports exactly those four
+      tooling-digest mismatches and nothing else (`checks: 99, failures: 4`). Re-execute the runs if a
+      future submission requires receipts produced by the current bytes; never re-derive by editing a
+      receipt.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the same question as the other two
+      re-production entries, answered by the same `docs/design/quality.md` paragraph: the 0008b
+      receipts stay verifiable against the revision tagged `0008b-produced-tooling` and fail closed
+      on submission under the current runner by design; a submission that requires current bytes
+      re-executes the runs.
 
 ## Dead-code candidates
 
@@ -232,6 +433,44 @@ from branch `chore/deadcode-revalidation`.
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
 
+- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
+      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
+      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
+      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
+      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
+      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
+      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
+      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
+      remaining failure is the environment-limited `CommandTest` above). The build output is
+      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
+      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
+      suite prerequisite; keep the assertions.
+      Closed in `fix/control-staged-assets-dependency` (2026-11-19) as the documented-prerequisite
+      option, kept loud rather than skipped: the four cases are tagged `:portal_assets`, and
+      `SymmetryControlWeb.PortalBundle`, called from `ConnCase` setup for every web test, fails a
+      tagged case before it touches the bundle. The failure states the prerequisite, the staging
+      command (`mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build`), CI's equivalent
+      staging (the `control` job downloads the `contracts` job's `portal-assets` artifact into
+      `control/priv/static/portal/` before `mix test`) and the explicit exclusion
+      (`mix test --exclude portal_assets`) instead of the raw `File.Error`/`File.RenameError` on the
+      staged path; the guard also rejects an entry document that is empty, references no built
+      JavaScript asset or no stylesheet, or names hashed assets that are not staged (an interrupted
+      `frontend/scripts/stage-assets.mjs`, or a build older than the current one). A fixture bundle
+      was rejected because these cases assert against the real built entry, and an ExUnit `skip`
+      would have hidden a broken CI staging step. Assertions are unchanged and nothing is skipped
+      silently: with no staging the four tagged cases failed with the guard's "staged entry
+      document is missing" problem line while the file's other nine cases passed
+      (`mix test test/symmetry_control_web/controllers/portal_controller_test.exs` — 9/13 passed,
+      4 failed), an entry document naming absent hashed assets failed the same four with
+      "references assets that are not staged", `--exclude portal_assets` reported "9 passed,
+      4 excluded", and with the staged build all thirteen passed. The staged path now has one
+      definition, `SymmetryControlWeb.PortalAssets.index_path/0`, read by both
+      `PortalController.index/2` and the tests. The prerequisite is recorded in the Elixir row of
+      `docs/design/quality.md` (which links `docs/runbooks/portal.md`) and in that runbook's local
+      gate list; the limit that a complete but source-stale bundle is not detectable from the
+      gitignored staging alone is stated only in the runbook, so freshness stays CI's guarantee
+      (the `portal-assets` artifact is built from the same revision).
+
 *Closed remainder of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; with the closed part above, nothing of the item stays there.*
 
 - [ ] Close the `daemon/internal/platform` flake class: the Linux descendant-monitor terminal reason
@@ -402,6 +641,89 @@ from branch `chore/deadcode-revalidation`.
       presentations; the rules now sit at `styles.css:216-217`) — so the literal-selector sweep's
       "unreferenced" premise was wrong and no rule was removed.
 
+- [ ] Investigate the intermittent browser failure `project, resource, work-item,
+      filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
+      detach confirmation, `#toast` still showed "Resource updated" instead of "Resource
+      detached" (desktop-chromium). Observed once while implementing goal 0007d
+      (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
+      9 skipped) with two Control compiles running on the same host; the same test passed
+      twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
+      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
+      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
+      Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the case no longer
+      exists to revalidate. On main, the file revision introduced by `7a92ca4` (#31, 0007b)
+      still carried it when `5c2e0ad` (#35, 0007c) replaced it in the same file with
+      `classic resource attach, update and detach with truthful health`; the last commit to
+      modify the file (`671525c`) is byte-identical at the cutover's parent `ca29a8e` and
+      holds only that case plus the session-boundary and keyboard walks
+      (`git show 671525c:browser/tests/portal.spec.mjs`). The 0007i cutover then deleted the
+      file with the classic renderer, its bundle and the `/portal/classic` routes
+      (`ca1bdad`); the only server-rendered document left is the script-free login template
+      `control/lib/symmetry_control_web/portal_html/login.html.eex` with its extracted
+      `control/priv/portal_assets/login.css`. No successor carries the name — `browser/tests/`
+      has no `filtering, ordering, and persistence` case (exact-name search and a test-title
+      token search both come back empty) — and the deleted spec's coverage is mapped in
+      `browser/README.md` (resource attach/update/detach and the truthful health read ->
+      `browser/tests/portal-connections.spec.mjs`; the list, board, detail and history reads ->
+      `browser/tests/portal-work-views.spec.mjs`). The `#toast` surface the observation names
+      went with the classic renderer: no `toast` element exists in `frontend/src`, `control/lib`
+      or `control/priv`, and the live receipts are `role="status"` notices — the resource walk's
+      successor asserts `Resource attached — …`, and its successful-unbind leg asserts
+      `Resource detached — Delta.` — in `browser/tests/portal-connections.spec.mjs`. There is no
+      assertion left to keep.
+
+- [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
+      legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
+      output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
+      toast and "two browser contexts reject a stale project update" hit the 60 s test timeout;
+      both pass alone on the same revision on a quiet host (the stale-update case `ok` in 5.0 s),
+      and neither surface is touched by the fix diff. Keep the assertions; re-test on a quiet host
+      before changing any budget.
+      Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): both retired cases are
+      absent from the tree, so there is nothing left to re-measure. `detail output encodes
+      untrusted statuses and rejects unsafe links` left main's `browser/tests/portal.spec.mjs` at
+      `7a92ca4` (#31, 0007b), which retired the classic detail-security probe to the new-route
+      successor `injected malicious detail values are rendered as text and never as markup or
+      unsafe URLs` in `browser/tests/portal-work-views.spec.mjs`; `two browser contexts reject a
+      stale project update` left the same file at `5c2e0ad` (#35, 0007c), whose planning
+      successor is `re-syncs to the newest project after a stale update in two contexts` in
+      `browser/tests/portal-work-planning.spec.mjs`. Neither name exists anywhere under
+      `browser/tests/` (exact-name search), the containing file is deleted with the 0007i cutover
+      (`ca1bdad`), and the successor surfaces are named in the migration record in
+      `browser/README.md` (the 0007b paragraph). The expect windows this item observed were the
+      cases' own; the 60 s test bound is still the global `timeout` at
+      `browser/playwright.config.mjs:15` and is not a budget this closure changes. What remains
+      open about host-load verdicts is the separate quiesced-host re-measure entry in
+      `docs/TODO.md`, which stays open.
+
+- [ ] Investigate the mobile-chromium classic case `project, resource, work-item, filtering,
+      ordering, and persistence` in `browser/tests/portal.spec.mjs`. After saving the work-item
+      edit dialog, `#toast` stayed hidden with the stale text "Work item created" for the whole
+      10 s expect window, while the update itself persisted: the failure snapshot's detail drawer
+      shows the new pull request URL, CI `passed` and review `required` that the test set. Observed
+      while completing 0007e in the first legacy run (`portal-work-views.spec.mjs` +
+      `portal.spec.mjs` + `workspace-shell.spec.mjs` on both widths, 43 passed / 4 failed /
+      5 skipped) and reproduced alone on the same revision with the desktop case passing (mobile
+      `x` in 17.0 s, desktop `ok` in 12.1 s); it then passed in the second run of the same suites on
+      the unchanged classic files (46 passed / 1 failed / 5 skipped), so the mobile case is
+      intermittent. The classic route is
+      unchanged by 0007e: `control/lib`, `control/priv/portal_assets`,
+      `control/lib/symmetry_control_web/portal_html` and `portal_controller.ex` have no diff
+      against the base revision. Revalidate the classic toast branch that reports an update when
+      the edit dialog was opened from the detail drawer; keep the assertion.
+      Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the same retirement as
+      the desktop entry above — main's `browser/tests/portal.spec.mjs` lost `project, resource,
+      work-item, filtering, ordering, and persistence` at `5c2e0ad` (#35, 0007c), and the 0007i
+      cutover deleted the file (`ca1bdad`). The classic toast branch this item asked to
+      revalidate (the detail drawer's work-item update receipt) went with the classic renderer:
+      the SPA renders its own `role="status"` notices from its own state, no `toast` element
+      exists in `frontend/src`, `control/lib` or `control/priv`, and the live detail-surface
+      successor cases assert `statusNotice(detail, "Work item updated.")` in
+      `browser/tests/portal-work-planning.spec.mjs`. The mobile-chromium project's successors for
+      these flows run in `browser/tests/portal-connections.spec.mjs` and
+      `browser/tests/portal-work-views.spec.mjs` per `browser/README.md`; no assertion of this
+      item's remains to keep.
+
 - [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
       the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
       query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
@@ -419,6 +741,154 @@ from branch `chore/deadcode-revalidation`.
       by both the frontend unit test (`frontend/src/app/application.test.ts`) and the ExUnit test
       (`control/test/symmetry_control_web/portal_session_test.exs`); its enumerated cases are
       pinned on both sides, so every path or query rule change must add a corpus case.
+
+- [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
+      43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
+      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.061s` on the 0008a head, where the
+      same package had taken 365 s earlier on the same pull request and every other package passed;
+      green on rerun. This is the same loaded-runner family as the Windows `internal/workspace`
+      180 s package timeout: decide whether the package needs a longer explicit budget or fewer
+      load-sensitive waits, and keep the tests themselves.
+      The second occurrence
+      (`FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s`, run 44055523619 job
+      133943809688) is classified and fixed in the `daemon/internal/platform` flake-class entry
+      above (closed part archived in `docs/archive/CLOSED-TODO.md`): a test cleanup joined a
+      worker that retried an unpersistable terminal transition forever, so the package died at
+      the go-test timeout instead of failing the test.
+      The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
+      in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
+      wait on the product's own state transition rather than on host speed.
+      **Fixed (2026-11-19, `fix/flake-app-race-timeout`):** the "fewer load-sensitive waits" answer
+      is implemented for the three start waits. They no longer select on the fixture's turn channel
+      with a wall-clock fallback; they poll the daemon's own durable start publication - the
+      "running" transition `markRunning` queues immediately before `StartTurn` - fail fast with
+      `nativeStartFailureDetail` when the run records a failure, and keep `testHangGuard` as the
+      only bound (a hung start, never host speed). The 30 s timeout messages keep naming the
+      outstanding step; the second wait in the cancellation test now also reports the durable
+      reason. The shared native fixture also sets the logger the other fixtures set, because a
+      start-wait failure outlives the test body and a nil logger panicked the whole package binary
+      while demonstrating the pre-fix budget. The historical hang itself was the cleanup-join class
+      fixed in `d29fe5a` (#49), so the ten-minute package budget is unchanged and was not raised.
+      Evidence on this host: with the pre-fix 1 s start budget under 12-way host load all nine runs
+      of the three tests failed (`native turn did not start before the ... hang guard expired: no
+      durable failure recorded (local state="claimed", pending transitions=0)`); with the guard they
+      pass `go test -count=3 -cpu 1,2` (56.5 s) and the same selection passes under
+      `-race -count=2 -cpu 1,2` in WSL (19.3 s). The full package completes in the ordinary pass on
+      this host (`go test -count=1 -timeout 1200s ./internal/app` - `ok … 297.871s`, exit 0); a
+      full-package `-race` shape was not obtainable here (Windows has no cgo for `-race`, and the
+      WSL guest hangs this package in `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`,
+      a loopback dial that never answers there and passes on Windows in this same tree), so the
+      package-level race gate stays with CI.
+
+- [ ] Revalidate the load-sensitive Go test
+      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
+      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
+      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
+      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
+      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
+      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
+      deadline rather than a longer test timeout.
+      Revalidated and closed by branch `fix/flake-load-sensitive-go` (2026-11-19): no further change
+      was needed because `8082317` (#44) already replaced the 1 s `context.WithTimeout` around
+      `WaitTurn` with the package's documented `testHangGuard` (30 s, "turns a hung harness into a
+      failure; never a statement about how fast the adapter should be") and made the failing wait
+      name the outstanding step (`mustSettle(t, "WaitTurn", err)`), so elapsed time no longer
+      decides the verdict and a guard expiry can no longer be reported as this test's behavioural
+      failure. Re-run on this host while the other regression workers loaded it: plain
+      `go test -count=20 -cpu 1,2 -run '^TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock$'
+      ./internal/harness/omp` passed (`ok … 18.389s`, exit 0) and the same selection under
+      `-race -count=5 -cpu 1,2` passed in WSL (`ok … 4.485s`, exit 0). The pristine 1 s failures
+      stay recorded in #44 (8/8 on the pre-fix revision under 3x oversubscription) and in the 0007e
+      observation above.
+
+- [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
+      the 0007d fixture database, 10 control tests fail because committed fixture rows are
+      visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
+      controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
+      on a clean dedicated test database. The browser harness recreates its own database;
+      the suite should use the repository default (`symmetry_control_test`).
+      **Closed (2026-11-19, `fix/mix-test-db-guard`):** `mix test` and the test-environment
+      `ecto.create`/`ecto.migrate`/`ecto.drop`/`ecto.rollback`/`ecto.load` commands now refuse
+      a browser acceptance database before any storage task can touch PostgreSQL.
+      `control/lib/mix/tasks/symmetry.check_test_db.ex` is the first step of the `test` alias
+      and of the five Ecto aliases in `control/mix.exs`; a step that names the overridden task
+      runs the real task, so flag passing is unchanged, and the task is a no-op outside the
+      test environment, so the harnesses keep recreating their own databases from the
+      development environment. The guard reads the effective database from the repository
+      configuration (`config/test.exs` appends `MIX_TEST_PARTITION`) and refuses whole browser
+      acceptance database families — `symmetry_0007c_`, `symmetry_0007d_`, `symmetry_0007e_`,
+      any suffix, because the planning harness takes its database as a `-DbName` parameter and
+      a recorded run used `symmetry_0007c_shell` — while the repository default and the
+      runbook's disposable `symmetry_receipt_e2e_<hex>` database stay allowed.
+      Unit-tested in `control/test/mix/tasks/symmetry_check_test_db_test.exs`, including the
+      `run/1` wiring against the configured Repo database.
+      Verified on 2026-11-19: `MIX_TEST_PARTITION=16 POSTGRES_DB=symmetry_0007d_test mix test
+      test/mix/tasks/symmetry_check_test_db_test.exs` exits 1 with the Mix error naming the
+      effective `symmetry_0007d_test16`, both against a live PostgreSQL and against an
+      unreachable `POSTGRES_PORT=1` — the refusal precedes any connection — and
+      `POSTGRES_DB=symmetry_0007e_test` refuses the same way; `MIX_ENV=test` `mix ecto.create`/
+      `mix ecto.migrate`/`mix ecto.drop` refuse for both names, and `pg_database` holds no
+      `symmetry_0007*` database after those runs. With `POSTGRES_DB` unset,
+      `MIX_TEST_PARTITION=16 mix test test/mix/tasks/symmetry_check_test_db_test.exs` creates
+      and migrates `symmetry_control_test16` and reports `Result: 7 passed` (exit 0);
+      `mix format --check-formatted` and `mix compile --warnings-as-errors` pass. In the
+      development environment the guard is a no-op: with `POSTGRES_DB=symmetry_0007e_test` and
+      an unreachable port the real `mix ecto.create` reaches the adapter with no refusal, and
+      `POSTGRES_DB=symmetry_guardmix_probe_dev mix ecto.create --quiet` followed by
+      `mix ecto.drop --quiet` both exit 0 and leave no probe database.
+      Review round (same branch): `POSTGRES_DB=symmetry_0007c_shell MIX_TEST_PARTITION=16 mix test
+      test/mix/tasks/symmetry_check_test_db_test.exs` and the test-environment
+      `mix ecto.rollback`/`mix ecto.load` refuse the same way, naming the effective
+      `symmetry_0007c_shell16`; with `MIX_ENV=test` the guard file reports `Result: 9 passed`,
+      and `mix format --check-formatted` and `mix compile --warnings-as-errors` exit 0.
+
+- [ ] Investigate the load-sensitive timeout fixture
+      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
+      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
+      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
+      on the pass whose host was also running four other regression suites and the record
+      re-derivations - the concurrency the model-routing runbook itself warns against. The
+      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
+      assertion 2.0 s later, while the kill path is a snapshot tree kill
+      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
+      kill enumerates the tree is not killed; whether that is what happened in that pass is not
+      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
+      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
+      kill path alone unless it reproduces on a quiet host.
+      **Fixed (2026-11-19, `fix/flake-timeout-fixture`):** the witness is now event-driven. The
+      descendant records its start in a handshake directory outside the checkout, waits for a
+      release the test writes only after the timed-out check returned, and only then writes
+      `late-descendant.txt` into the checkout - so a descendant the kill did reach is dead before
+      it could write during a slow kill, which is the direction the 1.0 s sleep could not
+      distinguish. The gate spawns the descendant with `stdin/stdout/stderr=DEVNULL` so a survivor
+      cannot hold the gate's inherited pipes and keep the runner's lingering reap open until its
+      own wait cap, and the descendant writes the witness after the release or after that cap, so
+      a survivor can never erase its own evidence. A cap-branch write records `late-cap` where the
+      release branch records `late`, so a failure self-identifies the P2 lingering-reap class. The
+      test polls repeatedly for up to the runner's own `PROCESS_TREE_REAP_SECONDS`, then reads the
+      witness once, instead of sleeping 2.0 s, and the gate publishes
+      its own spawn marker, so a failure reports what the fixture had established (gate spawned
+      descendant / descendant started / witness text) instead of only the assertion; the failure
+      message is platform-neutral (Windows `taskkill /T` and POSIX `killpg` are both snapshots).
+      The 0.5 s per-gate timeout, the assertion and the runner's kill path are unchanged.
+      Evidence, platform-labelled. Windows 10.0.26300 host, loaded by the peer regression workers:
+      the pristine fixture failed 1 of 5 runs (an earlier loaded pass failed 1 of 3) with `a gate
+      descendant survived the per-gate timeout` and no mechanism in its log, while the new fixture
+      passed 6 of 6 under the same load; 20 `taskkill /F /T` tree kills under load (2.0-8.6 s
+      each) never let an in-hierarchy descendant write, while the control that killed only the
+      parent let the waiting descendant record 3 of 3 times; a miss simulation (a throwaway copy
+      of the runner whose `terminate_owned_process_tree` drops `/T`) fails in 20 s with
+      `witness='late'` and both markers true, and the unmodified fixture passes in 23 s; a
+      backstop-path run on Windows (the round-2 review's: wait cap shortened 300 -> 20 s and no
+      release written) fails with the cap-branch witness at 19.1 s; the full
+      suite passes (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). WSL Linux (Ubuntu-24.04,
+      python3, `/mnt/q` worktree): the same test on the `killpg` path passes
+      (`Ran 1 test in 12.740s`, `OK`).
+      Residual: a descendant created after the kill enumerates the tree (`taskkill /T`) or after
+      the process group was signalled (`killpg`) is still reported as a survivor - correctly, with
+      the markers stating the ambiguity instead of the fixture tolerating it - so the fixture
+      keeps the documented quiet-host requirement (the model-routing runbook forbids running this
+      workflow beside a full test suite on the same host).
 
 ## Deferred review findings (0007f)
 
@@ -651,6 +1121,43 @@ from branch `chore/deadcode-revalidation`.
 
 ## Record and documentation hygiene
 
+- [ ] Decide whether record cleanliness needs an enforced gate, and keep the sanitising
+      tool's argv/output scope with the 0008a re-publish. `scripts/ci/model-routing-record-sanitize.py`
+      exposes `--check` (write nothing; exit 1 while a host absolute path remains), but no CI
+      step invokes it: CI runs only the unit suite
+      (`python3 ../scripts/ci/test-model-routing-record-sanitize.py`,
+      `.github/workflows/ci.yml:1138`), so published-record cleanliness rests on those unit
+      tests (`--check` cases at `scripts/ci/test-model-routing-record-sanitize.py:89-98`)
+      plus the manual render step documented at `docs/evaluations/model-routing/README.md:163`.
+      The README already scopes the renderer to argv/output capture, which is also its safety
+      boundary: it rewrites every absolute path it finds, including path fixtures quoted
+      inside recorded prose — harmless for `argv`/`output` fields (the `path-sha256:<digest>`
+      token is a deterministic function of the path, so the rendered record stays reproducible
+      and unambiguously mapped; note `output_sha256` binds the rendered text, not the
+      pre-render bytes) but corrupting for an
+      explanation whose meaning depends on the quoted path. Decide whether to add a
+      `--check`-style gate over the committed records; the future 0008a re-publish should
+      repeat the argv/output-only scope and record any prose fixture it deliberately leaves
+      rendered.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the gate exists.
+      `scripts/ci/check-record-cleanliness.py` selects the records a revision range adds,
+      modifies or retypes under `docs/evaluations/**` and `docs/evidence/**` against an
+      explicit comparison base (the pull-request base commit, the pushed `before`, or the
+      `origin/main` merge base when the base is empty or all-zero) and runs the sanitize
+      tool's own `--check --root-only` on each selected record: the guard executes the tool
+      instead of re-implementing its patterns, and the root-only scope keeps the
+      argv/output-only boundary, leaving product routes and prose fixtures literal while host
+      paths still refuse. `.github/workflows/ci.yml` reports `run-records` from the existing
+      changed-path classifier and runs the `record-cleanliness` job whenever those paths or
+      the sanitize tool change, independently of the documentation-only fast path, so a
+      records-only pull request is exactly the change it checks;
+      `scripts/ci/test-check-record-cleanliness.py` (twelve tests, observed `Ran 12 tests ...
+      OK`) pins the selection and the tool boundary and joins the model-routing suite in the
+      daemon job. The 0008a re-publish remains its own open entry in `docs/TODO.md`, with the
+      argv/output-only scope it asked for; each open item was moved separately, so this entry
+      carries no residual.
+
 *Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stays there.*
 
       Third pass (the `gpt-6.2-sol` findings, each re-verified against its
@@ -696,6 +1203,116 @@ from branch `chore/deadcode-revalidation`.
       report's embedded results and confirmed the focused 35/1/0 and broad 79/15/0 rows with no flaky cases -
       evidence for the 0007b receipts' browser rows, not a defect.
 
+- [x] Re-publish the pre-existing personal absolute paths in the committed 0008a
+      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
+      instead of rewriting history:
+      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
+      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
+      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
+      58 (the `EVIDENCE_ROOT` value, an operator-profile drive path). The 0008b change renders its own new
+      records with that helper and records the rendering in the record
+      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
+      record's quoted digest consistent when the older records are re-published.
+      Closed 2026-11-19 on branch `chore/eval-record-scrub`: re-published through
+      `scripts/ci/model-routing-record-sanitize.py` (`sha256:b8b252f3…`) as the
+      entry directs — `0008a-controls.json` 32 substitutions (the 14
+      disposable-root strings -> `<disposable-root>`, plus 9 toolchain
+      interpreter argv entries (one rendered to `path-sha256:4d144641…`) and 9
+      operator-worktree argv entries -> the
+      deterministic `path-sha256:` tokens), `0008a-audit.json` 5 (3
+      disposable-root values + 2 toolchain entries), and the evidence record's
+      line 58's `EVIDENCE_ROOT` value -> `EVIDENCE_ROOT='<disposable-root>'`.
+      No host path remains and no meaningful prose fixture needed leaving
+      unrendered in these three files, so the tool's `--check` exits 0 on all
+      three. Quoted-digest consistency was kept: the evidence record's quoted
+      audit digest was rebound (`dc878099…` -> `832117d0…`), and one
+      rendered-output digest needed a second-generation rebind
+      (`0008a-controls.json`'s `missing-gate` `stderr_sha256`, `c12881ae…` ->
+      `8503bfa2…`), re-deriving that file's `sha256`. No document holds a
+      full-length occurrence of a changed digest outside the README exception
+      record (checked across `docs/`, `scripts/`, `contracts/` and `.github/`);
+      the truncated `…` prefixes that remain are in that record and in these
+      closures. The full table is in
+      `docs/evaluations/model-routing/README.md`, "Record rendering exception
+      (2026-11-19)".
+
+## Deferred review findings (0007i, rebased onto `ca29a8e`)
+
+- [ ] Investigate the intermittent Control failure
+      `control recovery selects pending actions after more than one page of terminal no-op Goals` in
+      `control/test/symmetry_control/goals_test.exs:4753`. It is recorded from the pre-rebase delivery
+      revision `7235708` (`.tmp/gates/control-test-final.log`, 2026-11-17 11:16,
+      `884/886 passed, 21 skipped`, exit 2) with `** (EXIT from #PID<...>)` /
+      `** (DBConnection.ConnectionError) could not checkout the connection owned by #PID<...>
+      ({:sql_sandbox_owner, ...}) ... request was dropped from queue after 111ms`, raised inside
+      `Ecto.Repo.Preloader`'s supervised `Task`; the same suite's earlier run (09:44) reported
+      `885/886 passed` with the `pwsh` failure alone, so the case is intermittently load-sensitive:
+      it admits 101 Goals and cancels each one before asserting
+      `Goals.recover_pending_goal_control_actions/1`, and the sandbox owner's connection is preempted
+      while the preload tasks queue. This is not the `integrations_test.exs:1161` flake recorded above
+      (different test and call site). Revalidate whether the preload can run without a second supervised
+      task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
+      recovery page it checks.
+      Closed (2026-11-19, branch `fix/flake-control-recovery-page`, commit `3a87d58`): the Goal
+      projection read preloaded its five associations through `Ecto.Repo.Preloader`'s parallel
+      tasks, and under the SQL sandbox every task queued for the test process's single owned
+      connection, where DBConnection drops a checkout that waits past `2 * queue_target` (100ms)
+      when its poll runs - the recorded `dropped from queue after 111ms`. `Goals.ReadModel.load_data/2`
+      now preloads with `in_parallel: false`, so the read keeps every query on the caller's
+      connection and nothing queues; no queue or ownership timeout was changed, and the
+      regression test asserts the mechanism directly: `a Goal projection read keeps every query
+      on the calling process` (`control/test/symmetry_control/goals_test.exs`) was red on the
+      unfixed bytes (the caller plus five preloader pids) and is green with the fix. Evidence:
+      `mix test test/symmetry_control/goals_test.exs:4777` red -> green, `mix test
+      test/symmetry_control/goals_test.exs:4753` 2x green, `mix test
+      test/symmetry_control/goals_read_model_test.exs` 50 passed; the 100-item recovery-page
+      assertion is unchanged.
+- [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
+      failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
+      pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in
+      6.9 s in the same run, and both projects passed in the 12:10 run on the pre-repair bundle. The
+      retained trace shows the injected `route.abort("internetdisconnected")` never fired (no
+      `/portal/api/workspace` request or failure after the route was installed), and the click's
+      `refresh()` refetched `["connections"]` but not `["workspace"]` because of the page's guard
+      `if (!workspace.isFetching) void workspace.refetch()` (`frontend/src/features/connections/connections.tsx:351-352`;
+      the same guard also sits in `onRefreshProject` at `:501`). `workspace.isFetching` is never read
+      during render, so React Query's automatic change tracking does not watch it and a render taken while
+      a read was in flight leaves the guard snapshot at `true` until something else re-renders the page —
+      a state-snapshot race, not a cutover change. Decide whether the guard should read the query's live
+      `fetchStatus` at click time (`queryClient.getQueryState(key)?.fetchStatus`) or whether a
+      user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
+      the injected-failure design.
+      Closed by branch `fix/flake-browser-refresh-guard` (2026-11-19): the decision is that a
+      user-initiated refresh supersedes an in-flight read, so the guards are removed rather than made
+      live. The header refresh now calls `query.refetch()` and `workspace.refetch()` unconditionally,
+      and `onRefreshProject` (the failed-read "Try again" retry in both error states, and the re-read
+      the three resource dialogs issue when their write is refused) issues `workspace.refetch()`
+      without an `isFetching` test; the successful post-write re-read is the resources section's own
+      `reconcile()` -> `queryClient.invalidateQueries({ queryKey: ["workspace"] })`, untouched here.
+      React Query's manual refetch is what makes the click's read happen: with data present it cancels
+      the read it supersedes and starts a new one, and it joins an in-flight initial read instead of
+      duplicating it (query-core `Query.fetch`'s `cancelRefetch` branch), so the case's injected abort
+      is now decided by the click rather than by a fetch state this page cannot see. The retained trace
+      does not discriminate between a stale snapshot and a genuinely in-flight read; the fix is
+      deterministic under both, because the click always issues its read. The live-`fetchStatus`
+      alternative was rejected: it keeps the silent no-op for a genuinely in-flight read and leaves the
+      click depending on a fetch started before the route was installed, which is the race the recorded
+      trace shows. Regression tests in `frontend/src/features/connections/connections.test.tsx`: "issues
+      a new workspace read when a refresh is clicked while a re-read is in flight" (the header Refresh)
+      and "re-reads the project when Try again is clicked while a re-read is in flight" (the stale
+      error's retry) each hold a workspace re-read in flight across a page re-render and assert the
+      click records its own `/portal/api/workspace` request. On the guarded bytes both fail for the
+      recorded reason — no request after the click (`Expected: 3 / Received: 2` for the header
+      refresh; Vitest's inline `expected 5 to be 6` for the retry, whose count includes the refused
+      read's retries); on the fixed bytes the file passes (53 passed, `--no-file-parallelism`) with
+      `tsc --noEmit` and `eslint . --max-warnings 0` exit 0. The browser case keeps its assertions
+      and injected-failure design unchanged. Scope: only this page gated a read whose fetch state it
+      never rendered; the other refresh guards (`projects`, `runtimes`, `work/detail`, `goals/detail`,
+      `chat`) decide on the `isFetching` of the query they pass to `RefreshButton fetching=`, so their
+      field is tracked and their handler snapshots stay fresh, and they are left unchanged. Host
+      note: this host runs ~14 parallel workers, so local browser verdicts are indicative only; CI
+      holds the verdict.
+
 ## Paginated reads must be bound to the cursor that served their pages
 
 - [ ] The work detail's execution history retained the older pages a reader had expanded without
@@ -724,202 +1341,44 @@ from branch `chore/deadcode-revalidation`.
       boundary retires are loaded again by the reader's own "Load older history" / "Load more Goal
       attention", which continues from the served boundary.
 
-The blocks below were moved on 2026-11-19.
+- [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
+      construction: its pages are keyed by their own `after` sequence numbers
+      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
+      re-read under their own keys, so a page is never served under a boundary it was not fetched
+      from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
+      gap in `frontend/src/features/chat/presentation.ts`, rendered by
+      `frontend/src/features/chat/chat.tsx`) and therefore still differs from this fix: it keeps the
+      pages a moved boundary left behind and states the unloaded region, while the work history and
+      the attention feed retire them. Unifying the two changes one surface's reader-visible
+      behaviour, so it needs its own decision. Retiring a page is reader-visible too (an expanded
+      page disappears when a live run moves the boundary), and it is covered by the frontend suite
+      only: the browser suites, which CI runs, carry the live-daemon pagination case and were not
+      run on this host.
 
-## Model-routing evaluation records
-
-- [ ] Decide whether the four 0008d receipts ever need re-production once the evaluation tooling
-      changes again. The TypeScript carrier added gate fields `vitest_tests`/`vitest_files` and the
-      derived structured-report cross-check, so `scripts/ci/model-routing-evaluation.py` and its
-      regression suite changed after the 0008a/0008b/0008c receipts were produced. Those three
-      letters' receipts already refused re-derivation under the 0008c-era bytes (recorded in the
-      entry below); the 0008d receipts re-verify with the current bytes only, and any future tooling
-      edit invalidates them for submission in exactly the same fail-closed way. Nothing must change
-      unless a submission requires re-derivation, in which case the affected runs are re-executed,
-      never re-derived by editing a receipt.
-      The letter's own runner then changed once before publication (the `vitest_report_detail`
-      refusal order that the first full suite pass rejected, described in the closure record), and
-      the four receipts were re-derived to the corrected bytes without re-executing a gate or
-      re-importing a review, three times: first for the refusal-order fix, then for the cache-predicate
-      wiring that the independent reviews asked for, and a third time for a docstring-only change
-      (the refusal-order paragraph now names the walk's structural branches). Superseded history:
-      runner `sha256:d80e49ca…` then `sha256:3f3b0975…` then `sha256:619f0d37…`, source subject
-      `sha256:5abd13ec…` then `sha256:5e1e4e6c…` (both before the subject scope was narrowed to a
-      declared set that excludes generated bytecode caches and a worktree `.git` pointer file). The
-      published receipts bind the delivered runner `sha256:81504715…` (and the auxiliary tool
-      digests); the delivered suite `sha256:dbe1a0fe…` is named in the series receipt's subject
-      table rather than bound by a receipt.
-      The source subject is now computed by a delivered, reader-runnable tool
-      (`python scripts/ci/model-routing-source-subject.py`, scope and entry formula in its
-      docstring). Two values are current, each on its own revision: the *evaluated* revision
-      (`dacec450` plus this delivery's source paths) is `sha256:e333bb85…` over 1120 source paths,
-      and the landing tip after the rebase onto `ca1bdad` (`ca1bdad` plus this delivery, where `main`
-      added 21 source paths under `contracts/`, `browser/` and `frontend/`) is
-      `sha256:70e03853…` over 1141. History, in the order the run computed it: `sha256:5abd13ec…` (1121 paths, first scope), `sha256:5e1e4e6c…`
-      (with the `sha256:3f3b0975…` runner bytes), `sha256:e0976262…` (1123 paths,
-      `sha256:619f0d37…` runner) and `sha256:4db67385…` (1118 paths, same runner) - and it was the
-      last of those that was published, which a pre-publication audit showed to be stale: it was
-      computed before the runner's final docstring edit, so the delivered tree hashed to
-      `sha256:245edc15…` (1118 paths, delivered runner `sha256:81504715…`; derived by that audit, and
-      a value the run's own records and session transcript do not carry). The repair republished the subject and added the derivation
-      test to the suite and the subject tool with its test, which is why the delivered count is two
-      paths higher than the tree that value bound.
-
-      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the decision is recorded in
-      `docs/design/quality.md` (Model-cost evaluation, closing paragraph): a receipt is re-produced
-      only by re-executing the evaluation under the current tooling and never by editing a receipt,
-      an older receipt stays verifiable against the revision that produced it, and the current
-      runner refuses it for submission - so the 0008d receipts need re-production only if a
-      submission requires it, and then the affected runs are re-executed. This very change moves
-      the evaluation runner again, which invalidates the four 0008d receipts for submission under
-      the new bytes in exactly that fail-closed way.
-
-- [ ] Decide whether the 0008d published records need a second rendering pass. No host-specific
-      absolute path ships in any of them: the four receipts are published as the runner's derived
-      bytes (`accept` re-derives each one byte for byte) and both narrative records name the private
-      store root only as `<store>`. The store's stored session text was rendered through
-      `scripts/ci/model-routing-record-sanitize.py --root <store>` before the runner read it, so the
-      derived receipts still carry `path-sha256:` tokens for the text that was rendered (the fragment
-      `/||` became `path-sha256:019ba55f…` inside the `0008d-a-mixed.*` pair; the `0008d-a-strong.*`
-      pair carries `…e11f3495…`, `…810a366d…` and `…523fbab2…` for its quoted contract paths), and
-      the frozen `outcome` claim keeps the literal route `/portal/runtimes`, which is what keeps the
-      token correlatable. `--check` therefore still exits 1 for those records - the tool renders
-      every absolute path, not only host ones, which its docstring names as its boundary - and it
-      exits 0 for the four review records and the `0008d-b-*` receipts. Nothing must change unless a
-      future audit wants literal routes in reviewer prose, which needs a root-only rendering mode in
-      the tool, never an edit to a bound record.
-
-      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the sanitize tool gained the requested
-      root-only mode (`--root-only`): it renders or flags only host absolute paths (Windows drive and
-      UNC roots, POSIX home/root/temp/mount roots) plus any `--root` disposable root, so product
-      routes such as `/portal/runtimes` stay literal, and a bare root token with no following
-      separator or segment stays literal too. `--check --root-only` exits 0 for every committed
-      `0008d-*` record - the four receipts, their four review records and the candidate policy pair -
-      which is the second rendering pass the entry asked for: no record was edited, and the
-      pre-existing raw host paths in the older 0008-series records stay with their own open entries.
-
-- [ ] Decide whether the shared hoisted dependency tree should be bound. The 0008d TypeScript gates
-      resolve their tools through a hoisted pnpm install one level above the run directories (the
-      run's `environment.json` records the route), whose bytes sit outside every sealed checkout and
-      outside the source subject. The receipts record that route and state that the integrity values
-      are the frozen lockfile's own, but the store keeps no provisioning log, no install output and
-      no digest of the resolved tree, so that claim cannot be re-verified and a file placed in that
-      tree is unbound for a whole run. The honest fix is a recorded provisioning step - log the
-      install and bind a digest of the tree the gates resolve - which is its own increment because
-      it changes what a receipt binds, not an edit to this letter's records.
-
-      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the runner gained `bind-dependencies`
-      (`--run-dir`, `--tree`, `--log`, `--check`): it refuses a tree inside the run's sealed
-      checkout, computes a deterministic digest over every file and link of the resolved tree,
-      copies the install log into the run store (`provisioning/install.log`) and records both - tree
-      route, tree digest, entry count, log route, log digest and byte count - in `run.json`'s
-      `environment.provisioning` block, which every receipt derived from the run states and which
-      every `load_run` re-verifies against the stored log bytes; `--check` recomputes the tree
-      digest so a preserved tree still re-verifies. Regression tests cover determinism, a changed
-      tree, an in-checkout tree, a missing or empty log and a tampered record. The 0008d records
-      themselves were not edited; a future TypeScript run executed under this tooling carries the
-      bound provisioning step.
-
-- [ ] Decide whether the manifest's tool-cache exclusion should be narrowed. The Source manifest
-      excludes `node_modules/.vite`, `node_modules/.vite-temp` and `node_modules/.vitest-cache` so
-      that vitest's run state cannot change the revision a gate just verified. Files inside those
-      directories are therefore unbound - the seal records no digest for them - so in principle a
-      worker could hide code there that a relative import reaches during a gate. No run has written
-      such a file and the boundary is stated in the runner docstring, the closure record, the series
-      receipt and the candidate policy. The honest narrowing is vitest run state outside the
-      checkout (`cacheDir`/`VITEST_CACHE_DIR` or a gate-level redirect, the way the Playwright html
-      report is already redirected), which changes a frozen gate's environment and therefore needs
-      its own increment with re-derived evidence, not an edit to this letter's records.
-
-      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** vitest run state is redirected outside
-      the sealed checkout instead of excluded from the manifest. `frontend/vite.config.ts` and
-      `frontend/vitest.config.ts` resolve `SYMMETRY_TOOL_CACHE_DIR` as Vite's `cacheDir` and
-      vitest's `fsModuleCachePath`, the runner exports that variable for every gate it executes and
-      records the run-relative redirect (`tool-state/<gate id>`) in the gate result and the receipt,
-      and `prepare` gives the run store an empty `node_modules` so Vite's config-loader temp files
-      (`.vite-temp`) land in the run store rather than inside the checkout or the shared dependency
-      tree. The `TOOL_CACHE_DIRECTORIES` exclusion was removed from the Source manifest, so run
-      state written into the checkout is now bound and fails the gate (fail-closed) instead of
-      staying unbound; the runner and manifest tests cover both directions. A local probe with an
-      installed vitest 5.0.5/vite 8.3.5 pair (the pinned 5.1.0/8.3.6 bytes resolve the same options)
-      observed all three state kinds land under the redirect when the variable is set and inside the
-      checkout when it is unset.
-
-- [ ] Decide whether the four 0008c receipts ever need re-production under the current evaluation
-      tooling. They bind the produced revision, preserved as the annotated tag
-      `0008c-produced-tooling` (commit `cab222b`): all four re-verify with that revision's
-      bytes (`git archive 0008c-produced-tooling scripts/ci`, then `accept`, exit 0 each), while
-      the post-audit tooling refuses them for submission (`accept` exit 1 at
-      `$.evidence.tooling_sources.model-routing-evaluation.py`) — the documented fail-closed
-      consequence of changing receipt-bound tooling, labelled in the evidence record with both
-      digests. Nothing must change unless a future submission requires receipts produced by the
-      current bytes, in which case the runs have to be re-executed, never re-derived by editing a
-      receipt.
-
-      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** same decision as the 0008d
-      re-production entry above, now codified in `docs/design/quality.md`: the four 0008c receipts
-      stay verifiable against the `0008c-produced-tooling` revision and are refused for submission
-      by the current runner by design; if a submission requires current bytes, the runs are
-      re-executed, never re-derived by editing a receipt.
-
-- [ ] Decide whether the 0008b receipts need re-production under the current shared runner. They bind
-      `scripts/ci/model-routing-evaluation.py` as produced —
-      `sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56` — while `main`'s #42
-      extended that runner for the Elixir carrier
-      (`sha256:8ae5b2b6ba961924f7702aa4181e8488913b4d63171922bf1cf760e62142db50`), so the current bytes
-      refuse the 0008b records for submission at `$.evidence.tooling_sources.model-routing-evaluation.py`,
-      exactly as they refuse the committed 0008c receipts (see the model-routing entry above). The
-      producing bytes stay reachable from the annotated tag `0008b-produced-tooling` (commit `253a701`,
-      the head this branch was rebased from, tagged and pushed so the reference survives the rebase), and
-      the post-rebase audit recomputation reports exactly those four
-      tooling-digest mismatches and nothing else (`checks: 99, failures: 4`). Re-execute the runs if a
-      future submission requires receipts produced by the current bytes; never re-derive by editing a
-      receipt.
-
-      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the same question as the other two
-      re-production entries, answered by the same `docs/design/quality.md` paragraph: the 0008b
-      receipts stay verifiable against the revision tagged `0008b-produced-tooling` and fail closed
-      on submission under the current runner by design; a submission that requires current bytes
-      re-executes the runs.
-
-## Record and documentation hygiene
-
-- [ ] Decide whether record cleanliness needs an enforced gate, and keep the sanitising
-      tool's argv/output scope with the 0008a re-publish. `scripts/ci/model-routing-record-sanitize.py`
-      exposes `--check` (write nothing; exit 1 while a host absolute path remains), but no CI
-      step invokes it: CI runs only the unit suite
-      (`python3 ../scripts/ci/test-model-routing-record-sanitize.py`,
-      `.github/workflows/ci.yml:1138`), so published-record cleanliness rests on those unit
-      tests (`--check` cases at `scripts/ci/test-model-routing-record-sanitize.py:89-98`)
-      plus the manual render step documented at `docs/evaluations/model-routing/README.md:163`.
-      The README already scopes the renderer to argv/output capture, which is also its safety
-      boundary: it rewrites every absolute path it finds, including path fixtures quoted
-      inside recorded prose — harmless for `argv`/`output` fields (the `path-sha256:<digest>`
-      token is a deterministic function of the path, so the rendered record stays reproducible
-      and unambiguously mapped; note `output_sha256` binds the rendered text, not the
-      pre-render bytes) but corrupting for an
-      explanation whose meaning depends on the quoted path. Decide whether to add a
-      `--check`-style gate over the committed records; the future 0008a re-publish should
-      repeat the argv/output-only scope and record any prose fixture it deliberately leaves
-      rendered.
-
-      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the gate exists.
-      `scripts/ci/check-record-cleanliness.py` selects the records a revision range adds,
-      modifies or retypes under `docs/evaluations/**` and `docs/evidence/**` against an
-      explicit comparison base (the pull-request base commit, the pushed `before`, or the
-      `origin/main` merge base when the base is empty or all-zero) and runs the sanitize
-      tool's own `--check --root-only` on each selected record: the guard executes the tool
-      instead of re-implementing its patterns, and the root-only scope keeps the
-      argv/output-only boundary, leaving product routes and prose fixtures literal while host
-      paths still refuse. `.github/workflows/ci.yml` reports `run-records` from the existing
-      changed-path classifier and runs the `record-cleanliness` job whenever those paths or
-      the sanitize tool change, independently of the documentation-only fast path, so a
-      records-only pull request is exactly the change it checks;
-      `scripts/ci/test-check-record-cleanliness.py` (nine tests, observed `Ran 9 tests ...
-      OK`) pins the selection and the tool boundary and joins the model-routing suite in the
-      daemon job. The 0008a re-publish remains its own open entry in `docs/TODO.md`, with the
-      argv/output-only scope it asked for; each open item was moved separately, so this entry
-      carries no residual.
+      **Closed (2026-11-19, `fix/paginated-reads-cursor-binding`):** the scan enumerated every
+      paginated read with two search strategies — the server-side pagination parameters, the
+      `page_with_next` reads and the generated contract DTOs that carry
+      `next_before`/`next_after`/`next_cursor`, and every client consumer that accumulates pages
+      (`useInfiniteQuery`, `useQueries`, the retained page state) — and decided each: the work
+      detail's execution history (`/portal/api/work-items/:id/timeline`) and the Goal attention feed
+      (`/portal/api/attention`) are bound by #68; the Goal receipt list
+      (`/portal/api/goals/:id/events`) is bound by construction, its pages keyed by their own
+      `after` sequence over an append-only log and re-read under those keys; the chat conversation
+      (`/portal/api/chat`) binds its pages by the boundary message's id, and this branch fixed the
+      two ways that binding could still lie — the gap proof now requires every retained page to be
+      reached from the served boundary, so a later page that did reach the boundary no longer
+      excuses a chain a moved boundary left behind, and the note names the attached chain's
+      boundary and the newest unreached page, naming each further region as loads reach it; and the
+      reader's own "Load older" now reads through the cache under the cursor and boundary captured
+      at press time, so a re-serve that re-keys the surface mid-load neither cancels the press nor
+      binds its page to the boundary that arrived afterwards. The operator API's paged reads
+      (`/api/v1/tasks/:task_id/{timeline,events,transitions,commands}`,
+      `/api/v1/goals/:goal_id/events`, `/api/v1/attention`) have no retaining consumer — bounded
+      cursor-page drains in `scripts/ci/omo-control-native-evidence.py` and
+      `daemon/e2e/core_test.go`, and the browser suites' single reads or cursor drains (e.g.
+      `portal-chat.spec.mjs`) for verification — as is the providers' outbound pagination
+      (`control/lib/symmetry_control/integrations/providers/`), one-shot aggregation. The residual
+      in `docs/TODO.md` is the owner's unification decision and the CI browser runs.
 
 ## Deferred review findings (0007g)
 
@@ -969,3 +1428,37 @@ The blocks below were moved on 2026-11-19.
       remains: the classic `portal.js` was deleted in `ca1bdad`
       (`control/priv/portal_assets/` retains only `login.css`), and every other current reference is
       a migration comment, a 404 or `return_to` assertion, or prose.
+
+## Control instances sharing one worktree's build
+
+- [ ] Two Control instances started from the same worktree share `control/_build`, so a foreign
+      session's dev server can answer this worktree's browser runs with `# unhandled` error pages
+      (observed 2026-11-17 as console-500 assertions and render-wait timeouts during 0007g's
+      suite-context repetitions, with zero offset-assertion failures in the same runs). Give each
+      instance its own `MIX_BUILD_PATH` when several run at once; the runs that need isolation
+      should do it explicitly rather than relying on nobody else being active.
+
+      **Fixed (2026-11-19, `fix/control-instance-build-isolation`):** both harnesses that start a
+      Control instance from a worktree now pin that instance's own build path:
+      `browser/scripts/run-planning-tests.ps1` and
+      `browser/scripts/run-connection-fixture-tests.ps1` export
+      `MIX_BUILD_PATH=<worktree>/control/_build/instances/<harness>-<port>` for every mix command
+      they run and set it again on the server (planning) or fixture (connections) command they
+      start, so instances from one worktree that both serve compile into different build paths:
+      each harness refuses a port that already answers, and a concurrent start on one port fails
+      closed at bind/readiness. Deps sources stay shared under `control/deps`; only compiled output
+      moves. An inherited `MIX_BUILD_PATH` is overridden and reported, never trusted, because a
+      stale one from the surrounding shell is the same accident.
+      `browser/scripts/control-instance-isolation.test.mjs`
+      (`pnpm --filter symmetry-browser-acceptance test:control-isolation`) drives each real harness
+      with a recording `mise` stub and asserts that every mix invocation it makes - the database
+      tasks and the instance start alike - received the harness's own instance build path, that two
+      ports get two paths, and that a foreign inherited value decides nothing; `browser/README.md`
+      records the convention, including the path an operator-started Control server needs when
+      another instance may run from the same worktree. The planning harness was run end to end on
+      this branch (desktop `-g restores`, `1 passed`) against
+      `control/_build/instances/planning-<port>`, with its database tasks, server start, readiness,
+      login and staged-asset checks all served from that path (`mix` was reached through this
+      host's `mixwrap` toolchain because its `mise` cannot install the pinned Elixir); the
+      connection-fixture harness is covered by the stub test only on this host, whose fixed fixture
+      database port 55444 has no container here.
