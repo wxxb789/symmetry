@@ -410,10 +410,18 @@ type RunWorkItem struct {
 // PortalJSON.execution_summary/1 as served when the work item has an orchestration task;
 // null otherwise.
 type PurpleWorkItemExecution struct {
-	CanCancel          bool                          `json:"can_cancel"`
-	CanGuide           bool                          `json:"can_guide"`
-	CanPause           bool                          `json:"can_pause"`
-	CanResume          bool                          `json:"can_resume"`
+	// True when the task state permits a cancel and, while a runtime holds the attempt (claimed
+	// and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued
+	// or assigned attempt is applied by the control plane itself. A runtime without the
+	// advertisement is unknown and answers false.
+	CanCancel bool `json:"can_cancel"`
+	CanGuide  bool `json:"can_guide"`
+	CanPause  bool `json:"can_pause"`
+	CanResume bool `json:"can_resume"`
+	// True when the task state permits a retry, the work item's agent-assignment and
+	// external-work conditions hold, and, when a previous attempt exists, its runtime
+	// advertises the adapter `start` operation the fresh retried attempt uses. A runtime
+	// without the advertisement is unknown and answers false.
 	CanRetry           bool                          `json:"can_retry"`
 	Failure            map[string]interface{}        `json:"failure"`
 	Generation         int64                         `json:"generation"`
@@ -1660,10 +1668,18 @@ type SymmetryWorkDetailReadV1WorkItem struct {
 // PortalJSON.execution_summary/1 as served when the work item has an orchestration task;
 // null otherwise.
 type FluffyWorkItemExecution struct {
-	CanCancel          bool                          `json:"can_cancel"`
-	CanGuide           bool                          `json:"can_guide"`
-	CanPause           bool                          `json:"can_pause"`
-	CanResume          bool                          `json:"can_resume"`
+	// True when the task state permits a cancel and, while a runtime holds the attempt (claimed
+	// and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued
+	// or assigned attempt is applied by the control plane itself. A runtime without the
+	// advertisement is unknown and answers false.
+	CanCancel bool `json:"can_cancel"`
+	CanGuide  bool `json:"can_guide"`
+	CanPause  bool `json:"can_pause"`
+	CanResume bool `json:"can_resume"`
+	// True when the task state permits a retry, the work item's agent-assignment and
+	// external-work conditions hold, and, when a previous attempt exists, its runtime
+	// advertises the adapter `start` operation the fresh retried attempt uses. A runtime
+	// without the advertisement is unknown and answers false.
 	CanRetry           bool                          `json:"can_retry"`
 	Failure            map[string]interface{}        `json:"failure"`
 	Generation         int64                         `json:"generation"`
@@ -1858,10 +1874,18 @@ type TentacledWorkItemDeliveryValue struct {
 // PortalJSON.execution_summary/1 as served when the work item has an orchestration task;
 // null otherwise.
 type TentacledWorkItemExecution struct {
-	CanCancel          bool                             `json:"can_cancel"`
-	CanGuide           bool                             `json:"can_guide"`
-	CanPause           bool                             `json:"can_pause"`
-	CanResume          bool                             `json:"can_resume"`
+	// True when the task state permits a cancel and, while a runtime holds the attempt (claimed
+	// and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued
+	// or assigned attempt is applied by the control plane itself. A runtime without the
+	// advertisement is unknown and answers false.
+	CanCancel bool `json:"can_cancel"`
+	CanGuide  bool `json:"can_guide"`
+	CanPause  bool `json:"can_pause"`
+	CanResume bool `json:"can_resume"`
+	// True when the task state permits a retry, the work item's agent-assignment and
+	// external-work conditions hold, and, when a previous attempt exists, its runtime
+	// advertises the adapter `start` operation the fresh retried attempt uses. A runtime
+	// without the advertisement is unknown and answers false.
 	CanRetry           bool                             `json:"can_retry"`
 	Failure            map[string]interface{}           `json:"failure"`
 	Generation         int64                            `json:"generation"`

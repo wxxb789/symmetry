@@ -191,7 +191,13 @@ export interface WorkItemExecution {
   can_guide: boolean;
   can_pause: boolean;
   can_resume: boolean;
+  /**
+   * True when the task state permits a cancel and, while a runtime holds the attempt (claimed and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued or assigned attempt is applied by the control plane itself. A runtime without the advertisement is unknown and answers false.
+   */
   can_cancel: boolean;
+  /**
+   * True when the task state permits a retry, the work item's agent-assignment and external-work conditions hold, and, when a previous attempt exists, its runtime advertises the adapter `start` operation the fresh retried attempt uses. A runtime without the advertisement is unknown and answers false.
+   */
   can_retry: boolean;
   intent_locked: boolean;
   [k: string]: unknown | undefined;
