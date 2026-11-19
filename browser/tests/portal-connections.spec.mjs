@@ -759,6 +759,7 @@ test("a GitHub repository resource is bound, synced, updated and unbound through
   await expect(finalUnbind).toBeVisible();
   await finalUnbind.getByRole("button", { name: "Unbind resource", exact: true }).click();
   await expect(finalUnbind).toBeHidden();
+  await expect(page.getByRole("status").filter({ hasText: "Resource detached — Delta." })).toBeVisible();
   await expect(resetRow).toHaveCount(0);
   expect(await readBoundResource(page, connection.id, nextReference)).toBeUndefined();
   await capture(page, testInfo, "resource-unbound", {
