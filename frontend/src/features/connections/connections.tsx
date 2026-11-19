@@ -347,9 +347,15 @@ export function ConnectionsPage() {
   const editorSequence = useRef(0);
   const [openEditorId, setOpenEditorId] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  // A refresh is the operator's own request: it starts a new read even when one
+  // is already in flight, because React Query's manual refetch cancels the
+  // request it supersedes. Do not gate a refresh on `isFetching`: that field is
+  // not read during render, so a handler can hold a stale in-flight snapshot
+  // and skip a read the operator asked for (the failed workspace re-read that
+  // docs/TODO.md records).
   const refresh = () => {
-    if (!query.isFetching) void query.refetch();
-    if (!workspace.isFetching) void workspace.refetch();
+    void query.refetch();
+    void workspace.refetch();
   };
   const connections = query.data?.connections ?? [];
   const selected = connections.find((connection) => connection.id === search.connectionId);
@@ -498,7 +504,7 @@ export function ConnectionsPage() {
     <ProjectResources
       api={application.api} csrf={csrf} projectId={selectedProjectId}
       workspace={workspace.data} workspaceError={workspace.error} workspacePending={workspace.isPending}
-      onRefreshProject={() => { if (!workspace.isFetching) void workspace.refetch(); }}
+      onRefreshProject={() => { void workspace.refetch(); }}
       connections={connections} writePending={pendingWrites > 0} pendingSubjects={pendingSubjects}
       projectRef={projectRef} onWriteStart={beginWrite} onWriteSettled={endWrite} onSubjectPending={trackSubject} />
     {creating && <ConnectionEditor connection={null} providers={query.data?.providers ?? []} api={application.api} csrf={csrf} editorId={openEditorId} fallbackFocus={detailCloseRef} onSaved={saved} onWriteStart={beginWrite} onWriteSettled={endWrite} onClose={closeEditor} />}
