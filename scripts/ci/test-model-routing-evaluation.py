@@ -113,6 +113,12 @@ EMIT_SKIPPED_DESCENDANT = (
 EXIT_THREE = EMIT_PASS + "raise SystemExit(3)\n"
 WRITE_DURING_GATE = "open('wrote_during_gate.txt', 'w').write('x')\n"
 
+# The timeout-tree fixture's survivor witness is event-driven: a descendant the
+# tree kill reached is dead before the test releases it, so this guard only bounds
+# how long the test listens for a survivor's own record and never claims how fast
+# a host should spawn or kill a process. 10 s matches the runner's own reap window.
+DESCENDANT_WITNESS_GUARD_SECONDS = 10.0
+
 VITEST_NAMED_TESTS = (
     "renders one row per served boolean capability member",
     "never claims a capability the record does not carry",
@@ -1060,14 +1066,29 @@ class EvaluationTests(unittest.TestCase):
         self.assert_refused(self.accept(run=run), "nonaccepted row")
 
     def test_timed_out_gate_terminates_its_descendants(self) -> None:
+        # The descendant records survival through a handshake instead of a wall-clock
+        # sleep: it waits for the release the test writes only after the timed-out
+        # check returned, so a descendant the kill did reach can never write the
+        # witness and a survivor records itself as soon as the release lands. The gate
+        # and the descendant publish their own start markers outside the checkout so a
+        # failure records what the fixture had established on that host.
         descendant = (
-            "import time\n"
-            "time.sleep(1.0)\n"
-            "open('late-descendant.txt', 'w').write('late')\n"
+            "import os, time\n"
+            "from pathlib import Path\n"
+            "handshake = Path('..', 'timeout-tree-handshake')\n"
+            "handshake.joinpath('descendant-started.txt').write_text(str(os.getpid()), encoding='utf-8')\n"
+            "release = handshake / 'descendant-release.txt'\n"
+            "deadline = time.monotonic() + 300.0\n"
+            "while not release.exists() and time.monotonic() < deadline:\n"
+            "    time.sleep(0.02)\n"
+            "if release.exists():\n"
+            "    Path('late-descendant.txt').write_text('late', encoding='utf-8')\n"
         )
         gate_code = (
             "import subprocess, sys, time\n"
+            "from pathlib import Path\n"
             f"subprocess.Popen([sys.executable, '-c', {descendant!r}])\n"
+            "Path('..', 'timeout-tree-handshake', 'gate-spawned-descendant.txt').write_text('spawned', encoding='utf-8')\n"
             "time.sleep(60)\n"
         )
         run = self.root / "run-timeout-tree"
@@ -1075,6 +1096,8 @@ class EvaluationTests(unittest.TestCase):
         self.assert_ok(self.prepare(task=task, run=run))
         self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
         self.assert_ok(self.seal(run=run))
+        handshake = run / "timeout-tree-handshake"
+        handshake.mkdir(parents=True)
         checked = self.check("--timeout", "0.5", run=run)
         self.assertNotEqual(checked.returncode, 0, checked.stdout)
         summary = json.loads(checked.stdout)
@@ -1083,10 +1106,21 @@ class EvaluationTests(unittest.TestCase):
             (run / "checks" / summary["attempt_id"] / "slow" / "result.json").read_text(encoding="utf-8")
         )
         self.assertTrue(result["timed_out"])
-        time.sleep(2.0)
+        release = handshake / "descendant-release.txt"
+        self.addCleanup(lambda: None if release.exists() else release.write_text("release\n", encoding="utf-8"))
+        release.write_text("release\n", encoding="utf-8")
+        witness = self.checkout(run) / "late-descendant.txt"
+        deadline = time.monotonic() + DESCENDANT_WITNESS_GUARD_SECONDS
+        while not witness.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
         self.assertFalse(
-            (self.checkout(run) / "late-descendant.txt").exists(),
-            "a gate descendant survived the per-gate timeout",
+            witness.exists(),
+            "a gate descendant survived the per-gate timeout: "
+            f"gate spawned descendant={(handshake / 'gate-spawned-descendant.txt').exists()}, "
+            f"descendant started={(handshake / 'descendant-started.txt').exists()}, "
+            f"witness={witness.read_text(encoding='utf-8') if witness.exists() else None!r}; a descendant "
+            "created after the kill enumerates the tree is beyond the snapshot tree kill, so this host "
+            "must have let the gate spawn its descendant before the per-gate timeout fired",
         )
 
     def test_symlink_targets_are_bound(self) -> None:
