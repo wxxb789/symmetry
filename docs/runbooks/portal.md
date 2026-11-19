@@ -25,6 +25,16 @@ mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build
 The build stages hashed assets and `index.html` in
 `control/priv/static/portal/`; `mix release` and the Docker build include those
 files. Missing build output returns `503` rather than an alternate workspace.
+The staged directory is gitignored build output, so it is also a Control-suite
+prerequisite: the four `:portal_assets` cases in
+`control/test/symmetry_control_web/controllers/portal_controller_test.exs` assert
+against the real staged `index.html` and its hashed assets. Without a staging
+they fail with the build command above and with CI's equivalent staging — the
+`control` job downloads the `contracts` job's `portal-assets` artifact into
+`control/priv/static/portal/` before `mix test` (`.github/workflows/ci.yml`) —
+instead of a raw file error, and they are never skipped silently. Rebuild after
+changing frontend sources: the check detects a missing or incomplete staging,
+not a complete but stale one.
 For Vite development, start Phoenix first, then
 `mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend dev` and open
 `http://127.0.0.1:5173/portal/` (session and socket requests proxy to Phoenix).

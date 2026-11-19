@@ -10,8 +10,10 @@ param(
 #
 # The run fails closed before any browser flow: the target must be the loopback
 # port this harness starts its own fixture on, that port must be free, the
-# fixture must publish this run's identity file, and /healthz must report the
-# full topology healthy. The spec itself re-checks the identity file and logs in
+# fixture compiles into this instance's own build path (MIX_BUILD_PATH under
+# control/_build/instances, never the shared control/_build/dev), the fixture
+# must publish this run's identity file, and /healthz must report the full
+# topology healthy. The spec itself re-checks the identity file and logs in
 # with this run's operator token before any provider check.
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
@@ -58,6 +60,25 @@ try {
 $operatorToken = [guid]::NewGuid().ToString("N")
 $identity = [guid]::NewGuid().ToString("N")
 
+# Instance build isolation: two Control instances started from the same
+# worktree must not share control/_build, where a compile another instance runs
+# (or the dev code reloader that compile feeds) decides what this run's fixture
+# loads and reloads - the 2026-11-17 observation was a foreign session's
+# server answering this worktree's browser runs with `# unhandled` error pages.
+# This harness owns the fixture it starts and pins its compiled output per
+# port, so instances from one worktree that both serve compile into different
+# build paths: the preflight above refuses a port that already answers, and a
+# concurrent start on one port fails closed at bind/readiness. Deps sources
+# stay shared under control/deps; only compiled output moves. An inherited
+# MIX_BUILD_PATH is overridden explicitly, never trusted: a stale one from the
+# surrounding shell would point this instance at another directory, which is
+# the isolation this harness must own itself.
+$instanceBuildPath = Join-Path $controlRoot ("_build/instances/connections-" + $Port)
+if ($env:MIX_BUILD_PATH) {
+  Write-Host "ignoring inherited MIX_BUILD_PATH '$env:MIX_BUILD_PATH': this instance compiles into $instanceBuildPath"
+}
+$env:MIX_BUILD_PATH = $instanceBuildPath
+
 $env:POSTGRES_HOST = "127.0.0.1"
 $env:POSTGRES_PORT = "55444"
 $env:POSTGRES_USER = "postgres"
@@ -90,7 +111,10 @@ try {
   # into the value; plain `set NAME=value && …` would set "4021 " and "… .jsonl ".
   # --no-start: the fixture script installs its transports before it starts the
   # application, so no boot-time provider recovery can reach a real transport.
-  $fixtureCommand = "set `"PHX_SERVER=true`" && set `"PORT=$Port`" && " +
+  # MIX_BUILD_PATH is set again here, beside PORT, so the fixture's own build
+  # path is stated in the command that starts it instead of inherited silently.
+  $fixtureCommand = "set `"MIX_BUILD_PATH=$instanceBuildPath`" && " +
+    "set `"PHX_SERVER=true`" && set `"PORT=$Port`" && " +
     "set `"SYMMETRY_OPERATOR_TOKEN=$operatorToken`" && " +
     "set `"SYMMETRY_FIXTURE_IDENTITY=$identity`" && " +
     "set `"SYMMETRY_FIXTURE_IDENTITY_FILE=$identityFile`" && " +
@@ -206,6 +230,7 @@ try {
 
   Write-Host "fixture transport log: $fixtureLog"
   Write-Host "fixture state file: $stateFile"
+  Write-Host "instance build path: $instanceBuildPath"
   Write-Host "control log: $serverLog"
 } finally {
   # Stop only the process tree this harness started (cmd.exe → mise → mix → beam)

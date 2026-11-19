@@ -226,9 +226,9 @@ export function chatRunLinks(run: { readonly pull_request_url?: string | null; r
 }
 
 export interface ChatHistoryGap {
-  /** The current page's oldest served message id. */
+  /** The oldest message id of the chain the served read reached. */
   readonly current: string;
-  /** The newest message id the retained older pages carry. */
+  /** The newest message id among the retained pages the served read's chain did not reach. */
   readonly retained: string;
 }
 
@@ -268,9 +268,10 @@ function retainedMessages(pages: readonly ChatHistoryPage[], currentIds: Readonl
 /**
  * The retained history as rendered: the current page keeps its own order, older
  * messages precede it oldest first and duplicate ids render once (from the
- * refreshed copy). The gap is reported only when the pages share no id and the
- * current boundary differs from the boundary the retained chain was fetched
- * from, which is the only provable way an unloaded region can hide between them.
+ * refreshed copy). The gap is reported only while a retained page is off the
+ * chain the served page's boundary reaches: every page on that chain renders as
+ * one contiguous history, and the region between the chain and a page it did
+ * not reach is exactly what the note names.
  */
 export function chatHistoryView(pages: readonly ChatHistoryPage[], nextCursor: string | null): ChatHistoryView {
   const newest = pages[0];
@@ -278,24 +279,47 @@ export function chatHistoryView(pages: readonly ChatHistoryPage[], nextCursor: s
   const older = pages.slice(1);
   const currentIds = new Set(newest.messages.map((message) => message.id));
   const retained = retainedMessages(older, currentIds);
-  const gap = historyGap(newest, older, retained);
+  const gap = historyGap(newest, older);
   return { messages: [...retained, ...newest.messages], currentIds, gap, loadCursor: nextCursor };
 }
 
-function historyGap(newest: ChatHistoryPage, older: readonly ChatHistoryPage[], retained: readonly ChatConversationMessage[]): ChatHistoryGap | null {
-  if (older.length === 0 || newest.nextBefore === null) return null;
-  const currentBoundary = newest.messages[0]?.id;
-  const olderIds = new Set(older.flatMap((page) => page.messages.map((message) => message.id)));
-  // A shared id proves the pages overlap, so no entry can hide between them.
-  if ([...newest.messages.map((message) => message.id)].some((id) => olderIds.has(id))) return null;
-  // A retained page whose fetch cursor was relative to the current page's oldest
-  // message proves the region below that boundary was loaded from exactly it. The
-  // comparison is by the boundary message's id: a served cursor is re-signed per
-  // response, so the token itself never matches across two reads.
-  if (currentBoundary !== undefined && older.some((page) => page.fetchBeforeId !== null && page.fetchBeforeId === currentBoundary)) return null;
-  const retainedBoundary = retained[retained.length - 1]?.id;
-  if (currentBoundary === undefined || retainedBoundary === undefined) return null;
-  return { current: currentBoundary, retained: retainedBoundary };
+function historyGap(newest: ChatHistoryPage, older: readonly ChatHistoryPage[]): ChatHistoryGap | null {
+  if (older.length === 0 || newest.nextBefore === null || newest.messages.length === 0) return null;
+  // The chain the served page's boundary reaches, followed the way a load
+  // continues: it starts at the current page and gains every retained page that
+  // overlaps a message it carries or was fetched from one — such a page holds
+  // the messages just below that boundary, so no region can hide between them.
+  // The comparison is by message id: a served cursor is re-signed per response,
+  // so the token itself never matches across two reads.
+  //
+  // Every retained page has to be reached. A chain a moved boundary left behind
+  // must not be excused by a later page that does reach the served boundary —
+  // that page proves only its own region, and rendering the pages below it
+  // beside the chain would present the region between the two as contiguous. A
+  // page from the moved boundary joins the chain when Load older loads that
+  // region into it.
+  const attached = new Set<string>(newest.messages.map((message) => message.id));
+  const attachedMessages: ChatConversationMessage[] = [...newest.messages];
+  const remaining = [...older];
+  for (let reached = true; reached;) {
+    reached = false;
+    for (let index = remaining.length - 1; index >= 0; index -= 1) {
+      const page = remaining[index]!;
+      const chained = page.fetchBeforeId !== null && attached.has(page.fetchBeforeId);
+      if (!chained && !page.messages.some((message) => attached.has(message.id))) continue;
+      for (const message of page.messages) attached.add(message.id);
+      attachedMessages.push(...page.messages);
+      remaining.splice(index, 1);
+      reached = true;
+    }
+  }
+  const unreached = remaining.flatMap((page) => page.messages);
+  if (unreached.length === 0) return null;
+  // The note names the region between the two: the chain's own oldest message
+  // and the newest point of the history it did not reach.
+  const current = attachedMessages.reduce((oldest, message) => (messageOrder(message, oldest) < 0 ? message : oldest));
+  const retained = unreached.reduce((newestMessage, message) => (messageOrder(message, newestMessage) > 0 ? message : newestMessage));
+  return { current: current.id, retained: retained.id };
 }
 
 /** One recorded semantic execution entry, rendered as inert text. */
