@@ -1,10 +1,16 @@
 defmodule SymmetryControlWeb.PortalControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  alias SymmetryControlWeb.PortalAssets
+  alias SymmetryControlWeb.PortalBundle
   alias SymmetryControlWeb.PortalSession
 
   @operator_token "test-operator-token"
 
+  # `:portal_assets` marks the cases that need the staged frontend build;
+  # `SymmetryControlWeb.PortalBundle` (called from `ConnCase`) fails them with that
+  # prerequisite when the bundle is missing or incomplete.
+  @tag :portal_assets
   test "the portal requires an operator session and supports login and logout", %{conn: conn} do
     assert conn
            |> get("/")
@@ -48,8 +54,9 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     refute get_session(logged_out, :portal_operator)
   end
 
+  @tag :portal_assets
   test "every explicit shell deep link serves the actual built entry with request CSRF" do
-    index = File.read!(portal_index_path())
+    index = File.read!(PortalAssets.index_path())
     assert index =~ ~s(<meta name="csrf-token" content="__SYMMETRY_CSRF__")
 
     for path <- [
@@ -103,15 +110,12 @@ defmodule SymmetryControlWeb.PortalControllerTest do
              conn |> get("/assets/portal.js") |> json_response(404)
   end
 
+  @tag :portal_assets
   test "built hashed assets are public and immutable", %{
     conn: conn
   } do
-    index = File.read!(portal_index_path())
-
-    assets =
-      ~r/(?:src|href)="(\/portal\/assets\/[^"?]+\.(?:js|css))"/
-      |> Regex.scan(index, capture: :all_but_first)
-      |> List.flatten()
+    index = File.read!(PortalAssets.index_path())
+    assets = PortalBundle.referenced_assets(index)
 
     assert Enum.any?(assets, &String.ends_with?(&1, ".js"))
     assert Enum.any?(assets, &String.ends_with?(&1, ".css"))
@@ -151,8 +155,9 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     end
   end
 
+  @tag :portal_assets
   test "a missing built entry returns an explicit uncacheable 503, not a fallback workspace" do
-    index_path = portal_index_path()
+    index_path = PortalAssets.index_path()
     unavailable_path = index_path <> ".unavailable-#{System.unique_integer([:positive])}"
     File.rename!(index_path, unavailable_path)
 
@@ -471,9 +476,6 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     |> skip_csrf()
     |> put_req_header("accept", "application/json")
   end
-
-  defp portal_index_path,
-    do: Application.app_dir(:symmetry_control, "priv/static/portal/index.html")
 
   defp skip_csrf(conn), do: put_private(conn, :plug_skip_csrf_protection, true)
 end

@@ -327,15 +327,16 @@ export const chatConversationOptions = (api: Api, key: ChatScopeKey) => queryOpt
 });
 
 /**
- * One older conversation page, by the served `before` cursor. It stays disabled
- * until the reader asks for it through `Load older`, and the page it returns is
- * retained by the surface rather than by this cursor's own key.
+ * One older conversation page, by the served `before` cursor. The surface
+ * issues it only from the reader's `Load older` press, through the cache, so no
+ * mounted query runs it on its own and a re-serve that re-keys the surface
+ * cannot cancel a press already in flight; the page it returns is retained by
+ * the surface rather than by this cursor's own key.
  */
 export const chatOlderPageOptions = (api: Api, key: ChatScopeKey, before: string) => queryOptions({
   queryKey: ["chat-older", { ...key, before }],
   queryFn: ({ signal }) => api.chatConversation({ ...key, before }, signal),
   staleTime: 0,
-  enabled: false,
 });
 
 /**

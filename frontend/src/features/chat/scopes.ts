@@ -103,18 +103,25 @@ export function retainServedPage(
   return { ...state, pages: [page, ...state.pages.slice(1)], nextCursor, nextBoundaryId, servedSource: source };
 }
 
-/** Appends one loaded older page; the chain continues from that page's own cursor. */
+/**
+ * Appends one loaded older page, under the boundary its own cursor was minted
+ * from. The surface's chain continues from that page only while the boundary
+ * is still the one its next read chains from: a page a re-serve overtook keeps
+ * its own binding, and the served chain keeps its own continuation, so the
+ * reader's next press loads the region the moved boundary skipped.
+ */
 export function retainOlderPage(
   state: ChatScopeState,
   fetchedBefore: string,
   fetchedBeforeId: string | null,
   page: { readonly messages: readonly ChatConversationMessage[]; readonly nextBefore: string | null },
 ): ChatScopeState {
+  const continues = fetchedBeforeId !== null ? fetchedBeforeId === state.nextBoundaryId : state.nextCursor === fetchedBefore;
   return {
     ...state,
     pages: [...state.pages, { messages: page.messages, fetchBefore: fetchedBefore, nextBefore: page.nextBefore, fetchBeforeId: fetchedBeforeId }],
-    nextCursor: page.nextBefore,
-    nextBoundaryId: page.messages[0]?.id ?? null,
+    nextCursor: continues ? page.nextBefore : state.nextCursor,
+    nextBoundaryId: continues ? page.messages[0]?.id ?? null : state.nextBoundaryId,
   };
 }
 

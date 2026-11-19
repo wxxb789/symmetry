@@ -16,6 +16,9 @@ not a claim that work remains. The two blocks moved on 2026-11-19 (branch
 The five dead-code closures appended to `## Dead-code candidates` below were moved on 2026-11-19
 from branch `chore/deadcode-revalidation`.
 
+The closed class scan appended to `## Paginated reads must be bound to the cursor that served their
+pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-binding`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -278,6 +281,44 @@ from branch `chore/deadcode-revalidation`.
       supervisor-side stop proofs only. The same PID-only membership observation still verifies
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
+
+- [ ] Make the Control suite's dependence on the staged portal assets explicit. Four
+      `PortalControllerTest` cases ("a missing built entry returns an explicit uncacheable 503…",
+      "the portal requires an operator session…", "every explicit shell deep link…", "built hashed
+      assets are public and immutable…") fail when `control/priv/static/portal/index.html` is not
+      staged, with `Workspace assets are unavailable. Build and deploy the frontend assets.` and a
+      `File.RenameError` on the same path. Observed while completing 0007e: the 0007e full-suite run
+      started before `pnpm --filter @symmetry/frontend build` staged the assets and reported
+      851/856 passed with those four failures; the same suite after staging reports 855/856 (the one
+      remaining failure is the environment-limited `CommandTest` above). The build output is
+      gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
+      skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
+      suite prerequisite; keep the assertions.
+      Closed in `fix/control-staged-assets-dependency` (2026-11-19) as the documented-prerequisite
+      option, kept loud rather than skipped: the four cases are tagged `:portal_assets`, and
+      `SymmetryControlWeb.PortalBundle`, called from `ConnCase` setup for every web test, fails a
+      tagged case before it touches the bundle. The failure states the prerequisite, the staging
+      command (`mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build`), CI's equivalent
+      staging (the `control` job downloads the `contracts` job's `portal-assets` artifact into
+      `control/priv/static/portal/` before `mix test`) and the explicit exclusion
+      (`mix test --exclude portal_assets`) instead of the raw `File.Error`/`File.RenameError` on the
+      staged path; the guard also rejects an entry document that is empty, references no built
+      JavaScript asset or no stylesheet, or names hashed assets that are not staged (an interrupted
+      `frontend/scripts/stage-assets.mjs`, or a build older than the current one). A fixture bundle
+      was rejected because these cases assert against the real built entry, and an ExUnit `skip`
+      would have hidden a broken CI staging step. Assertions are unchanged and nothing is skipped
+      silently: with no staging the four tagged cases failed with the guard's "staged entry
+      document is missing" problem line while the file's other nine cases passed
+      (`mix test test/symmetry_control_web/controllers/portal_controller_test.exs` — 9/13 passed,
+      4 failed), an entry document naming absent hashed assets failed the same four with
+      "references assets that are not staged", `--exclude portal_assets` reported "9 passed,
+      4 excluded", and with the staged build all thirteen passed. The staged path now has one
+      definition, `SymmetryControlWeb.PortalAssets.index_path/0`, read by both
+      `PortalController.index/2` and the tests. The prerequisite is recorded in the Elixir row of
+      `docs/design/quality.md` (which links `docs/runbooks/portal.md`) and in that runbook's local
+      gate list; the limit that a complete but source-stale bundle is not detectable from the
+      gitignored staging alone is stated only in the runbook, so freshness stays CI's guarantee
+      (the `portal-assets` artifact is built from the same revision).
 
 *Closed remainder of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; with the closed part above, nothing of the item stays there.*
 
@@ -554,6 +595,44 @@ from branch `chore/deadcode-revalidation`.
       by both the frontend unit test (`frontend/src/app/application.test.ts`) and the ExUnit test
       (`control/test/symmetry_control_web/portal_session_test.exs`); its enumerated cases are
       pinned on both sides, so every path or query rule change must add a corpus case.
+
+- [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
+      43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
+      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.061s` on the 0008a head, where the
+      same package had taken 365 s earlier on the same pull request and every other package passed;
+      green on rerun. This is the same loaded-runner family as the Windows `internal/workspace`
+      180 s package timeout: decide whether the package needs a longer explicit budget or fewer
+      load-sensitive waits, and keep the tests themselves.
+      The second occurrence
+      (`FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s`, run 44055523619 job
+      133943809688) is classified and fixed in the `daemon/internal/platform` flake-class entry
+      above (closed part archived in `docs/archive/CLOSED-TODO.md`): a test cleanup joined a
+      worker that retried an unpersistable terminal transition forever, so the package died at
+      the go-test timeout instead of failing the test.
+      The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
+      in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
+      wait on the product's own state transition rather than on host speed.
+      **Fixed (2026-11-19, `fix/flake-app-race-timeout`):** the "fewer load-sensitive waits" answer
+      is implemented for the three start waits. They no longer select on the fixture's turn channel
+      with a wall-clock fallback; they poll the daemon's own durable start publication - the
+      "running" transition `markRunning` queues immediately before `StartTurn` - fail fast with
+      `nativeStartFailureDetail` when the run records a failure, and keep `testHangGuard` as the
+      only bound (a hung start, never host speed). The 30 s timeout messages keep naming the
+      outstanding step; the second wait in the cancellation test now also reports the durable
+      reason. The shared native fixture also sets the logger the other fixtures set, because a
+      start-wait failure outlives the test body and a nil logger panicked the whole package binary
+      while demonstrating the pre-fix budget. The historical hang itself was the cleanup-join class
+      fixed in `d29fe5a` (#49), so the ten-minute package budget is unchanged and was not raised.
+      Evidence on this host: with the pre-fix 1 s start budget under 12-way host load all nine runs
+      of the three tests failed (`native turn did not start before the ... hang guard expired: no
+      durable failure recorded (local state="claimed", pending transitions=0)`); with the guard they
+      pass `go test -count=3 -cpu 1,2` (56.5 s) and the same selection passes under
+      `-race -count=2 -cpu 1,2` in WSL (19.3 s). The full package completes in the ordinary pass on
+      this host (`go test -count=1 -timeout 1200s ./internal/app` - `ok … 297.871s`, exit 0); a
+      full-package `-race` shape was not obtainable here (Windows has no cgo for `-race`, and the
+      WSL guest hangs this package in `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`,
+      a loopback dial that never answers there and passes on Windows in this same tree), so the
+      package-level race gate stays with CI.
 
 - [ ] Revalidate the load-sensitive Go test
       `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
@@ -928,6 +1007,35 @@ from branch `chore/deadcode-revalidation`.
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
+- [ ] Investigate the intermittent Control failure
+      `control recovery selects pending actions after more than one page of terminal no-op Goals` in
+      `control/test/symmetry_control/goals_test.exs:4753`. It is recorded from the pre-rebase delivery
+      revision `7235708` (`.tmp/gates/control-test-final.log`, 2026-11-17 11:16,
+      `884/886 passed, 21 skipped`, exit 2) with `** (EXIT from #PID<...>)` /
+      `** (DBConnection.ConnectionError) could not checkout the connection owned by #PID<...>
+      ({:sql_sandbox_owner, ...}) ... request was dropped from queue after 111ms`, raised inside
+      `Ecto.Repo.Preloader`'s supervised `Task`; the same suite's earlier run (09:44) reported
+      `885/886 passed` with the `pwsh` failure alone, so the case is intermittently load-sensitive:
+      it admits 101 Goals and cancels each one before asserting
+      `Goals.recover_pending_goal_control_actions/1`, and the sandbox owner's connection is preempted
+      while the preload tasks queue. This is not the `integrations_test.exs:1161` flake recorded above
+      (different test and call site). Revalidate whether the preload can run without a second supervised
+      task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
+      recovery page it checks.
+      Closed (2026-11-19, branch `fix/flake-control-recovery-page`, commit `3a87d58`): the Goal
+      projection read preloaded its five associations through `Ecto.Repo.Preloader`'s parallel
+      tasks, and under the SQL sandbox every task queued for the test process's single owned
+      connection, where DBConnection drops a checkout that waits past `2 * queue_target` (100ms)
+      when its poll runs - the recorded `dropped from queue after 111ms`. `Goals.ReadModel.load_data/2`
+      now preloads with `in_parallel: false`, so the read keeps every query on the caller's
+      connection and nothing queues; no queue or ownership timeout was changed, and the
+      regression test asserts the mechanism directly: `a Goal projection read keeps every query
+      on the calling process` (`control/test/symmetry_control/goals_test.exs`) was red on the
+      unfixed bytes (the caller plus five preloader pids) and is green with the fix. Evidence:
+      `mix test test/symmetry_control/goals_test.exs:4777` red -> green, `mix test
+      test/symmetry_control/goals_test.exs:4753` 2x green, `mix test
+      test/symmetry_control/goals_read_model_test.exs` 50 passed; the 100-item recovery-page
+      assertion is unchanged.
 - [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
       failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
       pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in
@@ -1001,6 +1109,45 @@ from branch `chore/deadcode-revalidation`.
       its chain was expanded from. No timer, poll or automatic read was added: the pages a moved
       boundary retires are loaded again by the reader's own "Load older history" / "Load more Goal
       attention", which continues from the served boundary.
+
+- [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
+      construction: its pages are keyed by their own `after` sequence numbers
+      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
+      re-read under their own keys, so a page is never served under a boundary it was not fetched
+      from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
+      gap in `frontend/src/features/chat/presentation.ts`, rendered by
+      `frontend/src/features/chat/chat.tsx`) and therefore still differs from this fix: it keeps the
+      pages a moved boundary left behind and states the unloaded region, while the work history and
+      the attention feed retire them. Unifying the two changes one surface's reader-visible
+      behaviour, so it needs its own decision. Retiring a page is reader-visible too (an expanded
+      page disappears when a live run moves the boundary), and it is covered by the frontend suite
+      only: the browser suites, which CI runs, carry the live-daemon pagination case and were not
+      run on this host.
+
+      **Closed (2026-11-19, `fix/paginated-reads-cursor-binding`):** the scan enumerated every
+      paginated read with two search strategies — the server-side pagination parameters, the
+      `page_with_next` reads and the generated contract DTOs that carry
+      `next_before`/`next_after`/`next_cursor`, and every client consumer that accumulates pages
+      (`useInfiniteQuery`, `useQueries`, the retained page state) — and decided each: the work
+      detail's execution history (`/portal/api/work-items/:id/timeline`) and the Goal attention feed
+      (`/portal/api/attention`) are bound by #68; the Goal receipt list
+      (`/portal/api/goals/:id/events`) is bound by construction, its pages keyed by their own
+      `after` sequence over an append-only log and re-read under those keys; the chat conversation
+      (`/portal/api/chat`) binds its pages by the boundary message's id, and this branch fixed the
+      two ways that binding could still lie — the gap proof now requires every retained page to be
+      reached from the served boundary, so a later page that did reach the boundary no longer
+      excuses a chain a moved boundary left behind, and the note names the attached chain's
+      boundary and the newest unreached page, naming each further region as loads reach it; and the
+      reader's own "Load older" now reads through the cache under the cursor and boundary captured
+      at press time, so a re-serve that re-keys the surface mid-load neither cancels the press nor
+      binds its page to the boundary that arrived afterwards. The operator API's paged reads
+      (`/api/v1/tasks/:task_id/{timeline,events,transitions,commands}`,
+      `/api/v1/goals/:goal_id/events`, `/api/v1/attention`) have no retaining consumer — bounded
+      cursor-page drains in `scripts/ci/omo-control-native-evidence.py` and
+      `daemon/e2e/core_test.go`, and the browser suites' single reads or cursor drains (e.g.
+      `portal-chat.spec.mjs`) for verification — as is the providers' outbound pagination
+      (`control/lib/symmetry_control/integrations/providers/`), one-shot aggregation. The residual
+      in `docs/TODO.md` is the owner's unification decision and the CI browser runs.
 
 ## Deferred review findings (0007g)
 
