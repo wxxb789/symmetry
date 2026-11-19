@@ -97,6 +97,17 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       current bytes, in which case the runs have to be re-executed, never re-derived by editing a
       receipt.
 
+- [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
+      `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
+      `process.communicate(timeout=PROCESS_TREE_REAP_SECONDS)`, which on Windows can keep waiting
+      on the gate's stdout/stderr pipes while a descendant the snapshot tree kill missed still
+      holds the inherited write ends - past the documented reap window and past any caller that
+      expects `check` to return once the kill finished (the timeout-tree fixture's survivor
+      witness was masked this way until the fixture spawned its descendant with `DEVNULL`).
+      Fix direction: close the read ends from a daemon thread, or leave the final handle close to
+      process exit, so a pipe-holding survivor can never extend the reap; add a regression case
+      with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
+
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
@@ -108,20 +119,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 ## Dead-code candidates
 
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
-
-- [ ] Investigate the load-sensitive timeout fixture
-      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
-      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
-      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
-      on the pass whose host was also running four other regression suites and the record
-      re-derivations - the concurrency the model-routing runbook itself warns against. The
-      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
-      assertion 2.0 s later, while the kill path is a snapshot tree kill
-      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
-      kill enumerates the tree is not killed; whether that is what happened in that pass is not
-      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
-      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
-      kill path alone unless it reproduces on a quiet host.
 
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
