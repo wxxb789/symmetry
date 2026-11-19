@@ -1449,6 +1449,42 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `docs/evaluations/model-routing/README.md`, "Record rendering exception
       (2026-11-19)".
 
+- [ ] Revalidate the stale 0008-series prerequisite text:
+      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
+      and 0008c results" while the 0008b candidate policy is produced and awaiting
+      the owner's verdict. Pre-existing and not introduced by the 0008b evidence
+      change; correct the wording once the 0008b verdict lands. (The `0006h`
+      index-row dead link above is the same class of stale documentation and is
+      already tracked.)
+
+      **Closed (2026-11-19, `docs/0008-prerequisite-text`):** the frozen-bytes
+      convention resolves this item instead of a wording edit: no archived goal
+      document has been edited in place after placement
+      (`git log --diff-filter=M --name-only -- docs/goals/archive/` prints nothing).
+      Placement-time content changes occur during archive moves and are not
+      relevant to the frozen-bytes argument. The index's archive notes record the
+      archived documents' content as unchanged
+      (`docs/goals/README.md:47` 0008a, `:61` 0008d, `:100` 0008b, `:313` the 0007
+      series), and owner verdicts are recorded separately as they arrive (`:309`);
+      `73e083f` moved this goal document into `archive/` byte-identically. The
+      correction therefore lands live: the closure re-points the item to
+      `docs/goals/archive/0008d-typescript-model-routing.md:13` — the item text
+      stays verbatim — and a new recording note in `docs/goals/README.md` names
+      the archived sentence and the verdicts that govern it — the owner accepted
+      0008b on 2026-11-18 (`8a689bd`, row `:348`), while 0008c is produced and
+      awaiting the owner's verdict with no acceptance recorded (`:349`;
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md:3`). The 0008b
+      half of the archived sentence became true when the verdict landed; the 0008c
+      half stays as written, which is the convention's accepted state rather than
+      an open action — no 0008c acceptance is declared, and a future verdict is
+      recorded in the index row like the others. Check run on this branch:
+      `rg -n 'accepted 0008b|0008c'
+      docs/goals/archive/0008d-typescript-model-routing.md docs/goals/README.md`
+      (the archived line is unchanged; `docs/goals/README.md:117-123` is the new
+      note). The cross-referenced `0006h` note stays in `docs/TODO.md` as a
+      decision note, untouched here; its index-row link was already repointed
+      to the archived document by `c514bd9` (#66).
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Investigate the intermittent Control failure
