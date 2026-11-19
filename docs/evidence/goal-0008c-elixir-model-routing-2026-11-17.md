@@ -21,7 +21,7 @@ claim or routing-policy promotion. It reuses the existing configured worker/revi
 authorization (`reuse_existing`) and records the routes it observed.
 
 Private evidence root for this run (outside the repository, coordinator-owned):
-`C:/Users/lhan/AppData/Local/Temp/symmetry-0008c-eval`. Raw transcripts stay outside Git.
+`<disposable-root>`. Raw transcripts stay outside Git.
 
 ## Surface proof (blocking prerequisite, executed before either run)
 
@@ -312,7 +312,7 @@ provider-action projection and the fact that no consumer currently distinguishes
 frozen review `docs/evaluations/model-routing/0008c-a-mixed-review.json`
 (`sha256:2ef575e2a939cd88e88971e148119883995fe4b7941b8723a22bc9d5e94f0175`).
 Receipt `docs/evaluations/model-routing/0008c-a-mixed.json`
-(`sha256:9432545d54eca14346e24a42c37821915dc663e0bd5c6b89e36571e242a01e31`) with
+(`sha256:93050ced0667d012924564e58032f96fd3244214ac68871e3f552750cc5fa73c`) with
 `accepted: true`, no blockers, no later defects: implementation
 `deepseek-v4.1-flash-fast` 108,909 / 47,162 / 2,981,760 tokens and USD 0.0892671 estimated; review
 112,426 / 36,428 / 1,284,992 tokens and USD 0.0774414; one failed attempt
@@ -355,7 +355,7 @@ that the staged portal bundle is provisioned rather than authored. The review se
 (`openai-completions`, thinking `max`) — a different provider from the implementing model — and its
 frozen record is `docs/evaluations/model-routing/0008c-a-strong-review.json`
 (`sha256:9a7127385da08ef1cf76e86906eb539002bfb02948b1a6c03d9b162b150cb85d`).
-The receipt `docs/evaluations/model-routing/0008c-a-strong.json` (`sha256:26d8e003419e3e985e29b5a065b8ce4d178a8402c276855a39fdab6998040d7b`)
+The receipt `docs/evaluations/model-routing/0008c-a-strong.json` (`sha256:5ee9b87bd6d5b26adb4674b1024f8a212e48e6050223703c43e8e3c766f86a7f`)
 records `accepted: true`, `acceptance_blockers: []`, `later_defects: []` and the usage ledger:
 implementation `gpt-6.1-sol` 48 / 9,891 / 848,804 tokens and USD 0.321512 estimated; review
 58,248 / 40,245 / 1,754,240 tokens and USD 0.0657684 estimated; one failed attempt `gpt-6.1-sol`
@@ -392,7 +392,7 @@ rollback of a refused finalization) and a new focused test file carrying a provi
 `docs/evaluations/model-routing/0008c-b-mixed-review.json`
 (`sha256:1c9c68cdcdadbbcd7a92bde3afb1f94ffb8184eae150aad859c445d4cd99e310`).
 Receipt `docs/evaluations/model-routing/0008c-b-mixed.json`
-(`sha256:e79fe17327fe756f2af5580e61a64404c8a6a1b3d8bac4ed3bf15db48a078e40`) with
+(`sha256:ceae34ce3507075c4fe26dc719fa8d3caff8b98b4817b576a4f63798a6e6f74a`) with
 `accepted: true`, no blockers, no later defects: implementation `deepseek-v4.1-flash-fast`
 268,410 / 95,175 / 3,320,128 tokens and USD 0.194733 estimated; review 49,060 / 66,814 / 2,538,688
 tokens and USD 0.0948948; one failed attempt 115,573 / 45,589 / 1,566,080 tokens and USD 0.0893787;
@@ -429,7 +429,7 @@ Reviewer session `01a1e658-7809-7394-8127-72dcb770fca6` (`tencent-litellm/deepse
 thinking `max`); frozen review `docs/evaluations/model-routing/0008c-b-strong-review.json`
 (`sha256:2918a91d424e19957edde4df87317aa90b73b1bcd4f6562c5e939367c722136f`).
 Receipt `docs/evaluations/model-routing/0008c-b-strong.json`
-(`sha256:1be7b41985540705653c763f57cfe98f31b219a077f4812a1afe04747b863bf7`) with
+(`sha256:af12819d6806509f78c0379f561fd3d8c01e5f0a3116335cd362d9c55918f34a`) with
 `accepted: true`, no blockers, no later defects: implementation `gpt-6.1-sol`
 54 / 17,325 / 1,130,699 tokens and USD 0.4618031 estimated; review 58,667 / 48,547 / 2,583,296
 tokens and USD 0.0758565; one failed attempt 42 / 4,986 / 752,223 tokens and USD 0.2991183 (the

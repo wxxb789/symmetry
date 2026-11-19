@@ -49,6 +49,53 @@ from branch `chore/deadcode-revalidation`.
       re-derivations recorded in the audit) remain bound to the pre-rebase reviewed revision and are labelled as
       history.
 
+- [x] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
+      receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
+      `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
+      temp root (the `symmetry-0008c-eval` run store under the local user profile). They are produced,
+      committed evidence bound by digests other records name, so the 0008c audit recorded them as
+      an open item instead of rewriting history. The runner's sanitisation extension
+      (`validate_measured_mapping(..., redact=True)`) now records every host-specific absolute path
+      in a measured value as a `sha256:` token, so run records and receipts written from now on
+      cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
+      never edit a receipt whose digests other records bind. Decided by rendering rather than
+      keeping the roots: closed 2026-11-19 on branch
+      `chore/eval-record-scrub` under the owner's one-time Q2 authorization (revalidated first, as the entry asked):
+      the four receipts and the evidence record were rendered through `scripts/ci/model-routing-record-sanitize.py`
+      (`sha256:b8b252f3…`) — two substitutions per receipt (`mix_build_path`/`mix_deps_path` ->
+      `<disposable-root>/… (outside the checkout)`) and one in the evidence record — and every digest that binds
+      them was recomputed and rebound: the four receipt digests quoted by `0008c-candidate-policy.md` and by the
+      evidence record (`9432545d…`/`26d8e003…`/`e79fe173…`/`1be7b419…` ->
+      `93050ced…`/`5ee9b87b…`/`ceae34ce…`/`af12819d…`). The tool's `--check` exits 0 on the two receipts whose
+      absolute-path matches were all host paths (`0008c-a-strong.json`, `0008c-b-mixed.json`); the other two keep
+      only repo-relative prose fixtures (`/control/priv/static/portal/`, `/\`, `sync_status`) that rendering would
+      corrupt. Full before/after digest table (including a later second-generation rebind of
+      `0008a-controls.json`'s rendered `missing-gate` stderr digest) and the deliberately-left list:
+      `docs/evaluations/model-routing/README.md`, "Record rendering exception (2026-11-19)".
+
+- [x] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
+      how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
+      resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
+      against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
+      `scripts/ci/test-model-routing-evaluation.py` again, so the 0008b/0008c/0008d receipts stay fail-closed
+      for submission under the current bytes exactly as their entries below describe; re-execute the runs, never
+      re-derive by editing a receipt. Closed by the one-time reference-binding audit of 2026-11-19 (branch
+      `chore/eval-record-scrub`; the owner scoped Q5 to a one-time audit, no gate): an uncommitted script parsed
+      every model-routing record and 0008-series evidence document and verified the commit/path bindings (commit
+      resolves, reachable from `origin/main`, a tag, or GitHub; path exists at that commit), the 0008a source
+      manifest (17/17 entries plus bound tree and canonical scoped digest recompute at `1c6c715`), the 0008d
+      landing-tip source subject (recomputed at `73e083f`: 1141 paths, exact), 42 tooling-source digests at their
+      tags/commits, the receipt frozen review/task digests, and every quoted file digest at HEAD — checked 61,
+      broken 0, fixed 0 (this branch's nine-file digest cascade is the only rebinding this audit required),
+      0 mismatches, with 15 sealed subject manifests and the sealed-checkout `HEAD:` references classified
+      unverifiable-private by design. Two referenced pre-rebase commits (`c45db2c`, `1baf76c`) are GitHub-absent
+      and stay labelled history with no main equivalent; five (`4644fd7`, `993870e`, `abf8210`, `bdbcdc7`,
+      `a9f4d93`) are unreachable from local refs but still served by the GitHub API, and `cab222b` is preserved
+      via the tag `0008c-produced-tooling`. No live binding was broken, so no binding needed rebinding beyond
+      this branch's digest cascade (recorded in the README exception section). No CI gate was added; a gate
+      proposal would be a new item.
+
 ## Dead-code candidates
 
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
@@ -458,6 +505,68 @@ from branch `chore/deadcode-revalidation`.
       a loopback dial that never answers there and passes on Windows in this same tree), so the
       package-level race gate stays with CI.
 
+- [ ] Revalidate the load-sensitive Go test
+      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
+      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
+      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
+      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
+      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
+      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
+      deadline rather than a longer test timeout.
+      Revalidated and closed by branch `fix/flake-load-sensitive-go` (2026-11-19): no further change
+      was needed because `8082317` (#44) already replaced the 1 s `context.WithTimeout` around
+      `WaitTurn` with the package's documented `testHangGuard` (30 s, "turns a hung harness into a
+      failure; never a statement about how fast the adapter should be") and made the failing wait
+      name the outstanding step (`mustSettle(t, "WaitTurn", err)`), so elapsed time no longer
+      decides the verdict and a guard expiry can no longer be reported as this test's behavioural
+      failure. Re-run on this host while the other regression workers loaded it: plain
+      `go test -count=20 -cpu 1,2 -run '^TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock$'
+      ./internal/harness/omp` passed (`ok … 18.389s`, exit 0) and the same selection under
+      `-race -count=5 -cpu 1,2` passed in WSL (`ok … 4.485s`, exit 0). The pristine 1 s failures
+      stay recorded in #44 (8/8 on the pre-fix revision under 3x oversubscription) and in the 0007e
+      observation above.
+
+- [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
+      the 0007d fixture database, 10 control tests fail because committed fixture rows are
+      visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
+      controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
+      on a clean dedicated test database. The browser harness recreates its own database;
+      the suite should use the repository default (`symmetry_control_test`).
+      **Closed (2026-11-19, `fix/mix-test-db-guard`):** `mix test` and the test-environment
+      `ecto.create`/`ecto.migrate`/`ecto.drop`/`ecto.rollback`/`ecto.load` commands now refuse
+      a browser acceptance database before any storage task can touch PostgreSQL.
+      `control/lib/mix/tasks/symmetry.check_test_db.ex` is the first step of the `test` alias
+      and of the five Ecto aliases in `control/mix.exs`; a step that names the overridden task
+      runs the real task, so flag passing is unchanged, and the task is a no-op outside the
+      test environment, so the harnesses keep recreating their own databases from the
+      development environment. The guard reads the effective database from the repository
+      configuration (`config/test.exs` appends `MIX_TEST_PARTITION`) and refuses whole browser
+      acceptance database families — `symmetry_0007c_`, `symmetry_0007d_`, `symmetry_0007e_`,
+      any suffix, because the planning harness takes its database as a `-DbName` parameter and
+      a recorded run used `symmetry_0007c_shell` — while the repository default and the
+      runbook's disposable `symmetry_receipt_e2e_<hex>` database stay allowed.
+      Unit-tested in `control/test/mix/tasks/symmetry_check_test_db_test.exs`, including the
+      `run/1` wiring against the configured Repo database.
+      Verified on 2026-11-19: `MIX_TEST_PARTITION=16 POSTGRES_DB=symmetry_0007d_test mix test
+      test/mix/tasks/symmetry_check_test_db_test.exs` exits 1 with the Mix error naming the
+      effective `symmetry_0007d_test16`, both against a live PostgreSQL and against an
+      unreachable `POSTGRES_PORT=1` — the refusal precedes any connection — and
+      `POSTGRES_DB=symmetry_0007e_test` refuses the same way; `MIX_ENV=test` `mix ecto.create`/
+      `mix ecto.migrate`/`mix ecto.drop` refuse for both names, and `pg_database` holds no
+      `symmetry_0007*` database after those runs. With `POSTGRES_DB` unset,
+      `MIX_TEST_PARTITION=16 mix test test/mix/tasks/symmetry_check_test_db_test.exs` creates
+      and migrates `symmetry_control_test16` and reports `Result: 7 passed` (exit 0);
+      `mix format --check-formatted` and `mix compile --warnings-as-errors` pass. In the
+      development environment the guard is a no-op: with `POSTGRES_DB=symmetry_0007e_test` and
+      an unreachable port the real `mix ecto.create` reaches the adapter with no refusal, and
+      `POSTGRES_DB=symmetry_guardmix_probe_dev mix ecto.create --quiet` followed by
+      `mix ecto.drop --quiet` both exit 0 and leave no probe database.
+      Review round (same branch): `POSTGRES_DB=symmetry_0007c_shell MIX_TEST_PARTITION=16 mix test
+      test/mix/tasks/symmetry_check_test_db_test.exs` and the test-environment
+      `mix ecto.rollback`/`mix ecto.load` refuse the same way, naming the effective
+      `symmetry_0007c_shell16`; with `MIX_ENV=test` the guard file reports `Result: 9 passed`,
+      and `mix format --check-formatted` and `mix compile --warnings-as-errors` exit 0.
+
 ## Deferred review findings (0007f)
 
 - [ ] Revalidate the `/portal/connections?projectId=…` session return target.
@@ -734,6 +843,39 @@ from branch `chore/deadcode-revalidation`.
       report's embedded results and confirmed the focused 35/1/0 and broad 79/15/0 rows with no flaky cases -
       evidence for the 0007b receipts' browser rows, not a defect.
 
+- [x] Re-publish the pre-existing personal absolute paths in the committed 0008a
+      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
+      instead of rewriting history:
+      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
+      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
+      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
+      58 (the `EVIDENCE_ROOT` value, an operator-profile drive path). The 0008b change renders its own new
+      records with that helper and records the rendering in the record
+      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
+      record's quoted digest consistent when the older records are re-published.
+      Closed 2026-11-19 on branch `chore/eval-record-scrub`: re-published through
+      `scripts/ci/model-routing-record-sanitize.py` (`sha256:b8b252f3…`) as the
+      entry directs — `0008a-controls.json` 32 substitutions (the 14
+      disposable-root strings -> `<disposable-root>`, plus 9 toolchain
+      interpreter argv entries (one rendered to `path-sha256:4d144641…`) and 9
+      operator-worktree argv entries -> the
+      deterministic `path-sha256:` tokens), `0008a-audit.json` 5 (3
+      disposable-root values + 2 toolchain entries), and the evidence record's
+      line 58's `EVIDENCE_ROOT` value -> `EVIDENCE_ROOT='<disposable-root>'`.
+      No host path remains and no meaningful prose fixture needed leaving
+      unrendered in these three files, so the tool's `--check` exits 0 on all
+      three. Quoted-digest consistency was kept: the evidence record's quoted
+      audit digest was rebound (`dc878099…` -> `832117d0…`), and one
+      rendered-output digest needed a second-generation rebind
+      (`0008a-controls.json`'s `missing-gate` `stderr_sha256`, `c12881ae…` ->
+      `8503bfa2…`), re-deriving that file's `sha256`. No document holds a
+      full-length occurrence of a changed digest outside the README exception
+      record (checked across `docs/`, `scripts/`, `contracts/` and `.github/`);
+      the truncated `…` prefixes that remain are in that record and in these
+      closures. The full table is in
+      `docs/evaluations/model-routing/README.md`, "Record rendering exception
+      (2026-11-19)".
+
 ## Paginated reads must be bound to the cursor that served their pages
 
 - [ ] The work detail's execution history retained the older pages a reader had expanded without
@@ -810,3 +952,37 @@ from branch `chore/deadcode-revalidation`.
       remains: the classic `portal.js` was deleted in `ca1bdad`
       (`control/priv/portal_assets/` retains only `login.css`), and every other current reference is
       a migration comment, a 404 or `return_to` assertion, or prose.
+
+## Control instances sharing one worktree's build
+
+- [ ] Two Control instances started from the same worktree share `control/_build`, so a foreign
+      session's dev server can answer this worktree's browser runs with `# unhandled` error pages
+      (observed 2026-11-17 as console-500 assertions and render-wait timeouts during 0007g's
+      suite-context repetitions, with zero offset-assertion failures in the same runs). Give each
+      instance its own `MIX_BUILD_PATH` when several run at once; the runs that need isolation
+      should do it explicitly rather than relying on nobody else being active.
+
+      **Fixed (2026-11-19, `fix/control-instance-build-isolation`):** both harnesses that start a
+      Control instance from a worktree now pin that instance's own build path:
+      `browser/scripts/run-planning-tests.ps1` and
+      `browser/scripts/run-connection-fixture-tests.ps1` export
+      `MIX_BUILD_PATH=<worktree>/control/_build/instances/<harness>-<port>` for every mix command
+      they run and set it again on the server (planning) or fixture (connections) command they
+      start, so instances from one worktree that both serve compile into different build paths:
+      each harness refuses a port that already answers, and a concurrent start on one port fails
+      closed at bind/readiness. Deps sources stay shared under `control/deps`; only compiled output
+      moves. An inherited `MIX_BUILD_PATH` is overridden and reported, never trusted, because a
+      stale one from the surrounding shell is the same accident.
+      `browser/scripts/control-instance-isolation.test.mjs`
+      (`pnpm --filter symmetry-browser-acceptance test:control-isolation`) drives each real harness
+      with a recording `mise` stub and asserts that every mix invocation it makes - the database
+      tasks and the instance start alike - received the harness's own instance build path, that two
+      ports get two paths, and that a foreign inherited value decides nothing; `browser/README.md`
+      records the convention, including the path an operator-started Control server needs when
+      another instance may run from the same worktree. The planning harness was run end to end on
+      this branch (desktop `-g restores`, `1 passed`) against
+      `control/_build/instances/planning-<port>`, with its database tasks, server start, readiness,
+      login and staged-asset checks all served from that path (`mix` was reached through this
+      host's `mixwrap` toolchain because its `mise` cannot install the pinned Elixir); the
+      connection-fixture harness is covered by the stub test only on this host, whose fixed fixture
+      database port 55444 has no container here.
