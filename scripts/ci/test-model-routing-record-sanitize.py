@@ -72,9 +72,7 @@ QUOTED_HOST_PATHS = (
     "root:/home/operator/state/run",
     "root:C:" + _BS + "Users" + _BS + "operator" + _BS + "run",
     "state under /tmp//symmetry-0008d-run and /home//operator/x",
-    # A quoted path beside text: the backslash before the closing quote is that
-    # quote's JSON escape, not a path byte, so rendering must keep it outside the
-    # token instead of leaving a bare quote that breaks the record's syntax.
+    # A quoted path beside text: see `_render_match`'s docstring for the JSON-escape rule.
     '{"t":"see ' + _BS + '"C:' + _BS * 2 + "dir" + _BS * 2 + "file" + _BS + '", ok"}',
 )
 

@@ -24,6 +24,17 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       process exit, so a pipe-holding survivor can never extend the reap; add a regression case
       with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
 
+- [ ] Decide how the Control row in
+      `docs/evidence/test-ablation-final-review-2026-09-29.md:148` is bound: its digest
+      `e2672276b4f4171391a6df202dc01e9e66ccc705d72e4ee095db7471e7a1c6f9` matches no reachable
+      revision of any `test-ablation*` file (every distinct blob revision of the fourteen such
+      paths across all refs, under LF/CRLF, BOM and no-final-newline variants: 0 hits), and the
+      row has read that way since `72bcf8e`. Observed during the record render pass (PR #101),
+      which rebound the app-startup and Go-probe rows in the same table and left this one as
+      recorded; pre-existing, not introduced by that pass. Do not edit the record before the
+      decision, in a separate maintenance change: rebind the row to the reviewed artifact's
+      committed bytes, or annotate it as the as-reviewed artifact rather than the committed bytes.
+
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
