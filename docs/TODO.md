@@ -232,15 +232,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
       kill path alone unless it reproduces on a quiet host.
 
-- [ ] Investigate the intermittent Control failure `reversed import and delivery updates
-      lock WorkItems in UUID order without deadlocking` in
-      `control/test/symmetry_control/integrations_test.exs:1161` (`assert
-      String.contains?(query, "\"work_items\"")` inside `assert_sync_waiting_on_work_item/3`,
-      with Postgrex connections disconnecting in the same log). Observed in run 43891279765
-      job 133383740181 on the 0008a PR (`839/840 passed, 21 skipped`), green on rerun of the
-      same job (that run then completed successfully). Revalidate whether the captured SQL can
-      be asserted before the sync query is issued; keep the assertion itself and leave the fix
-      to separate maintenance.
 - [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
       `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
       states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
