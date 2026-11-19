@@ -13,27 +13,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Model-routing evaluation records
 
-- [ ] Decide whether the shared hoisted dependency tree should be bound. The 0008d TypeScript gates
-      resolve their tools through a hoisted pnpm install one level above the run directories (the
-      run's `environment.json` records the route), whose bytes sit outside every sealed checkout and
-      outside the source subject. The receipts record that route and state that the integrity values
-      are the frozen lockfile's own, but the store keeps no provisioning log, no install output and
-      no digest of the resolved tree, so that claim cannot be re-verified and a file placed in that
-      tree is unbound for a whole run. The honest fix is a recorded provisioning step - log the
-      install and bind a digest of the tree the gates resolve - which is its own increment because
-      it changes what a receipt binds, not an edit to this letter's records.
-
-- [ ] Decide whether the manifest's tool-cache exclusion should be narrowed. The Source manifest
-      excludes `node_modules/.vite`, `node_modules/.vite-temp` and `node_modules/.vitest-cache` so
-      that vitest's run state cannot change the revision a gate just verified. Files inside those
-      directories are therefore unbound - the seal records no digest for them - so in principle a
-      worker could hide code there that a relative import reaches during a gate. No run has written
-      such a file and the boundary is stated in the runner docstring, the closure record, the series
-      receipt and the candidate policy. The honest narrowing is vitest run state outside the
-      checkout (`cacheDir`/`VITEST_CACHE_DIR` or a gate-level redirect, the way the Playwright html
-      report is already redirected), which changes a frozen gate's environment and therefore needs
-      its own increment with re-derived evidence, not an edit to this letter's records.
-
 - [ ] Decide whether the four 0008c receipts ever need re-production under the current evaluation
       tooling. They bind the produced revision, preserved as the annotated tag
       `0008c-produced-tooling` (commit `cab222b`): all four re-verify with that revision's

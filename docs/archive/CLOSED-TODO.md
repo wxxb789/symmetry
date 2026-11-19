@@ -599,6 +599,53 @@ The blocks below were moved on 2026-11-19.
       which is the second rendering pass the entry asked for: no record was edited, and the
       pre-existing raw host paths in the older 0008-series records stay with their own open entries.
 
+- [ ] Decide whether the shared hoisted dependency tree should be bound. The 0008d TypeScript gates
+      resolve their tools through a hoisted pnpm install one level above the run directories (the
+      run's `environment.json` records the route), whose bytes sit outside every sealed checkout and
+      outside the source subject. The receipts record that route and state that the integrity values
+      are the frozen lockfile's own, but the store keeps no provisioning log, no install output and
+      no digest of the resolved tree, so that claim cannot be re-verified and a file placed in that
+      tree is unbound for a whole run. The honest fix is a recorded provisioning step - log the
+      install and bind a digest of the tree the gates resolve - which is its own increment because
+      it changes what a receipt binds, not an edit to this letter's records.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the runner gained `bind-dependencies`
+      (`--run-dir`, `--tree`, `--log`, `--check`): it refuses a tree inside the run's sealed
+      checkout, computes a deterministic digest over every file and link of the resolved tree,
+      copies the install log into the run store (`provisioning/install.log`) and records both - tree
+      route, tree digest, entry count, log route, log digest and byte count - in `run.json`'s
+      `environment.provisioning` block, which every receipt derived from the run states and which
+      every `load_run` re-verifies against the stored log bytes; `--check` recomputes the tree
+      digest so a preserved tree still re-verifies. Regression tests cover determinism, a changed
+      tree, an in-checkout tree, a missing or empty log and a tampered record. The 0008d records
+      themselves were not edited; a future TypeScript run executed under this tooling carries the
+      bound provisioning step.
+
+- [ ] Decide whether the manifest's tool-cache exclusion should be narrowed. The Source manifest
+      excludes `node_modules/.vite`, `node_modules/.vite-temp` and `node_modules/.vitest-cache` so
+      that vitest's run state cannot change the revision a gate just verified. Files inside those
+      directories are therefore unbound - the seal records no digest for them - so in principle a
+      worker could hide code there that a relative import reaches during a gate. No run has written
+      such a file and the boundary is stated in the runner docstring, the closure record, the series
+      receipt and the candidate policy. The honest narrowing is vitest run state outside the
+      checkout (`cacheDir`/`VITEST_CACHE_DIR` or a gate-level redirect, the way the Playwright html
+      report is already redirected), which changes a frozen gate's environment and therefore needs
+      its own increment with re-derived evidence, not an edit to this letter's records.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** vitest run state is redirected outside
+      the sealed checkout instead of excluded from the manifest. `frontend/vite.config.ts` and
+      `frontend/vitest.config.ts` resolve `SYMMETRY_TOOL_CACHE_DIR` as Vite's `cacheDir` and
+      vitest's `fsModuleCachePath`, the runner exports that variable for every gate it executes and
+      records the run-relative redirect (`tool-state/<gate id>`) in the gate result and the receipt,
+      and `prepare` gives the run store an empty `node_modules` so Vite's config-loader temp files
+      (`.vite-temp`) land in the run store rather than inside the checkout or the shared dependency
+      tree. The `TOOL_CACHE_DIRECTORIES` exclusion was removed from the Source manifest, so run
+      state written into the checkout is now bound and fails the gate (fail-closed) instead of
+      staying unbound; the runner and manifest tests cover both directions. A local probe with an
+      installed vitest 5.0.5/vite 8.3.5 pair (the pinned 5.1.0/8.3.6 bytes resolve the same options)
+      observed all three state kinds land under the redirect when the variable is set and inside the
+      checkout when it is unset.
+
 - [ ] Decide whether the four 0008c receipts ever need re-production under the current evaluation
       tooling. They bind the produced revision, preserved as the annotated tag
       `0008c-produced-tooling` (commit `cab222b`): all four re-verify with that revision's

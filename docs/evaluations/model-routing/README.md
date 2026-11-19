@@ -78,6 +78,10 @@ python scripts/ci/model-routing-evaluation.py receipt --run-dir "$RUN" --usage "
 python scripts/ci/model-routing-evaluation.py accept --run-dir "$RUN"
 ```
 
+A TypeScript run also records its resolved dependency tree once, after the shared hoisted install
+exists and before the first gate runs: `bind-dependencies --run-dir "$RUN" --tree
+"$STORE/runs/node_modules" --log "$INSTALL_LOG"` (the carrier section describes what it binds).
+
 `USAGE` contains `{"repair_count":0,"wall_time":12.0,"phases":[...]}` with all six stages: `exploration`, `implementation`, `verification`, `review`, `repair`, `failed_attempt`.
 The coordinator records the actual repair-attempt count explicitly; a required row saying that no repair occurred does not count as a repair.
 It also records measured task elapsed seconds in `wall_time`, with the observed timing window in phase metadata; summing overlapping coordinator/worker session durations would inflate elapsed time.
@@ -157,9 +161,13 @@ One optional gate field carries the TypeScript-specific evidence:
 Host prerequisites for the TypeScript carrier (measured, not assumed): the shared hoisted install
 above, whose provisioning lockfile copy substitutes the unreachable `registry.npmjs.org` host with
 the configured package feed while every package is still verified against the frozen lockfile's
-own integrity value; that tree is not bound by any record - no provisioning log and no digest of it
-was stored, so the integrity statement is asserted rather than re-verifiable by an auditor, and the
-`docs/TODO.md` entry proposes a recorded provisioning step that binds it; a real PostgreSQL instance and a Phoenix dev server started from the run's
+own integrity value; the tree is bound per run: `bind-dependencies --run-dir "$RUN" --tree "$STORE/runs/node_modules"
+--log "$INSTALL_LOG"` copies the captured install log into the run store as `provisioning/install.log`,
+records its digest and a deterministic digest over every file and link of the resolved tree
+(`--check` recomputes that digest against a preserved tree), and every receipt derived from the run
+states both under `environment.provisioning`; the recorded routes go through the same host-path
+redaction as the measured surface, so the receipt correlates the tree without republishing the store
+root. The coordinator runs that step after provisioning and before the gates; a real PostgreSQL instance and a Phoenix dev server started from the run's
 own sealed checkout (ports 4040/4041) with `MIX_DEPS_PATH`/`MIX_BUILD_PATH` outside the checkout;
 Chromium through Playwright's own browser cache; and the pre-staged generated trees. Because the
 seal refuses generated content that appears after it, the task must list both generated trees in
@@ -173,6 +181,18 @@ outside the checkout while running `check`, so the repository's own command and 
 stay unchanged and the report set lands next to the run as `rendered-report/`. Playwright's
 per-test captures and attachments land under `SYMMETRY_PLAYWRIGHT_OUTPUT` (or the platform temp
 directory by default) and are copied into the run store as `rendered/` after the check.
+
+Tool run state is redirected, not excluded from the manifest: `frontend/vite.config.ts` and
+`frontend/vitest.config.ts` resolve `SYMMETRY_TOOL_CACHE_DIR` as Vite's `cacheDir` and vitest's
+`fsModuleCachePath`, `check` exports that variable for every gate as `<run>/tool-state/<gate id>`,
+and the coordinator exports it for the worker's own runs (for example as `<run>/tool-state/worker`).
+`prepare` gives the run store an empty `node_modules` directory, so Vite's config-loader temp files
+(`.vite-temp`, written next to the nearest existing `node_modules`) land in the run store rather
+than inside the checkout or the shared dependency tree; an empty directory changes no module
+resolution because Node keeps walking ancestors past it. A gate that still writes
+`node_modules/.vite*` run state into the checkout changes the sealed revision and fails closed,
+which is what replaced the old `node_modules/.vite`, `.vite-temp` and `.vitest-cache` manifest
+exclusions.
 
 ## Two-arm class evaluation (0008b)
 
