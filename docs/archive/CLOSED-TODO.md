@@ -838,6 +838,54 @@ from branch `chore/deadcode-revalidation`.
       `docs/evaluations/model-routing/README.md`, "Record rendering exception
       (2026-11-19)".
 
+## Deferred review findings (0007i, rebased onto `ca29a8e`)
+
+- [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
+      failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
+      pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in
+      6.9 s in the same run, and both projects passed in the 12:10 run on the pre-repair bundle. The
+      retained trace shows the injected `route.abort("internetdisconnected")` never fired (no
+      `/portal/api/workspace` request or failure after the route was installed), and the click's
+      `refresh()` refetched `["connections"]` but not `["workspace"]` because of the page's guard
+      `if (!workspace.isFetching) void workspace.refetch()` (`frontend/src/features/connections/connections.tsx:351-352`;
+      the same guard also sits in `onRefreshProject` at `:501`). `workspace.isFetching` is never read
+      during render, so React Query's automatic change tracking does not watch it and a render taken while
+      a read was in flight leaves the guard snapshot at `true` until something else re-renders the page —
+      a state-snapshot race, not a cutover change. Decide whether the guard should read the query's live
+      `fetchStatus` at click time (`queryClient.getQueryState(key)?.fetchStatus`) or whether a
+      user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
+      the injected-failure design.
+      Closed by branch `fix/flake-browser-refresh-guard` (2026-11-19): the decision is that a
+      user-initiated refresh supersedes an in-flight read, so the guards are removed rather than made
+      live. The header refresh now calls `query.refetch()` and `workspace.refetch()` unconditionally,
+      and `onRefreshProject` (the failed-read "Try again" retry in both error states, and the re-read
+      the three resource dialogs issue when their write is refused) issues `workspace.refetch()`
+      without an `isFetching` test; the successful post-write re-read is the resources section's own
+      `reconcile()` -> `queryClient.invalidateQueries({ queryKey: ["workspace"] })`, untouched here.
+      React Query's manual refetch is what makes the click's read happen: with data present it cancels
+      the read it supersedes and starts a new one, and it joins an in-flight initial read instead of
+      duplicating it (query-core `Query.fetch`'s `cancelRefetch` branch), so the case's injected abort
+      is now decided by the click rather than by a fetch state this page cannot see. The retained trace
+      does not discriminate between a stale snapshot and a genuinely in-flight read; the fix is
+      deterministic under both, because the click always issues its read. The live-`fetchStatus`
+      alternative was rejected: it keeps the silent no-op for a genuinely in-flight read and leaves the
+      click depending on a fetch started before the route was installed, which is the race the recorded
+      trace shows. Regression tests in `frontend/src/features/connections/connections.test.tsx`: "issues
+      a new workspace read when a refresh is clicked while a re-read is in flight" (the header Refresh)
+      and "re-reads the project when Try again is clicked while a re-read is in flight" (the stale
+      error's retry) each hold a workspace re-read in flight across a page re-render and assert the
+      click records its own `/portal/api/workspace` request. On the guarded bytes both fail for the
+      recorded reason — no request after the click (`Expected: 3 / Received: 2` for the header
+      refresh; Vitest's inline `expected 5 to be 6` for the retry, whose count includes the refused
+      read's retries); on the fixed bytes the file passes (53 passed, `--no-file-parallelism`) with
+      `tsc --noEmit` and `eslint . --max-warnings 0` exit 0. The browser case keeps its assertions
+      and injected-failure design unchanged. Scope: only this page gated a read whose fetch state it
+      never rendered; the other refresh guards (`projects`, `runtimes`, `work/detail`, `goals/detail`,
+      `chat`) decide on the `isFetching` of the query they pass to `RefreshButton fetching=`, so their
+      field is tracked and their handler snapshots stay fresh, and they are left unchanged. Host
+      note: this host runs ~14 parallel workers, so local browser verdicts are indicative only; CI
+      holds the verdict.
+
 ## Paginated reads must be bound to the cursor that served their pages
 
 - [ ] The work detail's execution history retained the older pages a reader had expanded without
