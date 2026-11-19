@@ -273,6 +273,9 @@ from branch `chore/deadcode-revalidation`.
       Two focused-run failures during the repeat sweep were host-load artifacts of the shared
       PostgreSQL (`connection not available and request was dropped from queue after 4000ms` at
       the suite's `ecto.create` step), not the case under test.
+      The win32 `windows_shell/0` branch is not executed by CI — the `control` job runs on
+      `ubuntu-latest` (`.github/workflows/ci.yml:96`, steps at 134-139) — so its evidence above is
+      local to this Windows host.
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
@@ -293,10 +296,18 @@ from branch `chore/deadcode-revalidation`.
       `include_executables_for: [:unix, :windows]` (`mix/tasks/release.ex`, assembly default) also
       generates `bin\symmetry_control.bat`, which launches through `erl.exe`, and the packaged release
       booted here through it — `bin\symmetry_control.bat eval IO.puts(:release_eval_ok)` exits 0 with
-      `release_eval_ok`, and `bin\symmetry_control.bat start` with `PHX_SERVER=true PORT=4610
-      RELEASE_DISTRIBUTION=none` served `GET http://[::1]:4610/healthz` → `200
+      `release_eval_ok`, and `bin\symmetry_control.bat start` served
+      `GET http://[::1]:4610/healthz` → `200
       {"status":"ok","checks":{"scheduler":"ok","database":"ok","provider_access":"ok","reaper":"ok"}}`
-      against a migrated scratch database (then stopped). Distribution is the residual host obstacle:
+      against a migrated scratch database (then stopped). The boot environment was the runbook's
+      production set plus the serving knobs
+      (`docs/runbooks/control-plane-and-daemon.md:73-87`): `DATABASE_URL`, `SECRET_KEY_BASE`,
+      `PHX_HOST=127.0.0.1`, `SYMMETRY_ENROLLMENT_TOKEN`, `SYMMETRY_OPERATOR_TOKEN`,
+      `SYMMETRY_CONTRACTS_DIR`, `PHX_SERVER=true`, `PORT=4610`, and `RELEASE_DISTRIBUTION=none`;
+      an earlier `bin\symmetry_control.bat eval` attempt without `PHX_HOST` aborted in
+      `config/runtime.exs` (`System.fetch_env!("PHX_HOST")`, line 150) and left the release tree's
+      `erl_crash.dump` (deleted), so the full environment above is what a future run must supply.
+      Distribution is the residual host obstacle:
       the release default is `RELEASE_DISTRIBUTION=sname`, and every node-distributed start on this host
       fails with `Protocol 'inet_tcp': register/listen error: etimedout` because epmd cannot bind
       (port 4369 is not bindable here: `:gen_tcp.listen(4369, …)` → `:eaddrinuse`, `epmd` →
