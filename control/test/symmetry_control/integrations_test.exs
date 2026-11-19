@@ -1603,7 +1603,10 @@ defmodule SymmetryControl.IntegrationsTest do
     sample = sync_wait_sample(backend, blocker)
 
     if sample.ungranted_lock? and sample.blocked_by_delivery? do
-      assert sample.blocker_holds_work_item_lock?
+      assert sample.waiter_on_delivery_xid? and sample.blocker_holds_work_item_lock?,
+             "import sync did not wait on the delivery transaction's WorkItem locks" <>
+               " (#{format_sync_wait_sample(sample)})"
+
       :ok
     else
       assert System.monotonic_time(:millisecond) < deadline,
@@ -1626,6 +1629,12 @@ defmodule SymmetryControl.IntegrationsTest do
                EXISTS (
                  SELECT 1 FROM pg_locks held
                  WHERE held.pid = $2 AND held.granted AND held.relation = 'work_items'::regclass
+               ),
+               EXISTS (
+                 SELECT 1 FROM pg_locks waiter
+                 WHERE waiter.pid = $1 AND NOT waiter.granted
+                   AND waiter.transactionid =
+                         (SELECT backend_xid FROM pg_stat_activity WHERE pid = $2)
                )
         FROM pg_stat_activity AS activity
         WHERE activity.pid = $1
@@ -1634,14 +1643,15 @@ defmodule SymmetryControl.IntegrationsTest do
       )
 
     case result.rows do
-      [[query, wait_event_type, wait_event, blocked_by_delivery?, ungranted?, holds?]] ->
+      [[query, wait_event_type, wait_event, blocked_by_delivery?, ungranted?, holds?, on_xid?]] ->
         %{
           query: query,
           wait_event_type: wait_event_type,
           wait_event: wait_event,
           blocked_by_delivery?: blocked_by_delivery?,
           ungranted_lock?: ungranted?,
-          blocker_holds_work_item_lock?: holds?
+          blocker_holds_work_item_lock?: holds?,
+          waiter_on_delivery_xid?: on_xid?
         }
 
       [] ->
@@ -1651,7 +1661,8 @@ defmodule SymmetryControl.IntegrationsTest do
           wait_event: "absent",
           blocked_by_delivery?: false,
           ungranted_lock?: false,
-          blocker_holds_work_item_lock?: false
+          blocker_holds_work_item_lock?: false,
+          waiter_on_delivery_xid?: false
         }
     end
   end
@@ -1667,6 +1678,7 @@ defmodule SymmetryControl.IntegrationsTest do
 
     "#{sample.wait_event_type}/#{sample.wait_event}" <>
       " ungranted=#{sample.ungranted_lock?}" <>
+      " waiter_on_delivery_xid=#{sample.waiter_on_delivery_xid?}" <>
       " blocker_holds_work_items=#{sample.blocker_holds_work_item_lock?}" <> query
   end
 
