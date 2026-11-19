@@ -403,6 +403,38 @@ not a claim that work remains.
       report's embedded results and confirmed the focused 35/1/0 and broad 79/15/0 rows with no flaky cases -
       evidence for the 0007b receipts' browser rows, not a defect.
 
+## Deferred review findings (0007i, rebased onto `ca29a8e`)
+
+- [ ] Investigate the intermittent Control failure
+      `control recovery selects pending actions after more than one page of terminal no-op Goals` in
+      `control/test/symmetry_control/goals_test.exs:4753`. It is recorded from the pre-rebase delivery
+      revision `7235708` (`.tmp/gates/control-test-final.log`, 2026-11-17 11:16,
+      `884/886 passed, 21 skipped`, exit 2) with `** (EXIT from #PID<...>)` /
+      `** (DBConnection.ConnectionError) could not checkout the connection owned by #PID<...>
+      ({:sql_sandbox_owner, ...}) ... request was dropped from queue after 111ms`, raised inside
+      `Ecto.Repo.Preloader`'s supervised `Task`; the same suite's earlier run (09:44) reported
+      `885/886 passed` with the `pwsh` failure alone, so the case is intermittently load-sensitive:
+      it admits 101 Goals and cancels each one before asserting
+      `Goals.recover_pending_goal_control_actions/1`, and the sandbox owner's connection is preempted
+      while the preload tasks queue. This is not the `integrations_test.exs:1161` flake recorded above
+      (different test and call site). Revalidate whether the preload can run without a second supervised
+      task or the sandbox queue can be given the case's real budget; keep the assertion and the 100-item
+      recovery page it checks.
+      Closed (2026-11-19, branch `fix/flake-control-recovery-page`, commit `3a87d58`): the Goal
+      projection read preloaded its five associations through `Ecto.Repo.Preloader`'s parallel
+      tasks, and under the SQL sandbox every task queued for the test process's single owned
+      connection, where DBConnection drops a checkout that waits past `2 * queue_target` (100ms)
+      when its poll runs - the recorded `dropped from queue after 111ms`. `Goals.ReadModel.load_data/2`
+      now preloads with `in_parallel: false`, so the read keeps every query on the caller's
+      connection and nothing queues; no queue or ownership timeout was changed, and the
+      regression test asserts the mechanism directly: `a Goal projection read keeps every query
+      on the calling process` (`control/test/symmetry_control/goals_test.exs`) was red on the
+      unfixed bytes (the caller plus five preloader pids) and is green with the fix. Evidence:
+      `mix test test/symmetry_control/goals_test.exs:4777` red -> green, `mix test
+      test/symmetry_control/goals_test.exs:4753` 2x green, `mix test
+      test/symmetry_control/goals_read_model_test.exs` 50 passed; the 100-item recovery-page
+      assertion is unchanged.
+
 ## Paginated reads must be bound to the cursor that served their pages
 
 - [ ] The work detail's execution history retained the older pages a reader had expanded without
