@@ -5,11 +5,11 @@
   "results": [
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
-        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
+        "path-sha256:63627bcbd8e2050fcada71c234bd5116d5be0265709dd034cd88fbd0fb1353a9",
         "accept",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\stale-source"
+        "<disposable-root>\\controls\\stale-source"
       ],
       "control": "stale-source",
       "exit_code": 1,
@@ -21,29 +21,29 @@
     },
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
-        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
+        "path-sha256:63627bcbd8e2050fcada71c234bd5116d5be0265709dd034cd88fbd0fb1353a9",
         "check",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\missing-gate",
+        "<disposable-root>\\controls\\missing-gate",
         "--gate",
         "protocol-tests"
       ],
       "control": "missing-gate",
       "exit_code": 1,
       "operation": "check",
-      "stderr": "check attempt attempt-0002 failed; evidence preserved under C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\missing-gate\\checks\\attempt-0002\r\n",
+      "stderr": "check attempt attempt-0002 failed; evidence preserved under <disposable-root>\\controls\\missing-gate\\checks\\attempt-0002\r\n",
       "stderr_sha256": "sha256:c12881ae2c75bd3f62c646bef2b7c8cf3e0f415c0fd65f15f4c2b3b96a478a34",
       "stdout": "{\r\n  \"attempt_id\": \"attempt-0002\",\r\n  \"attempt_sha256\": \"sha256:c1bf2f1ad743666f527ca7c81a7391c8e15002dab477aaac77904a8d22fbc24e\",\r\n  \"complete\": false,\r\n  \"passed\": false,\r\n  \"subject_hash\": \"sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81\"\r\n}\r\n",
       "stdout_sha256": "sha256:70d7e3042f5be8ea158b21ed17e7f33d534f1d418bb4e17ff792ec74a7972840"
     },
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
-        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
+        "path-sha256:63627bcbd8e2050fcada71c234bd5116d5be0265709dd034cd88fbd0fb1353a9",
         "accept",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\missing-gate"
+        "<disposable-root>\\controls\\missing-gate"
       ],
       "control": "missing-gate",
       "exit_code": 1,
@@ -55,11 +55,11 @@
     },
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
-        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
+        "path-sha256:63627bcbd8e2050fcada71c234bd5116d5be0265709dd034cd88fbd0fb1353a9",
         "seal",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\weakened-baseline-test"
+        "<disposable-root>\\controls\\weakened-baseline-test"
       ],
       "control": "weakened-baseline-test",
       "exit_code": 1,
@@ -71,13 +71,13 @@
     },
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
-        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
+        "path-sha256:63627bcbd8e2050fcada71c234bd5116d5be0265709dd034cd88fbd0fb1353a9",
         "accept",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\incomplete-receipt",
+        "<disposable-root>\\controls\\incomplete-receipt",
         "--receipt",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\incomplete-receipt\\incomplete.json"
+        "<disposable-root>\\controls\\incomplete-receipt\\incomplete.json"
       ],
       "control": "incomplete-receipt",
       "exit_code": 1,
@@ -89,13 +89,13 @@
     },
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
-        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
+        "path-sha256:63627bcbd8e2050fcada71c234bd5116d5be0265709dd034cd88fbd0fb1353a9",
         "accept",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\fabricated-billing",
+        "<disposable-root>\\controls\\fabricated-billing",
         "--receipt",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\fabricated-billing\\fabricated.json"
+        "<disposable-root>\\controls\\fabricated-billing\\fabricated.json"
       ],
       "control": "fabricated-billing",
       "exit_code": 1,
@@ -107,11 +107,11 @@
     },
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
-        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
+        "path-sha256:63627bcbd8e2050fcada71c234bd5116d5be0265709dd034cd88fbd0fb1353a9",
         "accept",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\weakened-frozen-contract"
+        "<disposable-root>\\controls\\weakened-frozen-contract"
       ],
       "control": "weakened-frozen-contract",
       "exit_code": 1,
@@ -123,13 +123,13 @@
     },
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
-        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
+        "path-sha256:63627bcbd8e2050fcada71c234bd5116d5be0265709dd034cd88fbd0fb1353a9",
         "receipt",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\omitted-worker-usage",
+        "<disposable-root>\\controls\\omitted-worker-usage",
         "--usage",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\omitted-worker-usage\\omitted-usage.json"
+        "<disposable-root>\\controls\\omitted-worker-usage\\omitted-usage.json"
       ],
       "control": "omitted-worker-usage",
       "exit_code": 1,
@@ -141,13 +141,13 @@
     },
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
-        "Q:\\repos\\wt-0008a\\symmetry\\scripts\\ci\\model-routing-evaluation.py",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
+        "path-sha256:63627bcbd8e2050fcada71c234bd5116d5be0265709dd034cd88fbd0fb1353a9",
         "receipt",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\duplicate-session-usage",
+        "<disposable-root>\\controls\\duplicate-session-usage",
         "--usage",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\controls\\duplicate-session-usage\\duplicate-usage.json"
+        "<disposable-root>\\controls\\duplicate-session-usage\\duplicate-usage.json"
       ],
       "control": "duplicate-session-usage",
       "exit_code": 1,

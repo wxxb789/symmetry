@@ -150,13 +150,13 @@
   "final_positive_operations": [
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
         "scripts/ci/model-routing-evaluation.py",
         "receipt",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\positive",
+        "<disposable-root>\\positive",
         "--usage",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\positive-final-usage.json"
+        "<disposable-root>\\positive-final-usage.json"
       ],
       "exit_code": 0,
       "operation": "receipt",
@@ -164,11 +164,11 @@
     },
     {
       "argv": [
-        "C:\\ProgramData\\Tools\\Python\\3.12.10\\x64\\python.exe",
+        "path-sha256:4d14464183f6b82129ff401f306f8785a6833baad7c6f362ed82e1247c162f64",
         "scripts/ci/model-routing-evaluation.py",
         "accept",
         "--run-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0008a-8mdb7ctb\\positive"
+        "<disposable-root>\\positive"
       ],
       "exit_code": 0,
       "operation": "accept",
