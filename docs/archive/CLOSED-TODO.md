@@ -774,6 +774,79 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `ubuntu-latest` (`.github/workflows/ci.yml:96`, steps at 134-139) — so its evidence above is
       local to this Windows host.
 
+- [ ] Revalidate the unreachable resource synchronization states. `project_resources` has a
+      `project_resources_sync_status_check` constraint admitting `syncing` and `stale`, and
+      `SymmetryControl.Workspaces.ReadModel` maps them to `syncing`/`attention` labels, but no
+      writer sets either value (`Integrations.persist_sync/4`,
+      `Integrations.record_resource_failure/3` and the connection/capability resets in
+      `Integrations.update_connection/2` and `Workspaces.update_resource/2` only write
+      `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
+      constraint and labels, and decide in a separate maintenance change whether the states
+      need a writer or the vocabulary needs a migration.
+      Closed (2026-11-19, `fix/connections-refusal-guidance`): the premise is stale on main —
+      docs-only change, no product code touched. The writers landed on main in `9d9a641` (#42)
+      after the 0007d observation: `Integrations.mark_resource_syncing/1`
+      (`control/lib/symmetry_control/integrations.ex:683`) commits `sync_status: "syncing"`
+      through `update_sync_marker/2` (`:701`, `:709`) before the provider call, and
+      `record_resource_failure/3` (`:1651`) persists
+      `sync_status: if(code == :not_found, do: "stale", else: "failed")` (`:1676`);
+      `ReadModel.synchronization_health/1`
+      (`control/lib/symmetry_control/workspaces/read_model.ex:575-584`) maps `stale` to
+      `attention` and `syncing` to `syncing`. Both states are pinned by tests from the same
+      commit: `control/test/symmetry_control/resource_sync_inflight_marker_test.exs:197,202`
+      assert the committed `syncing` marker, and
+      `control/test/symmetry_control/resource_sync_identity_loss_test.exs:76,131,134` assert a
+      `:not_found` provider answer persists `stale` and the read model reports `attention`.
+      Verification (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`):
+      `mix test test/symmetry_control/resource_sync_inflight_marker_test.exs test/symmetry_control/resource_sync_identity_loss_test.exs`
+      → `Result: 8 passed`, rc 0. The constraint and labels stay as recorded; with real writers
+      for both values, neither an added writer nor a vocabulary migration is needed.
+
+- [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
+      `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
+      the server answers that code, but a sync refused for an ungranted capability maps to
+      `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
+      Either the server should serve the more specific code or the client entry should be removed;
+      decide in a separate maintenance change with a test that pins the served code.
+      Closed (2026-11-19, `fix/connections-refusal-guidance`, PR #96): the owner chose the
+      serve-the-specific-code route. `Protocol` maps `capability_not_granted` to HTTP 403 with
+      message `connection capability is not granted` (`protocol.ex:21-22`) — the same status
+      class as `forbidden`, because the credential is valid but the bound connection does not
+      grant the capability; `failure(:capability_not_granted)` now returns the specific code
+      instead of `:forbidden` (`integrations.ex:1704-1705`). The live refusals are the
+      read/sync path — `require_capability/2` in `sync_marked_resource/1`
+      (`integrations.ex:726`) — and the bind/update path —
+      `Workspaces.ensure_connection_capability/2` (`workspaces.ex:1000-1014`), called by
+      `prepare_resource_attrs/2` for both create and update (`workspaces.ex:1049`). The
+      provider-action classification entries are defensive, not live:
+      `record_provider_action_failure/3` (`integrations.ex:1201`) and the `:definite` list
+      in `mutation_failure_outcome/1` (`integrations.ex:626-636`) would store a pre-dispatch
+      capability refusal as `failed` with the `capability_not_granted` code, like
+      `:forbidden`, and `stored_failure/1` (`provider_access.ex:2367`) decodes that stored
+      code — but no live flow stores it today, because `authorized_connection/3`
+      (`provider_access.ex:1515-1538`) widens every execute context's capabilities before
+      dispatch. Pins:
+      `portal_resources_test.exs:264` (bind and sync answer 403 `capability_not_granted`),
+      `portal_resources_test.exs:306` (a PATCH moving a work-tracking resource onto a
+      repositories-only connection answers 403 `capability_not_granted`),
+      `resource_sync_identity_loss_test.exs:113`, `integrations_test.exs:947`,
+      `integrations_test.exs:976` (a pre-dispatch capability refusal classifies `:definite`),
+      and the frontend test `connections.test.tsx` "renders the served capability refusal with
+      the capability-specific next step" (a 403 `capability_not_granted` sync refusal renders
+      "Grant the connection the capability this resource kind needs, then try again.").
+      Red-first: the updated pins failed on the pre-change code with the served `forbidden`
+      (`2/5 passed`, 3 failed); after the change the affected control files report `Result:
+      123 passed`, rc 0 (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`: `mix test
+      test/symmetry_control/resource_sync_identity_loss_test.exs
+      test/symmetry_control_web/controllers/portal_resources_test.exs
+      test/symmetry_control/integrations_test.exs
+      test/symmetry_control_web/controllers/provider_action_controller_test.exs`), with
+      `mix format --check-formatted` and `mix compile --warnings-as-errors` rc 0, frontend
+      typecheck/lint rc 0 and `vitest run` 413 tests passed, and `pnpm contracts:check` green
+      (no schema or fixture enumerates portal error codes). Neither the Go daemon nor the
+      browser specs branch on the literal `forbidden` for these paths (the daemon acts on the
+      HTTP status and forwards the envelope code), so no other client changed.
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover

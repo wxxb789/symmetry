@@ -2364,6 +2364,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       "not_connected" -> :not_connected
       "provider_unauthorized" -> :provider_unauthorized
       "provider_failure" -> :provider_failure
+      "capability_not_granted" -> :capability_not_granted
       "provider_access_unavailable" -> :provider_access_unavailable
       _code -> :provider_failure
     end
