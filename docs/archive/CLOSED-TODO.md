@@ -50,28 +50,6 @@ from branch `chore/deadcode-revalidation`.
 
 ## Dead-code candidates
 
-- [ ] Investigate the intermittent Control failure `reversed import and delivery updates
-      lock WorkItems in UUID order without deadlocking` in
-      `control/test/symmetry_control/integrations_test.exs:1161` (`assert
-      String.contains?(query, "\"work_items\"")` inside `assert_sync_waiting_on_work_item/3`,
-      with Postgrex connections disconnecting in the same log). Observed in run 43891279765
-      job 133383740181 on the 0008a PR (`839/840 passed, 21 skipped`), green on rerun of the
-      same job (that run then completed successfully). Revalidate whether the captured SQL can
-      be asserted before the sync query is issued; keep the assertion itself and leave the fix
-      to separate maintenance.
-      Closed (2026-11-19, branch `fix/flake-control-reversed-import`, commit `8a8b5e3`): the
-      captured SQL can be sampled before the sync query is issued - the attempt-1 log of run
-      43891279765 shows the import blocked on its pre-sync repository lookup (`SELECT
-      p0."id" FROM "project_resources" ... LIMIT 1`) - so the poll now accepts only a sample
-      whose blocked query names the WorkItem table the ordered prelock waits on, keeps
-      `assert String.contains?(query, "\"work_items\"")` unchanged on that sample, and names
-      the last sample plus wait event when the deadline passes. Evidence: `mix test
-      test/symmetry_control/integrations_test.exs --seed 310068` 2x green (29 passed) and
-      `mix test test/symmetry_control/integrations_test.exs:1161 --seed 310068` 8x green with
-      the fix; the same seed on the unfixed bytes did not reproduce locally (the recorded
-      mechanism needs the loaded-runner timing the CI attempt-1 log shows), so that attempt
-      log stays the observation.
-
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
       in `daemon/internal/platform` (`process_windows_test.go:1004`, "owned child <pid>
       survived Close()"). Observed in run 43720680428 job 132831780245 on a docs-only diff,
