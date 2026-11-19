@@ -68,9 +68,11 @@ jobs:
   # modifies. It is deliberately independent of the heavy matrix - the change it
   # most needs to see is a records-only (documentation-only) pull request - so it
   # runs whenever the classifier above says a record or the tool itself changed.
-  # `fetch-depth: 0` gives the job the comparison base the gate needs: the
-  # pull-request base commit, or the pushed `before` commit; an all-zero base (a
-  # new branch, a tag, a manual run) falls back inside the script.
+  # `fetch-depth: 0` gives the job the comparison base the gate needs. On a
+  # pull request that is the checked-out event head's first parent (`HEAD^1`,
+  # exactly the range the classifier above used); on a push it is the pushed
+  # `before` commit; an all-zero base (a new branch, a tag, a manual run) falls
+  # back inside the script.
   record-cleanliness:
     needs: changes
     if: needs.changes.outputs.run-records == 'true'
@@ -82,7 +84,7 @@ jobs:
           persist-credentials: false
       - name: Refuse host paths in records this change adds or modifies
         env:
-          RECORD_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          RECORD_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
         run: python3 scripts/ci/check-record-cleanliness.py --base "$RECORD_BASE" --head "$GITHUB_SHA"
 
   contracts:

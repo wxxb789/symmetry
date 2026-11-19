@@ -138,9 +138,10 @@ SOURCE_CHANGED_SUFFIX = "source changed while executing this gate"
 TOOL_CACHE_ENV = "SYMMETRY_TOOL_CACHE_DIR"
 # A gate's tool state is fresh per attempt (nothing a previous attempt cached can be
 # executed) and the cache channels that would execute previously transformed code are
-# switched off through this variable, which `frontend/vite.config.ts` and
-# `frontend/vitest.config.ts` read (`cache: false`, `fsModuleCache: false`). Worker
-# runs keep the redirect alone: the coordinator seals what the worker leaves behind.
+# switched off through this variable, which `frontend/vitest.config.ts` reads as the
+# test-level `cache: false` and `fsModuleCache: false` (a production build has no such
+# channel, so `frontend/vite.config.ts` reads only the redirect). Worker runs keep the
+# redirect alone: the coordinator seals what the worker leaves behind.
 TOOL_CACHE_DISABLE_ENV = "SYMMETRY_DISABLE_TOOL_CACHES"
 TOOL_CACHE_DISABLED = "1"
 TOOL_STATE_DIRNAME = "tool-state"
@@ -704,7 +705,7 @@ def refuse_escaping_symlink(checkout: pathlib.Path, path: str, raw_target: bytes
     """
     try:
         resolved = os.path.realpath(pathlib.Path(checkout, *path.split("/")))
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
         raise Refused(f"cannot resolve the bound symlink {path}: {error}")
     try:
         relative = os.path.relpath(resolved, os.path.realpath(checkout))
@@ -1346,11 +1347,17 @@ def verify_dependency_tree(run_dir: pathlib.Path, provisioning: dict[str, Any]) 
 
 
 def requires_dependency_provisioning(task: dict[str, Any]) -> bool:
-    """True when the frozen task executes Node tooling that resolves a dependency tree."""
+    """True when the frozen task executes Node tooling that resolves a dependency tree.
+
+    The gate's argv is part of the claim: a task that runs a vitest entry point
+    resolves the same tree whatever its language field says, so the binding cannot be
+    skipped by declaring a different language.
+    """
     # `.get` keeps the predicate total for a caller that holds a raw task document (the
     # regression suite calls it with one); validated tasks carry every key.
     return task.get("language") == "typescript" or any(
-        gate.get("vitest_tests") is not None for gate in task.get("gates", ())
+        gate.get("vitest_tests") is not None or is_vitest_entry(gate.get("argv") or [])
+        for gate in task.get("gates", ())
     )
 
 
@@ -3049,7 +3056,9 @@ def _link_payload(link: pathlib.Path, root: pathlib.Path, seen: frozenset) -> by
         raise Refused(f"cannot read dependency tree link {link}: {error}")
     try:
         resolved = link.resolve(strict=True)
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
+        # `RuntimeError` is a link (or junction) chain that loops: the target never
+        # resolves, so the tree cannot be bound and the run is refused, not crashed.
         raise Refused(f"the dependency tree link {link} does not resolve: {error}")
     if _within(root, resolved):
         return b"in-tree\0" + target_text
@@ -3240,7 +3249,8 @@ def _dependency_tree(value: str) -> pathlib.Path:
     tree = pathlib.Path(value)
     try:
         resolved = tree.resolve(strict=True)
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
+        # A tree whose own path is a link loop never resolves; refuse it as unreadable.
         raise Refused(f"the dependency tree is not a readable directory: {error}")
     if not resolved.is_dir():
         raise Refused("--tree must name a directory")

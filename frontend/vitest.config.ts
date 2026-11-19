@@ -16,13 +16,15 @@ const disableToolCaches = process.env["SYMMETRY_DISABLE_TOOL_CACHES"] === "1";
 export default defineConfig({
   plugins: [react()],
   ...(toolCacheDir ? { cacheDir: path.join(toolCacheDir, "vite") } : {}),
-  ...(disableToolCaches ? { cache: false } : {}),
   test: {
     environment: "jsdom",
     environmentOptions: { jsdom: { pretendToBeVisual: true } },
     setupFiles: ["./src/test-setup.ts"],
     restoreMocks: true,
     clearMocks: true,
+    // `cache` is a test-level option: at the config root it is an unknown Vite key
+    // that leaves vitest's results cache on.
+    ...(disableToolCaches ? { cache: false } : {}),
     ...(toolCacheDir ? { fsModuleCachePath: path.join(toolCacheDir, "vitest-fs") } : {}),
     ...(disableToolCaches ? { fsModuleCache: false } : {}),
   },

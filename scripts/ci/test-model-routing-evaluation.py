@@ -2048,9 +2048,14 @@ class EvaluationTests(unittest.TestCase):
         printed = (gate_dir / "stdout.bin").read_text(encoding="utf-8").splitlines()
         # The state is per attempt, so nothing an earlier attempt cached can be read,
         # and the cache channels that execute earlier transformed code are disabled.
-        self.assertEqual(printed[0].strip(), str(run / "tool-state" / checked["attempt_id"] / "plain"))
+        # `check` resolves the run directory before exporting the redirect, so compare
+        # resolved paths: a host whose temp root is itself a link would differ otherwise.
+        self.assertEqual(
+            printed[0].strip(),
+            str((run / "tool-state" / checked["attempt_id"] / "plain").resolve()),
+        )
         self.assertEqual(printed[1].strip(), "1")
-        self.assertFalse(pathlib.Path(printed[0].strip()).is_relative_to(self.checkout(run)))
+        self.assertFalse(pathlib.Path(printed[0].strip()).is_relative_to(self.checkout(run).resolve()))
         result = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(result["tool_state_dir"], f"tool-state/{checked['attempt_id']}/plain")
         self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
@@ -2546,6 +2551,51 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(runner.dependency_tree_digest(second), (linked_digest, 5))
         self.assertEqual(runner.dependency_tree_digest(second), (linked_digest, 5))
 
+    def test_dependency_tree_digest_refuses_loops_and_unresolvable_links(self) -> None:
+        runner = load_runner_module()
+        tree = self.root / "tree-refusals"
+        self.write(tree / "package" / "index.js", "module.exports = 1\n")
+        try:
+            os.symlink(tree / "missing-target", tree / "dangling")
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"symlink creation is unavailable: {error}")
+        with self.assertRaises(runner.Refused) as dangling:
+            runner.dependency_tree_digest(tree)
+        self.assertIn("does not resolve", str(dangling.exception))
+        os.unlink(tree / "dangling")
+        # Two links that target each other never resolve: on Windows `Path.resolve` raises
+        # its own symlink-loop error, elsewhere the walk sees the pair. Either way the run
+        # gets a refusal, never an unhandled exception.
+        os.symlink(tree / "second", tree / "first")
+        os.symlink(tree / "first", tree / "second")
+        with self.assertRaises(runner.Refused) as loop:
+            runner.dependency_tree_digest(tree)
+        self.assertIn("does not resolve", str(loop.exception))
+        os.unlink(tree / "first")
+        os.unlink(tree / "second")
+        # Two out-of-tree targets that link to each other are a cycle the walk detects
+        # after the resolves succeed (`seen`), so it refuses as a cycle instead of
+        # recursing. A link that points back into its own walk root stays legitimate:
+        # the walked entries bind it.
+        first_shared = self.root / "shared-one"
+        second_shared = self.root / "shared-two"
+        self.write(first_shared / "index.js", "module.exports = 1\n")
+        self.write(second_shared / "index.js", "module.exports = 2\n")
+        os.symlink(second_shared, first_shared / "to-second")
+        os.symlink(first_shared, second_shared / "to-first")
+        os.symlink(first_shared, tree / "workspace-link")
+        with self.assertRaises(runner.Refused) as cycle:
+            runner.dependency_tree_digest(tree)
+        self.assertIn("cycle", str(cycle.exception))
+        os.unlink(second_shared / "to-first")
+        os.symlink(first_shared, first_shared / "self")
+        runner.dependency_tree_digest(tree)
+        # A tree whose own path is a loop is refused as unreadable, not crashed.
+        os.symlink(tree / "self-loop", tree / "self-loop")
+        with self.assertRaises(runner.Refused) as root_loop:
+            runner._dependency_tree(str(tree / "self-loop"))
+        self.assertIn("not a readable directory", str(root_loop.exception))
+
     def test_bind_dependencies_records_the_provisioning_step(self) -> None:
         run = self.run_dir()
         self.assert_ok(self.prepare(run=run))
@@ -2652,6 +2702,24 @@ class EvaluationTests(unittest.TestCase):
         self.assert_refused(self.receipt(self.usage_rows(), run=run), "before check or receipt")
         self.bind_tree(run)
         self.assert_ok(self.check(run=run))
+
+    def test_the_provisioning_predicate_follows_the_gate_not_only_the_language(self) -> None:
+        # Both gate-level arms are claims on their own: a task whose gate declares
+        # vitest tests, or whose argv runs a vitest entry point, resolves the dependency
+        # tree whatever its language field says.
+        runner = load_runner_module()
+        cases = (
+            ({"language": "typescript", "gates": [{"id": "gate", "argv": ["go", "test", "./..."]}]}, True),
+            ({"language": "go", "gates": [
+                {"id": "gate", "argv": ["node", "tools/run.mjs", "run"], "vitest_tests": ["a"]}]}, True),
+            ({"language": "go", "gates": [
+                {"id": "gate", "argv": ["node", ".bin/vitest.mjs", "run"]}]}, True),
+            ({"language": "go", "gates": [{"id": "gate", "argv": ["go", "test", "./..."]}]}, False),
+            ({"language": "go"}, False),
+        )
+        for task, expected in cases:
+            with self.subTest(task=task):
+                self.assertEqual(runner.requires_dependency_provisioning(task), expected)
 
     def test_check_refuses_a_dependency_tree_that_changed_during_the_attempt(self) -> None:
         run = self.root / "run-tree-drift"
