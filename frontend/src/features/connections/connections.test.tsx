@@ -102,6 +102,7 @@ interface Harness {
   setConnections: (value: Connection[]) => void;
   setProjects: (value: ProjectFixture[]) => void;
   failReads: (response: () => Response) => void;
+  failWorkspaceReads: (response: () => Response) => void;
   gateReads: (gate: Promise<void> | null) => void;
   gateWorkspaceReads: (gate: Promise<void> | null) => void;
 }
@@ -121,6 +122,7 @@ function renderConnections(
   let projects = options.projects ?? [];
   const registeredRuntimes = options.registeredRuntimes ?? [];
   let readFailure: (() => Response) | null = null;
+  let workspaceFailure: (() => Response) | null = null;
   let readGate: Promise<void> | null = options.deferReads ?? null;
   let workspaceGate: Promise<void> | null = null;
   const requests: Harness["requests"] = [];
@@ -139,6 +141,7 @@ function renderConnections(
     }
     if (method === "GET" && url.pathname === "/portal/api/workspace") {
       if (workspaceGate) await workspaceGate;
+      if (workspaceFailure) return workspaceFailure();
       // The server serves the project directory plus the selected project's
       // resources only, so a switch cannot render the previous project's rows.
       const selected = url.searchParams.get("project_id") ?? projectId;
@@ -162,6 +165,7 @@ function renderConnections(
     setConnections: (value: Connection[]) => { current = value; },
     setProjects: (value: ProjectFixture[]) => { projects = value; },
     failReads: (response: () => Response) => { readFailure = response; },
+    failWorkspaceReads: (response: () => Response) => { workspaceFailure = response; },
     gateReads: (gate: Promise<void> | null) => { readGate = gate; },
     gateWorkspaceReads: (gate: Promise<void> | null) => { workspaceGate = gate; },
   };
@@ -889,6 +893,35 @@ describe("connection management", () => {
     release();
     await waitFor(() => expect(harness.application.queryClient.isFetching({ queryKey: ["workspace"] })).toBe(0));
     expect(screen.getByText("Project not found")).toBeVisible();
+  });
+
+  it("re-reads the project when Try again is clicked while a re-read is in flight", async () => {
+    const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    const user = userEvent.setup();
+    expect(await screen.findByText("Project not found")).toBeVisible();
+
+    // A failed re-read leaves the stale error and its retry: that retry is the
+    // second control that gated on the render-time `isFetching` snapshot.
+    harness.failWorkspaceReads(() => refusal(503, "provider_failure", "workspace read failed"));
+    act(() => { void harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
+    expect(await screen.findByText("Refresh failed — showing last loaded data", undefined, { timeout: 5_000 })).toBeVisible();
+
+    // A further re-read is held in flight while the page re-renders (a settled
+    // connections re-read); the stale error stays on screen and the click must
+    // still issue the operator's own read.
+    const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+    harness.gateWorkspaceReads(gate);
+    const reads = () => harness.requests.filter((request) => request.path.startsWith("/portal/api/workspace")).length;
+    const settled = reads();
+    act(() => { void harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
+    await waitFor(() => expect(reads()).toBe(settled + 1));
+    harness.setConnections([connection({ name: "GitHub delivery" })]);
+    await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["connections"] }); });
+
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(reads()).toBe(settled + 2));
+    release();
+    await waitFor(() => expect(harness.application.queryClient.isFetching({ queryKey: ["workspace"] })).toBe(0), { timeout: 5_000 });
   });
 
   it("keeps the server's repositories-for-changes coupling observable in the editor", async () => {

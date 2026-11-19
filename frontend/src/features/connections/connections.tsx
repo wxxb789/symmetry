@@ -352,7 +352,7 @@ export function ConnectionsPage() {
   // request it supersedes. Do not gate a refresh on `isFetching`: that field is
   // not read during render, so a handler can hold a stale in-flight snapshot
   // and skip a read the operator asked for (the failed workspace re-read that
-  // docs/TODO.md records).
+  // docs/archive/CLOSED-TODO.md records).
   const refresh = () => {
     void query.refetch();
     void workspace.refetch();
