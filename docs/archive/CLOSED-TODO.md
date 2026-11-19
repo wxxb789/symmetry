@@ -160,8 +160,8 @@ from branch `chore/deadcode-revalidation`.
       option, kept loud rather than skipped: the four cases are tagged `:portal_assets`, and
       `SymmetryControlWeb.PortalBundle`, called from `ConnCase` setup for every web test, fails a
       tagged case before it touches the bundle. The failure states the prerequisite, the staging
-      command (`pnpm --filter @symmetry/frontend build`), CI's equivalent staging (the `control` job
-      downloads the `contracts` job's `portal-assets` artifact into
+      command (`mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build`), CI's equivalent
+      staging (the `control` job downloads the `contracts` job's `portal-assets` artifact into
       `control/priv/static/portal/` before `mix test`) and the explicit exclusion
       (`mix test --exclude portal_assets`) instead of the raw `File.Error`/`File.RenameError` on the
       staged path; the guard also rejects an entry document that is empty, references no built
@@ -176,10 +176,11 @@ from branch `chore/deadcode-revalidation`.
       "references assets that are not staged", `--exclude portal_assets` reported "9 passed,
       4 excluded", and with the staged build all thirteen passed. The staged path now has one
       definition, `SymmetryControlWeb.PortalAssets.index_path/0`, read by both
-      `PortalController.index/2` and the tests. Limit recorded in `docs/runbooks/portal.md` and the
-      Elixir row of `docs/design/quality.md`: a complete but source-stale bundle is not detectable
-      from the gitignored staging alone, so freshness stays CI's guarantee (the `portal-assets`
-      artifact is built from the same revision).
+      `PortalController.index/2` and the tests. The prerequisite is recorded in the Elixir row of
+      `docs/design/quality.md` (which links `docs/runbooks/portal.md`) and in that runbook's local
+      gate list; the limit that a complete but source-stale bundle is not detectable from the
+      gitignored staging alone is stated only in the runbook, so freshness stays CI's guarantee
+      (the `portal-assets` artifact is built from the same revision).
 
 - [ ] Revalidate and remove the unused `JsonDocument` alias in
       `control/lib/symmetry_control/goals/schemas.ex:1431`

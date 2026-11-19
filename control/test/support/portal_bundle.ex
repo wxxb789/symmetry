@@ -5,7 +5,8 @@ defmodule SymmetryControlWeb.PortalBundle do
   Four `:portal_assets` cases in `PortalControllerTest` assert against the real
   frontend build in `priv/static/portal/`: the SPA entry document and the hashed
   assets it references. That directory is gitignored build output, so a fresh
-  checkout has it only after `pnpm --filter @symmetry/frontend build`
+  checkout has it only after the pinned
+  `mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build`
   (`frontend/scripts/stage-assets.mjs`), and CI stages the same directory in the
   `control` job from the `contracts` job's `portal-assets` artifact before
   `mix test` (`.github/workflows/ci.yml`).
@@ -20,7 +21,7 @@ defmodule SymmetryControlWeb.PortalBundle do
 
   alias SymmetryControlWeb.PortalAssets
 
-  @build_command "pnpm --filter @symmetry/frontend build"
+  @build_command "mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build"
   @asset_ref ~r/(?:src|href)="(\/portal\/assets\/[^"?]+\.(?:js|css))"/
 
   @doc """
@@ -48,7 +49,10 @@ defmodule SymmetryControlWeb.PortalBundle do
 
     case File.read(index_path) do
       {:error, :enoent} ->
-        fail_staging!(index_path, "the staged entry document is missing")
+        fail_staging!(
+          index_path,
+          "the staged entry document is missing" <> leftover_rename(index_path)
+        )
 
       {:error, reason} ->
         fail_staging!(index_path, "the staged entry document is unreadable (#{inspect(reason)})")
@@ -72,11 +76,14 @@ defmodule SymmetryControlWeb.PortalBundle do
       not Enum.any?(assets, &String.ends_with?(&1, ".js")) ->
         fail_staging!(
           index_path,
-          "the staged entry document references no built JavaScript asset"
+          "no `/portal/assets/*.js` reference found in the entry document"
         )
 
       not Enum.any?(assets, &String.ends_with?(&1, ".css")) ->
-        fail_staging!(index_path, "the staged entry document references no built stylesheet")
+        fail_staging!(
+          index_path,
+          "no `/portal/assets/*.css` reference found in the entry document"
+        )
 
       unstaged != [] ->
         fail_staging!(
@@ -87,6 +94,20 @@ defmodule SymmetryControlWeb.PortalBundle do
 
       true ->
         :ok
+    end
+  end
+
+  # `PortalControllerTest`'s 503 case renames the entry document to
+  # `index.html.unavailable-*` and restores it in `after`; a killed run can leave
+  # the rename behind, and then the bundle looks absent rather than renamed.
+  defp leftover_rename(index_path) do
+    case Path.wildcard(index_path <> ".unavailable-*") do
+      [] ->
+        ""
+
+      leftovers ->
+        "; a leftover rename from the 503 case exists at " <>
+          Enum.join(leftovers, ", ") <> " (restore it, or delete it and restage)"
     end
   end
 
