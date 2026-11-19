@@ -573,6 +573,94 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `browser/tests/portal-work-views.spec.mjs` per `browser/README.md`; no assertion of this
       item's remains to keep.
 
+- [ ] Investigate the environment-limited Windows command test. `CommandTest` "provider
+      token commands can keep stderr diagnostics out of stdout" fails with
+      `{:error, {:command_unavailable, "pwsh"}}` on hosts without a working `pwsh`
+      (observed while implementing goal 0007d: the full control suite reported 828/829
+      passed, 21 skipped, 1 failed on a clean dedicated test database; the current tree
+      (control identical to `bbc9b6f`) reports 844/845 passed with the same single failure).
+      `System.find_executable("pwsh")` returns `nil` here while `powershell.exe` resolves,
+      and putting the `WindowsApps` store alias on PATH makes two cases in that file fail
+      instead of one. `Command.run/3` and the test itself are untouched by 0007d.
+      Revalidate the Windows shell resolution; keep the assertion.
+      Closed (2026-11-19, `fix/windows-command-test`): a test-environment assumption, not a
+      product defect. `Command.run/3` is a generic `System.cmd/3` wrapper and no product code
+      invokes `pwsh`/`powershell` (Control's only spawn site is `Command.run/3`; the daemon's
+      `exec.Command` sites spawn configured harness CLIs, never a shell by that name). On this
+      host PowerShell 7.7.0 exists but only as the Microsoft Store app-execution alias
+      (`pwsh -NoProfile -Command "Write-Output ok"` exits 0 from cmd/bash; the running
+      process is `C:\Program Files\WindowsApps\Microsoft.PowerShell_7.7.0.0_x64__8wekyb3d8bbwe\pwsh.exe`),
+      which Erlang cannot resolve: it is a 0-byte reparse point (`dir` shows 0 bytes;
+      `fsutil reparsepoint query` reports tag `0x8000001b`, `IO_REPARSE_TAG_APPEXECLINK`), so
+      `File.exists?/1` is false, `File.stat/1` reports `{:error, :eio}`,
+      `System.find_executable("pwsh")` is nil and `System.cmd/3` on the alias path raises
+      `:enoent`; `System.find_executable("powershell.exe")` resolves and runs the same scripts
+      with the same stdout/stderr split.
+      `shell_command/2` now resolves `windows_shell/0` at run time — a resolvable `pwsh`, else
+      `powershell.exe`, else a raise naming the prerequisite (ExUnit has no runtime skip, and a
+      compile-time environment skip can freeze in cached BEAM) — with all three assertions
+      unchanged. Evidence (`MIX_TEST_PARTITION=24`): before,
+      `mix test test/symmetry_control/integrations/command_test.exs` → `2/3 passed`, the
+      provider-token case failing with `{:error, {:command_unavailable, "pwsh"}}`, exit 2;
+      after, `3 passed`, exit 0 (first run and repeats), with
+      `mix format --check-formatted <that file>` clean. The recorded "two cases fail instead of
+      one with the WindowsApps alias on PATH" did not reproduce in the current host state (the
+      alias is already on PATH and the focused file failed only its provider-token case; 20/20
+      probes of the timeout case's 10 ms `Task.yield/2` observed no spawn outcome, so it still
+      saw `command_timeout`), and both failure paths are unreachable now that a shell resolves.
+      Two focused-run failures during the repeat sweep were host-load artifacts of the shared
+      PostgreSQL (`connection not available and request was dropped from queue after 4000ms` at
+      the suite's `ecto.create` step), not the case under test.
+      The win32 `windows_shell/0` branch is not executed by CI — the `control` job runs on
+      `ubuntu-latest` (`.github/workflows/ci.yml:96`, steps at 134-139) — so its evidence above is
+      local to this Windows host.
+
+## Deferred review findings (0007i, rebased onto `ca29a8e`)
+
+- [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover
+      them: the packaged release binary cannot boot on this Windows host because the generated
+      `erts-*/bin/erl` shim calls `erlexec` without the Windows `.exe` name (the browser gate therefore
+      runs the production configuration through `mix phx.server`, the same release-style instance the
+      0007h receipt records), and the browser suite's expiry/mobile projects need the release plus a
+      fixture database that only the two release instances provide.
+      Revalidated and closed (2026-11-19, `fix/windows-command-test`). First limit: the POSIX launcher
+      chain is confirmed broken on Windows — `mix release` (elixir-1.20.4) copies the Windows ERTS bin
+      (`erl.exe` and `erlexec.dll`, no `erlexec` executable) and unconditionally writes
+      `erts-<vsn>/bin/erl` as a POSIX shim ending `exec "$BINDIR/erlexec"`
+      (`Mix.Release.copy_erts/1`); the release assembled here with
+      `MIX_ENV=prod mix release --overwrite` fails through that chain at the shim's line 12:
+      `<…>/erts-17.0.6/bin/erlexec: No such file or directory`, exit 127 (`bash ./bin/symmetry_control
+      eval …`). The release is not un-bootable on Windows, however: the default
+      `include_executables_for: [:unix, :windows]` (`mix/tasks/release.ex`, assembly default) also
+      generates `bin\symmetry_control.bat`, which launches through `erl.exe`, and the packaged release
+      booted here through it — `bin\symmetry_control.bat eval IO.puts(:release_eval_ok)` exits 0 with
+      `release_eval_ok`, and `bin\symmetry_control.bat start` served
+      `GET http://[::1]:4610/healthz` → `200
+      {"status":"ok","checks":{"scheduler":"ok","database":"ok","provider_access":"ok","reaper":"ok"}}`
+      against a migrated scratch database (then stopped). The boot environment was the runbook's
+      production set plus the serving knobs
+      (`docs/runbooks/control-plane-and-daemon.md:73-87`): `DATABASE_URL`, `SECRET_KEY_BASE`,
+      `PHX_HOST=127.0.0.1`, `SYMMETRY_ENROLLMENT_TOKEN`, `SYMMETRY_OPERATOR_TOKEN`,
+      `SYMMETRY_CONTRACTS_DIR`, `PHX_SERVER=true`, `PORT=4610`, and `RELEASE_DISTRIBUTION=none`;
+      an earlier `bin\symmetry_control.bat eval` attempt without `PHX_HOST` aborted in
+      `config/runtime.exs` (`System.fetch_env!("PHX_HOST")`, line 150) and left the release tree's
+      `erl_crash.dump` (deleted), so the full environment above is what a future run must supply.
+      Distribution is the residual host obstacle:
+      the release default is `RELEASE_DISTRIBUTION=sname`, and every node-distributed start on this host
+      fails with `Protocol 'inet_tcp': register/listen error: etimedout` because epmd cannot bind
+      (port 4369 is not bindable here: `:gen_tcp.listen(4369, …)` → `:eaddrinuse`, `epmd` →
+      `failed to bind on ipaddr 0.0.0.0`); a serving gate instance needs no distribution, so
+      `RELEASE_DISTRIBUTION=none` is the usable recipe and no repository script is affected (the sh
+      launcher is used by `docker/control.Dockerfile` and `scripts/ci/linux-v2-native-acceptance.sh` on
+      Linux, not on Windows). Second limit: still accurate and already explicit — the
+      release+fixture-database browser cases skip on a detected condition with the missing environment
+      named (`browser/tests/workspace-shell.spec.mjs:355` `SYMMETRY_SHELL_EXPIRY_URL`;
+      `browser/tests/portal-goal-managed.spec.mjs:23-25` and
+      `browser/tests/portal-work-planning.spec.mjs:37-39` the fixture environment;
+      `browser/tests/portal-goal-attention.spec.mjs:455` `SYMMETRY_GOALS_OFF_URL`), and the mobile
+      project (`browser/playwright.config.mjs` Pixel 7) drives the same release target as desktop, so
+      no case passes silently without the release.
+
 - [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
       the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
       query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
@@ -690,6 +778,54 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `mix ecto.rollback`/`mix ecto.load` refuse the same way, naming the effective
       `symmetry_0007c_shell16`; with `MIX_ENV=test` the guard file reports `Result: 9 passed`,
       and `mix format --check-formatted` and `mix compile --warnings-as-errors` exit 0.
+
+- [ ] Investigate the load-sensitive timeout fixture
+      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
+      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
+      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
+      on the pass whose host was also running four other regression suites and the record
+      re-derivations - the concurrency the model-routing runbook itself warns against. The
+      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
+      assertion 2.0 s later, while the kill path is a snapshot tree kill
+      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
+      kill enumerates the tree is not killed; whether that is what happened in that pass is not
+      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
+      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
+      kill path alone unless it reproduces on a quiet host.
+      **Fixed (2026-11-19, `fix/flake-timeout-fixture`):** the witness is now event-driven. The
+      descendant records its start in a handshake directory outside the checkout, waits for a
+      release the test writes only after the timed-out check returned, and only then writes
+      `late-descendant.txt` into the checkout - so a descendant the kill did reach is dead before
+      it could write during a slow kill, which is the direction the 1.0 s sleep could not
+      distinguish. The gate spawns the descendant with `stdin/stdout/stderr=DEVNULL` so a survivor
+      cannot hold the gate's inherited pipes and keep the runner's lingering reap open until its
+      own wait cap, and the descendant writes the witness after the release or after that cap, so
+      a survivor can never erase its own evidence. A cap-branch write records `late-cap` where the
+      release branch records `late`, so a failure self-identifies the P2 lingering-reap class. The
+      test polls repeatedly for up to the runner's own `PROCESS_TREE_REAP_SECONDS`, then reads the
+      witness once, instead of sleeping 2.0 s, and the gate publishes
+      its own spawn marker, so a failure reports what the fixture had established (gate spawned
+      descendant / descendant started / witness text) instead of only the assertion; the failure
+      message is platform-neutral (Windows `taskkill /T` and POSIX `killpg` are both snapshots).
+      The 0.5 s per-gate timeout, the assertion and the runner's kill path are unchanged.
+      Evidence, platform-labelled. Windows 10.0.26300 host, loaded by the peer regression workers:
+      the pristine fixture failed 1 of 5 runs (an earlier loaded pass failed 1 of 3) with `a gate
+      descendant survived the per-gate timeout` and no mechanism in its log, while the new fixture
+      passed 6 of 6 under the same load; 20 `taskkill /F /T` tree kills under load (2.0-8.6 s
+      each) never let an in-hierarchy descendant write, while the control that killed only the
+      parent let the waiting descendant record 3 of 3 times; a miss simulation (a throwaway copy
+      of the runner whose `terminate_owned_process_tree` drops `/T`) fails in 20 s with
+      `witness='late'` and both markers true, and the unmodified fixture passes in 23 s; a
+      backstop-path run on Windows (the round-2 review's: wait cap shortened 300 -> 20 s and no
+      release written) fails with the cap-branch witness at 19.1 s; the full
+      suite passes (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). WSL Linux (Ubuntu-24.04,
+      python3, `/mnt/q` worktree): the same test on the `killpg` path passes
+      (`Ran 1 test in 12.740s`, `OK`).
+      Residual: a descendant created after the kill enumerates the tree (`taskkill /T`) or after
+      the process group was signalled (`killpg`) is still reported as a survivor - correctly, with
+      the markers stating the ambiguity instead of the fixture tolerating it - so the fixture
+      keeps the documented quiet-host requirement (the model-routing runbook forbids running this
+      workflow beside a full test suite on the same host).
 
 ## Deferred review findings (0007f)
 
