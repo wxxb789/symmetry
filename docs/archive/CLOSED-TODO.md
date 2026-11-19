@@ -1431,8 +1431,9 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `rg -n 'accepted 0008b|0008c'
       docs/goals/archive/0008d-typescript-model-routing.md docs/goals/README.md`
       (the archived line is unchanged; `docs/goals/README.md:117-123` is the new
-      note). The cross-referenced `0006h` dead-link item remains open in
-      `docs/TODO.md`.
+      note). The cross-referenced `0006h` note stays in `docs/TODO.md` as a
+      decision note, untouched here; its index-row link was already repointed
+      to the archived document by `c514bd9` (#66).
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
