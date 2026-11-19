@@ -226,7 +226,7 @@ export function chatRunLinks(run: { readonly pull_request_url?: string | null; r
 }
 
 export interface ChatHistoryGap {
-  /** The oldest message id of the chain the served read reached; the boundary its next load continues from. */
+  /** The oldest message id of the chain the served read reached. */
   readonly current: string;
   /** The newest message id among the retained pages the served read's chain did not reach. */
   readonly retained: string;
@@ -315,9 +315,8 @@ function historyGap(newest: ChatHistoryPage, older: readonly ChatHistoryPage[]):
   }
   const unreached = remaining.flatMap((page) => page.messages);
   if (unreached.length === 0) return null;
-  // The note names the region between the two: the chain's own oldest message —
-  // the boundary its next load continues from — and the newest point of the
-  // history it did not reach.
+  // The note names the region between the two: the chain's own oldest message
+  // and the newest point of the history it did not reach.
   const current = attachedMessages.reduce((oldest, message) => (messageOrder(message, oldest) < 0 ? message : oldest));
   const retained = unreached.reduce((newestMessage, message) => (messageOrder(message, newestMessage) > 0 ? message : newestMessage));
   return { current: current.id, retained: retained.id };
