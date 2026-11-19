@@ -77,6 +77,13 @@ finite presentation numbers in existing additive metadata; their consumed fields
 still pass the generated schema. UTF-8, duplicate-key and Unicode checks remain
 in force for both policies.
 
+Not every cross-stack fixture is a wire payload. `fixtures/shell-return-targets.json`
+is a shell-URL acceptance corpus consumed directly by the Control and frontend test
+suites (`control/test/symmetry_control_web/portal_session_test.exs`,
+`frontend/src/app/application.test.ts`) and stays deliberately outside the manifest and
+`contracts:check`; its own `comment` documents that placement and the raw-string
+asymmetries it cannot express.
+
 Served-read fixtures are derived from real responses. `attention-read.schema.json`
 and `goal-read.schema.json` describe what the portal projection actually serves,
 so their positive fixtures are sanitized captures of a running server's own
