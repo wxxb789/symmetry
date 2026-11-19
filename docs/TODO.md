@@ -741,16 +741,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Paginated reads must be bound to the cursor that served their pages
 
-- [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
-      construction: its pages are keyed by their own `after` sequence numbers
-      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
-      re-read under their own keys, so a page is never served under a boundary it was not fetched
-      from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
-      gap in `frontend/src/features/chat/presentation.ts`, rendered by
-      `frontend/src/features/chat/chat.tsx`) and therefore still differs from this fix: it keeps the
-      pages a moved boundary left behind and states the unloaded region, while the work history and
-      the attention feed retire them. Unifying the two changes one surface's reader-visible
-      behaviour, so it needs its own decision. Retiring a page is reader-visible too (an expanded
-      page disappears when a live run moves the boundary), and it is covered by the frontend suite
-      only: the browser suites, which CI runs, carry the live-daemon pagination case and were not
-      run on this host.
+- [ ] Residuals of the completed class scan (2026-11-19): (a) the owner's decision on unifying the
+      chat conversation's keep-and-state treatment with the work history's and the attention feed's
+      retirement — an expanded page the chat keeps renders beside a stated unloaded region, while
+      the other two retire it, and unifying changes one surface's reader-visible behaviour; (b) the
+      browser suites, which CI runs, carry the live-daemon pagination cases (an expanded page
+      disappearing when a live run moves the boundary is covered by the frontend suite only) and
+      were not run on this host. The scan and its fixes are archived in
+      `docs/archive/CLOSED-TODO.md`. Pre-existing, left as-is: `retainServedPage` detects a moved
+      boundary by comparing cursor token bytes, so a re-serve that only re-signs the same boundary
+      position still restarts the chain pointer; deciding whether it should compare the boundary
+      message's id instead belongs to (a).
