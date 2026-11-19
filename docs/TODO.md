@@ -97,26 +97,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       current bytes, in which case the runs have to be re-executed, never re-derived by editing a
       receipt.
 
-- [ ] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
-      receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
-      `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
-      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
-      temp root (the `symmetry-0008c-eval` run store under the local user profile). They are produced,
-      committed evidence bound by digests other records name, so the 0008c audit recorded them as
-      an open item instead of rewriting history. The runner's sanitisation extension
-      (`validate_measured_mapping(..., redact=True)`) now records every host-specific absolute path
-      in a measured value as a `sha256:` token, so run records and receipts written from now on
-      cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
-      never edit a receipt whose digests other records bind.
-
-- [ ] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
-      how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
-      resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
-      against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
-      `scripts/ci/test-model-routing-evaluation.py` again, so the 0008b/0008c/0008d receipts stay fail-closed
-      for submission under the current bytes exactly as their entries below describe; re-execute the runs, never
-      re-derive by editing a receipt.
-
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
@@ -128,67 +108,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 ## Dead-code candidates
 
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
-
-- [ ] Investigate the intermittent Linux failure `TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`
-      in `daemon/internal/platform` (`containment_supervisor_linux_test.go:1128: decode
-      wrong-session helper witness: unexpected end of JSON input`). Observed in run
-      43724904655 job 132844651104 on a workflow-only diff, then green on rerun job
-      132846453648. Revalidate whether the helper witness can be decoded before it is fully
-      written; keep the witness assertion itself and leave the fix to separate maintenance.
-      Second occurrence: run 44133750246 job `daemon` on main `3781c78`, the same tree that
-      passed the identical job in the PR #56 run minutes earlier; the failing line and message
-      match. Mechanism: `writeLinuxSupervisorHelloSessionWitness` created the destination with
-      `os.OpenFile(O_WRONLY|O_CREATE|O_EXCL)` and wrote the JSON afterwards, so the poller
-      `waitForLinuxSupervisorTestMarker` accepted a zero-byte document as its first successful
-      read and decoded it; the helper's create-to-write window is microseconds wide, so only the
-      10 ms poll interval landing inside it under load reproduced the failure.
-      `daemon/internal/platform/containment_supervisor_linux.go` now assembles each helper-side
-      witness document in a temporary file in the destination directory and renames it into
-      place (`publishLinuxSupervisorWitnessFile`, `:2318`), so a reader observes either no
-      document or a complete one, and the witness assertion itself is unchanged. The same
-      publish covers the owner-loss proof reached/result markers (`:2505`, `:2531`), read by the
-      same poller, the drop-response fired marker (`:2178`), whose e2e poller compares its first
-      successful read to `fired\n`, and the release response-loss reached marker (`:3528`),
-      whose content is parsed after a non-empty poll. The scan-injection markers (`:2627`,
-      `:2691`, `:2708`) keep `os.WriteFile`: their readers gate on a non-empty read or observe
-      after the frame that orders the write, so the zero-byte state the other readers accept is
-      already filtered there. The Windows `writeContainmentSupervisorWitnessMarker`
-      (`containment_supervisor_windows.go:1486`) has the same create-then-write shape but only
-      ordered readers (a same-process `os.Stat` after the handoff returns, and e2e parses after
-      the writing process exits), so it carries no observed or reachable race; the adjacent
-      Windows `TestCloseStopsOwnedChildAfterLeaderExit` observation (archived in
-      `docs/archive/CLOSED-TODO.md`) stays a different defect (an owned child survived
-      `Close()`), not a witness-publication race. Still open for
-      the owning change: the runner/app resume and stop-receipt barrier markers
-      (`daemon/internal/execution/runner.go:1046`, `daemon/internal/app/app.go:2207`) still
-      create-then-write documents whose e2e readers poll non-empty and then parse them; no
-      occurrence is recorded there, and only a torn read of one small write remains possible
-      once the non-empty gate is passed.
-      Follow-up slice (branch `fix/barrier-publish-atomicity`, based on da02900): the two writers
-      recorded as still open above are the same defect, not a weaker one.
-      `waitForResumeBarrier` created the commit/resume and lease-armed reached markers with
-      `os.OpenFile(O_CREATE|O_EXCL)` and wrote the four-line marker afterwards
-      (`daemon/internal/execution/runner.go:1046`), and `waitForLinuxStopReceiptBarrier` created
-      the stop-receipt JSON the same way (`daemon/internal/app/app.go:2207`). Their harness
-      readers poll the path, accept any non-empty read and then parse it
-      (`daemon/e2e/production_linux_containment_witness_test.go:804-816`, `:2701-2708`), which a
-      non-empty but incomplete document still fails, and `waitLinuxV2OwnerWitnessStage`
-      (`daemon/e2e/production_linux_v2_owner_cli_test.go:272-297`) turns a readable but
-      undecodable stage marker into a hard error; that shape reached the owner-witness stage
-      writer at `daemon/internal/app/linux_owner_witness_linux.go:1270`. All three now assemble
-      the document in a temporary file in the destination directory and publish it in one step
-      (`publishResumeBarrierMarker`, `publishLinuxStopReceiptBarrierMarker`,
-      `linkLinuxV2NativeWitnessStageMarker`); the stage marker links the temporary file into
-      place, so an existing marker still fails as an exist error for the exact-replay comparison
-      and is never replaced, and the replay read keeps the no-follow posture the create had.
-      Cleared by ordering rather than changed: the in-process `restoreStageMarkers` reader and
-      the `internal/execution` probe/startup fixtures observe presence only, or after the
-      writing process completed (`internal/execution/probe_test.go:194-201`,
-      `internal/execution/runner_windows_test.go:74-106`), and the owner-witness preflight writes
-      control files (`cgroup.kill`) that are never parsed. Residual: a crash between the
-      temporary write and its publish leaves a dot-prefixed `.partial-*` file instead of an
-      empty marker, which `ensureFresh` then reports as a non-empty barrier directory; both fail
-      loudly and no occurrence is recorded.
 
 - [ ] Investigate the load-sensitive timeout fixture
       `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
@@ -242,17 +161,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
       constraint and labels, and decide in a separate maintenance change whether the states
       need a writer or the vocabulary needs a migration.
-
-- [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
-      the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
-      query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
-      the project id, while `control/lib/symmetry_control_web/portal_session.ex` validates each
-      path's query against `projectId`, `connectionId` or the work-search patterns and narrows a
-      project id to `[A-Za-z0-9_-]+`. The server stays the authority, so the worst case is a deep
-      link falling back to `/portal` rather than an open redirect; observed while completing the
-      0007d rebase union (0007b's client filter and 0007d's server rule met for the first time).
-      Decide whether the client should narrow its filter or the server should accept the extra
-      params, and if the client is narrowed, add a test that keeps the two lists aligned.
 
 - [ ] Investigate the intermittent browser failure `project, resource, work-item,
       filtering, ordering, and persistence` in `browser/tests/portal.spec.mjs`: after the
@@ -319,71 +227,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
       suite prerequisite; keep the assertions.
 
-- [ ] Revalidate the load-sensitive Go test
-      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
-      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
-      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
-      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
-      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
-      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
-      deadline rather than a longer test timeout.
-
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
       the server answers that code, but a sync refused for an ungranted capability maps to
       `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
       Either the server should serve the more specific code or the client entry should be removed;
       decide in a separate maintenance change with a test that pins the served code.
-
-- [ ] Close the `daemon/internal/platform` flake class: the Linux descendant-monitor terminal reason
-      and the Windows owned-child close window. A rerun, a longer timeout or a relaxed assertion is
-      not a fix, and neither side may be closed on the other side's evidence.
-      Closed part moved to `docs/archive/CLOSED-TODO.md`.
-      **Today's other occurrences in run 44055523619 (daemon job 133943809650 / daemon-windows job
-      133943809688; identical tree green in run 44054200088).**
-      `TestPIDFDGroupSupportProbeReleasesProcessHandle` (`process_unix_linux_test.go:60`,
-      `capability probes retained pidfds: before=2 after=1`, 0.00 s) — test-design defect. The
-      assertion counted every pidfd in the process before and after 16 probes, so a baseline pidfd
-      no probe ever created plus an unrelated release during the loop moved the count; the failure
-      text is its own discriminator (a probe that retained handles would show `after > before`).
-      The test now attributes pidfds to this process through `/proc/self/fdinfo` (`Pid:`) and fails
-      only on a pidfd that did not exist before the probes, with an unrelated mid-loop release part
-      of the scenario. Evidence (WSL Linux, go1.27.0, the only Linux available here): with the probe
-      deliberately not releasing its handle the new assertion fails `capability probe retained
-      pidfd 10 for process 430 across 16 probes`; with the retired count assertion and only the
-      unrelated release it failed `before=1 after=0` against the unchanged product. CI verifies this
-      Linux-only test on the new revision.
-      `TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt` (1.84 s),
-      `TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability` (5.16 s) and
-      `TestGoalAdmissionLeavesProviderAccessNilForNativeHarness` (1.09 s) in `internal/app` failed
-      as `native turn did not start` / `native Pi provider turn did not start` — environment,
-      load-bound. Each is a bare 1 s/5 s wall-clock wait for an in-process fake adapter; this is the
-      family 0007b recorded failing only while the host also ran the browser suite, live daemon
-      fixtures and another agent's work and passing alone afterwards
-      (`docs/evidence/goal-0007b-readable-work-views-2026-11-15.md`), and the same tree passed in
-      run 44054200088, where that package took 120.8 s against the 600 s timeout seen here.
-      Resource: hosted-runner CPU/disk for ~230 in-process daemon starts that fsync a journal each
-      — what would make it deterministic is waiting on the product's own state transition instead
-      of host speed, which belongs in the test, not in the product or the job setup; a longer
-      budget is explicitly not the fix, so the waits are unchanged. Instead each of these three
-      waits now reports the durable reason (`nativeStartFailureDetail`), which the CI artifact
-      lacked because those test daemons discard their log. Only CI can judge a repeat.
-      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s` (`panic: test timed out after
-      10m0s`, `running tests: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (8m4s)`) —
-      test-design defect, fixed. These tests built a `daemon` with no background context, so
-      `rootContext` fell back to `context.Background()` and a worker whose terminal transition could
-      not be persisted — here because the test's deferred `store.Close()` runs before `t.Cleanup` —
-      retried forever while the cleanup joined it, killing the package at the go-test timeout with
-      the test's own failure unrecorded. `stopTestDaemon` now performs the daemon's own shutdown
-      ordering (cancel the background context, `stopAll`, then join the workers under the
-      documented 30 s `testHangGuard`) at the eight cleanup joins in this package; no assertion
-      changed. Evidence: with the pre-fix cleanup join and an expired start wait the package
-      reproduced `panic: test timed out after 25s` (bounded demo) with the test's own failure
-      unreported; with the fix the same scenario reports
-      `--- FAIL: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (0.21s)` and the package
-      completes. The Linux supervisor helper-witness flake
-      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in
-      `docs/TODO.md` above.
 
 - [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
       43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
@@ -411,13 +260,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       so the case reports an environment-named skip there. Either add the setup-beam and
       `mix deps.get`/compile steps to that job, or run the case from a harness job that owns them.
       The local focused-gate run in the 0007f review round executes it for real.
-
-- [ ] Revalidate the `/portal/connections?projectId=…` session return target.
-      `control/lib/symmetry_control_web/portal_session.ex` accepts only `connectionId=…` for the
-      connections shell path while the shell's own navigation writes `?projectId=…`, so a session
-      expiry collapses that page to `/portal`. The identical gap on `/portal/runtimes?projectId=…`
-      was fixed by the 0007f review round (`shell_query?("/portal/runtimes", …)`); extend the
-      connections clause and its accept/reject tests in a separate change.
 
 - [ ] Revalidate the pre-existing capability-vs-state cancel/retry policy in
       `control/lib/symmetry_control_web/portal_json.ex` (`execution_summary/1`): `can_cancel` and
@@ -765,17 +607,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
       convention paragraph itself (it restates the precedence the design and
       protocol documents already carry).
-
-- [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
-      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
-      instead of rewriting history:
-      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
-      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
-      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
-      records with that helper and records the rendering in the record
-      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
-      record's quoted digest consistent when the older records are re-published.
 
 - [ ] Decide whether record cleanliness needs an enforced gate, and keep the sanitising
       tool's argv/output scope with the 0008a re-publish. `scripts/ci/model-routing-record-sanitize.py`
