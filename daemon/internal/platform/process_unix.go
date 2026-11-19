@@ -268,6 +268,12 @@ type descendantMonitorScanResult struct {
 	sealMonitoring  bool
 }
 
+// endsMonitor reports whether a scan result ends the monitor goroutine. It
+// must stay exactly the predicate monitorDescendants evaluates at each of its
+// scan-result returns: waitForInitialDescendantScan joins monitorDone when the
+// initial result satisfies it, so a disjunct here that the monitor's returns
+// do not share (or the reverse) would either let the barrier return before the
+// monitor's final writes or wait for a monitor that keeps running.
 func (result descendantMonitorScanResult) endsMonitor() bool {
 	return result.stopped || result.sealMonitoring || result.terminalReason == descendantMonitorTerminalScanFailure ||
 		result.terminalReason == descendantMonitorTerminalObservedEscape
