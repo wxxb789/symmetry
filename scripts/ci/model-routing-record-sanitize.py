@@ -134,15 +134,17 @@ def _render_match(match: re.Match[str]) -> str:
     In JSON-escaped text a matched path immediately before a recorded quote is
     spelled ``...\\"``: its final backslash escapes the quote, not a path
     separator, so consuming it would leave a bare quote and corrupt the
-    record's JSON syntax. An odd trailing run of backslashes is such an escape
-    (its pairs are literal backslashes) and stays outside the token, which
-    still binds the raw path text minus that escape.
+    record's JSON syntax. An odd trailing run of backslashes ends in such an
+    escape: the run's pairs are literal backslashes, and its final backslash
+    stays outside the token, which still binds the raw path text minus the
+    backslash the rule treats as the escape.
 
     The rule is applied by shape, without JSON state, so it also governs
     literal text that spells a host path with raw backslashes before a quote
-    (a Markdown code span, say): the token binds the path minus its trailing
-    separator and that backslash survives outside it, keeping the render
-    idempotent.
+    (a Markdown code span, say): the token binds the path minus the backslash
+    the rule treats as the escape - the trailing separator, for a
+    single-backslash run - and that backslash survives outside it, keeping the
+    render idempotent.
     """
 
     matched = match.group(0)
