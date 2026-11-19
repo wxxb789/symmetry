@@ -110,16 +110,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Either the server should serve the more specific code or the client entry should be removed;
       decide in a separate maintenance change with a test that pins the served code.
 
-## Deferred review findings (0007f)
-
-- [ ] Give the focused render gate's `browser/tests/portal-goal-managed.spec.mjs` case its fixture
-      environment in CI. The case writes its real Goal-managed row through
-      `scripts/ci/portal-planning-fixture.exs`, so it needs `POSTGRES_*` naming the database the
-      release serves plus the Elixir toolchain; `.github/workflows/ci.yml`'s render job has neither,
-      so the case reports an environment-named skip there. Either add the setup-beam and
-      `mix deps.get`/compile steps to that job, or run the case from a harness job that owns them.
-      The local focused-gate run in the 0007f review round executes it for real.
-
 ## Deferred review findings (0007h)
 
 - [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate
@@ -136,11 +126,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       CI because it needs `SYMMETRY_GOALS_OFF_URL`, and the retained `:goal_admission_disabled` inline branch
       is unreachable in production because the attention read is not admission-gated.
       Closed part moved to `docs/archive/CLOSED-TODO.md`.
-      Remaining open: the two residuals above stay open; the legacy surfaces that read workspace-read
-      members still render their own fallbacks instead of refusing, which is per-surface work outside this
-      class; and the captures for `accepted_outcomes`, `settlement_attention` and `external_waits` are
-      empty arrays, so those members are pinned by the boundary test and the real-served controller gate
-      rather than by a fixture-level rename probe.
+      The rollout-off browser-case residual is closed (2026-11-19, `fix/ci-render-gate-fixtures`, PR #98):
+      the render step starts a rollout-off release instance and runs the attention spec's rollout-off case
+      at both widths; its closure narrative and hosted evidence are in the same section there.
+      Remaining open: the `:goal_admission_disabled` residual above stays open; the legacy surfaces that
+      read workspace-read members still render their own fallbacks instead of refusing, which is
+      per-surface work outside this class; and the captures for `accepted_outcomes`, `settlement_attention`
+      and `external_waits` are empty arrays, so those members are pinned by the boundary test and the
+      real-served controller gate rather than by a fixture-level rename probe.
 
 ## CI consolidation owner decisions (2026-11-17)
 
