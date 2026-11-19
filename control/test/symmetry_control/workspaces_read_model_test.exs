@@ -425,6 +425,61 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     refute served_execution(archived_model, supported.work_item).can_retry
   end
 
+  test "the served retry control keeps a chat-launched attempt's supervisory requirement" do
+    project = project_fixture()
+    %{machine: machine} = enroll_machine("supervisory-retry-machine")
+
+    # The chat launch path can require supervision, and the retry of that
+    # attempt retains the requirement even though the corrected work item
+    # derives no capability of its own.
+    assert {:ok, item} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Supervised retry",
+               status: "ready",
+               assignee_type: "agent",
+               agent_profile: "cap-supervised-retry",
+               workspace: "cap-supervised-retry"
+             })
+
+    assert {:ok, launched, :created} =
+             Workspaces.launch_work_item(item.id, "cap-supervised-retry-launch",
+               required_capabilities: %{"supervisory_control" => true},
+               notify: false
+             )
+
+    assert launched.task.task.required_capabilities == %{"supervisory_control" => true}
+
+    assert {:ok, _cancelled, :created} =
+             Workspaces.cancel_work_item(item.id, 1, "cap-supervised-retry-cancel")
+
+    served = fetch_item(item.id)
+
+    # A runtime that could start an unsupervised attempt of this binding does
+    # not make the retried attempt selectable: it advertises no
+    # `supervisory_control`, and the retry re-applies the requirement.
+    register_runtime(machine, "cap-supervised-retry-unsupervised",
+      agent_profile: "cap-supervised-retry",
+      workspace: "cap-supervised-retry",
+      metadata: adapter_metadata(),
+      capabilities: adapter_capabilities(start: true, cancel: true)
+    )
+
+    assert {:ok, unsupervised_model} = ReadModel.workspace(project.id)
+    refute served_execution(unsupervised_model, served).can_retry
+
+    # A runtime that advertises the requirement and the adapter `start`
+    # operation makes the same retried attempt selectable.
+    register_runtime(machine, "cap-supervised-retry-supervisor",
+      agent_profile: "cap-supervised-retry",
+      workspace: "cap-supervised-retry",
+      metadata: adapter_metadata(),
+      capabilities: supervised_adapter_capabilities()
+    )
+
+    assert {:ok, supervised_model} = ReadModel.workspace(project.id)
+    assert served_execution(supervised_model, served).can_retry
+  end
+
   test "the task snapshot offers cancel for claimed, paused and waiting attempts that advertise it" do
     project = project_fixture()
     item = launch_for(project, "cap-supervised", "Supervised cancel surface")

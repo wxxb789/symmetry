@@ -579,6 +579,136 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              |> json_response(409)
   end
 
+  test "a re-bound work item drives the cancel response's retry gate like the read" do
+    project = create_project("REBD")
+    key = Ecto.UUID.generate()
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(
+               %{name: "rebound-retry-machine", machine_token: "token-#{key}"},
+               key,
+               enrollment_token: "enrollment-secret",
+               expected_enrollment_token: "enrollment-secret",
+               now: @now
+             )
+
+    assert {:ok, [_runtime]} =
+             Orchestration.register_runtimes(
+               enrolled.machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "rebound-retry-runtime",
+                   name: "Rebound retry runtime",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   harness_kind: "generic",
+                   harness_version: "generic-v1",
+                   adapter_version: "generic-v1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "adapter" => %{
+                       "kind" => "generic",
+                       "native_version" => "generic-v1",
+                       "implementation_version" => "generic-v1",
+                       "protocol_version" => 1,
+                       "operations" => %{
+                         "start" => true,
+                         "events" => true,
+                         "cancel" => true,
+                         "resume" => false,
+                         "handoff" => false,
+                         "guidance" => "unsupported",
+                         "pause" => "unsupported",
+                         "approval_response" => false,
+                         "usage" => "unknown",
+                         "hard_cost_limit" => false
+                       }
+                     }
+                   }
+                 }
+               ],
+               now: @now
+             )
+
+    item =
+      create_work_item(project["id"], "Re-bound retry", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex"
+      })
+
+    assert %{"execution" => %{"state" => "queued"}, "work_item" => launched} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/run", %{"action_id" => "rebound-run"})
+             |> json_response(202)
+
+    # The cancel response states the gate the item's read states, both resolved
+    # from the work item's binding: this binding is served.
+    assert %{"execution" => %{"state" => "cancelled", "can_retry" => true}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/cancel", %{
+               "action_id" => "rebound-cancel",
+               "generation" => 1
+             })
+             |> json_response(202)
+
+    assert %{"work_item" => %{"execution" => %{"can_retry" => true}}} =
+             api_conn()
+             |> get("/portal/api/work-items/#{item["id"]}")
+             |> json_response(200)
+
+    # Editing the binding of a terminal item is allowed, and the control follows
+    # the corrected binding: the read withdraws it, and the replay of the same
+    # cancel action answers exactly as the read.
+    assert %{"work_item" => rebound} =
+             api_conn()
+             |> patch("/portal/api/work-items/#{item["id"]}", %{
+               "version" => launched["version"],
+               "agent_profile" => "nobody",
+               "workspace" => "nowhere"
+             })
+             |> json_response(200)
+
+    assert %{"work_item" => %{"execution" => %{"state" => "cancelled", "can_retry" => false}}} =
+             api_conn()
+             |> get("/portal/api/work-items/#{item["id"]}")
+             |> json_response(200)
+
+    assert %{"disposition" => "replayed", "execution" => %{"can_retry" => false}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/cancel", %{
+               "action_id" => "rebound-cancel",
+               "generation" => 1
+             })
+             |> json_response(200)
+
+    # Restoring the served binding restores the control in both responses.
+    assert %{"work_item" => restored} =
+             api_conn()
+             |> patch("/portal/api/work-items/#{item["id"]}", %{
+               "version" => rebound["version"],
+               "agent_profile" => "codex",
+               "workspace" => "primary"
+             })
+             |> json_response(200)
+
+    assert %{"work_item" => %{"execution" => %{"can_retry" => true}}} =
+             api_conn()
+             |> get("/portal/api/work-items/#{item["id"]}")
+             |> json_response(200)
+
+    assert %{"disposition" => "replayed", "execution" => %{"can_retry" => true}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/cancel", %{
+               "action_id" => "rebound-cancel",
+               "generation" => 1
+             })
+             |> json_response(200)
+
+    assert restored["workspace"] == "primary"
+  end
+
   test "retry is hidden and rejected after a failed task is reassigned to a human" do
     project = create_project("RPO")
 

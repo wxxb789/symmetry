@@ -121,26 +121,24 @@ defmodule SymmetryControl.Workspaces.ReadModel do
   end
 
   # Eligibility reads the binding the retried generation is re-admitted with —
-  # `retry_binding/1` resolves the work item's corrected profile, workspace and
-  # capability requirement — not the failed task row's; only goal-less tasks
-  # can be retried, so Goal-owned tasks never enter the query.
+  # `retry_binding/2` resolves the work item's corrected profile and workspace
+  # with the attempt's supervisory requirement — not the failed task row's. Only
+  # a goal-less terminal attempt can be retried, so live and Goal-owned tasks
+  # never enter the query.
   defp retry_runtime_eligible(work_items, tasks) do
     bindings =
       Enum.flat_map(work_items, fn item ->
-        with task_id when is_binary(task_id) <- item.orchestration_task_id,
-             %Task{goal_id: nil} <- Map.get(tasks, task_id) do
-          binding = Workspaces.retry_binding(item)
+        case Map.get(tasks, item.orchestration_task_id) do
+          %Task{goal_id: nil, state: state} = task when state in ["failed", "cancelled"] ->
+            [
+              Map.merge(
+                %{task_id: task.id},
+                Workspaces.retry_binding(item, task.required_capabilities)
+              )
+            ]
 
-          [
-            %{
-              task_id: task_id,
-              agent_profile: binding.agent_profile,
-              workspace: binding.workspace,
-              required_capabilities: binding.required_capabilities
-            }
-          ]
-        else
-          _other -> []
+          _live_goal_owned_or_absent ->
+            []
         end
       end)
 

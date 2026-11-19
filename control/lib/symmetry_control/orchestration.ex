@@ -559,8 +559,19 @@ defmodule SymmetryControl.Orchestration do
           task: task,
           run: run,
           runtime: runtime,
+          # Eligibility here speaks for the task row — the only binding a
+          # snapshot reader without a work item has; the workspace read and the
+          # command responses resolve the work item's corrected binding
+          # (`Workspaces.retry_binding/2`) instead. Only a terminal attempt can
+          # be retried, so live attempts never pay for the cross-join.
           retry_runtime_eligible:
-            is_nil(task.goal_id) and retry_runtime_eligible?(task_retry_binding(task)),
+            is_nil(task.goal_id) and task.state in ["failed", "cancelled"] and
+              retry_runtime_eligible?(%{
+                task_id: task.id,
+                agent_profile: task.agent_profile,
+                workspace: task.workspace,
+                required_capabilities: task.required_capabilities
+              }),
           waiting: current_waiting_context(task, run),
           latest_command: latest_task_command(task.id),
           controls:
@@ -621,7 +632,8 @@ defmodule SymmetryControl.Orchestration do
 
   @typedoc """
   One retried task's binding: the agent profile, workspace and required
-  capabilities `Workspaces.retry_binding/1` resolves for its work item.
+  capabilities `Workspaces.retry_binding/2` resolves for its work item,
+  including the requirement the attempt being retried imposed.
   """
   @type retry_binding :: %{
           task_id: Ecto.UUID.t(),
@@ -642,7 +654,7 @@ defmodule SymmetryControl.Orchestration do
   advertises the adapter `start` operation.
 
   Each binding carries the values the retried generation is re-admitted with —
-  not the failed task row's (`Workspaces.retry_binding/1`) — and eligibility is
+  not the failed task row's (`Workspaces.retry_binding/2`) — and eligibility is
   the non-transient part of the goal-less assignment path: same binding,
   capability containment, supervisory and harness-kind clauses, intersected
   with the adapter `start` requirement. Transient online, heartbeat and
@@ -680,20 +692,25 @@ defmodule SymmetryControl.Orchestration do
     )
   end
 
-  defp retry_binding_row(binding) do
-    Map.take(binding, [:task_id, :agent_profile, :workspace, :required_capabilities])
+  @doc """
+  The required capabilities a retried generation is re-admitted with: `required`
+  with `supervisory_control: true` restored when the attempt being replaced
+  required it.
+
+  `retry_task/4` never lets a retry drop the supervisory fence of its
+  predecessor, and the served retry control resolves the same value through
+  `Workspaces.retry_binding/2`, so the reader states the assignment the retry
+  would apply.
+  """
+  @spec retry_required_capabilities(map(), map() | nil) :: map()
+  def retry_required_capabilities(required, current_required) when is_map(required) do
+    if value(current_required, :supervisory_control, false) == true,
+      do: Map.put(required, "supervisory_control", true),
+      else: required
   end
 
-  # The command-response snapshot has no work item, so it reads the task row's
-  # own binding; the workspace projection resolves the work item's corrected
-  # binding instead (`Workspaces.retry_binding/1`).
-  defp task_retry_binding(%Task{} = task) do
-    %{
-      task_id: task.id,
-      agent_profile: task.agent_profile,
-      workspace: task.workspace,
-      required_capabilities: task.required_capabilities
-    }
+  defp retry_binding_row(binding) do
+    Map.take(binding, [:task_id, :agent_profile, :workspace, :required_capabilities])
   end
 
   # A retried attempt starts a fresh run, so its runtime must advertise `start`.
@@ -2633,14 +2650,11 @@ defmodule SymmetryControl.Orchestration do
         if not is_nil(task.goal_id), do: rollback(:goal_authority_required)
 
         task_attrs =
-          if value(task.required_capabilities, :supervisory_control, false) == true,
-            do:
-              Map.update!(
-                task_attrs,
-                :required_capabilities,
-                &Map.put(&1, "supervisory_control", true)
-              ),
-            else: task_attrs
+          Map.update!(
+            task_attrs,
+            :required_capabilities,
+            &retry_required_capabilities(&1, task.required_capabilities)
+          )
 
         payload = %{work: task_attrs}
         command_hash = command_request_hash("retry", payload, opts)

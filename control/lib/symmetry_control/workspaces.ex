@@ -347,9 +347,7 @@ defmodule SymmetryControl.Workspaces do
     with :ok <- validate_action_id(action_id),
          {:ok, work_item} <- fetch(WorkItem, work_item_id),
          :ok <- ensure_legacy_work_item(work_item),
-         # The command response serves the same retry gates as the read, which
-         # reads the item's project status.
-         work_item <- Repo.preload(work_item, [:project]),
+         work_item <- preload_binding(work_item),
          task_id when is_binary(task_id) <- work_item.orchestration_task_id,
          {:ok, command, disposition} <-
            Orchestration.create_command(
@@ -378,6 +376,7 @@ defmodule SymmetryControl.Workspaces do
     with :ok <- validate_action_id(action_id),
          {:ok, work_item} <- fetch(WorkItem, work_item_id),
          :ok <- ensure_legacy_work_item(work_item),
+         work_item <- preload_binding(work_item),
          task_id when is_binary(task_id) <- work_item.orchestration_task_id,
          {:ok, task_before} <- Orchestration.task_snapshot(task_id),
          {:ok, command, disposition} <-
@@ -477,25 +476,32 @@ defmodule SymmetryControl.Workspaces do
   @doc """
   The binding a retried generation is re-admitted with: the work item's (or the
   project default) agent profile and workspace plus the capability requirement
-  its provider-bound resources derive.
+  its provider-bound resources derive, with `supervisory_control: true`
+  restored when the attempt being replaced required it.
 
   `retry_work_item/3` rebuilds the next generation from the corrected work item
-  through `execution_attrs/1`, so a reader asking whether assignment could
-  serve that generation (the served retry control) resolves the same values
-  here instead of the failed task row's.
+  through `execution_attrs/1`, and `retry_task/4` re-applies the same
+  supervisory fence on the locked task row; a reader asking whether assignment
+  could serve that generation (the served retry control, in the workspace read
+  and the command responses) resolves the same values here instead of the
+  failed task row's.
   """
-  @spec retry_binding(WorkItem.t()) :: %{
+  @spec retry_binding(WorkItem.t(), map() | nil) :: %{
           agent_profile: String.t(),
           workspace: String.t(),
           required_capabilities: map()
         }
-  def retry_binding(%WorkItem{} = work_item) do
+  def retry_binding(%WorkItem{} = work_item, current_required_capabilities \\ nil) do
     project = work_item.project
 
     %{
       agent_profile: present(work_item.agent_profile) || project.default_agent_profile,
       workspace: present(work_item.workspace) || project.default_workspace,
-      required_capabilities: required_capabilities(provider_resource_ids(work_item))
+      required_capabilities:
+        Orchestration.retry_required_capabilities(
+          required_capabilities(provider_resource_ids(work_item)),
+          current_required_capabilities
+        )
     }
   end
 
@@ -784,6 +790,19 @@ defmodule SymmetryControl.Workspaces do
       :ci_resource,
       :external_work_item_resource,
       repository_resource: :connection
+    ])
+  end
+
+  # The command responses serve the same execution projection as the read
+  # (`PortalJSON.execution/2` resolves the retry gate from the work item's
+  # binding), which reads the project status and derives that binding from the
+  # item's provider-bound resources.
+  defp preload_binding(work_item) do
+    Repo.preload(work_item, [
+      :project,
+      :repository_resource,
+      :ci_resource,
+      :external_work_item_resource
     ])
   end
 

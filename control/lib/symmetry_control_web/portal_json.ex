@@ -3,6 +3,7 @@ defmodule SymmetryControlWeb.PortalJSON do
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
   alias SymmetryControlWeb.Protocol
 
@@ -290,12 +291,45 @@ defmodule SymmetryControlWeb.PortalJSON do
   @doc """
   The command responses' execution summary: the same projection with the work
   item's own retry gates applied, so a response serves the `can_retry` the
-  item's read would rather than a state-only one. A work item without its
-  project loaded answers those gates false.
+  item's read would rather than a state-only one. Eligibility resolves the work
+  item's corrected binding (`Workspaces.retry_binding/2`, including the
+  attempt's supervisory requirement) instead of the task row's own binding the
+  snapshot carries, so a re-bound work item answers the response exactly as it
+  answers the read. A work item without its project and provider resources
+  loaded answers those gates false.
   """
   def execution(nil, _work_item), do: nil
   def execution(task, nil), do: execution(task)
-  def execution(task, work_item), do: task |> execution_summary() |> retry_capability(work_item)
+
+  def execution(task, work_item) do
+    case execution_summary(task) do
+      nil ->
+        nil
+
+      execution ->
+        execution
+        |> Map.put(:can_retry, work_item_retry_runtime_eligible?(task, work_item))
+        |> retry_capability(work_item)
+    end
+  end
+
+  # The re-admission a retry would apply: the work item's corrected binding with
+  # the current attempt's supervisory requirement, for a goal-less terminal
+  # attempt. A live attempt answers without a query.
+  defp work_item_retry_runtime_eligible?(%Task{} = task, %WorkItem{} = work_item) do
+    is_nil(task.goal_id) and task.state in ["failed", "cancelled"] and
+      Orchestration.retry_runtime_eligible?(
+        Map.merge(
+          %{task_id: task.id},
+          Workspaces.retry_binding(work_item, task.required_capabilities)
+        )
+      )
+  end
+
+  defp work_item_retry_runtime_eligible?(%{task: %Task{} = task}, %WorkItem{} = work_item),
+    do: work_item_retry_runtime_eligible?(task, work_item)
+
+  defp work_item_retry_runtime_eligible?(_task, _work_item), do: false
 
   def changeset_errors(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {message, options} ->
