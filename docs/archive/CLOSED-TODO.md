@@ -997,3 +997,37 @@ from branch `chore/deadcode-revalidation`.
       remains: the classic `portal.js` was deleted in `ca1bdad`
       (`control/priv/portal_assets/` retains only `login.css`), and every other current reference is
       a migration comment, a 404 or `return_to` assertion, or prose.
+
+## Control instances sharing one worktree's build
+
+- [ ] Two Control instances started from the same worktree share `control/_build`, so a foreign
+      session's dev server can answer this worktree's browser runs with `# unhandled` error pages
+      (observed 2026-11-17 as console-500 assertions and render-wait timeouts during 0007g's
+      suite-context repetitions, with zero offset-assertion failures in the same runs). Give each
+      instance its own `MIX_BUILD_PATH` when several run at once; the runs that need isolation
+      should do it explicitly rather than relying on nobody else being active.
+
+      **Fixed (2026-11-19, `fix/control-instance-build-isolation`):** both harnesses that start a
+      Control instance from a worktree now pin that instance's own build path:
+      `browser/scripts/run-planning-tests.ps1` and
+      `browser/scripts/run-connection-fixture-tests.ps1` export
+      `MIX_BUILD_PATH=<worktree>/control/_build/instances/<harness>-<port>` for every mix command
+      they run and set it again on the server (planning) or fixture (connections) command they
+      start, so instances from one worktree that both serve compile into different build paths:
+      each harness refuses a port that already answers, and a concurrent start on one port fails
+      closed at bind/readiness. Deps sources stay shared under `control/deps`; only compiled output
+      moves. An inherited `MIX_BUILD_PATH` is overridden and reported, never trusted, because a
+      stale one from the surrounding shell is the same accident.
+      `browser/scripts/control-instance-isolation.test.mjs`
+      (`pnpm --filter symmetry-browser-acceptance test:control-isolation`) drives each real harness
+      with a recording `mise` stub and asserts that every mix invocation it makes - the database
+      tasks and the instance start alike - received the harness's own instance build path, that two
+      ports get two paths, and that a foreign inherited value decides nothing; `browser/README.md`
+      records the convention, including the path an operator-started Control server needs when
+      another instance may run from the same worktree. The planning harness was run end to end on
+      this branch (desktop `-g restores`, `1 passed`) against
+      `control/_build/instances/planning-<port>`, with its database tasks, server start, readiness,
+      login and staged-asset checks all served from that path (`mix` was reached through this
+      host's `mixwrap` toolchain because its `mise` cannot install the pinned Elixir); the
+      connection-fixture harness is covered by the stub test only on this host, whose fixed fixture
+      database port 55444 has no container here.
