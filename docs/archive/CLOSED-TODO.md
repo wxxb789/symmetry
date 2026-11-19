@@ -235,6 +235,27 @@ from branch `chore/deadcode-revalidation`.
       presentations; the rules now sit at `styles.css:216-217`) — so the literal-selector sweep's
       "unreferenced" premise was wrong and no rule was removed.
 
+- [ ] Revalidate the load-sensitive Go test
+      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
+      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
+      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
+      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
+      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
+      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
+      deadline rather than a longer test timeout.
+      Revalidated and closed by branch `fix/flake-load-sensitive-go` (2026-11-19): no further change
+      was needed because `8082317` (#44) already replaced the 1 s `context.WithTimeout` around
+      `WaitTurn` with the package's documented `testHangGuard` (30 s, "turns a hung harness into a
+      failure; never a statement about how fast the adapter should be") and made the failing wait
+      name the outstanding step (`mustSettle(t, "WaitTurn", err)`), so elapsed time no longer
+      decides the verdict and a guard expiry can no longer be reported as this test's behavioural
+      failure. Re-run on this host while the other regression workers loaded it: plain
+      `go test -count=20 -cpu 1,2 -run '^TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock$'
+      ./internal/harness/omp` passed (`ok … 18.389s`, exit 0) and the same selection under
+      `-race -count=5 -cpu 1,2` passed in WSL (`ok … 4.485s`, exit 0). The pristine 1 s failures
+      stay recorded in #44 (8/8 on the pre-fix revision under 3x oversubscription) and in the 0007e
+      observation above.
+
 ## Deferred review findings (0007h)
 
 *Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the open residual stays there.*
