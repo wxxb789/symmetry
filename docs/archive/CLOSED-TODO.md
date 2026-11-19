@@ -418,8 +418,11 @@ from branch `chore/deadcode-revalidation`.
       could select for the task (same binding and capability containment) advertise `start`, the
       operation of the fresh retried attempt. A runtime without adapter
       metadata, without the operation, or with a non-`true` value answers false, so a runtime
-      advertising `cancel: false` now serves `can_cancel: false`. `Orchestration.adapter_operation_supported?/2`
-      owns the vocabulary; `Workspaces.ReadModel` passes the runtimes it already loads in one query
+      advertising `cancel: false` now serves `can_cancel: false`. Cancel reads the runtime's
+      `adapter.operations.cancel` through `Orchestration.adapter_operation_supported?/2`; retry
+      resolves the same question in SQL containment through `Orchestration.retry_adapter_requirement/0`
+      against the goal-less assignment eligibility of the binding the corrected work item will be
+      re-admitted with. `Workspaces.ReadModel` passes the runtimes it already loads in one query
       into each execution projection and resolves retry eligibility in one batched query (no
       per-task read), and `Orchestration.task_snapshot/1` serves the same shape to the command
       responses. Projection tests cover state-ok+supported,
