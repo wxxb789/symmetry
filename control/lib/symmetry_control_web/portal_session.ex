@@ -17,6 +17,7 @@ defmodule SymmetryControlWeb.PortalSession do
   @work_project_param ~r{\AprojectId=[A-Za-z0-9_-]+\z}
   @work_search_params [@work_view_param, @work_text_param, @work_blocked_param]
   @work_item_search_params @work_search_params ++ [@work_project_param]
+  @connections_query_params [@connection_identifier_param, @work_project_param]
 
   def return_to(path) when is_binary(path) do
     if shell_return_to?(path), do: path, else: "/portal"
@@ -50,8 +51,12 @@ defmodule SymmetryControlWeb.PortalSession do
   defp shell_query?("/portal/attention", query),
     do: Regex.match?(~r{\AprojectId=[A-Za-z0-9_-]+\z}, query)
 
+  # The connections surface carries the selected connection and the project
+  # whose resource surface it scopes; both are shell-written view state. Without
+  # the project clause a session expiry collapses a project-scoped connections
+  # page to /portal.
   defp shell_query?("/portal/connections", query),
-    do: Regex.match?(@connection_identifier_param, query)
+    do: all_params?(query, @connections_query_params)
 
   # The shell's runtimes navigation carries the same project scope as the work
   # surface; without this clause a session expiry collapses a project-scoped
@@ -60,14 +65,14 @@ defmodule SymmetryControlWeb.PortalSession do
     do: Regex.match?(@work_project_param, query)
 
   defp shell_query?("/portal/projects/" <> _project_id, query),
-    do: work_query?(query, @work_search_params)
+    do: all_params?(query, @work_search_params)
 
   defp shell_query?("/portal/work/" <> _work_item_id, query),
-    do: work_query?(query, @work_item_search_params)
+    do: all_params?(query, @work_item_search_params)
 
   defp shell_query?(_path, _query), do: false
 
-  defp work_query?(query, patterns) do
+  defp all_params?(query, patterns) do
     query
     |> String.split("&")
     |> Enum.all?(fn param -> Enum.any?(patterns, &Regex.match?(&1, param)) end)

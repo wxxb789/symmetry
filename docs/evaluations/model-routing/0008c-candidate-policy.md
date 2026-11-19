@@ -52,10 +52,10 @@ pair of accepted revisions with their executed gates, reviews and accounting row
 
 Both arms were independently accepted on identical contracts, permissions, gates, evidence shapes
 and review route: mixed `sha256:5c8b1a800a17acb7231545ce3168b04f84a3fc3d21f6608e6ea6077f105d2ddc`
-(receipt `sha256:9432545d54eca14346e24a42c37821915dc663e0bd5c6b89e36571e242a01e31`, review `pass`,
+(receipt `sha256:93050ced0667d012924564e58032f96fd3244214ac68871e3f552750cc5fa73c`, review `pass`,
 four resolved `info` findings, zero repairs, one failed attempt) and strong
 `sha256:09dd5f8840f3d3fed81cc4c22e1fe7f9a981c78c941b27de8309f7b5643999af` (receipt
-`sha256:26d8e003419e3e985e29b5a065b8ce4d178a8402c276855a39fdab6998040d7b`, review `pass`, four
+`sha256:5ee9b87bd6d5b26adb4674b1024f8a212e48e6050223703c43e8e3c766f86a7f`, review `pass`, four
 resolved `info` findings, zero repairs, one failed attempt). Every frozen gate passed in both arms
 with its named tests executed and its trace recorded.
 
@@ -81,10 +81,10 @@ and a read-model observation from the reviews that no consumer currently disting
 Both arms were independently accepted on the amended frozen bytes and identical contracts,
 permissions, gates, evidence shapes and review route: mixed
 `sha256:986bbd6e8818d128a96dc84eb38f1267e134041e63dd5f562674e27217386864` (receipt
-`sha256:e79fe17327fe756f2af5580e61a64404c8a6a1b3d8bac4ed3bf15db48a078e40`, review `pass`, three
+`sha256:ceae34ce3507075c4fe26dc719fa8d3caff8b98b4817b576a4f63798a6e6f74a`, review `pass`, three
 resolved `info` findings, zero repairs, one failed attempt) and strong
 `sha256:2d98eaec565495be3bafc12559b99f9bc4beb51837fc8faf2ab3b0630bf3f2e1` (receipt
-`sha256:1be7b41985540705653c763f57cfe98f31b219a077f4812a1afe04747b863bf7`, review `pass`, four
+`sha256:af12819d6806509f78c0379f561fd3d8c01e5f0a3116335cd362d9c55918f34a`, review `pass`, four
 resolved `info` findings, zero repairs, one failed attempt). Every frozen gate passed in both arms
 with its named tests executed — five focused names plus the four provider-broker names per arm.
 
