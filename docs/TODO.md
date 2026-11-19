@@ -366,9 +366,10 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `.github/workflows/ci.yml:78,1218`): scoped to the changed files it audits
       but not hidden behind the documentation-only fast path, so a runbook-only
       pull request still runs it. Why: a cited `file:line` or symbol rots
-      silently when its owner moves — the 2026-11-19 revalidation found
-      `portal.md`'s health-signal citation pointing at a stale `read_model.ex`
-      line, and PR #99's "Review fixes (round 2)" replaced an untracked
+      silently when its owner moves — the 2026-11-19 revalidation found the
+      closed item's own `read_model.ex:471` health-signal citation stale
+      (`portal.md` cites `health/4` with no line number), and PR #99's "Review
+      fixes (round 2)" replaced an untracked
       `control/deps/ecto/...` citation (`control/.gitignore:8` ignores `deps/`)
       that no index contains. Check that a backticked repo-relative path exists
       and that the cited identifier occurs in the cited file; do not validate
@@ -376,7 +377,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Verification: the check fails on a citation whose path or symbol is absent
       and passes on the current tree; fixtures pin both outcomes.
 - [ ] Commit a fixture test for the `changes` job's changed-path classifier
-      (`.github/workflows/ci.yml:26-75`), whose proof today is only the removed
+      (`.github/workflows/ci.yml:26-65`), whose proof today is only the removed
       throwaway harness plus hosted runs. Pattern:
       `scripts/ci/test-no-legacy-routes-audit.py` (fixture-driven, runs ungated
       in the `legacy-route-audit` job; `.github/workflows/ci.yml:1355`). Pin:

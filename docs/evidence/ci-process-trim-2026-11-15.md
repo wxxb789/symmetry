@@ -4,8 +4,10 @@ Status: locally verified workflow implementation with the hosted observations
 recorded below: the trim revision's after runs, the first docs-only sample
 (PR #29) and the docs-only samples recorded on this branch (PR #99) are
 measured, and the classifier outputs cross-check the executed job sets. One
-limit stays recorded at the end of this record (the legacy-route audit's target
-enumeration). Local checks bind the workflow files of the trim revision
+limit stays recorded at the end of this record as true at the trim revision and
+resolved by #43 (`724d915`): the legacy-route audit then enumerated `ci.yml`,
+not the newly separate native workflow. Local checks bind the workflow files of
+the trim revision
 `829478aa862138188566dff558d133d85920551e` (merged as
 `f47b0c3e3e01e05a863eff9ae90ea852696305db`), not the unchanged baseline commit
 `5c56c6098583677dabdf92681f7925a8e754b8cd` as if it contained these edits.
@@ -154,6 +156,9 @@ Job count means check records, not billed minutes or cumulative executions.
 | Hosted `run-records=true` sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `0d0e99873b85babb5fa189d7b0dc28c04499df41` | [44540613218](https://github.com/wxxb789/symmetry/actions/runs/44540613218) | 1 / success | 10: 3 success, 7 skipped | 19 s (`14:08:54Z`–`14:09:13Z`) |
 | Hosted `run-records=true` sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `06502b5c0fa459b10c041f27676d2df2f84b34f7` | [44540895110](https://github.com/wxxb789/symmetry/actions/runs/44540895110) | 1 / success | 10: 3 success, 7 skipped | 20 s (`14:10:31Z`–`14:10:51Z`) |
 | Hosted `run-records=true` sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `ad87f9bafe92a6ad91f8a8960aff07093cfc4cff` | [44554983915](https://github.com/wxxb789/symmetry/actions/runs/44554983915) | 1 / success | 10: 3 success, 7 skipped | 26 s (`15:27:25Z`–`15:27:51Z`) |
+| Hosted `run-records=true` sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `b2a1340fb53ad6d55b7853fe7403348779b021c3` | [44560447996](https://github.com/wxxb789/symmetry/actions/runs/44560447996) | 1 / success | 10: 3 success, 7 skipped | 22 s (`15:56:28Z`–`15:56:50Z`) |
+| Hosted `run-records=true` sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `4b12e59ea836b26baeb9da0304e56d23b3ab0124` | [44565580363](https://github.com/wxxb789/symmetry/actions/runs/44565580363) | 1 / success | 10: 3 success, 7 skipped | 15 s (`16:23:39Z`–`16:23:54Z`) |
+| Hosted `run-records=true` sample recorded on this branch: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `83f6036530f9e8c889570741fba9f2a0819df1d2` | [44566899850](https://github.com/wxxb789/symmetry/actions/runs/44566899850) | 1 / success | 10: 3 success, 7 skipped | 18 s (`16:30:40Z`–`16:30:58Z`) |
 
 Predecessor and first-sample timestamps are 2026-11-15 UTC; the samples recorded
 on this branch are 2026-11-19 UTC. The predecessor PR's first attempt ended in
@@ -180,12 +185,14 @@ run: 2 success (`changes`, `legacy-route-audit`), 8 skipped (`contracts`,
 `control`, `pi-control-e2e-windows`, `daemon`, `daemon-windows`, `integration`
 and `compose` because the `run-heavy` gate evaluated `false`;
 `record-cleanliness` because `run-records` evaluated `false`; every consumer
-condition tests `== 'true'`), 12 s wall-clock. Three later PR #99 samples on
-this branch carried the record itself, so `run-records=true` and the
-`record-cleanliness` job joined the two cheap jobs: runs `44540613218` (head
-`0d0e998`), `44540895110` (head `06502b5`) and `44554983915` (head `ad87f9b`),
-each 10 job records with 3 success and 7 skipped, 19 s / 20 s / 26 s
-wall-clock (rows above). Cross-check: running the workflow's classifier block
+condition tests `== 'true'`), 12 s wall-clock. Six later PR #99 samples on this
+branch carried the record itself (the count at revision `83f6036`), so
+`run-records=true` and the `record-cleanliness` job joined the two cheap jobs:
+runs `44540613218` (head `0d0e998`), `44540895110` (head `06502b5`),
+`44554983915` (head `ad87f9b`), `44560447996` (head `b2a1340`), `44565580363`
+(head `4b12e59`) and `44566899850` (head `83f6036`), each 10 job records with
+3 success and 7 skipped, 19 s / 20 s / 26 s / 22 s / 15 s / 18 s wall-clock
+(rows above). Cross-check: running the workflow's classifier block
 over each pull request's first-parent diff (PR #29: its `docs/TODO.md`-only
 diff; PR #99's first sample: the merge ref's `HEAD^1..HEAD`, the same five
 `docs/**` paths) reports `run-heavy=false` for both, and the current classifier
@@ -332,12 +339,16 @@ add state/permissions and weaken exact-Subject locality.
   every recorded run, retry and classifier cross-check lives in the hosted
   timing table and its paragraph above. No generalized speedup or cost
   reduction is claimed.
-- Audit-surface limit: the existing legacy-route script explicitly enumerates
-  `ci.yml`, not the newly separate native workflow. The moved native block has
-  no retired-route literal; its future route edits would not be covered by that
-  script. Expanding the script's target enumeration is outside this increment's
-  exact workflow/evidence-only diff boundary; no duplicate regex or source-text
-  rewriting workaround was introduced.
+- Audit-surface limit at the trim revision: the legacy-route script then
+  enumerated `ci.yml` and not the newly separate native workflow. The moved
+  native block has no retired-route literal; its future route edits would not
+  have been covered by that script. Expanding the script's target enumeration
+  was outside this increment's exact workflow/evidence-only diff boundary; no
+  duplicate regex or source-text rewriting workaround was introduced. #43
+  (`724d915`, 2026-11-17, an ancestor of this branch's base) resolved the
+  limit: the script now derives its targets from `git ls-files`, so the native
+  workflow is audited, and `scripts/ci/test-no-legacy-routes-audit.py`
+  (`.github/workflows/ci.yml:1355`) pins the derivation.
 
 The hosted-measurement and execution-proof clause is satisfied by the rows
 above. At authoring time no commit, push, PR creation, history rewrite, remote

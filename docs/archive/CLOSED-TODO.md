@@ -368,7 +368,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       below keeps its original `docs/TODO.md` pointer for this item; the entry itself now lives
       in this archive.
 
-*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #76).*
+*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stayed there until it moved here on 2026-11-19 (PR #76).*
 
       **Linux terminal reason — fixed at the cause; verification is CI on the new revision, not a
       local green.** `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` failed
@@ -781,12 +781,15 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       skipped), 12 s wall-clock (`14:06:18Z`–`14:06:30Z`); the trim revision's after runs
       (PR #28 run `43724904655` attempt 2 and merge push `f47b0c3` run `43726189932`, both
       12/12) are beside them in the record's measurement table, with the status,
-      clause-coverage and limits sections updated. Three later PR #99 samples on this
-      branch carried the record itself, so `run-records=true` and `record-cleanliness`
-      executed: runs `44540613218` (head `0d0e998`), `44540895110` (head `06502b5`) and
-      `44554983915` (head `ad87f9b`) — 10 job records each, 3 success (`changes`,
-      `legacy-route-audit`, `record-cleanliness`), 7 skipped, 19 s / 20 s / 26 s
-      wall-clock. Cross-check: the workflow's classifier
+      clause-coverage and limits sections updated (the audit-surface limit is annotated
+      as true at the trim revision and resolved by #43, `724d915`). Six later PR #99
+      samples on this branch carried the record itself (the count at revision
+      `83f6036`), so `run-records=true` and `record-cleanliness` executed: runs
+      `44540613218` (head `0d0e998`), `44540895110` (head `06502b5`), `44554983915`
+      (head `ad87f9b`), `44560447996` (head `b2a1340`), `44565580363` (head `4b12e59`)
+      and `44566899850` (head `83f6036`) — 10 job records each, 3 success (`changes`,
+      `legacy-route-audit`, `record-cleanliness`), 7 skipped, 19 s / 20 s / 26 s / 22 s /
+      15 s / 18 s wall-clock. Cross-check: the workflow's classifier
       block over each pull request's first-parent diff (PR #29: its `docs/TODO.md`-only diff
       against `f47b0c3`; PR #99's first sample: the merge ref's `HEAD^1..HEAD`, the same five `docs/**`
       paths) reports `run-heavy=false` for both, and the current classifier reports
@@ -796,12 +799,19 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       jobs plus `record-cleanliness` — and `changes` and the ungated `legacy-route-audit`
       ran in both. Evidence:
       `gh run view 43726243703 --json jobs,createdAt,updatedAt`; `gh run view
-      44540158144 --json jobs,createdAt,updatedAt`; `gh run view 43724904655 --attempt 1|2
-      --json jobs`; `gh run view 43726189932 --json jobs`;
+      44540158144 --json jobs,createdAt,updatedAt`; `gh run view 43724904655
+      --attempt 1 --json jobs`; `gh run view 43724904655 --attempt 2 --json
+      jobs`; `gh run view 43726189932 --json jobs`;
       `gh api repos/wxxb789/symmetry/actions/runs?created=2026-11-15T14:40:00Z..2026-11-15T15:10:00Z`
       shows no pull_request run between the trim merge and PR #29's sample;
-      `gh api repos/wxxb789/symmetry/actions/runs/{44540613218,44540895110,44554983915}/jobs?per_page=100`
-      (heads `0d0e998`, `06502b5`, `ad87f9b`; 10 check records each: 3 success, 7 skipped);
+      `gh api repos/wxxb789/symmetry/actions/runs/44540613218/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44540895110/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44554983915/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44560447996/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44565580363/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44566899850/jobs?per_page=100`
+      (heads `0d0e998`, `06502b5`, `ad87f9b`, `b2a1340`, `4b12e59`, `83f6036`; 10 check
+      records each: 3 success, 7 skipped);
       `python3
       scripts/ci/model-routing-record-sanitize.py --check --root-only
       docs/evidence/ci-process-trim-2026-11-15.md` exit 0; `bash
@@ -1240,7 +1250,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
 
 ## Open findings from the 0008b model-routing review
 
-*Closed part of the item “Revalidate the open class B finding against `daemon/internal/platform/process_windows.go` …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #102).*
+*Closed part of the item “Revalidate the open class B finding against `daemon/internal/platform/process_windows.go` …” in `docs/TODO.md`; the open residual stayed there until it moved here on 2026-11-19 (PR #102).*
 
       **Fixed** (branch `fix/non-durable-close-proof`). `jobContainment.Close`
       now latches the failed physical stop proof into `job.closeErr` in the
@@ -1359,7 +1369,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       in `docs/TODO.md`, with the argv/output-only scope it asked for; each open item was moved
       separately, so this entry carries no residual.
 
-*Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #99).*
+*Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stayed there until it moved here on 2026-11-19 (PR #99).*
 
       Third pass (the `gpt-6.2-sol` findings, each re-verified against its
       artifact). Closed by restating them against their owners rather than
@@ -1498,8 +1508,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       Revalidated in full (2026-11-19, branch `docs/runbook-quality-drift`): every claim named
       below was rechecked against its owner, and the claim | owner | verdict | change table with each
       owner's current file:line is in the PR body — the CI inventory sentence against
-      `.github/workflows/ci.yml:1171-1346` (`daemon`: gofmt, `go vet`, the scoped ordinary
-      pass and the full `-race` pass) and `:1357-1474` (`daemon-windows`: `go test ./...`
+      `.github/workflows/ci.yml:1171-1345` (`daemon`: gofmt, `go vet`, the scoped ordinary
+      pass and the full `-race` pass) and `:1357-1473` (`daemon-windows`: `go test ./...`
       plus its named witnesses); OpenCode 2.3.0 against `docs/design/harness.md:15`,
       `daemon/internal/harness/registry.go:154,326-329` and the mechanical version guard
       `daemon/internal/harness/opencode/adapter.go:283-284` (TestedVersion `:28`); the
@@ -1514,7 +1524,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `MIX_TEST_PARTITION` against
       `control/config/test.exs:14-15` and
       `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs:1365`;
-      Compose forwarding against `compose.production.yaml:28-39` with the `legacy`/`false`
+      Compose forwarding against `compose.production.yaml:28-36` with the `legacy`/`false`
       defaults in `control/config/runtime.exs:27,86`; the 45-second skip bound against
       `daemon/e2e/core_test.go:196,242-245` and CI's `SYMMETRY_LEASE_DURATION_MS=30000` with
       the named JSON assertion (`.github/workflows/ci.yml:1503,1578-1599`); the Pi
@@ -1522,7 +1532,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       and `probe.go:242`; the installed-owner vocabulary against
       `docs/design/quality.md:80-85` (OpenCode side: `registry.go:154`,
       `harness.md:82,120`); and the docs-index
-      convention against `AGENTS.md:24-26`. `portal.md`'s `playwright-report/` location and its CSRF
+      convention paragraph (`README.md:325-330`) against `AGENTS.md:30-31` and
+      `:64-67`. `portal.md`'s `playwright-report/` location and its CSRF
       sentence were rechecked the same way and still match their owners
       (`browser/playwright.config.mjs:6-7,20` for the result and report directories; Plug 1.20.3's
       `@unprotected_methods ~w(HEAD GET OPTIONS)` for the read exemption, `control/mix.lock`).
