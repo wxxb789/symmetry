@@ -959,28 +959,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Paginated reads must be bound to the cursor that served their pages
 
-- [ ] The owner's decision on unifying the chat conversation's retained-page treatment, plus the
-      browser suites' live-daemon pagination runs (2026-11-19). The class scan is complete and every
-      portal paginated read is accounted for (`fix/paginated-reads-cursor-binding`): the Goal
-      receipt list is bound by construction — its pages are keyed by their own `after` sequence
-      numbers (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are
-      append-only and re-read under their own keys, so a page is never served under a boundary it
-      was not fetched from; the work history and the attention feed are bound by #68; the chat
-      conversation binds its pages by the boundary message's id, and its gap proof now requires
-      every retained page to be reached from the served boundary — through a recovered boundary or
-      an overlap — instead of accepting one reached page as proof for all, which had let the pages a
-      moved boundary left behind render a skipped region as contiguous; the note now names the
-      attached chain's boundary and the newest unreached page
-      (`frontend/src/features/chat/presentation.ts`, `frontend/src/features/chat/chat.tsx`). The
-      operator API's paged reads (`/api/v1/tasks/:task_id/{timeline,events,transitions,commands}`,
-      `/api/v1/attention`) have no retaining consumer — bounded one-shot paging in
-      `scripts/ci/omo-control-native-evidence.py` and single verification reads in the browser
-      suites — and are out of the reader-visible class, as is the provider pagination in
-      `control/lib/symmetry_control/integrations/providers/` (outbound one-shot aggregation). What
-      remains: (a) the reader-visible unification this entry's first text deferred — the chat keeps
-      the pages a moved boundary left behind and states the unloaded region, while the work history
-      and the attention feed retire them; unifying changes one surface's behaviour, so it needs its
-      own owner decision; (b) retiring a page is reader-visible too (an expanded page disappears
-      when a live run moves the boundary), and it is covered by the frontend suite only: the
-      browser suites, which CI runs, carry the live-daemon pagination cases and were not run on
-      this host.
+- [ ] Residuals of the completed class scan (2026-11-19): (a) the owner's decision on unifying the
+      chat conversation's keep-and-state treatment with the work history's and the attention feed's
+      retirement — an expanded page the chat keeps renders beside a stated unloaded region, while
+      the other two retire it, and unifying changes one surface's reader-visible behaviour; (b) the
+      browser suites, which CI runs, carry the live-daemon pagination cases (an expanded page
+      disappearing when a live run moves the boundary is covered by the frontend suite only) and
+      were not run on this host. The scan and its fixes are archived in
+      `docs/archive/CLOSED-TODO.md`.

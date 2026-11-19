@@ -15,6 +15,9 @@ not a claim that work remains.
 The five dead-code closures appended to `## Dead-code candidates` below were moved on 2026-11-19
 from branch `chore/deadcode-revalidation`.
 
+The closed class scan appended to `## Paginated reads must be bound to the cursor that served their
+pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-binding`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -524,3 +527,42 @@ from branch `chore/deadcode-revalidation`.
       its chain was expanded from. No timer, poll or automatic read was added: the pages a moved
       boundary retires are loaded again by the reader's own "Load older history" / "Load more Goal
       attention", which continues from the served boundary.
+
+- [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
+      construction: its pages are keyed by their own `after` sequence numbers
+      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
+      re-read under their own keys, so a page is never served under a boundary it was not fetched
+      from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
+      gap in `frontend/src/features/chat/presentation.ts`, rendered by
+      `frontend/src/features/chat/chat.tsx`) and therefore still differs from this fix: it keeps the
+      pages a moved boundary left behind and states the unloaded region, while the work history and
+      the attention feed retire them. Unifying the two changes one surface's reader-visible
+      behaviour, so it needs its own decision. Retiring a page is reader-visible too (an expanded
+      page disappears when a live run moves the boundary), and it is covered by the frontend suite
+      only: the browser suites, which CI runs, carry the live-daemon pagination case and were not
+      run on this host.
+
+      **Closed (2026-11-19, `fix/paginated-reads-cursor-binding`):** the scan enumerated every
+      paginated read with two search strategies — the server-side pagination parameters, the
+      `page_with_next` reads and the generated contract DTOs that carry
+      `next_before`/`next_after`/`next_cursor`, and every client consumer that accumulates pages
+      (`useInfiniteQuery`, `useQueries`, the retained page state) — and decided each: the work
+      detail's execution history (`/portal/api/work-items/:id/timeline`) and the Goal attention feed
+      (`/portal/api/attention`) are bound by #68; the Goal receipt list
+      (`/portal/api/goals/:id/events`) is bound by construction, its pages keyed by their own
+      `after` sequence over an append-only log and re-read under those keys; the chat conversation
+      (`/portal/api/chat`) binds its pages by the boundary message's id, and this branch fixed the
+      two ways that binding could still lie — the gap proof now requires every retained page to be
+      reached from the served boundary, so a later page that did reach the boundary no longer
+      excuses a chain a moved boundary left behind, and the note names the attached chain's
+      boundary and the newest unreached page, naming each further region as loads reach it; and the
+      reader's own "Load older" now reads through the cache under the cursor and boundary captured
+      at press time, so a re-serve that re-keys the surface mid-load neither cancels the press nor
+      binds its page to the boundary that arrived afterwards. The operator API's paged reads
+      (`/api/v1/tasks/:task_id/{timeline,events,transitions,commands}`,
+      `/api/v1/goals/:goal_id/events`, `/api/v1/attention`) have no retaining consumer — one-shot
+      cursor paging in `scripts/ci/omo-control-native-evidence.py` and `daemon/e2e/core_test.go`,
+      and the browser suites' single reads and bounded drains (e.g. `portal-chat.spec.mjs`) for
+      verification — as is the providers' outbound pagination
+      (`control/lib/symmetry_control/integrations/providers/`), one-shot aggregation. The residual
+      in `docs/TODO.md` is the owner's unification decision and the CI browser runs.
