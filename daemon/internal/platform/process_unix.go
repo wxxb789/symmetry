@@ -656,9 +656,13 @@ func (group *processGroup) waitForInitialDescendantScan(deadline time.Time) erro
 	if !complete {
 		return fmt.Errorf("%w: initial descendant scan did not publish a result", ErrLinuxDescendantContainmentUnproven)
 	}
-	if initialResult.stopped && group.monitorDone != nil {
-		// A stopped initial scan ends the monitor; return only after it exits
-		// so the caller never races its final state writes.
+	if initialResult.endsMonitor() && group.monitorDone != nil {
+		// An initial scan that ends the monitor (a clean leader-absent
+		// proof, a scan failure, an observed escape or a seal) must be
+		// observed to exit before this barrier returns: the monitor
+		// publishes its final scan state and closes monitorDone only
+		// after it signals the initial scan, so the scan result alone
+		// does not order those writes before the caller's reads.
 		select {
 		case <-group.monitorDone:
 		case <-timer.C:
