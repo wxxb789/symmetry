@@ -430,3 +430,30 @@ not a claim that work remains.
       its chain was expanded from. No timer, poll or automatic read was added: the pages a moved
       boundary retires are loaded again by the reader's own "Load older history" / "Load more Goal
       attention", which continues from the served boundary.
+
+## Control instances sharing one worktree's build
+
+- [ ] Two Control instances started from the same worktree share `control/_build`, so a foreign
+      session's dev server can answer this worktree's browser runs with `# unhandled` error pages
+      (observed 2026-11-17 as console-500 assertions and render-wait timeouts during 0007g's
+      suite-context repetitions, with zero offset-assertion failures in the same runs). Give each
+      instance its own `MIX_BUILD_PATH` when several run at once; the runs that need isolation
+      should do it explicitly rather than relying on nobody else being active.
+
+      **Fixed (2026-11-19, `fix/control-instance-build-isolation`):** both harnesses that start a
+      Control instance from a worktree now pin that instance's own build path:
+      `browser/scripts/run-planning-tests.ps1` and
+      `browser/scripts/run-connection-fixture-tests.ps1` export
+      `MIX_BUILD_PATH=<worktree>/control/_build/instances/<harness>-<port>` for every mix command
+      they run and set it again on the server (planning) or fixture (connections) command they
+      start, so two concurrent instances in one worktree - which can never share a port, because
+      each harness refuses an occupied one - can never share compiled output. Deps sources stay
+      shared under `control/deps`; only compiled output moves. An inherited `MIX_BUILD_PATH` is
+      overridden and reported, never trusted, because a stale one from the surrounding shell is the
+      same accident. `browser/scripts/control-instance-isolation.test.mjs`
+      (`pnpm --filter symmetry-browser-acceptance test:control-isolation`) drives each real harness
+      with a recording `mise` stub and asserts that every mix invocation it makes - the database
+      tasks and the instance start alike - received the harness's own instance build path, that two
+      ports get two paths, and that a foreign inherited value decides nothing; `browser/README.md`
+      records the convention, including the path an operator-started Control server needs when
+      another instance may run from the same worktree.

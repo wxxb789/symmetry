@@ -16,8 +16,10 @@ param(
 #
 # The run fails closed before any browser flow: the target must be the loopback
 # port this harness starts, that port must be free before anything starts, the
-# acceptance database is recreated and migrated for this run, and the server
-# must answer /healthz before the spec runs. The spec itself skips without the
+# acceptance database is recreated and migrated for this run, the server
+# compiles into this instance's own build path (MIX_BUILD_PATH under
+# control/_build/instances, never the shared control/_build/dev), and it must
+# answer /healthz before the spec runs. The spec itself skips without the
 # harness environment and the summary assertion below turns a skipped run into
 # a failure.
 $ErrorActionPreference = "Stop"
@@ -51,6 +53,24 @@ try {
 # Per-run operator token: a foreign control plane on this port cannot satisfy
 # the login the spec performs with it.
 $operatorToken = [guid]::NewGuid().ToString("N")
+
+# Instance build isolation: two Control instances started from the same
+# worktree must not share control/_build, where a compile another instance runs
+# (or the dev code reloader that compile feeds) decides what this run's server
+# loads and reloads - the 2026-11-17 observation was a foreign session's
+# server answering this worktree's browser runs with `# unhandled` error pages.
+# This harness owns the instance it starts and pins its compiled output per
+# port, so two concurrent instances in one worktree - which can never share a
+# port, because the preflight above refuses an occupied one - can never share a
+# build path. Deps sources stay shared under control/deps; only compiled output
+# moves. An inherited MIX_BUILD_PATH is overridden explicitly, never trusted:
+# a stale one from the surrounding shell would point this instance at another
+# directory, which is the isolation this harness must own itself.
+$instanceBuildPath = Join-Path $controlRoot ("_build/instances/planning-" + $Port)
+if ($env:MIX_BUILD_PATH) {
+  Write-Host "ignoring inherited MIX_BUILD_PATH '$env:MIX_BUILD_PATH': this instance compiles into $instanceBuildPath"
+}
+$env:MIX_BUILD_PATH = $instanceBuildPath
 
 $env:POSTGRES_HOST = "127.0.0.1"
 $env:POSTGRES_PORT = [string]$DbPort
@@ -86,8 +106,11 @@ try {
   # the BEAM mid-run (process gone, empty stderr, no crash dump), and a restart
   # keeps the remaining cases meaningful while the log records every restart.
   # A restart never turns a failure into a pass - every case still has to pass.
+  # MIX_BUILD_PATH is set again here, beside PORT, so the launcher states the
+  # instance's own build path instead of relying on what it inherited.
   $serverCommand = ":serve`r`n" +
     "echo [harness] control plane start %TIME%`r`n" +
+    "set `"MIX_BUILD_PATH=$instanceBuildPath`" && " +
     "set `"PORT=$Port`" && " +
     "set `"SYMMETRY_OPERATOR_TOKEN=$operatorToken`" && " +
     "cd /d `"$controlRoot`" && " +
@@ -181,6 +204,7 @@ try {
     $specStatus = 1
   }
 
+  Write-Host "instance build path: $instanceBuildPath"
   Write-Host "control log: $serverLog"
   Write-Host "spec log: $specLog"
   Write-Host "browser artifacts: $env:SYMMETRY_PLAYWRIGHT_OUTPUT"
