@@ -1355,6 +1355,92 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `docs/evaluations/model-routing/README.md`, "Record rendering exception
       (2026-11-19)".
 
+- [ ] Revalidate the runbook claims that are true on this tree but rot without any
+      edit to `docs/runbooks/**` (found while independently resolving every
+      checkable runbook claim on `632b369`). A CI job split or rename invalidates
+      `daemon-process-stop.md`'s "the daemon job runs `go vet`, a scoped ordinary
+      Go pass and the full `-race` suite ... and the `daemon-windows` job runs the
+      full Windows suite"; a harness pin move invalidates
+      `daemon-opencode-peer-ownership.md`'s "OpenCode 2.3.0 is explicitly
+      unsupported" and `control-plane-and-daemon.md`'s "the script-local version
+      guard is `-ExpectedClaudeVersion 2.1.281`, which is not the daemon's
+      promoted Claude pin" (both follow `docs/design/harness.md`); a pnpm bump
+      invalidates every `mise exec pnpm@12.17.0 -- …` command (they follow
+      `package.json`'s `packageManager`); a change to the `development-*` fallbacks
+      invalidates the sign-in and live-check examples (`control/config/runtime.exs`
+      `:63-64`); a rename of the workspace read's health keys invalidates
+      `portal.md`'s four signal names (`health/4` in
+      `control/lib/symmetry_control/workspaces/read_model.ex:471`); and
+      `session-receipt-recovery-e2e.md`'s `mix ecto.drop --force` uses the Ecto
+      option meaning "do not ask for confirmation", not `--force-drop`, so an
+      Ecto-side change to that option would change what the cleanup line does. The
+      runbooks also cite *Commands and gates* in `docs/design/quality.md` as the
+      checks CI actually runs while that section still carries the stale frontend
+      rows tracked under *Deferred review findings (0007i)* below.
+
+      Closed in the second pass (the review findings of `gpt-6.1-sol` on `#70`,
+      each re-verified against its artifact): `connections.md` no longer asserts
+      the `vso.code`/`vso.work`/`vso.build` scope mapping it could not support —
+      the shipped code requests an Entra resource token
+      (`control/lib/symmetry_control/integrations/auth.ex:41-46`) and names no
+      scope — and instead states the read-versus-write requirement the code does
+      establish (`change.upsert`/`change.update` create or update pull requests in
+      `integrations/providers/{github,azure_devops}.ex`), with the scope and
+      permission names explicitly left to the provider. Still rot-prone after that
+      pass, with no artifact that can re-derive them: the runbooks index's
+      precedence rule (it now mirrors `AGENTS.md:24`'s record-the-conflict
+      requirement instead of "the code wins", so a change to that contract
+      bullet invalidates it), `portal.md`'s board-move sentence (the keyboard
+      bindings follow `frontend/src/features/projects/work-surface.tsx:115` and
+      the Goal-managed refusal follows `ensure_legacy_work_item/1`), `portal.md`'s
+      `playwright-report/` location (follows `browser/playwright.config.mjs` and
+      `browser/README.md`), `portal.md`'s CSRF sentence (follows Plug's
+      `@unprotected_methods ~w(HEAD GET OPTIONS)`), and
+      `chat-and-supervisory-control.md`'s supervisory/intent scoping (follows
+      `control_capabilities/4` in `control/lib/symmetry_control/orchestration.ex`
+      and the daemon's autonomy envelope in `daemon/internal/app/app.go`).
+
+      *(Partly superseded by the archived third-pass closure, which restated several of these
+      against their owners; see `docs/archive/CLOSED-TODO.md`. The revalidatable list below stays
+      open.)*
+      Closed part moved to `docs/archive/CLOSED-TODO.md`.
+
+      Still revalidatable, with no artifact that can pre-empt a future edit: the
+      generated-name regex and the `MIX_TEST_PARTITION` behaviour (Ecto/Ecto
+      test-config side), the 45-second skip bound in
+      `daemon/e2e/core_test.go`, the list of variables the production Compose
+      service forwards, the Pi/native provider-bridge gate's exact shape, the
+      installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
+      convention paragraph itself (it restates the precedence the design and
+      protocol documents already carry).
+      Revalidated in full (2026-11-19, branch `docs/runbook-quality-drift`): every claim above
+      was rechecked against its owner, and the claim | owner | verdict | change table with each
+      owner's current file:line is in the PR body — the CI inventory sentence against
+      `.github/workflows/ci.yml:1195-1247` (`daemon`: gofmt, `go vet`, the scoped ordinary
+      pass and the full `-race` pass) and `:1357-1415` (`daemon-windows`: `go test ./...`
+      plus its named witnesses); OpenCode 2.3.0 against `docs/design/harness.md:15` and
+      `daemon/internal/harness/registry.go:154,326-329`; the Claude smoke guard against
+      `scripts/claude-code-local-transport-smoke.ps1:14` (default `2.1.281`) versus the
+      promoted `harness.md:11` blob; the pnpm commands against `package.json:5`; the
+      `development-*` examples against `control/config/runtime.exs:63-64`; `portal.md`'s four
+      health signals against `control/lib/symmetry_control/workspaces/read_model.ex:504-515`
+      (the item's `:471` was stale); `mix ecto.drop --force` against
+      `control/deps/ecto/lib/mix/tasks/ecto.drop.ex:35-38` ("do not ask for confirmation",
+      distinct from `--force-drop`); the generated-name regex and `MIX_TEST_PARTITION` against
+      `control/config/test.exs:14-15` and
+      `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs:1365`;
+      Compose forwarding against `compose.production.yaml:28-39` with the `legacy`/`false`
+      defaults in `control/config/runtime.exs:27,86`; the 45-second skip bound against
+      `daemon/e2e/core_test.go:196,242-245` and CI's `SYMMETRY_LEASE_DURATION_MS=30000` with
+      the named JSON assertion (`.github/workflows/ci.yml:1503,1578-1599`); the Pi
+      provider-bridge gate against `daemon/internal/harness/pi/provider_extension.go:459-467`
+      and `probe.go:242`; the installed-owner vocabulary against
+      `daemon/internal/harness/registry.go:154` and `harness.md:82,120`; and the docs-index
+      convention against `AGENTS.md:24-26`. Both edited runbooks now name their owner file
+      (`daemon/e2e/core_test.go` in `control-plane-and-daemon.md`; `daemon/internal/harness/pi`
+      in `connections.md`). Evidence: the owner reads above plus the docs-only hosted CI run on
+      this branch; no suite beyond that is required for a docs-only diff.
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Investigate the intermittent Control failure
@@ -1431,6 +1517,18 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       field is tracked and their handler snapshots stay fresh, and they are left unchanged. Host
       note: this host runs ~14 parallel workers, so local browser verdicts are indicative only; CI
       holds the verdict.
+
+- [ ] Revalidate the pre-existing doc drift in `docs/design/quality.md`: line 41 still says the frontend
+      commands "do not exist until goal 0007 builds `frontend/`" and line 116 lists them as a goal-0007
+      target, while `.github/workflows/ci.yml:67-70` has run them since 0007a. Observed while recording
+      the 0007i gate table; update the quality policy in a separate documentation change.
+      Fixed (2026-11-19, branch `docs/runbook-quality-drift`): the *Commands and gates* TS row no
+      longer frames the frontend commands as a goal-0007 target or asks for a browser-runner pnpm
+      migration; it now states the delivered reality — commands owned by `frontend.md`, run by CI in
+      the `contracts` job (`.github/workflows/ci.yml:107-110`), with the browser runner already pnpm
+      (`.github/workflows/ci.yml:618`). Line 41 was already corrected on main by `f2a759f`; this
+      change corrects :116, and `rg -n 'goal 0007 target|do not exist until goal 0007'
+      docs/design/quality.md` is empty on the committed bytes.
 
 ## Paginated reads must be bound to the cursor that served their pages
 
