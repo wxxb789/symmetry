@@ -66,7 +66,9 @@ def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> 
     A requested base that is not present in this checkout - the usual shape of a
     force-push, where the pushed ``before`` commit is unreachable - falls back to the
     ``origin/main`` merge base instead of refusing, and says so; only a range that
-    cannot be compared at all refuses.
+    cannot be compared at all refuses. A fallback that resolves to the head itself
+    would compare a revision with itself and report a vacuous pass, so it refuses
+    instead of passing: an unscoped run can never read as a pass.
     """
     if requested and requested != ZERO_COMMIT:
         resolved = resolve_commit(repository, requested)
@@ -79,7 +81,16 @@ def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> 
         )
     merge_base = run_git(repository, "merge-base", head, "origin/main")
     if merge_base.returncode == 0:
-        return merge_base.stdout.decode("ascii", "replace").strip()
+        resolved = merge_base.stdout.decode("ascii", "replace").strip()
+        if resolved == head:
+            print(
+                "check-record-cleanliness refused: the origin/main fallback base is the head "
+                "itself, so the range would be empty; pass an explicit --base (a force-push "
+                "rewrites history, so name the revision this change is to be compared against)",
+                file=sys.stderr,
+            )
+            return None
+        return resolved
     first_parent = resolve_commit(repository, f"{head}^")
     return first_parent
 

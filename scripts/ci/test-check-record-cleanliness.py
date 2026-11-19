@@ -144,6 +144,19 @@ class RecordCleanlinessTests(unittest.TestCase):
         self.assertIn("host-path.md", result.stderr)
         self.assertIn("not present in this checkout", result.stderr)
 
+    def test_a_fallback_base_that_equals_the_head_is_refused(self) -> None:
+        # A force-push to main whose `before` is unreachable resolves to a fallback base
+        # equal to the head (origin/main now points at it): comparing a revision with
+        # itself would pass vacuously while the head adds a host-path record, so the gate
+        # refuses instead of reporting "nothing to check".
+        self.write("docs/evidence/host-path.md", "the run store was /tmp/symmetry-0008d-eval\n")
+        head = self.commit("force-pushed record")
+        self.git("update-ref", "refs/remotes/origin/main", head)
+        result = self.run_gate("--base", "0123456789abcdef0123456789abcdef01234567", "--head", head)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("fallback base is the head", result.stderr)
+        self.assertNotIn("nothing to check", result.stdout)
+
     def test_a_range_with_no_comparison_at_all_is_refused(self) -> None:
         # A repository with a single commit and no origin/main has no base to compare
         # against: refusing is the only safe outcome.
