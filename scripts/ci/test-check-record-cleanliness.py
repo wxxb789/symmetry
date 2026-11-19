@@ -8,6 +8,7 @@ no record) and the boundary the tool draws (a product route and a bare root toke
 stay literal; a real host path is refused).
 """
 
+import os
 import pathlib
 import subprocess
 import sys
@@ -132,12 +133,62 @@ class RecordCleanlinessTests(unittest.TestCase):
         self.assertIn("host-path.md", result.stderr)
         self.assertNotIn("bare-roots.md", result.stderr)
 
-    def test_an_unresolvable_base_is_refused(self) -> None:
+    def test_an_unreachable_base_falls_back_and_says_so(self) -> None:
+        # A force-push leaves the pushed `before` commit unreachable; the gate falls
+        # back to the origin/main merge base instead of failing open or refusing.
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
         self.write("docs/evidence/host-path.md", "the run store was /tmp/symmetry-0008d-eval\n")
         head = self.commit("add a record")
         result = self.run_gate("--base", "0123456789abcdef0123456789abcdef01234567", "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("host-path.md", result.stderr)
+        self.assertIn("not present in this checkout", result.stderr)
+
+    def test_a_range_with_no_comparison_at_all_is_refused(self) -> None:
+        # A repository with a single commit and no origin/main has no base to compare
+        # against: refusing is the only safe outcome.
+        orphan = self.root / "orphan-repository"
+        orphan.mkdir()
+        subprocess.check_call(["git", "init", "--quiet"], cwd=str(orphan))
+        subprocess.check_call(["git", "config", "user.name", "Fixture"], cwd=str(orphan))
+        subprocess.check_call(["git", "config", "user.email", "fixture@example.invalid"], cwd=str(orphan))
+        (orphan / "docs" / "evidence").mkdir(parents=True)
+        (orphan / "docs" / "evidence" / "record.md").write_text("clean\n", encoding="utf-8")
+        subprocess.check_call(["git", "add", "-A"], cwd=str(orphan))
+        subprocess.check_call(["git", "commit", "--quiet", "-m", "only commit"], cwd=str(orphan))
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(orphan), "--base", ZERO],
+            capture_output=True, text=True, check=False,
+        )
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("cannot resolve a comparison base", result.stderr)
+
+    def test_a_renamed_record_is_checked_under_its_new_path(self) -> None:
+        # `--no-renames` reports a rename as delete + add, and the added path carries
+        # the content the gate must parse.
+        self.git("mv", "docs/evaluations/model-routing/clean.json",
+                 "docs/evaluations/model-routing/renamed.json")
+        self.write("docs/evaluations/model-routing/renamed.json", '{"store": "/tmp/symmetry-0008d-eval"}\n')
+        head = self.commit("rename a record and smuggle a host path")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("renamed.json", result.stderr)
+
+    def test_a_type_changed_record_is_checked(self) -> None:
+        # The selection includes a path that changed type (a file replaced by a link):
+        # the tool reads what the path serves at the head revision.
+        target = self.root / "linked-record.json"
+        target.write_text('{"store": "/tmp/symmetry-0008d-eval"}\n', encoding="utf-8")
+        path = self.repo / "docs" / "evaluations" / "model-routing" / "clean.json"
+        path.unlink()
+        try:
+            os.symlink(target, path)
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"symlink creation is unavailable: {error}")
+        head = self.commit("replace a record with a link")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("clean.json", result.stderr)
 
     def test_an_all_zero_base_falls_back_to_the_merge_base(self) -> None:
         self.git("update-ref", "refs/remotes/origin/main", self.base)

@@ -58,19 +58,46 @@ DISPOSABLE_ROOT_TOKEN = "<disposable-root>"
 # whitespace and JSON/CLI punctuation so a quoted or comma-separated path
 # renders cleanly, and the final ``+`` requires a real path segment so a lone
 # separator never matches.
+# One forward slash, or its JSON-escaped spelling (`\/`): a record quoted into a JSON
+# string carries both forms, and the checker must not miss a host path because the
+# writer escaped it.
+_HOST_SEP = r"(?:/|\\/)"
 _DRIVE_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>])[A-Za-z]:[\\/][^\s\"'`,;:)]*")
-_UNC_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>])\\\\[^\s\\\"'`,;:)]+\\[^\s\"'`,;:)]+")
-_POSIX_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>.])/(?:[^/\s\"'`,;:)]+/)*[^\s\"'`,;:)]+")
-# The filesystem roots a host absolute path actually starts with, in the shape the
-# evaluation runner's host-path redaction (`HOST_PATH_PATTERNS`) and the committed
-# records name. `/portal/runtimes` and any other product route stay literal in
-# `--root-only` mode because their first segment is not one of these roots, and a
-# bare root token with no following separator or segment (`/tmp` quoted in prose)
-# stays literal too: it names no host-specific location.
-_HOST_ROOT = r"(?:home|Users|root|tmp|var|mnt|private)"
-_HOST_POSIX_PATH = re.compile(
-    r"(?<![A-Za-z0-9_:/\\>.])(?:/" + _HOST_ROOT + r"(?:(?:/[^/\s\"'`,;:)]+)+|/))"
+# A UNC path whose separators are backslashes, each written once or doubled by JSON
+# escaping: `\\server\share` and `{"p":"\\\\server\\share"}` are the same location.
+_UNC_PATH = re.compile(
+    r"(?<![A-Za-z0-9_:/\\>])\\\\(?:\\\\)?"
+    r"[^\s\\\"'`,;:)]+(?:\\|\\\\)[^\s\"'`,;:)]+"
 )
+_POSIX_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>.])/(?:[^/\s\"'`,;:)]+/)*[^\s\"'`,;:)]+")
+# A forward-slash authority path (`//server/share`), with each separator optionally
+# escaped. The lookbehind keeps URLs (`https://`) out: their `//` follows a colon.
+_SLASH_UNC_PATH = re.compile(
+    r"(?<![A-Za-z0-9_:\\/])(?:/|\\/)(?:/|\\/)[^\s\\/\"'`,;:)]+(?:/|\\/)[^\s\"'`,;:)]+"
+)
+# The filesystem roots a host absolute path actually starts with. `/portal/runtimes`
+# and any other product route stay literal in `--root-only` mode because their first
+# segment is not one of these roots, and a bare root token with no following separator
+# or segment (`/tmp` quoted in prose) stays literal too: it names no host-specific
+# location. `HOST_PATH_PATTERNS` is the one shared definition: the evaluation runner's
+# measured-value redaction imports it, so both tools agree on what a host path is.
+HOST_ROOT_SEGMENTS = ("home", "Users", "root", "tmp", "var", "mnt", "private")
+_HOST_ROOT = "(?:" + "|".join(HOST_ROOT_SEGMENTS) + ")"
+_HOST_POSIX_PATH = re.compile(
+    r"(?<![A-Za-z0-9_:>.])(?:" + _HOST_SEP + r")" + _HOST_ROOT
+    + r"(?:(?:" + _HOST_SEP + r")[^/\s\"'`,;:)]+)+(?:" + _HOST_SEP + r")?"
+)
+# A `file:` URL names an absolute location; without this, the drive or POSIX pattern's
+# lookbehind (the URL's own slashes) would hide a host path inside one.
+_FILE_URL_PATH = re.compile(
+    r"(?<![A-Za-z0-9_])file:(?:[\\/]{1,3})?"
+    r"(?:[A-Za-z]:[\\/]|(?:" + _HOST_SEP + r")" + _HOST_ROOT + r"(?:" + _HOST_SEP + r")"
+    r"|(?://|\\/\\/)[^\s\\/\"'`,;:)]+(?:[\\/]|\\/))"
+    r"[^\s\"'`,;:)]*"
+)
+# The root-only scope: every host shape above, and nothing that could be a product
+# route. The default scope stays `(_DRIVE_PATH, _UNC_PATH, _POSIX_PATH)`.
+HOST_PATH_PATTERNS = (_DRIVE_PATH, _UNC_PATH, _SLASH_UNC_PATH, _HOST_POSIX_PATH, _FILE_URL_PATH)
 
 
 def hashed_path_token(path: str) -> str:
@@ -105,9 +132,7 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     for root in roots:
         for variant in _root_variants(root):
             rendered = rendered.replace(variant, DISPOSABLE_ROOT_TOKEN)
-    patterns = (_DRIVE_PATH, _UNC_PATH, _HOST_POSIX_PATH) if root_only else (
-        _DRIVE_PATH, _UNC_PATH, _POSIX_PATH,
-    )
+    patterns = HOST_PATH_PATTERNS if root_only else (_DRIVE_PATH, _UNC_PATH, _POSIX_PATH)
     for pattern in patterns:
         rendered = pattern.sub(lambda match: hashed_path_token(match.group(0)), rendered)
     return rendered

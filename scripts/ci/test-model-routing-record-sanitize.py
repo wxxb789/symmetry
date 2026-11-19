@@ -48,6 +48,18 @@ PRODUCT_ROUTES = (
     "/assets/login.css",
 )
 
+# The same host paths as they appear after JSON quoting: doubled backslashes, an
+# escaped forward slash (`\/`) or a `file:` URL. A checker that misses these forms
+# would pass a record whose published bytes still name a host location.
+_BS, _FS = chr(92), chr(47)
+QUOTED_HOST_PATHS = (
+    '{"store":"' + _BS * 4 + "server" + _BS * 2 + "share" + _BS * 2 + "run" + '"}',
+    "store //server/share/run here",
+    "opened file:///C:/Users/operator/run today",
+    "opened file:///home/operator/x today",
+    "root " + _BS + _FS + "Users" + _BS + _FS + "operator" + _BS + _FS + "x kept",
+)
+
 
 def digest_of(path):
     return "path-sha256:" + hashlib.sha256(path.encode("utf-8")).hexdigest()
@@ -114,6 +126,19 @@ class SanitizeTextTests(unittest.TestCase):
         self.assertEqual(MODULE.sanitize_text(text, [], root_only=True), text)
         # The default scope still renders them, so this is a `--root-only` boundary.
         self.assertNotEqual(MODULE.sanitize_text(text, [], root_only=False), text)
+
+    def test_root_only_catches_quoted_and_url_host_paths(self):
+        for text in QUOTED_HOST_PATHS:
+            with self.subTest(text=text):
+                rendered = MODULE.sanitize_text(text, [], root_only=True)
+                self.assertNotEqual(rendered, text)
+                self.assertIn("path-sha256:", rendered)
+                # Rendering stays idempotent even with the quoted forms.
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+
+    def test_root_only_keeps_https_urls_literal(self):
+        text = "https://github.com/wxxb789/symmetry/blob/main/x and https://x/home/y"
+        self.assertEqual(MODULE.sanitize_text(text, [], root_only=True), text)
 
     def test_root_only_still_renders_a_disposable_root(self):
         text = ROOT + r"\controls\baseline-protocol"
@@ -197,6 +222,13 @@ class SanitizeCliTests(unittest.TestCase):
             result = self.run_cli(f"ran under {path}\n", "--check", "--root-only")
             self.assertEqual(result.returncode, 1, path)
             self.assertEqual(result.stdout, "", path)
+            self.assertIn("refused", result.stderr)
+
+    def test_cli_root_only_check_refuses_quoted_host_paths(self):
+        for text in QUOTED_HOST_PATHS:
+            result = self.run_cli(text + "\n", "--check", "--root-only")
+            self.assertEqual(result.returncode, 1, text)
+            self.assertEqual(result.stdout, "", text)
             self.assertIn("refused", result.stderr)
 
     def test_cli_root_only_renders_stdin_with_routes_kept(self):

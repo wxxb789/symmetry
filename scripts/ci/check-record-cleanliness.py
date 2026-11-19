@@ -13,11 +13,14 @@ path, or a ``--root`` disposable root still refuses.
 Changed-file selection is computed against an explicit comparison base, never from
 the checkout's last commit: CI passes the pull-request base commit, or the pushed
 ``before`` commit for a push. An empty or all-zero base - a new branch, a tag, a
-manual run - falls back to the merge base with ``origin/main`` and then to ``HEAD^``;
-a base that cannot be resolved at all is a refusal, so an unscoped run can never
-read as a pass. Unchanged records are deliberately not checked (the pre-existing
-0008-series records are tracked by their own TODO entries), and deleted records have
-nothing to check.
+manual run - falls back to the merge base with ``origin/main`` and then to ``HEAD^``,
+and a requested base that is not present in this checkout (a force-push's ``before``)
+takes the same fallback with a hint instead of refusing. The range is then narrowed to
+``git merge-base base head`` when one exists, so commits that belong to the base
+branch are not attributed to this change. Only a range that cannot be compared at all
+refuses, so an unscoped run can never read as a pass. Unchanged records are
+deliberately not checked (the pre-existing 0008-series records are tracked by their own
+TODO entries), and deleted records have nothing to check.
 
 Usage::
 
@@ -58,14 +61,35 @@ def resolve_commit(repository: pathlib.Path, revision: str) -> str | None:
 
 
 def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> str | None:
-    """The commit to compare ``head`` against, or None when none can be resolved."""
+    """The commit to compare ``head`` against, or None when none can be resolved.
+
+    A requested base that is not present in this checkout - the usual shape of a
+    force-push, where the pushed ``before`` commit is unreachable - falls back to the
+    ``origin/main`` merge base instead of refusing, and says so; only a range that
+    cannot be compared at all refuses.
+    """
     if requested and requested != ZERO_COMMIT:
-        return resolve_commit(repository, requested)
+        resolved = resolve_commit(repository, requested)
+        if resolved is not None:
+            return resolved
+        print(
+            f"check-record-cleanliness: base {requested} is not present in this checkout "
+            "(a force-push?); comparing against the origin/main merge base instead",
+            file=sys.stderr,
+        )
     merge_base = run_git(repository, "merge-base", head, "origin/main")
     if merge_base.returncode == 0:
         return merge_base.stdout.decode("ascii", "replace").strip()
     first_parent = resolve_commit(repository, f"{head}^")
     return first_parent
+
+
+def narrow_to_merge_base(repository: pathlib.Path, base: str, head: str) -> str:
+    """The merge base of base and head when one exists, so base-branch commits stay out."""
+    merge_base = run_git(repository, "merge-base", base, head)
+    if merge_base.returncode != 0:
+        return base
+    return merge_base.stdout.decode("ascii", "replace").strip() or base
 
 
 def changed_records(repository: pathlib.Path, base: str, head: str) -> list[str]:
@@ -126,6 +150,7 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
+    base = narrow_to_merge_base(repository, base, head)
     records = changed_records(repository, base, head)
     if not records:
         print(f"check-record-cleanliness: no record added or modified between {base[:12]} and {head[:12]}; nothing to check")
@@ -141,7 +166,8 @@ def main(argv: list[str]) -> int:
         print(
             f"check-record-cleanliness refused: {len(failures)} of {len(records)} changed records "
             "still carry a host absolute path; render argv/output capture with "
-            f"{SANITIZE_TOOL.name} --root-only or keep prose free of host paths",
+            f"{SANITIZE_TOOL.name} (its default scope) and keep prose free of host paths "
+            "instead of publishing the path",
             file=sys.stderr,
         )
         return 1
