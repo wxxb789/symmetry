@@ -1,0 +1,346 @@
+{
+  "comment": "Shared shell session return-target corpus. `path` is the request path and query the portal server validates before restoring it after login (control/lib/symmetry_control_web/portal_session.ex, PortalSession.return_to/1); the client rebuilds the same location from an absolute URL (frontend/src/app/application.ts, safeReturnTo) and must agree case by case. The enumerated accept/reject cases are pinned on both sides, so every path or query rule change on either side must add a corpus case; only the cases listed here are compared. `return_to` is the accepted target echoed back, or null when the target is refused: the server then falls back to /portal and the client to /portal/attention. This file is deliberately outside the wire-fixture manifest (`fixtures/manifest.json`) and its `pnpm contracts:check` validation: it describes shell URL acceptance, not a wire payload, and only `control/test/symmetry_control_web/portal_session_test.exs` and `frontend/src/app/application.test.ts` consume it. Three raw-string asymmetries stay out of the corpus because a single `path` string cannot express both sides: a bare trailing `#` (the parsed URL hash is empty, so the client accepts and emits the location without it, while the server receives fragment \"\" and refuses), an empty `?` query (the client's URL parser normalizes it away and the location is accepted, while the server refuses the empty query), and absolute, protocol-relative or backslash host forms (`https://host/portal/...`, `//host/portal/...`, `\\\\host\\portal`) that the client's URL parser resolves to an authority or a same-origin path while the server refuses any raw string carrying a scheme or host — or, for the backslash form, matching no shell path.",
+  "base_url": "https://portal.example.invalid",
+  "cases": [
+    {
+      "name": "the shell landing is a target of its own",
+      "path": "/portal",
+      "return_to": "/portal"
+    },
+    {
+      "name": "the legacy hash carrier keeps its retired project parameter",
+      "path": "/portal?project_id=project-123",
+      "return_to": "/portal?project_id=project-123"
+    },
+    {
+      "name": "the legacy hash carrier keeps its full retired search state",
+      "path": "/portal?project_id=project-123&chat_scope=run&run_id=run-456",
+      "return_to": "/portal?project_id=project-123&chat_scope=run&run_id=run-456"
+    },
+    {
+      "name": "attention keeps its project scope",
+      "path": "/portal/attention",
+      "return_to": "/portal/attention"
+    },
+    {
+      "name": "attention keeps the project it was scoped to",
+      "path": "/portal/attention?projectId=project-123",
+      "return_to": "/portal/attention?projectId=project-123"
+    },
+    {
+      "name": "chat keeps its scope selection",
+      "path": "/portal/chat",
+      "return_to": "/portal/chat"
+    },
+    {
+      "name": "chat keeps the workspace scope",
+      "path": "/portal/chat?scope=workspace",
+      "return_to": "/portal/chat?scope=workspace"
+    },
+    {
+      "name": "chat keeps the project scope",
+      "path": "/portal/chat?scope=project&projectId=project-123",
+      "return_to": "/portal/chat?scope=project&projectId=project-123"
+    },
+    {
+      "name": "chat keeps the run scope",
+      "path": "/portal/chat?scope=run&runId=run-456",
+      "return_to": "/portal/chat?scope=run&runId=run-456"
+    },
+    {
+      "name": "connections is a target of its own",
+      "path": "/portal/connections",
+      "return_to": "/portal/connections"
+    },
+    {
+      "name": "connections keeps the selected connection",
+      "path": "/portal/connections?connectionId=20000000-0000-4000-8000-000000000001",
+      "return_to": "/portal/connections?connectionId=20000000-0000-4000-8000-000000000001"
+    },
+    {
+      "name": "connections keeps the project whose resources it scopes",
+      "path": "/portal/connections?projectId=project-123",
+      "return_to": "/portal/connections?projectId=project-123"
+    },
+    {
+      "name": "connections keeps the project scope beside the selection",
+      "path": "/portal/connections?projectId=project-123&connectionId=20000000-0000-4000-8000-000000000001",
+      "return_to": "/portal/connections?projectId=project-123&connectionId=20000000-0000-4000-8000-000000000001"
+    },
+    {
+      "name": "a goal detail is a target of its own",
+      "path": "/portal/goals/goal-123",
+      "return_to": "/portal/goals/goal-123"
+    },
+    {
+      "name": "the projects index is a target of its own",
+      "path": "/portal/projects",
+      "return_to": "/portal/projects"
+    },
+    {
+      "name": "a project is a target of its own",
+      "path": "/portal/projects/project-123",
+      "return_to": "/portal/projects/project-123"
+    },
+    {
+      "name": "a project keeps its view and text filter",
+      "path": "/portal/projects/project-123?view=board&q=keeper",
+      "return_to": "/portal/projects/project-123?view=board&q=keeper"
+    },
+    {
+      "name": "a project keeps an encoded filter value and the blocked flag",
+      "path": "/portal/projects/project-123?q=Human+decision&blocked=%221%22",
+      "return_to": "/portal/projects/project-123?q=Human+decision&blocked=%221%22"
+    },
+    {
+      "name": "a project keeps an encoded owner filter",
+      "path": "/portal/projects/project-123?owner=agent%3Acodex",
+      "return_to": "/portal/projects/project-123?owner=agent%3Acodex"
+    },
+    {
+      "name": "a project keeps its state filter",
+      "path": "/portal/projects/project-123?state=ready",
+      "return_to": "/portal/projects/project-123?state=ready"
+    },
+    {
+      "name": "a project keeps a quoted text filter",
+      "path": "/portal/projects/project-123?q=%22123%22",
+      "return_to": "/portal/projects/project-123?q=%22123%22"
+    },
+    {
+      "name": "a project keeps the tab escape the shell writes for filter text",
+      "path": "/portal/projects/project-123?q=a%09b",
+      "return_to": "/portal/projects/project-123?q=a%09b"
+    },
+    {
+      "name": "the runtimes index is a target of its own",
+      "path": "/portal/runtimes",
+      "return_to": "/portal/runtimes"
+    },
+    {
+      "name": "runtimes keeps the project it was scoped to",
+      "path": "/portal/runtimes?projectId=project-123",
+      "return_to": "/portal/runtimes?projectId=project-123"
+    },
+    {
+      "name": "a work item is a target of its own",
+      "path": "/portal/work/work-123",
+      "return_to": "/portal/work/work-123"
+    },
+    {
+      "name": "a work item keeps its full search state",
+      "path": "/portal/work/work-123?view=list&q=a%09b&owner=agent%3Acodex&blocked=1&projectId=project-123",
+      "return_to": "/portal/work/work-123?view=list&q=a%09b&owner=agent%3Acodex&blocked=1&projectId=project-123"
+    },
+    {
+      "name": "a work item keeps its state filter",
+      "path": "/portal/work/work-123?state=running",
+      "return_to": "/portal/work/work-123?state=running"
+    },
+    {
+      "name": "the legacy carrier refuses an unknown key",
+      "path": "/portal?return_to=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "the legacy carrier refuses a project value outside the identifier charset",
+      "path": "/portal?project_id=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "the legacy carrier refuses a scope the server does not name",
+      "path": "/portal?chat_scope=admin",
+      "return_to": null
+    },
+    {
+      "name": "an attention notice only the legacy repair writes is refused",
+      "path": "/portal/attention?unavailable=legacy",
+      "return_to": null
+    },
+    {
+      "name": "attention refuses a foreign key",
+      "path": "/portal/attention?projectId=project-123&extra=1",
+      "return_to": null
+    },
+    {
+      "name": "attention refuses a project value outside the identifier charset",
+      "path": "/portal/attention?projectId=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "attention refuses an empty project value",
+      "path": "/portal/attention?projectId=",
+      "return_to": null
+    },
+    {
+      "name": "chat refuses a scope the server does not name",
+      "path": "/portal/chat?scope=admin",
+      "return_to": null
+    },
+    {
+      "name": "chat refuses an unknown key",
+      "path": "/portal/chat?unknown=1",
+      "return_to": null
+    },
+    {
+      "name": "chat refuses a run value outside the identifier charset",
+      "path": "/portal/chat?runId=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "connections refuses an unknown key",
+      "path": "/portal/connections?unknown=1",
+      "return_to": null
+    },
+    {
+      "name": "connections refuses a caller-chosen return target",
+      "path": "/portal/connections?return_to=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "connections refuses a connection value outside the identifier charset",
+      "path": "/portal/connections?connectionId=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "connections refuses a project value outside the identifier charset",
+      "path": "/portal/connections?projectId=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "connections refuses a percent-encoded path separator in the project id",
+      "path": "/portal/connections?projectId=project%2F123",
+      "return_to": null
+    },
+    {
+      "name": "connections refuses a header-injection project value",
+      "path": "/portal/connections?projectId=project-123%0d%0alocation%3ahttps://example.com",
+      "return_to": null
+    },
+    {
+      "name": "connections refuses a known key beside a foreign one",
+      "path": "/portal/connections?connectionId=20000000-0000-4000-8000-000000000001&user=admin",
+      "return_to": null
+    },
+    {
+      "name": "connections refuses an empty project value",
+      "path": "/portal/connections?projectId=",
+      "return_to": null
+    },
+    {
+      "name": "a goal detail refuses query state",
+      "path": "/portal/goals/goal-123?unknown=1",
+      "return_to": null
+    },
+    {
+      "name": "the goals index is not a shell path",
+      "path": "/portal/goals",
+      "return_to": null
+    },
+    {
+      "name": "the projects index refuses query state",
+      "path": "/portal/projects?view=board",
+      "return_to": null
+    },
+    {
+      "name": "a project refuses a project parameter only work items carry",
+      "path": "/portal/projects/project-123?projectId=project-123",
+      "return_to": null
+    },
+    {
+      "name": "a project refuses an unencoded separator in a filter value",
+      "path": "/portal/projects/project-123?q=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "a project refuses a control-character escape outside the tab",
+      "path": "/portal/projects/project-123?q=a%0ab",
+      "return_to": null
+    },
+    {
+      "name": "a project refuses a view the server does not name",
+      "path": "/portal/projects/project-123?view=evil",
+      "return_to": null
+    },
+    {
+      "name": "a project refuses a blocked flag outside the shell's encoding",
+      "path": "/portal/projects/project-123?blocked=0",
+      "return_to": null
+    },
+    {
+      "name": "a project path does not take extra segments",
+      "path": "/portal/projects/project-123/extra",
+      "return_to": null
+    },
+    {
+      "name": "runtimes refuses an unknown key",
+      "path": "/portal/runtimes?x=1",
+      "return_to": null
+    },
+    {
+      "name": "runtimes refuses a known key beside a foreign one",
+      "path": "/portal/runtimes?projectId=project-123&view=board",
+      "return_to": null
+    },
+    {
+      "name": "runtimes refuses an empty project value",
+      "path": "/portal/runtimes?projectId=",
+      "return_to": null
+    },
+    {
+      "name": "a work item refuses an unknown key",
+      "path": "/portal/work/work-123?unknown=1",
+      "return_to": null
+    },
+    {
+      "name": "a work item refuses a project value outside the identifier charset",
+      "path": "/portal/work/work-123?projectId=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "a trailing slash is not a shell path",
+      "path": "/portal/attention/",
+      "return_to": null
+    },
+    {
+      "name": "an encoded parent segment is not an identifier",
+      "path": "/portal/projects/%2e%2e",
+      "return_to": null
+    },
+    {
+      "name": "a goal id outside the identifier charset is refused",
+      "path": "/portal/goals/goal.1",
+      "return_to": null
+    },
+    {
+      "name": "a project id outside the identifier charset is refused",
+      "path": "/portal/projects/p.1",
+      "return_to": null
+    },
+    {
+      "name": "a work item id outside the identifier charset is refused",
+      "path": "/portal/work/w.1",
+      "return_to": null
+    },
+    {
+      "name": "a percent-encoded path separator inside a goal id is refused",
+      "path": "/portal/goals/goal%2F1",
+      "return_to": null
+    },
+    {
+      "name": "a path traversal into the login route is not a shell path",
+      "path": "/portal/work/../login",
+      "return_to": null
+    },
+    {
+      "name": "a fragment is never echoed back as a destination",
+      "path": "/portal/connections#board",
+      "return_to": null
+    },
+    {
+      "name": "the login route is not a shell path",
+      "path": "/portal/logout",
+      "return_to": null
+    }
+  ]
+}

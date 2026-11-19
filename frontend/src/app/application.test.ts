@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApplication, safeReturnTo, workspaceOptions } from "./application";
 import { Conflict, Network, Unauthenticated, UnexpectedResponse, readRetry, type ConnectionDraft } from "../services/api";
+import returnTargets from "../../../contracts/fixtures/shell-return-targets.json";
 
 describe("private query lifecycle", () => {
   it.each([401, 302, 303])("clears private records and cancels other reads before login recovery for HTTP %s", async (status) => {
@@ -23,12 +24,18 @@ describe("private query lifecycle", () => {
 
   it("never accepts an external or non-shell login return location", () => {
     expect(safeReturnTo("https://other.invalid/elsewhere")).toBe("/portal/attention");
-    expect(safeReturnTo("http://localhost/portal/projects/p1?x=1")).toBe("/portal/projects/p1?x=1");
+    // Only the query state the shell itself writes survives; the server's
+    // per-path rules are the authority, so a foreign key falls back.
+    expect(safeReturnTo("http://localhost/portal/projects/p1?x=1")).toBe("/portal/attention");
     expect(safeReturnTo("http://localhost/portal/goals/goal-123")).toBe("/portal/goals/goal-123");
     expect(safeReturnTo("http://localhost/portal/logout")).toBe("/portal/attention");
     // The Goal path is a single anchored segment, like the work-item path.
     expect(safeReturnTo("http://localhost/portal/goals/goal-123/extra")).toBe("/portal/attention");
     expect(safeReturnTo("http://localhost/portal/goals/../login")).toBe("/portal/attention");
+  });
+
+  it.each(returnTargets.cases)("keeps the shared shell return target: $name", ({ path, return_to }) => {
+    expect(safeReturnTo(new URL(path, returnTargets.base_url).href)).toBe(return_to ?? "/portal/attention");
   });
 
   it("expires the session when a command refuses with 401 even though its mutation has its own error handler", async () => {
