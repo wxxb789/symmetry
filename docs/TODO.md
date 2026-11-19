@@ -838,4 +838,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       browser suites, which CI runs, carry the live-daemon pagination cases (an expanded page
       disappearing when a live run moves the boundary is covered by the frontend suite only) and
       were not run on this host. The scan and its fixes are archived in
-      `docs/archive/CLOSED-TODO.md`.
+      `docs/archive/CLOSED-TODO.md`. Pre-existing, left as-is: `retainServedPage` detects a moved
+      boundary by comparing cursor token bytes, so a re-serve that only re-signs the same boundary
+      position still restarts the chain pointer; deciding whether it should compare the boundary
+      message's id instead belongs to (a).

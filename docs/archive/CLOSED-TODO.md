@@ -726,10 +726,10 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       at press time, so a re-serve that re-keys the surface mid-load neither cancels the press nor
       binds its page to the boundary that arrived afterwards. The operator API's paged reads
       (`/api/v1/tasks/:task_id/{timeline,events,transitions,commands}`,
-      `/api/v1/goals/:goal_id/events`, `/api/v1/attention`) have no retaining consumer — one-shot
-      cursor paging in `scripts/ci/omo-control-native-evidence.py` and `daemon/e2e/core_test.go`,
-      and the browser suites' single reads and bounded drains (e.g. `portal-chat.spec.mjs`) for
-      verification — as is the providers' outbound pagination
+      `/api/v1/goals/:goal_id/events`, `/api/v1/attention`) have no retaining consumer — bounded
+      cursor-page drains in `scripts/ci/omo-control-native-evidence.py` and
+      `daemon/e2e/core_test.go`, and the browser suites' single reads or cursor drains (e.g.
+      `portal-chat.spec.mjs`) for verification — as is the providers' outbound pagination
       (`control/lib/symmetry_control/integrations/providers/`), one-shot aggregation. The residual
       in `docs/TODO.md` is the owner's unification decision and the CI browser runs.
 
