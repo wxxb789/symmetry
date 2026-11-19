@@ -76,6 +76,89 @@ from branch `chore/deadcode-revalidation`.
       guard expiry can no longer be reported as this test's behavioural failure. The observation
       above stays as the record; the open action does not.
 
+- [ ] Investigate the intermittent Linux failure `TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`
+      in `daemon/internal/platform` (`containment_supervisor_linux_test.go:1128: decode
+      wrong-session helper witness: unexpected end of JSON input`). Observed in run
+      43724904655 job 132844651104 on a workflow-only diff, then green on rerun job
+      132846453648. Revalidate whether the helper witness can be decoded before it is fully
+      written; keep the witness assertion itself and leave the fix to separate maintenance.
+      Second occurrence: run 44133750246 job `daemon` on main `3781c78`, the same tree that
+      passed the identical job in the PR #56 run minutes earlier; the failing line and message
+      match. Mechanism: `writeLinuxSupervisorHelloSessionWitness` created the destination with
+      `os.OpenFile(O_WRONLY|O_CREATE|O_EXCL)` and wrote the JSON afterwards, so the poller
+      `waitForLinuxSupervisorTestMarker` accepted a zero-byte document as its first successful
+      read and decoded it; the helper's create-to-write window is microseconds wide, so only the
+      10 ms poll interval landing inside it under load reproduced the failure.
+      `daemon/internal/platform/containment_supervisor_linux.go` now assembles each helper-side
+      witness document in a temporary file in the destination directory and renames it into
+      place (`publishLinuxSupervisorWitnessFile`, `:2318`), so a reader observes either no
+      document or a complete one, and the witness assertion itself is unchanged. The same
+      publish covers the owner-loss proof reached/result markers (`:2505`, `:2531`), read by the
+      same poller, the drop-response fired marker (`:2178`), whose e2e poller compares its first
+      successful read to `fired\n`, and the release response-loss reached marker (`:3528`),
+      whose content is parsed after a non-empty poll. The scan-injection markers (`:2627`,
+      `:2691`, `:2708`) keep `os.WriteFile`: their readers gate on a non-empty read or observe
+      after the frame that orders the write, so the zero-byte state the other readers accept is
+      already filtered there. The Windows `writeContainmentSupervisorWitnessMarker`
+      (`containment_supervisor_windows.go:1486`) has the same create-then-write shape but only
+      ordered readers (a same-process `os.Stat` after the handoff returns, and e2e parses after
+      the writing process exits), so it carries no observed or reachable race; the adjacent
+      Windows `TestCloseStopsOwnedChildAfterLeaderExit` observation (archived in
+      `docs/archive/CLOSED-TODO.md`) stays a different defect (an owned child survived
+      `Close()`), not a witness-publication race. Still open for
+      the owning change: the runner/app resume and stop-receipt barrier markers
+      (`daemon/internal/execution/runner.go:1046`, `daemon/internal/app/app.go:2207`) still
+      create-then-write documents whose e2e readers poll non-empty and then parse them; no
+      occurrence is recorded there, and only a torn read of one small write remains possible
+      once the non-empty gate is passed.
+      Follow-up slice (branch `fix/barrier-publish-atomicity`, based on da02900): the two writers
+      recorded as still open above are the same defect, not a weaker one.
+      `waitForResumeBarrier` created the commit/resume and lease-armed reached markers with
+      `os.OpenFile(O_CREATE|O_EXCL)` and wrote the four-line marker afterwards
+      (`daemon/internal/execution/runner.go:1046`), and `waitForLinuxStopReceiptBarrier` created
+      the stop-receipt JSON the same way (`daemon/internal/app/app.go:2207`). Their harness
+      readers poll the path, accept any non-empty read and then parse it
+      (`daemon/e2e/production_linux_containment_witness_test.go:804-816`, `:2701-2708`), which a
+      non-empty but incomplete document still fails, and `waitLinuxV2OwnerWitnessStage`
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go:272-297`) turns a readable but
+      undecodable stage marker into a hard error; that shape reached the owner-witness stage
+      writer at `daemon/internal/app/linux_owner_witness_linux.go:1270`. All three now assemble
+      the document in a temporary file in the destination directory and publish it in one step
+      (`publishResumeBarrierMarker`, `publishLinuxStopReceiptBarrierMarker`,
+      `linkLinuxV2NativeWitnessStageMarker`); the stage marker links the temporary file into
+      place, so an existing marker still fails as an exist error for the exact-replay comparison
+      and is never replaced, and the replay read keeps the no-follow posture the create had.
+      Cleared by ordering rather than changed: the in-process `restoreStageMarkers` reader and
+      the `internal/execution` probe/startup fixtures observe presence only, or after the
+      writing process completed (`internal/execution/probe_test.go:194-201`,
+      `internal/execution/runner_windows_test.go:74-106`), and the owner-witness preflight writes
+      control files (`cgroup.kill`) that are never parsed. Residual: a crash between the
+      temporary write and its publish leaves a dot-prefixed `.partial-*` file instead of an
+      empty marker, which `ensureFresh` then reports as a non-empty barrier directory; both fail
+      loudly and no occurrence is recorded.
+      Closed by `fix/flake-linux-wrong-hello` (2026-11-19, based on `9192241`): the move changes
+      no code because the fix is already in `main`. The publisher this record names
+      (`publishLinuxSupervisorWitnessFile`,
+      `daemon/internal/platform/containment_supervisor_linux.go:2318`) is `3377a7d` (#59), the
+      resume/stop-receipt barrier and stage-marker follow-up is `9c73a05` (#62); both are
+      ancestors of this revision, the publisher covers every reader listed here, and the reader
+      helper (`containment_supervisor_linux_test.go:1219`) and the witness assertions are
+      unchanged. Both occurrences were re-read from their own CI logs: run 43724904655 attempt 1
+      job 132844651104 (`actions/runs/43724904655/attempts/1/logs`, `7_daemon.txt` — the
+      attempt's own log, because `gh run view --job` now serves the green rerun) carries
+      `containment_supervisor_linux_test.go:1128: decode wrong-session helper witness:
+      unexpected end of JSON input` with `--- FAIL: ... (0.01s)`, and run 44133750246 job
+      134217597395 carries the same text with `(0.05s)`. Fresh evidence on this revision: WSL
+      Ubuntu-24.04, go1.27.0, `go test -race -count=50 -run
+      ^TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec ./internal/platform` — `ok`,
+      118.418 s, 50 runs, 0 failures, exit 0. CI on revisions containing the fix kept the
+      `daemon` job green with no recurrence (runs 44140380720 `3377a7d`, 44147815717 `9c73a05`,
+      44230735630 and 44253118123 `9192241`; `daemon-windows` too where the trigger ran it). The
+      `.partial-*` crash residual stays recorded and needs no further action: the publish
+      removes its temporary file on every failure it can observe, a crash can leave only the
+      dot-prefixed file, and `ensureFresh` then refuses the non-empty barrier directory loudly
+      instead of reusing it — no occurrence is recorded.
+
 *Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stays there.*
 
       **Linux terminal reason — fixed at the cause; verification is CI on the new revision, not a
@@ -104,7 +187,7 @@ from branch `chore/deadcode-revalidation`.
       43720680428 job 132831780245 on a docs-only diff, green in run 43715830442 and on rerun job
       132834151127; this change makes no claim about it, so this entry stays open. The Linux
       supervisor helper-witness flake
-      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in `docs/TODO.md`.
+      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in this archive.
       **Windows owned-child — fixed at the cause; verification is CI on the new revision, not a
       local green.** `TestCloseStopsOwnedChildAfterLeaderExit` failed again in run 44055523619 job
       133943809688 (push of main `ca1bdad`) with `process_windows_test.go:1004: owned child 7824
