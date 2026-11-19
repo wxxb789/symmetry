@@ -627,6 +627,7 @@ defmodule SymmetryControl.Integrations do
     if provider_action_error(reason) in [
          :invalid_request,
          :forbidden,
+         :capability_not_granted,
          :not_found,
          :provider_unauthorized
        ],
@@ -1197,6 +1198,7 @@ defmodule SymmetryControl.Integrations do
       when code in [
              :invalid_request,
              :forbidden,
+             :capability_not_granted,
              :stale,
              :state_conflict,
              :ownership_lost
@@ -1698,7 +1700,9 @@ defmodule SymmetryControl.Integrations do
     do: {:provider_failure, "Provider returned HTTP #{status}"}
 
   defp failure(:not_connected), do: {:not_connected, "Resource has no external connection"}
-  defp failure(:capability_not_granted), do: {:forbidden, "Connection capability is not granted"}
+
+  defp failure(:capability_not_granted),
+    do: {:capability_not_granted, "Connection capability is not granted"}
 
   defp failure(:github_https_required),
     do: {:provider_failure, "GitHub CLI authentication must use HTTPS"}

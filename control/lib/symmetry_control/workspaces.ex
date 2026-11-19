@@ -1009,7 +1009,7 @@ defmodule SymmetryControl.Workspaces do
     cond do
       is_nil(capability) -> {:error, :invalid_request}
       capability in connection.capabilities -> :ok
-      true -> {:error, :forbidden}
+      true -> {:error, :capability_not_granted}
     end
   end
 

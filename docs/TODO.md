@@ -93,23 +93,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       classifier's skip list against the jobs that actually ran before treating the trim as
       fully accepted.
 
-- [ ] Revalidate the unreachable resource synchronization states. `project_resources` has a
-      `project_resources_sync_status_check` constraint admitting `syncing` and `stale`, and
-      `SymmetryControl.Workspaces.ReadModel` maps them to `syncing`/`attention` labels, but no
-      writer sets either value (`Integrations.persist_sync/4`,
-      `Integrations.record_resource_failure/3` and the connection/capability resets in
-      `Integrations.update_connection/2` and `Workspaces.update_resource/2` only write
-      `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
-      constraint and labels, and decide in a separate maintenance change whether the states
-      need a writer or the vocabulary needs a migration.
-
-- [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
-      `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
-      the server answers that code, but a sync refused for an ungranted capability maps to
-      `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
-      Either the server should serve the more specific code or the client entry should be removed;
-      decide in a separate maintenance change with a test that pins the served code.
-
 ## Deferred review findings (0007f)
 
 - [ ] Give the focused render gate's `browser/tests/portal-goal-managed.spec.mjs` case its fixture
@@ -413,14 +396,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
       convention paragraph itself (it restates the precedence the design and
       protocol documents already carry).
-
-- [ ] Revalidate the stale 0008-series prerequisite text:
-      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
-      and 0008c results" while the 0008b candidate policy is produced and awaiting
-      the owner's verdict. Pre-existing and not introduced by the 0008b evidence
-      change; correct the wording once the 0008b verdict lands. (The `0006h`
-      index-row dead link above is the same class of stale documentation and is
-      already tracked.)
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
