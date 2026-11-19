@@ -1365,26 +1365,20 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
 
       **Closed (2026-11-19, `docs/0008-prerequisite-text`):** the frozen-bytes
       convention resolves this item instead of a wording edit: no archived goal
-      document has been edited in place
-      (`git log --diff-filter=M --name-only -- docs/goals/archive/` prints nothing),
-      and the only byte-changing moves into or within `archive/` are recorded
-      placement-time ones — the CR/EOL-only renames `03-goal.md` -> `archive/`
-      (`91fa4f4`) and the 2026-09-07 renumbering (`24621f1`: `01`/`02` -> `0001`/
-      `0002`, `04-goal.md` -> `archive/0004-goal.md`, all R099; `03` -> `0003` as
-      R100; `git diff -M --ignore-cr-at-eol --numstat <commit>^ <commit>` reports
-      `0 0` on each R099, for both `91fa4f4` and `24621f1`) — plus
-      `0006-final.md`'s five relative link targets rebased for `archive/`
-      at its placement (`5c56c60`, R093, recorded at `docs/goals/README.md:126`).
-      The index's archive notes record the archived documents' content as unchanged
+      document has been edited in place after placement
+      (`git log --diff-filter=M --name-only -- docs/goals/archive/` prints nothing).
+      Placement-time content changes occur during archive moves and are not
+      relevant to the frozen-bytes argument. The index's archive notes record the
+      archived documents' content as unchanged
       (`docs/goals/README.md:47` 0008a, `:61` 0008d, `:100` 0008b, `:313` the 0007
       series), and owner verdicts are recorded separately as they arrive (`:309`);
       `73e083f` moved this goal document into `archive/` byte-identically. The
-      correction therefore lands live: the item's pointer moves to
-      `docs/goals/archive/0008d-typescript-model-routing.md:13`, and a new recording
-      note in `docs/goals/README.md` names the archived sentence and the verdicts
-      that govern it — the owner accepted 0008b on 2026-11-18 (`8a689bd`, row
-      `:348`), while 0008c is produced and awaiting the owner's verdict with no
-      acceptance recorded (`:349`;
+      correction therefore lands live: the closure re-points the item to
+      `docs/goals/archive/0008d-typescript-model-routing.md:13` — the item text
+      stays verbatim — and a new recording note in `docs/goals/README.md` names
+      the archived sentence and the verdicts that govern it — the owner accepted
+      0008b on 2026-11-18 (`8a689bd`, row `:348`), while 0008c is produced and
+      awaiting the owner's verdict with no acceptance recorded (`:349`;
       `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md:3`). The 0008b
       half of the archived sentence became true when the verdict landed; the 0008c
       half stays as written, which is the convention's accepted state rather than
