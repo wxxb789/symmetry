@@ -286,20 +286,26 @@ class Refused(Exception):
 # exports as `HOST_PATH_PATTERNS` (Windows drive, UNC and forward-slash authority
 # paths, the POSIX home/root/temp/mount roots, `file:` URLs and their JSON-escaped
 # spellings). Paths outside those roots stay readable; the token is `sha256:` here and
-# `path-sha256:` in the renderer, each tool's own recorded shape.
+# `path-sha256:` in the renderer, each tool's own recorded shape. The definition loads
+# lazily so a command that never redacts a value does not need the sibling file.
 SANITIZE_SCRIPT = pathlib.Path(__file__).with_name("model-routing-record-sanitize.py")
+_HOST_PATH_PATTERNS: tuple[re.Pattern[str], ...] | None = None
 
 
-def _load_host_path_patterns() -> tuple[re.Pattern[str], ...]:
-    spec = importlib.util.spec_from_file_location("model_routing_record_sanitize", SANITIZE_SCRIPT)
-    if spec is None or spec.loader is None:
-        raise Refused("cannot load model-routing-record-sanitize.py for the shared host-path patterns")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.HOST_PATH_PATTERNS
-
-
-HOST_PATH_PATTERNS = _load_host_path_patterns()
+def host_path_patterns() -> tuple[re.Pattern[str], ...]:
+    """The shared host-path matchers, read from the sanitize tool on first use."""
+    global _HOST_PATH_PATTERNS
+    if _HOST_PATH_PATTERNS is None:
+        spec = importlib.util.spec_from_file_location("model_routing_record_sanitize", SANITIZE_SCRIPT)
+        if spec is None or spec.loader is None:
+            raise Refused("cannot load model-routing-record-sanitize.py for the shared host-path patterns")
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except OSError as error:
+            raise Refused(f"cannot load model-routing-record-sanitize.py for the shared host-path patterns: {error}")
+        _HOST_PATH_PATTERNS = module.HOST_PATH_PATTERNS
+    return _HOST_PATH_PATTERNS
 
 
 # ---------------------------------------------------------------------------
@@ -1258,7 +1264,7 @@ def redact_host_paths(value: str) -> str:
     the same path still agree, and no operator profile or disposable root is published
     by the record itself.
     """
-    for pattern in HOST_PATH_PATTERNS:
+    for pattern in host_path_patterns():
         value = pattern.sub(lambda match: sha256_hex(match.group(0).encode("utf-8")), value)
     return value
 
@@ -1341,8 +1347,10 @@ def verify_dependency_tree(run_dir: pathlib.Path, provisioning: dict[str, Any]) 
 
 def requires_dependency_provisioning(task: dict[str, Any]) -> bool:
     """True when the frozen task executes Node tooling that resolves a dependency tree."""
-    return task["language"] == "typescript" or any(
-        gate["vitest_tests"] is not None for gate in task["gates"]
+    # `.get` keeps the predicate total for a caller that holds a raw task document (the
+    # regression suite calls it with one); validated tasks carry every key.
+    return task.get("language") == "typescript" or any(
+        gate.get("vitest_tests") is not None for gate in task.get("gates", ())
     )
 
 
