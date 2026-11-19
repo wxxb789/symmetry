@@ -104,10 +104,11 @@ When a run is `waiting_for_input`, the detail view exposes the current question
 and sends a durable `provide_input` command. An active run can be cancelled
 through the same durable command path, though the served **Cancel run** and
 **Retry** controls render only when the runtime that would perform the operation
-advertises it (the claimed attempt's runtime for cancel, some assignment-eligible
-runtime for retry), so a runtime registered without adapter metadata fails
-closed while the `cancel` endpoint still accepts a command the task state
-permits.
+advertises it (the claimed attempt's runtime for cancel, some runtime assignment
+could select for the goal-less task for retry, ignoring transient online state):
+a cancel of a queued or assigned attempt is applied by the control plane itself,
+and a runtime registered without adapter metadata fails closed while the `cancel`
+endpoint still accepts a command the task state permits.
 
 ### Health signals
 
