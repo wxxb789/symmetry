@@ -783,14 +783,14 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       after the 0007d observation: `Integrations.mark_resource_syncing/1`
       (`control/lib/symmetry_control/integrations.ex:682`) commits `sync_status: "syncing"`
       through `update_sync_marker/2` (`:700`, `:708`) before the provider call, and
-      `record_resource_failure/3` (`:1649`) persists
-      `sync_status: if(code == :not_found, do: "stale", else: "failed")` (`:1674`);
+      `record_resource_failure/3` (`:1650`) persists
+      `sync_status: if(code == :not_found, do: "stale", else: "failed")` (`:1675`);
       `ReadModel.synchronization_health/1`
       (`control/lib/symmetry_control/workspaces/read_model.ex:575-584`) maps `stale` to
       `attention` and `syncing` to `syncing`. Both states are pinned by tests from the same
       commit: `control/test/symmetry_control/resource_sync_inflight_marker_test.exs:197,202`
       assert the committed `syncing` marker, and
-      `control/test/symmetry_control/resource_sync_identity_loss_test.exs:76,130,133` assert a
+      `control/test/symmetry_control/resource_sync_identity_loss_test.exs:76,130,134` assert a
       `:not_found` provider answer persists `stale` and the read model reports `attention`.
       Verification (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`):
       `mix test test/symmetry_control/resource_sync_inflight_marker_test.exs test/symmetry_control/resource_sync_identity_loss_test.exs`
@@ -819,7 +819,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       "Grant the connection the capability this resource kind needs, then try again.").
       Red-first: the updated pins failed on the pre-change code with the served `forbidden`
       (`2/5 passed`, 3 failed); after the change the affected control files report `Result:
-      120 passed`, rc 0 (`mix test test/symmetry_control/resource_sync_identity_loss_test.exs
+      121 passed`, rc 0 (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`: `mix test
+      test/symmetry_control/resource_sync_identity_loss_test.exs
       test/symmetry_control_web/controllers/portal_resources_test.exs
       test/symmetry_control/integrations_test.exs
       test/symmetry_control_web/controllers/provider_action_controller_test.exs`), with

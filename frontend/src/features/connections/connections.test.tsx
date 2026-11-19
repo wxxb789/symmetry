@@ -1212,7 +1212,7 @@ describe("project resources", () => {
   });
 
   it("renders the served capability refusal with the capability-specific next step", async () => {
-    const target = resourceFixture({ version: 5 });
+    const target = resourceFixture();
     const harness = renderConnections(({ method, path }) => {
       if (method !== "POST" || !path.endsWith("/sync")) return refusal(404, "not_found", "unexpected request");
       harness.setProjects([projectFixture({ resources: [{ ...target, status: "degraded", sync_status: "failed", status_message: "Connection capability is not granted" }] })]);
