@@ -281,6 +281,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     assert Enum.any?(work_items, &(&1.id == item.id))
 
     reads = snapshot_reads([])
+
     queries = Enum.map(reads, fn {_pid, query} -> query end)
     processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
 
