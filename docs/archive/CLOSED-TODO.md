@@ -69,7 +69,8 @@ from branch `chore/deadcode-revalidation`.
       `93050ced…`/`5ee9b87b…`/`ceae34ce…`/`af12819d…`). The tool's `--check` exits 0 on the two receipts whose
       absolute-path matches were all host paths (`0008c-a-strong.json`, `0008c-b-mixed.json`); the other two keep
       only repo-relative prose fixtures (`/control/priv/static/portal/`, `/\`, `sync_status`) that rendering would
-      corrupt. Full before/after digest table and the deliberately-left list:
+      corrupt. Full before/after digest table (including a later second-generation rebind of
+      `0008a-controls.json`'s rendered `missing-gate` stderr digest) and the deliberately-left list:
       `docs/evaluations/model-routing/README.md`, "Record rendering exception (2026-11-19)".
 
 - [x] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
@@ -549,7 +550,7 @@ from branch `chore/deadcode-revalidation`.
       `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
       strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
       `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
+      58 (the `EVIDENCE_ROOT` value, an operator-profile drive path). The 0008b change renders its own new
       records with that helper and records the rendering in the record
       (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
       record's quoted digest consistent when the older records are re-published.
@@ -557,17 +558,22 @@ from branch `chore/deadcode-revalidation`.
       `scripts/ci/model-routing-record-sanitize.py` (`sha256:b8b252f3…`) as the
       entry directs — `0008a-controls.json` 32 substitutions (the 14
       disposable-root strings -> `<disposable-root>`, plus 9 toolchain
-      `C:\ProgramData\...\python.exe` and 9 operator-worktree argv entries -> the
+      interpreter argv entries (one rendered to `path-sha256:4d144641…`) and 9
+      operator-worktree argv entries -> the
       deterministic `path-sha256:` tokens), `0008a-audit.json` 5 (3
       disposable-root values + 2 toolchain entries), and the evidence record's
-      line 58 `EVIDENCE_ROOT='C:/Users/...'` -> `EVIDENCE_ROOT='<disposable-root>'`.
+      line 58's `EVIDENCE_ROOT` value -> `EVIDENCE_ROOT='<disposable-root>'`.
       No host path remains and no meaningful prose fixture needed leaving
       unrendered in these three files, so the tool's `--check` exits 0 on all
       three. Quoted-digest consistency was kept: the evidence record's quoted
-      audit digest was rebound (`dc878099…` -> `832117d0…`), and no other
-      document quotes a changed digest (checked across `docs/`, `scripts/`,
-      `contracts/` and `.github/`; the README exception record is the one place
-      the replaced values remain, as before/after digests). The full table is in
+      audit digest was rebound (`dc878099…` -> `832117d0…`), and one
+      rendered-output digest needed a second-generation rebind
+      (`0008a-controls.json`'s `missing-gate` `stderr_sha256`, `c12881ae…` ->
+      `8503bfa2…`), re-deriving that file's `sha256`. No document holds a
+      full-length occurrence of a changed digest outside the README exception
+      record (checked across `docs/`, `scripts/`, `contracts/` and `.github/`);
+      the truncated `…` prefixes that remain are in that record and in these
+      closures. The full table is in
       `docs/evaluations/model-routing/README.md`, "Record rendering exception
       (2026-11-19)".
 

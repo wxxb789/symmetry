@@ -33,7 +33,7 @@
       "exit_code": 1,
       "operation": "check",
       "stderr": "check attempt attempt-0002 failed; evidence preserved under <disposable-root>\\controls\\missing-gate\\checks\\attempt-0002\r\n",
-      "stderr_sha256": "sha256:c12881ae2c75bd3f62c646bef2b7c8cf3e0f415c0fd65f15f4c2b3b96a478a34",
+      "stderr_sha256": "sha256:8503bfa258a799266f130667783e9bd83f745b946bafe23c8c85146083c74c30",
       "stdout": "{\r\n  \"attempt_id\": \"attempt-0002\",\r\n  \"attempt_sha256\": \"sha256:c1bf2f1ad743666f527ca7c81a7391c8e15002dab477aaac77904a8d22fbc24e\",\r\n  \"complete\": false,\r\n  \"passed\": false,\r\n  \"subject_hash\": \"sha256:b14e84696205aa4f2b4f7e6f9f7ea61790d89a72206a850a429ef76d58829d81\"\r\n}\r\n",
       "stdout_sha256": "sha256:70d7e3042f5be8ea158b21ed17e7f33d534f1d418bb4e17ff792ec74a7972840"
     },
