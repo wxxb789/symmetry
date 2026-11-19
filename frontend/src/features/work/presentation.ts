@@ -352,6 +352,21 @@ export function decisionView(waiting: unknown, fallbackQuestion: string | null):
   };
 }
 
+/**
+ * Whether the served waiting context carries the agent's decision record — the
+ * extraction result or the raw payload's `decision`, read as a record, exactly
+ * the gate `chatDecisionPacket` applies (`features/chat/presentation.ts`). That
+ * module already imports this one, so the reading is kept expression-identical
+ * here rather than shared: a surface that sends the operator to Chat for a
+ * decision must not claim one the conversation would not offer. A waiting
+ * request without a record is answered on the surface that renders it.
+ */
+export function hasDecisionPacket(waiting: unknown): boolean {
+  const record = asRecord(waiting);
+  if (record === null) return false;
+  return asRecord(record["decision"]) !== null || asRecord(asRecord(record["payload"])?.["decision"]) !== null;
+}
+
 const shortId = (value: string): string => (value.length > 13 ? `${value.slice(0, 8)}…` : value);
 
 /** Reads the reported task result's proposed next action; advisory text only, never an executable command. */
