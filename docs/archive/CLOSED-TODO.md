@@ -248,13 +248,15 @@ from branch `chore/deadcode-revalidation`.
       advertised support. `execution_summary/1` joins the state permission with the adapter
       operations the attempt's runtime advertises: `can_cancel` requires `cancel` whenever a runtime
       holds the attempt (claimed and beyond — a queued or assigned cancel is applied by the control
-      plane itself, so it needs no runtime), and `can_retry` requires the previous attempt's runtime
-      to advertise `start`, the operation of the fresh retried attempt. A runtime without adapter
+      plane itself, so it needs no runtime), and `can_retry` requires that some runtime assignment
+      could select for the task (same binding and capability containment) advertise `start`, the
+      operation of the fresh retried attempt. A runtime without adapter
       metadata, without the operation, or with a non-`true` value answers false, so a runtime
       advertising `cancel: false` now serves `can_cancel: false`. `Orchestration.adapter_operation_supported?/2`
       owns the vocabulary; `Workspaces.ReadModel` passes the runtimes it already loads in one query
-      into each execution projection (no per-task read), and `Orchestration.task_snapshot/1` serves
-      the same shape to the command responses. Projection tests cover state-ok+supported,
+      into each execution projection and resolves retry eligibility in one batched query (no
+      per-task read), and `Orchestration.task_snapshot/1` serves the same shape to the command
+      responses. Projection tests cover state-ok+supported,
       state-ok+unsupported, state-ok+unknown and state-not-ok for both controls, plus the
       runtime-less local transitions; the work-detail render test covers the withheld Cancel/Retry.
 
