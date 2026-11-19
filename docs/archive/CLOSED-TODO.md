@@ -10,7 +10,8 @@ fragments of items keep their original indentation. Each entry keeps its closure
 closure date it records. Entries in this file older than six months may be deleted.
 
 The blocks below were moved on 2026-11-18. Markers (`- [ ]`, `- [x]`) are reproduced as they were,
-not a claim that work remains.
+not a claim that work remains. The two blocks moved on 2026-11-19 (branch
+`fix/portal-return-targets`) name that branch in their closure lines.
 
 The five dead-code closures appended to `## Dead-code candidates` below were moved on 2026-11-19
 from branch `chore/deadcode-revalidation`.
@@ -48,6 +49,53 @@ from branch `chore/deadcode-revalidation`.
       re-derivations recorded in the audit) remain bound to the pre-rebase reviewed revision and are labelled as
       history.
 
+- [x] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
+      receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
+      `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
+      temp root (the `symmetry-0008c-eval` run store under the local user profile). They are produced,
+      committed evidence bound by digests other records name, so the 0008c audit recorded them as
+      an open item instead of rewriting history. The runner's sanitisation extension
+      (`validate_measured_mapping(..., redact=True)`) now records every host-specific absolute path
+      in a measured value as a `sha256:` token, so run records and receipts written from now on
+      cannot republish a disposable root or the operator profile. Revalidate before any scrub, and
+      never edit a receipt whose digests other records bind. Decided by rendering rather than
+      keeping the roots: closed 2026-11-19 on branch
+      `chore/eval-record-scrub` under the owner's one-time Q2 authorization (revalidated first, as the entry asked):
+      the four receipts and the evidence record were rendered through `scripts/ci/model-routing-record-sanitize.py`
+      (`sha256:b8b252f3…`) — two substitutions per receipt (`mix_build_path`/`mix_deps_path` ->
+      `<disposable-root>/… (outside the checkout)`) and one in the evidence record — and every digest that binds
+      them was recomputed and rebound: the four receipt digests quoted by `0008c-candidate-policy.md` and by the
+      evidence record (`9432545d…`/`26d8e003…`/`e79fe173…`/`1be7b419…` ->
+      `93050ced…`/`5ee9b87b…`/`ceae34ce…`/`af12819d…`). The tool's `--check` exits 0 on the two receipts whose
+      absolute-path matches were all host paths (`0008c-a-strong.json`, `0008c-b-mixed.json`); the other two keep
+      only repo-relative prose fixtures (`/control/priv/static/portal/`, `/\`, `sync_status`) that rendering would
+      corrupt. Full before/after digest table (including a later second-generation rebind of
+      `0008a-controls.json`'s rendered `missing-gate` stderr digest) and the deliberately-left list:
+      `docs/evaluations/model-routing/README.md`, "Record rendering exception (2026-11-19)".
+
+- [x] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
+      how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
+      resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
+      against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
+      `scripts/ci/test-model-routing-evaluation.py` again, so the 0008b/0008c/0008d receipts stay fail-closed
+      for submission under the current bytes exactly as their entries below describe; re-execute the runs, never
+      re-derive by editing a receipt. Closed by the one-time reference-binding audit of 2026-11-19 (branch
+      `chore/eval-record-scrub`; the owner scoped Q5 to a one-time audit, no gate): an uncommitted script parsed
+      every model-routing record and 0008-series evidence document and verified the commit/path bindings (commit
+      resolves, reachable from `origin/main`, a tag, or GitHub; path exists at that commit), the 0008a source
+      manifest (17/17 entries plus bound tree and canonical scoped digest recompute at `1c6c715`), the 0008d
+      landing-tip source subject (recomputed at `73e083f`: 1141 paths, exact), 42 tooling-source digests at their
+      tags/commits, the receipt frozen review/task digests, and every quoted file digest at HEAD — checked 61,
+      broken 0, fixed 0 (this branch's nine-file digest cascade is the only rebinding this audit required),
+      0 mismatches, with 15 sealed subject manifests and the sealed-checkout `HEAD:` references classified
+      unverifiable-private by design. Two referenced pre-rebase commits (`c45db2c`, `1baf76c`) are GitHub-absent
+      and stay labelled history with no main equivalent; five (`4644fd7`, `993870e`, `abf8210`, `bdbcdc7`,
+      `a9f4d93`) are unreachable from local refs but still served by the GitHub API, and `cab222b` is preserved
+      via the tag `0008c-produced-tooling`. No live binding was broken, so no binding needed rebinding beyond
+      this branch's digest cascade (recorded in the README exception section). No CI gate was added; a gate
+      proposal would be a new item.
+
 ## Dead-code candidates
 
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
@@ -76,7 +124,94 @@ from branch `chore/deadcode-revalidation`.
       guard expiry can no longer be reported as this test's behavioural failure. The observation
       above stays as the record; the open action does not.
 
-*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stays there.*
+- [ ] Investigate the intermittent Linux failure `TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`
+      in `daemon/internal/platform` (`containment_supervisor_linux_test.go:1128: decode
+      wrong-session helper witness: unexpected end of JSON input`). Observed in run
+      43724904655 job 132844651104 on a workflow-only diff, then green on rerun job
+      132846453648. Revalidate whether the helper witness can be decoded before it is fully
+      written; keep the witness assertion itself and leave the fix to separate maintenance.
+      Second occurrence: run 44133750246 job `daemon` on main `3781c78`, the same tree that
+      passed the identical job in the PR #56 run minutes earlier; the failing line and message
+      match. Mechanism: `writeLinuxSupervisorHelloSessionWitness` created the destination with
+      `os.OpenFile(O_WRONLY|O_CREATE|O_EXCL)` and wrote the JSON afterwards, so the poller
+      `waitForLinuxSupervisorTestMarker` accepted a zero-byte document as its first successful
+      read and decoded it; the helper's create-to-write window is microseconds wide, so only the
+      10 ms poll interval landing inside it under load reproduced the failure.
+      `daemon/internal/platform/containment_supervisor_linux.go` now assembles each helper-side
+      witness document in a temporary file in the destination directory and renames it into
+      place (`publishLinuxSupervisorWitnessFile`, `:2318`), so a reader observes either no
+      document or a complete one, and the witness assertion itself is unchanged. The same
+      publish covers the owner-loss proof reached/result markers (`:2505`, `:2531`), read by the
+      same poller, the drop-response fired marker (`:2178`), whose e2e poller compares its first
+      successful read to `fired\n`, and the release response-loss reached marker (`:3528`),
+      whose content is parsed after a non-empty poll. The scan-injection markers (`:2627`,
+      `:2691`, `:2708`) keep `os.WriteFile`: their readers gate on a non-empty read or observe
+      after the frame that orders the write, so the zero-byte state the other readers accept is
+      already filtered there. The Windows `writeContainmentSupervisorWitnessMarker`
+      (`containment_supervisor_windows.go:1486`) has the same create-then-write shape but only
+      ordered readers (a same-process `os.Stat` after the handoff returns, and e2e parses after
+      the writing process exits), so it carries no observed or reachable race; the adjacent
+      Windows `TestCloseStopsOwnedChildAfterLeaderExit` observation (archived in
+      `docs/archive/CLOSED-TODO.md`) stays a different defect (an owned child survived
+      `Close()`), not a witness-publication race. Still open for
+      the owning change: the runner/app resume and stop-receipt barrier markers
+      (`daemon/internal/execution/runner.go:1046`, `daemon/internal/app/app.go:2207`) still
+      create-then-write documents whose e2e readers poll non-empty and then parse them; no
+      occurrence is recorded there, and only a torn read of one small write remains possible
+      once the non-empty gate is passed.
+      Follow-up slice (branch `fix/barrier-publish-atomicity`, based on da02900): the two writers
+      recorded as still open above are the same defect, not a weaker one.
+      `waitForResumeBarrier` created the commit/resume and lease-armed reached markers with
+      `os.OpenFile(O_CREATE|O_EXCL)` and wrote the four-line marker afterwards
+      (`daemon/internal/execution/runner.go:1046`), and `waitForLinuxStopReceiptBarrier` created
+      the stop-receipt JSON the same way (`daemon/internal/app/app.go:2207`). Their harness
+      readers poll the path, accept any non-empty read and then parse it
+      (`daemon/e2e/production_linux_containment_witness_test.go:804-816`, `:2701-2708`), which a
+      non-empty but incomplete document still fails, and `waitLinuxV2OwnerWitnessStage`
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go:272-297`) turns a readable but
+      undecodable stage marker into a hard error; that shape reached the owner-witness stage
+      writer at `daemon/internal/app/linux_owner_witness_linux.go:1270`. All three now assemble
+      the document in a temporary file in the destination directory and publish it in one step
+      (`publishResumeBarrierMarker`, `publishLinuxStopReceiptBarrierMarker`,
+      `linkLinuxV2NativeWitnessStageMarker`); the stage marker links the temporary file into
+      place, so an existing marker still fails as an exist error for the exact-replay comparison
+      and is never replaced, and the replay read keeps the no-follow posture the create had.
+      Cleared by ordering rather than changed: the in-process `restoreStageMarkers` reader and
+      the `internal/execution` probe/startup fixtures observe presence only, or after the
+      writing process completed (`internal/execution/probe_test.go:194-201`,
+      `internal/execution/runner_windows_test.go:74-106`), and the owner-witness preflight writes
+      control files (`cgroup.kill`) that are never parsed. Residual: a crash between the
+      temporary write and its publish leaves a dot-prefixed `.partial-*` file instead of an
+      empty marker, which `ensureFresh` then reports as a non-empty barrier directory; both fail
+      loudly and no occurrence is recorded.
+      Delivered by PR #76 (`docs/close-linux-platform-flakes`, based on `f2a759f`): the move
+      changes no code because the fix is already in `main`. The publisher this record names
+      (`publishLinuxSupervisorWitnessFile`,
+      `daemon/internal/platform/containment_supervisor_linux.go:2318`) is `3377a7d` (#59), the
+      resume/stop-receipt barrier and stage-marker follow-up is `9c73a05` (#62); both are
+      ancestors of this revision, the publisher covers every reader listed here, and the reader
+      helper (`containment_supervisor_linux_test.go:1219`) and the witness assertions are
+      unchanged. Both occurrences were re-read from their own CI logs: run 43724904655 attempt 1
+      job 132844651104 (`actions/runs/43724904655/attempts/1/logs`, `7_daemon.txt` — the
+      attempt's own log, because `gh run view --job` now serves the green rerun) carries
+      `containment_supervisor_linux_test.go:1128: decode wrong-session helper witness:
+      unexpected end of JSON input` with `--- FAIL: ... (0.01s)`, and run 44133750246 job
+      134217597395 carries the same text with `(0.05s)`. Fresh evidence on this revision: WSL
+      `Ubuntu-24.04` (`/usr/local/bin/go` -> `/usr/local/lib/go1.27.0/bin/go`, go1.27.0
+      linux/amd64, `GOTOOLCHAIN=auto`; the default WSL distro's `/usr/bin/go` is go1.26.8 with
+      `GOTOOLCHAIN=local` and refuses this go 1.27 module), `go test -race -count=50 -run
+      ^TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec ./internal/platform` — `ok`,
+      118.418 s, 50 runs, 0 failures, exit 0. CI on revisions containing the fix kept the
+      `daemon` job green with no recurrence (runs 44140380720 `3377a7d`, 44147815717 `9c73a05`,
+      44230735630 `d60d50d` and 44253118123 `9192241`; `daemon-windows` too where the trigger ran
+      it). The `.partial-*` crash residual stays recorded and needs no further action: the
+      publish removes its temporary file on every failure it can observe, a crash can leave only
+      the dot-prefixed file, and `ensureFresh` then refuses the non-empty barrier directory
+      loudly instead of reusing it — no occurrence is recorded. The archived flake-class block
+      below keeps its original `docs/TODO.md` pointer for this item; the entry itself now lives
+      in this archive.
+
+*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #76).*
 
       **Linux terminal reason — fixed at the cause; verification is CI on the new revision, not a
       local green.** `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` failed
@@ -143,6 +278,85 @@ from branch `chore/deadcode-revalidation`.
       supervisor-side stop proofs only. The same PID-only membership observation still verifies
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
+
+*Closed remainder of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; with the closed part above, nothing of the item stays there.*
+
+- [ ] Close the `daemon/internal/platform` flake class: the Linux descendant-monitor terminal reason
+      and the Windows owned-child close window. A rerun, a longer timeout or a relaxed assertion is
+      not a fix, and neither side may be closed on the other side's evidence.
+      Closed part moved to `docs/archive/CLOSED-TODO.md`.
+      **Today's other occurrences in run 44055523619 (daemon job 133943809650 / daemon-windows job
+      133943809688; identical tree green in run 44054200088).**
+      `TestPIDFDGroupSupportProbeReleasesProcessHandle` (`process_unix_linux_test.go:60`,
+      `capability probes retained pidfds: before=2 after=1`, 0.00 s) — test-design defect. The
+      assertion counted every pidfd in the process before and after 16 probes, so a baseline pidfd
+      no probe ever created plus an unrelated release during the loop moved the count; the failure
+      text is its own discriminator (a probe that retained handles would show `after > before`).
+      The test now attributes pidfds to this process through `/proc/self/fdinfo` (`Pid:`) and fails
+      only on a pidfd that did not exist before the probes, with an unrelated mid-loop release part
+      of the scenario. Evidence (WSL Linux, go1.27.0, the only Linux available here): with the probe
+      deliberately not releasing its handle the new assertion fails `capability probe retained
+      pidfd 10 for process 430 across 16 probes`; with the retired count assertion and only the
+      unrelated release it failed `before=1 after=0` against the unchanged product. CI verifies this
+      Linux-only test on the new revision.
+      `TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt` (1.84 s),
+      `TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability` (5.16 s) and
+      `TestGoalAdmissionLeavesProviderAccessNilForNativeHarness` (1.09 s) in `internal/app` failed
+      as `native turn did not start` / `native Pi provider turn did not start` — environment,
+      load-bound. Each is a bare 1 s/5 s wall-clock wait for an in-process fake adapter; this is the
+      family 0007b recorded failing only while the host also ran the browser suite, live daemon
+      fixtures and another agent's work and passing alone afterwards
+      (`docs/evidence/goal-0007b-readable-work-views-2026-11-15.md`), and the same tree passed in
+      run 44054200088, where that package took 120.8 s against the 600 s timeout seen here.
+      Resource: hosted-runner CPU/disk for ~230 in-process daemon starts that fsync a journal each
+      — what would make it deterministic is waiting on the product's own state transition instead
+      of host speed, which belongs in the test, not in the product or the job setup; a longer
+      budget is explicitly not the fix, so the waits are unchanged. Instead each of these three
+      waits now reports the durable reason (`nativeStartFailureDetail`), which the CI artifact
+      lacked because those test daemons discard their log. Only CI can judge a repeat.
+      `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.043s` (`panic: test timed out after
+      10m0s`, `running tests: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (8m4s)`) —
+      test-design defect, fixed. These tests built a `daemon` with no background context, so
+      `rootContext` fell back to `context.Background()` and a worker whose terminal transition could
+      not be persisted — here because the test's deferred `store.Close()` runs before `t.Cleanup` —
+      retried forever while the cleanup joined it, killing the package at the go-test timeout with
+      the test's own failure unrecorded. `stopTestDaemon` now performs the daemon's own shutdown
+      ordering (cancel the background context, `stopAll`, then join the workers under the
+      documented 30 s `testHangGuard`) at the eight cleanup joins in this package; no assertion
+      changed. Evidence: with the pre-fix cleanup join and an expired start wait the package
+      reproduced `panic: test timed out after 25s` (bounded demo) with the test's own failure
+      unreported; with the fix the same scenario reports
+      `--- FAIL: TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn (0.21s)` and the package
+      completes. The Linux supervisor helper-witness flake
+      (`TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`) keeps its own entry in
+      `docs/TODO.md` above.
+      Delivered by PR #76 (`docs/close-linux-platform-flakes`, based on `f2a759f`): the move
+      changes no code because every occurrence this text records is already fixed in `main`. The
+      fixes were re-read against this revision: `d29fe5a` (#49) for the identity-bound Windows stop
+      proof, the pidfd attribution (`pidfdsForThisProcess` through `/proc/self/fdinfo`),
+      `nativeStartFailureDetail` in the three start waits and `stopTestDaemon`'s shutdown ordering
+      at the package's cleanup joins; the closed part above keeps its own record (`0220f2a` #47,
+      `d29fe5a` #49, `3781c78` #56). Both job logs were re-read from their own run
+      (`gh run view 44055523619 --job 133943809650 --log-failed`: `capability probes retained
+      pidfds: before=2 after=1` at 0.00 s; `--job 133943809688 --log-failed`: `harness_test.go:4285:
+      native turn did not start`, `harness_test.go:4507: native Pi provider turn did not start`,
+      `harness_test.go:4601: native turn did not start`, `panic: test timed out after 10m0s` and
+      `process_windows_test.go:1004: owned child 7824 survived Close()`), and the identical tree's
+      green run 44054200088 (`95b9fa1`: `daemon` and `daemon-windows` both success) was confirmed.
+      Fresh evidence on this revision: WSL `Ubuntu-24.04` (`/usr/local/bin/go` ->
+      `/usr/local/lib/go1.27.0/bin/go`, go1.27.0 linux/amd64, `GOTOOLCHAIN=auto`; the default WSL
+      distro's `/usr/bin/go` is go1.26.8 with `GOTOOLCHAIN=local` and refuses this go 1.27
+      module), `go test -race -count=50 -run
+      'TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven|TestProcessGroupStopRequestKeepsCleanLeaderAbsentTerminalReason|TestPIDFDGroupSupportProbeReleasesProcessHandle'
+      ./internal/platform` — `ok`, 20.091 s, 50 runs per test, 0 failures, exit 0. CI on revisions
+      containing the fixes kept the `daemon` job green with no recurrence of any signature in this
+      class (runs 44147815717 `9c73a05`, 44230735630 `d60d50d`, 44253118123 `9192241`). The three
+      load-bound start waits this text records as "unchanged" were subsequently converted to the
+      package's documented hang guard — `time.After(testHangGuard)`, 30 s at `app_test.go:7281`,
+      applied at `harness_test.go:4284`/`:4290`, `:4506`, `:4600` by `4094624` (#57) — so a
+      further occurrence would be a new finding, not an open action of this item. The moved
+      text's final line keeps its original `docs/TODO.md` pointer; the helper-witness item it
+      names is the entry closed above in this archive.
 
 - [ ] Revalidate and remove the unused `JsonDocument` alias in
       `control/lib/symmetry_control/goals/schemas.ex:1431`
@@ -234,6 +448,59 @@ from branch `chore/deadcode-revalidation`.
       `runtimes/presentation.ts` for the not-supported, next-turn and estimated capability
       presentations; the rules now sit at `styles.css:216-217`) — so the literal-selector sweep's
       "unreferenced" premise was wrong and no rule was removed.
+
+- [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
+      the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
+      query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
+      the project id, while `control/lib/symmetry_control_web/portal_session.ex` validates each
+      path's query against `projectId`, `connectionId` or the work-search patterns and narrows a
+      project id to `[A-Za-z0-9_-]+`. The server stays the authority, so the worst case is a deep
+      link falling back to `/portal` rather than an open redirect; observed while completing the
+      0007d rebase union (0007b's client filter and 0007d's server rule met for the first time).
+      Decide whether the client should narrow its filter or the server should accept the extra
+      params, and if the client is narrowed, add a test that keeps the two lists aligned.
+      Closed on branch `fix/portal-return-targets` (2026-11-19): `safeReturnTo` now mirrors the
+      server's `SymmetryControlWeb.PortalSession` rules parameter for parameter — the same shell
+      paths with the `[A-Za-z0-9_-]+` identifier charset, the same per-path query keys, and no
+      fragment — and the shared corpus `contracts/fixtures/shell-return-targets.json` is consumed
+      by both the frontend unit test (`frontend/src/app/application.test.ts`) and the ExUnit test
+      (`control/test/symmetry_control_web/portal_session_test.exs`); its enumerated cases are
+      pinned on both sides, so every path or query rule change must add a corpus case.
+
+- [ ] Revalidate the load-sensitive Go test
+      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
+      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
+      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
+      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
+      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
+      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
+      deadline rather than a longer test timeout.
+      Revalidated and closed by branch `fix/flake-load-sensitive-go` (2026-11-19): no further change
+      was needed because `8082317` (#44) already replaced the 1 s `context.WithTimeout` around
+      `WaitTurn` with the package's documented `testHangGuard` (30 s, "turns a hung harness into a
+      failure; never a statement about how fast the adapter should be") and made the failing wait
+      name the outstanding step (`mustSettle(t, "WaitTurn", err)`), so elapsed time no longer
+      decides the verdict and a guard expiry can no longer be reported as this test's behavioural
+      failure. Re-run on this host while the other regression workers loaded it: plain
+      `go test -count=20 -cpu 1,2 -run '^TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock$'
+      ./internal/harness/omp` passed (`ok … 18.389s`, exit 0) and the same selection under
+      `-race -count=5 -cpu 1,2` passed in WSL (`ok … 4.485s`, exit 0). The pristine 1 s failures
+      stay recorded in #44 (8/8 on the pre-fix revision under 3x oversubscription) and in the 0007e
+      observation above.
+
+## Deferred review findings (0007f)
+
+- [ ] Revalidate the `/portal/connections?projectId=…` session return target.
+      `control/lib/symmetry_control_web/portal_session.ex` accepts only `connectionId=…` for the
+      connections shell path while the shell's own navigation writes `?projectId=…`, so a session
+      expiry collapses that page to `/portal`. The identical gap on `/portal/runtimes?projectId=…`
+      was fixed by the 0007f review round (`shell_query?("/portal/runtimes", …)`); extend the
+      connections clause and its accept/reject tests in a separate change.
+      Closed on branch `fix/portal-return-targets` (2026-11-19):
+      `shell_query?("/portal/connections", …)` now accepts `connectionId=…` and `projectId=…` per
+      parameter through the shared `all_params?/2` helper (renamed from `work_query?/2`), and both
+      the module's accept/reject lists and the shared corpus cover the project-scoped connections
+      target.
 
 ## Deferred review findings (0007h)
 
@@ -496,6 +763,39 @@ from branch `chore/deadcode-revalidation`.
       Corroboration recorded without action: an independent cancelled review parsed the browser HTML
       report's embedded results and confirmed the focused 35/1/0 and broad 79/15/0 rows with no flaky cases -
       evidence for the 0007b receipts' browser rows, not a defect.
+
+- [x] Re-publish the pre-existing personal absolute paths in the committed 0008a
+      evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
+      instead of rewriting history:
+      `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
+      strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
+      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
+      58 (the `EVIDENCE_ROOT` value, an operator-profile drive path). The 0008b change renders its own new
+      records with that helper and records the rendering in the record
+      (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
+      record's quoted digest consistent when the older records are re-published.
+      Closed 2026-11-19 on branch `chore/eval-record-scrub`: re-published through
+      `scripts/ci/model-routing-record-sanitize.py` (`sha256:b8b252f3…`) as the
+      entry directs — `0008a-controls.json` 32 substitutions (the 14
+      disposable-root strings -> `<disposable-root>`, plus 9 toolchain
+      interpreter argv entries (one rendered to `path-sha256:4d144641…`) and 9
+      operator-worktree argv entries -> the
+      deterministic `path-sha256:` tokens), `0008a-audit.json` 5 (3
+      disposable-root values + 2 toolchain entries), and the evidence record's
+      line 58's `EVIDENCE_ROOT` value -> `EVIDENCE_ROOT='<disposable-root>'`.
+      No host path remains and no meaningful prose fixture needed leaving
+      unrendered in these three files, so the tool's `--check` exits 0 on all
+      three. Quoted-digest consistency was kept: the evidence record's quoted
+      audit digest was rebound (`dc878099…` -> `832117d0…`), and one
+      rendered-output digest needed a second-generation rebind
+      (`0008a-controls.json`'s `missing-gate` `stderr_sha256`, `c12881ae…` ->
+      `8503bfa2…`), re-deriving that file's `sha256`. No document holds a
+      full-length occurrence of a changed digest outside the README exception
+      record (checked across `docs/`, `scripts/`, `contracts/` and `.github/`);
+      the truncated `…` prefixes that remain are in that record and in these
+      closures. The full table is in
+      `docs/evaluations/model-routing/README.md`, "Record rendering exception
+      (2026-11-19)".
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
