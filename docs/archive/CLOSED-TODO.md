@@ -575,6 +575,30 @@ The blocks below were moved on 2026-11-19.
       the evaluation runner again, which invalidates the four 0008d receipts for submission under
       the new bytes in exactly that fail-closed way.
 
+- [ ] Decide whether the 0008d published records need a second rendering pass. No host-specific
+      absolute path ships in any of them: the four receipts are published as the runner's derived
+      bytes (`accept` re-derives each one byte for byte) and both narrative records name the private
+      store root only as `<store>`. The store's stored session text was rendered through
+      `scripts/ci/model-routing-record-sanitize.py --root <store>` before the runner read it, so the
+      derived receipts still carry `path-sha256:` tokens for the text that was rendered (the fragment
+      `/||` became `path-sha256:019ba55f…` inside the `0008d-a-mixed.*` pair; the `0008d-a-strong.*`
+      pair carries `…e11f3495…`, `…810a366d…` and `…523fbab2…` for its quoted contract paths), and
+      the frozen `outcome` claim keeps the literal route `/portal/runtimes`, which is what keeps the
+      token correlatable. `--check` therefore still exits 1 for those records - the tool renders
+      every absolute path, not only host ones, which its docstring names as its boundary - and it
+      exits 0 for the four review records and the `0008d-b-*` receipts. Nothing must change unless a
+      future audit wants literal routes in reviewer prose, which needs a root-only rendering mode in
+      the tool, never an edit to a bound record.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the sanitize tool gained the requested
+      root-only mode (`--root-only`): it renders or flags only host absolute paths (Windows drive and
+      UNC roots, POSIX home/root/temp/mount roots) plus any `--root` disposable root, so product
+      routes such as `/portal/runtimes` stay literal, and a bare root token with no following
+      separator or segment stays literal too. `--check --root-only` exits 0 for every committed
+      `0008d-*` record - the four receipts, their four review records and the candidate policy pair -
+      which is the second rendering pass the entry asked for: no record was edited, and the
+      pre-existing raw host paths in the older 0008-series records stay with their own open entries.
+
 - [ ] Decide whether the four 0008c receipts ever need re-production under the current evaluation
       tooling. They bind the produced revision, preserved as the annotated tag
       `0008c-produced-tooling` (commit `cab222b`): all four re-verify with that revision's

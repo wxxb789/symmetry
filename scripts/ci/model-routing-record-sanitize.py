@@ -17,6 +17,17 @@ recorded text as a stable token instead:
 Relative paths, URLs and ``sha256:`` digests pass through unchanged, and
 rendering is idempotent.
 
+With ``--root-only`` the renderer flags only host absolute paths: Windows drive
+and UNC roots and the POSIX roots a host path actually starts under (``/home/``,
+``/Users/``, ``/root/``, ``/tmp/``, ``/var/``, ``/mnt/``, ``/private/`` - the
+shapes the evaluation runner's host-path redaction and the committed records
+name), plus every ``--root`` disposable root. A product route such as
+``/portal/runtimes`` is not a host path and stays literal in this mode, and so
+does a bare root token with no following separator or segment (``/tmp`` quoted
+in prose), which names no host-specific location; the default mode keeps
+rendering every absolute path, which is its documented boundary for argv/output
+capture.
+
 Usage (record publishers apply this before writing a record)::
 
     python scripts/ci/model-routing-record-sanitize.py \
@@ -24,7 +35,8 @@ Usage (record publishers apply this before writing a record)::
 
 The CLI renders files (or standard input) to standard output. With ``--check``
 it writes nothing and exits 1 when the input would change, so a publishing
-script can gate on "no host path is present".
+script can gate on "no host path is present"; ``--check --root-only`` is the
+shape the committed-record cleanliness gate uses.
 """
 
 from __future__ import annotations
@@ -49,6 +61,16 @@ DISPOSABLE_ROOT_TOKEN = "<disposable-root>"
 _DRIVE_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>])[A-Za-z]:[\\/][^\s\"'`,;:)]*")
 _UNC_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>])\\\\[^\s\\\"'`,;:)]+\\[^\s\"'`,;:)]+")
 _POSIX_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>.])/(?:[^/\s\"'`,;:)]+/)*[^\s\"'`,;:)]+")
+# The filesystem roots a host absolute path actually starts with, in the shape the
+# evaluation runner's host-path redaction (`HOST_PATH_PATTERNS`) and the committed
+# records name. `/portal/runtimes` and any other product route stay literal in
+# `--root-only` mode because their first segment is not one of these roots, and a
+# bare root token with no following separator or segment (`/tmp` quoted in prose)
+# stays literal too: it names no host-specific location.
+_HOST_ROOT = r"(?:home|Users|root|tmp|var|mnt|private)"
+_HOST_POSIX_PATH = re.compile(
+    r"(?<![A-Za-z0-9_:/\\>.])(?:/" + _HOST_ROOT + r"(?:(?:/[^/\s\"'`,;:)]+)+|/))"
+)
 
 
 def hashed_path_token(path: str) -> str:
@@ -68,19 +90,25 @@ def _root_variants(root: str) -> list[str]:
     return sorted(variants, key=len, reverse=True)
 
 
-def sanitize_text(text: str, roots: list[str]) -> str:
+def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     """Render host-specific absolute paths in ``text`` as tokens.
 
     ``roots`` are disposable coordinator roots (absolute paths) to render as
-    ``<disposable-root>``; every other absolute path is rendered as a hashed
-    token. The function is idempotent: rendering rendered text changes nothing.
+    ``<disposable-root>``. With ``root_only`` false every other absolute path is
+    rendered as a hashed token; with ``root_only`` true only host absolute paths
+    (drive, UNC and the POSIX home/root/temp/mount roots) are rendered, so a
+    product route such as ``/portal/runtimes`` stays literal. The function is
+    idempotent: rendering rendered text changes nothing.
     """
 
     rendered = text
     for root in roots:
         for variant in _root_variants(root):
             rendered = rendered.replace(variant, DISPOSABLE_ROOT_TOKEN)
-    for pattern in (_DRIVE_PATH, _UNC_PATH, _POSIX_PATH):
+    patterns = (_DRIVE_PATH, _UNC_PATH, _HOST_POSIX_PATH) if root_only else (
+        _DRIVE_PATH, _UNC_PATH, _POSIX_PATH,
+    )
+    for pattern in patterns:
         rendered = pattern.sub(lambda match: hashed_path_token(match.group(0)), rendered)
     return rendered
 
@@ -93,6 +121,9 @@ def _parse_arguments(argv: list[str]) -> argparse.Namespace:
                         help="disposable coordinator root to render as <disposable-root>; repeatable")
     parser.add_argument("--check", action="store_true",
                         help="write nothing and exit 1 when the input still carries a host path")
+    parser.add_argument("--root-only", action="store_true",
+                        help="render/flag only host absolute paths and --root disposable roots; "
+                             "product routes such as /portal/runtimes stay literal")
     parser.add_argument("file", nargs="?", default="-", metavar="FILE",
                         help="file to render, or - for standard input (default)")
     return parser.parse_args(argv)
@@ -111,7 +142,7 @@ def main(argv: list[str]) -> int:
         # CRLF/LF convention must survive rendering unchanged.
         with path.open(encoding="utf-8", errors="replace", newline="") as handle:
             text = handle.read()
-    rendered = sanitize_text(text, arguments.root)
+    rendered = sanitize_text(text, arguments.root, root_only=arguments.root_only)
     if arguments.check:
         if rendered != text:
             print("model-routing-record-sanitize refused: a host absolute path is present", file=sys.stderr)

@@ -13,21 +13,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Model-routing evaluation records
 
-- [ ] Decide whether the 0008d published records need a second rendering pass. No host-specific
-      absolute path ships in any of them: the four receipts are published as the runner's derived
-      bytes (`accept` re-derives each one byte for byte) and both narrative records name the private
-      store root only as `<store>`. The store's stored session text was rendered through
-      `scripts/ci/model-routing-record-sanitize.py --root <store>` before the runner read it, so the
-      derived receipts still carry `path-sha256:` tokens for the text that was rendered (the fragment
-      `/||` became `path-sha256:019ba55f…` inside the `0008d-a-mixed.*` pair; the `0008d-a-strong.*`
-      pair carries `…e11f3495…`, `…810a366d…` and `…523fbab2…` for its quoted contract paths), and
-      the frozen `outcome` claim keeps the literal route `/portal/runtimes`, which is what keeps the
-      token correlatable. `--check` therefore still exits 1 for those records - the tool renders
-      every absolute path, not only host ones, which its docstring names as its boundary - and it
-      exits 0 for the four review records and the `0008d-b-*` receipts. Nothing must change unless a
-      future audit wants literal routes in reviewer prose, which needs a root-only rendering mode in
-      the tool, never an edit to a bound record.
-
 - [ ] Decide whether the shared hoisted dependency tree should be bound. The 0008d TypeScript gates
       resolve their tools through a hoisted pnpm install one level above the run directories (the
       run's `environment.json` records the route), whose bytes sit outside every sealed checkout and
