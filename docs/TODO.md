@@ -439,14 +439,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       was fixed by the 0007f review round (`shell_query?("/portal/runtimes", …)`); extend the
       connections clause and its accept/reject tests in a separate change.
 
-- [ ] Revalidate the pre-existing capability-vs-state cancel/retry policy in
-      `control/lib/symmetry_control_web/portal_json.ex` (`execution_summary/1`): `can_cancel` and
-      `can_retry` are derived from task state only, while adapters advertise per-operation support,
-      so a runtime advertising `cancel: false` still shows a live Cancel control until the server
-      refuses it. Either bind the projection to the advertised support or record the state-only
-      policy as intended. Named as a limitation by the 0007f review round; out of that diff's
-      scope.
-
 ## Deferred review findings (0007h)
 
 - [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate

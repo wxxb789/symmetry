@@ -141,6 +141,29 @@ not a claim that work remains.
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
 
+## Deferred review findings (0007f)
+
+- [ ] Revalidate the pre-existing capability-vs-state cancel/retry policy in
+      `control/lib/symmetry_control_web/portal_json.ex` (`execution_summary/1`): `can_cancel` and
+      `can_retry` are derived from task state only, while adapters advertise per-operation support,
+      so a runtime advertising `cancel: false` still shows a live Cancel control until the server
+      refuses it. Either bind the projection to the advertised support or record the state-only
+      policy as intended. Named as a limitation by the 0007f review round; out of that diff's
+      scope.
+      **Fixed (2026-11-19, `fix/portal-capability-bound-controls`):** the projection is bound to the
+      advertised support. `execution_summary/1` joins the state permission with the adapter
+      operations the attempt's runtime advertises: `can_cancel` requires `cancel` whenever a runtime
+      holds the attempt (claimed and beyond — a queued or assigned cancel is applied by the control
+      plane itself, so it needs no runtime), and `can_retry` requires the previous attempt's runtime
+      to advertise `start`, the operation of the fresh retried attempt. A runtime without adapter
+      metadata, without the operation, or with a non-`true` value answers false, so a runtime
+      advertising `cancel: false` now serves `can_cancel: false`. `Orchestration.adapter_operation_supported?/2`
+      owns the vocabulary; `Workspaces.ReadModel` passes the runtimes it already loads in one query
+      into each execution projection (no per-task read), and `Orchestration.task_snapshot/1` serves
+      the same shape to the command responses. Projection tests cover state-ok+supported,
+      state-ok+unsupported, state-ok+unknown and state-not-ok for both controls, plus the
+      runtime-less local transitions; the work-detail render test covers the withheld Cancel/Retry.
+
 ## Deferred review findings (0007h)
 
 *Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the open residual stays there.*
