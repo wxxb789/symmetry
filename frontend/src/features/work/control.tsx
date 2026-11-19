@@ -35,7 +35,7 @@ import {
   type WorkDetail,
   type WorkTimeline,
 } from "../../services/api";
-import { asRecord, asText, executionStateLabel, timelineBoundary, timelineItemKey, timestamp, type TimelineItemLike } from "./presentation";
+import { asRecord, asText, executionStateLabel, hasDecisionPacket, timelineBoundary, timelineItemKey, timestamp, type TimelineItemLike } from "./presentation";
 import {
   attemptReceiptView,
   receiptLabel,
@@ -46,8 +46,6 @@ import {
 } from "./receipts";
 
 type WorkItemRow = WorkDetail["work_item"];
-type WorkExecutionRow = NonNullable<WorkItemRow["execution"]>;
-type WorkWaitingRow = NonNullable<WorkExecutionRow["waiting"]>;
 
 /** The placeholder key of an attempt the browser could not give an identity. */
 const unavailableActionId = "unavailable";
@@ -449,13 +447,6 @@ function mountAttempts(item: WorkItemRow, baseline: number): ControlAttempt[] {
   const waiting = execution?.waiting ?? null;
   if (waiting !== null && !hasDecisionPacket(waiting)) probe("input", waiting.transition_id, null);
   return attempts;
-}
-
-function hasDecisionPacket(waiting: WorkWaitingRow): boolean {
-  const decision = waiting.decision ?? null;
-  if (decision !== null) return true;
-  const payload = asRecord(waiting.payload);
-  return asRecord(payload?.["decision"]) !== null;
 }
 
 function commandRecord(command: ControlReceipt): ReceiptCommand {
