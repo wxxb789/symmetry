@@ -166,13 +166,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       instead of one. `Command.run/3` and the test itself are untouched by 0007d.
       Revalidate the Windows shell resolution; keep the assertion.
 
-- [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
-      the 0007d fixture database, 10 control tests fail because committed fixture rows are
-      visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
-      controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
-      on a clean dedicated test database. The browser harness recreates its own database;
-      the suite should use the repository default (`symmetry_control_test`).
-
 - [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
       legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
       output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
@@ -209,15 +202,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       gitignored, so a fresh worktree has it only after a build. Decide whether the suite should
       skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
       suite prerequisite; keep the assertions.
-
-- [ ] Revalidate the load-sensitive Go test
-      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
-      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
-      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
-      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
-      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
-      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
-      deadline rather than a longer test timeout.
 
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
