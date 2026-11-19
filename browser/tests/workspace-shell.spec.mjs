@@ -2,6 +2,16 @@ import fs from "node:fs/promises";
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
 
 const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
+// The expiry release is started by the render gate, which exports
+// SYMMETRY_RENDER_GATE_REQUIRED=1: a gate run missing its URL is
+// half-configured and fails collection instead of skipping green, while the
+// local default stays the named skip at the case itself.
+if (process.env.SYMMETRY_RENDER_GATE_REQUIRED === "1" && !process.env.SYMMETRY_SHELL_EXPIRY_URL) {
+  throw new Error(
+    "SYMMETRY_SHELL_EXPIRY_URL must be set: SYMMETRY_RENDER_GATE_REQUIRED=1 makes the render gate " +
+      "fail collection instead of skipping the expiry case",
+  );
+}
 
 // The expiry release is started with a two-second session lifetime
 // (SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2 in CI's render step). The guard is

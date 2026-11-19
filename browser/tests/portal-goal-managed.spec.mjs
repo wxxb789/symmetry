@@ -20,6 +20,17 @@ import { api, attachResource, createProject, createWorkItem, login, uniqueKey } 
 
 const fixtureEnvironment = ["POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB"];
 const presentEnvironment = fixtureEnvironment.filter((name) => Boolean(process.env[name]));
+const missingEnvironment = fixtureEnvironment.filter((name) => !process.env[name]);
+// The render gate carries the whole fixture environment and exports
+// SYMMETRY_RENDER_GATE_REQUIRED=1: a missing variable there is a half-configured
+// gate and fails collection instead of skipping green, while the local default
+// stays the named skip below.
+if (process.env.SYMMETRY_RENDER_GATE_REQUIRED === "1" && missingEnvironment.length > 0) {
+  throw new Error(
+    `${missingEnvironment.join(", ")} must be set: SYMMETRY_RENDER_GATE_REQUIRED=1 makes the render gate ` +
+      "fail collection instead of skipping its Goal-managed fixture case",
+  );
+}
 test.skip(presentEnvironment.length > 0 && presentEnvironment.length < fixtureEnvironment.length,
   `${fixtureEnvironment.join(", ")} must be set together for the Goal-management fixture`);
 test.skip(presentEnvironment.length === 0,

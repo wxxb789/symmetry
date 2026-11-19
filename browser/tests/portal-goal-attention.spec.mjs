@@ -11,6 +11,15 @@ const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operat
 // A second release instance started with Goal rollout off. Without it the
 // rollout-off case is explicitly skipped, never passed on the primary instance.
 const goalsOffUrl = process.env.SYMMETRY_GOALS_OFF_URL;
+// The render gate exports SYMMETRY_RENDER_GATE_REQUIRED=1 and starts that
+// instance: a gate run missing its URL is half-configured and fails collection
+// instead of skipping green, while the local default stays the named skip.
+if (process.env.SYMMETRY_RENDER_GATE_REQUIRED === "1" && !goalsOffUrl) {
+  throw new Error(
+    "SYMMETRY_GOALS_OFF_URL must be set: SYMMETRY_RENDER_GATE_REQUIRED=1 makes the render gate " +
+      "fail collection instead of skipping the rollout-off case",
+  );
+}
 
 async function login(page, path = "/portal/attention", base = "") {
   await page.goto(`${base}/portal/login?return_to=${encodeURIComponent(path)}`);

@@ -629,6 +629,10 @@ jobs:
           curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4001/healthz
           curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4002/healthz
           cd ..
+          # The environment-gated cases (Goal-managed fixture, rollout-off
+          # attention, expiry) throw at collection under this flag instead of
+          # skipping green when the environment below goes missing.
+          SYMMETRY_RENDER_GATE_REQUIRED=1 \
           SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
           SYMMETRY_GOALS_OFF_URL=http://127.0.0.1:4002 \
           SYMMETRY_FIXTURE_MIX=mix \

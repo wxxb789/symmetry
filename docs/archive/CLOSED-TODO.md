@@ -19,6 +19,10 @@ from branch `chore/deadcode-revalidation`.
 The closed class scan appended to `## Paginated reads must be bound to the cursor that served their
 pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-binding`.
 
+The 0007f render-gate fixture item and the 0007h rollout-off residual appended to the `## Deferred
+review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 from branch
+`fix/ci-render-gate-fixtures`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
