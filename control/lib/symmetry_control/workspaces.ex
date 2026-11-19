@@ -474,7 +474,16 @@ defmodule SymmetryControl.Workspaces do
   @spec work_item_snapshot(Ecto.UUID.t()) :: {:ok, map()} | {:error, atom()}
   def work_item_snapshot(work_item_id) do
     with {:ok, work_item} <- fetch(WorkItem, work_item_id) do
-      work_item = Repo.preload(work_item, [:project, :repository_resource, :ci_resource])
+      # One connection per read: parallel preloads spawn sibling tasks that in
+      # the SQL sandbox queue for the caller's single owned connection, where
+      # DBConnection drops a checkout that waits past its queue window. Ecto
+      # only skips parallel preloads when `Ecto.Adapters.SQL.checked_out?/1` is
+      # true - an open transaction or explicit checkout - which sandbox
+      # ownership is not, so the read states the rule itself.
+      work_item =
+        Repo.preload(work_item, [:project, :repository_resource, :ci_resource],
+          in_parallel: false
+        )
 
       case work_item.orchestration_task_id do
         nil ->
@@ -707,7 +716,8 @@ defmodule SymmetryControl.Workspaces do
         order_by: [asc: work_item.position, desc: work_item.updated_at, asc: work_item.number],
         preload: [:project, :repository_resource, :ci_resource, :external_work_item_resource]
 
-    Repo.preload(project, resources: resources, work_items: work_items)
+    # Same one-connection rationale as work_item_snapshot/1.
+    Repo.preload(project, [resources: resources, work_items: work_items], in_parallel: false)
   end
 
   defp select_project([], _selected_project_id), do: nil
