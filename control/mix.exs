@@ -73,6 +73,8 @@ defmodule SymmetryControl.MixProject do
       "ecto.create": ["symmetry.check_test_db", "ecto.create"],
       "ecto.migrate": ["symmetry.check_test_db", "ecto.migrate"],
       "ecto.drop": ["symmetry.check_test_db", "ecto.drop"],
+      "ecto.rollback": ["symmetry.check_test_db", "ecto.rollback"],
+      "ecto.load": ["symmetry.check_test_db", "ecto.load"],
       test: ["symmetry.check_test_db", "ecto.create --quiet", "ecto.migrate --quiet", "test"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
