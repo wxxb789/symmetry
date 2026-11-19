@@ -775,17 +775,24 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       classifier's skip list against the jobs that actually ran before treating the trim as
       fully accepted.
       Recorded (2026-11-19, branch `docs/runbook-quality-drift`): the first hosted docs-only
-      sample is PR #99's run `44540158144` — 10 job records (2 success, 8 skipped), 12 s
-      wall-clock (`14:06:18Z`–`14:06:30Z`) — and the trim revision's after runs (PR #28 run
-      `43724904655` attempt 2 and merge push `f47b0c3` run `43726189932`, both 12/12) are now
-      in the record's measurement table, with the status, clause-coverage and limits sections
-      updated. Cross-check: the workflow's classifier block over the pull request's
-      first-parent diff (the merge ref's `HEAD^1..HEAD`, the same five `docs/**` paths)
-      reports `run-heavy=false` and `run-records=false`, which predicts the executed set
-      exactly — `changes` and the ungated `legacy-route-audit` ran; the seven
-      `run-heavy`-gated jobs and `record-cleanliness` were skipped. Evidence: `gh run view
+      sample is PR #29's run `43726243703` — 12 job records (2 success, 10 skipped), 12 s
+      wall-clock (`14:47:12Z`–`14:47:24Z`) on the trim revision — and the docs-only sample
+      recorded on this branch is PR #99's run `44540158144` — 10 job records (2 success, 8
+      skipped), 12 s wall-clock (`14:06:18Z`–`14:06:30Z`); the trim revision's after runs
+      (PR #28 run `43724904655` attempt 2 and merge push `f47b0c3` run `43726189932`, both
+      12/12) are beside them in the record's measurement table, with the status,
+      clause-coverage and limits sections updated. Cross-check: the workflow's classifier
+      block over each pull request's first-parent diff (PR #29: its `docs/TODO.md`-only diff
+      against `f47b0c3`; PR #99: the merge ref's `HEAD^1..HEAD`, the same five `docs/**`
+      paths) reports `run-heavy=false` for both and `run-records=false` additionally for
+      PR #99, which predicts the executed sets exactly — `changes` and the ungated
+      `legacy-route-audit` ran; the ten `run-heavy`-gated trim jobs (PR #29) and the seven
+      `run-heavy`-gated jobs plus `record-cleanliness` (PR #99) were skipped. Evidence:
+      `gh run view 43726243703 --json jobs,createdAt,updatedAt`; `gh run view
       44540158144 --json jobs,createdAt,updatedAt`; `gh run view 43724904655 --attempt 1|2
-      --json jobs`; `gh run view 43726189932 --json jobs`; `python3
+      --json jobs`; `gh run view 43726189932 --json jobs`;
+      `gh api repos/wxxb789/symmetry/actions/runs?created=2026-11-15T14:40:00Z..2026-11-15T15:10:00Z`
+      shows no pull_request run between the trim merge and PR #29's sample; `python3
       scripts/ci/model-routing-record-sanitize.py --check --root-only
       docs/evidence/ci-process-trim-2026-11-15.md` exit 0; `bash
       scripts/audit-no-legacy-routes.sh` exit 0 (1327 tracked files, 4 exclusions).
@@ -1445,9 +1452,10 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       promoted `harness.md:11` blob; the pnpm commands against `package.json:5`; the
       `development-*` examples against `control/config/runtime.exs:63-64`; `portal.md`'s four
       health signals against `control/lib/symmetry_control/workspaces/read_model.ex:504-515`
-      (the item's `:471` was stale); `mix ecto.drop --force` against
-      `control/deps/ecto/lib/mix/tasks/ecto.drop.ex:43-46` ("do not ask for confirmation",
-      distinct from `--force-drop`); the generated-name regex and `MIX_TEST_PARTITION` against
+      (the item's `:471` was stale); `mix ecto.drop --force` against Ecto 3.14.3's
+      `mix ecto.drop` option docs (`control/mix.lock`; `--force` = "do not ask for
+      confirmation", distinct from `--force-drop`); the generated-name regex and
+      `MIX_TEST_PARTITION` against
       `control/config/test.exs:14-15` and
       `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs:1365`;
       Compose forwarding against `compose.production.yaml:28-39` with the `legacy`/`false`
@@ -1456,7 +1464,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       the named JSON assertion (`.github/workflows/ci.yml:1503,1578-1599`); the Pi
       provider-bridge gate against `daemon/internal/harness/pi/provider_extension.go:459-467`
       and `probe.go:242`; the installed-owner vocabulary against
-      `daemon/internal/harness/registry.go:154` and `harness.md:82,120`; and the docs-index
+      `docs/design/quality.md:80-85` (OpenCode side: `registry.go:154`,
+      `harness.md:82,120`); and the docs-index
       convention against `AGENTS.md:24-26`. Both edited runbooks now name their owner file
       (`daemon/e2e/core_test.go` in `control-plane-and-daemon.md`; `daemon/internal/harness/pi`
       in `connections.md`). Evidence: the owner reads above plus the docs-only hosted CI run on
