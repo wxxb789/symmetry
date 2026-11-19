@@ -485,23 +485,31 @@ from branch `chore/deadcode-revalidation`.
       release the test writes only after the timed-out check returned, and only then writes
       `late-descendant.txt` into the checkout - so a descendant the kill did reach is dead before
       it could write during a slow kill, which is the direction the 1.0 s sleep could not
-      distinguish. The test polls for the witness under a documented 10 s guard instead of
-      sleeping 2.0 s, and the gate publishes its own spawn marker, so a failure now reports what
-      the fixture had established (gate spawned descendant / descendant started / witness text)
-      instead of only the assertion. The 0.5 s per-gate timeout, the assertion and the runner's
-      kill path are unchanged. Evidence on this host under load: the pristine fixture failed 1 of
-      5 runs (`a gate descendant survived the per-gate timeout`, with no mechanism in its log) -
-      with an earlier loaded pass failing 1 of 3 - while the new fixture passed 6 of 6 under the
-      same load; on this host under load, 20 `taskkill /F /T` tree kills (2.0-8.6 s each) never
-      let an in-hierarchy descendant write, while the control that killed only the parent let the
-      waiting descendant record 3 of 3 times - so the tree kill reaches the descendant before it
-      can act, and the witness path itself works. The full evaluation suite passes on the branch
-      (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). Residual, as
-      the entry's premise allows: the fixture still needs the gate to spawn its descendant inside
-      the per-gate timeout, so a host so loaded that the spawn lands after the kill enumerated the
-      tree still records a survivor - the failure message now names that condition, and the
-      model-routing runbook already forbids running this workflow beside a full test suite on the
-      same host.
+      distinguish. The gate spawns the descendant with `stdin/stdout/stderr=DEVNULL` so a survivor
+      cannot hold the gate's inherited pipes and keep the runner's lingering reap open until its
+      own wait cap, and the descendant writes the witness after the release or after that cap, so
+      a survivor can never erase its own evidence. The test polls for the witness once under the
+      runner's own `PROCESS_TREE_REAP_SECONDS` instead of sleeping 2.0 s, and the gate publishes
+      its own spawn marker, so a failure reports what the fixture had established (gate spawned
+      descendant / descendant started / witness text) instead of only the assertion; the failure
+      message is platform-neutral (`taskkill /T` and `killpg` are both snapshots). The 0.5 s
+      per-gate timeout, the assertion and the runner's kill path are unchanged.
+      Evidence, platform-labelled. Windows 10.0.26300 host, loaded by the peer regression workers:
+      the pristine fixture failed 1 of 5 runs (an earlier loaded pass failed 1 of 3) with `a gate
+      descendant survived the per-gate timeout` and no mechanism in its log, while the new fixture
+      passed 6 of 6 under the same load; 20 `taskkill /F /T` tree kills under load (2.0-8.6 s
+      each) never let an in-hierarchy descendant write, while the control that killed only the
+      parent let the waiting descendant record 3 of 3 times; a miss simulation (a throwaway copy
+      of the runner whose `terminate_owned_process_tree` drops `/T`) fails in 20 s with
+      `witness='late'` and both markers true, and the unmodified fixture passes in 23 s; the full
+      suite passes (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). WSL Linux (Ubuntu-24.04,
+      python3, `/mnt/q` worktree): the same test on the `killpg` path passes
+      (`Ran 1 test in 12.740s`, `OK`).
+      Residual: a descendant created after the kill enumerates the tree (`taskkill /T`) or the
+      process group was snapshotted (`killpg`) is still reported as a survivor - correctly, with
+      the markers stating the ambiguity instead of the fixture tolerating it - so the fixture
+      keeps the documented quiet-host requirement (the model-routing runbook forbids running this
+      workflow beside a full test suite on the same host).
 
 ## Deferred review findings (0007f)
 
