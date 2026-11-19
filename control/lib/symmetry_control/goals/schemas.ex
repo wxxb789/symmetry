@@ -1428,7 +1428,7 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{Goal, GoalEvent, JsonDocument}
+  alias SymmetryControl.Goals.{Goal, GoalEvent}
   alias SymmetryControl.Orchestration.{Run, Task}
   alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
 
