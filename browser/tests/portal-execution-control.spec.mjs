@@ -9,8 +9,8 @@
 // run's served state (the classic live timer and Activity-row assertion are
 // retired, not migrated — this surface renders no client-side elapsed time),
 // cancel -> cancelled, retry withheld while no runtime serves the binding,
-// retry hidden after reassignment, and an idempotent replay of an unconfirmed
-// attempt.
+// the retry endpoint refusing a human-owned item after reassignment, and an
+// idempotent replay of an unconfirmed attempt.
 //
 // Network interception appears in three places only, each named in the case that
 // uses it and each explicitly separated from real-data acceptance:
@@ -134,13 +134,20 @@ test.describe("Execution control", () => {
     expect(refused.status, JSON.stringify(refused.body)).toBe(409);
 
     // Reassigning away from the agent removes the retry control (migrated
-    // classic assertion) with no local policy of our own.
+    // classic assertion) with no local policy of our own. This binding has no
+    // serving runtime either, so the control was already withheld: the
+    // assignee gate is observable at the endpoint that would apply the retry,
+    // which refuses the human-owned item for the current generation.
     const current = await projectItemVersion(page, item.id);
     await updateWorkItem(page, item.id, { assignee_type: "human", assignee_name: "Casey", version: current });
     await page.reload();
     await expect(page.locator("h1")).toBeVisible();
     await expect(page.getByRole("button", { name: ui.retry })).toHaveCount(0);
     await expect.poll(() => executionOf(page, item.id)).toMatchObject({ state: "cancelled" });
+
+    allowBrowserError(page, /409 \(Conflict\)/);
+    const humanOwned = await api(page, "POST", `/portal/api/work-items/${item.id}/retry`, { action_id: crypto.randomUUID(), generation: 1 });
+    expect(humanOwned.status, JSON.stringify(humanOwned.body)).toBe(409);
 
     const dimensions = await page.evaluate(() => ({ clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }));
     expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
