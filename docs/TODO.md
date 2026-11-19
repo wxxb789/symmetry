@@ -127,36 +127,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Dead-code candidates
 
-- [ ] Revalidate and remove the unused `JsonDocument` alias in
-      `control/lib/symmetry_control/goals/schemas.ex:1431`
-      (`SymmetryControl.Goals.GoalExternalWait`). The 0006h focused Control run
-      reported the unused alias; a scoped search of that module found only its
-      alias declaration. Leave removal and verification to separate maintenance.
-
-- [ ] Revalidate the unused `replay_task` binding at
-      `control/test/symmetry_control/orchestration_goal_admission_test.exs:1059`
-      and `task` bindings at lines `2079` and `2170`. The 0007a `mix test` run
-      reported these compiler warnings (`.tmp/0007a-session/control-test.log`).
-      Preserve the fixture calls and leave any binding cleanup to separate
-      maintenance.
-      The 0009 full Control run reports the same bindings at lines `1351`,
-      `2450` and `2541` in `.tmp/0009/control-full.log`; these are current
-      coordinates, not additional cleanup work.
-
-- [ ] Revalidate the unused default `kind \\ "omp"` on private
-      `register_unverified_omp_runtime/2` in
-      `control/test/symmetry_control/orchestration_goal_admission_test.exs:3651`.
-      The 0009 full Control run reports that the optional default is never used
-      (`.tmp/0009/control-full.log`). Preserve the runtime fixture behavior and
-      leave cleanup and verification to separate maintenance.
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
 
-- [ ] Revalidate and remove the unused `Connection.statuses/0` accessor at
-      `control/lib/symmetry_control/integrations/schemas.ex:92`. A scoped search for
-      `Connection.statuses` and `Integrations.Connection.statuses` in `control/lib` and
-      `control/test` found no caller; the changesets read the `@statuses` module attribute
-      directly. Observed while fixing goal 0007d. Leave removal and verification to separate
-      maintenance.
 - [ ] Investigate the intermittent Linux failure `TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`
       in `daemon/internal/platform` (`containment_supervisor_linux_test.go:1128: decode
       wrong-session helper witness: unexpected end of JSON input`). Observed in run
@@ -381,12 +353,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       The "longer budget or fewer load-sensitive waits" decision stays open: the three start waits
       in that run are unchanged (a longer budget is not the fix), and the recorded next step is a
       wait on the product's own state transition rather than on host speed.
-
-- [ ] Remove or justify the unreferenced CSS rules `.chip-failed` and `.chip-pending` in
-      `frontend/src/styles.css:170-171`. A sweep of all 137 class selectors in that file against
-      `frontend/src` found these two unreferenced already at `7a92ca4` (untouched by the 0007b,
-      0007c and 0007d work), so they are pre-existing dead weight rather than a merge artifact.
-      Revalidate before deleting and leave removal to separate maintenance.
 
 ## Deferred review findings (0007f)
 
