@@ -38,10 +38,75 @@ export interface Application {
   };
 }
 
+/**
+ * The shell paths the server accepts, with its exact identifier charset. The
+ * server stays the authority on what survives login, so this mirrors
+ * `SymmetryControlWeb.PortalSession` instead of keeping a looser allowlist.
+ */
+const shellPath = /^\/portal(?:\/(?:attention|chat|connections|goals\/[A-Za-z0-9_-]+|projects(?:\/[A-Za-z0-9_-]+)?|runtimes|work\/[A-Za-z0-9_-]+))?$/;
+
+/**
+ * The query each shell surface writes into its own URLs, parameter for
+ * parameter like the server's per-path clauses: the legacy hash carrier, the
+ * chat scope, the connection or project scope, and the work-search state.
+ */
+const legacyHashParam = /^(?:project_id|run_id)=[A-Za-z0-9_-]+$/;
+const legacyScopeParam = /^chat_scope=(?:workspace|project|run)$/;
+const chatScopeParam = /^scope=(?:workspace|project|run)$/;
+const chatIdentifierParam = /^(?:projectId|runId)=[A-Za-z0-9_-]+$/;
+const connectionScopeParam = /^(?:connectionId|projectId)=[A-Za-z0-9_-]+$/;
+const workViewParam = /^view=(?:list|board)$/;
+const workTextParam = /^(?:q|state|owner)=(?:[A-Za-z0-9*.+_-]|%(?:09|[2-9A-Fa-f][0-9A-Fa-f]))*$/;
+const workBlockedParam = /^blocked=(?:1|%221%22)$/;
+const workProjectParam = /^projectId=[A-Za-z0-9_-]+$/;
+const workSearchParams = [workViewParam, workTextParam, workBlockedParam];
+const workItemSearchParams = [...workSearchParams, workProjectParam];
+
+/** Every `&`-separated parameter matches one of `patterns`. */
+const allParametersMatch = (search: string, patterns: readonly RegExp[]) =>
+  (search === "" ? [] : search.slice(1).split("&")).every((parameter) =>
+    patterns.some((pattern) => pattern.test(parameter)),
+  );
+
+/** The whole query is that single parameter, or empty. */
+const onlyParameterMatches = (search: string, pattern: RegExp) =>
+  search === "" || pattern.test(search.slice(1));
+
+const shellQuery = (pathname: string, search: string): boolean => {
+  switch (pathname) {
+    case "/portal":
+      return allParametersMatch(search, [legacyHashParam, legacyScopeParam]);
+    case "/portal/chat":
+      return allParametersMatch(search, [chatScopeParam, chatIdentifierParam]);
+    case "/portal/attention":
+      return onlyParameterMatches(search, workProjectParam);
+    case "/portal/connections":
+      return allParametersMatch(search, [connectionScopeParam]);
+    case "/portal/runtimes":
+      return onlyParameterMatches(search, workProjectParam);
+    case "/portal/projects":
+      return search === "";
+    default:
+      if (pathname.startsWith("/portal/projects/")) return allParametersMatch(search, workSearchParams);
+      if (pathname.startsWith("/portal/work/")) return allParametersMatch(search, workItemSearchParams);
+      // A goal detail carries no query state, like the server's clause set.
+      return search === "";
+  }
+};
+
+/**
+ * The session-expiry return target. It mirrors the server's
+ * `SymmetryControlWeb.PortalSession` rules parameter for parameter, so a deep
+ * link survives login exactly when the server would restore it; the shared
+ * corpus at `contracts/fixtures/shell-return-targets.json` pins both sides, so
+ * a route or query rule added on either side fails the other side's test.
+ */
 export function safeReturnTo(href: string): string {
   try {
     const url = new URL(href);
-    if (/^\/portal\/(attention|chat|connections|goals\/[^/]+|projects(?:\/[^/]+)?|runtimes|work\/[^/]+)\/?$/.test(url.pathname)) {
+    // The server refuses a fragment outright: it never receives one from the
+    // browser, and a caller-chosen fragment is not a destination to echo back.
+    if (url.hash === "" && shellPath.test(url.pathname) && shellQuery(url.pathname, url.search)) {
       return `${url.pathname}${url.search}`;
     }
   } catch {
