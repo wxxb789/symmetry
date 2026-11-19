@@ -253,6 +253,39 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       on submission under the current runner by design; a submission that requires current bytes
       re-executes the runs.
 
+- [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
+      `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
+      `process.communicate(timeout=PROCESS_TREE_REAP_SECONDS)`, which on Windows can keep waiting
+      on the gate's stdout/stderr pipes while a descendant the snapshot tree kill missed still
+      holds the inherited write ends - past the documented reap window and past any caller that
+      expects `check` to return once the kill finished (the timeout-tree fixture's survivor
+      witness was masked this way until the fixture spawned its descendant with `DEVNULL`).
+      Fix direction: close the read ends from a daemon thread, or leave the final handle close to
+      process exit, so a pipe-holding survivor can never extend the reap; add a regression case
+      with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
+
+      **Closed (2026-11-19, `fix/eval-runner-windows-reap`, PR #100):** the lingering reap no
+      longer touches a blocked pipe. `run_owned_command` releases a timed-out gate's read ends
+      through `close_lingering_read_ends`, which closes each `communicate` stream from its own
+      daemon thread and never joins them, so a descendant that escaped the tree kill (or the
+      platform process tree) can hold the inherited write ends without extending the reap; the
+      reap itself stays the bounded `communicate(timeout=PROCESS_TREE_REAP_SECONDS)` plus
+      `kill`/`wait` on the direct child and still returns the output captured so far with
+      `timed_out=True`. The regression case
+      `EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes` spawns a
+      gate whose descendant inherits stdout/stderr and outlives the kill (the kill is narrowed to
+      the direct child, exactly the descendant `taskkill /T` misses), asserts the reap returns
+      within one window (`timeout + PROCESS_TREE_REAP_SECONDS + 5s`), reports the timeout, keeps
+      the output the POSIX reap captured before the kill, and terminates the survivor: red on the
+      pre-fix runner (`python scripts/ci/test-model-routing-evaluation.py
+      EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes -v` ->
+      "run_owned_command did not return within 17.0s while a survivor held the gate's pipes: ...
+      survivor running at the bound=True, reap finished after release=True", FAILED (failures=1)
+      in 19.339s), green after (OK in 16.723s); the focused descendant test passes on Windows (OK
+      in 19.982s) and both tests pass under WSL Ubuntu `python3` (OK in 24.162s), with the full
+      Windows suite passing (`python scripts/ci/test-model-routing-evaluation.py` -> Ran 66 tests
+      in 1165.380s, OK, skipped=2: the POSIX-only executable-mode and non-UTF-8 path fixtures).
+
 ## Dead-code candidates
 
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
