@@ -435,23 +435,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       empty arrays, so those members are pinned by the boundary test and the real-served controller gate
       rather than by a fixture-level rename probe.
 
-## Deferred review findings (0007g)
-
-- [ ] Give the work detail an entry point into a run's conversation. The classic workspace drawer
-      offered "Open Chat" and "Review decision in Chat" for a work item whose execution carries a
-      `run_id`; the migrated `/portal/chat` is reachable from the shell's Chat entry (whose run
-      picker lists the served runs) but the React work detail added by 0007f has no such link, so a
-      waiting decision is only reachable by picking the run in Chat. Adding the link is work-detail
-      surface work (0007f's file) and was outside the 0007g diff; `browser/tests/portal.spec.mjs`
-      keeps the classic drawer's own buttons until the 0007i cutover.
-
-- [ ] Redirect the documented `#chat` hash location to `/portal/chat`. The frontend design fixes
-      "old `/portal#chat` … redirect once to the new equivalent URL", and
-      `frontend/src/app/legacy.ts` still maps the fragment to `/portal/classic#chat` (the classic
-      surface's own in-page entry points write that hash). The one-time hash mapping belongs to the
-      0007i cutover, which retires the classic writable UI; changing it earlier would split the
-      classic page's own navigation from its hash.
-
 ## CI consolidation owner decisions (2026-11-17)
 
 - [ ] Decide whether `linux-native-v2-acceptance.yml` is dispatched against a current subject or its gap
