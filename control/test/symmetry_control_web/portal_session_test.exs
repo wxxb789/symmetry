@@ -142,6 +142,8 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/attention?projectId=project-123",
           "/portal/connections",
           "/portal/connections?connectionId=20000000-0000-4000-8000-000000000001",
+          "/portal/connections?projectId=project-123",
+          "/portal/connections?projectId=project-123&connectionId=20000000-0000-4000-8000-000000000001",
           "/portal/projects",
           "/portal/projects/project-123",
           "/portal/projects/project-123?view=board&q=keeper",
@@ -268,6 +270,10 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/connections/extra",
           "/portal/connections?connectionId=//example.com",
           "/portal/connections?return_to=//example.com",
+          "/portal/connections?projectId=//example.com",
+          "/portal/connections?projectId=project-123%0d%0alocation%3ahttps://example.com",
+          "/portal/connections?unknown=1",
+          "/portal/connections?connectionId=20000000-0000-4000-8000-000000000001&user=admin",
           "/portal/connections#not-a-view",
           "/portal/projects/project-123?return_to=//example.com",
           "/portal?return_to=//example.com",
@@ -336,6 +342,23 @@ defmodule SymmetryControlWeb.PortalSessionTest do
         })
 
       assert redirected_to(authenticated, 302) == "/portal"
+    end
+  end
+
+  # The cross-stack corpus the frontend's safeReturnTo test consumes as well:
+  # one side drifting from the other's per-path shell rules fails here or there.
+  @shell_return_targets Path.expand(
+                          "../../../contracts/fixtures/shell-return-targets.json",
+                          __DIR__
+                        )
+
+  test "shell return targets agree with the shared cross-stack corpus" do
+    %{"cases" => cases} = @shell_return_targets |> File.read!() |> Jason.decode!()
+    assert cases != []
+
+    for %{"name" => name, "path" => path, "return_to" => expected} <- cases do
+      assert PortalSession.return_to(path) == (expected || "/portal"),
+             "shared return-target case #{inspect(name)}: #{path}"
     end
   end
 
