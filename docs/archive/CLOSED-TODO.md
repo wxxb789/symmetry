@@ -206,7 +206,10 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       the sealed checkout instead of excluded from the manifest. `frontend/vite.config.ts` and
       `frontend/vitest.config.ts` resolve `SYMMETRY_TOOL_CACHE_DIR` as Vite's `cacheDir` and
       vitest's `fsModuleCachePath`, the runner exports that variable for every gate it executes and
-      records the run-relative redirect (`tool-state/<gate id>`) in the gate result and the receipt,
+      records the run-relative redirect (`tool-state/<attempt>/<gate id>`, a fresh directory per
+      attempt) in the gate result and the receipt, and a gate also exports
+      `SYMMETRY_DISABLE_TOOL_CACHES=1`, which the vitest config reads as its test-level
+      `cache: false` and as `fsModuleCache: false`, so neither cache channel survives a gate,
       and `prepare` gives the run store an empty `node_modules` so Vite's config-loader temp files
       (`.vite-temp`) land in the run store rather than inside the checkout or the shared dependency
       tree. The `TOOL_CACHE_DIRECTORIES` exclusion was removed from the Source manifest, so run

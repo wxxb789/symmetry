@@ -24,6 +24,27 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       process exit, so a pipe-holding survivor can never extend the reap; add a regression case
       with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
 
+- [ ] Own the record-cleanliness ratchet baseline: 26 unchanged committed records under
+      `docs/evaluations/**` and `docs/evidence/**` still carry a host absolute path, so the
+      `record-cleanliness` CI job - which checks only the records a revision range adds or
+      modifies - fails the moment a later change touches one of them. Enumerated at `5d6c858`
+      with `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only` over
+      `git ls-files docs/evaluations docs/evidence`: the four
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-{mixed,strong}{,.review}.json`
+      receipts; `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md`,
+      `goal-0006-final-series-review-2026-11-15.md`,
+      `goal-0006i-exact-subject-release-acceptance-2026-11-15.md`,
+      `goal-0006j-omp-native-capability-2026-11-14.md`, `goal-0007b-readable-work-views-2026-11-15.md`,
+      `goal-0007i-portal-cutover-series-receipt-2026-11-17.md`,
+      `goal-0009-source-identity-2026-11-16.json`; the seven `goal-0006b-*` files
+      (`acceptance-environment-audit`, `acceptance-source-audit`, `convergence-receipt`,
+      `fixture-inventory`, `resumed-go-gates` and `surface-qa` of 2026-09-29, and
+      `iteration-closure-2026-10-10`); the two `pi-control-e2e-*-2026-09-13.md` files, the five
+      `test-ablation-*-2026-09-29.md` files and `windows-opencode-ci-gate-2026-09-14.md`. Each one
+      needs either the heavier render-and-rebind pass (they bind digests other records name) or an
+      explicit decision to leave it as produced; until that decision, the remedy for a touched
+      record is that render pass, never an edit that breaks a binding.
+
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social

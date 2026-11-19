@@ -199,10 +199,10 @@ than inside the checkout or the shared dependency tree; an empty directory chang
 resolution because Node keeps walking ancestors past it. Redirection alone does not close the
 boundary: vitest's results cache and transformed-module cache execute code written by an earlier
 invocation, so a gate run also exports `SYMMETRY_DISABLE_TOOL_CACHES=1`, which
-`frontend/vitest.config.ts` reads as `cache: false` and `fsModuleCache: false`, and the fresh
-per-attempt directory means nothing a previous attempt wrote can be read. Worker runs keep their
-caches (the variable is the harness's to set), and run state a worker leaves inside the checkout is
-bound by the seal. A gate that still writes
+`frontend/vitest.config.ts` reads as its test-level `cache: false` and as `fsModuleCache: false`, and
+the fresh per-attempt directory means nothing a previous attempt wrote can be read. Worker runs keep
+their caches (the variable is the harness's to set), and run state a worker leaves inside the
+checkout is bound by the seal. A gate that still writes
 `node_modules/.vite*` run state into the checkout changes the sealed revision and fails closed,
 which is what replaced the old `node_modules/.vite`, `.vite-temp` and `.vitest-cache` manifest
 exclusions.
