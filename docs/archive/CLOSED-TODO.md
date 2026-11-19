@@ -576,6 +576,47 @@ from branch `chore/deadcode-revalidation`.
       stay recorded in #44 (8/8 on the pre-fix revision under 3x oversubscription) and in the 0007e
       observation above.
 
+- [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
+      the 0007d fixture database, 10 control tests fail because committed fixture rows are
+      visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
+      controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
+      on a clean dedicated test database. The browser harness recreates its own database;
+      the suite should use the repository default (`symmetry_control_test`).
+      **Closed (2026-11-19, `fix/mix-test-db-guard`):** `mix test` and the test-environment
+      `ecto.create`/`ecto.migrate`/`ecto.drop`/`ecto.rollback`/`ecto.load` commands now refuse
+      a browser acceptance database before any storage task can touch PostgreSQL.
+      `control/lib/mix/tasks/symmetry.check_test_db.ex` is the first step of the `test` alias
+      and of the five Ecto aliases in `control/mix.exs`; a step that names the overridden task
+      runs the real task, so flag passing is unchanged, and the task is a no-op outside the
+      test environment, so the harnesses keep recreating their own databases from the
+      development environment. The guard reads the effective database from the repository
+      configuration (`config/test.exs` appends `MIX_TEST_PARTITION`) and refuses whole browser
+      acceptance database families — `symmetry_0007c_`, `symmetry_0007d_`, `symmetry_0007e_`,
+      any suffix, because the planning harness takes its database as a `-DbName` parameter and
+      a recorded run used `symmetry_0007c_shell` — while the repository default and the
+      runbook's disposable `symmetry_receipt_e2e_<hex>` database stay allowed.
+      Unit-tested in `control/test/mix/tasks/symmetry_check_test_db_test.exs`, including the
+      `run/1` wiring against the configured Repo database.
+      Verified on 2026-11-19: `MIX_TEST_PARTITION=16 POSTGRES_DB=symmetry_0007d_test mix test
+      test/mix/tasks/symmetry_check_test_db_test.exs` exits 1 with the Mix error naming the
+      effective `symmetry_0007d_test16`, both against a live PostgreSQL and against an
+      unreachable `POSTGRES_PORT=1` — the refusal precedes any connection — and
+      `POSTGRES_DB=symmetry_0007e_test` refuses the same way; `MIX_ENV=test` `mix ecto.create`/
+      `mix ecto.migrate`/`mix ecto.drop` refuse for both names, and `pg_database` holds no
+      `symmetry_0007*` database after those runs. With `POSTGRES_DB` unset,
+      `MIX_TEST_PARTITION=16 mix test test/mix/tasks/symmetry_check_test_db_test.exs` creates
+      and migrates `symmetry_control_test16` and reports `Result: 7 passed` (exit 0);
+      `mix format --check-formatted` and `mix compile --warnings-as-errors` pass. In the
+      development environment the guard is a no-op: with `POSTGRES_DB=symmetry_0007e_test` and
+      an unreachable port the real `mix ecto.create` reaches the adapter with no refusal, and
+      `POSTGRES_DB=symmetry_guardmix_probe_dev mix ecto.create --quiet` followed by
+      `mix ecto.drop --quiet` both exit 0 and leave no probe database.
+      Review round (same branch): `POSTGRES_DB=symmetry_0007c_shell MIX_TEST_PARTITION=16 mix test
+      test/mix/tasks/symmetry_check_test_db_test.exs` and the test-environment
+      `mix ecto.rollback`/`mix ecto.load` refuse the same way, naming the effective
+      `symmetry_0007c_shell16`; with `MIX_ENV=test` the guard file reports `Result: 9 passed`,
+      and `mix format --check-formatted` and `mix compile --warnings-as-errors` exit 0.
+
 ## Deferred review findings (0007f)
 
 - [ ] Revalidate the `/portal/connections?projectId=…` session return target.
@@ -885,6 +926,54 @@ from branch `chore/deadcode-revalidation`.
       `docs/evaluations/model-routing/README.md`, "Record rendering exception
       (2026-11-19)".
 
+## Deferred review findings (0007i, rebased onto `ca29a8e`)
+
+- [ ] Investigate the intermittent mobile failure `a failed workspace re-read after a write surfaces the
+      failure instead of the stale rows` in `browser/tests/portal-connections.spec.mjs`. Recorded from the
+      pre-rebase delivery revision `7235708`: mobile failed after its 30 s expect while desktop passed in
+      6.9 s in the same run, and both projects passed in the 12:10 run on the pre-repair bundle. The
+      retained trace shows the injected `route.abort("internetdisconnected")` never fired (no
+      `/portal/api/workspace` request or failure after the route was installed), and the click's
+      `refresh()` refetched `["connections"]` but not `["workspace"]` because of the page's guard
+      `if (!workspace.isFetching) void workspace.refetch()` (`frontend/src/features/connections/connections.tsx:351-352`;
+      the same guard also sits in `onRefreshProject` at `:501`). `workspace.isFetching` is never read
+      during render, so React Query's automatic change tracking does not watch it and a render taken while
+      a read was in flight leaves the guard snapshot at `true` until something else re-renders the page —
+      a state-snapshot race, not a cutover change. Decide whether the guard should read the query's live
+      `fetchStatus` at click time (`queryClient.getQueryState(key)?.fetchStatus`) or whether a
+      user-initiated refresh may deliberately supersede an in-flight read; keep the case's assertions and
+      the injected-failure design.
+      Closed by branch `fix/flake-browser-refresh-guard` (2026-11-19): the decision is that a
+      user-initiated refresh supersedes an in-flight read, so the guards are removed rather than made
+      live. The header refresh now calls `query.refetch()` and `workspace.refetch()` unconditionally,
+      and `onRefreshProject` (the failed-read "Try again" retry in both error states, and the re-read
+      the three resource dialogs issue when their write is refused) issues `workspace.refetch()`
+      without an `isFetching` test; the successful post-write re-read is the resources section's own
+      `reconcile()` -> `queryClient.invalidateQueries({ queryKey: ["workspace"] })`, untouched here.
+      React Query's manual refetch is what makes the click's read happen: with data present it cancels
+      the read it supersedes and starts a new one, and it joins an in-flight initial read instead of
+      duplicating it (query-core `Query.fetch`'s `cancelRefetch` branch), so the case's injected abort
+      is now decided by the click rather than by a fetch state this page cannot see. The retained trace
+      does not discriminate between a stale snapshot and a genuinely in-flight read; the fix is
+      deterministic under both, because the click always issues its read. The live-`fetchStatus`
+      alternative was rejected: it keeps the silent no-op for a genuinely in-flight read and leaves the
+      click depending on a fetch started before the route was installed, which is the race the recorded
+      trace shows. Regression tests in `frontend/src/features/connections/connections.test.tsx`: "issues
+      a new workspace read when a refresh is clicked while a re-read is in flight" (the header Refresh)
+      and "re-reads the project when Try again is clicked while a re-read is in flight" (the stale
+      error's retry) each hold a workspace re-read in flight across a page re-render and assert the
+      click records its own `/portal/api/workspace` request. On the guarded bytes both fail for the
+      recorded reason — no request after the click (`Expected: 3 / Received: 2` for the header
+      refresh; Vitest's inline `expected 5 to be 6` for the retry, whose count includes the refused
+      read's retries); on the fixed bytes the file passes (53 passed, `--no-file-parallelism`) with
+      `tsc --noEmit` and `eslint . --max-warnings 0` exit 0. The browser case keeps its assertions
+      and injected-failure design unchanged. Scope: only this page gated a read whose fetch state it
+      never rendered; the other refresh guards (`projects`, `runtimes`, `work/detail`, `goals/detail`,
+      `chat`) decide on the `isFetching` of the query they pass to `RefreshButton fetching=`, so their
+      field is tracked and their handler snapshots stay fresh, and they are left unchanged. Host
+      note: this host runs ~14 parallel workers, so local browser verdicts are indicative only; CI
+      holds the verdict.
+
 ## Paginated reads must be bound to the cursor that served their pages
 
 - [ ] The work detail's execution history retained the older pages a reader had expanded without
@@ -961,3 +1050,37 @@ from branch `chore/deadcode-revalidation`.
       remains: the classic `portal.js` was deleted in `ca1bdad`
       (`control/priv/portal_assets/` retains only `login.css`), and every other current reference is
       a migration comment, a 404 or `return_to` assertion, or prose.
+
+## Control instances sharing one worktree's build
+
+- [ ] Two Control instances started from the same worktree share `control/_build`, so a foreign
+      session's dev server can answer this worktree's browser runs with `# unhandled` error pages
+      (observed 2026-11-17 as console-500 assertions and render-wait timeouts during 0007g's
+      suite-context repetitions, with zero offset-assertion failures in the same runs). Give each
+      instance its own `MIX_BUILD_PATH` when several run at once; the runs that need isolation
+      should do it explicitly rather than relying on nobody else being active.
+
+      **Fixed (2026-11-19, `fix/control-instance-build-isolation`):** both harnesses that start a
+      Control instance from a worktree now pin that instance's own build path:
+      `browser/scripts/run-planning-tests.ps1` and
+      `browser/scripts/run-connection-fixture-tests.ps1` export
+      `MIX_BUILD_PATH=<worktree>/control/_build/instances/<harness>-<port>` for every mix command
+      they run and set it again on the server (planning) or fixture (connections) command they
+      start, so instances from one worktree that both serve compile into different build paths:
+      each harness refuses a port that already answers, and a concurrent start on one port fails
+      closed at bind/readiness. Deps sources stay shared under `control/deps`; only compiled output
+      moves. An inherited `MIX_BUILD_PATH` is overridden and reported, never trusted, because a
+      stale one from the surrounding shell is the same accident.
+      `browser/scripts/control-instance-isolation.test.mjs`
+      (`pnpm --filter symmetry-browser-acceptance test:control-isolation`) drives each real harness
+      with a recording `mise` stub and asserts that every mix invocation it makes - the database
+      tasks and the instance start alike - received the harness's own instance build path, that two
+      ports get two paths, and that a foreign inherited value decides nothing; `browser/README.md`
+      records the convention, including the path an operator-started Control server needs when
+      another instance may run from the same worktree. The planning harness was run end to end on
+      this branch (desktop `-g restores`, `1 passed`) against
+      `control/_build/instances/planning-<port>`, with its database tasks, server start, readiness,
+      login and staged-asset checks all served from that path (`mix` was reached through this
+      host's `mixwrap` toolchain because its `mise` cannot install the pinned Elixir); the
+      connection-fixture harness is covered by the stub test only on this host, whose fixed fixture
+      database port 55444 has no container here.
