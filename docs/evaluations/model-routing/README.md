@@ -78,6 +78,12 @@ python scripts/ci/model-routing-evaluation.py receipt --run-dir "$RUN" --usage "
 python scripts/ci/model-routing-evaluation.py accept --run-dir "$RUN"
 ```
 
+A TypeScript run also records its resolved dependency tree once, after the shared hoisted install
+exists and before the first gate runs: `bind-dependencies --run-dir "$RUN" --tree
+"$STORE/runs/node_modules" --log "$INSTALL_LOG"` (the carrier section describes what it binds).
+`check` and `receipt` refuse a TypeScript task, or one whose gates declare `vitest_tests`, until
+that step is recorded.
+
 `USAGE` contains `{"repair_count":0,"wall_time":12.0,"phases":[...]}` with all six stages: `exploration`, `implementation`, `verification`, `review`, `repair`, `failed_attempt`.
 The coordinator records the actual repair-attempt count explicitly; a required row saying that no repair occurred does not count as a repair.
 It also records measured task elapsed seconds in `wall_time`, with the observed timing window in phase metadata; summing overlapping coordinator/worker session durations would inflate elapsed time.
@@ -157,9 +163,17 @@ One optional gate field carries the TypeScript-specific evidence:
 Host prerequisites for the TypeScript carrier (measured, not assumed): the shared hoisted install
 above, whose provisioning lockfile copy substitutes the unreachable `registry.npmjs.org` host with
 the configured package feed while every package is still verified against the frozen lockfile's
-own integrity value; that tree is not bound by any record - no provisioning log and no digest of it
-was stored, so the integrity statement is asserted rather than re-verifiable by an auditor, and the
-`docs/TODO.md` entry proposes a recorded provisioning step that binds it; a real PostgreSQL instance and a Phoenix dev server started from the run's
+own integrity value; the tree is bound per run: `bind-dependencies --run-dir "$RUN" --tree "$STORE/runs/node_modules"
+--log "$INSTALL_LOG"` copies the captured install log into the run store as `provisioning/install.log`,
+records the run-relative tree route and a deterministic digest over every file and link of the
+resolved tree - a link whose target resolves outside the tree (pnpm's workspace links such as
+`@symmetry/contracts -> ../../contracts`) contributes that target's own content digest, because the
+gates execute it - and every receipt derived from the run states the block under
+`environment.provisioning`, which `--check` and every later load recompute and refuse on drift; the
+log's source route keeps the measured surface's host-path redaction, while the tree route stays
+run-relative so the digest remains recomputable from the stored run directory. `check` and `receipt`
+refuse a `typescript` task, or one whose gates declare `vitest_tests`, until that step is recorded.
+The coordinator runs the step after provisioning and before the gates; a real PostgreSQL instance and a Phoenix dev server started from the run's
 own sealed checkout (ports 4040/4041) with `MIX_DEPS_PATH`/`MIX_BUILD_PATH` outside the checkout;
 Chromium through Playwright's own browser cache; and the pre-staged generated trees. Because the
 seal refuses generated content that appears after it, the task must list both generated trees in
@@ -173,6 +187,25 @@ outside the checkout while running `check`, so the repository's own command and 
 stay unchanged and the report set lands next to the run as `rendered-report/`. Playwright's
 per-test captures and attachments land under `SYMMETRY_PLAYWRIGHT_OUTPUT` (or the platform temp
 directory by default) and are copied into the run store as `rendered/` after the check.
+
+Tool run state is redirected, not excluded from the manifest: `frontend/vite.config.ts` and
+`frontend/vitest.config.ts` resolve `SYMMETRY_TOOL_CACHE_DIR` as Vite's `cacheDir` and vitest's
+`fsModuleCachePath`, `check` exports that variable for every gate as
+`<run>/tool-state/<attempt>/<gate id>` (a fresh directory per attempt), and the coordinator exports
+it for the worker's own runs (for example as `<run>/tool-state/worker`).
+`prepare` gives the run store an empty `node_modules` directory, so Vite's config-loader temp files
+(`.vite-temp`, written next to the nearest existing `node_modules`) land in the run store rather
+than inside the checkout or the shared dependency tree; an empty directory changes no module
+resolution because Node keeps walking ancestors past it. Redirection alone does not close the
+boundary: vitest's results cache and transformed-module cache execute code written by an earlier
+invocation, so a gate run also exports `SYMMETRY_DISABLE_TOOL_CACHES=1`, which
+`frontend/vitest.config.ts` reads as its test-level `cache: false` and as `fsModuleCache: false`, and
+the fresh per-attempt directory means nothing a previous attempt wrote can be read. Worker runs keep
+their caches (the variable is the harness's to set), and run state a worker leaves inside the
+checkout is bound by the seal. A gate that still writes
+`node_modules/.vite*` run state into the checkout changes the sealed revision and fails closed,
+which is what replaced the old `node_modules/.vite`, `.vite-temp` and `.vitest-cache` manifest
+exclusions.
 
 ## Two-arm class evaluation (0008b)
 
@@ -219,6 +252,7 @@ From the repository root:
 python scripts/ci/test-model-routing-evaluation.py
 python scripts/ci/test-model-routing-omp-usage.py
 python scripts/ci/test-model-routing-record-sanitize.py
+python scripts/ci/test-check-record-cleanliness.py
 python scripts/ci/test-model-routing-source-subject.py
 python scripts/ci/test-linux-v2-source-subject.py
 ```
@@ -232,6 +266,7 @@ go test ./...
 
 The focused Go task also requires exact named-test execution through the frozen task gate.
 CI's existing daemon job runs the Python regression suites (evaluation runner, OMP usage extraction, record path sanitisation, Linux v2 contracts) sequentially before the ordinary Go suite; these deterministic parser/runner controls need no model credentials and do not replace the live evaluation records.
+A separate `record-cleanliness` CI job runs `scripts/ci/check-record-cleanliness.py` whenever a change adds, modifies or retypes a file under `docs/evaluations/**` or `docs/evidence/**`, or changes the sanitize tool itself: the script selects that change's records against the pull-request base commit (or the pushed `before` commit; an all-zero base falls back to the `origin/main` merge base) and runs `model-routing-record-sanitize.py --check --root-only` on each one, so the guard executes the tool's own check instead of re-implementing its patterns. The job is independent of the documentation-only fast path - a records-only pull request is exactly the change it must see - and unchanged committed records are deliberately out of scope while their own TODO entries remain open.
 Linux native/race, Control, wire and browser gates are neither removed nor reinterpreted by this tooling.
 Record unavailable or inapplicable gates rather than claiming they passed.
 
@@ -240,6 +275,8 @@ Record unavailable or inapplicable gates rather than claiming they passed.
 Each run needs a receipt plus the exact checks, independent review and any escalation handoff.
 Keep sanitized task rows here and narrative closure records under `docs/evidence/`, following the existing executable-witness convention.
 When capturing argv or output into a published record, render host-specific absolute paths with `scripts/ci/model-routing-record-sanitize.py` (a disposable root becomes the `<disposable-root>` token, other absolute paths become `path-sha256:<digest>`), and record the rendering in the record as `0008b-controls.json` does in its `record_rendering` block. For the 2026-11-19 one-time re-publication of the older 0008 records, the series-level record of the rendering is the [record rendering exception](#record-rendering-exception-2026-11-19) section below, not new `record_rendering` blocks in those records.
+The renderer's default scope is every absolute path, which its docstring names as the argv/output boundary. `--root-only` narrows rendering and `--check` to host absolute paths - Windows drive and UNC roots and the POSIX `/home`, `/Users`, `/root`, `/tmp`, `/var`, `/mnt` and `/private` roots - plus every `--root` disposable root, so a product route such as `/portal/runtimes` stays literal: `--check --root-only` exits 0 for every committed `0008d-*` record, while a host path in recorded prose is still caught. Records published from argv/output capture use the default scope; prose fixtures that are meant to keep a literal route use the root-only scope.
+The patterns are deliberately an over-approximation, and two false positives are accepted rather than narrowed, because a narrower pattern would miss a real path: a JSON-escaped regular expression (a single-letter escape class written twice, as JSON doubles each backslash, reads as a UNC authority), and a `file:` URL whose first segment after the authority slashes is a host root (that segment may name a relative directory). Both outcomes are safe by construction - the text becomes a `path-sha256:` token and no record is edited - so the cost is an unnecessary token, never a leaked path or a corrupted record. This prose is itself inside the checked tree, so it names those shapes in words rather than spelling them.
 Rejection controls may deliberately corrupt a disposable copy of a real run; they are controls, not additional live-model samples.
 Parser regression fixtures establish parser behavior only and never replace the real Go/Elixir work required by the goal.
 The 0008b class evidence is [go-bounded-regression mixed](0008b-go-bounded-regression-mixed.json) and [strong-only](0008b-go-bounded-regression-strong.json), [go-native-ownership-settlement mixed](0008b-go-native-ownership-settlement-mixed.json) and [strong-only](0008b-go-native-ownership-settlement-strong.json), their review records, the [candidate policy record](0008b-policy.json) and the [refusal controls](0008b-controls.json); the narrative closure record is [`docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`](../../evidence/goal-0008b-go-model-routing-2026-11-17.md).

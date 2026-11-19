@@ -9,6 +9,11 @@ Operations:
            alongside the host environment in the run record, with every
            host-specific absolute path in a value recorded as a sha256: token
            instead of the raw path
+  bind-dependencies
+           record the resolved dependency tree the TypeScript gates execute from (a
+           hoisted pnpm install outside every sealed checkout): copy the install log
+           into the run store, bind its digest and a deterministic digest over every
+           file and link of the tree in the environment block every receipt states
   seal     refuse a checkout whose Git index carries assume-unchanged,
            skip-worktree or other nonstandard entries, whose Git view carries
            checkout-local attribute/filter machinery, or whose object store
@@ -44,7 +49,29 @@ Manifest scope: a sealed Subject binds every checkout file and symlink except
 foo.local.go that Go still compiles) cannot mutate without invalidating
 evidence. Build outputs must stay outside the checkout or be cleaned before
 seal; Elixir _build or other ignored artifact directories are deliberately not
-exempted.
+exempted, and neither is tool run state: the manifest exempts nothing but .git
+internals.
+
+Tool run state: `vitest run` and `vite build` write caches into a project's own
+`node_modules` directory (`node_modules/.vite`, `node_modules/.vitest-cache`) and
+Vite writes its config-loader temp files next to the nearest existing
+`node_modules` directory (`.vite-temp`). `check` therefore exports
+SYMMETRY_TOOL_CACHE_DIR - resolved by `frontend/vite.config.ts` as Vite's
+`cacheDir` and by `frontend/vitest.config.ts` as `cacheDir` plus vitest's
+`fsModuleCachePath` - to every gate it executes, pointing at
+`<run dir>/tool-state/<attempt>/<gate id>` in the coordinator-owned run store,
+and `prepare` creates an empty `<run dir>/node_modules` so `.vite-temp` lands in
+the run store too (an empty directory changes no module resolution: Node walks
+past it to the hoisted dependency tree). Redirection alone is not the boundary:
+the results cache and the transformed-module cache execute code written by an
+earlier invocation, so a gate run also sets SYMMETRY_DISABLE_TOOL_CACHES, which
+`frontend/vitest.config.ts` reads as `cache: false` and `fsModuleCache: false`,
+and each attempt gets a fresh state directory that nothing from a previous
+attempt can be read from. A gate that still writes such state inside the
+checkout fails closed: the sealed Subject changes and the attempt is refused.
+The worker's own runs need the redirect variable exported by the coordinator
+(the runbook names it); they keep caches, and anything they leave in the
+checkout is bound by the seal.
 
 Change detection: the sealed change set is derived from bytes, never from Git's
 filtered or cached view of them. seal refuses assume-unchanged, skip-worktree
@@ -96,12 +123,30 @@ MAX_USAGE_BYTES = 8 << 20
 MAX_RECEIPT_BYTES = 16 << 20
 MAX_RESULT_BYTES = 16 << 20
 MAX_CAPTURE_BYTES = 256 << 20
+MAX_PROVISIONING_LOG_BYTES = 8 << 20
 DEFAULT_TIMEOUT = 1800.0
 PROCESS_TREE_REAP_SECONDS = 10.0
 GO_LIST_FAILURE_PREFIX = "the package test binary did not list the named Go tests: "
 EXUNIT_FAILURE_PREFIX = "the traced ExUnit run did not execute every named test: "
 VITEST_FAILURE_PREFIX = "the traced vitest run did not report every named test as passed: "
 SOURCE_CHANGED_SUFFIX = "source changed while executing this gate"
+# Tool run state a gate's processes would otherwise write inside the checkout is
+# redirected through this variable; `frontend/vite.config.ts` and
+# `frontend/vitest.config.ts` resolve it as Vite's `cacheDir` and vitest's
+# `fsModuleCachePath`. The recorded value is run-relative so a receipt states the
+# redirect without publishing a coordinator store path.
+TOOL_CACHE_ENV = "SYMMETRY_TOOL_CACHE_DIR"
+# A gate's tool state is fresh per attempt (nothing a previous attempt cached can be
+# executed) and the cache channels that would execute previously transformed code are
+# switched off through this variable, which `frontend/vitest.config.ts` reads as the
+# test-level `cache: false` and `fsModuleCache: false` (a production build has no such
+# channel, so `frontend/vite.config.ts` reads only the redirect). Worker runs keep the
+# redirect alone: the coordinator seals what the worker leaves behind.
+TOOL_CACHE_DISABLE_ENV = "SYMMETRY_DISABLE_TOOL_CACHES"
+TOOL_CACHE_DISABLED = "1"
+TOOL_STATE_DIRNAME = "tool-state"
+DEPENDENCY_TREE_NAMESPACE = b"symmetry-dependency-tree/v1"
+PROVISIONING_LOG_PATH = "provisioning/install.log"
 
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -111,15 +156,6 @@ SECRET_KEY_PATTERN = re.compile(
     r"(^|[^a-z0-9])(api[_-]?key|apikey|secret|password|passwd|token|bearer"
     r"|private[_-]?key|access[_-]?key)([^a-z0-9]|$)",
     re.IGNORECASE,
-)
-# Recorded measured-surface values must not republish the operator profile or a
-# disposable evaluation root. These are the shapes a host-specific absolute path
-# actually takes: Windows drive-rooted and UNC paths, and POSIX home or temporary
-# roots. System paths such as /usr or /etc are not host-specific and stay readable.
-HOST_PATH_PATTERNS = (
-    re.compile(r'[A-Za-z]:[\\/][^\s"\']*'),
-    re.compile(r'\\\\[^\s\\"\']+\\[^\s"\']*'),
-    re.compile(r'(?<![\w./-])/(?:home|Users|root|tmp|var/(?:tmp|folders)|private/(?:var|tmp))(/[^\s"\']*)?'),
 )
 GATE_ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 MEASURED_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
@@ -173,6 +209,10 @@ REQUIRED_RUN_KEYS = {
     "task_sha256", "routes_sha256", "environment",
 }
 ENVIRONMENT_KEYS = {"platform", "machine", "python_version", "git_version"}
+PROVISIONING_KEYS = {
+    "tree", "tree_digest", "tree_entries", "install_log", "install_log_source",
+    "install_log_sha256", "install_log_bytes",
+}
 SEALED_KEYS = {
     "schema", "task_id", "base", "head", "manifest_digest", "content_revision",
     "subject_hash", "file_count", "changed_paths",
@@ -219,6 +259,7 @@ ATTEMPT_ENTRY_KEYS = {
 RESULT_KEYS = {
     "gate_id", "cwd", "argv", "go_tests", "go_package", "exit_code", "timed_out",
     "error", "stdout_sha256", "stderr_sha256", "stdout_bytes", "stderr_bytes",
+    "tool_state_dir",
     "go_list_argv", "go_list_exit_code", "go_list_stdout_sha256", "go_list_stderr_sha256",
     "go_list_stdout_bytes", "go_list_stderr_bytes",
     "env", "exunit_tests", "exunit_files", "exunit_argv", "exunit_exit_code",
@@ -238,6 +279,34 @@ SOURCE_SUBJECT_SCRIPT = pathlib.Path(__file__).with_name("linux-v2-source-subjec
 
 class Refused(Exception):
     """A refusal that must never be recorded as accepted evidence."""
+
+
+# Recorded measured-surface values must not republish the operator profile or a
+# disposable evaluation root, and the root-only record check must agree on what a
+# host path is: both tools use the one definition `model-routing-record-sanitize.py`
+# exports as `HOST_PATH_PATTERNS` (Windows drive, UNC and forward-slash authority
+# paths, the POSIX home/root/temp/mount roots, `file:` URLs and their JSON-escaped
+# spellings). Paths outside those roots stay readable; the token is `sha256:` here and
+# `path-sha256:` in the renderer, each tool's own recorded shape. The definition loads
+# lazily so a command that never redacts a value does not need the sibling file.
+SANITIZE_SCRIPT = pathlib.Path(__file__).with_name("model-routing-record-sanitize.py")
+_HOST_PATH_PATTERNS: tuple[re.Pattern[str], ...] | None = None
+
+
+def host_path_patterns() -> tuple[re.Pattern[str], ...]:
+    """The shared host-path matchers, read from the sanitize tool on first use."""
+    global _HOST_PATH_PATTERNS
+    if _HOST_PATH_PATTERNS is None:
+        spec = importlib.util.spec_from_file_location("model_routing_record_sanitize", SANITIZE_SCRIPT)
+        if spec is None or spec.loader is None:
+            raise Refused("cannot load model-routing-record-sanitize.py for the shared host-path patterns")
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except OSError as error:
+            raise Refused(f"cannot load model-routing-record-sanitize.py for the shared host-path patterns: {error}")
+        _HOST_PATH_PATTERNS = module.HOST_PATH_PATTERNS
+    return _HOST_PATH_PATTERNS
 
 
 # ---------------------------------------------------------------------------
@@ -527,43 +596,6 @@ def is_protected_asset(path: str) -> bool:
     return path.rsplit("/", 1)[-1] in PROTECTED_BASENAMES
 
 
-# Tool-generated run caches that live inside a project's own `node_modules`
-# directory. `vitest run` writes `node_modules/.vite/vitest/**` and
-# `node_modules/.vitest-cache/**` unconditionally inside the project it runs in,
-# and neither directory can hold a resolvable package: Node resolves a bare
-# specifier from `<dir>/node_modules/<name>`, so only a directory *named*
-# `<name>` can shadow a dependency. Binding their run state would make every
-# gate that executes vitest change the sealed revision it just verified, so the
-# manifest excludes exactly these cache directories and nothing else under
-# `node_modules`; a package directory, an installed dependency or any other file
-# under the same `node_modules` stays bound and is refused outside allowed paths.
-TOOL_CACHE_DIRECTORIES = (".vite", ".vite-temp", ".vitest-cache")
-
-
-def is_tool_cache_path(path: str) -> bool:
-    parts = path.split("/")
-    for index, segment in enumerate(parts[:-1]):
-        # The cache name must name a directory with an entry inside it: a file
-        # that merely carries a cache name is not run state.
-        if (
-            segment == "node_modules"
-            and parts[index + 1] in TOOL_CACHE_DIRECTORIES
-            and index + 1 < len(parts) - 1
-        ):
-            return True
-    return False
-
-
-def is_tool_cache_directory(path: str) -> bool:
-    """True when the path names a tool-cache directory the manifest excludes.
-
-    The manifest walk asks this for one directory at a time, and it is the same
-    definition `is_tool_cache_path` answers for entries inside such a directory, so
-    the exclusion rule lives in one place instead of a second inline condition.
-    """
-    return is_tool_cache_path(f"{path}/")
-
-
 # ---------------------------------------------------------------------------
 # Git and source binding
 
@@ -626,28 +658,18 @@ def executable_bits_tracked(checkout: pathlib.Path) -> bool:
 
 
 def iter_source_paths(checkout: pathlib.Path) -> list[str]:
-    """Every checkout file and symlink; only .git internals and tool caches are excluded.
+    """Every checkout file and symlink; only .git internals are excluded.
 
-    The excluded tool caches are exactly the directories `is_tool_cache_path`
-    names, asked per directory by `is_tool_cache_directory`: run state written by
-    vitest inside a project's own `node_modules`, which cannot hold a resolvable
-    module and would otherwise change the sealed revision during every gate that
-    executes vitest. This is a declared boundary, not a proof of harmlessness: a
-    file placed inside one of those directories is not bound by the Source
-    manifest and the seal records no digest for it, so in principle a worker could
-    hide code there that a relative import reaches during a gate. The exclusion
-    stays narrow - three cache names, directories under `node_modules` only, while
-    package files elsewhere remain bound - no run observed such a file, and
-    removing the exclusion entirely needs vitest's run state outside the checkout,
-    which is proposed in `docs/TODO.md`.
+    Tool run state is not exempt: `frontend/vite.config.ts` and
+    `frontend/vitest.config.ts` resolve SYMMETRY_TOOL_CACHE_DIR (exported by
+    `check` for every gate) so vitest/vite caches and Vite's config-loader temp
+    files land in the run store, and a gate that still writes such state into the
+    checkout changes the sealed revision and fails closed.
     """
     paths: list[str] = []
     for root, dirnames, filenames in os.walk(checkout):
         for dirname in list(dirnames):
             if dirname == ".git":
-                dirnames.remove(dirname)
-                continue
-            if is_tool_cache_directory(pathlib.Path(root, dirname).relative_to(checkout).as_posix()):
                 dirnames.remove(dirname)
                 continue
             candidate = pathlib.Path(root, dirname)
@@ -683,7 +705,7 @@ def refuse_escaping_symlink(checkout: pathlib.Path, path: str, raw_target: bytes
     """
     try:
         resolved = os.path.realpath(pathlib.Path(checkout, *path.split("/")))
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
         raise Refused(f"cannot resolve the bound symlink {path}: {error}")
     try:
         relative = os.path.relpath(resolved, os.path.realpath(checkout))
@@ -1243,7 +1265,7 @@ def redact_host_paths(value: str) -> str:
     the same path still agree, and no operator profile or disposable root is published
     by the record itself.
     """
-    for pattern in HOST_PATH_PATTERNS:
+    for pattern in host_path_patterns():
         value = pattern.sub(lambda match: sha256_hex(match.group(0).encode("utf-8")), value)
     return value
 
@@ -1277,8 +1299,80 @@ def validate_measured_mapping(value: Any, source: str, redact: bool = False) -> 
     return {name: measured[name] for name in sorted(measured)}
 
 
+def validate_provisioning(value: Any, source: str) -> dict[str, Any]:
+    """Validate the recorded provisioning step of the resolved dependency tree."""
+    block = require_object(value, source, PROVISIONING_KEYS, PROVISIONING_KEYS)
+    provisioning: dict[str, Any] = {
+        "tree": require_text(block["tree"], source + " tree", max_length=300),
+        "tree_digest": require_digest(block["tree_digest"], source + " tree_digest"),
+        "tree_entries": require_integer(block["tree_entries"], source + " tree_entries", 1),
+        "install_log": require_text(block["install_log"], source + " install_log", max_length=300),
+        "install_log_source": require_text(
+            block["install_log_source"], source + " install_log_source", max_length=300
+        ),
+        "install_log_sha256": require_digest(block["install_log_sha256"], source + " install_log_sha256"),
+        "install_log_bytes": require_integer(block["install_log_bytes"], source + " install_log_bytes", 1),
+    }
+    if provisioning["install_log"] != PROVISIONING_LOG_PATH:
+        raise Refused(f"{source} install_log must be {PROVISIONING_LOG_PATH!r}")
+    route = provisioning["tree"]
+    if (
+        route.startswith("/") or "\\" in route or re.match(r"^[A-Za-z]:", route)
+        or any(part == "" for part in route.split("/"))
+    ):
+        raise Refused(
+            f"{source} tree must be a run-relative path so a reader can recompute the digest "
+            "from the stored run directory"
+        )
+    return provisioning
+
+
+def verify_dependency_tree(run_dir: pathlib.Path, provisioning: dict[str, Any]) -> None:
+    """Recompute the recorded dependency-tree digest and refuse a missing or changed tree.
+
+    The recorded route is run-relative, so this re-verification works from the stored run
+    directory alone: a tree that was edited, or pruned after the run, refuses instead of
+    leaving the recorded binding unverifiable.
+    """
+    tree = run_dir / provisioning["tree"]
+    if not tree.is_dir():
+        raise Refused(f"the recorded dependency tree {provisioning['tree']!r} is missing")
+    digest, entries = dependency_tree_digest(tree)
+    if digest != provisioning["tree_digest"] or entries != provisioning["tree_entries"]:
+        raise Refused(
+            "the recorded dependency tree changed after it was recorded: "
+            f"{digest} over {entries} entries != {provisioning['tree_digest']} over "
+            f"{provisioning['tree_entries']} entries"
+        )
+
+
+def requires_dependency_provisioning(task: dict[str, Any]) -> bool:
+    """True when the frozen task executes Node tooling that resolves a dependency tree.
+
+    The gate's argv is part of the claim: a task that runs a vitest entry point
+    resolves the same tree whatever its language field says, so the binding cannot be
+    skipped by declaring a different language.
+    """
+    # `.get` keeps the predicate total for a caller that holds a raw task document (the
+    # regression suite calls it with one); validated tasks carry every key.
+    return task.get("language") == "typescript" or any(
+        gate.get("vitest_tests") is not None or is_vitest_entry(gate.get("argv") or [])
+        for gate in task.get("gates", ())
+    )
+
+
+def require_dependency_provisioning(run: dict[str, Any], task: dict[str, Any]) -> None:
+    if requires_dependency_provisioning(task) and "provisioning" not in run["environment"]:
+        raise Refused(
+            "this task executes Node tooling from a dependency tree; record it with "
+            "bind-dependencies before check or receipt"
+        )
+
+
 def validate_environment(value: Any) -> dict[str, Any]:
-    block = require_object(value, "run record environment", ENVIRONMENT_KEYS | {"measured"}, ENVIRONMENT_KEYS)
+    block = require_object(
+        value, "run record environment", ENVIRONMENT_KEYS | {"measured", "provisioning"}, ENVIRONMENT_KEYS
+    )
     environment: dict[str, Any] = {
         key: require_text(block[key], f"run record environment {key}", max_length=300)
         for key in sorted(ENVIRONMENT_KEYS)
@@ -1286,6 +1380,10 @@ def validate_environment(value: Any) -> dict[str, Any]:
     if "measured" in block:
         environment["measured"] = validate_measured_mapping(
             block["measured"], "run record environment measured"
+        )
+    if "provisioning" in block:
+        environment["provisioning"] = validate_provisioning(
+            block["provisioning"], "run record environment provisioning"
         )
     return environment
 
@@ -1307,6 +1405,20 @@ def load_run(run_dir: pathlib.Path) -> dict[str, Any]:
         "routes_sha256": require_digest(value["routes_sha256"], "run record routes_sha256"),
         "environment": validate_environment(value["environment"]),
     }
+    if "provisioning" in run["environment"]:
+        # The recorded log digest is checked against the stored copy on every load, so a
+        # rewritten or truncated provisioning log is refused before it reaches a receipt.
+        stored_log = read_bytes(
+            run_dir / run["environment"]["provisioning"]["install_log"],
+            MAX_PROVISIONING_LOG_BYTES, "stored provisioning log",
+        )
+        provisioning = run["environment"]["provisioning"]
+        if (
+            len(stored_log) != provisioning["install_log_bytes"]
+            or sha256_hex(stored_log) != provisioning["install_log_sha256"]
+        ):
+            raise Refused("the stored provisioning log changed after it was recorded")
+        verify_dependency_tree(run_dir, provisioning)
     for key in ("review_sha256", "usage_sha256"):
         if key in value:
             run[key] = require_digest(value[key], f"run record {key}")
@@ -1777,13 +1889,31 @@ def run_owned_command(
         return None, stdout, stderr, True
 
 
+def tool_state_relative(gate_dir: pathlib.Path) -> str:
+    """The run-relative directory a gate's tool run state is redirected to.
+
+    The path carries the attempt (`tool-state/<attempt>/<gate>`), so a later attempt
+    never executes run state written by an earlier one.
+    """
+    return f"{TOOL_STATE_DIRNAME}/{gate_dir.parent.name}/{gate_dir.name}"
+
+
 def execute_gate(
-    checkout: pathlib.Path, gate: dict[str, Any], gate_dir: pathlib.Path, timeout: float | None
+    checkout: pathlib.Path, gate: dict[str, Any], gate_dir: pathlib.Path, timeout: float | None,
+    run_dir: pathlib.Path,
 ) -> dict[str, Any]:
     gate_dir.mkdir(parents=True, exist_ok=True)
     cwd = pathlib.Path(checkout, *gate["cwd"].split("/"))
     gate_env = dict(os.environ)
     gate_env.update(gate["env"])
+    # Run state a vitest/vite gate would write into the checkout is redirected into
+    # the coordinator-owned run store, outside the sealed Subject; the recorded value
+    # stays run-relative so a receipt states the redirect without a store path. See the
+    # module docstring's tool-run-state paragraph.
+    tool_state_dir = run_dir / TOOL_STATE_DIRNAME / gate_dir.parent.name / gate["id"]
+    shutil.rmtree(tool_state_dir, ignore_errors=True)
+    gate_env[TOOL_CACHE_ENV] = str(tool_state_dir)
+    gate_env[TOOL_CACHE_DISABLE_ENV] = TOOL_CACHE_DISABLED
     stdout_raw = b""
     stderr_raw = b""
     exit_code: int | None = None
@@ -1892,6 +2022,7 @@ def execute_gate(
         "gate_id": gate["id"],
         "cwd": gate["cwd"],
         "argv": gate["argv"],
+        "tool_state_dir": tool_state_relative(gate_dir),
         "go_tests": gate["go_tests"],
         "go_package": gate["go_package"],
         "env": gate["env"],
@@ -1948,6 +2079,7 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         ("go_tests", gate["go_tests"]),
         ("go_package", gate["go_package"]),
         ("env", gate["env"]),
+        ("tool_state_dir", tool_state_relative(gate_dir)),
         ("exunit_tests", gate["exunit_tests"]),
         ("exunit_files", gate["exunit_files"]),
         ("vitest_tests", gate["vitest_tests"]),
@@ -2195,6 +2327,7 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         "id": gate["id"],
         "cwd": gate["cwd"],
         "argv": gate["argv"],
+        "tool_state_dir": tool_state_relative(gate_dir),
         "go_tests": gate["go_tests"],
         "go_package": gate["go_package"],
         "env": gate["env"],
@@ -2656,6 +2789,7 @@ def build_receipt(
             "id": gate["id"],
             "cwd": gate["cwd"],
             "argv": gate["argv"],
+            "tool_state_dir": gate["tool_state_dir"],
             "exit_code": gate["exit_code"],
             "timed_out": gate["timed_out"],
             "passed": gate["passed"],
@@ -2779,6 +2913,7 @@ def derive_receipt(run_dir: pathlib.Path, candidate_usage: bytes | None = None) 
     """
     run = load_run(run_dir)
     task = load_frozen_task(run_dir, run)
+    require_dependency_provisioning(run, task)
     routes = load_frozen_routes(run_dir, run)
     sealed = load_sealed(run_dir, task)
     require_current_subject(run_dir, task, sealed)
@@ -2878,6 +3013,134 @@ def environment_record() -> dict[str, str]:
     }
 
 
+def _is_junction(path: pathlib.Path) -> bool:
+    """True for a Windows junction, which is a link but not `path.is_symlink()`."""
+    isjunction = getattr(os.path, "isjunction", None)
+    return bool(isjunction is not None and isjunction(path))
+
+
+def _file_content_digest(path: pathlib.Path) -> bytes:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest().encode("ascii")
+
+
+def _within(root: pathlib.Path, candidate: pathlib.Path) -> bool:
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _walk_error(error: OSError) -> None:
+    # os.walk swallows a directory it cannot list unless onerror refuses: a silently
+    # skipped subtree would be an unbound hole in the digest.
+    raise Refused(f"cannot walk the dependency tree at {error.filename}: {error}")
+
+
+def _link_payload(link: pathlib.Path, root: pathlib.Path, seen: frozenset) -> bytes:
+    """The digest payload of one link: its text, plus its target's content outside the tree.
+
+    A link inside the tree is bound by the walked entries the target names. A link whose
+    resolved target leaves the tree is what pnpm's workspace links look like
+    (`@symmetry/contracts -> ../../contracts`): the target's own content is executed by
+    the gates, so it is digested here instead of being left unbound; a link cycle
+    refuses rather than recursing forever.
+    """
+    try:
+        target_text = os.readlink(link).encode("utf-8", "surrogateescape")
+    except OSError as error:
+        raise Refused(f"cannot read dependency tree link {link}: {error}")
+    try:
+        resolved = link.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        # `RuntimeError` is a link (or junction) chain that loops: the target never
+        # resolves, so the tree cannot be bound and the run is refused, not crashed.
+        raise Refused(f"the dependency tree link {link} does not resolve: {error}")
+    if _within(root, resolved):
+        return b"in-tree\0" + target_text
+    if resolved in seen:
+        raise Refused(f"the dependency tree link {link} resolves into a cycle at {resolved}")
+    return b"out-of-tree\0" + target_text + b"\0" + _target_content_digest(resolved, seen | {resolved})
+
+
+def _target_content_digest(path: pathlib.Path, seen: frozenset) -> bytes:
+    """Content digest of one out-of-tree link target (a file, or a directory tree)."""
+    if path.is_dir():
+        digest = hashlib.sha256()
+        digest.update(b"directory\0")
+        for relative, kind, payload in _tree_entries(path, seen):
+            digest.update(kind.encode("ascii") + b"\0" + relative.encode("utf-8") + b"\0" + payload + b"\n")
+        return digest.hexdigest().encode("ascii")
+    try:
+        return _file_content_digest(path)
+    except OSError as error:
+        raise Refused(f"cannot read the dependency tree link target {path}: {error}")
+
+
+def _tree_entries(root: pathlib.Path, seen: frozenset) -> list[tuple[str, str, bytes]]:
+    """Every file and link under ``root`` as sorted (relative path, kind, payload)."""
+    entries: list[tuple[str, str, bytes]] = []
+    for walk_root, dirnames, filenames in os.walk(root, followlinks=False, onerror=_walk_error):
+        for dirname in list(dirnames):
+            candidate = pathlib.Path(walk_root, dirname)
+            relative = candidate.relative_to(root).as_posix()
+            if candidate.is_symlink() or _is_junction(candidate):
+                dirnames.remove(dirname)
+                entries.append((relative, "link", _link_payload(candidate, root, seen)))
+                continue
+            try:
+                info = candidate.lstat()
+            except OSError as error:
+                raise Refused(f"cannot read dependency tree entry {relative}: {error}")
+            if getattr(info, "st_reparse_tag", 0):
+                # A reparse point that is neither a symlink nor a detectable junction
+                # cannot be classified, so it refuses instead of being walked into.
+                raise Refused(f"unsupported reparse-point directory in the dependency tree: {relative}")
+        for name in filenames:
+            candidate = pathlib.Path(walk_root, name)
+            relative = candidate.relative_to(root).as_posix()
+            if candidate.is_symlink():
+                entries.append((relative, "link", _link_payload(candidate, root, seen)))
+            else:
+                try:
+                    entries.append((relative, "file", _file_content_digest(candidate)))
+                except OSError as error:
+                    raise Refused(f"cannot read dependency tree entry {relative}: {error}")
+    try:
+        entries.sort(key=lambda entry: entry[0].encode("utf-8"))
+    except UnicodeEncodeError:
+        raise Refused("the dependency tree contains a path that is not valid UTF-8")
+    return entries
+
+
+def dependency_tree_digest(tree: pathlib.Path) -> tuple[str, int]:
+    """Deterministic digest of every file and link of a resolved dependency tree.
+
+    Each entry contributes its relative path (UTF-8 bytes), its kind and its payload in
+    one sorted stream, so two trees with the same entries digest identically regardless
+    of traversal order: a file contributes its content digest, a link its target text -
+    plus, when the target resolves outside the tree, that target's own content digest,
+    because the gates execute it (pnpm's workspace links point at source outside the
+    hoisted tree). Directory links are pruned instead of followed (a cycle refuses);
+    empty directories are not entries.
+    """
+    try:
+        resolved_tree = tree.resolve()
+    except (OSError, RuntimeError) as error:
+        # A tree path that is itself a link loop never resolves: refuse, never crash.
+        raise Refused(f"the dependency tree is not a readable directory: {error}")
+    entries = _tree_entries(resolved_tree, frozenset({resolved_tree}))
+    digest = hashlib.sha256()
+    digest.update(DEPENDENCY_TREE_NAMESPACE + b"\0")
+    for relative, kind, payload in entries:
+        digest.update(kind.encode("ascii") + b"\0" + relative.encode("utf-8") + b"\0" + payload + b"\n")
+    return sha256_hex(digest.digest()), len(entries)
+
+
 def command_prepare(arguments: argparse.Namespace) -> int:
     run_dir = pathlib.Path(arguments.run_dir)
     if run_dir.exists():
@@ -2953,6 +3216,12 @@ def finish_prepare(
     frozen = run_dir / "frozen"
     write_bytes(frozen / "task.json", task_raw)
     write_bytes(frozen / "routes.json", routes_raw)
+    # Vite writes its config-loader temp files next to the nearest existing
+    # `node_modules` directory. The run store carries an empty one so those files land
+    # in run state instead of inside an enclosing sealed checkout or the shared hoisted
+    # dependency tree; an empty directory changes no module resolution, because Node
+    # keeps walking ancestors past it.
+    (run_dir / "node_modules").mkdir(exist_ok=True)
     environment = environment_record()
     if measured is not None:
         environment["measured"] = measured
@@ -2976,6 +3245,89 @@ def finish_prepare(
         "task_sha256": run["task_sha256"],
         "routes_sha256": run["routes_sha256"],
         "base_tree_digest": run["base_tree_digest"],
+    }, indent=2, sort_keys=True))
+    return 0
+
+
+def _dependency_tree(value: str) -> pathlib.Path:
+    tree = pathlib.Path(value)
+    try:
+        resolved = tree.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        # A tree whose own path is a link loop never resolves; refuse it as unreadable.
+        raise Refused(f"the dependency tree is not a readable directory: {error}")
+    if not resolved.is_dir():
+        raise Refused("--tree must name a directory")
+    return resolved
+
+
+def command_bind_dependencies(arguments: argparse.Namespace) -> int:
+    run_dir = pathlib.Path(arguments.run_dir)
+    run = load_run(run_dir)
+    recorded = run["environment"].get("provisioning")
+    if arguments.check:
+        if recorded is None:
+            raise Refused("the run records no provisioning step to check")
+        digest, entries = dependency_tree_digest(_dependency_tree(arguments.tree))
+        if (digest, entries) != (recorded["tree_digest"], recorded["tree_entries"]):
+            raise Refused(
+                "the dependency tree no longer matches the recorded provisioning step: "
+                f"{digest} over {entries} entries != {recorded['tree_digest']} over "
+                f"{recorded['tree_entries']} entries"
+            )
+        print(json.dumps({
+            "verified": True,
+            "tree": recorded["tree"],
+            "tree_digest": digest,
+            "tree_entries": entries,
+        }, indent=2, sort_keys=True))
+        return 0
+    if recorded is not None:
+        raise Refused("the run already records a provisioning step")
+    if not arguments.log:
+        raise Refused("bind-dependencies requires --log to record the provisioning log (or --check)")
+    tree = _dependency_tree(arguments.tree)
+    checkout = run_dir / "checkout"
+    if checkout.exists() and (tree == checkout.resolve() or checkout.resolve() in tree.parents):
+        raise Refused("the bound dependency tree must live outside the sealed checkout")
+    tree_digest, tree_entries = dependency_tree_digest(tree)
+    log_path = pathlib.Path(arguments.log)
+    log_raw = read_bytes(log_path, MAX_PROVISIONING_LOG_BYTES, "dependency provisioning log")
+    if not log_raw:
+        raise Refused("the dependency provisioning log is empty")
+    # The tree route is run-relative, so a reader can recompute the digest from the
+    # stored run directory (a redacted absolute route would make that impossible); the
+    # log's source route keeps the measured-surface redaction, because it names where
+    # the log came from rather than a re-verifiable location.
+    try:
+        relative_tree = os.path.relpath(str(tree), str(run_dir.resolve()))
+    except ValueError:
+        raise Refused(
+            "the dependency tree must live on the same drive or root as the run directory "
+            "so the recorded digest stays recomputable"
+        )
+    provisioning = validate_provisioning({
+        "tree": pathlib.PurePath(relative_tree).as_posix(),
+        "tree_digest": tree_digest,
+        "tree_entries": tree_entries,
+        "install_log": PROVISIONING_LOG_PATH,
+        "install_log_source": redact_host_paths(str(log_path)),
+        "install_log_sha256": sha256_hex(log_raw),
+        "install_log_bytes": len(log_raw),
+    }, "provisioning step")
+    environment = dict(run["environment"], provisioning=provisioning)
+    # The log copy and the run record are both written only after every value that will
+    # be recorded has been serialized by validate_provisioning, so a refusal leaves the
+    # run unbound to a partial provisioning step.
+    write_bytes(run_dir / PROVISIONING_LOG_PATH, log_raw)
+    save_run(run_dir, run, environment=environment)
+    print(json.dumps({
+        "tree": provisioning["tree"],
+        "tree_digest": tree_digest,
+        "tree_entries": tree_entries,
+        "install_log": PROVISIONING_LOG_PATH,
+        "install_log_sha256": provisioning["install_log_sha256"],
+        "install_log_bytes": provisioning["install_log_bytes"],
     }, indent=2, sort_keys=True))
     return 0
 
@@ -3015,9 +3367,10 @@ def command_seal(arguments: argparse.Namespace) -> int:
 def command_check(arguments: argparse.Namespace) -> int:
     if arguments.timeout < 0:
         raise Refused("--timeout must be >= 0; 0 disables the per-gate timeout")
-    run_dir = pathlib.Path(arguments.run_dir)
+    run_dir = pathlib.Path(arguments.run_dir).resolve()
     run = load_run(run_dir)
     task = load_frozen_task(run_dir, run)
+    require_dependency_provisioning(run, task)
     sealed = load_sealed(run_dir, task)
     require_current_subject(run_dir, task, sealed)
     unknown = [gate_id for gate_id in (arguments.gate or []) if gate_id not in {gate["id"] for gate in task["gates"]}]
@@ -3035,7 +3388,7 @@ def command_check(arguments: argparse.Namespace) -> int:
     attempt_passed = True
     stopped_early = False
     for gate in gates:
-        result = execute_gate(run_dir / "checkout", gate, attempt_dir / gate["id"], timeout)
+        result = execute_gate(run_dir / "checkout", gate, attempt_dir / gate["id"], timeout, run_dir)
         result["subject_hash_before"] = sealed["subject_hash"]
         after = current_subject(run_dir, task)["subject_hash"]
         result["subject_hash_after"] = after
@@ -3071,6 +3424,12 @@ def command_check(arguments: argparse.Namespace) -> int:
         "passed": attempt_passed and not stopped_early and complete,
         "gates": verified,
     }
+    provisioning = run["environment"].get("provisioning")
+    if provisioning is not None:
+        # A gate that wrote into the shared dependency tree would change what later
+        # gates execute; the post-attempt digest refuses that instead of binding it, and
+        # it runs before the attempt record exists so a refused attempt is not evidence.
+        verify_dependency_tree(run_dir, provisioning)
     attempt_raw = write_json(attempt_dir / "attempt.json", attempt)
     print(json.dumps({
         "attempt_id": attempt_name,
@@ -3211,6 +3570,17 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--source", required=True, help="git repository path or URL to clone")
     prepare.add_argument("--environment-json", help="measured non-secret execution-surface facts JSON file")
     prepare.set_defaults(handler=command_prepare)
+
+    bind = subparsers.add_parser(
+        "bind-dependencies",
+        help="record the resolved dependency tree and its provisioning log in the run environment",
+    )
+    bind.add_argument("--run-dir", required=True)
+    bind.add_argument("--tree", required=True, help="resolved dependency tree outside every sealed checkout")
+    bind.add_argument("--log", help="provisioning install log to copy into the run store and bind")
+    bind.add_argument("--check", action="store_true",
+                      help="recompute the tree digest and compare it with the recorded provisioning step")
+    bind.set_defaults(handler=command_bind_dependencies)
 
     seal = subparsers.add_parser("seal", help="bind the checkout into one exact evaluation Subject")
     seal.add_argument("--run-dir", required=True)

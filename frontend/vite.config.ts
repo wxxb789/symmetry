@@ -1,12 +1,22 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import path from "node:path";
 import { defineConfig } from "vite";
 
 const target = process.env["SYMMETRY_PHOENIX_ORIGIN"] ?? "http://127.0.0.1:4000";
+// Vite's dependency/optimizer cache defaults to `node_modules/.vite` inside the
+// tree. A harness that runs the build from a sealed checkout exports this variable
+// to keep run state out of the sealed revision (the evaluator's runbook names it);
+// with the variable unset the default location is unchanged. Its companion
+// `SYMMETRY_DISABLE_TOOL_CACHES` also reaches this config; a production build has no
+// cache channel that executes previously transformed code (the optimizer cache is a
+// dev-server concern), so only `frontend/vitest.config.ts` has options to switch off.
+const toolCacheDir = process.env["SYMMETRY_TOOL_CACHE_DIR"];
 
 export default defineConfig({
   base: "/portal/",
   plugins: [react(), tailwindcss()],
+  ...(toolCacheDir ? { cacheDir: path.join(toolCacheDir, "vite") } : {}),
   build: { outDir: "dist", emptyOutDir: true },
   server: {
     host: "127.0.0.1",

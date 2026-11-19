@@ -17,10 +17,17 @@ jobs:
   # whose every changed path is under `docs/**` or ends in `.md` (any Markdown
   # file, including root files such as AGENTS.md) reports run-heavy=false.
   # Every non-pull_request event runs the full matrix.
+  #
+  # The same diff also reports `run-records`: a change that adds or modifies an
+  # evaluation record under `docs/evaluations/**` or `docs/evidence/**`, or that
+  # changes the record sanitize tool itself, gates the record-cleanliness job
+  # below. That gate must run for a records-only (documentation-only) pull
+  # request, so it is a separate output rather than part of run-heavy.
   changes:
     runs-on: ubuntu-latest
     outputs:
       run-heavy: ${{ github.event_name != 'pull_request' || steps.paths.outputs.run-heavy == 'true' }}
+      run-records: ${{ github.event_name != 'pull_request' || steps.paths.outputs.run-records == 'true' }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name == 'pull_request'
@@ -45,9 +52,40 @@ jobs:
               path and not (path.startswith(b"docs/") or path.endswith(b".md"))
               for path in paths
           )
+          run_records = any(
+              path.startswith(b"docs/evaluations/")
+              or path.startswith(b"docs/evidence/")
+              or path == b"scripts/ci/model-routing-record-sanitize.py"
+              or path == b"scripts/ci/check-record-cleanliness.py"
+              for path in paths
+          )
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"run-heavy={'true' if run_heavy else 'false'}\n")
+              output.write(f"run-records={'true' if run_records else 'false'}\n")
           PY
+
+  # The sanitize tool's own root-only `--check` over records a change adds or
+  # modifies. It is deliberately independent of the heavy matrix - the change it
+  # most needs to see is a records-only (documentation-only) pull request - so it
+  # runs whenever the classifier above says a record or the tool itself changed.
+  # `fetch-depth: 0` gives the job the comparison base the gate needs. On a
+  # pull request that is the checked-out event head's first parent (`HEAD^1`,
+  # exactly the range the classifier above used); on a push it is the pushed
+  # `before` commit; an all-zero base (a new branch, a tag, a manual run) falls
+  # back inside the script.
+  record-cleanliness:
+    needs: changes
+    if: needs.changes.outputs.run-records == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Refuse host paths in records this change adds or modifies
+        env:
+          RECORD_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: python3 scripts/ci/check-record-cleanliness.py --base "$RECORD_BASE" --head "$GITHUB_SHA"
 
   contracts:
     needs: changes
@@ -1177,6 +1215,7 @@ jobs:
           python3 ../scripts/ci/test-model-routing-evaluation.py
           python3 ../scripts/ci/test-model-routing-omp-usage.py
           python3 ../scripts/ci/test-model-routing-record-sanitize.py
+          python3 ../scripts/ci/test-check-record-cleanliness.py
           python3 ../scripts/ci/test-model-routing-source-subject.py
       # The ordinary (non-race) pass is scoped to the two packages whose named
       # assertions are checked below. The full ordinary suite and the full race

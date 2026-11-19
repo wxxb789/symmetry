@@ -199,3 +199,13 @@ threshold. Any observed acceptance regression prevents promotion for that task
 class until resolved. A clean sample supports only its tested scope, never
 "zero quality loss". Owner judges maintainability/UX and accepts routing policy.
 Unavailable credentials/prices mean incomplete evidence, not estimated success.
+A published receipt is re-produced only by re-executing the evaluation, never by
+editing a receipt: when a submission needs rows exported under the current tooling,
+the affected runs are executed again with those bytes. A receipt stays verifiable
+against the tooling revision that produced it wherever a reader can reach those bytes:
+the 0008b and 0008c runs' tooling is preserved by the annotated tags
+`0008b-produced-tooling` (commit `253a701`) and `0008c-produced-tooling` (commit
+`cab222b`), while the 0008d delivery's revision `73e083f` is untagged. The current
+runner refuses a receipt whose tooling digests differ from the bytes that would
+recompute it, so changing the evaluation tooling invalidates an older submitted
+receipt by design (fail-closed) instead of re-deriving it into a new one.

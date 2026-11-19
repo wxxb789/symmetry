@@ -331,6 +331,23 @@ class EvaluationTests(unittest.TestCase):
             "vitest_tests": list(tests),
         }
 
+    def bind_tree(self, run: pathlib.Path | None = None, *, tree: pathlib.Path | None = None):
+        """Record the dependency tree a Node-tooling task resolves (required at check).
+
+        The tree sits beside the run directory, as the runbook's hoisted install does,
+        so the recorded route stays run-relative and the digest stays recomputable.
+        """
+        run_dir = run or self.run_dir()
+        tree = tree or (self.root / "runs" / (run_dir.name + "-node_modules"))
+        self.write(tree / "vitest" / "index.js", "module.exports = {};\n")
+        self.write(tree / ".modules.yaml", "hoistPattern: []\n")
+        log = self.root / "inputs" / (run_dir.name + "-pnpm-install.log")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_bytes(b"Progress: resolved 1, reused 0, downloaded 1\nDone in 1.2s\n")
+        return self.assert_ok(self.cli(
+            "bind-dependencies", "--run-dir", str(run_dir), "--tree", str(tree), "--log", str(log)
+        ))
+
     def run_dir(self) -> pathlib.Path:
         return self.root / "run"
 
@@ -498,6 +515,9 @@ class EvaluationTests(unittest.TestCase):
         """Prepare, edit, seal, check, review and derive one accepted receipt."""
         run_path = run or self.run_dir()
         self.assert_ok(self.prepare(task=task, run=run_path, environment_json=environment_json))
+        frozen_task = task if task is not None else self.task()
+        if load_runner_module().requires_dependency_provisioning(frozen_task):
+            self.bind_tree(run_path)
         self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run_path)
         self.edit("app/new_test.go", "package app\n\nimport \"testing\"\n\nfunc TestWitness2(t *testing.T) {}\n", run=run_path)
         sealed = self.assert_ok(self.seal(run=run_path))
@@ -1971,29 +1991,16 @@ class EvaluationTests(unittest.TestCase):
         self.assertIsNone(receipt["checks"][0]["exunit_exit_code"])
         self.assertIsNone(receipt["checks"][0]["exunit_error"])
 
-    def test_tool_cache_run_state_is_not_bound_by_the_manifest(self) -> None:
+    def test_tool_cache_run_state_inside_the_checkout_is_refused(self) -> None:
         run = self.root / "run-tool-cache"
         self.assert_ok(self.prepare(run=run))
         self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
-        # `vitest run` writes its run state inside the project's own node_modules
-        # directory; the sealed revision binds the source change and not that state.
+        # vitest/vite run state is redirected outside a sealed checkout, so a cache
+        # file that still appears inside one is ordinary source the manifest binds.
         self.edit("app/node_modules/.vite/vitest/results.json", '{"failed":[]}\n', run=run)
         self.edit("app/node_modules/.vitest-cache/ab/entry.json", "{}\n", run=run)
         self.edit("app/node_modules/.vite-temp/stale.tmp", "x\n", run=run)
-        sealed = self.assert_ok(self.seal(run=run))
-        self.assertEqual([change["path"] for change in sealed["changed_paths"]], ["app/main.go"])
-        control = self.root / "run-tool-cache-control"
-        self.assert_ok(self.prepare(run=control))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=control)
-        control_sealed = self.assert_ok(self.seal(run=control))
-        self.assertEqual(sealed["file_count"], control_sealed["file_count"])
-        checked = self.assert_ok(self.check(run=run))
-        self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
-        self.assertTrue(self.assert_ok(self.receipt(self.usage_rows(), run=run))["accepted"])
-        # A later gate regenerating that run state must not change the subject.
-        self.edit("app/node_modules/.vite/vitest/results.json", '{"failed":["app/main_test.go"]}\n', run=run)
-        self.assertEqual(self.assert_ok(self.receipt(self.usage_rows(), run=run))["accepted"], True)
-        self.assert_ok(self.accept(run=run))
+        self.assert_refused(self.seal(run=run), "outside allowed_paths")
 
     def test_package_files_under_node_modules_stay_bound(self) -> None:
         run = self.root / "run-node-modules-package"
@@ -2004,24 +2011,60 @@ class EvaluationTests(unittest.TestCase):
         (self.checkout(run) / "app" / "node_modules" / "react" / "index.js").unlink()
         self.assert_ok(self.seal(run=run))
 
-    def test_tool_cache_predicate_stays_narrow(self) -> None:
-        runner = load_runner_module()
-        for path in (
-            "node_modules/.vite/x",
-            "frontend/node_modules/.vite/vitest/results.json",
-            "frontend/node_modules/.vite-temp/stale.tmp",
-            "a/node_modules/.vitest-cache/ab/entry.json",
-        ):
-            self.assertTrue(runner.is_tool_cache_path(path), path)
-        for path in (
-            "node_modules/react/index.js",
-            "frontend/node_modules/vite/index.js",
-            "src/.vite/x",
-            "node_modules/.vite",
-            "frontend/node_modules/.cache/x",
-            "node_modules",
-        ):
-            self.assertFalse(runner.is_tool_cache_path(path), path)
+    def test_gate_writing_tool_cache_state_into_the_checkout_fails_closed(self) -> None:
+        write_cache = (
+            "import os\n"
+            "os.makedirs('node_modules/.vite/vitest', exist_ok=True)\n"
+            "open('node_modules/.vite/vitest/results.json', 'w').write('{\"failed\": []}')\n"
+        )
+        run = self.root / "run-tool-cache-gate"
+        self.assert_ok(self.prepare(task=self.task(gates=[self.gate_plain(code=write_cache)]), run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        checked = self.check(run=run)
+        self.assertNotEqual(checked.returncode, 0, checked.stdout)
+        result = json.loads(
+            (run / "checks" / "attempt-0001" / "plain" / "result.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("source changed while executing this gate", result["error"])
+        self.assertFalse(result["passed"])
+
+    def test_gate_environment_redirects_tool_state_outside_the_checkout(self) -> None:
+        printer = (
+            "import os\n"
+            "print(os.environ['SYMMETRY_TOOL_CACHE_DIR'])\n"
+            "print(os.environ['SYMMETRY_DISABLE_TOOL_CACHES'])\n"
+        )
+        run = self.root / "run-tool-state"
+        self.assert_ok(self.prepare(task=self.task(gates=[self.gate_plain(gate_id="plain", code=printer)]), run=run))
+        # prepare gives the run store the empty `node_modules` Vite's config loader
+        # resolves `.vite-temp` against, outside every sealed checkout.
+        self.assertTrue((run / "node_modules").is_dir())
+        self.assertEqual(list((run / "node_modules").iterdir()), [])
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        checked = self.assert_ok(self.check(run=run))
+        gate_dir = run / "checks" / checked["attempt_id"] / "plain"
+        printed = (gate_dir / "stdout.bin").read_text(encoding="utf-8").splitlines()
+        # The state is per attempt, so nothing an earlier attempt cached can be read,
+        # and the cache channels that execute earlier transformed code are disabled.
+        # `check` resolves the run directory before exporting the redirect, so compare
+        # resolved paths: a host whose temp root is itself a link would differ otherwise.
+        self.assertEqual(
+            printed[0].strip(),
+            str((run / "tool-state" / checked["attempt_id"] / "plain").resolve()),
+        )
+        self.assertEqual(printed[1].strip(), "1")
+        self.assertFalse(pathlib.Path(printed[0].strip()).is_relative_to(self.checkout(run).resolve()))
+        result = json.loads((gate_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["tool_state_dir"], f"tool-state/{checked['attempt_id']}/plain")
+        self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
+        self.assert_ok(self.receipt(self.usage_rows(), run=run))
+        self.assertEqual(
+            self.stored_receipt(run)["checks"][0]["tool_state_dir"],
+            f"tool-state/{checked['attempt_id']}/plain",
+        )
+        self.assert_ok(self.accept(run=run))
 
     @staticmethod
     def vitest_report(entries, *, success=True, total=None, failed=0, test_results=None):
@@ -2213,6 +2256,7 @@ class EvaluationTests(unittest.TestCase):
                 run = self.root / ("run-vitest-" + label)
                 task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
                 self.assert_ok(self.prepare(task=task, run=run))
+                self.bind_tree(run)
                 self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
                 self.assert_ok(self.seal(run=run))
                 checked = self.check(run=run)
@@ -2297,6 +2341,7 @@ class EvaluationTests(unittest.TestCase):
         run = self.root / "run-vitest-gate-failure"
         task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
         self.assert_ok(self.prepare(task=task, run=run))
+        self.bind_tree(run)
         self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.check(run=run)
@@ -2467,6 +2512,234 @@ class EvaluationTests(unittest.TestCase):
         receipt_measured = self.stored_receipt(run)["environment"]["measured"]
         self.assertEqual(receipt_measured["build_root"], f"{token(windows_root)} (outside the checkout)")
         self.assertEqual(receipt_measured["deps_root"], f"{token(posix_root)} (outside the checkout)")
+
+    def test_dependency_tree_digest_is_deterministic_and_content_bound(self) -> None:
+        runner = load_runner_module()
+        first = self.root / "tree-first"
+        second = self.root / "tree-second"
+        for tree in (first, second):
+            self.write(tree / "z-package" / "index.js", "module.exports = 1\n")
+            self.write(tree / "a-package" / "dist" / "index.js", "module.exports = 2\n")
+            self.write(tree / "b-package" / "index.js", "third\n")
+        digest_first, entries_first = runner.dependency_tree_digest(first)
+        self.assertEqual((digest_first, entries_first), runner.dependency_tree_digest(second))
+        self.assertEqual(entries_first, 3)
+        self.assertTrue(digest_first.startswith("sha256:"))
+        self.write(second / "b-package" / "index.js", "changed\n")
+        self.assertNotEqual(runner.dependency_tree_digest(second)[0], digest_first)
+        # An in-tree link is bound by its target text and pruned instead of followed.
+        try:
+            os.symlink("a-package", second / "linked-target")
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"symlink creation is unavailable: {error}")
+        with_link, link_entries = runner.dependency_tree_digest(second)
+        self.assertEqual(link_entries, 4)
+        self.assertNotEqual(with_link, digest_first)
+        # A link whose target resolves outside the tree binds that target's content:
+        # pnpm's workspace links (`@symmetry/contracts -> ../../contracts`) point at
+        # source the gates execute, and the link text alone would not bind it.
+        workspace_package = self.root / "workspace-package"
+        self.write(workspace_package / "index.js", "module.exports = 1\n")
+        os.symlink(workspace_package, second / "workspace-link")
+        linked_digest, entries = runner.dependency_tree_digest(second)
+        self.assertEqual(entries, 5)
+        self.write(workspace_package / "index.js", "module.exports = 2\n")
+        self.assertNotEqual(runner.dependency_tree_digest(second)[0], linked_digest)
+        # Editing that target back reproduces the linked digest, and the digest stays
+        # stable across repeated walks of an unchanged tree.
+        self.write(workspace_package / "index.js", "module.exports = 1\n")
+        self.assertEqual(runner.dependency_tree_digest(second), (linked_digest, 5))
+        self.assertEqual(runner.dependency_tree_digest(second), (linked_digest, 5))
+
+    def test_dependency_tree_digest_refuses_loops_and_unresolvable_links(self) -> None:
+        runner = load_runner_module()
+        tree = self.root / "tree-refusals"
+        self.write(tree / "package" / "index.js", "module.exports = 1\n")
+        try:
+            os.symlink(tree / "missing-target", tree / "dangling")
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"symlink creation is unavailable: {error}")
+        with self.assertRaises(runner.Refused) as dangling:
+            runner.dependency_tree_digest(tree)
+        self.assertIn("does not resolve", str(dangling.exception))
+        os.unlink(tree / "dangling")
+        # Two links that target each other never resolve: on Windows `Path.resolve` raises
+        # its own symlink-loop error, elsewhere the walk sees the pair. Either way the run
+        # gets a refusal, never an unhandled exception.
+        os.symlink(tree / "second", tree / "first")
+        os.symlink(tree / "first", tree / "second")
+        with self.assertRaises(runner.Refused) as loop:
+            runner.dependency_tree_digest(tree)
+        self.assertIn("does not resolve", str(loop.exception))
+        os.unlink(tree / "first")
+        os.unlink(tree / "second")
+        # Two out-of-tree targets that link to each other are a cycle the walk detects
+        # after the resolves succeed (`seen`), so it refuses as a cycle instead of
+        # recursing. A link that points back into its own walk root stays legitimate:
+        # the walked entries bind it.
+        first_shared = self.root / "shared-one"
+        second_shared = self.root / "shared-two"
+        self.write(first_shared / "index.js", "module.exports = 1\n")
+        self.write(second_shared / "index.js", "module.exports = 2\n")
+        os.symlink(second_shared, first_shared / "to-second")
+        os.symlink(first_shared, second_shared / "to-first")
+        os.symlink(first_shared, tree / "workspace-link")
+        with self.assertRaises(runner.Refused) as cycle:
+            runner.dependency_tree_digest(tree)
+        self.assertIn("cycle", str(cycle.exception))
+        os.unlink(second_shared / "to-first")
+        os.symlink(first_shared, first_shared / "self")
+        runner.dependency_tree_digest(tree)
+        # A tree whose own path is a loop is refused as unreadable, not crashed.
+        os.symlink(tree / "self-loop", tree / "self-loop")
+        with self.assertRaises(runner.Refused) as root_loop:
+            runner._dependency_tree(str(tree / "self-loop"))
+        self.assertIn("not a readable directory", str(root_loop.exception))
+
+    def test_bind_dependencies_records_the_provisioning_step(self) -> None:
+        run = self.run_dir()
+        self.assert_ok(self.prepare(run=run))
+        tree = self.root / "runs" / "node_modules"
+        self.write(tree / "react" / "index.js", "module.exports = {}\n")
+        self.write(tree / ".modules.yaml", "hoistPattern: []\n")
+        log = self.root / "pnpm-install.log"
+        log.write_bytes(b"Progress: resolved 1, reused 0, downloaded 1\nDone in 1.2s\n")
+        bound = self.assert_ok(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log)
+        ))
+        self.assertEqual(bound["tree_entries"], 2)
+        self.assertEqual((run / "provisioning" / "install.log").read_bytes(), log.read_bytes())
+        provisioning = self.run_record(run)["environment"]["provisioning"]
+        self.assertEqual(provisioning["tree_digest"], bound["tree_digest"])
+        self.assertEqual(provisioning["tree_entries"], 2)
+        # The route is run-relative, so the digest is recomputable from the stored run
+        # directory alone (a redacted absolute route could not be re-verified).
+        self.assertEqual(provisioning["tree"], "../runs/node_modules")
+        self.assertEqual(provisioning["install_log"], "provisioning/install.log")
+        self.assertEqual(provisioning["install_log_sha256"], bound["install_log_sha256"])
+        self.assertEqual(provisioning["install_log_bytes"], len(log.read_bytes()))
+        # The recorded digest re-verifies against the tree and refuses a changed tree.
+        self.assert_ok(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"
+        ))
+        self.write(tree / "react" / "index.js", "module.exports = { changed: true }\n")
+        # Loading the run already recomputes the digest, before --check can compare it.
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "changed after it was recorded")
+        self.write(tree / "react" / "index.js", "module.exports = {}\n")
+        # Pointing --check at a different tree is a different refusal.
+        other = self.root / "runs" / "other-node_modules"
+        self.write(other / "react" / "index.js", "module.exports = {}\n")
+        self.assert_refused(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(other), "--check"
+        ), "tree no longer matches")
+        self.assert_ok(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"
+        ))
+        # One provisioning step per run, and the receipt states it.
+        self.assert_refused(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log)
+        ), "already records a provisioning step")
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        checked = self.assert_ok(self.check(run=run))
+        self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
+        self.assert_ok(self.receipt(self.usage_rows(), run=run))
+        self.assertEqual(
+            self.stored_receipt(run)["environment"]["provisioning"]["tree_digest"], bound["tree_digest"]
+        )
+        # The stored log copy is re-verified on every load.
+        (run / "provisioning" / "install.log").write_bytes(b"tampered\n")
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "provisioning log changed")
+
+    def test_bind_dependencies_refuses_incomplete_or_unsafe_provisioning(self) -> None:
+        run = self.run_dir()
+        self.assert_ok(self.prepare(run=run))
+        tree = self.root / "runs" / "node_modules"
+        self.write(tree / "react" / "index.js", "module.exports = {}\n")
+        log = self.root / "pnpm-install.log"
+        log.write_bytes(b"install output\n")
+        # A tree inside the sealed checkout is refused: the point of the record is what
+        # lives outside it.
+        inside = self.checkout(run) / "node_modules"
+        self.write(inside / "react" / "index.js", "module.exports = {}\n")
+        self.assert_refused(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(inside), "--log", str(log)
+        ), "outside the sealed checkout")
+        self.assert_refused(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree)
+        ), "requires --log")
+        empty = self.root / "empty-install.log"
+        empty.write_bytes(b"")
+        self.assert_refused(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(empty)
+        ), "log is empty")
+        self.assert_refused(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree),
+            "--log", str(self.root / "missing.log"),
+        ), "cannot read dependency provisioning log")
+        # An unrecorded run cannot check a provisioning step, and a recorded block is
+        # refused when its shape is tampered with.
+        self.assert_refused(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"
+        ), "no provisioning step")
+        self.assert_ok(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log)
+        ))
+        record = self.run_record(run)
+        record["environment"]["provisioning"]["tree_digest"] = "sha256:" + "0" * 64
+        self.write_json(run / "run.json", record)
+        self.assert_refused(self.cli(
+            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"
+        ), "changed after it was recorded")
+
+    def test_typescript_task_requires_a_bound_dependency_tree(self) -> None:
+        run = self.root / "run-ts-requirement"
+        task = self.task(language="typescript", gates=[self.gate_plain()])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        self.assert_refused(self.check(run=run), "before check or receipt")
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "before check or receipt")
+        self.bind_tree(run)
+        self.assert_ok(self.check(run=run))
+
+    def test_the_provisioning_predicate_follows_the_gate_not_only_the_language(self) -> None:
+        # Both gate-level arms are claims on their own: a task whose gate declares
+        # vitest tests, or whose argv runs a vitest entry point, resolves the dependency
+        # tree whatever its language field says.
+        runner = load_runner_module()
+        cases = (
+            ({"language": "typescript", "gates": [{"id": "gate", "argv": ["go", "test", "./..."]}]}, True),
+            ({"language": "go", "gates": [
+                {"id": "gate", "argv": ["node", "tools/run.mjs", "run"], "vitest_tests": ["a"]}]}, True),
+            ({"language": "go", "gates": [
+                {"id": "gate", "argv": ["node", ".bin/vitest.mjs", "run"]}]}, True),
+            ({"language": "go", "gates": [{"id": "gate", "argv": ["go", "test", "./..."]}]}, False),
+            ({"language": "go"}, False),
+        )
+        for task, expected in cases:
+            with self.subTest(task=task):
+                self.assertEqual(runner.requires_dependency_provisioning(task), expected)
+
+    def test_check_refuses_a_dependency_tree_that_changed_during_the_attempt(self) -> None:
+        run = self.root / "run-tree-drift"
+        tamper = (
+            "import os\n"
+            "os.makedirs('../../runs/run-tree-drift-node_modules/tampered', exist_ok=True)\n"
+            "open('../../runs/run-tree-drift-node_modules/tampered/index.js', 'w').write('x')\n"
+        )
+        task = self.task(gates=[self.gate_plain(code=tamper)])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.bind_tree(run)
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        checked = self.check(run=run)
+        self.assertNotEqual(checked.returncode, 0, checked.stdout)
+        self.assertIn("changed after it was recorded", checked.stderr)
+        # The refusal lands before the attempt record exists, so a drifted attempt is
+        # preserved evidence that no receipt can read as a pass.
+        self.assertFalse((run / "checks" / "attempt-0001" / "attempt.json").exists())
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "changed after it was recorded")
 
     def test_fixture_probe_failure_fails_instead_of_skipping(self) -> None:
         interpreter = sys.executable
