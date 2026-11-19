@@ -98,14 +98,17 @@ const shellQuery = (pathname: string, search: string): boolean => {
  * The session-expiry return target. It mirrors the server's
  * `SymmetryControlWeb.PortalSession` rules parameter for parameter, so a deep
  * link survives login exactly when the server would restore it; the shared
- * corpus at `contracts/fixtures/shell-return-targets.json` pins both sides, so
- * a route or query rule added on either side fails the other side's test.
+ * corpus at `contracts/fixtures/shell-return-targets.json` pins the enumerated
+ * accept/reject cases on both sides, so every path or query rule change must
+ * add a corpus case.
  */
 export function safeReturnTo(href: string): string {
   try {
     const url = new URL(href);
-    // The server refuses a fragment outright: it never receives one from the
-    // browser, and a caller-chosen fragment is not a destination to echo back.
+    // The emitted target must be one the server accepts verbatim, and the
+    // server refuses a fragment. A fragment-bearing location therefore falls
+    // back by design — a deliberate change from main, which dropped the
+    // fragment and kept the path.
     if (url.hash === "" && shellPath.test(url.pathname) && shellQuery(url.pathname, url.search)) {
       return `${url.pathname}${url.search}`;
     }

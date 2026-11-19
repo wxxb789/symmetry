@@ -251,8 +251,8 @@ from branch `chore/deadcode-revalidation`.
       paths with the `[A-Za-z0-9_-]+` identifier charset, the same per-path query keys, and no
       fragment — and the shared corpus `contracts/fixtures/shell-return-targets.json` is consumed
       by both the frontend unit test (`frontend/src/app/application.test.ts`) and the ExUnit test
-      (`control/test/symmetry_control_web/portal_session_test.exs`), so either side drifting
-      fails the other's suite.
+      (`control/test/symmetry_control_web/portal_session_test.exs`); its enumerated cases are
+      pinned on both sides, so every path or query rule change must add a corpus case.
 
 ## Deferred review findings (0007f)
 

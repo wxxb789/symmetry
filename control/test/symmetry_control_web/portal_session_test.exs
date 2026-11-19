@@ -346,7 +346,8 @@ defmodule SymmetryControlWeb.PortalSessionTest do
   end
 
   # The cross-stack corpus the frontend's safeReturnTo test consumes as well:
-  # one side drifting from the other's per-path shell rules fails here or there.
+  # its enumerated cases are pinned on both sides, so every path or query rule
+  # change must add a corpus case.
   @shell_return_targets Path.expand(
                           "../../../contracts/fixtures/shell-return-targets.json",
                           __DIR__

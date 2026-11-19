@@ -1,5 +1,5 @@
 {
-  "comment": "Shared shell session return-target corpus. `path` is the request path and query the portal server validates before restoring it after login (control/lib/symmetry_control_web/portal_session.ex, PortalSession.return_to/1); the client rebuilds the same location from an absolute URL (frontend/src/app/application.ts, safeReturnTo) and must agree case for case, so adding a route or a query rule on either side fails the other side's test. `return_to` is the accepted target echoed back, or null when the target is refused: the server then falls back to /portal and the client to /portal/attention.",
+  "comment": "Shared shell session return-target corpus. `path` is the request path and query the portal server validates before restoring it after login (control/lib/symmetry_control_web/portal_session.ex, PortalSession.return_to/1); the client rebuilds the same location from an absolute URL (frontend/src/app/application.ts, safeReturnTo) and must agree case by case. The enumerated accept/reject cases are pinned on both sides, so every path or query rule change on either side must add a corpus case; only the cases listed here are compared. `return_to` is the accepted target echoed back, or null when the target is refused: the server then falls back to /portal and the client to /portal/attention. This file is deliberately outside the wire-fixture manifest (`fixtures/manifest.json`) and its `pnpm contracts:check` validation: it describes shell URL acceptance, not a wire payload, and only `control/test/symmetry_control_web/portal_session_test.exs` and `frontend/src/app/application.test.ts` consume it. Three raw-string asymmetries stay out of the corpus because a single `path` string cannot express both sides: a bare trailing `#` (the parsed URL hash is empty, so the client accepts and emits the location without it, while the server receives fragment \"\" and refuses), an empty `?` query (the client's URL parser normalizes it away and the location is accepted, while the server refuses the empty query), and absolute, protocol-relative or backslash host forms (`https://host/portal/...`, `//host/portal/...`, `\\\\host\\portal`) that the client's URL parser resolves to an authority or a same-origin path while the server refuses any raw string carrying a scheme or host — or, for the backslash form, matching no shell path.",
   "base_url": "https://portal.example.invalid",
   "cases": [
     {
@@ -98,6 +98,16 @@
       "return_to": "/portal/projects/project-123?owner=agent%3Acodex"
     },
     {
+      "name": "a project keeps its state filter",
+      "path": "/portal/projects/project-123?state=ready",
+      "return_to": "/portal/projects/project-123?state=ready"
+    },
+    {
+      "name": "a project keeps a quoted text filter",
+      "path": "/portal/projects/project-123?q=%22123%22",
+      "return_to": "/portal/projects/project-123?q=%22123%22"
+    },
+    {
       "name": "a project keeps the tab escape the shell writes for filter text",
       "path": "/portal/projects/project-123?q=a%09b",
       "return_to": "/portal/projects/project-123?q=a%09b"
@@ -123,8 +133,23 @@
       "return_to": "/portal/work/work-123?view=list&q=a%09b&owner=agent%3Acodex&blocked=1&projectId=project-123"
     },
     {
+      "name": "a work item keeps its state filter",
+      "path": "/portal/work/work-123?state=running",
+      "return_to": "/portal/work/work-123?state=running"
+    },
+    {
       "name": "the legacy carrier refuses an unknown key",
       "path": "/portal?return_to=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "the legacy carrier refuses a project value outside the identifier charset",
+      "path": "/portal?project_id=//example.com",
+      "return_to": null
+    },
+    {
+      "name": "the legacy carrier refuses a scope the server does not name",
+      "path": "/portal?chat_scope=admin",
       "return_to": null
     },
     {
@@ -198,6 +223,11 @@
       "return_to": null
     },
     {
+      "name": "connections refuses an empty project value",
+      "path": "/portal/connections?projectId=",
+      "return_to": null
+    },
+    {
       "name": "a goal detail refuses query state",
       "path": "/portal/goals/goal-123?unknown=1",
       "return_to": null
@@ -233,6 +263,11 @@
       "return_to": null
     },
     {
+      "name": "a project refuses a blocked flag outside the shell's encoding",
+      "path": "/portal/projects/project-123?blocked=0",
+      "return_to": null
+    },
+    {
       "name": "a project path does not take extra segments",
       "path": "/portal/projects/project-123/extra",
       "return_to": null
@@ -245,6 +280,11 @@
     {
       "name": "runtimes refuses a known key beside a foreign one",
       "path": "/portal/runtimes?projectId=project-123&view=board",
+      "return_to": null
+    },
+    {
+      "name": "runtimes refuses an empty project value",
+      "path": "/portal/runtimes?projectId=",
       "return_to": null
     },
     {
@@ -265,6 +305,26 @@
     {
       "name": "an encoded parent segment is not an identifier",
       "path": "/portal/projects/%2e%2e",
+      "return_to": null
+    },
+    {
+      "name": "a goal id outside the identifier charset is refused",
+      "path": "/portal/goals/goal.1",
+      "return_to": null
+    },
+    {
+      "name": "a project id outside the identifier charset is refused",
+      "path": "/portal/projects/p.1",
+      "return_to": null
+    },
+    {
+      "name": "a work item id outside the identifier charset is refused",
+      "path": "/portal/work/w.1",
+      "return_to": null
+    },
+    {
+      "name": "a percent-encoded path separator inside a goal id is refused",
+      "path": "/portal/goals/goal%2F1",
       "return_to": null
     },
     {
