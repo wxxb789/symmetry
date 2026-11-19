@@ -89,7 +89,6 @@ defmodule SymmetryControl.Integrations.Connection do
   end
 
   def providers, do: @providers
-  def statuses, do: @statuses
   def capabilities, do: @capabilities
   def auth_types(provider), do: Map.get(@auth_types, provider, [])
 
