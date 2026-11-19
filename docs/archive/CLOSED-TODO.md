@@ -10,7 +10,8 @@ fragments of items keep their original indentation. Each entry keeps its closure
 closure date it records. Entries in this file older than six months may be deleted.
 
 The blocks below were moved on 2026-11-18. Markers (`- [ ]`, `- [x]`) are reproduced as they were,
-not a claim that work remains.
+not a claim that work remains. The two blocks moved on 2026-11-19 (branch
+`fix/portal-return-targets`) name that branch in their closure lines.
 
 The five dead-code closures appended to `## Dead-code candidates` below were moved on 2026-11-19
 from branch `chore/deadcode-revalidation`.
@@ -401,6 +402,24 @@ from branch `chore/deadcode-revalidation`.
       presentations; the rules now sit at `styles.css:216-217`) — so the literal-selector sweep's
       "unreferenced" premise was wrong and no rule was removed.
 
+- [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
+      the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
+      query string on `/portal/attention|connections|projects/:id|work/:id` and any characters in
+      the project id, while `control/lib/symmetry_control_web/portal_session.ex` validates each
+      path's query against `projectId`, `connectionId` or the work-search patterns and narrows a
+      project id to `[A-Za-z0-9_-]+`. The server stays the authority, so the worst case is a deep
+      link falling back to `/portal` rather than an open redirect; observed while completing the
+      0007d rebase union (0007b's client filter and 0007d's server rule met for the first time).
+      Decide whether the client should narrow its filter or the server should accept the extra
+      params, and if the client is narrowed, add a test that keeps the two lists aligned.
+      Closed on branch `fix/portal-return-targets` (2026-11-19): `safeReturnTo` now mirrors the
+      server's `SymmetryControlWeb.PortalSession` rules parameter for parameter — the same shell
+      paths with the `[A-Za-z0-9_-]+` identifier charset, the same per-path query keys, and no
+      fragment — and the shared corpus `contracts/fixtures/shell-return-targets.json` is consumed
+      by both the frontend unit test (`frontend/src/app/application.test.ts`) and the ExUnit test
+      (`control/test/symmetry_control_web/portal_session_test.exs`); its enumerated cases are
+      pinned on both sides, so every path or query rule change must add a corpus case.
+
 - [ ] Investigate the intermittent `-race` package timeout in `daemon/internal/app`. Observed in run
       43905338877 job 133432721943 as `panic: test timed out after 10m0s` with
       `FAIL github.com/wxxb789/symmetry/daemon/internal/app 600.061s` on the 0008a head, where the
@@ -438,6 +457,20 @@ from branch `chore/deadcode-revalidation`.
       WSL guest hangs this package in `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`,
       a loopback dial that never answers there and passes on Windows in this same tree), so the
       package-level race gate stays with CI.
+
+## Deferred review findings (0007f)
+
+- [ ] Revalidate the `/portal/connections?projectId=…` session return target.
+      `control/lib/symmetry_control_web/portal_session.ex` accepts only `connectionId=…` for the
+      connections shell path while the shell's own navigation writes `?projectId=…`, so a session
+      expiry collapses that page to `/portal`. The identical gap on `/portal/runtimes?projectId=…`
+      was fixed by the 0007f review round (`shell_query?("/portal/runtimes", …)`); extend the
+      connections clause and its accept/reject tests in a separate change.
+      Closed on branch `fix/portal-return-targets` (2026-11-19):
+      `shell_query?("/portal/connections", …)` now accepts `connectionId=…` and `projectId=…` per
+      parameter through the shared `all_params?/2` helper (renamed from `work_query?/2`), and both
+      the module's accept/reject lists and the shared corpus cover the project-scoped connections
+      target.
 
 ## Deferred review findings (0007h)
 
