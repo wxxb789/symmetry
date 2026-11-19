@@ -66,7 +66,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       keeping the roots: closed 2026-11-19 on branch
       `chore/eval-record-scrub` under the owner's one-time Q2 authorization (revalidated first, as the entry asked):
       the four receipts and the evidence record were rendered through `scripts/ci/model-routing-record-sanitize.py`
-      (`sha256:b8b252f3…`) — two substitutions per receipt (`mix_build_path`/`mix_deps_path` ->
+      (`sha256:b8b252f3…`, the tool's bytes on 2026-11-19; #79 (`21cf326`) has since changed it to
+      `sha256:52f7c182…`) — two substitutions per receipt (`mix_build_path`/`mix_deps_path` ->
       `<disposable-root>/… (outside the checkout)`) and one in the evidence record — and every digest that binds
       them was recomputed and rebound: the four receipt digests quoted by `0008c-candidate-policy.md` and by the
       evidence record (`9432545d…`/`26d8e003…`/`e79fe173…`/`1be7b419…` ->
@@ -550,7 +551,9 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       package's documented hang guard — `time.After(testHangGuard)`, 30 s at `app_test.go:7281`,
       applied at `harness_test.go:4284`/`:4290`, `:4506`, `:4600` by `4094624` (#57) (positions at
       `4094624`; #92 (`535019d`) has since replaced the three start waits with
-      `waitForNativeRunning`, `harness_test.go:4739`-`:4770`) — so a further occurrence would be a
+      `waitForNativeRunning`, `harness_test.go:4739`-`:4774`, and left the fourth position — that
+      test's terminal `waitTurnEntered` wait, `4094624` `:4290` and HEAD `:4286` — in place with
+      its `time.After(testHangGuard)` select) — so a further occurrence would be a
       new finding, not an open action of this item. The moved
       text's final line keeps its original `docs/TODO.md` pointer; the helper-witness item it
       names is the entry closed above in this archive.
@@ -816,6 +819,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `browser/tests/portal-goal-attention.spec.mjs:455` `SYMMETRY_GOALS_OFF_URL`), and the mobile
       project (`browser/playwright.config.mjs` Pixel 7) drives the same release target as desktop, so
       no case passes silently without the release.
+
+## Dead-code candidates
 
 - [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
       the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
@@ -1375,14 +1380,13 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
       strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
       `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (the `EVIDENCE_ROOT` value, an operator-profile drive path; the original entry
-      quoted that value in its elided drive-path form, and it was reworded so the record
-      holds no host-path shape). The 0008b change renders its own new
+      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
       records with that helper and records the rendering in the record
       (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
       record's quoted digest consistent when the older records are re-published.
       Closed 2026-11-19 on branch `chore/eval-record-scrub`: re-published through
-      `scripts/ci/model-routing-record-sanitize.py` (`sha256:b8b252f3…`) as the
+      `scripts/ci/model-routing-record-sanitize.py` (`sha256:b8b252f3…`, the tool's bytes on
+      2026-11-19; #79 (`21cf326`) has since changed it to `sha256:52f7c182…`) as the
       entry directs — `0008a-controls.json` 32 substitutions (the 14
       disposable-root strings -> `<disposable-root>`, plus 9 toolchain
       interpreter argv entries (one rendered to `path-sha256:4d144641…`) and 9
