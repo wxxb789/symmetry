@@ -87,8 +87,10 @@ export function chatScopeKey(scope: ChatScope, projectId: string | null, runId: 
 /**
  * Applies a served page (the initial read or a refresh). The current page is
  * replaced in place; the displayed older pages are kept and deduped at render
- * time. The older chain restarts from the refreshed boundary whenever the
- * served cursor moved.
+ * time. The older chain restarts from the refreshed boundary only when the
+ * served page ends at a different boundary message: a served cursor is
+ * re-signed per response, so the boundary message's id — not the token's
+ * bytes — is what proves two reads paginate from the same position.
  */
 export function retainServedPage(
   state: ChatScopeState,
@@ -97,7 +99,16 @@ export function retainServedPage(
 ): ChatScopeState {
   if (state.servedSource === source) return state;
   const page: ChatHistoryPage = { messages: served.messages, fetchBefore: null, nextBefore: served.nextBefore, fetchBeforeId: null };
-  const moved = served.nextBefore !== state.nextCursor;
+  // The retained chain hangs on the current page's boundary — the message its
+  // own `next_before` was signed from — so a re-signed token for the same
+  // boundary keeps the chain pointer where the reader's loads reached it. A
+  // page that proves no boundary falls back to the token, as a fetched page's
+  // own binding does.
+  const servedBoundaryId = served.messages[0]?.id ?? null;
+  const currentBoundaryId = state.pages[0]?.messages[0]?.id ?? null;
+  const moved = servedBoundaryId !== null && currentBoundaryId !== null
+    ? servedBoundaryId !== currentBoundaryId
+    : served.nextBefore !== state.nextCursor;
   const nextCursor = moved ? served.nextBefore : state.nextCursor;
   const nextBoundaryId = moved ? served.messages[0]?.id ?? null : state.nextBoundaryId;
   return { ...state, pages: [page, ...state.pages.slice(1)], nextCursor, nextBoundaryId, servedSource: source };

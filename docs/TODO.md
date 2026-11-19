@@ -557,14 +557,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Paginated reads must be bound to the cursor that served their pages
 
-- [ ] Residuals of the completed class scan (2026-11-19): (a) the owner's decision on unifying the
-      chat conversation's keep-and-state treatment with the work history's and the attention feed's
-      retirement — an expanded page the chat keeps renders beside a stated unloaded region, while
-      the other two retire it, and unifying changes one surface's reader-visible behaviour; (b) the
-      browser suites, which CI runs, carry the live-daemon pagination cases (an expanded page
-      disappearing when a live run moves the boundary is covered by the frontend suite only) and
-      were not run on this host. The scan and its fixes are archived in
-      `docs/archive/CLOSED-TODO.md`. Pre-existing, left as-is: `retainServedPage` detects a moved
-      boundary by comparing cursor token bytes, so a re-serve that only re-signs the same boundary
-      position still restarts the chain pointer; deciding whether it should compare the boundary
-      message's id instead belongs to (a).
+- [ ] Residual of the completed class scan (2026-11-19): (b) the browser suites, which CI runs,
+      carry the live-daemon pagination cases (an expanded page disappearing when a live run moves
+      the boundary is covered by the frontend suite only) and were not run on this host; running
+      them needs a provisioned live daemon on a quiet host.
+      Closed part moved to `docs/archive/CLOSED-TODO.md`, recording the owner's 2026-11-19 keep
+      decision — the chat conversation keeps its keep-and-state treatment rather than unifying with
+      the work history's and the attention feed's retirement — and the fixed pre-existing
+      `retainServedPage` note (a moved boundary is now judged by the boundary message's id, not the
+      re-signed cursor's bytes).

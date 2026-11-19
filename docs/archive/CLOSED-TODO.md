@@ -1499,6 +1499,36 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       (`control/lib/symmetry_control/integrations/providers/`), one-shot aggregation. The residual
       in `docs/TODO.md` is the owner's unification decision and the CI browser runs.
 
+*Closed part of the item “Residuals of the completed class scan (2026-11-19)” in `docs/TODO.md`; the open residual stays there; moved 2026-11-19 from branch `fix/chat-history-boundary-id`.*
+
+      (a) the owner's decision on unifying the chat conversation's keep-and-state treatment with
+      the work history's and the attention feed's retirement — an expanded page the chat keeps
+      renders beside a stated unloaded region, while the other two retire it, and unifying changes
+      one surface's reader-visible behaviour. Pre-existing, left as-is: `retainServedPage` detects
+      a moved boundary by comparing cursor token bytes, so a re-serve that only re-signs the same
+      boundary position still restarts the chain pointer; deciding whether it should compare the
+      boundary message's id instead belongs to (a).
+      **Decided and fixed (2026-11-19, `fix/chat-history-boundary-id`):** the owner keeps the chat
+      conversation's keep-and-state treatment — it does not unify with the work history's and the
+      attention feed's retirement — and the pre-existing note is fixed: `retainServedPage`
+      (`frontend/src/features/chat/scopes.ts`) now judges the boundary by the served page's oldest
+      message, the message the served `next_before` is signed from — the chat read signs the cursor
+      afresh from the descending page's last (oldest) message, served reversed as `messages[0]`
+      (`last = List.last(page)` in `SymmetryControl.Chat.conversation/1`), and that message's id
+      reaches the client without a wire change as `ChatMessage.id` in the generated
+      `SymmetryChatReadV1` — so a read that only re-signs the same boundary position keeps the
+      chain pointer where the reader's loads reached it, while a served page that ends at a
+      different message still restarts it from its own boundary; a served page that proves no
+      boundary keeps the token comparison, the same fallback `retainOlderPage` already applies to
+      a fetched page. Evidence: `frontend/src/features/chat/chat.test.tsx`'s "keeps the chain a
+      refresh re-signs at the same boundary and restarts it at a moved one" was red on the previous
+      bytes (`expected [ 'cursor-5', 'cursor-5-resigned' ] to deeply equal [ 'cursor-5',
+      'cursor-3' ]`) and passes on the delivered bytes, which also pin the moved-boundary restart
+      and the named skipped region; the chat suite passes (63 tests, `--no-file-parallelism`), with
+      `tsc --noEmit` and `eslint src/features/chat --max-warnings 0` exit 0 (full frontend eslint
+      rc 0 as well). The open residual — the CI browser suites' live-daemon pagination cases — stays
+      in `docs/TODO.md`.
+
 ## Deferred review findings (0007g)
 
 *Both items of this section moved here on 2026-11-19; `docs/TODO.md` keeps no residual under it.*

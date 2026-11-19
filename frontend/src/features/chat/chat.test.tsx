@@ -804,6 +804,71 @@ describe("history", () => {
     expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12, 13, 14].map(messageId));
   });
 
+  it("keeps the chain a refresh re-signs at the same boundary and restarts it at a moved one", async () => {
+    const user = userEvent.setup();
+    let read = 0;
+    const requested: string[] = [];
+    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
+    const older: Record<string, ServedMessage[]> = {
+      "cursor-5": [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
+      "cursor-3": [message(1, { insertedAt: at(1) }), message(2, { insertedAt: at(2) })],
+      "cursor-8": [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) }), message(7, { insertedAt: at(7) })],
+    };
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          requested.push(before);
+          const nextBefore = before === "cursor-5" ? "cursor-3" : before === "cursor-3" ? "cursor-1" : null;
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: older[before] ?? [], nextBefore })));
+        }
+        read += 1;
+        const pages = [
+          conversationBody({ scope: "project", projectId, messages: [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) }), message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })], nextBefore: "cursor-5" }),
+          // The same boundary, re-served by a later read with a cursor the
+          // server signed afresh: the token bytes differ while the boundary
+          // message the surface's chain hangs on does not.
+          conversationBody({ scope: "project", projectId, messages: [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) }), message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) }), message(9, { insertedAt: at(9) })], nextBefore: "cursor-5-resigned" }),
+          // A moved boundary: the served page no longer ends at message 5.
+          conversationBody({ scope: "project", projectId, messages: [message(8, { insertedAt: at(8) }), message(9, { insertedAt: at(9) }), message(10, { insertedAt: at(10) })], nextBefore: "cursor-8" }),
+        ];
+        return new Response(JSON.stringify(pages[Math.min(read, pages.length) - 1]));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 5");
+
+    // Load older walks the chain down from the served boundary at message 5.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 3");
+    expect(requested).toEqual(["cursor-5"]);
+
+    // The refresh re-signs the cursor for the same boundary position, so the
+    // chain pointer stays where the reader's loads reached: the next press
+    // continues below message 3 instead of re-reading the served boundary.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 9");
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested.length).toBe(2));
+    expect(requested).toEqual(["cursor-5", "cursor-3"]);
+    await screen.findByText("message 1");
+
+    // A refresh that moves the boundary restarts the chain from the boundary
+    // the served page now ends at; the region the retained chain does not
+    // reach stays named until the reader's own load fills it.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 10");
+    const gap = document.querySelector("#chat-history-gap");
+    expect(gap).not.toBeNull();
+    expect(gap).toHaveAttribute("data-boundary-current", messageId(8));
+    expect(gap).toHaveAttribute("data-boundary-retained", messageId(4));
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 5");
+    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    expect(requested).toEqual(["cursor-5", "cursor-3", "cursor-8"]);
+    expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(messageId));
+  });
+
   it("keeps the page a re-serve overtook bound to the boundary its cursor was minted from", async () => {
     const user = userEvent.setup();
     let read = 0;
