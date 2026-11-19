@@ -8,7 +8,7 @@ opt-in Pi/Control integration test after that revision was committed.
 
 ```powershell
 $env:SYMMETRY_PI_CONTROL_E2E = '1'
-$env:SYMMETRY_PI_CONTROL_E2E_EXECUTABLE = 'C:\Users\lhan\AppData\Local\mise\installs\pi\0.85.1\pi.exe'
+$env:SYMMETRY_PI_CONTROL_E2E_EXECUTABLE = 'path-sha256:75a33df1f0a9746a824a82525bec171d0299f0513a5d28e0eaa3e48b6fc36980'
 mise exec -- mix test test/symmetry_control/pi_control_e2e_test.exs --only pi_control_e2e
 ```
 

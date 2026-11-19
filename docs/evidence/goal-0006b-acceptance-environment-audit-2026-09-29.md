@@ -243,9 +243,9 @@ Current script SHA-256 values:
 
 Executed checks:
 
-- `wsl.exe -d Ubuntu-24.04 --exec bash -n /mnt/q/repos/symmetry/scripts/ci/wsl2-v2-denial-witness.sh`
+- `wsl.exe -d Ubuntu-24.04 --exec bash -n path-sha256:6d78bed8971ceec01b722f42101c017875caead7889fc34a39a430b114dc449f`
   and the same command for `linux-v2-native-acceptance.sh`: both exit 0.
-- `wsl.exe -d Ubuntu-24.04 --exec env SYMMETRY_PRODUCTION_LINUX_V2_WSL2_DENIAL_WITNESS=1 bash /mnt/q/repos/symmetry/scripts/ci/wsl2-v2-denial-witness.sh`:
+- `wsl.exe -d Ubuntu-24.04 --exec env SYMMETRY_PRODUCTION_LINUX_V2_WSL2_DENIAL_WITNESS=1 bash path-sha256:6d78bed8971ceec01b722f42101c017875caead7889fc34a39a430b114dc449f`:
   exit 1 with `the isolated A-owned symmetry-owner.service must already be active`.
   The real script passed the corrected systemd/cgroup prerequisite and rejected
   the unavailable installed owner. This is prerequisite smoke evidence only,
@@ -271,7 +271,7 @@ The parent executed the boundary smoke separately.
 
 These checks concern the original shared checkout and the WSL host, not the
 separate installed guest or current acceptance candidate. Subsequent continuity
-recovery found a clean `Q:/repos/symmetry-0006b-acceptance` at
+recovery found a clean `path-sha256:e5b061569b786fcc0673c70a218f53a3e4fa6ce02f4afe5312b0eb6d7fef462e` at
 `3f233f4d7394d5d0ffb21201612dc604595410c1`, tree
 `2cd69626a502b5e9e70c76b020de4509c35b68ef`. Its newer deployment evidence locates
 the earlier peer denial in nspawn's syscall filter, not a blanket WSL kernel
