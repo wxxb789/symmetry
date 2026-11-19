@@ -1590,22 +1590,44 @@ defmodule SymmetryControl.IntegrationsTest do
     end)
   end
 
+  # The import's ordered prelock is its first WorkItem statement, so the sync is
+  # observed waiting for the WorkItem locks the delivery transaction holds. A
+  # sample can also catch the import before that prelock is issued - run
+  # 43891279765 job 133383740181 captured the repository lookup there - and such
+  # a sample is not the wait under test: keep polling until the WorkItem wait is
+  # observed, and when the deadline passes, name the last sample so the next
+  # occurrence stays traceable.
   defp assert_sync_waiting_on_work_item(backend, blocker, deadline) do
+    case sync_wait_sample(backend, blocker) do
+      {:blocked, query} ->
+        assert String.contains?(query, "\"work_items\"")
+
+      {:sampled, observation} ->
+        assert System.monotonic_time(:millisecond) < deadline,
+               "import sync did not wait for the delivery WorkItem locks" <>
+                 " (last sample: #{observation})"
+
+        assert_sync_waiting_on_work_item(backend, blocker, deadline)
+    end
+  end
+
+  defp sync_wait_sample(backend, blocker) do
     result =
       Repo.query!(
-        "SELECT query, $2::integer = ANY(pg_blocking_pids(pid)) FROM pg_stat_activity WHERE pid = $1",
+        "SELECT query, $2::integer = ANY(pg_blocking_pids(pid)), coalesce(wait_event_type, '-'), coalesce(wait_event, '-') FROM pg_stat_activity WHERE pid = $1",
         [backend, blocker]
       )
 
     case result.rows do
-      [[query, true]] ->
-        assert String.contains?(query, "\"work_items\"")
+      [[query, true, wait_event_type, wait_event]] when is_binary(query) ->
+        if String.contains?(query, "\"work_items\"") do
+          {:blocked, query}
+        else
+          {:sampled, "#{wait_event_type}/#{wait_event} #{String.slice(query, 0, 160)}"}
+        end
 
-      _not_blocked ->
-        assert System.monotonic_time(:millisecond) < deadline,
-               "import sync did not wait for the delivery WorkItem locks"
-
-        assert_sync_waiting_on_work_item(backend, blocker, deadline)
+      _not_waiting ->
+        {:sampled, "not waiting"}
     end
   end
 
