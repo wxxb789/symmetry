@@ -582,7 +582,7 @@ func TestReturnedProcessBlocksCleanupUntilWaitCompletes(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("returned process was not terminated after cancellation")
 	}
-	waitForReturnedProcessPublication(t, daemon, key)
+	waitForStartFenceOpen(t, daemon, key)
 	journal, err = store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -635,16 +635,17 @@ func TestReturnedProcessBlocksCleanupUntilWaitCompletes(t *testing.T) {
 	}
 }
 
-// waitForReturnedProcessPublication waits for the start owner to publish the
-// process it returned after cancellation. finishAttachedStart (app.go) clears
-// the starting flag that flushRun reads as its fence (isStarting), and the
-// owner runs it only after terminating the returned process, so a caller that
-// observed the terminate signal can still reach flushRun while the fence is
-// closed - flushRun then returns without resolving the terminal and the caller
-// reads terminal_pending with an empty verdict (CI run 44511730324 job
-// 135518340983; locally reproduced with isStarting sampled true at the flush).
-// testHangGuard bounds a genuinely hung start; it is never a host-speed budget.
-func waitForReturnedProcessPublication(t *testing.T, app *daemon, key state.RunKey) {
+// waitForStartFenceOpen waits only for flushRun's fence to open: the start owner
+// runs finishAttachedStart (app.go), which clears the starting flag isStarting
+// reads to defer the outbox while a start is unpublished. The caller must have
+// already proved the returned-process path was reached - the fixture's terminate
+// signal - because any published start opens this fence, so the wait alone does
+// not say a returned process exists. While the fence is closed, flushRun returns
+// nil without resolving the terminal, and a caller that skipped the wait reads
+// terminal_pending with an empty verdict (CI run 44511730324 job 135518340983;
+// locally reproduced with isStarting sampled true at the flush). testHangGuard
+// bounds a genuinely hung start; it is never a host-speed budget.
+func waitForStartFenceOpen(t *testing.T, app *daemon, key state.RunKey) {
 	t.Helper()
 	deadline := time.Now().Add(testHangGuard)
 	for app.isStarting(key) {
@@ -751,7 +752,7 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 			case <-time.After(testHangGuard):
 				t.Fatal("startup failure did not terminate returned process")
 			}
-			waitForReturnedProcessPublication(t, daemon, key)
+			waitForStartFenceOpen(t, daemon, key)
 			journal, err := store.LoadJournal(key)
 			if err != nil {
 				t.Fatal(err)

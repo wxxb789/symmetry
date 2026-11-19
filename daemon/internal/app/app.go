@@ -10784,6 +10784,8 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		return daemon.scheduleCleanup(ctx, updated)
 	}
 	if daemon.isStarting(key) {
+		// A nil return here defers rather than succeeds: the outbox retries on
+		// its wake signal and 1s interval; journal readers must wait for !isStarting.
 		return nil
 	}
 	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict != "" && journal.TerminalVerdict != state.TerminalVerdictAccepted {
