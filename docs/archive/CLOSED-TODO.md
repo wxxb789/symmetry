@@ -691,6 +691,54 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `symmetry_0007c_shell16`; with `MIX_ENV=test` the guard file reports `Result: 9 passed`,
       and `mix format --check-formatted` and `mix compile --warnings-as-errors` exit 0.
 
+- [ ] Investigate the load-sensitive timeout fixture
+      `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in
+      `scripts/ci/test-model-routing-evaluation.py` (`assertFalse(..., "a gate descendant
+      survived the per-gate timeout")`). Observed once during the 0008d series-closing repair,
+      on the pass whose host was also running four other regression suites and the record
+      re-derivations - the concurrency the model-routing runbook itself warns against. The
+      fixture spawns a descendant that sleeps 1.0 s, times the gate out at 0.5 s and reads the
+      assertion 2.0 s later, while the kill path is a snapshot tree kill
+      (`terminate_owned_process_tree` -> `taskkill /F /T`), so a descendant created after the
+      kill enumerates the tree is not killed; whether that is what happened in that pass is not
+      traceable from its log. Keep the assertion: revalidate the fixture (a readiness handshake
+      instead of the 1.0 s sleep, or a documented quiet-host requirement) and leave the runner's
+      kill path alone unless it reproduces on a quiet host.
+      **Fixed (2026-11-19, `fix/flake-timeout-fixture`):** the witness is now event-driven. The
+      descendant records its start in a handshake directory outside the checkout, waits for a
+      release the test writes only after the timed-out check returned, and only then writes
+      `late-descendant.txt` into the checkout - so a descendant the kill did reach is dead before
+      it could write during a slow kill, which is the direction the 1.0 s sleep could not
+      distinguish. The gate spawns the descendant with `stdin/stdout/stderr=DEVNULL` so a survivor
+      cannot hold the gate's inherited pipes and keep the runner's lingering reap open until its
+      own wait cap, and the descendant writes the witness after the release or after that cap, so
+      a survivor can never erase its own evidence. A cap-branch write records `late-cap` where the
+      release branch records `late`, so a failure self-identifies the P2 lingering-reap class. The
+      test polls repeatedly for up to the runner's own `PROCESS_TREE_REAP_SECONDS`, then reads the
+      witness once, instead of sleeping 2.0 s, and the gate publishes
+      its own spawn marker, so a failure reports what the fixture had established (gate spawned
+      descendant / descendant started / witness text) instead of only the assertion; the failure
+      message is platform-neutral (Windows `taskkill /T` and POSIX `killpg` are both snapshots).
+      The 0.5 s per-gate timeout, the assertion and the runner's kill path are unchanged.
+      Evidence, platform-labelled. Windows 10.0.26300 host, loaded by the peer regression workers:
+      the pristine fixture failed 1 of 5 runs (an earlier loaded pass failed 1 of 3) with `a gate
+      descendant survived the per-gate timeout` and no mechanism in its log, while the new fixture
+      passed 6 of 6 under the same load; 20 `taskkill /F /T` tree kills under load (2.0-8.6 s
+      each) never let an in-hierarchy descendant write, while the control that killed only the
+      parent let the waiting descendant record 3 of 3 times; a miss simulation (a throwaway copy
+      of the runner whose `terminate_owned_process_tree` drops `/T`) fails in 20 s with
+      `witness='late'` and both markers true, and the unmodified fixture passes in 23 s; a
+      backstop-path run on Windows (the round-2 review's: wait cap shortened 300 -> 20 s and no
+      release written) fails with the cap-branch witness at 19.1 s; the full
+      suite passes (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). WSL Linux (Ubuntu-24.04,
+      python3, `/mnt/q` worktree): the same test on the `killpg` path passes
+      (`Ran 1 test in 12.740s`, `OK`).
+      Residual: a descendant created after the kill enumerates the tree (`taskkill /T`) or after
+      the process group was signalled (`killpg`) is still reported as a survivor - correctly, with
+      the markers stating the ambiguity instead of the fixture tolerating it - so the fixture
+      keeps the documented quiet-host requirement (the model-routing runbook forbids running this
+      workflow beside a full test suite on the same host).
+
 ## Deferred review findings (0007f)
 
 - [ ] Revalidate the `/portal/connections?projectId=…` session return target.
