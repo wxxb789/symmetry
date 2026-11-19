@@ -3156,7 +3156,6 @@ func TestNativeClosePhysicalStopProofOMPReturnedIdentityMismatchPreservesResumeR
 	capabilities.Resume = true
 	app, store, session, client := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindOMP, config.RuntimeHarnessOMP, capabilities)
 	defer store.Close()
-	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
 	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -4618,7 +4617,6 @@ func TestOMPAndOmORejectLegacyAssignmentBeforeRunningWorkspaceOrRawStart(t *test
 			capabilities.VersionKnown, capabilities.TransportVerified = true, true
 			app, store, session, client := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, test.kind, test.configKind, capabilities)
 			defer store.Close()
-			app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 			client.work.Input = json.RawMessage(`{}`)
 			starts := 0
 			app.start = func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
@@ -4754,7 +4752,7 @@ func waitForNativeRunning(t *testing.T, store *state.Store, key state.RunKey) {
 				t.Fatalf("run reached terminal state %q before the start wait observed running: %s", journal.TerminalState, nativeStartFailureDetail(store, key))
 			}
 			switch journal.LocalState {
-			case "claiming", "claimed", "running":
+			case "claiming", "claimed":
 			default:
 				// Any other local state (stale, cleanup_pending, terminal_pending, ...)
 				// is decisive: the start wait must not outlive it.
@@ -5741,7 +5739,6 @@ func TestNativeAdapterStartPublicationLinearizesCancellation(t *testing.T) {
 			}
 			app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 			defer store.Close()
-			app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 			adapterValue, err := app.harnessRegistry.Lookup(harness.KindCodex)
 			if err != nil {
 				t.Fatal(err)
@@ -5876,7 +5873,6 @@ func TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn(t *testing.T) {
 	}
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
-	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	adapterValue, err := app.harnessRegistry.Lookup(harness.KindCodex)
 	if err != nil {
 		t.Fatal(err)
@@ -6183,7 +6179,6 @@ func TestCancelDuringGoalSubjectPreparationDoesNotLaunchNativeSession(t *testing
 	}
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
-	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	prepareEntered := make(chan struct{}, 1)
 	prepareRelease := make(chan struct{})
 	app.workspace = &fakeWorkspace{prepareSubjectEntered: prepareEntered, prepareSubjectRelease: prepareRelease}
@@ -6229,7 +6224,6 @@ func TestCancelAfterGoalSessionIntentDoesNotCrossNativeStartBoundary(t *testing.
 	}
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
-	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	leaseClockEntered := make(chan struct{}, 1)
 	leaseClockRelease := make(chan struct{})
 	localClockCalls := 0

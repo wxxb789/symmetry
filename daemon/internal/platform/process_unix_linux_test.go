@@ -2008,6 +2008,54 @@ func TestProcessGroupAcknowledgesObservedEscapeBeforeRetiringScanFence(t *testin
 	}
 }
 
+// TestProcessGroupInitialSealEndsMonitorBeforeBarrierReturns pins the
+// sealMonitoring arm of endsMonitor at the barrier: when the initial clean
+// scan requests the seal, the barrier must join the monitor before it returns,
+// and the post-join seal must record the initial scan's sequence. The hooks
+// are installed before the monitor starts, so no lock is needed.
+func TestProcessGroupInitialSealEndsMonitorBeforeBarrierReturns(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) { return nil, nil }
+	sealed := make(chan uint64, 1)
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	group.sealAfterCleanScan = func(uint64) bool { return true }
+	group.sealCleanScanForTesting = true
+	group.afterDescendantScanSeal = func(sequence uint64) { sealed <- sequence }
+	t.Cleanup(func() { _ = group.stopDescendantMonitor(time.Now().Add(time.Second)) })
+	group.startDescendantMonitor()
+	if err := group.waitForInitialDescendantScan(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("initial sealing clean scan = %v, want a clean sealed containment", err)
+	}
+	select {
+	case <-group.monitorDone:
+	default:
+		t.Fatal("barrier returned before the ending monitor stopped")
+	}
+	if !group.monitorSealRequested || group.monitorTerminalReason != descendantMonitorTerminalSealed {
+		t.Fatalf("seal state = requested:%v terminal:%s, want the monitor to end sealed", group.monitorSealRequested, group.monitorTerminalReason)
+	}
+	select {
+	case sequence := <-sealed:
+		if sequence != 1 {
+			t.Fatalf("post-monitor seal sequence = %d, want the initial scan's sequence 1", sequence)
+		}
+	case <-time.After(testHangGuard):
+		t.Fatal("post-monitor seal did not complete after the monitor joined")
+	}
+	if !group.descendantScanSealed {
+		t.Fatal("clean sealing scan did not record the sealed state")
+	}
+}
+
 func TestAttachProcessWaitsForInitialDescendantScan(t *testing.T) {
 	process, err := os.FindProcess(os.Getpid())
 	if err != nil {
