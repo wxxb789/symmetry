@@ -266,7 +266,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     limited = create_connection("github", "Repositories only", "acme", ["repositories"])
 
     for kind <- ["work_tracking", "ci"] do
-      assert %{"error" => %{"code" => "forbidden", "message" => message}} =
+      assert %{"error" => %{"code" => "capability_not_granted", "message" => message}} =
                api_conn()
                |> post("/portal/api/projects/#{project["id"]}/resources", %{
                  "connection_id" => limited["id"],
@@ -290,7 +290,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
              })
              |> json_response(200)
 
-    assert %{"resource" => refused, "error" => %{"code" => "forbidden"}} =
+    assert %{"resource" => refused, "error" => %{"code" => "capability_not_granted"}} =
              sync_resource(tracker["id"]) |> json_response(403)
 
     assert refused["status"] == "degraded"

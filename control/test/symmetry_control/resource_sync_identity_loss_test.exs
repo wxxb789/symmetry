@@ -110,7 +110,8 @@ defmodule SymmetryControl.ResourceSyncIdentityLossTest do
            "Provider authentication failed"},
           {{:http, 403, "forbidden"}, :forbidden, "Provider permission denied"},
           {{:http, 503, "unavailable"}, :provider_failure, "Provider returned HTTP 503"},
-          {:capability_not_granted, :forbidden, "Connection capability is not granted"},
+          {:capability_not_granted, :capability_not_granted,
+           "Connection capability is not granted"},
           {:invalid_provider_response, :provider_failure, "Provider response is invalid"},
           {:not_connected, :not_connected, "Resource has no external connection"}
         ] do

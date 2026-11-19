@@ -956,7 +956,7 @@ defmodule SymmetryControl.IntegrationsTest do
                capabilities: ["work_items"]
              })
 
-    assert {:error, :forbidden} =
+    assert {:error, :capability_not_granted} =
              Workspaces.create_resource(project.id, %{
                connection_id: connection.id,
                kind: "repository",
