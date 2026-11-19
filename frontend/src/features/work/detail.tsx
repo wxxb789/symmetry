@@ -26,6 +26,7 @@ import {
   evidenceRows,
   executionStateLabel,
   failureText,
+  hasDecisionPacket,
   nextActionLabel,
   noAcceptedEvidence,
   noBlocker,
@@ -49,6 +50,10 @@ import {
  * the detail loads, fails or resolves its project scope, so keyboard focus is
  * never dropped; the project work behind it appears only once the served
  * projection confirms which project the item belongs to.
+ *
+ * An execution that carries a run is linked into its conversation in Chat:
+ * pure navigation into the run scope `/portal/chat` already serves, labeled for
+ * review only when the served waiting context carries a decision packet.
  */
 export function WorkDetailPage() {
   const { workItemId } = useParams({ from: "/work/$workItemId" });
@@ -232,6 +237,17 @@ function WorkDetailBody({ workItemId, scopedProjectId, backSearch, editable, ope
   const query = useQuery(workDetailOptions(application.api, workItemId));
   const detail = query.data;
   const item = detail?.work_item;
+  const execution = item?.execution ?? null;
+  // The current execution's conversation entry point, present only while the
+  // served read binds it to a run: the scope and run are the query the chat
+  // route already resolves, and the project travels with it so the picker can
+  // name the run before the conversation read answers.
+  const runId = execution?.run_id ?? null;
+  const runChatSearch = runId === null ? null : {
+    scope: "run" as const,
+    ...(item?.project_id === undefined ? {} : { projectId: item.project_id }),
+    runId,
+  };
   const backToProjectId = item?.project_id ?? scopedProjectId;
   const refresh = () => {
     if (query.isFetching) return;
@@ -252,6 +268,9 @@ function WorkDetailBody({ workItemId, scopedProjectId, backSearch, editable, ope
         {backToProjectId === null
           ? <Link className="button" to="/projects">Back to projects</Link>
           : <Link className="button" to="/projects/$projectId" params={{ projectId: backToProjectId }} search={backSearch}>Back to project</Link>}
+        {runChatSearch !== null && <Link className="button" to="/chat" search={runChatSearch}>
+          {hasDecisionPacket(execution?.waiting) ? "Review decision in Chat" : "Open in Chat"}
+        </Link>}
         {item !== undefined && editable && <button className="button button-primary" type="button" disabled={opening || pendingWrites > 0} onClick={() => { void openEditor(); }}>{opening ? "Opening…" : "Edit work item"}</button>}
         <RefreshButton fetching={query.isFetching} refresh={refresh} />
       </div>

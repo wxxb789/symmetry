@@ -352,6 +352,22 @@ export function decisionView(waiting: unknown, fallbackQuestion: string | null):
   };
 }
 
+/**
+ * Whether the served waiting context carries the agent's decision packet. A
+ * surface that sends the operator to Chat for a decision checks this member and
+ * not the waiting state alone: the conversation offers its decision intent only
+ * while the packet is served, and a waiting request without one is answered on
+ * the surface that renders it. Both the extraction result and the raw payload
+ * are read, exactly as the decision packet itself is.
+ */
+export function hasDecisionPacket(waiting: unknown): boolean {
+  const record = asRecord(waiting);
+  if (record === null) return false;
+  const decision = record["decision"] ?? null;
+  if (decision !== null) return true;
+  return asRecord(asRecord(record["payload"])?.["decision"]) !== null;
+}
+
 const shortId = (value: string): string => (value.length > 13 ? `${value.slice(0, 8)}…` : value);
 
 /** Reads the reported task result's proposed next action; advisory text only, never an executable command. */
