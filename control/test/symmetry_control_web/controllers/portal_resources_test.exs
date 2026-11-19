@@ -112,6 +112,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   import Ecto.Query
 
+  alias SymmetryControl.Orchestration
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
   alias SymmetryControlWeb.PortalSession
@@ -524,6 +525,60 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     available = served_items(project["id"])
     assert available["101"]["can_start"] == true
     assert available["101"]["external"]["available"] == true
+
+    # The served retry control reads assignment eligibility, so a runtime the
+    # task could be assigned to must advertise the adapter `start` operation
+    # for the external-work gate below to be the only refusal left.
+    machine_key = Ecto.UUID.generate()
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(
+               %{name: "resource-retry-machine", machine_token: "token-#{machine_key}"},
+               machine_key,
+               enrollment_token: "enrollment-secret",
+               expected_enrollment_token: "enrollment-secret"
+             )
+
+    assert {:ok, [_runtime]} =
+             Orchestration.register_runtimes(
+               enrolled.machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "resource-retry-runtime",
+                   name: "Resource retry runtime",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   harness_kind: "generic",
+                   harness_version: "generic-v1",
+                   adapter_version: "generic-v1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "structured_input" => true,
+                     "provider_access" => true,
+                     "adapter" => %{
+                       "kind" => "generic",
+                       "native_version" => "generic-v1",
+                       "implementation_version" => "generic-v1",
+                       "protocol_version" => 1,
+                       "operations" => %{
+                         "start" => true,
+                         "events" => true,
+                         "cancel" => false,
+                         "resume" => false,
+                         "handoff" => false,
+                         "guidance" => "unsupported",
+                         "pause" => "unsupported",
+                         "approval_response" => false,
+                         "usage" => "unknown",
+                         "hard_cost_limit" => false
+                       }
+                     }
+                   }
+                 }
+               ]
+             )
 
     assert %{"execution" => %{"generation" => 1, "state" => "queued"}} =
              api_conn()

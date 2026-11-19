@@ -334,9 +334,102 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     assert {:ok, cancelled_model} = ReadModel.workspace(project.id)
     cancelled_execution = served_execution(cancelled_model, queued.work_item)
 
-    # The cancelled attempt carries no run, so retry is a local re-queue.
+    # Retry re-queues into assignment, and no runtime assignment could select
+    # for this binding advertises `start`, so the control is never offered.
     refute cancelled_execution.can_cancel
-    assert cancelled_execution.can_retry
+    refute cancelled_execution.can_retry
+
+    # Assigned (never claimed): the control plane applies the cancel itself, so
+    # the runtime's advertisement does not gate it even though it says
+    # `cancel: false`.
+    assigned = launch_for(project, "cap-no-cancel", "Assigned cancel without advertisement")
+    assert {:ok, assigned_run} = Orchestration.assign_one(now: @now)
+    assert assigned_run.runtime_id == no_cancel_runtime.id
+    assert {:ok, assigned_model} = ReadModel.workspace(project.id)
+    assert served_execution(assigned_model, assigned.work_item).can_cancel
+
+    # Retry reads assignment's own eligibility, not the previous attempt's
+    # runtime: a second runtime with the same binding that advertises `start`
+    # makes the retried attempt possible even though the failed attempt's
+    # runtime does not.
+    other_runtime =
+      register_runtime(machine, "cap-no-start-other",
+        agent_profile: "cap-no-start",
+        workspace: "cap-no-start",
+        metadata: adapter_metadata(),
+        capabilities: adapter_capabilities(start: true, cancel: true)
+      )
+
+    assert other_runtime.id != no_start_runtime.id
+
+    assert {:ok, eligible_model} = ReadModel.workspace(project.id)
+    assert served_execution(eligible_model, retry_unsupported.work_item).can_retry
+
+    # An archived project refuses the retry the endpoint would reject, so the
+    # control is withheld even though a selectable runtime advertises `start`.
+    assert {:ok, _assigned_snapshot, :created} =
+             Workspaces.cancel_work_item(assigned.work_item.id, 1, "cap-assigned-cancel")
+
+    assert {:ok, _archived} =
+             Workspaces.update_project(project.id, %{
+               version: project.lock_version,
+               status: "archived"
+             })
+
+    assert {:ok, archived_model} = ReadModel.workspace(project.id)
+    refute served_execution(archived_model, supported.work_item).can_retry
+  end
+
+  test "the task snapshot offers cancel for claimed, paused and waiting attempts that advertise it" do
+    project = project_fixture()
+    item = launch_for(project, "cap-supervised", "Supervised cancel surface")
+    %{machine: machine} = enroll_machine("supervised-machine")
+
+    runtime =
+      register_runtime(machine, "cap-supervised",
+        agent_profile: "cap-supervised",
+        workspace: "cap-supervised",
+        metadata: adapter_metadata(),
+        capabilities: supervised_adapter_capabilities()
+      )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.runtime_id == runtime.id
+    fence = claim(run, runtime, 105)
+
+    # claimed: the runtime holds the attempt and advertises cancel.
+    assert %{can_cancel: true} = snapshot_execution(item.work_item)
+
+    transition(run.id, fence, "running", 50)
+    assert %{can_cancel: true} = snapshot_execution(item.work_item)
+
+    transition(run.id, fence, "waiting_for_input", 51)
+    assert %{can_cancel: true} = snapshot_execution(item.work_item)
+
+    # Back to running, then a safe-boundary pause the same runtime supervises.
+    transition(run.id, fence, "running", 52)
+
+    assert {:ok, pause, :created} =
+             Orchestration.create_command(
+               item.work_item.orchestration_task_id,
+               "pause",
+               %{},
+               "cap-supervised-pause",
+               expected_generation: 1,
+               now: @now
+             )
+
+    assert {:ok, _paused} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "paused",
+               %{"command_id" => pause.id},
+               uuid(53),
+               now: @now
+             )
+
+    assert %{can_cancel: true} = snapshot_execution(item.work_item)
   end
 
   defp project_fixture do
@@ -415,9 +508,15 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
   # The served control projection: the same merge the portal read applies.
   defp served_execution(model, work_item) do
     work_item
-    |> Repo.preload([:project, :repository_resource, :ci_resource])
+    |> Repo.preload([:project, :repository_resource, :ci_resource], force: true)
     |> PortalJSON.work_item(model.projections)
     |> Map.fetch!(:execution)
+  end
+
+  # The single-task read's control projection, as command responses serve it.
+  defp snapshot_execution(work_item) do
+    assert {:ok, snapshot} = Orchestration.task_snapshot(work_item.orchestration_task_id)
+    PortalJSON.execution(snapshot)
   end
 
   # The registered metadata an adapter-backed runtime carries.
@@ -451,6 +550,15 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
         }
       }
     }
+  end
+
+  defp supervised_adapter_capabilities do
+    adapter_capabilities(start: true, cancel: true)
+    |> Map.merge(%{
+      "structured_input" => true,
+      "interactive" => true,
+      "supervisory_control" => true
+    })
   end
 
   defp claim(run, runtime, claim_number \\ 100) do

@@ -74,22 +74,31 @@ defmodule SymmetryControl.Workspaces.ReadModel do
       runtimes = current_runtimes(runs)
       commands = latest_commands(task_ids)
       waiting = waiting_contexts(tasks, runs)
-      controls = controls(tasks, runs, runtimes)
+      pending = pending_supervisory_commands(runs)
+      retry_eligible = Orchestration.retry_runtime_eligible_task_ids(task_ids)
       evidence = evidence(task_ids)
 
       Map.new(task_ids, fn task_id ->
         task = Map.fetch!(tasks, task_id)
         run = Map.get(runs, task_id)
+        runtime = run && Map.get(runtimes, run.runtime_id)
 
         {task_id,
          %{
            execution: %{
              task: task,
              run: run,
-             runtime: run && Map.get(runtimes, run.runtime_id),
+             runtime: runtime,
+             retry_runtime_eligible: MapSet.member?(retry_eligible, task_id),
              waiting: Map.get(waiting, task_id),
              latest_command: Map.get(commands, task_id),
-             controls: Map.fetch!(controls, task_id)
+             controls:
+               Orchestration.control_capabilities(
+                 task,
+                 run,
+                 runtime,
+                 not is_nil(run) and MapSet.member?(pending, run.id)
+               )
            },
            evidence:
              Map.get(
@@ -111,31 +120,19 @@ defmodule SymmetryControl.Workspaces.ReadModel do
     |> Map.new(&{&1.id, &1})
   end
 
-  defp controls(tasks, runs, runtimes) do
+  # The runs whose pause/resume command is pending or applied: an attempt at a
+  # supervisory transition the served controls must not duplicate.
+  defp pending_supervisory_commands(runs) do
     run_ids = runs |> Map.values() |> Enum.map(& &1.id)
 
-    pending =
-      Repo.all(
-        from command in Command,
-          where:
-            command.run_id in ^run_ids and command.kind in ["pause", "resume"] and
-              command.state in ["pending", "applied"],
-          select: command.run_id
-      )
-      |> MapSet.new()
-
-    Map.new(tasks, fn {id, task} ->
-      run = Map.get(runs, id)
-      runtime = run && Map.get(runtimes, run.runtime_id)
-
-      {id,
-       Orchestration.control_capabilities(
-         task,
-         run,
-         runtime,
-         not is_nil(run) and MapSet.member?(pending, run.id)
-       )}
-    end)
+    Repo.all(
+      from command in Command,
+        where:
+          command.run_id in ^run_ids and command.kind in ["pause", "resume"] and
+            command.state in ["pending", "applied"],
+        select: command.run_id
+    )
+    |> MapSet.new()
   end
 
   defp current_runs(task_ids) do

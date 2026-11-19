@@ -120,8 +120,10 @@ test.describe("Execution control", () => {
     await expect(page.locator(".receipt").filter({ hasText: ui.receiptDeferred }).first()).toBeVisible();
     await expect(page.locator(".receipt").filter({ hasText: ui.receiptApplied })).toHaveCount(0);
 
-    // Retry availability is the server's own signal.
-    await expect(page.getByRole("button", { name: ui.retry })).toBeVisible();
+    // Retry availability is the server's own signal: retry re-queues into
+    // assignment, no runtime serves this binding, and the capability-bound
+    // policy withholds a control no runtime could honour.
+    await expect(page.getByRole("button", { name: ui.retry })).toHaveCount(0);
 
     // A retry aimed at an already-cancelled generation is refused by the
     // server; the refusal is a definitive rejection, never an applied state.

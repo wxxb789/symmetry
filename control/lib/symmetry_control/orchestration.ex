@@ -537,6 +537,7 @@ defmodule SymmetryControl.Orchestration do
              task: Task.t(),
              run: Run.t() | nil,
              runtime: Runtime.t() | nil,
+             retry_runtime_eligible: boolean(),
              waiting: map() | nil,
              latest_command: Command.t() | nil
            }}
@@ -558,6 +559,7 @@ defmodule SymmetryControl.Orchestration do
           task: task,
           run: run,
           runtime: runtime,
+          retry_runtime_eligible: retry_runtime_eligible?(task),
           waiting: current_waiting_context(task, run),
           latest_command: latest_task_command(task.id),
           controls:
@@ -1298,18 +1300,9 @@ defmodule SymmetryControl.Orchestration do
     Repo.one(
       from task in Task,
         join: runtime in Runtime,
-        on:
-          runtime.status == "online" and runtime.agent_profile == task.agent_profile and
-            runtime.workspace == task.workspace and
-            fragment("? @> ?", runtime.capabilities, task.required_capabilities),
+        on: runtime.status == "online",
+        where: ^legacy_task_runtime_eligibility(),
         where: task.state == "queued" and is_nil(task.goal_id),
-        where: is_nil(runtime.harness_kind) or runtime.harness_kind not in ["omp", "omo"],
-        where:
-          fragment(
-            "?->>'supervisory_control' IS DISTINCT FROM 'true'",
-            task.required_capabilities
-          ) or
-            is_nil(runtime.harness_kind) or runtime.harness_kind == "generic",
         where:
           fragment(
             "? > CAST(? AS timestamp) - (? * INTERVAL '3 milliseconds')",
@@ -1328,6 +1321,24 @@ defmodule SymmetryControl.Orchestration do
         limit: 1,
         lock: "FOR UPDATE SKIP LOCKED",
         select: {task, runtime}
+    )
+  end
+
+  # The non-transient conditions that make a runtime eligible for a goal-less
+  # task: same binding, the task's capability containment, the supervisory
+  # clause and the harness-kind exclusion. `next_assignable_legacy_task_and_runtime/1`
+  # adds runtime status, heartbeat freshness and free capacity on top; the
+  # retry projection asks only which runtimes assignment rules could select at
+  # all, so it shares exactly these conditions.
+  defp legacy_task_runtime_eligibility do
+    dynamic(
+      [task, runtime],
+      runtime.agent_profile == task.agent_profile and
+        runtime.workspace == task.workspace and
+        fragment("? @> ?", runtime.capabilities, task.required_capabilities) and
+        (fragment("?->>'supervisory_control' IS DISTINCT FROM 'true'", task.required_capabilities) or
+           is_nil(runtime.harness_kind) or runtime.harness_kind == "generic") and
+        (is_nil(runtime.harness_kind) or runtime.harness_kind not in ["omp", "omo"])
     )
   end
 
