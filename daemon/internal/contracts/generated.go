@@ -418,10 +418,11 @@ type PurpleWorkItemExecution struct {
 	CanGuide  bool `json:"can_guide"`
 	CanPause  bool `json:"can_pause"`
 	CanResume bool `json:"can_resume"`
-	// True when the task state permits a retry, the work item's agent-assignment and
-	// external-work conditions hold, and, when a previous attempt exists, its runtime
-	// advertises the adapter `start` operation the fresh retried attempt uses. A runtime
-	// without the advertisement is unknown and answers false.
+	// True when the task state permits a retry, the work item's agent-assignment, external-work
+	// and active-project conditions hold, and at least one runtime assignment could select for
+	// the task (same binding and capability containment, ignoring transient online state)
+	// advertises the adapter `start` operation the fresh retried attempt uses. No such runtime
+	// answers false.
 	CanRetry           bool                          `json:"can_retry"`
 	Failure            map[string]interface{}        `json:"failure"`
 	Generation         int64                         `json:"generation"`
@@ -1676,10 +1677,11 @@ type FluffyWorkItemExecution struct {
 	CanGuide  bool `json:"can_guide"`
 	CanPause  bool `json:"can_pause"`
 	CanResume bool `json:"can_resume"`
-	// True when the task state permits a retry, the work item's agent-assignment and
-	// external-work conditions hold, and, when a previous attempt exists, its runtime
-	// advertises the adapter `start` operation the fresh retried attempt uses. A runtime
-	// without the advertisement is unknown and answers false.
+	// True when the task state permits a retry, the work item's agent-assignment, external-work
+	// and active-project conditions hold, and at least one runtime assignment could select for
+	// the task (same binding and capability containment, ignoring transient online state)
+	// advertises the adapter `start` operation the fresh retried attempt uses. No such runtime
+	// answers false.
 	CanRetry           bool                          `json:"can_retry"`
 	Failure            map[string]interface{}        `json:"failure"`
 	Generation         int64                         `json:"generation"`
@@ -1882,10 +1884,11 @@ type TentacledWorkItemExecution struct {
 	CanGuide  bool `json:"can_guide"`
 	CanPause  bool `json:"can_pause"`
 	CanResume bool `json:"can_resume"`
-	// True when the task state permits a retry, the work item's agent-assignment and
-	// external-work conditions hold, and, when a previous attempt exists, its runtime
-	// advertises the adapter `start` operation the fresh retried attempt uses. A runtime
-	// without the advertisement is unknown and answers false.
+	// True when the task state permits a retry, the work item's agent-assignment, external-work
+	// and active-project conditions hold, and at least one runtime assignment could select for
+	// the task (same binding and capability containment, ignoring transient online state)
+	// advertises the adapter `start` operation the fresh retried attempt uses. No such runtime
+	// answers false.
 	CanRetry           bool                             `json:"can_retry"`
 	Failure            map[string]interface{}           `json:"failure"`
 	Generation         int64                            `json:"generation"`
