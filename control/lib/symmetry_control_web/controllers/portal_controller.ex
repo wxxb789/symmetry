@@ -1,12 +1,13 @@
 defmodule SymmetryControlWeb.PortalController do
   use SymmetryControlWeb, :controller
 
+  alias SymmetryControlWeb.PortalAssets
   alias SymmetryControlWeb.PortalHTML
 
   def home(conn, _params), do: redirect(conn, to: "/portal")
 
   def index(conn, _params) do
-    index_path = Application.app_dir(:symmetry_control, "priv/static/portal/index.html")
+    index_path = PortalAssets.index_path()
 
     case File.read(index_path) do
       {:ok, index_html} ->

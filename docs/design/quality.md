@@ -110,7 +110,7 @@ changing the forwarded response status, headers or body.
 
 | Surface | Actual commands / target additions |
 | --- | --- |
-| Elixir (`control/`) | `mix format --check-formatted`; `mix compile --warnings-as-errors`; `mix test`; release/E2E per current CI |
+| Elixir (`control/`) | `mix format --check-formatted`; `mix compile --warnings-as-errors`; `mix test` (four portal cases require the staged frontend bundle: `pnpm --filter @symmetry/frontend build`, or CI's `portal-assets` artifact — see the [portal runbook](../runbooks/portal.md)); release/E2E per current CI |
 | Go (`daemon/`) | `go vet ./...`; `go test ./...`; concurrency changes: `go test -race ./...` |
 | Browser (`browser/`) | `mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile` from the repository root; `mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test`; configured control/daemon fixtures required |
 | TS (goal 0007 target) | frontend typecheck/lint/test/build commands from frontend.md; migrate browser runner to pnpm |
