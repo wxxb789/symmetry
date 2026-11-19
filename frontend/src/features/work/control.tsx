@@ -3,8 +3,10 @@
  *
  * Every control renders only from the server's own signal: `can_start`,
  * `can_cancel`, `can_retry` and `execution.waiting`. The surface never derives
- * a permission or transition rule from task state, never renders a disabled
- * live control for an operation the server did not offer, and never shows a
+ * a permission or transition rule from task state — `can_cancel`/`can_retry`
+ * already join the attempt's state with the runtime's advertised adapter
+ * operations server-side — never renders a disabled live control for an
+ * operation the server did not offer, and never shows a
  * queued request as applied: an in-flight attempt renders `requested`, and a
  * settled attempt renders only what the mutation's own command or the refreshed
  * snapshot proves. Guidance, safe-boundary pause and resume are dispatched from
