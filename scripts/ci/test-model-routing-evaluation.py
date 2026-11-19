@@ -113,12 +113,6 @@ EMIT_SKIPPED_DESCENDANT = (
 EXIT_THREE = EMIT_PASS + "raise SystemExit(3)\n"
 WRITE_DURING_GATE = "open('wrote_during_gate.txt', 'w').write('x')\n"
 
-# The timeout-tree fixture's survivor witness is event-driven: a descendant the
-# tree kill reached is dead before the test releases it, so this guard only bounds
-# how long the test listens for a survivor's own record and never claims how fast
-# a host should spawn or kill a process. 10 s matches the runner's own reap window.
-DESCENDANT_WITNESS_GUARD_SECONDS = 10.0
-
 VITEST_NAMED_TESTS = (
     "renders one row per served boolean capability member",
     "never claims a capability the record does not carry",
@@ -1071,7 +1065,9 @@ class EvaluationTests(unittest.TestCase):
         # check returned, so a descendant the kill did reach can never write the
         # witness and a survivor records itself as soon as the release lands. The gate
         # and the descendant publish their own start markers outside the checkout so a
-        # failure records what the fixture had established on that host.
+        # failure records what the fixture had established on that host. The handshake
+        # directory is a sibling of the checkout because the gate runs with `cwd: "."`
+        # in the checkout, so `..` is the run directory for both processes.
         descendant = (
             "import os, time\n"
             "from pathlib import Path\n"
@@ -1081,13 +1077,16 @@ class EvaluationTests(unittest.TestCase):
             "deadline = time.monotonic() + 300.0\n"
             "while not release.exists() and time.monotonic() < deadline:\n"
             "    time.sleep(0.02)\n"
-            "if release.exists():\n"
-            "    Path('late-descendant.txt').write_text('late', encoding='utf-8')\n"
+            "Path('late-descendant.txt').write_text('late', encoding='utf-8')\n"
         )
         gate_code = (
             "import subprocess, sys, time\n"
             "from pathlib import Path\n"
-            f"subprocess.Popen([sys.executable, '-c', {descendant!r}])\n"
+            # DEVNULL so a descendant the kill missed cannot hold the gate's
+            # inherited stdout/stderr pipes: on Windows that would keep the runner's
+            # bounded reap waiting until the descendant's own wait cap expired,
+            # delaying the release until the witness had already been missed.
+            f"subprocess.Popen([sys.executable, '-c', {descendant!r}], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
             "Path('..', 'timeout-tree-handshake', 'gate-spawned-descendant.txt').write_text('spawned', encoding='utf-8')\n"
             "time.sleep(60)\n"
         )
@@ -1109,17 +1108,21 @@ class EvaluationTests(unittest.TestCase):
         release = handshake / "descendant-release.txt"
         release.write_text("release\n", encoding="utf-8")
         witness = self.checkout(run) / "late-descendant.txt"
-        deadline = time.monotonic() + DESCENDANT_WITNESS_GUARD_SECONDS
+        # The bound matches the runner's own reap window: a survivor the kill missed
+        # writes as soon as the release lands, so the poll only has to outlast that.
+        guard = load_runner_module().PROCESS_TREE_REAP_SECONDS
+        deadline = time.monotonic() + guard
         while not witness.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
-        self.assertFalse(
-            witness.exists(),
+        text = witness.read_text(encoding="utf-8") if witness.exists() else None
+        self.assertIsNone(
+            text,
             "a gate descendant survived the per-gate timeout: "
             f"gate spawned descendant={(handshake / 'gate-spawned-descendant.txt').exists()}, "
             f"descendant started={(handshake / 'descendant-started.txt').exists()}, "
-            f"witness={witness.read_text(encoding='utf-8') if witness.exists() else None!r}; the markers "
-            "cannot distinguish a descendant the kill missed inside the tree from one created after the "
-            "kill enumerates the tree, which a snapshot tree kill cannot reach",
+            f"witness={text!r}; the markers cannot distinguish a descendant the kill missed inside the "
+            "tree from one created after the kill enumerated it (Windows `taskkill /T`) or the process "
+            "group was snapshotted (POSIX `killpg`): neither kill can reach a process it never saw",
         )
 
     def test_symlink_targets_are_bound(self) -> None:
