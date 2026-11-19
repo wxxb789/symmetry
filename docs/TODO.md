@@ -213,15 +213,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       skip those cases with an explicit reason, stage a fixture bundle, or document the build as a
       suite prerequisite; keep the assertions.
 
-- [ ] Revalidate the load-sensitive Go test
-      `TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock` in
-      `daemon/internal/harness/omp/adapter_final_message_test.go`. It failed with
-      `adapter_final_message_test.go:44: context deadline exceeded` in the 0007e `go test ./...` run
-      while 20 Go packages and the full Control suite ran concurrently, and passed alone on the same
-      revision (`ok … 10.609s`, exit 0). The test itself sets a 1 s `context.WithTimeout` around
-      `WaitTurn`, so host load alone can trip it. Keep the assertion; consider a load-tolerant
-      deadline rather than a longer test timeout.
-
 - [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
       `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
       the server answers that code, but a sync refused for an ungranted capability maps to
