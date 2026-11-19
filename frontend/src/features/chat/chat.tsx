@@ -26,6 +26,7 @@ import {
   Conflict,
   Forbidden,
   ServerRefusal,
+  UnexpectedResponse,
   Unsupported,
   Validation,
   errorMessage,
@@ -183,6 +184,19 @@ export function ChatPage() {
           // ready. The failure handler is the rejection callback, not a
           // `catch`: a write that throws must not be reported as a read
           // failure.
+          if (definitiveReadRefusal(error)) {
+            // A refused cursor is dead: no later serve re-signs an older
+            // boundary, so the chain pointer falls back to the served page's
+            // own token — retained pages stay, deduped at render — and the
+            // re-read renews that token, letting the next press walk the
+            // served boundary again instead of retrying the dead one.
+            updateWith(key, (previous) => ({
+              ...previous,
+              nextCursor: previous.pages[0]?.nextBefore ?? null,
+              nextBoundaryId: previous.pages[0]?.messages[0]?.id ?? null,
+            }));
+            if (!conversation.isFetching) void conversation.refetch();
+          }
           update(key, { status: { kind: "notice", message: errorMessage(error) } });
         },
       )
@@ -635,4 +649,16 @@ function ChatMessageRow({ message, receipt }: {
 function definitiveRefusal(error: unknown): boolean {
   return error instanceof Conflict || error instanceof Validation || error instanceof Forbidden || error instanceof Unsupported ||
     (error instanceof ServerRefusal && error.status >= 400 && error.status < 500);
+}
+
+/**
+ * A definitive refusal of a read's cursor: the server answered with a client
+ * error, so the same read would fail identically and only a re-served page can
+ * renew the position. A transient fault — a lost or unproven response, a
+ * server-side or timeout status — proves nothing about the cursor, so it stays
+ * a retry and the chain pointer is left alone.
+ */
+function definitiveReadRefusal(error: unknown): boolean {
+  return definitiveRefusal(error) ||
+    (error instanceof UnexpectedResponse && error.status !== null && error.status >= 400 && error.status < 500 && !error.transient);
 }

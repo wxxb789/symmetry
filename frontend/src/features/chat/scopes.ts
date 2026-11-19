@@ -87,10 +87,13 @@ export function chatScopeKey(scope: ChatScope, projectId: string | null, runId: 
 /**
  * Applies a served page (the initial read or a refresh). The current page is
  * replaced in place; the displayed older pages are kept and deduped at render
- * time. The older chain restarts from the refreshed boundary only when the
- * served page ends at a different boundary message: a served cursor is
+ * time. Whether the served page ends at a different boundary message decides
+ * if the chain pointer moves to it, compared by message id while both pages
+ * name one and by token bytes while either does not. A served cursor is
  * re-signed per response, so the boundary message's id — not the token's
- * bytes — is what proves two reads paginate from the same position.
+ * bytes — is what proves two reads paginate from the same position; at an
+ * unchanged boundary the served token is adopted while no continuation was
+ * ever established, and otherwise renews the reader's own cursor.
  */
 export function retainServedPage(
   state: ChatScopeState,
@@ -103,19 +106,25 @@ export function retainServedPage(
   // message — so a re-signed token for the same boundary keeps the chain
   // pointer where the reader's loads reached it. While either side lacks a
   // boundary id (the first read has no previous page) the token bytes are
-  // compared instead, as a fetched page's own binding does.
+  // compared instead; the fetched page's binding in `retainOlderPage` is
+  // narrower: it compares bytes only while its own captured boundary id is
+  // absent.
   const servedBoundaryId = served.messages[0]?.id ?? null;
   const currentBoundaryId = state.pages[0]?.messages[0]?.id ?? null;
   const moved = servedBoundaryId !== null && currentBoundaryId !== null
     ? servedBoundaryId !== currentBoundaryId
     : served.nextBefore !== state.nextCursor;
-  // A cursor the reader has not paged past still designates that boundary, so
-  // the token this response signed for it replaces the aging one; a cursor the
-  // reader's loads moved past names an older message the served page cannot
-  // re-sign, so it stays where the loads reached it.
+  // A response at the same boundary offers its own token to the chain: it is
+  // adopted while no continuation was ever established — a chain the reader
+  // already paged to the end keeps its recorded boundary and stays ended — and
+  // otherwise replaces the aging token exactly while the reader's cursor still
+  // designates that boundary. A cursor the reader's loads moved past names an
+  // older message the served page cannot re-sign, so it stays where the loads
+  // reached it.
+  const adopt = !moved && state.nextCursor === null && state.nextBoundaryId === null && served.nextBefore !== null;
   const renew = !moved && servedBoundaryId !== null && state.nextBoundaryId === servedBoundaryId;
-  const nextCursor = moved || renew ? served.nextBefore : state.nextCursor;
-  const nextBoundaryId = moved ? servedBoundaryId : state.nextBoundaryId;
+  const nextCursor = moved || adopt || renew ? served.nextBefore : state.nextCursor;
+  const nextBoundaryId = moved || adopt ? servedBoundaryId : state.nextBoundaryId;
   return { ...state, pages: [page, ...state.pages.slice(1)], nextCursor, nextBoundaryId, servedSource: source };
 }
 

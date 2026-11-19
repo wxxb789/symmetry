@@ -521,5 +521,17 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       decision — the chat conversation keeps its keep-and-state treatment rather than unifying with
       the work history's and the attention feed's retirement — and the fixed pre-existing
       `retainServedPage` note (a moved boundary is now judged by the boundary message's id, not the
-      re-signed cursor's bytes); a cursor the reader has paged past is not renewed by later serves
-      and still expires into a refusal after the server's 24-hour `max_age`.
+      re-signed cursor's bytes); a cursor the reader has paged past is not renewed by later serves,
+      but its refusal after the server's 24-hour `max_age` now restarts the chain from the served
+      page and re-reads it, so the next press renews the token and the re-walk dedupes.
+
+- [ ] The chat surface's in-flight `Load older` guard is keyed by cursor bytes: `loadingCursor`
+      (`frontend/src/features/chat/chat.tsx:167-201`) admits a second load for the same boundary
+      while the first is in flight once a re-serve has renewed `history.loadCursor` and re-rendered
+      the button (`frontend/src/features/chat/chat.tsx:543`), and a refusal of the superseded
+      request then posts its notice after the retry already loaded the page. Pre-existing: base
+      re-keyed the cursor on every refresh, so the race predates the boundary-id work. Repro on
+      those bytes: press Load older, refresh while its page is in flight, press Load older again
+      (admitted because the cursor bytes changed), and let the first request's refusal settle after
+      the second landed. Fix direction: key pending loads by scope + boundary id (token bytes as
+      the fallback) and ignore failures superseded at that boundary.

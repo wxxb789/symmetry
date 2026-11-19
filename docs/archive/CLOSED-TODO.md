@@ -1578,6 +1578,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `portal-chat.spec.mjs`) for verification — as is the providers' outbound pagination
       (`control/lib/symmetry_control/integrations/providers/`), one-shot aggregation. The residual
       in `docs/TODO.md` is the owner's unification decision and the CI browser runs.
+      *(Historical pointer: the unification decision closed on 2026-11-19 — see the entry below —
+      leaving the CI browser runs as the residual.)*
 
 *Closed part of the item “Residuals of the completed class scan (2026-11-19)” in `docs/TODO.md`; the open residual stays there; moved 2026-11-19 from branch `fix/chat-history-boundary-id`.*
 
@@ -1597,18 +1599,31 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       (`last = List.last(page)` in `SymmetryControl.Chat.conversation/1`), and that message's id
       reaches the client without a wire change as `ChatMessage.id` in the generated
       `SymmetryChatReadV1` — so a read that only re-signs the same boundary position keeps the
-      chain pointer where the reader's loads reached it, while a served page that ends at a
-      different message still restarts it from its own boundary; a served page that proves no
-      boundary keeps the token comparison, the same fallback `retainOlderPage` already applies to
-      a fetched page. Evidence: `frontend/src/features/chat/chat.test.tsx`'s "keeps the chain a
+      chain pointer where the reader's loads reached it (adopting the offered token while no
+      continuation was ever established), while a served page that ends at a different message
+      still restarts it from its own boundary; a refused cursor — the server's 24-hour `max_age` —
+      restarts the chain pointer from the served page and re-reads it, so the next press renews
+      that page's token and the re-walk dedupes against the retained pages. Both fallback
+      predicates stated exactly: the served comparison decides by the boundary message's id while
+      both sides name one and by the cursor's bytes while either does not, while a fetched page
+      binds by its own captured boundary id and compares token bytes only while that id is absent.
+      Evidence: `frontend/src/features/chat/chat.test.tsx`'s "keeps the chain a
       refresh re-signs at the same boundary and restarts it at a moved one" was red on the previous
       bytes (`expected [ 'cursor-5', 'cursor-5-resigned' ] to deeply equal [ 'cursor-5',
       'cursor-3' ]`), and the cursor renewal is red-first pinned beside it: "renews the served
       cursor at an unchanged boundary only while the reader has not paged past it" was red on the
       fix's first bytes (`expected [ 'cursor-5' ] to deeply equal [ 'cursor-5-resigned' ]`). Both
-      pass on the delivered bytes, which also pin the moved-boundary restart, the renewal stopping
-      at a cursor the reader has paged past, and the named skipped region; the chat suite passes
-      (64 tests, `--no-file-parallelism`), with `tsc --noEmit` and `eslint src/features/chat
+      pass on the delivered bytes, and the two fix-round tests are red-first pinned against the
+      delivered pre-fix bytes in the same way: "restarts the chain from the served page when a
+      cursor the reader has paged past is refused" was red on the pre-fix `chat.tsx` bytes
+      (`Unable to find an element with the text: message 12`), and "adopts a token newly offered
+      at an unchanged boundary while no continuation exists yet" was red on the pre-fix
+      `scopes.ts` bytes (`Unable to find an accessible element with the role "button" and name
+      "Load older"`). The delivered bytes also pin the moved-boundary restart, the renewal of an
+      in-flight press's chain, the renewal stopping at a cursor the reader has paged past, the
+      adoption of a cursor newly offered at an unchanged boundary, the refusal-triggered restart
+      from the served page, and the named skipped region; the chat suite passes
+      (66 tests, `--no-file-parallelism`), with `tsc --noEmit` and `eslint src/features/chat
       --max-warnings 0` exit 0 (full frontend eslint rc 0 as well). The open residual — the CI
       browser suites' live-daemon pagination cases — stays in `docs/TODO.md`.
 
