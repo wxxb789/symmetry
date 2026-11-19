@@ -107,6 +107,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 from typing import Any, Iterable
 
 SCHEMA = "symmetry-model-routing-evaluation/v1"
@@ -1840,6 +1841,31 @@ def terminate_owned_process_tree(process: subprocess.Popen) -> None:
         process.kill()
 
 
+def _close_stream_quietly(stream: Any) -> None:
+    try:
+        stream.close()
+    except OSError:
+        pass
+
+
+def close_lingering_read_ends(process: subprocess.Popen) -> None:
+    """Release a lingering gate's read ends without waiting on a blocked reader.
+
+    A descendant that escaped the tree kill can still hold the inherited write ends,
+    so the pipes never reach EOF while it lives. On Windows `communicate` reads each
+    pipe on its own daemon reader thread and closing a read end queues behind a
+    reader blocked in it, so a close on the reaping thread would wait for the
+    survivor instead of the documented reap window. Each read end is therefore
+    closed from its own daemon thread, which the reap never joins: a close that can
+    proceed releases the handle immediately, and one that would block is abandoned
+    to process exit exactly as its reader thread already is.
+    """
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        threading.Thread(target=_close_stream_quietly, args=(stream,), daemon=True).start()
+
+
 def run_owned_command(
     argv: list[str], cwd: str, timeout: float | None, env: dict[str, str] | None = None
 ) -> tuple[int | None, bytes, bytes, bool]:
@@ -1873,11 +1899,10 @@ def run_owned_command(
         except subprocess.TimeoutExpired as lingering:
             stdout += lingering.stdout or b""
             stderr += lingering.stderr or b""
-            for stream in (process.stdout, process.stderr):
-                try:
-                    stream.close()
-                except OSError:
-                    pass
+            # The pipes can still be held by a descendant the tree kill missed, so
+            # the read ends are released off the reaping thread and only the direct
+            # child is waited on: the reap must not wait on a survivor's pipes.
+            close_lingering_read_ends(process)
             try:
                 process.kill()
             except OSError:
