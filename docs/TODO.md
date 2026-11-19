@@ -372,8 +372,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `docs/archive/CLOSED-TODO.md`; only (a)–(c) below stay open.)*
       Closed part moved to `docs/archive/CLOSED-TODO.md`.
       **Still open, deliberately unchanged.** (a) The wider settlement contract
-      for the `daemon/internal/platform` flake class above (the wider-contract note
-      is archived in `docs/archive/CLOSED-TODO.md`) keeps the load-sensitive
+      for the `daemon/internal/platform` flake-class item now in
+      `docs/archive/CLOSED-TODO.md` (the wider-contract note is archived in
+      `docs/archive/CLOSED-TODO.md`) keeps the load-sensitive
       Windows owned-child close window; this change only removes the false-success
       reporting. (b) A first settlement failure on the
       non-durable route is terminal for that containment owner: `Close` and

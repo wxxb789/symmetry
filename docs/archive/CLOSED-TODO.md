@@ -52,7 +52,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       re-derivations recorded in the audit) remain bound to the pre-rebase reviewed revision and are labelled as
       history.
 
-- [x] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
+- [ ] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
       receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
       `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
       `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
@@ -72,12 +72,12 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       evidence record (`9432545d…`/`26d8e003…`/`e79fe173…`/`1be7b419…` ->
       `93050ced…`/`5ee9b87b…`/`ceae34ce…`/`af12819d…`). The tool's `--check` exits 0 on the two receipts whose
       absolute-path matches were all host paths (`0008c-a-strong.json`, `0008c-b-mixed.json`); the other two keep
-      only repo-relative prose fixtures (`/control/priv/static/portal/`, `/\`, `sync_status`) that rendering would
+      only repo-relative prose fixtures that rendering would
       corrupt. Full before/after digest table (including a later second-generation rebind of
       `0008a-controls.json`'s rendered `missing-gate` stderr digest) and the deliberately-left list:
-      `docs/evaluations/model-routing/README.md`, "Record rendering exception (2026-11-19)".
+      `docs/evaluations/model-routing/README.md:305`, "Record rendering exception (2026-11-19)".
 
-- [x] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
+- [ ] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
       how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
       resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
       against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
@@ -548,8 +548,10 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       class (runs 44147815717 `9c73a05`, 44230735630 `d60d50d`, 44253118123 `9192241`). The three
       load-bound start waits this text records as "unchanged" were subsequently converted to the
       package's documented hang guard — `time.After(testHangGuard)`, 30 s at `app_test.go:7281`,
-      applied at `harness_test.go:4284`/`:4290`, `:4506`, `:4600` by `4094624` (#57) — so a
-      further occurrence would be a new finding, not an open action of this item. The moved
+      applied at `harness_test.go:4284`/`:4290`, `:4506`, `:4600` by `4094624` (#57) (positions at
+      `4094624`; #92 (`535019d`) has since replaced the three start waits with
+      `waitForNativeRunning`, `harness_test.go:4739`-`:4770`) — so a further occurrence would be a
+      new finding, not an open action of this item. The moved
       text's final line keeps its original `docs/TODO.md` pointer; the helper-witness item it
       names is the entry closed above in this archive.
 
@@ -881,9 +883,10 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       deadline rather than a longer test timeout.
       Revalidated and closed by branch `fix/flake-load-sensitive-go` (2026-11-19): no further change
       was needed because `8082317` (#44) already replaced the 1 s `context.WithTimeout` around
-      `WaitTurn` with the package's documented `testHangGuard` (30 s, "turns a hung harness into a
-      failure; never a statement about how fast the adapter should be") and made the failing wait
-      name the outstanding step (`mustSettle(t, "WaitTurn", err)`), so elapsed time no longer
+      `WaitTurn` with the package's documented `testHangGuard` (30 s, "It only turns a hung harness
+      into a failure; it is never a statement about how fast a turn should complete, so it sits
+      far above any real scheduling delay, race instrumentation included.") and made the failing
+      wait name the outstanding step (`mustSettle(t, "WaitTurn", err)`), so elapsed time no longer
       decides the verdict and a guard expiry can no longer be reported as this test's behavioural
       failure. Re-run on this host while the other regression workers loaded it: plain
       `go test -count=20 -cpu 1,2 -run '^TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock$'
@@ -1322,13 +1325,15 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       report's embedded results and confirmed the focused 35/1/0 and broad 79/15/0 rows with no flaky cases -
       evidence for the 0007b receipts' browser rows, not a defect.
 
-- [x] Re-publish the pre-existing personal absolute paths in the committed 0008a
+- [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
       evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
       instead of rewriting history:
       `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
       strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
       `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (the `EVIDENCE_ROOT` value, an operator-profile drive path). The 0008b change renders its own new
+      58 (the `EVIDENCE_ROOT` value, an operator-profile drive path; the original entry
+      quoted that value in its elided drive-path form, and it was reworded so the record
+      holds no host-path shape). The 0008b change renders its own new
       records with that helper and records the rendering in the record
       (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
       record's quoted digest consistent when the older records are re-published.
