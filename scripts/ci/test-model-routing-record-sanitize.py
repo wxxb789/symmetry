@@ -8,6 +8,7 @@ real evaluation record.
 
 import hashlib
 import importlib.util
+import json
 import pathlib
 import subprocess
 import sys
@@ -71,6 +72,10 @@ QUOTED_HOST_PATHS = (
     "root:/home/operator/state/run",
     "root:C:" + _BS + "Users" + _BS + "operator" + _BS + "run",
     "state under /tmp//symmetry-0008d-run and /home//operator/x",
+    # A quoted path beside text: the backslash before the closing quote is that
+    # quote's JSON escape, not a path byte, so rendering must keep it outside the
+    # token instead of leaving a bare quote that breaks the record's syntax.
+    '{"t":"see ' + _BS + '"C:' + _BS * 2 + "dir" + _BS * 2 + "file" + _BS + '", ok"}',
 )
 
 # The fragments that must not survive rendering of the prefixed/escaped forms above:
@@ -155,6 +160,25 @@ class SanitizeTextTests(unittest.TestCase):
                     self.assertNotIn(fragment, rendered, text)
                 # Rendering stays idempotent even with the quoted forms.
                 self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+
+    def test_json_escaped_quote_after_a_path_stays_out_of_the_token(self):
+        # A path quoted inside a recorded JSON string is spelled `\"C:\\dir\\file\"`:
+        # each backslash before a quote is that quote's escape, not a path byte.
+        # Consuming the trailing one would leave a bare quote and break the record.
+        raw_path = "C:" + _BS * 2 + "dir" + _BS * 2 + "file"
+        text = '{"t": "see ' + _BS + '"' + raw_path + _BS + '", ok", "n": 1}'
+        rendered = MODULE.sanitize_text(text, [], root_only=True)
+        self.assertEqual(
+            json.loads(rendered), {"t": 'see "' + digest_of(raw_path) + '", ok', "n": 1},
+        )
+        # An even trailing run is literal backslashes before the string's own bare
+        # closing quote, so the whole run stays inside the token.
+        tail_path = "C:" + _BS * 2 + "dir" + _BS * 2
+        tail_rendered = MODULE.sanitize_text('{"t": "' + tail_path + '"}', [], root_only=True)
+        self.assertEqual(json.loads(tail_rendered), {"t": digest_of(tail_path)})
+        # Both shapes stay idempotent.
+        self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        self.assertEqual(MODULE.sanitize_text(tail_rendered, [], root_only=True), tail_rendered)
 
     def test_root_only_keeps_https_urls_literal(self):
         text = "https://github.com/wxxb789/symmetry/blob/main/x and https://x/home/y"

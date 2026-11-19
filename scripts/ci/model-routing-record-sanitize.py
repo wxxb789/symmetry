@@ -128,6 +128,25 @@ def hashed_path_token(path: str) -> str:
     return "path-sha256:" + hashlib.sha256(path.encode("utf-8")).hexdigest()
 
 
+def _render_match(match: re.Match[str]) -> str:
+    """Render one matched path, leaving a JSON ``\\"`` escape outside the token.
+
+    A matched path immediately before a recorded quote is spelled ``...\\"``:
+    its final backslash escapes the quote, not a path separator, so consuming
+    it would leave a bare quote and corrupt the record's JSON syntax. An odd
+    trailing run of backslashes is such an escape (its pairs are literal
+    backslashes) and stays outside the token, which still binds the raw path
+    text minus that escape.
+    """
+
+    matched = match.group(0)
+    if match.string[match.end():match.end() + 1] == '"':
+        trailing = len(matched) - len(matched.rstrip("\\"))
+        if trailing % 2 == 1:
+            return hashed_path_token(matched[:-1]) + "\\"
+    return hashed_path_token(matched)
+
+
 def _root_variants(root: str) -> list[str]:
     """Return the separator variants a root may appear with in recorded text."""
 
@@ -156,7 +175,7 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
             rendered = rendered.replace(variant, DISPOSABLE_ROOT_TOKEN)
     patterns = HOST_PATH_PATTERNS if root_only else DEFAULT_PATH_PATTERNS
     for pattern in patterns:
-        rendered = pattern.sub(lambda match: hashed_path_token(match.group(0)), rendered)
+        rendered = pattern.sub(_render_match, rendered)
     return rendered
 
 
