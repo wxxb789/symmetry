@@ -1155,8 +1155,9 @@ class EvaluationTests(unittest.TestCase):
         # reap window. The kill is narrowed to the direct child so the survivor is
         # always missed, exactly as a detached spawn escapes `taskkill /T`. The case
         # proves the fixture really held the pipes (the gate spawned the survivor
-        # before the kill and the survivor still runs), bounds the reap and its
-        # timeout result, and keeps output already captured before the reap.
+        # before the kill and the survivor still runs), measures the reap against its
+        # window and its documented worst case, checks the direct child was waited
+        # on, and on POSIX keeps exactly the output already captured before the kill.
         runner = load_runner_module()
         handshake = self.root / "lingering-handshake"
         handshake.mkdir()
@@ -1223,16 +1224,36 @@ class EvaluationTests(unittest.TestCase):
         self.addCleanup(setattr, runner, "terminate_owned_process_tree", original)
 
         timeout = 2.0
-        # Bounded means: the initial timeout, then one full reap window (the survivor
-        # holds the pipes across all of it), then slack. A reap that never waits on a
-        # pipe a survivor can withhold returns once its own window has passed.
-        bound = timeout + runner.PROCESS_TREE_REAP_SECONDS + 5.0
+        # The reap's documented worst case is the initial timeout, one full reap
+        # window, then the kill plus its own bounded wait (a platform tree kill such
+        # as `taskkill` carries no timeout of its own). The guard sits past that worst
+        # case, so a merely slow kill is never reported as a pipe block.
+        bound = timeout + 2.0 * runner.PROCESS_TREE_REAP_SECONDS + 5.0
         outcome: dict = {}
+        recorded: list = []
+        real_subprocess = runner.subprocess
+
+        class RecordingSubprocess:
+            """Delegate to the real module, recording every Popen the runner builds."""
+
+            def __getattr__(self, name):
+                return getattr(real_subprocess, name)
+
+            def Popen(self, *args, **kwargs):
+                process = real_subprocess.Popen(*args, **kwargs)
+                recorded.append(process)
+                return process
+
+        runner.subprocess = RecordingSubprocess()
+        self.addCleanup(setattr, runner, "subprocess", real_subprocess)
+
+        started = time.monotonic()
 
         def reap() -> None:
             outcome["reaped"] = runner.run_owned_command(
                 [sys.executable, "-c", gate_code], str(self.root), timeout
             )
+            outcome["elapsed"] = time.monotonic() - started
 
         thread = threading.Thread(target=reap, daemon=True)
         thread.start()
@@ -1240,16 +1261,23 @@ class EvaluationTests(unittest.TestCase):
         if thread.is_alive():
             pid = survivor_pid()
             was_running = pid is not None and survivor_running(pid)
+            stalled = time.monotonic() - started
             # Release the survivor (and with it the pipes) so the reaping thread can
             # finish rather than being abandoned mid-close, then fail on the evidence
             # the guard collected.
             terminate_survivor()
             thread.join(30)
+            finished = not thread.is_alive()
+            measured = (
+                f"reap finished {outcome['elapsed']:.1f}s after the call started"
+                if finished
+                else f"reap still running {stalled:.1f}s after the call started"
+            )
             self.fail(
                 f"run_owned_command did not return within {bound:.1f}s while a survivor held the "
                 f"gate's pipes: gate armed={armed_path.is_file()}, survivor pid={pid}, "
-                f"survivor running at the bound={was_running}, "
-                f"reap finished after release={not thread.is_alive()}"
+                f"survivor running at the bound={was_running}, {measured}, "
+                f"reap finished after release={finished}"
             )
         self.assertTrue(
             armed_path.is_file(),
@@ -1264,12 +1292,34 @@ class EvaluationTests(unittest.TestCase):
         exit_code, stdout, stderr, timed_out = outcome["reaped"]
         self.assertIsNone(exit_code, "a timed-out gate must not report an exit code")
         self.assertTrue(timed_out, "the reap must report the run as timed out")
+        # Positive control for the premise: the survivor held the write ends until the
+        # test released them, so the reap cannot have returned before its own window
+        # passed. A reap that returns early never faced a held pipe and proved
+        # nothing.
+        elapsed = outcome["elapsed"]
+        self.assertGreaterEqual(
+            elapsed,
+            timeout + runner.PROCESS_TREE_REAP_SECONDS - 2.0,
+            f"the reap returned in {elapsed:.1f}s without consuming a reap window: the survivor "
+            "never held the gate's pipes, so the case proved nothing",
+        )
+        # The other half of the reap contract: the direct child is waited on, not
+        # merely killed, so its exit status is known before the reap returns.
+        self.assertEqual(len(recorded), 1, "the reap constructed an unexpected number of processes")
+        self.assertIsNotNone(
+            recorded[0].returncode,
+            "the reap returned without waiting on the direct child (returncode unset)",
+        )
         if os.name != "nt":
             # The POSIX reap reads chunks while it waits, so output captured before the
             # kill must come back with the timeout result. Windows `communicate`
             # cannot read a partial buffer out of a pipe that never reaches EOF, so
             # nothing is asserted there.
-            self.assertIn(b"gate-output-before-kill", stdout, "output captured before the reap was dropped")
+            self.assertEqual(
+                stdout,
+                b"gate-output-before-kill\n",
+                "the POSIX reap must return exactly the output captured before the kill",
+            )
 
     def test_symlink_targets_are_bound(self) -> None:
         run = self.root / "run-symlink"

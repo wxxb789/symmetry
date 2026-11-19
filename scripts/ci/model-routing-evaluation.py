@@ -1850,8 +1850,10 @@ def run_owned_command(
     On timeout the whole tree is terminated and reaped before returning, so a later
     gate never runs next to survivors that could write into the checkout. A
     descendant that escaped the owned group (or the platform process tree) and still
-    holds a pipe cannot be reached; that case keeps the captured partial output and
-    marks the run timed out instead of hanging the runner.
+    holds a pipe cannot be reached; that case marks the run timed out instead of
+    hanging the runner, keeping the output the POSIX reap read before the kill (a
+    Windows reader publishes pipe data only at EOF, so there the capture a survivor
+    keeps open comes back empty).
     """
     created: dict[str, Any] = {}
     if os.name == "nt":
@@ -1871,11 +1873,21 @@ def run_owned_command(
         try:
             stdout, stderr = process.communicate(timeout=PROCESS_TREE_REAP_SECONDS)
         except subprocess.TimeoutExpired as lingering:
-            stdout += lingering.stdout or b""
-            stderr += lingering.stderr or b""
+            # POSIX `communicate` keeps every window's bytes in one buffer and reports
+            # them all from the second timeout, so the capture is assigned, never
+            # appended; the first window's value is the fallback for a platform whose
+            # timeout carries no partial output (Windows).
+            stdout = lingering.stdout or stdout
+            stderr = lingering.stderr or stderr
             # A descendant the tree kill missed can still hold the pipe write ends,
-            # so the reap must not close or wait on the pipes: the final handle
-            # close is left to process exit and only the direct child is waited on.
+            # so the reap never waits on the pipes: only the direct child is killed
+            # and waited on, within its own bounded window. POSIX then closes the
+            # read ends, because its `communicate` reads on this thread and the close
+            # cannot queue behind the survivor, while the finalizer close at return
+            # would emit `ResourceWarning: unclosed file`. Windows keeps them open:
+            # a close there queues behind the reader thread parked in the pipe, and
+            # that thread closes the stream once the survivor releases the write
+            # ends, or process exit does.
             try:
                 process.kill()
             except OSError:
@@ -1884,6 +1896,12 @@ def run_owned_command(
                 process.wait(timeout=PROCESS_TREE_REAP_SECONDS)
             except subprocess.TimeoutExpired:
                 pass
+            if os.name != "nt":
+                for stream in (process.stdout, process.stderr):
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
         return None, stdout, stderr, True
 
 

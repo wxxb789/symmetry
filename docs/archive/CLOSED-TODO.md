@@ -265,26 +265,35 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
 
       **Closed (2026-11-19, `fix/eval-runner-windows-reap`, PR #100):** the lingering reap never
-      touches a blocked pipe. `run_owned_command` reaps a timed-out gate with the bounded
+      waits on a blocked pipe. `run_owned_command` reaps a timed-out gate with the bounded
       `communicate(timeout=PROCESS_TREE_REAP_SECONDS)` plus `kill` and a bounded `wait` on the
-      direct child and leaves the pipes' final handle close to process exit, so a descendant that
-      escaped the tree kill (or the platform process tree) can hold the inherited write ends
-      without extending the reap; the call still returns the output captured so far with
-      `timed_out=True`. The regression case
+      direct child, so a descendant that escaped the tree kill (or the platform process tree) can
+      hold the inherited write ends without extending the reap; the call returns `timed_out=True`
+      with the output the POSIX reap read before the kill, while a Windows capture comes back
+      empty when a survivor holds the pipes (`communicate` there publishes a reader's pipe data
+      only at EOF). In the lingering branch the reap then closes its read ends on POSIX, where
+      `communicate` reads on the calling thread so the close cannot queue behind the survivor and
+      the finalizer close at return would emit `ResourceWarning: unclosed file`; Windows keeps
+      them open, where a close queues behind the reader thread parked in the pipe, and that
+      thread closes the stream once the survivor releases the write ends, or process exit does.
+      The regression case
       `EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes` spawns a
       gate whose descendant inherits stdout/stderr and outlives the kill (the kill is narrowed to
-      the direct child, exactly the descendant `taskkill /T` misses), asserts the reap returns
-      within one window (`timeout + PROCESS_TREE_REAP_SECONDS + 5s`), reports the timeout, keeps
-      the output the POSIX reap captured before the kill, and terminates the survivor: red on the
-      pre-fix runner (`py -3.12 scripts/ci/test-model-routing-evaluation.py
+      the direct child, so the survivor is missed, standing in for a descendant that escapes
+      `taskkill /T`), asserts the reap consumes its window (measured duration at least `timeout +
+      PROCESS_TREE_REAP_SECONDS - 2s`) and returns within the code's documented worst case
+      (`timeout + 2 * PROCESS_TREE_REAP_SECONDS + 5s`, with the failure message reporting the
+      measured duration), that the direct child was waited on, reports the timeout, and on POSIX
+      returns exactly the output captured before the kill, and terminates the survivor: red on
+      the pre-fix runner (`py -3.12 scripts/ci/test-model-routing-evaluation.py
       EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes -v` ->
-      "run_owned_command did not return within 17.0s while a survivor held the gate's pipes: ...
-      survivor running at the bound=True, reap finished after release=True", FAILED (failures=1)
-      in 23.320s), green after (OK in 16.273s); the focused descendant test passes on Windows (OK
-      in 27.533s) and both tests pass under WSL Ubuntu `python3` (OK in 26.323s), with the full
-      Windows suite passing (`py -3.12 scripts/ci/test-model-routing-evaluation.py -v` -> Ran 66
-      tests in 1279.615s, OK, skipped=2: the POSIX-only executable-mode and non-UTF-8 path
-      fixtures).
+      "run_owned_command did not return within 27.0s while a survivor held the gate's pipes: ...
+      survivor running at the bound=True, reap finished 27.8s after the call started, reap
+      finished after release=True", FAILED (failures=1) in 29.787s), green after (OK in 14.440s);
+      the focused descendant test passes on Windows (OK in 17.520s) and both tests pass under WSL
+      Ubuntu `python3` (OK in 24.206s), with the full Windows suite passing (`py -3.12
+      scripts/ci/test-model-routing-evaluation.py -v` -> Ran 66 tests in 1167.657s, OK,
+      skipped=2: the POSIX-only executable-mode and non-UTF-8 path fixtures).
 
 ## Dead-code candidates
 
