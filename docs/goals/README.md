@@ -172,8 +172,9 @@ usage branch, so the increment records `cost_microusd: null` and
 `zero_or_not_billed_established: false`; billable-usage accounting stays
 unverified, Azure DevOps effects were not run, and the two pre-existing Control
 gate failures (a repo-wide `mix format --check-formatted` divergence and a stale
-`JsonDocument` alias under `--warnings-as-errors`) remain recorded in
-`docs/TODO.md`.
+`JsonDocument` alias under `--warnings-as-errors`) were recorded in
+`docs/TODO.md`; the stale `JsonDocument` alias was removed and closed in
+`docs/archive/CLOSED-TODO.md` (2026-11-19).
 
 Goal [0006f](archive/0006f-pi-native-capability.md) completed its owner-scoped
 2026-11-14 Windows closure and is archived. The exact pi `1.5.2` Windows
