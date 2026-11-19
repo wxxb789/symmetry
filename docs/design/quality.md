@@ -38,8 +38,8 @@ multi-agent orchestration is required by these files.
 
 The current CI has Elixir tests/release, Linux Go vet/tests/race tests, Windows
 tests, the wire-contract gate and daemon/control restart E2E. Preserve those
-gates. Frontend commands do not exist until goal 0007 builds `frontend/`; do not
-report them as run.
+gates. Frontend typecheck, lint, test and build exist since goal 0007 delivered
+`frontend/`; run them when a change touches it.
 
 Run CI for pull requests, pushes to `main`, tags, and manual dispatch; do not
 duplicate the full matrix on feature-branch pushes. PR evidence binds the tested
