@@ -769,6 +769,27 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `ubuntu-latest` (`.github/workflows/ci.yml:96`, steps at 134-139) — so its evidence above is
       local to this Windows host.
 
+- [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
+      `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
+      states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
+      classifier's skip list against the jobs that actually ran before treating the trim as
+      fully accepted.
+      Recorded (2026-11-19, branch `docs/runbook-quality-drift`): the first hosted docs-only
+      sample is PR #99's run `44540158144` — 10 job records (2 success, 8 skipped), 12 s
+      wall-clock (`14:06:18Z`–`14:06:30Z`) — and the trim revision's after runs (PR #28 run
+      `43724904655` attempt 2 and merge push `f47b0c3` run `43726189932`, both 12/12) are now
+      in the record's measurement table, with the status, clause-coverage and limits sections
+      updated. Cross-check: the workflow's classifier block over the pull request's
+      first-parent diff (the merge ref's `HEAD^1..HEAD`, the same five `docs/**` paths)
+      reports `run-heavy=false` and `run-records=false`, which predicts the executed set
+      exactly — `changes` and the ungated `legacy-route-audit` ran; the seven
+      `run-heavy`-gated jobs and `record-cleanliness` were skipped. Evidence: `gh run view
+      44540158144 --json jobs,createdAt,updatedAt`; `gh run view 43724904655 --attempt 1|2
+      --json jobs`; `gh run view 43726189932 --json jobs`; `python3
+      scripts/ci/model-routing-record-sanitize.py --check --root-only
+      docs/evidence/ci-process-trim-2026-11-15.md` exit 0; `bash
+      scripts/audit-no-legacy-routes.sh` exit 0 (1327 tracked files, 4 exclusions).
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover

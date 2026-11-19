@@ -1,9 +1,11 @@
 # CI process trim — 2026-11-15
 
-Status: locally verified workflow implementation; not fully accepted. Hosted
-after measurements and execution evidence are unavailable. Local checks bind
-the uncommitted workflow files based on the commit below, not that unchanged
-baseline commit as if it contained these edits.
+Status: locally verified workflow implementation with the hosted observations
+recorded below: the trim revision's after runs and the first docs-only sample
+are measured, and the classifier outputs cross-check the executed job set. One
+limit stays recorded at the end of this record (the legacy-route audit's target
+enumeration). Local checks bind the workflow files of the commit below, not
+that unchanged baseline commit as if it contained these edits.
 
 ## Subject and scope
 
@@ -121,7 +123,7 @@ numbers in the old workflow, determine whether these owners were retained.
 
 Read from `gh api repos/wxxb789/symmetry/actions/runs/<id>` and
 `.../jobs?per_page=100`, with the per-attempt run/jobs endpoints used to separate
-the predecessor's retry. These reads exited 0. There are fewer than 100 jobs,
+each retry. These reads exited 0. There are fewer than 100 jobs,
 so this query has no omitted jobs page. Wall-clock below is `updated_at` minus
 `created_at` for a completed run, including queueing, retry gaps and reruns.
 Job count means check records, not billed minutes or cumulative executions.
@@ -130,22 +132,37 @@ Job count means check records, not billed minutes or cumulative executions.
 | --- | --- | --- | --- | --- |
 | Merged predecessor PR #26 / `pull_request`, head `d881838b74d820e7ce158948c836321e443f957e` | [43720680428](https://github.com/wxxb789/symmetry/actions/runs/43720680428) | 2 / success | 12: 11 success, 1 skipped | 724 s (`13:45:46Z`–`13:57:50Z`) |
 | Merged predecessor commit `5c56c6098583677dabdf92681f7925a8e754b8cd` / `push` to `main` | [43721800117](https://github.com/wxxb789/symmetry/actions/runs/43721800117) | 1 / success | 12: 11 success, 1 skipped | 562 s (`13:58:36Z`–`14:07:58Z`) |
-| Current uncommitted workflow tree / PR | Missing: branch has 0 PRs | Not run | Not measured | Not measured |
+| Trim PR [#28](https://github.com/wxxb789/symmetry/pull/28) / `pull_request`, head `829478aa862138188566dff558d133d85920551e` | [43724904655](https://github.com/wxxb789/symmetry/actions/runs/43724904655) | 2 / success | 12: 12 success (attempt 2) | 806 s (`14:32:26Z`–`14:45:52Z`) |
+| Trim merge commit `f47b0c3e3e01e05a863eff9ae90ea852696305db` / `push` to `main` | [43726189932](https://github.com/wxxb789/symmetry/actions/runs/43726189932) | 1 / success | 12: 12 success | 493 s (`14:46:37Z`–`14:54:50Z`) |
+| First hosted docs-only sample: PR [#99](https://github.com/wxxb789/symmetry/pull/99) / `pull_request`, head `d6291417e831d921e862d019bdb97f57ae6c2a1a` | [44540158144](https://github.com/wxxb789/symmetry/actions/runs/44540158144) | 1 / success | 10: 2 success, 8 skipped | 12 s (`14:06:18Z`–`14:06:30Z`) |
 
-All timestamps are 2026-11-15 UTC. The predecessor PR's first attempt ended in
-failure after 478 s (`13:45:46Z`–`13:53:44Z`: 10 success, 1 failure, 1 skipped;
-`daemon-windows` failed). Its successful retry interval was 195 s
-(`13:54:35Z`–`13:57:50Z`). The latest jobs endpoint carries earlier successful
-jobs forward; only the Windows daemon job has new execution timestamps in that
-interval. Do not compare the 195 s retry alone against a full after workflow.
-The skipped native job has inconsistent start/end ordering in GitHub metadata;
-no per-job duration is derived from it.
+Predecessor timestamps are 2026-11-15 UTC and the docs-only sample is
+2026-11-19 UTC. The predecessor PR's first attempt ended in failure after 478 s
+(`13:45:46Z`–`13:53:44Z`: 10 success, 1 failure, 1 skipped; `daemon-windows`
+failed). Its successful retry interval was 195 s (`13:54:35Z`–`13:57:50Z`). The
+latest jobs endpoint carries earlier successful jobs forward; only the Windows
+daemon job has new execution timestamps in that interval. Do not compare the
+195 s retry alone against a full after workflow. The skipped native job has
+inconsistent start/end ordering in GitHub metadata; no per-job duration is
+derived from it.
 
-No after run exists for this tree, so no measured reduction is claimed. A PR
-containing workflow edits necessarily selects all automatic jobs, by design;
-it is not a documentation-only sample. Hosted docs-only routing additionally
-needs an actual docs-only PR after publication. Both observations are missing;
-the local classifier scenarios below do not pretend to be GitHub run metadata.
+The trim PR's first attempt ended in failure after 358 s
+(`14:32:26Z`–`14:38:24Z`: 11 success, 1 failure; `daemon` failed) and its
+successful retry interval was 408 s (`14:39:04Z`–`14:45:52Z`: 12 success); the
+merge push then succeeded in 493 s. Both after runs carried all 12 job records,
+by design: a PR containing workflow edits necessarily selects the full
+automatic matrix, and a push to `main` is never documentation-filtered. The
+first hosted docs-only sample is PR #99's run: 2 success (`changes`,
+`legacy-route-audit`), 8 skipped (`contracts`, `control`,
+`pi-control-e2e-windows`, `daemon`, `daemon-windows`, `integration` and
+`compose` gated on `run-heavy=false`; `record-cleanliness` gated on
+`run-records=false`), 12 s wall-clock. Cross-check: running the workflow's
+classifier block over the pull request's first-parent diff (the merge ref's
+`HEAD^1..HEAD`, the same five `docs/**` paths) reports `run-heavy=false` and
+`run-records=false`, which predicts exactly that executed/skipped split, and
+the ungated `legacy-route-audit` explains the second executed job. The local
+classifier scenarios below are not a substitute for these GitHub run metadata
+rows.
 
 ## Current native dispatch entry point
 
@@ -264,15 +281,19 @@ add state/permissions and weaken exact-Subject locality.
   and frontend/contracts prerequisite preserved. Schedule remains unsupported
   by the existing source guard, not silently enabled or simulated.
 - Redundancy: 0 jobs deleted; four candidate owners and all opt-in/no-skip
-  assertions remain. Their disposition is in this record because no PR exists.
+  assertions remain. Their disposition is recorded in this record.
 - Release reuse: one automatic Linux production-release build; both archive
-  consumers verified locally. Full hosted release startup, migration, browser
-  rendering and integration witnesses for this tree remain unrun.
+  consumers verified locally. The published tree's full hosted runs above
+  executed the shared-release startup and migration (Control and integration
+  jobs), the authenticated release-shell render step and the live
+  daemon/integration witnesses; the docs-only row proves the routing side.
 - Lockfiles: existing package-manager verification retained; no matching
   registry-URL grep found in the audited workflow/script scope.
 - Measurements: predecessor PR and merged-commit run IDs/times are measured;
-  current-tree after run and a hosted docs-only sample are missing. No speedup
-  or cost reduction is claimed without them.
+  the trim revision's after runs (PR #28 retry and merge push `f47b0c3`, both
+  12/12) and the first hosted docs-only sample (PR #99, 2 executed / 8 skipped,
+  classifier cross-checked) are recorded above. No generalized speedup or cost
+  reduction is claimed.
 - Audit-surface limit: the existing legacy-route script explicitly enumerates
   `ci.yml`, not the newly separate native workflow. The moved native block has
   no retired-route literal; its future route edits would not be covered by that
@@ -280,7 +301,10 @@ add state/permissions and weaken exact-Subject locality.
   exact workflow/evidence-only diff boundary; no duplicate regex or source-text
   rewriting workaround was introduced.
 
-The increment is not fully accepted: hosted after measurements and execution
-proof are absent. No commit, push, PR creation, history rewrite, remote policy
-change or goal-contract archive was performed. The external contract artifact
-was not moved; this record is the permitted implementation-stage handoff.
+The hosted-measurement and execution-proof clause is satisfied by the rows
+above: both after runs passed all 12 job records and the docs-only sample
+matches the classifier outputs. The audit-surface limit recorded in this
+section stays outside this increment's workflow/evidence scope. At authoring
+time no commit, push, PR creation, history rewrite, remote policy change or
+goal-contract archive had been performed; publication followed as PR #28. The
+external contract artifact was not moved.

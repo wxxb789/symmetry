@@ -87,12 +87,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       shows the importer's wait event, whether it waited on the delivery transaction, and
       whether the delivery backend held `work_items`.
 
-- [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
-      `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
-      states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
-      classifier's skip list against the jobs that actually ran before treating the trim as
-      fully accepted.
-
 - [ ] Revalidate the unreachable resource synchronization states. `project_resources` has a
       `project_resources_sync_status_check` constraint admitting `syncing` and `stale`, and
       `SymmetryControl.Workspaces.ReadModel` maps them to `syncing`/`attention` labels, but no
