@@ -32,6 +32,7 @@ HOST_PATHS = (
     r"C:\Users\operator\AppData\Local\Temp\symmetry-0008b-probe",
     "C:/Users/operator/project",
     r"\\server\share\records",
+    r"\\?\C:\Users\operator\run",
     "/home/operator/state/run-7f3m2q",
     "/Users/operator/Library/Caches/tmp",
     "/root/omp-native-acceptance",
@@ -58,7 +59,24 @@ QUOTED_HOST_PATHS = (
     "opened file:///C:/Users/operator/run today",
     "opened file:///home/operator/x today",
     "root " + _BS + _FS + "Users" + _BS + _FS + "operator" + _BS + _FS + "x kept",
+    # A `file:` URL whose location is spelled with backslashes: single (a legitimate
+    # file-URL form), JSON-escaped, and device-prefixed.
+    "store file:" + _BS + "server" + _BS + "share" + _BS + "records",
+    '{"src":"file:' + _BS * 2 + "server" + _BS + "share" + _BS + "0008d" + '"}',
+    '{"src":"file:' + _BS * 4 + "server" + _BS * 2 + "share" + _BS * 2 + "run" + '"}',
+    "store file:" + _BS + "tmp" + _BS + "x",
+    "handle " + _BS * 2 + "?" + _BS + "C:" + _BS + "Users" + _BS + "operator" + _BS + "run",
+    '{"handle":"file:' + _BS * 4 + "?" + _BS * 2 + "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + '"}',
+    # A location spelled after a key's colon, and a naive separator doubling.
+    "root:/home/operator/state/run",
+    "root:C:" + _BS + "Users" + _BS + "operator" + _BS + "run",
+    "state under /tmp//symmetry-0008d-run and /home//operator/x",
 )
+
+# The fragments that must not survive rendering of the prefixed/escaped forms above:
+# a partial render (`path-sha256:<hex>:\Users\operator`) would still pass a
+# "changed and contains a token" assertion, but it republishes part of the path.
+QUOTED_HOST_PATH_FRAGMENTS = ("C:", "Users", "operator", "home", "server", "share", "tmp")
 
 
 def digest_of(path):
@@ -133,6 +151,8 @@ class SanitizeTextTests(unittest.TestCase):
                 rendered = MODULE.sanitize_text(text, [], root_only=True)
                 self.assertNotEqual(rendered, text)
                 self.assertIn("path-sha256:", rendered)
+                for fragment in QUOTED_HOST_PATH_FRAGMENTS:
+                    self.assertNotIn(fragment, rendered, text)
                 # Rendering stays idempotent even with the quoted forms.
                 self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
 
@@ -223,6 +243,27 @@ class SanitizeCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, path)
             self.assertEqual(result.stdout, "", path)
             self.assertIn("refused", result.stderr)
+
+    def test_cli_refuses_a_record_that_does_not_decode_as_utf8(self):
+        # Checked as mojibake, either spelling of a UTF-16 record's host path would pass:
+        # its ASCII characters interleave NULs (valid UTF-8, invisible to a contiguous
+        # pattern) and a BOM-led record does not decode at all. The tool refuses the
+        # bytes instead, in both the check and the render path.
+        with tempfile.TemporaryDirectory() as tmp:
+            body = '{"root":"/tmp/symmetry-0008d-eval"}\n'
+            for name, payload in (("nul-laden", body.encode("utf-16-le")),
+                                  ("bom-led", b"\xff\xfe" + body.encode("utf-16-le"))):
+                path = pathlib.Path(tmp) / f"recorded-{name}.json"
+                path.write_bytes(payload)
+                for arguments in (["--check", "--root-only"], ["--check"], []):
+                    with self.subTest(payload=name, arguments=arguments):
+                        result = subprocess.run(
+                            [sys.executable, str(SCRIPT), *arguments, str(path)],
+                            capture_output=True, check=False,
+                        )
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertEqual(result.stdout, b"")
+                        self.assertIn("refused", result.stderr.decode("utf-8"))
 
     def test_cli_root_only_check_refuses_quoted_host_paths(self):
         for text in QUOTED_HOST_PATHS:
