@@ -682,3 +682,42 @@ The blocks below were moved on 2026-11-19.
       receipts stay verifiable against the revision tagged `0008b-produced-tooling` and fail closed
       on submission under the current runner by design; a submission that requires current bytes
       re-executes the runs.
+
+## Record and documentation hygiene
+
+- [ ] Decide whether record cleanliness needs an enforced gate, and keep the sanitising
+      tool's argv/output scope with the 0008a re-publish. `scripts/ci/model-routing-record-sanitize.py`
+      exposes `--check` (write nothing; exit 1 while a host absolute path remains), but no CI
+      step invokes it: CI runs only the unit suite
+      (`python3 ../scripts/ci/test-model-routing-record-sanitize.py`,
+      `.github/workflows/ci.yml:1138`), so published-record cleanliness rests on those unit
+      tests (`--check` cases at `scripts/ci/test-model-routing-record-sanitize.py:89-98`)
+      plus the manual render step documented at `docs/evaluations/model-routing/README.md:163`.
+      The README already scopes the renderer to argv/output capture, which is also its safety
+      boundary: it rewrites every absolute path it finds, including path fixtures quoted
+      inside recorded prose — harmless for `argv`/`output` fields (the `path-sha256:<digest>`
+      token is a deterministic function of the path, so the rendered record stays reproducible
+      and unambiguously mapped; note `output_sha256` binds the rendered text, not the
+      pre-render bytes) but corrupting for an
+      explanation whose meaning depends on the quoted path. Decide whether to add a
+      `--check`-style gate over the committed records; the future 0008a re-publish should
+      repeat the argv/output-only scope and record any prose fixture it deliberately leaves
+      rendered.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the gate exists.
+      `scripts/ci/check-record-cleanliness.py` selects the records a revision range adds,
+      modifies or retypes under `docs/evaluations/**` and `docs/evidence/**` against an
+      explicit comparison base (the pull-request base commit, the pushed `before`, or the
+      `origin/main` merge base when the base is empty or all-zero) and runs the sanitize
+      tool's own `--check --root-only` on each selected record: the guard executes the tool
+      instead of re-implementing its patterns, and the root-only scope keeps the
+      argv/output-only boundary, leaving product routes and prose fixtures literal while host
+      paths still refuse. `.github/workflows/ci.yml` reports `run-records` from the existing
+      changed-path classifier and runs the `record-cleanliness` job whenever those paths or
+      the sanitize tool change, independently of the documentation-only fast path, so a
+      records-only pull request is exactly the change it checks;
+      `scripts/ci/test-check-record-cleanliness.py` (nine tests, observed `Ran 9 tests ...
+      OK`) pins the selection and the tool boundary and joins the model-routing suite in the
+      daemon job. The 0008a re-publish remains its own open entry in `docs/TODO.md`, with the
+      argv/output-only scope it asked for; each open item was moved separately, so this entry
+      carries no residual.

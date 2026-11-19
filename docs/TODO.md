@@ -707,25 +707,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
       record's quoted digest consistent when the older records are re-published.
 
-- [ ] Decide whether record cleanliness needs an enforced gate, and keep the sanitising
-      tool's argv/output scope with the 0008a re-publish. `scripts/ci/model-routing-record-sanitize.py`
-      exposes `--check` (write nothing; exit 1 while a host absolute path remains), but no CI
-      step invokes it: CI runs only the unit suite
-      (`python3 ../scripts/ci/test-model-routing-record-sanitize.py`,
-      `.github/workflows/ci.yml:1138`), so published-record cleanliness rests on those unit
-      tests (`--check` cases at `scripts/ci/test-model-routing-record-sanitize.py:89-98`)
-      plus the manual render step documented at `docs/evaluations/model-routing/README.md:163`.
-      The README already scopes the renderer to argv/output capture, which is also its safety
-      boundary: it rewrites every absolute path it finds, including path fixtures quoted
-      inside recorded prose — harmless for `argv`/`output` fields (the `path-sha256:<digest>`
-      token is a deterministic function of the path, so the rendered record stays reproducible
-      and unambiguously mapped; note `output_sha256` binds the rendered text, not the
-      pre-render bytes) but corrupting for an
-      explanation whose meaning depends on the quoted path. Decide whether to add a
-      `--check`-style gate over the committed records; the future 0008a re-publish should
-      repeat the argv/output-only scope and record any prose fixture it deliberately leaves
-      rendered.
-
 - [ ] Revalidate the stale 0008-series prerequisite text:
       `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
       and 0008c results" while the 0008b candidate policy is produced and awaiting
