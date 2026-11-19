@@ -99,18 +99,23 @@ export function retainServedPage(
 ): ChatScopeState {
   if (state.servedSource === source) return state;
   const page: ChatHistoryPage = { messages: served.messages, fetchBefore: null, nextBefore: served.nextBefore, fetchBeforeId: null };
-  // The retained chain hangs on the current page's boundary — the message its
-  // own `next_before` was signed from — so a re-signed token for the same
-  // boundary keeps the chain pointer where the reader's loads reached it. A
-  // page that proves no boundary falls back to the token, as a fetched page's
-  // own binding does.
+  // The retained chain hangs on the served page's boundary — its oldest
+  // message — so a re-signed token for the same boundary keeps the chain
+  // pointer where the reader's loads reached it. While either side lacks a
+  // boundary id (the first read has no previous page) the token bytes are
+  // compared instead, as a fetched page's own binding does.
   const servedBoundaryId = served.messages[0]?.id ?? null;
   const currentBoundaryId = state.pages[0]?.messages[0]?.id ?? null;
   const moved = servedBoundaryId !== null && currentBoundaryId !== null
     ? servedBoundaryId !== currentBoundaryId
     : served.nextBefore !== state.nextCursor;
-  const nextCursor = moved ? served.nextBefore : state.nextCursor;
-  const nextBoundaryId = moved ? served.messages[0]?.id ?? null : state.nextBoundaryId;
+  // A cursor the reader has not paged past still designates that boundary, so
+  // the token this response signed for it replaces the aging one; a cursor the
+  // reader's loads moved past names an older message the served page cannot
+  // re-sign, so it stays where the loads reached it.
+  const renew = !moved && servedBoundaryId !== null && state.nextBoundaryId === servedBoundaryId;
+  const nextCursor = moved || renew ? served.nextBefore : state.nextCursor;
+  const nextBoundaryId = moved ? servedBoundaryId : state.nextBoundaryId;
   return { ...state, pages: [page, ...state.pages.slice(1)], nextCursor, nextBoundaryId, servedSource: source };
 }
 

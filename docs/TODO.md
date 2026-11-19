@@ -565,4 +565,5 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       decision — the chat conversation keeps its keep-and-state treatment rather than unifying with
       the work history's and the attention feed's retirement — and the fixed pre-existing
       `retainServedPage` note (a moved boundary is now judged by the boundary message's id, not the
-      re-signed cursor's bytes).
+      re-signed cursor's bytes); a cursor the reader has paged past is not renewed by later serves
+      and still expires into a refusal after the server's 24-hour `max_age`.

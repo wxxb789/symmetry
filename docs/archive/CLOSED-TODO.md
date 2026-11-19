@@ -1523,11 +1523,14 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       a fetched page. Evidence: `frontend/src/features/chat/chat.test.tsx`'s "keeps the chain a
       refresh re-signs at the same boundary and restarts it at a moved one" was red on the previous
       bytes (`expected [ 'cursor-5', 'cursor-5-resigned' ] to deeply equal [ 'cursor-5',
-      'cursor-3' ]`) and passes on the delivered bytes, which also pin the moved-boundary restart
-      and the named skipped region; the chat suite passes (63 tests, `--no-file-parallelism`), with
-      `tsc --noEmit` and `eslint src/features/chat --max-warnings 0` exit 0 (full frontend eslint
-      rc 0 as well). The open residual — the CI browser suites' live-daemon pagination cases — stays
-      in `docs/TODO.md`.
+      'cursor-3' ]`), and the cursor renewal is red-first pinned beside it: "renews the served
+      cursor at an unchanged boundary only while the reader has not paged past it" was red on the
+      fix's first bytes (`expected [ 'cursor-5' ] to deeply equal [ 'cursor-5-resigned' ]`). Both
+      pass on the delivered bytes, which also pin the moved-boundary restart, the renewal stopping
+      at a cursor the reader has paged past, and the named skipped region; the chat suite passes
+      (64 tests, `--no-file-parallelism`), with `tsc --noEmit` and `eslint src/features/chat
+      --max-warnings 0` exit 0 (full frontend eslint rc 0 as well). The open residual — the CI
+      browser suites' live-daemon pagination cases — stays in `docs/TODO.md`.
 
 ## Deferred review findings (0007g)
 
