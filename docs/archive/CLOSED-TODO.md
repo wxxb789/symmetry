@@ -141,6 +141,39 @@ not a claim that work remains.
       child liveness in `internal/execution` (`runner_windows_test.go`, its own
       `windowsProcessExists`); it produced none of today's failures and was not touched here.
 
+- [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
+      the 0007d fixture database, 10 control tests fail because committed fixture rows are
+      visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
+      controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
+      on a clean dedicated test database. The browser harness recreates its own database;
+      the suite should use the repository default (`symmetry_control_test`).
+      **Closed (2026-11-19, `fix/mix-test-db-guard`):** `mix test` and the test-environment
+      `ecto.create`/`ecto.migrate`/`ecto.drop` commands now refuse a browser acceptance
+      database before any storage task can touch PostgreSQL.
+      `control/lib/mix/tasks/symmetry.check_test_db.ex` is the first step of the `test` alias
+      and of the three Ecto aliases in `control/mix.exs`; a step that names the overridden
+      task runs the real task, so flag passing is unchanged, and the task is a no-op outside
+      the test environment, so the harnesses keep recreating their own databases from the
+      development environment. The guard reads the effective database from the repository
+      configuration — `config/test.exs` appends `MIX_TEST_PARTITION`, so a partition suffix
+      cannot turn a refused name into an allowed one — and refuses the databases the browser
+      harnesses own (`symmetry_0007c_test`, `symmetry_0007d_test`, `symmetry_0007e_test`).
+      Unit-tested in `control/test/mix/tasks/symmetry_check_test_db_test.exs`.
+      Verified on 2026-11-19: `MIX_TEST_PARTITION=16 POSTGRES_DB=symmetry_0007d_test mix test
+      test/mix/tasks/symmetry_check_test_db_test.exs` exits 1 with the Mix error naming the
+      effective `symmetry_0007d_test16`, both against a live PostgreSQL and against an
+      unreachable `POSTGRES_PORT=1` — the refusal precedes any connection — and
+      `POSTGRES_DB=symmetry_0007e_test` refuses the same way; `MIX_ENV=test` `mix ecto.create`/
+      `mix ecto.migrate`/`mix ecto.drop` refuse for both names, and `pg_database` holds no
+      `symmetry_0007*` database after those runs. With `POSTGRES_DB` unset,
+      `MIX_TEST_PARTITION=16 mix test test/mix/tasks/symmetry_check_test_db_test.exs` creates
+      and migrates `symmetry_control_test16` and reports `Result: 7 passed` (exit 0);
+      `mix format --check-formatted` and `mix compile --warnings-as-errors` pass. In the
+      development environment the guard is a no-op: with `POSTGRES_DB=symmetry_0007e_test` and
+      an unreachable port the real `mix ecto.create` reaches the adapter with no refusal, and
+      `POSTGRES_DB=symmetry_guardmix_probe_dev mix ecto.create --quiet` followed by
+      `mix ecto.drop --quiet` both exit 0 and leave no probe database.
+
 ## Deferred review findings (0007h)
 
 *Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the open residual stays there.*

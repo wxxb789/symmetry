@@ -289,13 +289,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       instead of one. `Command.run/3` and the test itself are untouched by 0007d.
       Revalidate the Windows shell resolution; keep the assertion.
 
-- [ ] Keep `mix test` off the portal acceptance database. With `POSTGRES_DB` pointing at
-      the 0007d fixture database, 10 control tests fail because committed fixture rows are
-      visible to suite-level aggregates (`sync_all_resources/0`, workspace and portal
-      controller reads): 819/829 passed / 10 failed there versus 828/829 passed / 1 failed
-      on a clean dedicated test database. The browser harness recreates its own database;
-      the suite should use the repository default (`symmetry_control_test`).
-
 - [ ] Revalidate the load-sensitive `portal.spec.mjs` desktop cases. In the 0007d fix round's
       legacy run (two fixture servers on one host, 31 passed / 2 failed / 7 skipped), "detail
       output encodes untrusted statuses and rejects unsafe links" timed out on its project-create
