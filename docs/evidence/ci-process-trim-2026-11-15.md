@@ -248,9 +248,11 @@ same Python classifier with substituted NUL-delimited Git output: newline and
 non-UTF-8 paths, 5,000 documentation files and code after those files. The
 negative Git failure emitted no passing bypass output. The official Actions
 expression library evaluated the actual output/job expressions for those 28
-PR cases and six push/manual input combinations, across 10 gated job owners.
-The final shape has those 10 heavy owners and one unconditional legacy-route
-audit; the harness also compares that audit's complete job to the baseline.
+PR cases and six push/manual input combinations — 34 scenarios — against all
+11 automatic owners, the 10 gated heavy owners plus the unconditional
+legacy-route audit, which is the 374 evaluations above. The final shape has
+those 10 heavy owners and one unconditional legacy-route audit; the harness
+also compares that audit's complete job to the baseline.
 
 The carrier proof ran the actual workflow tar creation/extraction commands in
 Ubuntu-24.04 WSL, checking both consumer directories, executable mode `0751`,

@@ -1359,7 +1359,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       in `docs/TODO.md`, with the argv/output-only scope it asked for; each open item was moved
       separately, so this entry carries no residual.
 
-*Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stays there.*
+*Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #99).*
 
       Third pass (the `gpt-6.2-sol` findings, each re-verified against its
       artifact). Closed by restating them against their owners rather than
@@ -1495,8 +1495,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
       convention paragraph itself (it restates the precedence the design and
       protocol documents already carry).
-      Revalidated in full (2026-11-19, branch `docs/runbook-quality-drift`): every claim above
-      was rechecked against its owner, and the claim | owner | verdict | change table with each
+      Revalidated in full (2026-11-19, branch `docs/runbook-quality-drift`): every claim named
+      below was rechecked against its owner, and the claim | owner | verdict | change table with each
       owner's current file:line is in the PR body — the CI inventory sentence against
       `.github/workflows/ci.yml:1171-1346` (`daemon`: gofmt, `go vet`, the scoped ordinary
       pass and the full `-race` pass) and `:1357-1474` (`daemon-windows`: `go test ./...`
@@ -1522,7 +1522,11 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       and `probe.go:242`; the installed-owner vocabulary against
       `docs/design/quality.md:80-85` (OpenCode side: `registry.go:154`,
       `harness.md:82,120`); and the docs-index
-      convention against `AGENTS.md:24-26`. Both edited runbooks now name their owner file
+      convention against `AGENTS.md:24-26`. `portal.md`'s `playwright-report/` location and its CSRF
+      sentence were rechecked the same way and still match their owners
+      (`browser/playwright.config.mjs:6-7,20` for the result and report directories; Plug 1.20.3's
+      `@unprotected_methods ~w(HEAD GET OPTIONS)` for the read exemption, `control/mix.lock`).
+      Both edited runbooks now name their owner file or package
       (`daemon/e2e/core_test.go` in `control-plane-and-daemon.md`; `daemon/internal/harness/pi`
       in `connections.md`). Evidence: the owner reads above plus the docs-only hosted CI run on
       this branch; no suite beyond that is required for a docs-only diff.
@@ -1611,7 +1615,8 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       Fixed (2026-11-19, branch `docs/runbook-quality-drift`): the *Commands and gates* TS row no
       longer frames the frontend commands as a goal-0007 target or asks for a browser-runner pnpm
       migration; it now states the delivered reality — commands owned by `frontend.md`, run by CI in
-      the `contracts` job (`.github/workflows/ci.yml:107-110`), with the browser runner already pnpm
+      the `contracts` job (`.github/workflows/ci.yml:107-110`; the item's `:67-70` was stale), with
+      the browser runner already pnpm
       (`.github/workflows/ci.yml:618`). Line 41 was already corrected on main by `f2a759f`; this
       change corrects :116, and `rg -n 'goal 0007 target|do not exist until goal 0007'
       docs/design/quality.md` is empty on the committed bytes.
