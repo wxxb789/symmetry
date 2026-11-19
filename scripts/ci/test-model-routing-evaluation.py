@@ -1184,10 +1184,7 @@ class EvaluationTests(unittest.TestCase):
                 return None
             return int(pid_path.read_text(encoding="utf-8"))
 
-        def terminate_survivor() -> None:
-            pid = survivor_pid()
-            if pid is None:
-                return
+        def kill_pid(pid: int) -> None:
             if os.name == "nt":
                 subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
             else:
@@ -1195,6 +1192,11 @@ class EvaluationTests(unittest.TestCase):
                     os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
+        def terminate_survivor() -> None:
+            pid = survivor_pid()
+            if pid is not None:
+                kill_pid(pid)
 
         def survivor_running(pid: int) -> bool:
             if os.name == "nt":
@@ -1214,10 +1216,7 @@ class EvaluationTests(unittest.TestCase):
             # The tree kill this replaces cannot reach the survivor; killing only the
             # direct child leaves the inherited write ends with the survivor exactly as
             # a descendant that escaped `taskkill /T` would.
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/PID", str(process.pid)], capture_output=True, check=False)
-            else:
-                os.kill(process.pid, signal.SIGKILL)
+            kill_pid(process.pid)
 
         original = runner.terminate_owned_process_tree
         runner.terminate_owned_process_tree = parent_only_kill
@@ -1231,11 +1230,9 @@ class EvaluationTests(unittest.TestCase):
         outcome: dict = {}
 
         def reap() -> None:
-            started = time.monotonic()
             outcome["reaped"] = runner.run_owned_command(
                 [sys.executable, "-c", gate_code], str(self.root), timeout
             )
-            outcome["elapsed"] = time.monotonic() - started
 
         thread = threading.Thread(target=reap, daemon=True)
         thread.start()
@@ -1244,8 +1241,8 @@ class EvaluationTests(unittest.TestCase):
             pid = survivor_pid()
             was_running = pid is not None and survivor_running(pid)
             # Release the survivor (and with it the pipes) so the reaping thread can
-            # finish rather than being abandoned mid-close, then fail on the elapsed
-            # evidence the guard collected.
+            # finish rather than being abandoned mid-close, then fail on the evidence
+            # the guard collected.
             terminate_survivor()
             thread.join(30)
             self.fail(
@@ -1267,12 +1264,6 @@ class EvaluationTests(unittest.TestCase):
         exit_code, stdout, stderr, timed_out = outcome["reaped"]
         self.assertIsNone(exit_code, "a timed-out gate must not report an exit code")
         self.assertTrue(timed_out, "the reap must report the run as timed out")
-        self.assertLessEqual(
-            outcome["elapsed"],
-            bound,
-            f"the reap must not extend past {bound:.1f}s while a survivor holds the pipes; "
-            f"it took {outcome['elapsed']:.1f}s",
-        )
         if os.name != "nt":
             # The POSIX reap reads chunks while it waits, so output captured before the
             # kill must come back with the timeout result. Windows `communicate`

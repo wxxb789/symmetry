@@ -264,27 +264,27 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       process exit, so a pipe-holding survivor can never extend the reap; add a regression case
       with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
 
-      **Closed (2026-11-19, `fix/eval-runner-windows-reap`, PR #100):** the lingering reap no
-      longer touches a blocked pipe. `run_owned_command` releases a timed-out gate's read ends
-      through `close_lingering_read_ends`, which closes each `communicate` stream from its own
-      daemon thread and never joins them, so a descendant that escaped the tree kill (or the
-      platform process tree) can hold the inherited write ends without extending the reap; the
-      reap itself stays the bounded `communicate(timeout=PROCESS_TREE_REAP_SECONDS)` plus
-      `kill`/`wait` on the direct child and still returns the output captured so far with
+      **Closed (2026-11-19, `fix/eval-runner-windows-reap`, PR #100):** the lingering reap never
+      touches a blocked pipe. `run_owned_command` reaps a timed-out gate with the bounded
+      `communicate(timeout=PROCESS_TREE_REAP_SECONDS)` plus `kill` and a bounded `wait` on the
+      direct child and leaves the pipes' final handle close to process exit, so a descendant that
+      escaped the tree kill (or the platform process tree) can hold the inherited write ends
+      without extending the reap; the call still returns the output captured so far with
       `timed_out=True`. The regression case
       `EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes` spawns a
       gate whose descendant inherits stdout/stderr and outlives the kill (the kill is narrowed to
       the direct child, exactly the descendant `taskkill /T` misses), asserts the reap returns
       within one window (`timeout + PROCESS_TREE_REAP_SECONDS + 5s`), reports the timeout, keeps
       the output the POSIX reap captured before the kill, and terminates the survivor: red on the
-      pre-fix runner (`python scripts/ci/test-model-routing-evaluation.py
+      pre-fix runner (`py -3.12 scripts/ci/test-model-routing-evaluation.py
       EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes -v` ->
       "run_owned_command did not return within 17.0s while a survivor held the gate's pipes: ...
       survivor running at the bound=True, reap finished after release=True", FAILED (failures=1)
-      in 19.339s), green after (OK in 16.723s); the focused descendant test passes on Windows (OK
-      in 19.982s) and both tests pass under WSL Ubuntu `python3` (OK in 24.162s), with the full
-      Windows suite passing (`python scripts/ci/test-model-routing-evaluation.py` -> Ran 66 tests
-      in 1165.380s, OK, skipped=2: the POSIX-only executable-mode and non-UTF-8 path fixtures).
+      in 23.320s), green after (OK in 16.273s); the focused descendant test passes on Windows (OK
+      in 27.533s) and both tests pass under WSL Ubuntu `python3` (OK in 26.323s), with the full
+      Windows suite passing (`py -3.12 scripts/ci/test-model-routing-evaluation.py -v` -> Ran 66
+      tests in 1279.615s, OK, skipped=2: the POSIX-only executable-mode and non-UTF-8 path
+      fixtures).
 
 ## Dead-code candidates
 
