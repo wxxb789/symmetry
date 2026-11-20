@@ -57,11 +57,11 @@ Both proofs for the deleted symbol, verbatim:
 
 ```
 $ deadcode -test ./cmd/... | grep ValidateRequired
-internal\harness\registry.go:216:6: unreachable func: Registry.ValidateRequired     # windows/amd64
+internal\harness\registry.go:216:27: unreachable func: Registry.ValidateRequired     # windows/amd64
 $ GOOS=linux GOARCH=amd64 deadcode -test ./cmd/... | grep ValidateRequired
-internal/harness/registry.go:216:6: unreachable func: Registry.ValidateRequired     # linux/amd64
+internal/harness/registry.go:216:27: unreachable func: Registry.ValidateRequired     # linux/amd64
 $ GOOS=linux GOARCH=arm64 deadcode -test ./cmd/... | grep ValidateRequired
-internal/harness/registry.go:216:6: unreachable func: Registry.ValidateRequired     # linux/arm64
+internal/harness/registry.go:216:27: unreachable func: Registry.ValidateRequired     # linux/arm64
 $ git grep -nw -- ValidateRequired
 daemon/internal/harness/registry.go:215:// ValidateRequired probes one adapter and checks operation requirements.
 daemon/internal/harness/registry.go:216:func (registry *Registry) ValidateRequired(ctx context.Context, kind Kind, required ...Capability) (Capabilities, error) {
@@ -83,14 +83,14 @@ linux/arm64.
 | surface | deadcode membership | `git grep -nw` references | disposition |
 | --- | --- | --- | --- |
 | `Registry.ValidateRequired` (`harness/registry.go:216`) | yes · yes · yes | definition + doc comment only | **deleted** |
-| `NewOperatorClient` (`control/client.go:485`) | yes · yes · yes | 16: `e2e/core_test.go:696`, `e2e/production_linux_containment_witness_test.go:2046`, `control/client.go` ×2, `client_review_test.go` ×6, `client_test.go` ×6 | kept (amendment exclusion; e2e/witness callers) |
-| `OperatorClient.SubmitTask` `:987`, `.GetTask` `:999`, `.CreateTaskCommand` `:1015`, `.operatorRequest` `:1121`, `.operatorRequestWithStatus` `:1125` | yes · yes · yes | call sites inside `control/client.go:989`, `:1004`, `:1027` and in the e2e files/tests above | kept (same family) |
-| `WithMaxResponseBytes` (`control/client.go:99`) | yes · yes · yes | 6: `app/pi_provider_bridge_test.go:409` (oversized-response case of the live `NewClient`), `control/client_test.go:420`, `provider_action_client_test.go:425` | kept (live test seam) |
-| `validateTaskResponse` `:209`, `validateTaskCommandRequest` `:281`, `validateTaskCommandResponse` `:302`, `validateTaskWaiting` `:334`, `sameCommandPayload` `:441`, `isTaskState` `:611`, `requiresTaskRun` `:629` (`control/validation.go`) | yes · yes · yes | call sites `control/client.go:992`, `:1007`, `:1022`, `:1034` (inside the dead operator client) and `control/supervisory_validation_test.go:39,43,48,55,107,125,129,148,152` | kept (amendment exclusion; a live sibling shares the file) |
-| `Task.UnmarshalJSON/HasField`, `TaskWaiting.UnmarshalJSON/HasField` (`protocol/protocol.go`) | yes · yes · yes | `protocol.Task` 65 references over 8 files (`e2e/core_test.go` 37, `control/client.go` 9, `e2e/production_linux_containment_witness_test.go` 9, `e2e/production_linux_containment_replay_witness_test.go` 4, `e2e/production_daemon_crash_witness_test.go` 2, `control/validation.go` 2, two control tests 1 each); `TaskWaiting` 8 (7 in `protocol/protocol.go`, 1 in `validation.go`) | kept (amendment exclusion; e2e/witness decoders) |
+| `NewOperatorClient` (`daemon/internal/control/client.go:485`) | yes · yes · yes | 16: `e2e/core_test.go:696`, `e2e/production_linux_containment_witness_test.go:2046`, `daemon/internal/control/client.go` ×2, `client_review_test.go` ×6, `client_test.go` ×6 | kept (amendment exclusion; e2e/witness callers) |
+| `OperatorClient.SubmitTask` `:987`, `.GetTask` `:999`, `.CreateTaskCommand` `:1015`, `.operatorRequest` `:1121`, `.operatorRequestWithStatus` `:1125` | yes · yes · yes | call sites inside `daemon/internal/control/client.go:989`, `:1004`, `:1027` and in the e2e files/tests above | kept (same family) |
+| `WithMaxResponseBytes` (`daemon/internal/control/client.go:99`) | yes · yes · yes | 6: `app/pi_provider_bridge_test.go:409` (oversized-response case of the live `NewClient`), `daemon/internal/control/client_test.go:420`, `provider_action_client_test.go:425` | kept (live test seam) |
+| `validateTaskResponse` `:209`, `validateTaskCommandRequest` `:281`, `validateTaskCommandResponse` `:302`, `validateTaskWaiting` `:334`, `sameCommandPayload` `:441`, `isTaskState` `:611`, `requiresTaskRun` `:629` (`daemon/internal/control/validation.go`) | yes · yes · yes | call sites `daemon/internal/control/client.go:992`, `:1007`, `:1022`, `:1034` (inside the dead operator client) and `daemon/internal/control/supervisory_validation_test.go:39,43,48,55,107,125,129,148,152` | kept (amendment exclusion; a live sibling shares the file) |
+| `Task.UnmarshalJSON/HasField`, `TaskWaiting.UnmarshalJSON/HasField` (`protocol/protocol.go`) | yes · yes · yes | `protocol.Task` 65 references over 8 files (`e2e/core_test.go` 37, `daemon/internal/control/client.go` 9, `e2e/production_linux_containment_witness_test.go` 9, `e2e/production_linux_containment_replay_witness_test.go` 4, `e2e/production_daemon_crash_witness_test.go` 2, `daemon/internal/control/validation.go` 2, two control tests 1 each); `TaskWaiting` 8 (7 in `protocol/protocol.go`, 1 in `validation.go`) | kept (amendment exclusion; e2e/witness decoders) |
 | `NewClaudeAdapterWithRunner` (`harness/registry.go:254`) | yes · yes · yes | 5: `app/harness_test.go:306`, `harness/harness_test.go:61`, `harness/claude_probe_test.go:96` (+2 in `registry.go`) | kept (test-referenced seam; W3-04 owns the probe/registry dedup) |
-| `launchLinuxV2Process` (`execution/linux_owner_v2_unsupported.go:12`) | **no** (windows only) · no · no | 4: real `linux && amd64` definition `linux_owner_v2_linux.go`, caller `process_launcher_linux.go:33`, test | kept (linux/arm64 builds against the stub; not an intersection member) |
-| `validateAcknowledgementResponse` (`control/validation.go:318`) | no · no · no | live caller `control/client.go:980` inside `Client.AcknowledgeCommand` | kept (production-live) |
+| `launchLinuxV2Process` (`execution/linux_owner_v2_unsupported.go:12`) | **yes** (windows only) · no · no | 4: real `linux && amd64` definition `linux_owner_v2_linux.go`, caller `process_launcher_linux.go:33`, test | kept (linux/arm64 builds against the stub; not an intersection member) |
+| `validateAcknowledgementResponse` (`daemon/internal/control/validation.go:318`) | no · no · no | live caller `daemon/internal/control/client.go:980` inside `Client.AcknowledgeCommand` | kept (production-live) |
 | root probe paths `probeCodexExecutableWithRunner` (`harness/registry.go:388`), `probeClaudeExecutable` (`:308`) | **no · no · no** | main-reachable through the default adapters (`NewCodexAdapter` `:374` → `NewCodexAdapterWithRunner` `:380` → `probeCodexExecutableWithRunner`; `NewClaudeAdapterWithExecutable` `:248` → `newClaudeAdapterWithRunner` → `probeClaudeExecutable`); plus `harness/codex_probe_test.go` ×5, `harness/claude_probe_test.go` ×12, and two docs citations | kept (neither proof holds; W3-04 owns delegation) |
 
 The remaining functions in the cited `validation.go:209-629` range

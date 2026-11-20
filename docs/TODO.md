@@ -50,9 +50,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (`daemon/internal/state/goal_session.go:1044`), `Store.EnsureGoalSessionLineageAvailable`
       (`:592`) and `Store.FailUnresolvedProvideInput` (`daemon/internal/state/state.go:4175`) are
       unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
-      alike, and `git grep -nw <symbol>` matches only each definition plus its doc comment — no
-      call site, no test, no doc citation anywhere. They were outside that sweep's owned file set;
-      reproduction is the three `deadcode` runs plus the grep, as recorded in the plan.
+      alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matches only each
+      definition plus its doc comment — no call site, no test, no doc citation anywhere; this
+      entry and the plan are the only matches added since. They were outside that sweep's owned
+      file set; reproduction is the three `deadcode` runs plus the baseline-scoped grep, as
+      recorded in the plan.
 
 - [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
       referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
@@ -62,12 +64,13 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `control.WithMaxResponseBytes` (`:99`) — callers `daemon/e2e/core_test.go:696`,
       `e2e/production_linux_containment_witness_test.go:2046`, the control tests, and
       `app/pi_provider_bridge_test.go:409` (the oversized-response case of the live `NewClient`);
-      the legacy task validators (`control/validation.go:209-629`) — kept live by
-      `control/client.go:992,:1007,:1022,:1034` and `control/supervisory_validation_test.go`;
+      the legacy task validators (`daemon/internal/control/validation.go:209-629`) — kept live by
+      `daemon/internal/control/client.go:992,:1007,:1022,:1034` and
+      `daemon/internal/control/supervisory_validation_test.go`;
       the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
-      `e2e/core_test.go`); `harness.NewClaudeAdapterWithRunner` (`registry.go:254`, three test
-      files) and the shadowed root probe paths `probeCodexExecutableWithRunner` (`:388`) and
-      `probeClaudeExecutable` (`:308`), which are still main-reachable through
+      `e2e/core_test.go`); `harness.NewClaudeAdapterWithRunner` (`registry.go:245`, three test
+      files) and the shadowed root probe paths `probeCodexExecutableWithRunner` (`:379`) and
+      `probeClaudeExecutable` (`:299`), which are still main-reachable through
       `NewCodexAdapter`/`NewClaudeAdapter` and belong to the probe/registry dedup instead.
       Removing any of them needs an owner for `daemon/e2e/**` and the app/control test seams.
 
