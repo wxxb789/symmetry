@@ -56,7 +56,8 @@ and this plan file.
 - **(c)** The entry records both directions of the change: the minted key (`agent:` for an absent
   name, `agent::unrecorded` for a recorded name equal to the legacy sentinel) and the surviving
   label path (`ownerKeyLabel` still labels `agent:unrecorded` "Agent" and `human:unrecorded`
-  "Human owner not recorded"), so the defect is stated as "chip renders, list is empty".
+  "Human owner not recorded"), so the defect is stated as "the Work owner select shows 'Agent (not
+  in this project)' above an empty list".
 - **(e)** Decision note, not a tracked item: there is no owner action to track (the limitation is
   this host's, the artifact is a workflow file that CI already executes), which matches the
   file's rule that a marker-less bullet is a decision note. The note carries the exact command,
@@ -64,15 +65,20 @@ and this plan file.
   (verified: a repository grep for `actionlint` matches `docs/` only), so a later reader does not
   infer a CI gate that does not exist.
 - **Quality rule** (contract clause 2): a change touching `frontend/` or `browser/` runs the local
-  browser render gate before its pull request; a change touching `daemon/`, Linux-specific or
-  platform-shared code, or `scripts/ci/` runs the affected suites on Linux (WSL or a Linux host)
-  before its pull request, while Windows-specific code runs on Windows; a path-triggered run that
-  cannot be executed stays pending, never passed. CI remains the floor, not the first execution of
-  browser-rendered or Linux-only behavior. The Windows clause narrows the contract's
-  "platform-specific code" wording so Windows-only code is not sent to a Linux run, and is flagged
-  for the owner. Named artifacts stay generic (no host paths, no machine names); the existing
-  "Run affected focused checks during development" sentence is left as is, and the amendment
-  states the path trigger it lacked.
+  browser render gate before its pull request; a change touching `daemon/`, platform-specific
+  code, or `scripts/ci/` runs the affected suites on the platform it targets before its pull
+  request opens — Linux via WSL or a Linux host; Windows-specific code natively on Windows; a
+  path-triggered run that cannot be executed stays pending, never passed; documentation-only
+  changes under these paths are exempt, per the `AGENTS.md` sentence "Do not require every
+  expensive suite for a documentation-only or unrelated local change". CI remains the floor, not
+  the first execution of browser-rendered or Linux-only behavior. The conductor, as the delegated
+  repo owner for this goal (2026-11-20), decided the two clauses the round-2 review flagged as
+  unconfirmed owner scope: the Windows clause narrowing the contract's "platform-specific code"
+  wording so Windows-only code is not sent to a Linux run, and the documentation-only exemption
+  citing `AGENTS.md` as its source rather than as new policy; the interim wording that swept shared
+  cross-platform code into the Linux trigger is removed as unbounded. Named artifacts stay generic
+  (no host paths, no machine names); the existing "Run affected focused checks during development"
+  sentence is left as is, and the amendment states the path trigger it lacked.
 
 ## Evidence plan (all commands run at `978abba`)
 

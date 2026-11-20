@@ -311,7 +311,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Reproduced at `978abba` against the repository's own modules (a throwaway Node ESM probe
       that imports `filters.ts` and `presentation.ts` through a type-stripping resolve hook; no
       test file added and no dependency install): `ownerKey` printed `"agent:"`,
-      `"agent::unrecorded"` and `"agent:builder"` for those three assignees,
+      `"agent::unrecorded"` and `"agent:builder"` for those three assignees (rows built as
+      `{key, title, status: "ready", blocked: false, assignee}` with assignees
+      `{type: "agent", name: null, agent_profile: null}`,
+      `{type: "agent", name: "unrecorded", agent_profile: null}`,
+      `{type: "agent", name: "builder", agent_profile: "builder"}`),
       `filterWorkItems(rows, filtersOf({owner: "agent:unrecorded"})).length` was `0` of `3`,
       `ownerKeyLabel("agent:unrecorded")` printed `"Agent"`, and the currently minted key `agent:`
       matched `1` of `3`. Fix direction: read a filter key through one normalising reader so the
@@ -323,8 +327,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 - Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
   workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
   shellcheck-disabled repo-wide `actionlint -shellcheck= -pyflakes=` run plus a direct
-  `shellcheck --shell=bash` over the changed workflow `run:` blocks, extracted from the diff —
-  the form the 2026-11-15 trim record used (`docs/evidence/ci-process-trim-2026-11-15.md:231`).
+  `shellcheck --shell=bash` over each changed workflow `run:` block in full (read from the
+  workflow file; the diff only selects which blocks), with every `${{ … }}` GitHub expression
+  replaced by a placeholder word first, which is what actionlint does, because a raw expression is
+  ShellCheck SC2296 — the form the 2026-11-15 trim record used
+  (`docs/evidence/ci-process-trim-2026-11-15.md:231`).
   A shellcheck-enabled `actionlint` run is used only on a workflow where it has been observed to
   finish; for `.github/workflows/ci.yml` on this host it is not available. Observed
   2026-11-20 at `978abba` with the `mise`-installed upstream actionlint 1.7.12 invoked as
