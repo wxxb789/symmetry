@@ -160,6 +160,18 @@ scripts/ci`, then `accept --run-dir <store run> --receipt docs/evaluations/model
 exit 0 each, `accepted: true`). No gate was re-run under different tooling bytes, and every receipt,
 store copy, Subject and attempt digest still recomputes.
 
+*(Amended 2026-11-20, PR #115: re-measured against the preserved run stores, `accept` with the
+current bytes refuses each receipt before any receipt comparison — at the store's own attempt
+validation, `gate result is missing keys: tool_state_dir, vitest_argv, …` (these store directories
+predate the extended result keys, and such a run directory is refused, not upgraded; exit 1) — for
+the published receipt and the store copy alike. Where a store does validate, the derived receipt's
+first reported difference is `$.evidence.check_attempt: key sets differ (not expected:
+dependency_provisioning)`: the attempt record's additive `dependency_provisioning` member changes
+that key set, which `accept`'s sorted-key walk reaches before the `evidence.tooling_sources`
+comparison — so the `$.evidence.tooling_sources.model-routing-evaluation.py` location named above
+is where the walk lands only after the key sets agree. The rule above and the exit code are
+unchanged.)*
+
 The three tooling suites ran on the produced bytes: `python
 scripts/ci/test-model-routing-evaluation.py` — 44 tests, `OK (skipped=2)`, exit 0 (`Ran 44 tests`
 in the run's session transcript; 44 `def test_` methods statically counted in `cab222b`); `python

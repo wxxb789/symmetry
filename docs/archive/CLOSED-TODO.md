@@ -300,7 +300,10 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s two receipt digests, policy
       digest and controls digest, plus `test-ablation-final-review-2026-09-29.md`'s app-startup
       and Go-probe rows (the cross-record quote this entry named). Evidence: the whole-corpus
-      `--check --root-only` sweep reports 0 dirty of 111 files,
+      `--check --root-only` sweep reports 0 dirty of 111 files (superseded 2026-11-20: the
+      widened UNC leader pattern flags the two `0008b-go-bounded-regression-strong` specimens
+      named in the records README's accepted false positives; the records were deliberately
+      not re-rendered),
       `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` exits 0,
       re-running the renderer over all 30 touched files is byte-stable, and
       `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`

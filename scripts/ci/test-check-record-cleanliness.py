@@ -42,9 +42,9 @@ class RecordCleanlinessTests(unittest.TestCase):
 
     # -- helpers -------------------------------------------------------------
 
-    def git(self, *arguments: str) -> bytes:
+    def git(self, *arguments: str, input: bytes | None = None) -> bytes:
         return subprocess.check_output(
-            ["git", "-C", str(self.repo), *arguments], stderr=subprocess.PIPE
+            ["git", "-C", str(self.repo), *arguments], input=input, stderr=subprocess.PIPE
         )
 
     def git_text(self, *arguments: str) -> str:
@@ -80,6 +80,13 @@ class RecordCleanlinessTests(unittest.TestCase):
         self.assertTrue((self.repo / "docs/evidence/old-dirty.md").is_file())
 
     def test_a_changed_sanitize_tool_alone_changes_no_record(self) -> None:
+        # The fixture bytes are inert - the gate resolves the sanitize tool from its
+        # own directory (--repo only names the git repository) - so a change to that
+        # path alone selects no record and the gate reports "nothing to check": the
+        # selector side of the tool-path case, with the tool's own behaviour covered
+        # by its own suite. The ci.yml classifier arm that turns this path into a job
+        # trigger is not executed here (this suite runs no workflow conditions); the
+        # classifier fixture is tracked as its own TODO entry in docs/TODO.md.
         self.write("scripts/ci/model-routing-record-sanitize.py", "print('not the real tool')\n")
         head = self.commit("touch the sanitize tool")
         result = self.run_gate("--base", self.base, "--head", head)
@@ -225,21 +232,48 @@ class RecordCleanlinessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("renamed.json", result.stderr)
 
-    def test_a_type_changed_record_is_checked(self) -> None:
-        # The selection includes a path that changed type (a file replaced by a link):
-        # the tool reads what the path serves at the head revision.
-        target = self.root / "linked-record.json"
-        target.write_text('{"store": "/tmp/symmetry-0008d-eval"}\n', encoding="utf-8")
-        path = self.repo / "docs" / "evaluations" / "model-routing" / "clean.json"
-        path.unlink()
-        try:
-            os.symlink(target, path)
-        except (OSError, NotImplementedError) as error:
-            self.skipTest(f"symlink creation is unavailable: {error}")
-        head = self.commit("replace a record with a link")
+    def test_a_record_committed_as_a_symlink_is_refused_even_with_a_clean_target(self) -> None:
+        # F04: the gate reads the head revision's own blob, so the record's *stored*
+        # bytes are checked - a committed symlink stores its target text, while the
+        # worktree keeps serving the (clean) target file. Pre-fix this passed, because
+        # the gate followed the worktree link to the clean target.
+        target = self.root / "clean-target.md"
+        target.write_text("the route /portal/runtimes stays literal\n", encoding="utf-8")
+        # Record the head entry as a symlink blob through the index, so the case works
+        # on hosts without symlink privileges: mode 120000, bytes = the link text, and
+        # the worktree file stays the clean regular file it already is.
+        blob = self.git("hash-object", "-w", "--stdin", input=str(target).encode("utf-8"))
+        self.git("update-index", "--add", "--cacheinfo",
+                 f"120000,{blob.decode('ascii').strip()},docs/evaluations/model-routing/clean.json")
+        tree = self.git_text("write-tree")
+        head = self.git_text("commit-tree", tree, "-p", self.base, "-m", "commit the record as a link")
+        self.git("update-ref", "HEAD", head)
+        status = self.git_text("diff", "--name-status", self.base, head, "--",
+                               "docs/evaluations/model-routing/clean.json")
+        self.assertTrue(status.startswith("T"), status)
         result = self.run_gate("--base", self.base, "--head", head)
-        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("clean.json", result.stderr)
+        self.assertIn("not regular file blobs", result.stderr)
+
+    def test_a_record_committed_as_a_gitlink_takes_the_nonregular_arm(self) -> None:
+        # STD-A08: a real gitlink's object id is the subproject commit, so
+        # `cat-file blob <that id>` fails with "bad file" and the gate exited 2
+        # (an unusable range) instead of the documented non-regular refusal
+        # (exit 1). The head entry's mode decides before the blob is read.
+        relative = "docs/evaluations/model-routing/gitlink-record"
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{self.base},{relative}")
+        tree = self.git_text("write-tree")
+        head = self.git_text("commit-tree", tree, "-p", self.base, "-m", "commit a record as a gitlink")
+        self.git("update-ref", "HEAD", head)
+        status = self.git_text("diff", "--name-status", self.base, head, "--", relative)
+        self.assertTrue(status.startswith("A"), status)
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gitlink-record", result.stderr)
+        self.assertIn("stores it as mode 160000", result.stderr)
+        self.assertIn("not regular file blobs", result.stderr)
+        self.assertNotIn("cannot read the blob", result.stderr)
 
     def test_an_all_zero_base_falls_back_to_the_merge_base(self) -> None:
         self.git("update-ref", "refs/remotes/origin/main", self.base)
@@ -248,6 +282,41 @@ class RecordCleanlinessTests(unittest.TestCase):
         result = self.run_gate("--base", ZERO, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("host-path.md", result.stderr)
+
+    def test_a_non_fast_forward_push_is_compared_with_its_requested_base(self) -> None:
+        # F05: a rollback push (the head reintroduces a record an earlier commit had
+        # cleaned) makes the head an ancestor of the requested base. Narrowing to the
+        # merge base collapsed the range to the head itself and reported "nothing to
+        # check" while the head's stored bytes were dirty; a requested base is now
+        # compared directly, so the reintroduced record is selected and refused.
+        self.write("docs/evidence/rollback.md", "the run store was /tmp/symmetry-0008d-eval\n")
+        dirty = self.commit("add the record with a host path")
+        self.write("docs/evidence/rollback.md", "the run store renders as <disposable-root>\n")
+        clean = self.commit("clean the record")
+        self.git("update-ref", "HEAD", dirty)
+        result = self.run_gate("--base", clean, "--head", dirty)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("rollback.md", result.stderr)
+        self.assertNotIn("nothing to check", result.stdout)
+
+    def test_an_unusable_diff_exits_with_the_unusable_revision_code(self) -> None:
+        # F11: a git diff that cannot run (here: `diff.orderFile` names a missing file)
+        # is an unusable revision range, so the gate must exit 2 like every other
+        # unusable-range arm, not the record-failure code 1.
+        self.write("docs/evidence/host-path.md", "the run store was /tmp/symmetry-0008d-eval\n")
+        head = self.commit("add a record the diff cannot inspect")
+        environment = dict(
+            os.environ,
+            GIT_CONFIG_COUNT="1",
+            GIT_CONFIG_KEY_0="diff.orderFile",
+            GIT_CONFIG_VALUE_0=str(self.root / "missing-order-file"),
+        )
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--base", self.base, "--head", head],
+            capture_output=True, text=True, check=False, env=environment,
+        )
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("cannot diff", result.stderr)
 
 
 if __name__ == "__main__":

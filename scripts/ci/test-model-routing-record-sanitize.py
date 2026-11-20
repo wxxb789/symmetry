@@ -9,6 +9,7 @@ real evaluation record.
 import hashlib
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -34,6 +35,7 @@ HOST_PATHS = (
     "C:/Users/operator/project",
     r"\\server\share\records",
     r"\\?\C:\Users\operator\run",
+    r"\\.\C:\Users\operator\secret",
     "/home/operator/state/run-7f3m2q",
     "/Users/operator/Library/Caches/tmp",
     "/root/omp-native-acceptance",
@@ -68,10 +70,26 @@ QUOTED_HOST_PATHS = (
     "store file:" + _BS + "tmp" + _BS + "x",
     "handle " + _BS * 2 + "?" + _BS + "C:" + _BS + "Users" + _BS + "operator" + _BS + "run",
     '{"handle":"file:' + _BS * 4 + "?" + _BS * 2 + "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + '"}',
+    # A `.` device namespace, JSON-escaped, and a UNC escaped one level deeper than the
+    # single JSON escape above (the raw doubly escaped spelling of `\\server\share`):
+    # the device prefix must take `.` as well as `?`, and the UNC leader/inner
+    # separator any even backslash run, not just two or four.
+    '{"handle":"' + _BS * 4 + "." + _BS * 2 + "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + '"}',
+    '{"p":"' + _BS * 8 + "server" + _BS * 4 + "share" + _BS * 4 + "run" + '"}',
     # A location spelled after a key's colon, and a naive separator doubling.
     "root:/home/operator/state/run",
     "root:C:" + _BS + "Users" + _BS + "operator" + _BS + "run",
     "state under /tmp//symmetry-0008d-run and /home//operator/x",
+    # Mixed-separator UNC spellings (Windows reads both slash directions as the same
+    # location), their JSON-escaped inner separator, a root-relative Windows
+    # spelling, a space-containing path, and a `file:` URL with no segment after the
+    # host root.
+    "store " + _BS * 2 + "server/share/sub as a mixed-separator UNC",
+    "store //server" + _BS + "share" + _BS + "sub as a mixed-separator UNC",
+    "store " + _BS * 2 + "server" + _BS + _FS + "share/sub as an escaped-inner UNC",
+    "store " + _BS + "Users" + _BS + "operator" + _BS + "run as a root-relative spelling",
+    "worktree C:" + _BS + "Users" + _BS + "First Last" + _BS + "repo today",
+    "opened file:///tmp today",
     # A quoted path beside text: see `_render_match`'s docstring for the JSON-escape rule.
     '{"t":"see ' + _BS + '"C:' + _BS * 2 + "dir" + _BS * 2 + "file" + _BS + '", ok"}',
 )
@@ -131,8 +149,12 @@ class SanitizeTextTests(unittest.TestCase):
         self.assertEqual(MODULE.sanitize_text(text, [], root_only=True), text)
 
     def test_root_only_still_hashes_host_paths(self):
+        # The path is closed by punctuation before the prose word: a bare word at
+        # the end of the line is a terminal space chunk the tail absorbs (the
+        # documented over-approximation, pinned by its own cases below), and this
+        # case pins the exact digest of the path itself.
         for path in HOST_PATHS:
-            rendered = MODULE.sanitize_text(f"ran under {path} today", [], root_only=True)
+            rendered = MODULE.sanitize_text(f"ran under {path}, today", [], root_only=True)
             self.assertNotIn(path, rendered, path)
             self.assertIn(digest_of(path), rendered, path)
 
@@ -194,6 +216,248 @@ class SanitizeTextTests(unittest.TestCase):
         text = "https://github.com/wxxb789/symmetry/blob/main/x and https://x/home/y"
         self.assertEqual(MODULE.sanitize_text(text, [], root_only=True), text)
 
+    def test_https_urls_with_a_host_root_segment_stay_literal_verbatim(self):
+        # F12: the host-rooted POSIX pattern must not see a `/tmp` or `/home`
+        # authority segment behind a URL's own separators as a location. This holds
+        # in both modes, because the measured-value redaction shares the root-only
+        # pattern set.
+        text = ("https://tmp/vendor/doc and https://home/vendor/doc beside "
+                "https://x/home/y and https://github.com/wxxb789/symmetry/blob/main/x")
+        self.assertEqual(MODULE.sanitize_text(text, [], root_only=True), text)
+        self.assertEqual(MODULE.sanitize_text(text, []), text)
+
+    def test_root_only_catches_space_continued_path_tails(self):
+        # F06: a path whose segment contains a space rendered only its prefix, and the
+        # residual tail (`First`, `Last`, `repo`) no longer looked like a path, so the
+        # rendered text re-checked clean. The tail continues across one space exactly
+        # while the chunk after it reaches another separator or closes the location at
+        # the end of the line; a word followed by another word is not a continuation.
+        windows = "C:" + _BS + "Users" + _BS + "First Last" + _BS + "repo"
+        posix = "/home/first last/repo"
+        for text in (f"worktree {windows} today", f"state {posix} today",
+                     json.dumps({"path": windows}), json.dumps({"path": posix})):
+            with self.subTest(text=text):
+                rendered = MODULE.sanitize_text(text, [], root_only=True)
+                for fragment in ("First", "Last", "first", "last", "repo"):
+                    self.assertNotIn(fragment, rendered, text)
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        # A prose word after the path is not a continuation: the space ends the match.
+        prose = f"worktree {windows} and the run continues"
+        rendered = MODULE.sanitize_text(prose, [], root_only=True)
+        self.assertIn("and the run continues", rendered)
+
+    def test_space_continued_paths_render_whole_on_every_family(self):
+        # Sol P2: the F06 continuation covered only a chunk that reaches another
+        # separator, only the drive and host-POSIX families, and only when the
+        # host-POSIX pattern won in root-only mode: `\\server\share\My Folder\sub\x`
+        # rendered as its prefix plus ` Folder\sub\x`, and a terminal chunk
+        # (`my project`, `my folder`) stayed literal in both scopes - all of them
+        # re-checking clean because the residue no longer looked like a path.
+        cases = (
+            _BS * 2 + "server" + _BS + "share" + _BS + "My Folder" + _BS + "sub" + _BS + "x",
+            "C:" + _BS + "Users" + _BS + "op" + _BS + "my project",
+            "/home/op/my project",
+            _BS * 2 + "srv" + _BS + "sh" + _BS + "my folder",
+            "/home/first last/repo",
+        )
+        for path in cases:
+            for root_only in (True, False):
+                # The raw spelling at the end of a line renders as one token whose
+                # digest is the path itself (the final chunk is closed by the line).
+                with self.subTest(path=path, root_only=root_only, boundary="eol"):
+                    rendered = MODULE.sanitize_text(f"worktree {path}", [], root_only=root_only)
+                    self.assertEqual(rendered, f"worktree {digest_of(path)}")
+                    self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+                # A quoted spelling closes the same chunks, and the whole location
+                # (escaping included) is one token - the digest binds the matched
+                # text, so only the fragment absence is asserted here.
+                quoted = json.dumps({"path": path})
+                with self.subTest(path=path, root_only=root_only, boundary="quote"):
+                    rendered = MODULE.sanitize_text(quoted, [], root_only=root_only)
+                    self.assertEqual(rendered.count("path-sha256:"), 1, quoted)
+                    for fragment in ("Folder", "folder", "project", "First", "Last"):
+                        self.assertNotIn(fragment, rendered, quoted)
+                    self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+
+    def test_a_json_escape_after_a_path_survives_the_render(self):
+        # STD-A07: the segment classes used to accept a bare backslash, so the
+        # render took the JSON `\n` escape and the evidence line behind it into the
+        # token (`FAIL: verifier refused` vanished) while the record stayed valid
+        # JSON. A POSIX segment never contains a bare backslash, so the escape and
+        # everything after it stay outside the token.
+        text = '{"out":"working directory: /tmp/run' + _BS + 'nFAIL: verifier refused"}'
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                self.assertEqual(
+                    json.loads(rendered),
+                    {"out": "working directory: " + digest_of("/tmp/run") + "\nFAIL: verifier refused"},
+                )
+                self.assertEqual(
+                    MODULE.sanitize_text(rendered, [], root_only=root_only), rendered
+                )
+
+    def test_file_scheme_spellings_are_case_insensitive(self):
+        # STD-A05: `FILE:` and `File:` are the same URL scheme as `file:`, and the
+        # lowercase-only scheme let a record carrying either spelling pass the
+        # root-only check unchanged (the lookbehind also blocked the bare drive
+        # letter behind the slashes).
+        cases = (
+            "FILE:///C:/Work/Personal",
+            "File:///C:/Work/Personal",
+            "FILE:///home/operator/run",
+        )
+        for text in cases:
+            for root_only in (True, False):
+                with self.subTest(text=text, root_only=root_only):
+                    rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                    self.assertEqual(rendered, digest_of(text))
+                    self.assertEqual(
+                        MODULE.sanitize_text(rendered, [], root_only=root_only), rendered
+                    )
+
+    def test_file_url_authority_with_a_drive_location_is_one_token(self):
+        # STD-A06: `file://localhost/C:/Work/Personal` is one absolute location, but
+        # the authority arm stopped at the drive letter's colon: the render left
+        # `/Work/Personal` literal and the residue re-checked clean, so a published
+        # record could still name the operator's directories.
+        text = "opened file://localhost/C:/Work/Personal, today"
+        whole = "file://localhost/C:/Work/Personal"
+        rendered = MODULE.sanitize_text(text, [], root_only=True)
+        self.assertEqual(rendered, f"opened {digest_of(whole)}, today")
+        self.assertEqual(MODULE.sanitize_text(text, []), rendered)
+        self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+
+    def test_a_terminal_prose_word_is_the_documented_over_approximation(self):
+        # Sol P3: the space continuation cannot tell a space-containing segment
+        # (`my project`) from a path followed by a prose word (`x and/or`), so a
+        # terminal chunk is absorbed into the token and the correlated digest is the
+        # path plus that word. The over-approximation is deliberate - the narrower
+        # rule leaked the path's own bytes - and this fixture pins it so a later
+        # narrowing is a visible decision, not a silent drift.
+        path, tail = "C:" + _BS + "Users" + _BS + "x", " and/or"
+        text = path + tail + " the repo"
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                self.assertEqual(rendered, digest_of(path + tail) + " the repo")
+                self.assertEqual(
+                    MODULE.sanitize_text(rendered, [], root_only=root_only), rendered
+                )
+
+    def test_urls_stay_literal_in_both_scopes(self):
+        # The URL battery: the lookbehinds keep every URL spelling literal in both
+        # modes, including authorities whose first segment is a host root.
+        urls = (
+            "https://github.com/wxxb789/symmetry/blob/main/README.md",
+            "https://tmp/vendor/doc",
+            "https://home/vendor/doc",
+            "https://x/home/y",
+            "https://example.invalid/a/b",
+            "http://127.0.0.1:8080/portal/runtimes",
+            "http://localhost:55444/socket",
+            "git+ssh://git@example.invalid/tmp/repo",
+            "https:\\/\\/tmp/vendor/doc",
+            "<https://10.0.0.1/home/x>",
+            "https://xn--80ak6aa92e.invalid/Users/op",
+        )
+        for url in urls:
+            for root_only in (True, False):
+                with self.subTest(url=url, root_only=root_only):
+                    text = f"fetched {url} unchanged"
+                    self.assertEqual(
+                        MODULE.sanitize_text(text, [], root_only=root_only), text, url
+                    )
+        # A doubled-slash authority spelling is a location, not a URL to spare, in
+        # both scopes; the spelled route behind it renders with it.
+        authority = "//example.invalid/portal/runtimes"
+        text = f"fetched {authority}, unchanged"
+        for root_only in (True, False):
+            self.assertEqual(
+                MODULE.sanitize_text(text, [], root_only=root_only),
+                "fetched " + digest_of(authority) + ", unchanged",
+            )
+
+    def test_root_only_catches_mixed_separator_unc_spellings(self):
+        # F07: Windows reads `\\server/share/sub` and `//server\share\sub` as the same
+        # UNC location, and a checker that missed a mixed spelling would pass a record
+        # that still names it.
+        cases = (
+            _BS * 2 + "server/share/sub",
+            "//server" + _BS + "share" + _BS + "sub",
+            _BS * 2 + "server" + _BS + _FS + "share/sub",
+        )
+        for path in cases:
+            for root_only in (True, False):
+                with self.subTest(path=path, root_only=root_only):
+                    rendered = MODULE.sanitize_text(f"store {path}, here", [], root_only=root_only)
+                    self.assertNotIn("server", rendered, path)
+                    self.assertNotIn("share", rendered, path)
+                    self.assertIn(digest_of(path), rendered, path)
+                    self.assertEqual(
+                        MODULE.sanitize_text(rendered, [], root_only=root_only), rendered
+                    )
+
+    def test_default_mode_renders_colon_adjacent_and_escaped_posix_paths(self):
+        # F10: the default scope's documented boundary is every absolute path, and a
+        # path after a key's colon or in its JSON-escaped spelling is one; a URL must
+        # stay literal in the same pass.
+        text = ("PATH=/usr/bin:/usr/local/bin:/bin and "
+                + '{"p":"' + _BS + '/etc' + _BS + '/hosts"} and https://tmp/vendor/doc')
+        rendered = MODULE.sanitize_text(text, [])
+        for fragment in ("/usr/local/bin", "/bin", "etc", "hosts"):
+            self.assertNotIn(fragment, rendered, text)
+        self.assertIn("https://tmp/vendor/doc", rendered)
+        self.assertEqual(MODULE.sanitize_text(rendered, []), rendered)
+        # The host-rooted spelling after a colon is a host path in both modes.
+        for root_only in (True, False):
+            host_rooted = "store:" + "/home/operator/x"
+            self.assertNotIn(
+                "/home/operator/x", MODULE.sanitize_text(host_rooted, [], root_only=root_only)
+            )
+
+    def test_root_only_catches_a_file_url_with_no_segment_after_the_root(self):
+        # F13: a `file:` URL names an absolute location whether or not a segment
+        # follows the host root; only the bare root token in prose stays literal.
+        for text in ("opened file:///tmp today", "opened file:///tmp/run today"):
+            with self.subTest(text=text):
+                rendered = MODULE.sanitize_text(text, [], root_only=True)
+                self.assertNotIn("/tmp", rendered, text)
+                self.assertIn("path-sha256:", rendered)
+        for root_only in (True, False):
+            rendered = MODULE.sanitize_text("opened file:///tmp today", [], root_only=root_only)
+            self.assertNotIn("file:", rendered)
+            self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+        self.assertEqual(MODULE.sanitize_text("blocked by `/tmp` alone", [], root_only=True),
+                         "blocked by `/tmp` alone")
+
+    def test_root_only_catches_a_root_relative_backslash_spelling(self):
+        # F23: classic Windows resolves a leading single backslash against the current
+        # drive root, so `\Users\op\run` names the same profile location as
+        # `C:\Users\op\run`; the bare root token keeps its `/tmp`-style boundary.
+        text = "store " + _BS + "Users" + _BS + "operator" + _BS + "run today"
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                self.assertNotIn("operator", rendered, text)
+                self.assertIn("path-sha256:", rendered)
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+        self.assertEqual(MODULE.sanitize_text("blocked by `" + _BS + "tmp` alone", [], root_only=True),
+                         "blocked by `" + _BS + "tmp` alone")
+
+    def test_a_deep_escaped_file_url_renders_the_whole_location(self):
+        # Sol F2: the `file:` head is followed by any run of separators, so an escaped
+        # run past the old cap no longer leaves the drive head (`file:\\\\C:`) behind.
+        text = json.dumps({"cmd": "file:" + _BS * 4 + "C:" + _BS * 4 + "Users"
+                          + _BS * 4 + "operator" + _BS * 4 + "secret"})
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                for fragment in ("C:", "Users", "operator", "secret"):
+                    self.assertNotIn(fragment, rendered, text)
+                self.assertIn("path-sha256:", rendered)
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+
     def test_root_only_still_renders_a_disposable_root(self):
         text = ROOT + r"\controls\baseline-protocol"
         rendered = MODULE.sanitize_text(text, [ROOT], root_only=True)
@@ -209,8 +473,10 @@ class SanitizeTextTests(unittest.TestCase):
     def test_default_mode_still_renders_product_routes(self):
         # The default renderer's documented boundary is every absolute path, so
         # argv/output capture keeps hashing routes; only --root-only spares them.
+        # The route is closed by punctuation because a bare end-of-line word is a
+        # terminal chunk the space continuation absorbs.
         for route in PRODUCT_ROUTES:
-            rendered = MODULE.sanitize_text(f"served {route} twice", [])
+            rendered = MODULE.sanitize_text(f"served {route}, twice", [])
             self.assertNotIn(route, rendered)
             self.assertIn(digest_of(route), rendered)
 
@@ -306,12 +572,82 @@ class SanitizeCliTests(unittest.TestCase):
             self.assertEqual(result.stdout, "", text)
             self.assertIn("refused", result.stderr)
 
+    def test_cli_refuses_mixed_case_file_scheme_spellings(self):
+        # STD-A05: the check must flag the scheme however it is spelled.
+        for text in ("FILE:///C:/Work/Personal", "File:///C:/Work/Personal",
+                     "FILE:///home/operator/run"):
+            with self.subTest(text=text):
+                result = self.run_cli(text + "\n", "--check", "--root-only")
+                self.assertEqual(result.returncode, 1, text)
+                self.assertEqual(result.stdout, "", text)
+                self.assertIn("refused", result.stderr)
+
+    def test_cli_refuses_a_file_authority_with_a_drive_location(self):
+        # STD-A06: the original bytes refuse in both scopes, the render replaces the
+        # whole location, and the rendered text passes the root-only check.
+        text = "opened file://localhost/C:/Work/Personal, today"
+        for arguments in (["--check", "--root-only"], ["--check"]):
+            with self.subTest(arguments=arguments):
+                result = self.run_cli(text + "\n", *arguments)
+                self.assertEqual(result.returncode, 1, text)
+                self.assertIn("refused", result.stderr)
+        rendered = MODULE.sanitize_text(text, [], root_only=True)
+        recheck = self.run_cli(rendered + "\n", "--check", "--root-only")
+        self.assertEqual(recheck.returncode, 0, recheck.stderr)
+
     def test_cli_root_only_renders_stdin_with_routes_kept(self):
         result = self.run_cli("see /portal/runtimes under " + HOST_PATHS[4] + "\n",
                               "--root-only", "--root", ROOT)
         self.assertEqual(result.returncode, 0)
         self.assertIn("/portal/runtimes", result.stdout)
         self.assertIn(digest_of(HOST_PATHS[4]), result.stdout)
+
+    def test_cli_refuses_an_existing_but_unreadable_file(self):
+        # F22: a file the checker cannot read is not a verdict about recorded text -
+        # an uncaught traceback exits 1, which `--check --root-only` reads as "still
+        # carries a host absolute path". The tool refuses it as unusable (exit 2),
+        # like every other input it cannot inspect.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "unreadable.txt"
+            path.write_text("clean text\n", encoding="utf-8")
+            restore = None
+            if os.name == "nt":
+                user = os.environ.get("USERNAME", "")
+                denied = subprocess.run(
+                    ["icacls", str(path), "/deny", f"{user}:(R)"],
+                    capture_output=True, text=True, check=False,
+                )
+                if denied.returncode != 0:
+                    self.skipTest(f"cannot deny read access: {denied.stdout}{denied.stderr}")
+                restore = lambda: subprocess.run(
+                    ["icacls", str(path), "/remove:d", user], capture_output=True
+                )
+            else:
+                try:
+                    path.chmod(0)
+                except OSError as error:
+                    self.skipTest(f"cannot remove read permission: {error}")
+                restore = lambda: path.chmod(0o600)
+            try:
+                try:
+                    with path.open("rb"):
+                        self.skipTest("this host can still read the restricted file")
+                except OSError:
+                    pass
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), "--check", "--root-only", str(path)],
+                    capture_output=True, check=False,
+                )
+            finally:
+                # The mode is restored inside the TemporaryDirectory block, before the
+                # context manager deletes the directory: a unittest `addCleanup` runs
+                # after that deletion and on POSIX raised FileNotFoundError from the
+                # chmod, turning the hosted daemon job red (Sol P1).
+                if restore is not None:
+                    restore()
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, b"")
+            self.assertIn("refused", result.stderr.decode("utf-8"))
 
 
 if __name__ == "__main__":

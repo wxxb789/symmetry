@@ -15,17 +15,25 @@ recorded text as a stable token instead:
   path be correlated.
 
 Relative paths, URLs and ``sha256:`` digests pass through unchanged, and
-rendering is idempotent.
+rendering is idempotent - except that a ``file:`` URL or a doubled-slash
+authority spelling is an absolute location, not a URL to spare: both modes
+render it.
 
 With ``--root-only`` the renderer flags only host absolute paths: Windows drive
-and UNC roots and the POSIX roots a host path actually starts under (``/home/``,
+and UNC roots, a root-relative Windows spelling (``\\Users\\op\\run``, which
+classic Windows semantics resolve against the current drive root - a profile
+location) and the POSIX roots a host path actually starts under (``/home/``,
 ``/Users/``, ``/root/``, ``/tmp/``, ``/var/``, ``/mnt/``, ``/private/`` - the
 shapes the evaluation runner's host-path redaction and the committed records
 name), plus every ``--root`` disposable root. A product route such as
-``/portal/runtimes`` is not a host path and stays literal in this mode, and so
-does a bare root token with no following separator or segment (``/tmp`` quoted
-in prose), which names no host-specific location; the default mode keeps
-rendering every absolute path, which is its documented boundary for argv/output
+``/portal/runtimes`` is not a host path and stays literal in this mode - in its
+single-slash spelling only: spelled behind an authority (``//portal/...``) or
+as a ``file:`` URL it is an absolute location like any other, and this mode
+renders (and the gate refuses) it. A bare root token with no following
+separator or segment (``/tmp`` quoted in prose) stays literal too: it names no
+host-specific location. The default mode keeps rendering every absolute path -
+including a POSIX path spelled after a key's colon and the JSON-escaped spelling
+of one (``\\/etc\\/hosts``) - which is its documented boundary for argv/output
 capture.
 
 Usage (record publishers apply this before writing a record)::
@@ -58,35 +66,106 @@ DISPOSABLE_ROOT_TOKEN = "<disposable-root>"
 # whitespace and JSON/CLI punctuation so a quoted or comma-separated path
 # renders cleanly, and the final ``+`` requires a real path segment so a lone
 # separator never matches.
+# The boundary that keeps a space-continued path chunk inside one location: the
+# chunk must reach another separator (`\`, any slash spelling or `\/`), close on a
+# quote, or end the line. A chunk bounded only by end-of-line (or a quote) is the
+# documented over-approximation: `C:\Users\op\my project` renders whole, and so
+# does the prose word in `C:\Users\op\x today`, because the two are the same shape
+# and a partial render of a space-containing segment would leave path bytes in the
+# record. A word followed by another word is not a continuation, so
+# `C:\Users\x and the run continues` still ends at `x`.
+_SPACE_END = r"(?=[\\/]|[\"'`]|\r|\n|\Z)"
+# One space-continued chunk: a single space whose following non-space run reaches
+# a separator (`First Last\repo` continues) or is a terminal word (`my project` at
+# the end of a line or before a closing quote).
+_SPACE_CHUNK = r" [^\s\"'`,;:)]+" + _SPACE_END
 # One forward slash, or its JSON-escaped spelling (`\/`): a record quoted into a JSON
 # string carries both forms, and the checker must not miss a host path because the
 # writer escaped it.
 _HOST_SEP = r"(?:/|\\/)"
-# The prefixes a Windows location may carry: a `file:` URL scheme (with any number
-# of separators after it) and the `\\?\` device namespace (whose backslashes a JSON
-# writer doubles). The lookbehinds accept a preceding `:` so a location spelled
-# after a key (`root:C:\x`, `root:/home/x`) is still a location, while a preceding
-# letter, digit, underscore, separator or rendered token keeps relative paths and
-# URLs out.
-_FILE_PREFIX = r"(?:file:[\\/]{0,4})?"
-_DEVICE_PREFIX = r"(?:\\{1,4}\?\\{1,4})?"
+# One separator of a location whose separators may be mixed: a Windows UNC accepts
+# both slash directions, and a JSON writer doubles each backslash run at every
+# nesting level, so a backslash separator is any positive run and a forward slash
+# may be escaped as `\/`.
+_SEPARATOR = r"(?:\\|(?:\\{2})+|/|\\/)"
+# The scheme a `file:` URL carries is case-insensitive - `FILE:`, `File:` and
+# `file:` are the same scheme - so a record spelling it any other way must not
+# pass the checker unchanged.
+_FILE_SCHEME = r"(?i:file):"
+# The prefixes a Windows location may carry: a `file:` URL scheme (with any run of
+# separators after it, since concatenated escapes are still the scheme's own
+# separators) and a device namespace (`\\?\` or the `\\.\` device form, whose
+# backslashes a JSON writer doubles). The lookbehinds accept a preceding `:` so a
+# location spelled after a key (`root:C:\x`, `root:/home/x`) is still a location,
+# while a preceding letter, digit, underscore, separator or rendered token keeps
+# relative paths and URLs out.
+_FILE_PREFIX = r"(?:" + _FILE_SCHEME + r"[\\/]*)?"
+_DEVICE_PREFIX = r"(?:\\{1,4}[?.]\\{1,4})?"
+# A Windows path tail: path bytes, or a space-continued chunk. The byte class
+# stops at quotes, whitespace and JSON/CLI punctuation, so a quoted or
+# comma-separated path renders cleanly, and a single backslash stays a path byte:
+# in raw recorded text it IS the separator, and the JSON-escaped spelling doubles
+# it, so excluding it would stop every raw Windows location at its first inner
+# separator.
+_WINDOWS_TAIL = r"(?:[^\s\"'`,;:)]|" + _SPACE_CHUNK + r")*"
+# The same tail where the shape requires a real byte after the separator (a UNC
+# location whose second segment is empty, `\\server\`, is not a path: an empty tail
+# would read the two-character prefix of an escaped source literal like `\\n\` as
+# one, the false positive the corpus sweep caught in an embedded code sample).
+_WINDOWS_TAIL_PLUS = r"(?:[^\s\"'`,;:)]|" + _SPACE_CHUNK + r")+"
+# One byte of a POSIX path segment: any byte except a separator, whitespace, a
+# quote and JSON/CLI punctuation - or a JSON-escaped forward slash, which is the
+# escaped spelling of the segment separator. A bare backslash is deliberately NOT
+# a segment byte: a POSIX location never contains one, and consuming it would
+# swallow a JSON escape sequence together with the text behind it (the render of
+# `/tmp/run\nFAIL` would take the `\n` and the `FAIL` line into its token).
+_POSIX_BYTE = r"(?:[^/\s\"'`,;:)\\]|\\/)"
+_POSIX_RUN = r"(?:" + _POSIX_BYTE + r")+"
+# The POSIX spelling of the same space continuation: the chunk after the space
+# must reach a separator or end the line (`/home/first last/repo` and
+# `/home/op/my project` are one location each).
+_POSIX_SPACE_CHUNK = r" " + _POSIX_RUN + _SPACE_END
+# A POSIX path segment: a run of bytes plus any space-continued chunks.
+_POSIX_SEGMENT = r"(?:" + _POSIX_RUN + r"(?:" + _POSIX_SPACE_CHUNK + r")*)"
+# A segment of the escaped POSIX spelling (`\/etc\/hosts`), whose escaped
+# separator pairs sit outside the segment bytes.
+_ESCAPED_SEGMENT = r"(?:[^\\/\s\"'`,;:)]+(?: [^\\/\s\"'`,;:)]+" + _SPACE_END + r")*)"
 _DRIVE_PATH = re.compile(
-    r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"[A-Za-z]:[\\/][^\s\"'`,;:)]*"
+    r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"[A-Za-z]:[\\/]" + _WINDOWS_TAIL
 )
-# A UNC path whose separators are backslashes, each written once or doubled by JSON
-# escaping: `\\server\share` and `{"p":"\\\\server\\share"}` are the same location.
+# A UNC path whose separators are backslashes, each written once or escaped by JSON
+# quoting at any nesting level (an even run of two or more): `\\server\share` and
+# `{"p":"\\\\server\\share"}` are the same location, and so is the doubly escaped
+# spelling of either separator. The inner separators (and the tail after them) may
+# also be forward slashes or their escapes, because Windows reads the mixed
+# spellings as the same location.
 _UNC_PATH = re.compile(
-    r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"\\{2}(?:\\{2})?"
-    r"[^\s\\\"'`,;:)]+(?:\\|\\\\)[^\s\"'`,;:)]+"
+    r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"(?:\\{2})+"
+    r"[^\s\\\"'`,;:)]+" + _SEPARATOR + _WINDOWS_TAIL_PLUS
 )
-# The lookbehind keeps URLs (`https://`) and relative paths out; a host-rooted form
-# spelled after a colon (`root:/home/x`) is caught by `_HOST_POSIX_PATH` instead,
-# which cannot collide with a URL authority.
-_POSIX_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>.])/(?:[^/\s\"'`,;:)]+/)*[^\s\"'`,;:)]+")
+# The lookbehind keeps URLs (`https://`) and relative paths out, and `:` too: a
+# location spelled after a colon would otherwise swallow a URL authority
+# (`https://x` must never start a match), and the colon-adjacent spelling has its
+# own pattern below.
+_POSIX_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>.])/(?:" + _POSIX_SEGMENT + r"/)*" + _POSIX_SEGMENT)
+# A POSIX path spelled directly after a colon (`PATH=/usr/bin:/usr/local/bin`): the
+# colon allowance the pattern above must not take, because the very next character
+# decides between an absolute path and a URL authority - a URL's colon is followed
+# by two separators, and this pattern requires exactly one.
+_COLON_POSIX_PATH = re.compile(r"(?<=:)/(?!/)(?:" + _POSIX_SEGMENT + r"/)*" + _POSIX_SEGMENT)
+# A POSIX path a JSON writer escaped (`\/etc\/hosts`): the escaped spelling of an
+# absolute location, rendered in the default argv/output scope. The lookbehind
+# keeps URL authorities (`https:\/\/tmp` - the pair after the colon, and the pair
+# after a separator) and relative paths out, and every separator must be the
+# escaped pairing, so an unescaped `/` cannot drift this pattern into a URL.
+_ESCAPED_POSIX_PATH = re.compile(
+    r"(?<![A-Za-z0-9_:\\/])(?:\\/)(?:" + _ESCAPED_SEGMENT + r"\\/)*" + _ESCAPED_SEGMENT
+)
 # A forward-slash authority path (`//server/share`), with each separator optionally
-# escaped. The lookbehind keeps URLs (`https://`) out: their `//` follows a colon.
+# escaped or a backslash (the mixed spellings are the same UNC location). The
+# lookbehind keeps URLs (`https://`) out: their `//` follows a colon.
 _SLASH_UNC_PATH = re.compile(
-    r"(?<![A-Za-z0-9_:\\/])(?:/|\\/)(?:/|\\/)[^\s\\/\"'`,;:)]+(?:/|\\/)[^\s\"'`,;:)]+"
+    r"(?<![A-Za-z0-9_:\\/])(?:/|\\/)(?:/|\\/)[^\s\\/\"'`,;:)]+" + _SEPARATOR + _WINDOWS_TAIL_PLUS
 )
 # The filesystem roots a host absolute path actually starts with. `/portal/runtimes`
 # and any other product route stay literal in `--root-only` mode because their first
@@ -97,29 +176,54 @@ _SLASH_UNC_PATH = re.compile(
 HOST_ROOT_SEGMENTS = ("home", "Users", "root", "tmp", "var", "mnt", "private")
 _HOST_ROOT = "(?:" + "|".join(HOST_ROOT_SEGMENTS) + ")"
 # The segment class allows an empty segment, so a naive concatenation (`/tmp//run`)
-# is still a host path; a preceding `:` is accepted for the same reason as above.
+# is still a host path; a preceding `:` is accepted for the same reason as above,
+# while a preceding separator is not: that spelling is an authority path or a URL,
+# handled by their own patterns, and it keeps `https://tmp/vendor/doc` literal.
 _HOST_POSIX_PATH = re.compile(
-    r"(?<![A-Za-z0-9_>.])(?:" + _HOST_SEP + r")" + _HOST_ROOT
-    + r"(?:(?:" + _HOST_SEP + r")[^/\s\"'`,;:)]*)+"
+    r"(?<![A-Za-z0-9_>./\\])(?:" + _HOST_SEP + r")" + _HOST_ROOT
+    + r"(?:(?:" + _HOST_SEP + r")(?:" + _POSIX_SEGMENT + r")?)+"
+)
+# A root-relative Windows spelling (`\Users\op\run`): classic Windows semantics
+# resolve a leading single backslash against the current drive root, so it names
+# the same profile location as `C:\Users\op\run`. The leader is an odd backslash run
+# (the raw and Markdown-prose spelling); the even runs are the JSON-escaped
+# spellings the UNC patterns already cover.
+_ROOT_RELATIVE_PATH = re.compile(
+    r"(?<![A-Za-z0-9_>./\\])(?:\\{2})*\\" + _HOST_ROOT
+    + r"(?:\\[^\\\s\"'`,;:)]*|" + _SPACE_CHUNK + r")+"
 )
 # A `file:` URL names an absolute location; without this, the drive or POSIX pattern's
 # lookbehind (the URL's own slashes) would hide a host path inside one. After `file:`
 # a Windows location may be spelled with backslashes (a single one before an
 # authority is a legitimate file-URL form), so this pattern accepts them where the
-# bare `_DRIVE_PATH`/`_UNC_PATH` leaders require two.
+# bare `_DRIVE_PATH`/`_UNC_PATH` leaders require two; the scheme is followed by any
+# run of separators (concatenated escapes included), and the host-root arm does not
+# require a segment after the root (`file:///tmp` names an absolute location too).
+# An authority followed by a drive location (`file://localhost/C:/x`) is one
+# location: the authority's own separator is not where the path ends.
 _FILE_URL_PATH = re.compile(
-    r"(?<![A-Za-z0-9_])file:[\\/]{0,4}(?:"
-    + _DEVICE_PREFIX + r"[A-Za-z]:[\\/]"
-    r"|" + _DEVICE_PREFIX + r"\\{1,4}[^\s\\\"'`,;:)]+(?:\\|\\\\)[^\s\"'`,;:)]+"
-    r"|(?:" + _HOST_SEP + r")" + _HOST_ROOT + r"(?:" + _HOST_SEP + r")"
-    r"|(?://|\\/\\/)[^\s\\/\"'`,;:)]+(?:[\\/]|\\/))"
-    r"[^\s\"'`,;:)]*"
+    r"(?<![A-Za-z0-9_])" + _FILE_SCHEME + r"[\\/]*(?:"
+    + _DEVICE_PREFIX + r"[A-Za-z]:[\\/]" + _WINDOWS_TAIL
+    + r"|" + _DEVICE_PREFIX + r"\\{1,4}[^\s\\\"'`,;:)]+(?:\\|\\\\)[^\s\"'`,;:)]+"
+    + _WINDOWS_TAIL
+    + r"|" + _HOST_SEP + _HOST_ROOT + r"(?:(?:" + _HOST_SEP + r")(?:" + _POSIX_SEGMENT + r")?)*"
+    + r"|(?://|\\/\\/)[^\s\\/\"'`,;:)]+(?:[\\/]|\\/)(?:[A-Za-z]:[\\/])?" + _WINDOWS_TAIL
+    + r")"
 )
 # The root-only scope: every host shape above, and nothing that could be a product
 # route. The default scope adds every absolute path the POSIX pattern cannot see,
-# including a host-rooted one spelled after a colon and a `file:` URL.
-HOST_PATH_PATTERNS = (_DRIVE_PATH, _UNC_PATH, _SLASH_UNC_PATH, _HOST_POSIX_PATH, _FILE_URL_PATH)
-DEFAULT_PATH_PATTERNS = (_DRIVE_PATH, _UNC_PATH, _POSIX_PATH, _FILE_URL_PATH, _HOST_POSIX_PATH)
+# including a host-rooted one spelled after a colon, the JSON-escaped spelling of a
+# POSIX path, and a `file:` URL.
+HOST_PATH_PATTERNS = (
+    _DRIVE_PATH, _UNC_PATH, _SLASH_UNC_PATH, _HOST_POSIX_PATH, _ROOT_RELATIVE_PATH, _FILE_URL_PATH,
+)
+# The host-rooted POSIX pattern runs before the general POSIX one: it carries the
+# same space continuation, but a spelling only it recognises (a host root directly
+# after the separator) must not be consumed piecewise by the general pattern first.
+DEFAULT_PATH_PATTERNS = (
+    _DRIVE_PATH, _UNC_PATH, _SLASH_UNC_PATH, _HOST_POSIX_PATH, _POSIX_PATH, _FILE_URL_PATH,
+    _ROOT_RELATIVE_PATH, _ESCAPED_POSIX_PATH, _COLON_POSIX_PATH,
+)
 
 
 def hashed_path_token(path: str) -> str:
@@ -215,7 +319,15 @@ def main(argv: list[str]) -> int:
         if not path.is_file():
             print(f"model-routing-record-sanitize refused: {path} is not a readable file", file=sys.stderr)
             return 2
-        raw = path.read_bytes()
+        try:
+            # A file that exists but cannot be read is not text the checker got to
+            # inspect: report it as unusable (exit 2) instead of crashing, because an
+            # uncaught traceback exits 1 and a `--check --root-only` run reads that as
+            # "still carries a host absolute path" - a verdict about bytes never seen.
+            raw = path.read_bytes()
+        except OSError as error:
+            print(f"model-routing-record-sanitize refused: cannot read {path}: {error}", file=sys.stderr)
+            return 2
         source = str(path)
     try:
         # newline="" keeps the recorded line endings byte-faithful: a record's

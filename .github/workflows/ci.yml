@@ -20,9 +20,10 @@ jobs:
   #
   # The same diff also reports `run-records`: a change that adds or modifies an
   # evaluation record under `docs/evaluations/**` or `docs/evidence/**`, or that
-  # changes the record sanitize tool itself, gates the record-cleanliness job
-  # below. That gate must run for a records-only (documentation-only) pull
-  # request, so it is a separate output rather than part of run-heavy.
+  # changes `model-routing-record-sanitize.py` or `check-record-cleanliness.py`,
+  # gates the record-cleanliness job below. That gate must run for a records-only
+  # (documentation-only) pull request, so it is a separate output rather than
+  # part of run-heavy.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -71,8 +72,13 @@ jobs:
   # `fetch-depth: 0` gives the job the comparison base the gate needs. On a
   # pull request that is the checked-out event head's first parent (`HEAD^1`,
   # exactly the range the classifier above used); on a push it is the pushed
-  # `before` commit; an all-zero base (a new branch, a tag, a manual run) falls
-  # back inside the script.
+  # `before` commit; an empty or all-zero base (a manual `workflow_dispatch` run
+  # has no `before` field and arrives empty; a new branch or tag is all-zero)
+  # falls back inside the script.
+  # The head is the checkout's own `HEAD`, not the event's `$GITHUB_SHA`: both name
+  # the same revision in every event here, but only `HEAD` is guaranteed to be the
+  # revision this checkout holds, so a `refs/pull/N/merge` rebuilt between the event
+  # and the clone cannot compare `HEAD^1` with a commit the clone never fetched.
   record-cleanliness:
     needs: changes
     if: needs.changes.outputs.run-records == 'true'
@@ -85,7 +91,7 @@ jobs:
       - name: Refuse host paths in records this change adds or modifies
         env:
           RECORD_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
-        run: python3 scripts/ci/check-record-cleanliness.py --base "$RECORD_BASE" --head "$GITHUB_SHA"
+        run: python3 scripts/ci/check-record-cleanliness.py --base "$RECORD_BASE" --head HEAD
 
   contracts:
     needs: changes

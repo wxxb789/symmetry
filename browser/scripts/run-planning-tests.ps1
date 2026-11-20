@@ -51,6 +51,20 @@ if ($target.Scheme -ne "http" -or $target.IdnHost -notin @("127.0.0.1", "localho
 if ($target.Port -ne $Port) {
   throw "PortalUrl port ($($target.Port)) disagrees with the harness port ($Port): refusing to target a process this harness does not own"
 }
+# The port preflight below is check-then-use: two same-port starts both pass it
+# and then share one _build/instances/planning-<port> path and this database
+# until one fails at bind, which is the 2026-11-17 compile-interference window.
+# The named mutex is taken before the preflight and every mix invocation and
+# held through cleanup, so a second same-port harness fails closed here before
+# any mix call. An abandoned mutex means the previous owner died without
+# releasing it, so acquiring it is safe.
+$portLockName = "Local\symmetry-browser-harness-port-$Port"
+$portLock = New-Object System.Threading.Mutex($false, $portLockName)
+$portLockHeld = $false
+try { $portLockHeld = $portLock.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $portLockHeld = $true }
+if (-not $portLockHeld) {
+  throw "port $Port is already owned by another harness instance (lock $portLockName is held): refusing to share its database and instance build path"
+}
 if (@(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue).Count -gt 0) {
   throw "port $Port is already in use: the control plane this harness starts cannot answer PortalUrl"
 }
@@ -68,19 +82,13 @@ try {
 # the login the spec performs with it.
 $operatorToken = [guid]::NewGuid().ToString("N")
 
-# Instance build isolation: two Control instances started from the same
-# worktree must not share control/_build, where a compile another instance runs
-# (or the dev code reloader that compile feeds) decides what this run's server
-# loads and reloads - the 2026-11-17 observation was a foreign session's
-# server answering this worktree's browser runs with `# unhandled` error pages.
-# This harness owns the instance it starts and pins its compiled output per
-# port, so instances from one worktree that both serve compile into different
-# build paths: the preflight above refuses a port that already answers, and a
-# concurrent start on one port fails closed at bind/readiness. Deps sources
-# stay shared under control/deps; only compiled output moves. An inherited
-# MIX_BUILD_PATH is overridden explicitly, never trusted: a stale one from the
-# surrounding shell would point this instance at another directory, which is
-# the isolation this harness must own itself.
+# Instance build isolation: this instance compiles into its own per-port path
+# under control/_build/instances (never the shared control/_build/dev), an
+# inherited MIX_BUILD_PATH is overridden and reported rather than trusted, and
+# deps sources stay shared under control/deps - only compiled output moves.
+# The rationale (the 2026-11-17 cross-instance observation included) and the
+# asserted contract are recorded in browser/README.md and
+# browser/scripts/control-instance-isolation.test.mjs.
 $instanceBuildPath = Join-Path $controlRoot ("_build/instances/planning-" + $Port)
 if ($env:MIX_BUILD_PATH) {
   Write-Host "ignoring inherited MIX_BUILD_PATH '$env:MIX_BUILD_PATH': this instance compiles into $instanceBuildPath"
@@ -237,5 +245,6 @@ try {
   }
 }
 
+$portLock.ReleaseMutex()
 if ($stopFailed) { exit 1 }
 exit $specStatus
