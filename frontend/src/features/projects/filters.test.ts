@@ -95,12 +95,21 @@ describe("work filtering and projections", () => {
     // The filter reads its key through the same reader, so a search that never
     // passed the URL parser (a stored or hand-built one) re-points as well.
     expect(filterWorkItems(sentinelWork, filtersOf({ owner: "agent:unrecorded" })).map((item) => item.key)).toEqual(["ONE-4"]);
-    // A saved view that still carries the legacy key is the same search as the
-    // URL the reader repairs, so the active-view comparison keeps working.
-    expect(sameWorkSearch(workSearch({ owner: "agent:unrecorded" }), workSearch({ owner: "agent:" }))).toBe(true);
+    expect(filterWorkItems(sentinelWork, filtersOf({ owner: "human:unrecorded" })).map((item) => item.key)).toEqual(["ONE-5"]);
+    // The minted keys are fixed points, so the reader stays idempotent at the
+    // second call site.
+    expect(workSearch({ owner: "agent:" })).toEqual({ owner: "agent:" });
+    expect(workSearch({ owner: "human:" })).toEqual({ owner: "human:" });
     // #111's escape is a recorded name, not the legacy word: it keeps matching
     // its own row and never collapses onto the unnamed one.
     expect(filterWorkItems(sentinelWork, filtersOf(workSearch({ owner: "agent::unrecorded" }))).map((item) => item.key)).toEqual(["ONE-6"]);
+    // A key that merely resembles the sentinel is not it: an unknown owner type
+    // literally named `unrecorded` and a name that starts with the legacy word
+    // travel as written through both readers.
+    expect(workSearch({ owner: "type:unrecorded" })).toEqual({ owner: "type:unrecorded" });
+    expect(filtersOf({ owner: "type:unrecorded" }).owner).toBe("type:unrecorded");
+    expect(workSearch({ owner: "agent:unrecorded-bot" })).toEqual({ owner: "agent:unrecorded-bot" });
+    expect(filtersOf({ owner: "agent:unrecorded-bot" }).owner).toBe("agent:unrecorded-bot");
     // Every other key travels as written through both readers.
     expect(workSearch({ owner: "agent:builder" })).toEqual({ owner: "agent:builder" });
   });

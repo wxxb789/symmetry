@@ -55,17 +55,19 @@ signatures.
   carry as the absence they named", `frontend/src/features/work/presentation.test.ts:81-89`), and
   this increment makes the filter side agree with it. This is the entry's own wording ("the legacy
   sentinel word maps to the empty-value sentinel the encoder now mints").
-- **Semantics table** (pinned in `filters.test.ts` unless noted):
+- **Semantics table** (pinned in `filters.test.ts` unless a row says otherwise):
 
   | Key read | Normalised to | Row it matches |
   | --- | --- | --- |
   | `agent:unrecorded` | `agent:` | the agent row with no profile and no name |
   | `human:unrecorded` | `human:` | the human row with no name |
-  | `agent:` | `agent:` | unchanged |
-  | `human:` | `human:` | unchanged |
+  | `agent:` | `agent:` | unchanged (the minted key is a fixed point) |
+  | `human:` | `human:` | unchanged (the minted key is a fixed point) |
   | `agent::unrecorded` | `agent::unrecorded` | the row whose recorded name is `unrecorded` (a real name, not absence) |
-  | `agent::Ada:`, `human::Ada` | unchanged | the escaped recorded names the current encoder mints |
-  | `agent:builder`, `human:Ada`, `unassigned`, `type:robot`, `""` | unchanged | unchanged |
+  | `agent:::Ada`, `human:::Ada` | unchanged | the escaped recorded names the current encoder mints (a recorded name `:Ada`); not pinned |
+  | `agent:builder`, `unassigned`, `type:unrecorded`, `agent:unrecorded-bot` | unchanged | keys that must not be read as the sentinel |
+  | `human::Ada` (pre-#111 spelling for a recorded name `:Ada`) | `human::Ada` | no row — out of scope, tracked open in `docs/TODO.md`; not pinned |
+  | `human:Ada`, `type:robot`, `""` | unchanged | further unchanged samples, read from the implementation; not pinned |
 
 - **Idempotence.** The reader is a fixed point on every key it returns, so applying it twice — or
   applying it at both read boundaries as production does (`workSearch` then `filtersOf`) — is the
@@ -74,7 +76,8 @@ signatures.
   (`:141`) tests the minted key against `ownerOptions` values: a project with an unnamed-agent row
   selects that row's own option ("Agent"), and a project without one renders the absent option
   labelled from the minted key ("Agent (not in this project)") instead of a legacy duplicate. No
-  surface file changes.
+  surface file changes. Pinned by `router.test.tsx`, case "selects the row's own owner option for
+  a legacy sentinel bookmark instead of an absent duplicate".
 - **Escaped-name non-collapse.** The reader must not re-read `agent::unrecorded` as the legacy
   word: that is the escape the current encoder added so a real name cannot collide with the
   sentinel, and collapsing it would re-introduce the collision #111 removed.
@@ -102,7 +105,9 @@ signatures.
 5. **No storage migration.** Saved views are decoded through `workSearch` on read
    (`saved-views.ts:66`), so a stored pre-fix view carrying the legacy key is repaired by the same
    reader; the storage document, its version and `sameWorkSearch` are untouched, and a saved view
-   with the legacy key now compares as the same search as the URL's repaired key.
+   with the legacy key now compares as the same search as the URL's repaired key. Pinned by
+   `saved-views.test.ts`, case "reads a stored legacy sentinel owner key back as the key the URL
+   reader mints", which reads the stored document through `readSavedViews`.
 6. **No contract/schema change.** No wire member, fixture or generated file changes; the increment
    does not run `contracts:check` because nothing under `contracts/` moves.
 
@@ -113,7 +118,12 @@ signatures.
    `filtersOf(workSearch({ owner: "agent:unrecorded" }))` selects the unnamed-agent row; a
    `filtersOf({ owner: "agent:unrecorded" })` literal selects it too; `agent::unrecorded` still
    selects the row whose recorded name is `unrecorded` and not the unnamed one; `human:unrecorded`
-   selects the unnamed human row.
+   selects the unnamed human row through both call sites; the minted keys are fixed points; and the
+   sentinel neighbours `type:unrecorded` and `agent:unrecorded-bot` travel as written through both
+   readers. Two surface-level pins back the same reader: `saved-views.test.ts`, case "reads a
+   stored legacy sentinel owner key back as the key the URL reader mints", and `router.test.tsx`,
+   case "selects the row's own owner option for a legacy sentinel bookmark instead of an absent
+   duplicate".
 2. **Before/after runs** of that test file on the pre-fix and post-fix bytes (red first, then
    green), plus the entry's own reproduction command: a throwaway Node ESM probe importing
    `filters.ts`/`presentation.ts` through a type-stripping resolve hook in the system temp
@@ -133,22 +143,29 @@ signatures.
    rewriting and no application change); the fixture's `mise exec elixir@1.20.4-otp-29
    erlang@29.1.2 -- mix` resolves through install-directory junctions to the pinned Elixir 1.20.4 /
    OTP 29.0.6 toolchain; `RELEASE_DISTRIBUTION=none` because a release node name cannot register on
-   this host. Outcome — three full runs plus an isolation pass: run 1 `88 passed / 5 failed /
-   1 skipped` (13.2 m; four failures came from a stale `SYMMETRY_FIXTURE_MIX` export left in the
-   shell, one is the recorded load class), run 2 `89 passed / 4 failed / 1 skipped` (13.7 m; two
-   fixture `mix run` database-pool drops, one 60 s test timeout on a fixture case, one Playwright
-   trace-write `ENOENT` in the shared temp output directory — the class recorded at
+   this host. **Local render gate: pending** — no full run on this host was green across the seven
+   spec files at both widths; the evidence is the three full runs and the isolation pass below, and
+   CI's `control` render gate decides the merge. Outcome of those runs: run 1 `88 passed / 5 failed
+   / 1 skipped` (13.2 m; four diagnosed environmental failures from a stale
+   `SYMMETRY_FIXTURE_MIX=unused` export left in the shell — `spawnSync` ENOENT on the fixture
+   command — and one unclassified failure: the mobile `portal-execution-control.spec.mjs:98`
+   receipt timeout, whose 61 polls saw only `data-outcome="queued"`; it was not investigated and
+   passed in the other runs on the same bytes), run 2 `89 passed / 4 failed / 1 skipped` (13.7 m;
+   two fixture `mix run` database-pool drops, one 60 s test timeout on a fixture case, one
+   Playwright trace-write `ENOENT` in the shared temp output directory — the class recorded at
    `docs/evidence/goal-0007c-safe-work-planning-2026-11-16.md:759-763` and
    `docs/evidence/goal-0007g-scoped-engineering-chat-2026-11-17.md:611-615`), run 3 with a private
    `SYMMETRY_PLAYWRIGHT_OUTPUT` `92 passed / 1 failed / 1 skipped` (16.9 m; the single failure is
    the fixture-heavy `portal-goal-attention.spec.mjs:435` desktop case exceeding its 60 s timeout),
-   and an isolation pass of the failing cases at both widths `4 passed / 2 failed`. No failure was
-   on the changed owner-key path: the owner-filter end-to-end case
+   and an isolation pass of the failing cases at both widths `4 passed / 2 failed`. The diagnosed
+   environmental classes are the stale-export, database-pool, trace-write and 60 s fixture-timeout
+   failures; the mobile receipt timeout above is recorded as not investigated rather than
+   classified. No failure was on the changed owner-key path: the owner-filter end-to-end case
    (`browser/tests/portal-work-views.spec.mjs:117`, list/board/filters over real served rows)
    passed at both widths in every run, every failing case passed in at least one other run on the
-   same bytes, and the residual failures are the documented host-contention class of `docs/TODO.md`
-   "Browser acceptance under host load" (a second session held 36 database connections on the
-   shared server throughout). CI remains the merge gate.
+   same bytes, and the residual host-contention class is tracked by `docs/TODO.md` "Browser
+   acceptance under host load" (a second session held 36 database connections on the shared server
+   throughout). CI remains the merge gate.
 
 ## Out of scope (contract clause 4)
 
@@ -157,5 +174,13 @@ signatures.
   pinned by #111; no legacy sentinel existed there.
 - Any refactor of `work-surface.tsx`, saved-view storage, or the owner-option projection beyond
   what the two reader call sites need.
+- The pre-#111 keys minted for recorded names that start with `:` (for example `human::Ada` for a
+  recorded name `:Ada`). They keep their spelling and match no row, and the legacy key for a
+  recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to the escape the current
+  encoder mints for the recorded name `unrecorded`, so it selects that other row and cannot be
+  disambiguated (the collision repeats for deeper colon prefixes: a legacy key carrying `n` colons
+  is the current mint for the same name with `n-1`). The contract's sentinel wording excludes
+  both shapes; they are tracked as an open entry in `docs/TODO.md` (reproduction: the throwaway
+  vitest probe recorded there).
 - Contract/schema/fixture changes: the fix is client-side read compatibility for a first release
   that is not shipped; no backward-compatibility obligation was accepted.

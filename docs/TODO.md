@@ -276,6 +276,32 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       both the escaped-escape case and the raw single-backslash spelling must be pinned in the
       tester. Suggested owner area: `scripts/ci` record tooling.
 
+- [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
+      current encoder escapes a recorded value that starts with `:` by prefixing one
+      (`frontend/src/features/work/presentation.ts:94-97`), so a recorded name `:Ada` mints
+      `human:::Ada` (`agent:::Ada` on the agent side), while the pre-#111 encoder spelled it
+      unescaped — `human::Ada`. The reader committed with the legacy-sentinel fix
+      (`ownerKeyFilter`, `:135-139`) maps only the two sentinel words, so a bookmark or hand-typed
+      link carrying the pre-#111 spelling normalises to itself and matches no row, and the
+      pre-#111 key for a recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to
+      the escape the current encoder mints for the recorded name `unrecorded`, so it silently
+      selects that other row and cannot be disambiguated (the collision repeats for deeper colon
+      prefixes: a legacy key carrying `n` colons is the current mint for the same name with
+      `n-1`). Reproduced on this tree with a throwaway vitest probe over the repository's own
+      modules (deleted after the run, no test file kept): rows named `:Ada`, `:unrecorded` and
+      `unrecorded` mint `human:::Ada`, `human:::unrecorded` and `human::unrecorded`; the legacy
+      key `human::Ada` kept its spelling and `filterWorkItems` selected `[]`; the legacy key
+      `human::unrecorded` selected the row named `unrecorded`; and
+      `ownerKeyLabel("human::Ada")` prints `Ada`, dropping the colon.
+      Reachable: `assignee_name` and `agent_profile` are length-bounded only
+      (`control/lib/symmetry_control/workspaces/schemas.ex:472-473`), so a colon-leading name can
+      be served. The shape was recorded as an explicit residual of the legacy-sentinel increment
+      (`docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`, "Out of scope"). Fix direction:
+      decide the reading for the colon-leading pre-#111 keys (re-point them like the sentinel, or
+      accept the collision and document it), then pin both shapes in
+      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
+      work-surface/frontend.
+
 - Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
   workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
   shellcheck-disabled repo-wide `actionlint -shellcheck= -pyflakes=` run plus a direct

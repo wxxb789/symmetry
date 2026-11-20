@@ -26,11 +26,11 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
-The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
-2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
-
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
+
+The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
+2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
 
 ## Model-routing evaluation records
 
@@ -2371,30 +2371,41 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       now matches the minted key against `ownerOptions`, renders the row's own "Agent" option,
       and labels the absent fallback from the minted key instead of duplicating the legacy one.
       No surface, label, encoder, storage-schema or contract change; the decision and the
-      edge-case table are written out in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`.
+      edge-case table are written out in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`,
+      which also records the second pre-#111 shape (keys for recorded names that start with `:`,
+      for example `human::Ada`) as out of scope and tracked open in `docs/TODO.md`.
       Pinned by `frontend/src/features/projects/filters.test.ts`, case "re-points the legacy
       sentinel bookmarks to the keys the encoder mints now": the legacy URL key maps to the
-      minted key, both reader call sites select the unnamed-agent and unnamed-human rows, a
-      legacy saved view compares as the same search as the repaired URL, and `agent::unrecorded`
-      still selects the row whose recorded name is `unrecorded`. Recorded runs: the case failed
-      on the pre-fix bytes (`1 failed | 7 passed` in the file) and passes after (`8 passed`); the
-      entry's throwaway Node ESM probe over the repository modules printed
+      minted key, both reader call sites select the unnamed-agent and unnamed-human rows, the
+      minted keys are fixed points, `agent::unrecorded` still selects the row whose recorded name
+      is `unrecorded`, and the sentinel neighbours `type:unrecorded` and `agent:unrecorded-bot`
+      travel as written; by `frontend/src/features/projects/saved-views.test.ts`, case "reads a
+      stored legacy sentinel owner key back as the key the URL reader mints" (the saved-view read
+      path repairs the stored key); and by `frontend/src/app/router.test.tsx`, case "selects the
+      row's own owner option for a legacy sentinel bookmark instead of an absent duplicate" (the
+      select reads the repaired key and renders no absent duplicate). Recorded runs: the case
+      failed on the pre-fix bytes (`1 failed | 7 passed` in the file) and passes after
+      (`8 passed`); the entry's throwaway Node ESM probe over the repository modules printed
       `filterWorkItems(rows, filtersOf({owner:"agent:unrecorded"})).length = 0 of 3` and
       `filterWorkItems(rows, filtersOf(workSearch({owner:"agent:unrecorded"}))).length = 0 of 3`
       before the fix, `1 of 3` for both shapes after, with `ownerKey` keys
       `["agent:","agent::unrecorded","agent:builder"]` and `ownerKeyLabel("agent:unrecorded")`
       unchanged at "Agent". Gates: `pnpm install --frozen-lockfile` exit 0; frontend typecheck 0,
-      lint 0, vitest 494 passed (20 files), build 0. Render gate (`docs/design/quality.md`
-      amendment, `SYMMETRY_RENDER_GATE_REQUIRED=1`, the focused release-shell gate's seven spec
-      files at both widths against a `MIX_ENV=prod` release of this tree, three instances on
-      4000/4001/4002 and a fresh migrated database): three full runs reported `88 passed /
-      5 failed / 1 skipped`, `89 passed / 4 failed / 1 skipped` and `92 passed / 1 failed /
-      1 skipped`, with an isolation pass of the failing cases at `4 passed / 2 failed`. The
-      failure set is unstable and every failure is environmental — a stale `SYMMETRY_FIXTURE_MIX`
-      export in the first run, fixture `mix run` database-pool drops under the shared server's
-      load, a 60 s test timeout on a fixture case, a Playwright trace-write `ENOENT` in the shared
-      temp output directory, and one receipt race — and every failing case passed in at least one
-      other run on the same bytes; the owner-filter end-to-end case
+      lint 0, vitest 496 passed (20 files; 494 at the implement revision), build 0. Render gate
+      (`docs/design/quality.md` amendment, `SYMMETRY_RENDER_GATE_REQUIRED=1`, the focused
+      release-shell gate's seven spec files at both widths against a `MIX_ENV=prod` release of
+      this tree, three instances on 4000/4001/4002 and a fresh migrated database): the local
+      render gate is **pending** — no fully green run on this host; CI's `control` render gate
+      decides the merge. Three full runs reported `88 passed / 5 failed / 1 skipped`,
+      `89 passed / 4 failed / 1 skipped` and `92 passed / 1 failed / 1 skipped`, with an
+      isolation pass of the failing cases at `4 passed / 2 failed`. The diagnosed failure classes
+      are environmental — a stale
+      `SYMMETRY_FIXTURE_MIX` export in the first run, fixture `mix run` database-pool drops under
+      the shared server's load, a 60 s test timeout on a fixture case, and a Playwright
+      trace-write `ENOENT` in the shared temp output directory — and one failure is recorded as
+      not investigated: the run-1 mobile `browser/tests/portal-execution-control.spec.mjs:98`
+      receipt timeout (61 polls saw only `data-outcome="queued"`), which passed in the other runs
+      on the same bytes; so did every other failing case, and the owner-filter end-to-end case
       (`browser/tests/portal-work-views.spec.mjs:117`, list/board/filters over real served rows)
       passed at both widths in every run. The gate's environment, its carrier deviations and the
       failure classification are in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`; CI
