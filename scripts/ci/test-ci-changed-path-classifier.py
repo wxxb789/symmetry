@@ -69,6 +69,16 @@ AUDITED_FIXTURES = {
     "docs/archive/CLOSED-TODO.md": "closed-todo-modified",
 }
 
+# The citation job's own tool paths: the gate's program, its fixture suite and the
+# revision-range module both the record and the citation gate read. They are not
+# audited documents, so the audited-corpus check cannot explain the literals that
+# mention them; this mapping is that explanation, pinned by fixtures the same way.
+CITATION_TOOL_FIXTURES = {
+    "scripts/ci/check-citation-existence.py": "citation-tool-modified",
+    "scripts/ci/test-check-citation-existence.py": "citation-tests-modified",
+    "scripts/ci/revision_scope.py": "revision-scope-modified",
+}
+
 JOB_HEADER = re.compile(r"^  ([a-z][a-z0-9-]*):$")
 NEEDS_LINE = re.compile(r"^    needs:\s*(\S.*?)\s*$")
 CONDITION_LINE = re.compile(r"^    if:\s*(\S.*?)\s*$")
@@ -94,8 +104,11 @@ BASE_FILES = {
     "docs/archive/CLOSED-TODO.md": "# Closed TODO\n\nBase archive text.\n",
     "docs/design/quality.md": "# Quality\n\nBase design text.\n",
     "docs/runbooks/portal.md": "# Portal\n\nBase runbook text.\n",
+    "scripts/ci/check-citation-existence.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
     "scripts/ci/check-record-cleanliness.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
     "scripts/ci/model-routing-record-sanitize.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
+    "scripts/ci/revision_scope.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
+    "scripts/ci/test-check-citation-existence.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
 }
 
 
@@ -507,12 +520,37 @@ FIXTURES = (
         ("docs/runbooks/portal.md",),
         delete_fixture_file("docs/runbooks/portal.md"),
     ),
+    Fixture(
+        "revision-scope-modified",
+        "the shared revision-range module gates the record and citation jobs and the heavy matrix",
+        (True, True, True),
+        ("scripts/ci/revision_scope.py",),
+        rewrite_fixture_file("scripts/ci/revision_scope.py", "# Stand-in bytes, edited.\n"),
+    ),
+    Fixture(
+        "citation-tool-modified",
+        "a changed citation gate gates its own job",
+        (True, False, True),
+        ("scripts/ci/check-citation-existence.py",),
+        rewrite_fixture_file("scripts/ci/check-citation-existence.py", "# Stand-in bytes, edited.\n"),
+    ),
+    Fixture(
+        "citation-tests-modified",
+        "a changed citation fixture suite gates the citation job",
+        (True, False, True),
+        ("scripts/ci/test-check-citation-existence.py",),
+        rewrite_fixture_file("scripts/ci/test-check-citation-existence.py", "# Stand-in bytes, edited.\n"),
+    ),
 )
 
 FIXTURES_BY_NAME = {fixture.name: fixture for fixture in FIXTURES}
 require(len(FIXTURES_BY_NAME) == len(FIXTURES), "fixture names must be unique")
 require(set(PINNED_GATES.values()) <= set(OUTPUT_KEYS), "every pinned gate must name a classifier output")
 require(DEFAULT_GATE in OUTPUT_KEYS, "the default gate must name a classifier output")
+require(
+    set(CITATION_TOOL_FIXTURES) <= set(BASE_FILES),
+    "every citation tool path must be a stand-in file in the fixture base",
+)
 
 
 def git(repo: pathlib.Path, *arguments: str) -> bytes:
@@ -635,8 +673,25 @@ class ChangedPathClassifierTests(unittest.TestCase):
                 check_fixture_triple(self.outputs[fixture.name], fixture)
         for literal in literals["run-citations"]:
             with self.subTest(literal=literal):
-                self.assertTrue(any(covers(literal, entry) for entry in self.audited),
-                                f"the run-citations predicate mentions {literal}, which no audited path explains")
+                self.assertTrue(
+                    any(covers(literal, entry) for entry in (*self.audited, *CITATION_TOOL_FIXTURES)),
+                    f"the run-citations predicate mentions {literal}, which no audited path "
+                    "or citation tool path explains",
+                )
+
+    def test_every_citation_tool_path_gates_only_run_citations(self) -> None:
+        literals = predicate_literals(self.program_text)
+        for tool, fixture_name in CITATION_TOOL_FIXTURES.items():
+            with self.subTest(citation_tool=tool):
+                self.assertTrue(any(covers(literal, tool) for literal in literals["run-citations"]),
+                                f"{tool} is a citation tool path but run-citations never mentions it")
+                self.assertFalse(
+                    any(covers(literal, tool) for literal in literals["run-heavy"]),
+                    f"{tool} is a citation tool path but run-heavy mentions it",
+                )
+                fixture = FIXTURES_BY_NAME[fixture_name]
+                self.assertIn(tool, fixture.paths)
+                check_fixture_triple(self.outputs[fixture_name], fixture)
 
     # -- the workflow's outputs and the routing they gate ---------------------
 
@@ -726,6 +781,34 @@ class ChangedPathClassifierTests(unittest.TestCase):
         self.assertEqual(set(model.folds), {"run-heavy", "run-citations"})
         with self.assertRaises(AssertionError):
             check_output_folds(model)
+
+    def test_mutation_dropping_the_records_revision_scope_clause_breaks_its_fixture(self) -> None:
+        fixture = FIXTURES_BY_NAME["revision-scope-modified"]
+        mutated = self.program_text.replace(
+            'or path == b"scripts/ci/check-record-cleanliness.py"\n'
+            '    or path == b"scripts/ci/revision_scope.py"',
+            'or path == b"scripts/ci/check-record-cleanliness.py"',
+        )
+        self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
+        outputs = self.run_program(mutated, fixture)
+        self.assertEqual(triple_of(outputs), (True, False, True),
+                         "dropping the records clause must flip run-records for the shared module")
+        with self.assertRaises(AssertionError):
+            check_fixture_triple(outputs, fixture)
+
+    def test_mutation_dropping_the_citations_revision_scope_clause_breaks_its_fixture(self) -> None:
+        fixture = FIXTURES_BY_NAME["revision-scope-modified"]
+        mutated = self.program_text.replace(
+            'or path == b"scripts/ci/test-check-citation-existence.py"\n'
+            '    or path == b"scripts/ci/revision_scope.py"',
+            'or path == b"scripts/ci/test-check-citation-existence.py"',
+        )
+        self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
+        outputs = self.run_program(mutated, fixture)
+        self.assertEqual(triple_of(outputs), (True, True, False),
+                         "dropping the citations clause must flip run-citations for the shared module")
+        with self.assertRaises(AssertionError):
+            check_fixture_triple(outputs, fixture)
 
 
 if __name__ == "__main__":

@@ -9,13 +9,16 @@ and checks the path and symbol citations those documents write in backticks agai
 symbol that no longer exists when its owner moves.
 
 A path citation must hold in the head revision's tree (``git ls-tree -r -t``), or be a
-path the checkout's ignore rules cover as a file or as a directory (``git
-check-ignore``): the second arm is the deliberate boundary for generated output that no
-index can contain by the repository's own rule - the runbook that documents the staged
-portal bundle at ``control/priv/static/portal/`` keeps naming it - while a citation the
-repository neither holds nor declares is refused. Raw ``file:line`` values are never
-validated: the line suffix is stripped before the path is resolved, because any edit
-above a cited line would otherwise redden the gate.
+path the head revision's own ignore rules cover as a file or as a directory: the second
+arm is the deliberate boundary for generated output that no index can contain by the
+repository's own rule - the runbook that documents the staged portal bundle at
+``control/priv/static/portal/`` keeps naming it - while a citation the repository
+neither holds nor declares is refused. An ignore-covered citation cannot be verified
+against any committed bytes, so each one is reported as a per-citation notice naming
+the ``source:line:pattern`` rule that covers it, never as a silent pass. Raw
+``file:line`` values are never validated: the line suffix, with an optional column, is
+stripped before the path is resolved, because any edit above a cited line would
+otherwise redden the gate.
 
 A symbol citation must occur in the file the prose binds it to. The binding is
 deliberately narrow: the symbol and the path are consecutive backticked tokens in one
@@ -23,24 +26,43 @@ paragraph, separated by at most forty characters that hold no sentence terminato
 most two words, each from the closed connective list below. A wider rule was measured
 over the corpus and produced false pairs (identifiers belonging to another file in the
 same sentence, config values, commit shas), and a mis-parse must never demand a rewrite;
-an unbound pair is left to review rather than silently claimed.
+an unbound pair is left to review rather than silently claimed. The list holds words
+that join a name to its owner (``in``, ``of``, ``calls``, ``reads``); a coordinating
+conjunction (``and``, ``or``) only joins list items, so it binds nothing, and a symbol
+bound to a path the head revision does not hold is skipped entirely: the path arm
+already reports that path, named, at exit 1.
 
 What is audited, exactly. A backticked token is a path citation when, after a trailing
 line suffix and a leading ``./`` are stripped:
 
-* it is ``name.ext`` shaped (a file name) or carried a line suffix, and every path
-  segment before the last names a real directory of the head tree - the multi-segment
-  form; or
+* it is ``name.ext`` shaped (a file name) or carried a line suffix - the multi-segment
+  form - and its first segment, or the deepest existing directory above it, resolves
+  in the head tree; or
 * it is, as a single segment, a top-level entry of the head tree (``README.md``,
   ``compose.production.yaml``, ``control``); or
-* it ends in ``/`` (a directory citation, stripped of the slash); or
-* it holds a wildcard (``**``, ``...``, ``…``, ``*``), whose anchor is the text before
-  it and must be a tree entry.
+* it ends in ``/`` (a directory citation, stripped of the slash), resolved like the
+  multi-segment form; or
+* it holds a wildcard (``**``, ``...``, ``…``, ``*``); the pattern it spells must match
+  at least one entry of the head tree (``**`` spans path segments and ``*`` does not),
+  and the text before the first wildcard must resolve like the multi-segment form.
 
-Two shapes are deliberately not citations. An extensionless multi-segment token without
-a trailing slash, a line suffix or a wildcard: this corpus writes branch names in
-backticks (``docs/close-linux-platform-flakes``), which are indistinguishable from a
-directory citation by shape, and that ambiguity is left to review rather than guessed.
+The head tree need not hold a resolved multi-segment citation (that is the rot the gate
+refuses). "Resolves" has a third arm beside the head tree: a multi-segment token whose
+first segment the comparison base held at the top level and the head revision does not
+is a directory or file this very range removed or renamed, and every citation under it
+- path, directory or glob alike - is refused with the path named. A token whose first
+segment neither revision holds at the top level (a subdirectory-relative
+``config/test.exs``, an upstream source path such as PostgreSQL's ``src/backend/...``)
+names no repo-relative path the gate can resolve, and is left to review rather than
+guessed: a mis-parse must never demand a rewrite.
+
+Two more shapes are deliberately not citations. An extensionless multi-segment token
+without a trailing slash, a line suffix or a wildcard: this corpus writes branch names
+in backticks (``docs/close-linux-platform-flakes``) in the same shape it cites
+directories (``control/lib``, ``daemon/internal/platform``), and the tree separates the
+two only when the token is itself an entry - so the whole shape is left to review rather
+than guessed, a deliberate recall limit whose cost is that a tree directory cited this
+way is not re-checked when it moves.
 And a bare file name (``read_model.ex``, ``runner.go``) that is not a top-level entry:
 a basename names no repo-relative path, so there is nothing to resolve - the multi-
 segment citations that do carry a directory are where that file is checked. A token
@@ -48,7 +70,9 @@ with whitespace, a scheme, a leading ``/``, ``~``, ``$`` or ``-``, or a placehol
 (``<``, ``>``, ``{``, ``}``) is not a citation either: it is a command, a URL, a host
 path or a template. A symbol citation is ``name/arity``, ``Module.name/arity``,
 ``name()`` or ``Module.name()``, and it is checked only against a file-shaped path
-citation: a directory or glob citation has no single text to search.
+citation: a directory or glob citation has no single text to search. Lines inside a
+fenced code block are not audited at all: the backticks in a JS template literal, a Go
+raw string or a shell example are code, not citations.
 
 Changed-file selection is computed against an explicit comparison base, never from the
 checkout's last commit: CI passes the pull-request base commit, or the pushed ``before``
@@ -56,10 +80,18 @@ commit for a push. The selected documents' text and the cited files' text are re
 the ``--head`` revision's Git blob - never from the working tree - so the checkout need
 not be at ``--head`` and a worktree file cannot substitute bytes for the revision under
 test; a document whose head entry is not a regular file blob (a symlink storing its
-target text, or a gitlink) is refused. The base fallback and narrowing rules are
-``revision_scope``'s, shared with ``check-record-cleanliness.py``. An audited document
-that the range does not change is deliberately not audited: the reading of an older
-document is its own review.
+target text, or a gitlink) is refused. The ignore rules are read the same way, from the
+head revision's own ``.gitignore`` blobs and not from the checkout's (see
+``HeadIgnoreRules`` below). The base fallback and narrowing rules are
+``revision_scope``'s, shared with ``check-record-cleanliness.py``.
+
+The audit scope is the whole selected document, not the lines the range changed:
+touching a document obliges repairing every stale citation it carries - the archived
+closure that cites a file another increment moved must be repointed in the same pull
+request. A document the range does not change is deliberately not audited (the reading
+of an older document is its own review), so a pull request that only moves or renames a
+file does not re-check the documents that cite it: the repair lands, as a red gate, in
+the next pull request that touches one of those documents.
 
 Usage::
 
@@ -75,9 +107,12 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import os
 import pathlib
 import re
+import subprocess
 import sys
+import tempfile
 
 # The revision-range machinery is shared with scripts/ci/check-record-cleanliness.py;
 # importing the sibling keeps one implementation of the base fallback and the head-blob
@@ -91,8 +126,13 @@ PROGRAM = "check-citation-existence"
 AUDITED_PATHS = ("docs/runbooks", "docs/design/quality.md", "docs/archive/CLOSED-TODO.md")
 
 BACKTICKED = re.compile(r"`([^`\n]+)`")
-LINE_SUFFIX = re.compile(r":\d+(?:[-–,]\d+)*$")
+# The line suffix, with an optional column (``file:line:col`` is what compilers, test
+# runners and linters print); the suffix is stripped and never validated.
+LINE_SUFFIX = re.compile(r":\d+(?::\d+)?(?:[-–,]\d+(?::\d+)?)*$")
 WILDCARD = re.compile(r"\*\*|\.\.\.|…|\*")
+# A fenced code block's opening or closing line: up to three leading spaces and three or
+# more backticks or tildes (CommonMark's fence shapes).
+FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 FILENAME = re.compile(r"[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,8}$")
 NOT_A_CITATION = re.compile(r"[\s<>{}]")
 ARITY_SYMBOL = re.compile(r"^(?:[A-Z][A-Za-z0-9_.]*\.)?([a-z_][A-Za-z0-9_]*[!?]?)/[0-9]+$")
@@ -103,7 +143,7 @@ WORD = re.compile(r"[A-Za-z0-9_]+")
 # The closed connective list the gap between a path and its symbol may use; anything else
 # leaves the pair unbound (see the module docstring).
 CONNECTIVES = frozenset(
-    "of in at and or is the its from to with uses used calls see sees runs reads writes "
+    "of in at is the its from to with uses used calls see sees runs reads writes "
     "now only by for that so".split()
 )
 MAX_GAP_CHARACTERS = 40
@@ -111,7 +151,7 @@ MAX_GAP_WORDS = 2
 
 
 class IgnoreQueryRefused(Exception):
-    """The checkout's ignore rules could not be asked about a path."""
+    """The head revision's ignore rules could not be asked about a path."""
 
 
 class Record:
@@ -119,22 +159,32 @@ class Record:
 
     __slots__ = ("match", "path_shape", "path_body", "symbol", "line")
 
-    def __init__(self, match: re.Match[str], line: int, files: set[str], directories: set[str]) -> None:
+    def __init__(
+        self,
+        match: re.Match[str],
+        line: int,
+        files: set[str],
+        directories: set[str],
+        removed: frozenset[str],
+    ) -> None:
         self.match = match
         self.line = line
-        self.path_shape, self.path_body = path_citation(match.group(1).strip(), files, directories)
+        self.path_shape, self.path_body = path_citation(
+            match.group(1).strip(), files, directories, removed,
+        )
         self.symbol = symbol_citation(match.group(1).strip())
 
 
 def path_citation(
-    token: str, files: set[str], directories: set[str],
+    token: str, files: set[str], directories: set[str], removed: frozenset[str],
 ) -> tuple[str | None, str | None]:
     """The ``(shape, body)`` of a path citation, or ``(None, None)`` when it is not one.
 
-    Shapes are ``file``, ``dir`` and ``glob`` (a wildcard anchor); the line suffix is
-    stripped from ``body`` and never checked (see the module docstring). The head tree's
-    entries decide the shapes only a tree can decide: whether a single segment is an
-    entry, and whether every directory above a file-shaped token exists.
+    Shapes are ``file``, ``dir`` and ``glob`` (the glob as written); the line suffix is
+    stripped from ``body`` and never checked, and a leading ``./`` comes off (see the
+    module docstring). The head tree's entries and the range's removed top-level
+    entries decide the shapes only they can decide: whether a single segment is an
+    entry, and whether a multi-segment token names a repo-relative prefix at all.
     """
     if not token or "://" in token or NOT_A_CITATION.search(token):
         return (None, None)
@@ -149,12 +199,12 @@ def path_citation(
     wildcard = WILDCARD.search(body)
     if wildcard:
         anchor = body[: wildcard.start()].rstrip("/")
-        if not anchor or not directory_prefix_exists(anchor, files, directories):
+        if not anchor or not names_a_repo_prefix(anchor, files, directories, removed):
             return (None, None)
-        return ("glob", anchor)
+        return ("glob", body)
     if body.endswith("/"):
         stripped = body.rstrip("/")
-        if not stripped or not directory_prefix_exists(stripped, files, directories):
+        if not stripped or not names_a_repo_prefix(stripped, files, directories, removed):
             return (None, None)
         return ("dir", stripped)
     if "/" not in body:
@@ -164,18 +214,38 @@ def path_citation(
         if body in files:
             return ("file", body)
         return ("dir", body) if body in directories else (None, None)
-    if not directory_prefix_exists(body, files, directories):
+    if not names_a_repo_prefix(body, files, directories, removed):
         return (None, None)
     return ("file", body) if suffixed or FILENAME.match(body.rsplit("/", 1)[-1]) else (None, None)
 
 
+def names_a_repo_prefix(
+    body: str, files: set[str], directories: set[str], removed: frozenset[str],
+) -> bool:
+    """Whether ``body`` names a repo-relative prefix the head tree or the range explains.
+
+    The head tree's entries decide for a token it holds or whose deepest existing
+    ancestor it holds (``directory_prefix_exists``). When even the first segment of
+    ``body`` is gone, one arm remains: a first segment the comparison base held at the
+    top level and the head does not is an entry this very range removed or renamed, so
+    the token cites the moved owner - while a first segment neither revision holds at
+    the top level (a subdirectory-relative ``config/test.exs``, an upstream source path
+    such as PostgreSQL's ``src/backend/...``) names nothing the gate can resolve, and
+    is left to review rather than guessed (a mis-parse must never demand a rewrite).
+    """
+    return directory_prefix_exists(body, files, directories) or body.split("/", 1)[0] in removed
+
+
 def directory_prefix_exists(body: str, files: set[str], directories: set[str]) -> bool:
-    """Whether ``body`` is a tree entry, or every directory above it is.
+    """Whether ``body`` is a tree entry, or the deepest existing ancestor above it is.
 
     A citation of a path the head revision does not hold is still this gate's business
     (that is the rot it refuses), so the directory prefix - not the whole path - decides
     whether a token is repo-relative at all: ``docs/runbooks/moved.md`` is a citation
-    because ``docs/runbooks`` exists, while ``main`` or ``docs/close-a-branch`` is not.
+    because ``docs/runbooks`` exists, and so is ``docs/runbooks/moved/sub/thing.md``,
+    because the deepest ancestor the walk finds is a tree directory. ``main`` or
+    ``docs/close-a-branch`` is not: no ancestor is a tree directory and neither is the
+    token itself.
     """
     if body in files or body in directories:
         return True
@@ -187,6 +257,52 @@ def directory_prefix_exists(body: str, files: set[str], directories: set[str]) -
             return False
         parent = parent.rsplit("/", 1)[0]
     return False
+
+
+def segment_matches(pattern: str, name: str) -> bool:
+    """Whether one path segment matches a wildcard segment pattern; ``*`` is any run."""
+    parts = pattern.split("*")
+    if len(parts) == 1:
+        return pattern == name
+    if not name.startswith(parts[0]):
+        return False
+    name = name[len(parts[0]):]
+    for part in parts[1:-1]:
+        index = name.find(part)
+        if index < 0:
+            return False
+        name = name[index + len(part):]
+    return name.endswith(parts[-1]) and len(name) >= len(parts[-1])
+
+
+def glob_matches(pattern: str, path: str) -> bool:
+    """Whether ``path`` matches a citation glob: ``**`` spans segments, ``*`` does not.
+
+    The two ellipsis spellings were translated to ``*`` before this call. Matching a
+    tree path is a presence test, so the semantics are the narrowing kind: ``*`` never
+    crosses a ``/``, and ``**`` is the one spelling that does.
+    """
+    reachable = [True] + [False] * len(path.split("/"))
+    names = path.split("/")
+    for pattern_segment in pattern.split("/"):
+        if pattern_segment == "**":
+            spanning = False
+            for index in range(len(reachable)):
+                spanning = spanning or reachable[index]
+                reachable[index] = spanning
+            continue
+        advanced = [False] * len(reachable)
+        for index in range(1, len(reachable)):
+            advanced[index] = (
+                reachable[index - 1] and segment_matches(pattern_segment, names[index - 1])
+            )
+        reachable = advanced
+    return reachable[len(names)]
+
+
+def glob_pattern(body: str) -> str:
+    """The citation glob as a matcher pattern: the ellipsis spellings become ``*``."""
+    return body.replace("...", "*").replace("…", "*")
 
 
 def symbol_citation(token: str) -> str | None:
@@ -213,6 +329,32 @@ def paragraphs(text: str):
         yield start, text[start:separator.start()]
         start = separator.end()
     yield start, text[start:]
+
+
+def without_fenced_blocks(text: str) -> str:
+    """``text`` with every fenced code block blanked to spaces; line offsets survive.
+
+    A backticked token inside a fence is code, not a citation: JS template literals, Go
+    raw strings and shell examples write the same backticks prose does, and demanding a
+    rewrite of the example would be the mis-parse the module docstring forbids. The
+    blanked lines keep their newlines - and so every line number a refusal reports -
+    and become paragraph separators, so a binding never reaches across a fence.
+    """
+    blanked: list[str] = []
+    fence: tuple[str, int] | None = None
+    for line in text.splitlines(keepends=True):
+        marker = FENCE.match(line)
+        if fence is not None:
+            blanked.append(re.sub(r"[^\n]", " ", line))
+            if marker is not None and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= fence[1]:
+                fence = None
+            continue
+        if marker is None:
+            blanked.append(line)
+            continue
+        fence = (marker.group(1)[0], len(marker.group(1)))
+        blanked.append(re.sub(r"[^\n]", " ", line))
+    return "".join(blanked)
 
 
 def head_entries(repository: pathlib.Path, head: str) -> tuple[set[str], set[str]]:
@@ -242,18 +384,117 @@ def head_entries(repository: pathlib.Path, head: str) -> tuple[set[str], set[str
     return files, directories
 
 
-def ignore_explains(repository: pathlib.Path, body: str) -> bool:
-    """Whether the checkout's ignore rules cover ``body`` as a file or as a directory."""
-    for probe in (body, f"{body}/"):
-        completed = revision_scope.run_git(repository, "check-ignore", "--quiet", "--", probe)
-        if completed.returncode == 0:
-            return True
-        if completed.returncode != 1:
+def removed_top_level(
+    repository: pathlib.Path, base: str, files: set[str], directories: set[str],
+) -> frozenset[str]:
+    """Top-level entries the comparison base held and the head revision does not.
+
+    A file-shaped citation whose first segment is gone from the head tree is refused
+    only when the base held that segment at the top level, because then the range
+    removed or renamed the owner this citation names; the segment is the only one the
+    ancestor walk cannot reach (a deeper removal still leaves the first segment
+    standing, and the walk finds it). The returned names are what ``names_a_repo_prefix``
+    consults, and the base tree is read once per run.
+    """
+    listed = revision_scope.run_git(repository, "ls-tree", "--name-only", "-z", base)
+    if listed.returncode != 0:
+        raise revision_scope.DiffRefused(
+            f"cannot read the tree of {base}: {listed.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    base_entries = {
+        entry.decode("utf-8", "surrogateescape")
+        for entry in listed.stdout.split(b"\0")
+        if entry
+    }
+    head_entries_at_top = {path.split("/", 1)[0] for path in files | directories}
+    return frozenset(base_entries - head_entries_at_top)
+
+
+def scratch_git(scratch: pathlib.Path, *arguments: str) -> subprocess.CompletedProcess:
+    """A git command in the scratch checkout, isolated from the user's own state.
+
+    The scratch checkout exists to answer from the head revision's committed rule
+    bytes; the user's global and system configuration, the XDG excludes file and an
+    inherited ``GIT_DIR`` (a hook or a wrapper may set one) must not enter the answer.
+    The callers that match pathnames pin ``core.ignorecase=false`` so the committed
+    bytes decide the same way on every platform, as the tree arm's membership does.
+    """
+    environment = dict(os.environ)
+    environment.update(
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_CONFIG_SYSTEM=os.devnull,
+        GIT_CONFIG_NOSYSTEM="1",
+        XDG_CONFIG_HOME=str(scratch / "no-xdg-config"),
+        HOME=str(scratch / "no-home"),
+    )
+    for key in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        environment.pop(key, None)
+    return subprocess.run(
+        ["git", "-C", str(scratch), *arguments], capture_output=True, check=False, env=environment,
+    )
+
+
+class HeadIgnoreRules:
+    """The head revision's own ignore rules, asked in a scratch checkout of them.
+
+    ``git check-ignore`` answers from the ignore files *the worktree* holds, so asking
+    the repository itself would let a working tree that lags the head revision, a local
+    ``.git/info/exclude`` or a global excludes file answer for the revision under test.
+    The gate materializes the head revision's ``.gitignore`` blobs into a scratch
+    repository once per run and asks there, so one set of committed bytes decides on
+    every checkout and platform. The rule text check-ignore reports back
+    (``source:line:pattern``) is what the per-citation notices name.
+    """
+
+    def __init__(
+        self, repository: pathlib.Path, head: str, files: set[str], scratch: pathlib.Path,
+    ) -> None:
+        self.scratch = scratch
+        initialized = scratch_git(scratch, "init", "--quiet")
+        if initialized.returncode != 0:
             raise IgnoreQueryRefused(
-                f"git check-ignore could not be asked about {probe}: "
-                f"{completed.stderr.decode('utf-8', 'replace').strip()}"
+                "cannot prepare the ignore-rule checkout: "
+                f"{initialized.stderr.decode('utf-8', 'replace').strip()}"
             )
-    return False
+        for relative in sorted(
+            path for path in files if path == ".gitignore" or path.endswith("/.gitignore")
+        ):
+            _mode, payload = revision_scope.head_blob(repository, head, relative)
+            target = scratch / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+
+    def covering_rule(self, body: str) -> str | None:
+        """The ``source:line:pattern`` of the rule covering ``body``, or ``None``.
+
+        The decision is the quiet query's exit code - the only shape whose status means
+        "ignored" after negation is resolved - and the verbose query only names the
+        deciding rule for the notice.
+        """
+        for probe in (body, f"{body}/"):
+            decision = scratch_git(
+                self.scratch, "-c", "core.ignorecase=false", "check-ignore", "--quiet", "--", probe,
+            )
+            if decision.returncode == 1:
+                continue
+            if decision.returncode != 0:
+                raise IgnoreQueryRefused(
+                    f"git check-ignore could not be asked about {probe}: "
+                    f"{decision.stderr.decode('utf-8', 'replace').strip()}"
+                )
+            named = scratch_git(
+                self.scratch, "-c", "core.ignorecase=false", "check-ignore", "-v", "--", probe,
+            )
+            lines = named.stdout.decode("utf-8", "replace").splitlines()
+            return lines[0].split("\t", 1)[0] if lines else f"a rule matching {probe}"
+        return None
 
 
 def occurrence(blob: str, name: str) -> bool:
@@ -266,12 +507,15 @@ def audit_document(
     head: str,
     files: set[str],
     directories: set[str],
+    removed: frozenset[str],
+    ignore_rules: HeadIgnoreRules,
     relative: str,
     text: str,
-) -> tuple[list[str], int]:
-    """Check one document's citations; return its refusals and its path-citation count."""
+) -> tuple[list[str], list[str], int]:
+    """Check one document's citations; return its refusals, its notices and its count."""
     newlines = [index for index, character in enumerate(text) if character == "\n"]
     refusals: list[str] = []
+    notices: list[str] = []
     citations = 0
     blobs: dict[str, str | None] = {}
 
@@ -288,9 +532,9 @@ def audit_document(
                 blobs[relative_path] = None
         return blobs[relative_path]
 
-    for start, paragraph in paragraphs(text):
+    for start, paragraph in paragraphs(without_fenced_blocks(text)):
         records = [
-            Record(match, line_of(start + match.start()), files, directories)
+            Record(match, line_of(start + match.start()), files, directories, removed)
             for match in BACKTICKED.finditer(paragraph)
         ]
         for record in records:
@@ -298,12 +542,30 @@ def audit_document(
                 continue
             body = record.path_body or ""
             citations += 1
-            present = body in directories if record.path_shape == "dir" else body in files | directories
-            if not present and not ignore_explains(repository, body):
+            if record.path_shape == "glob":
+                present = any(
+                    glob_matches(glob_pattern(body), path) for path in files | directories
+                )
+                absent = f"the cited glob `{body}` matches no entry of {head[:12]}"
+            elif record.path_shape == "dir":
+                present = body in directories
+                absent = f"the cited path `{body}` is in no entry of {head[:12]}"
+            else:
+                present = body in files | directories
+                absent = f"the cited path `{body}` is in no entry of {head[:12]}"
+            if present:
+                continue
+            rule = ignore_rules.covering_rule(body)
+            if rule is None:
                 refusals.append(
-                    f"{relative}:{record.line}: the cited path `{body}` is in no entry of "
-                    f"{head[:12]} and no ignore rule covers it; cite a path this revision's tree "
-                    "holds, or pin the historical one as `git show <rev>:<path>`"
+                    f"{relative}:{record.line}: {absent} and no ignore rule covers it; cite a "
+                    "path this revision's tree holds, or pin the historical one as "
+                    "`git show <rev>:<path>`"
+                )
+            else:
+                notices.append(
+                    f"{relative}:{record.line}: {absent}; the ignore rule {rule} covers it, "
+                    "so the committed tree cannot verify it"
                 )
         for first, second in zip(records, records[1:]):
             gap = paragraph[first.match.end():second.match.start()]
@@ -320,6 +582,11 @@ def audit_document(
                 # A directory or glob citation has no single text to search.
                 continue
             body = path_record.path_body or ""
+            if body not in files:
+                # The path arm above reports a path the head revision does not hold (a
+                # missing path, named, at exit 1), and an ignore-covered path has no
+                # blob to search: neither may abort the run as an unusable range.
+                continue
             blob = blob_of(body)
             if blob is None:
                 refusals.append(
@@ -333,7 +600,7 @@ def audit_document(
                     f"`{symbol_record.symbol}` does not occur in `{body}` at {head[:12]}; cite "
                     "the file that carries it, or drop the symbol"
                 )
-    return refusals, citations
+    return refusals, notices, citations
 
 
 def main(argv: list[str]) -> int:
@@ -383,31 +650,42 @@ def main(argv: list[str]) -> int:
         return 0
     try:
         files, directories = head_entries(repository, head)
+        removed = removed_top_level(repository, base, files, directories)
     except revision_scope.DiffRefused as refusal:
         print(f"{PROGRAM} refused: {refusal}", file=sys.stderr)
         return 2
-    refusals: list[str] = []
-    nonregular: list[str] = []
-    citations = 0
-    for relative in documents:
+    with tempfile.TemporaryDirectory(prefix="citation-ignore-rules-") as scratch:
         try:
-            mode, payload = revision_scope.head_blob(repository, head, relative)
-        except revision_scope.DiffRefused as refusal:
-            print(f"{PROGRAM} refused: {refusal}", file=sys.stderr)
-            return 2
-        if mode not in revision_scope.REGULAR_BLOB_MODES:
-            nonregular.append(f"{relative}: the head revision stores it as mode {mode}")
-            continue
-        try:
-            document_refusals, document_citations = audit_document(
-                repository, head, files, directories, relative,
-                payload.decode("utf-8", "surrogateescape"),
-            )
+            ignore_rules = HeadIgnoreRules(repository, head, files, pathlib.Path(scratch))
         except (IgnoreQueryRefused, revision_scope.DiffRefused) as refusal:
             print(f"{PROGRAM} refused: {refusal}", file=sys.stderr)
             return 2
-        refusals += document_refusals
-        citations += document_citations
+        refusals: list[str] = []
+        notices: list[str] = []
+        nonregular: list[str] = []
+        citations = 0
+        for relative in documents:
+            try:
+                mode, payload = revision_scope.head_blob(repository, head, relative)
+            except revision_scope.DiffRefused as refusal:
+                print(f"{PROGRAM} refused: {refusal}", file=sys.stderr)
+                return 2
+            if mode not in revision_scope.REGULAR_BLOB_MODES:
+                nonregular.append(f"{relative}: the head revision stores it as mode {mode}")
+                continue
+            try:
+                document_refusals, document_notices, document_citations = audit_document(
+                    repository, head, files, directories, removed, ignore_rules, relative,
+                    payload.decode("utf-8", "surrogateescape"),
+                )
+            except (IgnoreQueryRefused, revision_scope.DiffRefused) as refusal:
+                print(f"{PROGRAM} refused: {refusal}", file=sys.stderr)
+                return 2
+            refusals += document_refusals
+            notices += document_notices
+            citations += document_citations
+    for notice in notices:
+        print(f"{PROGRAM}: note: {notice}")
     if refusals or nonregular:
         for refusal in refusals:
             print(f"{PROGRAM} refused: {refusal}", file=sys.stderr)

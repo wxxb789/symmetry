@@ -51,39 +51,58 @@ entry). No second mode was added for it.
 ## Citation grammar (exact semantics)
 
 A backticked token is a **path citation** when, after stripping a trailing line suffix
-(`:` digits, ranges joined by `-`, `,` or an en dash) and a leading `./`:
+(`:` digits, ranges joined by `-`, `,` or an en dash, and an optional `:col` column, the
+shape compiler and test-runner output prints) and a leading `./`:
 
 | Shape | Rule |
 | --- | --- |
-| file | its last segment is file shaped (`name.ext`, 1-8 alphanumerics after the final dot) or the token carried a line suffix, and the directories above it resolve in the head tree; a single-segment token must itself be a head-tree top-level entry |
-| directory | the token ends in `/` |
-| glob/ellipsis | the token contains `**`, `...` or `…`; its anchor is the text before the first wildcard, with any trailing `/` removed |
+| file | its last segment is file shaped (`name.ext`, 1-8 alphanumerics after the final dot) or the token carried a line suffix, and its first segment, or the deepest existing directory above it, resolves in the head tree; a single-segment token must itself be a head-tree top-level entry |
+| directory | the token ends in `/`, resolved like the file shape |
+| glob/ellipsis | the token contains `**`, `...` or `…`; the pattern it spells - the ellipsis spellings as `*` - must match at least one head-tree entry (`**` spans path segments, `*` does not), and the text before the first wildcard resolves like the file shape |
 
 Tokens with whitespace, a scheme (`://`), a leading `/`, `~`, `$`, `-`, or a placeholder (`<`, `>`,
 `{`, `}`) are not citations: they are commands, URLs, host paths, or templates. An extensionless
 multi-segment token with no trailing slash, no line suffix and no wildcard is deliberately **not**
 audited: this corpus cites branches with path-shaped names (`docs/close-linux-platform-flakes`,
-`docs/retro-followups`), which are indistinguishable from a directory citation by shape, and the
-ambiguity is left to review rather than guessed (fixture:
-`test_an_extensionless_token_is_not_a_path_citation`). A bare file name that is not a top-level
-entry (`read_model.ex`, `runner.go` — the corpus cites these constantly) is not a path citation
-either: a basename names no repo-relative path to resolve, and the entry's own example pairs such a
-name with a line number that this gate deliberately does not validate.
+`docs/retro-followups`) in the same shape it cites directories (`control/lib`,
+`daemon/internal/platform`), and the tree separates the two only when the token is itself an entry;
+the whole shape is left to review rather than guessed (fixture:
+`test_an_extensionless_token_is_not_a_path_citation`), a deliberate recall limit whose cost is that
+a tree directory cited this way is not re-checked when it moves. A bare file name that is not a
+top-level entry (`read_model.ex`, `runner.go` — the corpus cites these constantly) is not a path
+citation either: a basename names no repo-relative path to resolve, and the entry's own example
+pairs such a name with a line number that this gate deliberately does not validate.
 
-A path citation **resolves** when the head revision's tree (`git ls-tree -r -t`) holds the path (or
-the glob/ellipsis anchor), or when the checkout's ignore rules cover it as a file or as a directory
-(`git check-ignore` on the path and on `path/`, both quiet). The second arm is the deliberate
+A path citation **resolves** when the head revision's tree (`git ls-tree -r -t`) holds the path (or,
+for a glob, matches at least one entry the pattern spells), or when the head revision's own ignore
+rules cover it as a file or as a directory: the head's `.gitignore` blobs are materialized into a
+scratch checkout and asked with `git check-ignore --quiet` on the path and on `path/`, so a lagging
+worktree, a local `.git/info/exclude` or a global excludes file cannot answer for the revision
+under test, and `core.ignorecase` is pinned false so one set of committed bytes answers on every
+platform. A third arm covers a removed owner: when even the first segment of a multi-segment token
+is gone, the token is a citation if the comparison base held that first segment at the top level -
+the range removed or renamed it - and such a citation is refused with the path named; a first
+segment neither revision holds at the top level (a subdirectory-relative `config/test.exs`, an
+upstream `src/backend/...`) is left to review rather than guessed. The ignore arm is the deliberate
 boundary for generated output: `docs/runbooks/portal.md` documents the staged portal bundle at
 `control/priv/static/portal/`, which no index contains *by the repository's own ignore rule*
-(`/.gitignore`), and a gate that flagged those mentions would force accurate prose to be degraded.
-`check-ignore` exits 128 on its own error, and that refuses the run (exit 2) instead of passing.
+(`/.gitignore`), and a gate that flagged those mentions would force accurate prose to be degraded;
+because such a citation cannot be verified from committed bytes, it is reported as a per-citation
+notice naming the `source:line:pattern` rule that covers it. `check-ignore` exits 128 on its own
+error, and that refuses the run (exit 2) instead of passing. Fenced code blocks are blanked before
+the backtick scan - a token inside a fence is example code (a JS template literal, a Go raw string,
+a shell example), not a citation - and the blanking keeps every line number the refusals report.
 
 A **symbol citation** is a backticked `name/arity`, `Module.name/arity`, `name()` or
 `Module.name()` token. It is bound to a path citation when the two are consecutive backticked tokens
 in the same paragraph separated by at most 40 characters that contain no sentence terminator and at
-most two words, each from a closed connective list (`of, in, at, and, or, is, the, its, from, to,
-with, uses, used, calls, see, sees, runs, reads, writes, now, only, by, for, that, so`). A bound
-symbol must occur in the cited file's head blob as a whole word. Unbound pairs are left to review —
+most two words, each from a closed connective list (`of, in, at, is, the, its, from, to, with,
+uses, used, calls, see, sees, runs, reads, writes, now, only, by, for, that, so`; the coordinating
+conjunctions `and` and `or` were removed in the fix round - they join list items, and the pair
+`file` + `OtherModule.fun/1` they bound demanded a symbol that belongs to another file). A bound
+symbol must occur in the cited file's head blob as a whole word; a symbol bound to a path the head
+revision does not hold is skipped, and the path arm reports the path, named, at exit 1, instead of
+the run aborting as an unusable range. Unbound pairs are left to review —
 this is a recall limit, not a passing claim, and it is fixture-pinned as such
 (`test_a_symbol_the_prose_does_not_bind_is_not_checked`). The conservative rule is what keeps the
 corpus green without a rewrite wave: the wider "any identifier-shaped token within N characters"
@@ -115,12 +134,16 @@ commands and outputs are recorded in the final report.
 
 `run-citations` joins `run-heavy`/`run-records`, folded with the same event arm
 (`github.event_name != 'pull_request' || steps.paths.outputs.run-citations == 'true'`), computed from
-the same `--no-renames` diff. Its predicate is the gate's corpus: `docs/runbooks/**`,
-`docs/design/quality.md`, `docs/archive/CLOSED-TODO.md`. The predicate is duplicated in the workflow
-because GitHub evaluates it there; the duplication is pinned by the classifier fixture test, which
-imports the gate's `AUDITED_PATHS` and requires the classifier's own output to turn `true` for a
-diff touching each entry — so extending the corpus without extending the classifier fails the test
-instead of silently skipping the job.
+the same `--no-renames` diff. Its predicate is the gate's corpus (`docs/runbooks/**`,
+`docs/design/quality.md`, `docs/archive/CLOSED-TODO.md`) plus the citation job's own tooling
+(`scripts/ci/check-citation-existence.py`, `scripts/ci/test-check-citation-existence.py`,
+`scripts/ci/revision_scope.py`); `run-records` also fires for `scripts/ci/revision_scope.py`. The
+self-triggering predicates exist because a change to the gate program or to the module it reads must
+run the gate end to end on a real checkout's event shape, which no fixture can reproduce. The
+predicate is duplicated in the workflow because GitHub evaluates it there; the duplication is pinned
+by the classifier fixture test, which imports the gate's `AUDITED_PATHS` and requires the
+classifier's own output to turn `true` for a diff touching each entry or tool path — so extending
+the corpus without extending the classifier fails the test instead of silently skipping the job.
 
 Job placement: `citation-existence` sits next to `record-cleanliness`, `needs: changes`,
 `if: needs.changes.outputs.run-citations == 'true'`, `fetch-depth: 0`, and the same event-fold base
@@ -139,11 +162,15 @@ ungated in the `legacy-route-audit` job, the job the entry names as the pattern 
    own, not a copy.
 2. **Pins** (fixture diffs, one per routing): `docs/**`-only and `*.md`-only diffs report
    `run-heavy=false`; `docs/evaluations/**`, `docs/evidence/**`,
-   `scripts/ci/model-routing-record-sanitize.py` and `scripts/ci/check-record-cleanliness.py` report
-   `run-records=true`; each audited-corpus path reports `run-citations=true`; a non-`pull_request`
-   event folds all three outputs to `true`; `legacy-route-audit` carries neither `needs:` nor `if:`
-   and runs unconditionally; the `citation-existence` job runs exactly when `run-citations` is true;
-   a rename across the documentation boundary reports both sides (`--no-renames`).
+   `scripts/ci/model-routing-record-sanitize.py`, `scripts/ci/check-record-cleanliness.py` and
+   `scripts/ci/revision_scope.py` report `run-records=true`; each audited-corpus path reports
+   `run-citations=true`, and so do the citation job's tool paths
+   (`scripts/ci/check-citation-existence.py`, `scripts/ci/test-check-citation-existence.py`,
+   `scripts/ci/revision_scope.py`, the last of which reports `run-records=true` as well); a
+   non-`pull_request` event folds all three outputs to `true`; `legacy-route-audit` carries neither
+   `needs:` nor `if:` and runs unconditionally; the `citation-existence` job runs exactly when
+   `run-citations` is true; a rename across the documentation boundary reports both sides
+   (`--no-renames`).
 3. **Wiring model**: whitespace-normalized assertions over the job blocks are closed-world: every
    job except `changes` and the declared unconditional job must `needs: changes` and gate on a
    classifier output, so a new job that forgets to gate fails the test instead of passing silently.
@@ -162,9 +189,11 @@ ungated in the `legacy-route-audit` job, the job the entry names as the pattern 
   extraction is behaviour-preserving by inspection and by its unchanged suite.
 - No Elixir/Go/frontend/browser run: nothing under `control/`, `daemon/`, `frontend/`, `browser/`
   or `contracts/` is touched, so the browser render gate and the Elixir recipe are not triggered.
-- Line numbers inside citations are not validated and are not repaired (entry 1: "do not validate
-  raw `file:line` values"); `docs/design/quality.md`'s `ci.yml:107-110`/`:618` references therefore
-  keep their pre-change numbers even though this increment shifts lines below them.
+- Line numbers inside *citations* are not validated (entry 1: "do not validate raw `file:line`
+  values"). `docs/design/quality.md`'s two bare `ci.yml:NNN` pointers are not path citations and the
+  gate cannot see them; this increment's own `ci.yml` insertions had invalidated them (the same rot
+  the gate repairs in the corpus), and the fix round repointed them to the post-change coordinates
+  (`:154-157` for the frontend commands, `:688` for the browser runner's pnpm test invocation).
 - No second audit mode, no per-file opt-out, no configuration surface: the gate's corpus and
   grammar are code and are pinned by fixtures.
 
@@ -184,7 +213,9 @@ increment has none):
    git commit-tree <tree> -p HEAD`), because this stage leaves the tree uncommitted and the gate
    binds a revision: the snapshot reads the repaired documents and the increment's own new files
    with the same code path, and neither the real index nor the working tree is touched
-   (observed: exit 1 with five refusals, then exit 0, 365 path citations).
+   (observed on that pre-merge snapshot: exit 1 with five refusals, then exit 0 with 365 path
+   citations; the current shipped revision's re-measurement lives in the closure entry in
+   `docs/archive/CLOSED-TODO.md`, one number in one place).
 5. `actionlint -color -shellcheck= -pyflakes= .github/workflows/ci.yml` (upstream 1.7.12, the
    documented substitute on this host) plus `shellcheck --shell=bash` over every changed `run:`
    block with each `${{ … }}` replaced by a placeholder word.
@@ -218,7 +249,39 @@ increment has none):
    behaviour-preserving and its regression evidence is the sibling suite, run before and after.
 4. **Conservative symbol binding.** See the grammar section: a mis-parse must not demand a rewrite.
 5. **Extensionless multi-segment tokens are not audited.** See the grammar section: branch names in
-   this corpus are path-shaped.
+   this corpus are path-shaped, and the shape is a recall limit even when the tree holds the token
+   itself (`daemon/internal/platform`, `control/lib`); auditing that subset is an owner decision the
+   fix round did not take.
+
+## Conductor decisions (2026-11-21, PR #122 round-1 fixes)
+
+The round-1 reviews (adversarial Opus F1-F8, DeepSeek CR-01..CR-07) found the first cut narrower and
+noisier than the grammar above; the delegated repo owner ruled the fix round's semantics, and the
+grammar, fixtures and records above now implement them:
+
+- **D1 (CR-01/CR-02 narrowing).** A citation of a path the head revision's ignore rules cover (the
+  entry's own motivating example, `control/deps/ecto/...`) cannot be verified from the committed
+  tree. Entry 1's acceptance is narrowed to paths no ignore rule covers: the gate does not fail such
+  a citation, but prints a per-citation notice naming the covering rule, so the exemption stays
+  visible instead of passing silently. A bound symbol on an ignore-covered or absent path no longer
+  aborts the run - the symbol check skips a path the head tree does not hold, and a missing
+  non-ignored path is reported by the path arm, named, at exit 1.
+- **D2 (F8 scope question).** The audit scope stays the whole changed document: touching a document
+  obliges repairing its stale citations, and a rename-only pull request does not re-check the
+  documents it leaves alone (that repair lands in the next pull request that touches one). Both
+  statements live in the gate's docstring and in `docs/design/quality.md` beside the gate list.
+- **D3 (F8's other gaps).** Ignore rules are read from the head revision's own `.gitignore` blobs,
+  materialized into a scratch checkout (`core.ignorecase` pinned false), never from the working
+  tree; and a citation whose first segment the comparison base held at the top level and the head
+  does not is refused, so a removed or renamed top-level tree no longer hides the citations under
+  it. A first segment neither revision holds at the top level stays unaudited - the corpus writes
+  subdirectory-relative and upstream paths (`config/test.exs`, `src/backend/...`) - pinned in both
+  directions.
+- **Everything else as prescribed.** The wildcard-in-name and `...`/`…` forms, `path:line:col`,
+  fence blanking, the connective list without `and`/`or`, fixtures for the grammar branches the
+  first cut left untested, the classifier self-triggering on `revision_scope.py`,
+  `check-citation-existence.py` and its fixture suite, and every count re-measured at the shipped
+  revision.
 
 ## Residual risk
 

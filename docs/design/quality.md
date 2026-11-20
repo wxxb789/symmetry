@@ -113,7 +113,7 @@ changing the forwarded response status, headers or body.
 | Elixir (`control/`) | `mix format --check-formatted`; `mix compile --warnings-as-errors`; `mix test` (four portal cases require the staged frontend bundle: `mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build`, or CI's `portal-assets` artifact — see the [portal runbook](../runbooks/portal.md)); release/E2E per current CI |
 | Go (`daemon/`) | `go vet ./...`; `go test ./...`; concurrency changes: `go test -race ./...` |
 | Browser (`browser/`) | `mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile` from the repository root; `mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test`; configured control/daemon fixtures required |
-| TS (`frontend/`) | frontend typecheck/lint/test/build commands from frontend.md; CI runs them in the `contracts` job (`.github/workflows/ci.yml:107-110`); the browser runner is already pnpm (`.github/workflows/ci.yml:618`) |
+| TS (`frontend/`) | frontend typecheck/lint/test/build commands from frontend.md; CI runs them in the `contracts` job (`.github/workflows/ci.yml:154-157`); the browser runner is already pnpm (`.github/workflows/ci.yml:688`) |
 | Wire contract | `pnpm contracts:check` (schemas, fixtures through Effect decoders, generated-file drift; regenerate with `pnpm contracts:generate`); Go and Elixir fixture decoders run in their test suites |
 
 Run affected focused checks during development; required CI gates remain required
@@ -135,6 +135,20 @@ under these paths are exempt, per the `AGENTS.md` sentence "Do not require every
 expensive suite for a documentation-only or unrelated local change". CI remains the
 floor, not the first execution of browser-rendered or Linux-only behavior: the local
 run decides the change before review, and the hosted gates still decide the merge.
+
+Amendment (2026-11-21, conductor decisions for goal `ci-classifier-gates`, fix round).
+The document-citation existence gate (`scripts/ci/check-citation-existence.py`, the
+`citation-existence` CI job) audits the whole document a revision range adds or modifies,
+not only the lines the range changed: touching a runbook, this file or the archived
+closures obliges repairing every stale citation the document already carries, because a
+cited path or symbol that no longer exists is the rot the gate exists to catch. A
+document the range does not touch is deliberately not audited — a pull request that only
+moves or renames a file does not re-check the documents that cite it, and that repair
+lands, as a red gate, in the next pull request that touches one of those documents. A
+citation no committed tree holds but the head revision's own ignore rules cover
+(generated output such as the staged portal bundle) cannot be verified from committed
+bytes: the gate passes it and reports it as a per-citation notice naming the covering
+rule, so the exemption stays visible in the job log instead of passing silently.
 
 For state-changing code test the smallest set covering each changed invariant:
 replay after commit, crash before acknowledgement, duplicate/out-of-order event,

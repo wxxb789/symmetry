@@ -3,12 +3,13 @@
 
 The fixture repositories here are throwaway trees: the gate is a selector over a
 revision range plus a citation grammar, so the tests pin what the grammar audits (a
-line-suffixed path, a file-shaped path, a directory citation, a wildcard anchor), what
-it deliberately does not (an extensionless multi-segment token, a command, a URL), the
-resolution boundary (the head tree, or the checkout's own ignore rules for generated
-output), the symbol binding and its whole-word occurrence test, and the range side the
-gate shares with `check-record-cleanliness.py` (a changed file's head blob, never the
-working tree; a deletion or an unrelated change selects nothing).
+line-suffixed path, a file-shaped path, a directory citation, a wildcard family, a
+fenced block's exclusion), what it deliberately does not (an extensionless multi-segment
+token, a command, a URL), the resolution boundary (the head tree, or the head revision's
+own ignore rules for generated output, with a per-citation notice), the symbol binding
+and its whole-word occurrence test, and the range side the gate shares with
+`check-record-cleanliness.py` (a changed file's head blob, never the working tree; a
+deletion or an unrelated change selects nothing).
 """
 
 import os
@@ -46,6 +47,8 @@ class CitationExistenceTests(unittest.TestCase):
         self.write("docs/TODO.md", "## Rules\n")
         self.write("control/lib/thing.ex", "defmodule Thing do\n  def health(_), do: :ok\nend\n")
         self.write("control/lib/legacy.ex", "defmodule Legacy do\n  def unrelated, do: :ok\nend\n")
+        self.write("scripts/ci/test-a.py", "# Stand-in bytes: a member of the fixture family.\n")
+        self.write("README.md", "# Fixture\n")
         self.write("daemon/main.go", "package main\n")
         self.git("add", "-A")
         self.git("commit", "--quiet", "-m", "fixture base")
@@ -258,6 +261,224 @@ class CitationExistenceTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot resolve a comparison base", result.stderr)
+
+    # -- the review-round pins -------------------------------------------------
+
+    def test_a_bound_symbol_on_a_missing_path_reports_only_the_path_refusal(self) -> None:
+        # The path arm owns a missing path; the symbol arm must not read the absent
+        # file's blob, turn the run into an "unusable revision" exit and drop the
+        # refusal the path arm already collected.
+        head = self.cite_in_runbook(
+            "`health/4` in `control/lib/moved.ex`", "bind a symbol to a moved path"
+        )
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("control/lib/moved.ex", result.stderr)
+        self.assertIn("no ignore rule covers it", result.stderr)
+        self.assertNotIn("does not hold exactly one entry", result.stderr)
+
+    def test_a_bound_symbol_on_an_ignored_path_is_not_refused(self) -> None:
+        # A generated bundle's path is legal prose and stores no committed blob: the
+        # symbol binding must not crash the run, and the skip is reported as a notice
+        # naming the ignore rule rather than passing silently.
+        self.write(".gitignore", "/control/priv/static/portal/\n")
+        head = self.cite_in_runbook(
+            "`render()` in `control/priv/static/portal/index.html`",
+            "bind a symbol to a generated path",
+        )
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("the ignore rule .gitignore:1:/control/priv/static/portal/", result.stdout)
+        self.assertIn("control/priv/static/portal/index.html", result.stdout)
+        self.assertNotIn("does not hold exactly one entry", result.stderr)
+
+    def test_a_wildcard_inside_a_name_matches_the_family(self) -> None:
+        # A family glob is a citation and it holds while the tree holds a member: the
+        # first author to write `scripts/ci/test-*.py` must not be reddened by the
+        # wildcard sitting inside the file-name segment.
+        head = self.cite_in_runbook("`scripts/ci/test-*.py`", "cite a file family")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+
+    def test_a_glob_of_an_existing_directorys_members_passes(self) -> None:
+        head = self.cite_in_runbook("`docs/runbooks/*.md`", "cite the runbook directory's members")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+
+    def test_an_ellipsis_truncated_name_matches_the_family(self) -> None:
+        # `...` and `…` both mean "and so on": both are wildcards inside the name.
+        head = self.cite_in_runbook(
+            "`docs/runbooks/port...` and `docs/runbooks/port…`", "cite truncated names"
+        )
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("2 path citation(s)", result.stdout)
+
+    def test_a_glob_whose_family_has_disappeared_is_refused(self) -> None:
+        # The directory standing is not enough: the citation names members, and a
+        # family that has vanished entirely is the rot this gate exists for.
+        head = self.cite_in_runbook("`docs/runbooks/gone-*.md`", "cite a vanished family")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gone-*.md", result.stderr)
+        self.assertIn("no ignore rule covers it", result.stderr)
+
+    def test_a_line_and_column_suffix_is_stripped_and_never_validated(self) -> None:
+        # `file:line:col` is what compilers, test runners and linters print; only the
+        # suffix is stripped, never the path, and never the numbers themselves.
+        head = self.cite_in_runbook("`control/lib/thing.ex:12:5`", "cite a line and column")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+        head = self.cite_in_runbook("`control/lib/moved.ex:12:5`", "cite a moved file's column")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("control/lib/moved.ex", result.stderr)
+        self.assertNotIn("moved.ex:12", result.stderr)
+
+    def test_a_token_inside_a_fenced_block_is_not_a_citation(self) -> None:
+        # JS template literals, Go raw strings and shell examples inside fences write
+        # the same backticks prose does; the example code is not a citation, and the
+        # prose around the fence still is.
+        self.write(
+            "docs/runbooks/portal.md",
+            "# Portal runbook\n"
+            "\n"
+            "```js\n"
+            "const gone = `docs/runbooks/moved.md`;\n"
+            "```\n"
+        )
+        head = self.commit("show example code")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0 path citation(s)", result.stdout)
+        self.write(
+            "docs/runbooks/portal.md",
+            "# Portal runbook\n"
+            "\n"
+            "```js\n"
+            "const gone = `docs/runbooks/moved.md`;\n"
+            "```\n"
+            "\n"
+            "The projection lives in `control/lib/thing.ex`.\n",
+        )
+        head = self.commit("show code beside prose")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+
+    def test_a_coordinating_conjunction_does_not_bind_a_path_and_symbol(self) -> None:
+        # `and` joins list items: it must not demand that a symbol belonging to some
+        # other file occur in the file the list happens to mention first.
+        head = self.cite_in_runbook(
+            "`control/lib/thing.ex` and `snapshot_progress/2`", "list beside a symbol"
+        )
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+
+    def test_a_symbol_after_the_path_it_binds_to_is_checked(self) -> None:
+        head = self.cite_in_runbook(
+            "`control/lib/thing.ex` calls `snapshot_progress/2`", "bind path-first"
+        )
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("snapshot_progress", result.stderr)
+
+    def test_a_symbol_that_is_only_a_substring_is_not_an_occurrence(self) -> None:
+        # thing.ex carries `health/4`; `heal/1` must not match inside it.
+        head = self.cite_in_runbook("`heal/1` in `control/lib/thing.ex`", "cite a substring")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("does not occur", result.stderr)
+
+    def test_a_leading_dot_slash_is_stripped(self) -> None:
+        head = self.cite_in_runbook("`./control/lib/thing.ex`", "cite with a leading ./")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+
+    def test_a_top_level_single_segment_entry_is_checked(self) -> None:
+        head = self.cite_in_runbook("`README.md`", "cite a top-level file")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+
+    def test_a_bare_file_name_that_is_not_a_top_level_entry_is_not_a_citation(self) -> None:
+        # A `read_model.ex`-style basename names no repo-relative path: nothing to
+        # resolve, and the middle-segment citations are where that file is checked.
+        head = self.cite_in_runbook("`read_model.ex`", "cite a bare file name")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0 path citation(s)", result.stdout)
+
+    def test_a_path_whose_intermediate_directories_are_gone_is_refused(self) -> None:
+        # `docs/runbooks` stands and `moved/sub` does not: the deepest existing ancestor
+        # is a tree directory, so the token is a citation and the refusal names it.
+        head = self.cite_in_runbook("`docs/runbooks/moved/sub/thing.md`", "cite a deep missing path")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("docs/runbooks/moved/sub/thing.md", result.stderr)
+
+    def test_a_tree_the_range_removed_is_refused_for_paths_and_directories(self) -> None:
+        # A wholesale removal takes the first segment with it, and the ancestor walk
+        # cannot see a segment that is gone: only the comparison base can say the token
+        # ever named a repo path. It did, and both shapes are refused.
+        self.write("browser/tests/portal.spec.mjs", "// fixture\n")
+        self.base = self.commit("fixture a browser tree")
+        self.git("rm", "-r", "--quiet", "browser")
+        head = self.cite_in_runbook(
+            "`browser/tests/portal.spec.mjs:12` and `browser/`", "cite a removed tree"
+        )
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("browser/tests/portal.spec.mjs", result.stderr)
+        self.assertIn("browser", result.stderr)
+
+    def test_a_first_segment_neither_revision_held_is_not_a_citation(self) -> None:
+        # A subdirectory-relative or upstream path (PostgreSQL's `src/backend/...`)
+        # names no repo-relative path: guessing it would demand rewrites of accurate
+        # prose, so it is left to review.
+        head = self.cite_in_runbook("`src/backend/tcop/postgres.c:1680`", "cite an upstream path")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0 path citation(s)", result.stdout)
+
+    def test_the_head_revisions_ignore_rules_decide_not_the_working_tree(self) -> None:
+        # The rule is committed with the head revision and then removed from the
+        # worktree: the checkout is no longer at the revision under test, and the gate
+        # must still answer from the head revision's own bytes.
+        self.write(".gitignore", "/control/priv/static/portal/\n")
+        self.write(
+            "docs/runbooks/portal.md",
+            "# Portal runbook\n\nThe build stages hashed assets in "
+            "`control/priv/static/portal/index.html`.\n",
+        )
+        head = self.commit("document the generated bundle")
+        (self.repo / ".gitignore").unlink()
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+        self.assertIn("the ignore rule .gitignore:1:/control/priv/static/portal/", result.stdout)
+
+    def test_a_rule_the_working_tree_alone_holds_does_not_cover_a_citation(self) -> None:
+        # An untracked ignore file is not the revision under test: it must not make a
+        # citation pass.
+        self.write(".gitignore", "/control/generated/\n")
+        self.write(
+            "docs/runbooks/portal.md",
+            "# Portal runbook\n\nThe build stages hashed assets in "
+            "`control/generated/index.html`.\n",
+        )
+        self.git("add", "docs/runbooks/portal.md")
+        self.git("commit", "--quiet", "-m", "cite an untracked generated path")
+        head = self.git_text("rev-parse", "HEAD")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("control/generated/index.html", result.stderr)
+        self.assertIn("no ignore rule covers it", result.stderr)
 
 
 if __name__ == "__main__":
