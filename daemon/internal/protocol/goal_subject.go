@@ -232,7 +232,10 @@ func normalizeJSONStringEscapes(encoded []byte) []byte {
 			default:
 				output = append(output, '\\', 'u')
 				for _, digit := range encoded[index+2 : index+6] {
-					output = append(output, upperHexDigit(digit))
+					if digit >= 'a' && digit <= 'f' {
+						digit -= 'a' - 'A'
+					}
+					output = append(output, digit)
 				}
 			}
 			index += 6
@@ -242,15 +245,6 @@ func normalizeJSONStringEscapes(encoded []byte) []byte {
 		}
 	}
 	return output
-}
-
-// upperHexDigit returns the uppercase spelling of a hexadecimal digit byte;
-// other bytes are returned unchanged.
-func upperHexDigit(digit byte) byte {
-	if digit >= 'a' && digit <= 'f' {
-		return digit - 'a' + 'A'
-	}
-	return digit
 }
 
 func ensureDecoderEOF(decoder *json.Decoder) error {

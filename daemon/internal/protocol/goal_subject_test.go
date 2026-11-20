@@ -130,11 +130,11 @@ func TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane(t *testing.
 		if !bytes.Equal(canonical, want) {
 			t.Fatalf("canonical %s = %q, want %q", test.name, canonical, want)
 		}
-	}
-	digest := sha256.Sum256(want)
-	const wantHash = "sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63"
-	if gotHash := "sha256:" + hex.EncodeToString(digest[:]); gotHash != wantHash {
-		t.Fatalf("canonical control-character hash = %s, want %s", gotHash, wantHash)
+		digest := sha256.Sum256(canonical)
+		const wantHash = "sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63"
+		if gotHash := "sha256:" + hex.EncodeToString(digest[:]); gotHash != wantHash {
+			t.Fatalf("canonical control-character hash = %s, want %s", gotHash, wantHash)
+		}
 	}
 
 	hexLetters, err := CanonicalizeJSON([]byte(`{"value":"\u000b\u000e\u000f\u001a\u001b\u001c\u001d\u001e\u001f"}`))
@@ -158,7 +158,7 @@ func TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane(t *testing.
 	if !bytes.Equal(document, wantDocument) {
 		t.Fatalf("canonical boundary document = %q, want %q", document, wantDocument)
 	}
-	documentDigest := sha256.Sum256(wantDocument)
+	documentDigest := sha256.Sum256(document)
 	const wantDocumentHash = "sha256:401bf74e8085ac0cce504b465cabbc82043e4fc8c6ec73625d60a43292656fd8"
 	if gotHash := "sha256:" + hex.EncodeToString(documentDigest[:]); gotHash != wantDocumentHash {
 		t.Fatalf("canonical boundary document hash = %s, want %s", gotHash, wantDocumentHash)
