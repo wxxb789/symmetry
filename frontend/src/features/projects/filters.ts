@@ -1,5 +1,5 @@
 import type { WorkItem } from "../../services/api";
-import { ownerKey, ownerLabel } from "../work/presentation";
+import { ownerKey, ownerKeyFilter, ownerLabel } from "../work/presentation";
 
 /** View and filter state of the project work surface. The URL owns it: every value here is reloadable. */
 export type WorkView = "list" | "board";
@@ -47,7 +47,8 @@ export function workSearch(search: Record<string, unknown>): WorkSearch {
   const view = search["view"];
   const q = queryParam(search["q"]);
   const state = textParam(search["state"]);
-  const owner = textParam(search["owner"]);
+  const ownerParam = textParam(search["owner"]);
+  const owner = ownerParam === undefined ? undefined : ownerKeyFilter(ownerParam);
   const blocked = blockedParam(search["blocked"]);
   return {
     ...(view === "board" || view === "list" ? { view } : {}),
@@ -81,7 +82,9 @@ export function filtersOf(search: WorkSearch): WorkFilters {
   return {
     q: (search.q ?? "").trim().toLocaleLowerCase(),
     state: search.state ?? "",
-    owner: search.owner ?? "",
+    // A search built anywhere — a stored view, a hand-built one — reads its key
+    // through the same reader the URL uses, so both states always agree.
+    owner: ownerKeyFilter(search.owner ?? ""),
     blocked: search.blocked === "1",
   };
 }
