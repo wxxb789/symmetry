@@ -1042,7 +1042,7 @@ type SymmetryGoalReadV1 struct {
 	UpdatedAt           *string                                 `json:"updated_at"`
 	// The Goal's operator-authority version: advanced by exactly one per accepted operator
 	// command (creation included) and never by internal reconciliation, settlement or automatic
-	// admission. The value every command must carry as expected_version.
+	// admission. The value every post-creation command must carry as expected_version.
 	Version   int64              `json:"version"`
 	WorkItems []GoalReadWorkItem `json:"work_items"`
 }

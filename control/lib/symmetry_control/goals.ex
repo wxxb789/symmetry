@@ -2855,7 +2855,8 @@ defmodule SymmetryControl.Goals do
                     response,
                     opts
                     |> Keyword.put(:event_revision, task.goal_revision)
-                    |> Keyword.put(:settlement_next_wake_at, next_wake_at)
+                    |> Keyword.put(:settlement_next_wake_at, next_wake_at),
+                    false
                   )
 
                 finalize_external_wait!(
@@ -4035,7 +4036,8 @@ defmodule SymmetryControl.Goals do
               "system:goal_control",
               body,
               response,
-              Keyword.put(opts, :event_revision, task.goal_revision)
+              Keyword.put(opts, :event_revision, task.goal_revision),
+              false
             )
 
           {:created, Map.put(response, "event_sequence", event.sequence)}
@@ -4226,7 +4228,8 @@ defmodule SymmetryControl.Goals do
           "purpose" => purpose,
           "source_identity" => source_identity
         },
-        Keyword.merge(opts, now: current, settlement_next_wake_at: current)
+        Keyword.merge(opts, now: current, settlement_next_wake_at: current),
+        false
       )
 
     %{
@@ -4805,7 +4808,8 @@ defmodule SymmetryControl.Goals do
                 "reason" => reason,
                 "next_wake_at" => DateTime.to_iso8601(next_wake_at)
               },
-              Keyword.merge(opts, now: current, settlement_next_wake_at: next_wake_at)
+              Keyword.merge(opts, now: current, settlement_next_wake_at: next_wake_at),
+              false
             )
 
           {Repo.get!(Goal, goal.id), event.sequence}
@@ -5989,7 +5993,8 @@ defmodule SymmetryControl.Goals do
           "candidate_identity" => candidate_identity,
           "reason" => blocker_reason
         },
-        Keyword.merge(opts, now: current, settlement_next_wake_at: current)
+        Keyword.merge(opts, now: current, settlement_next_wake_at: current),
+        false
       )
 
     %{
@@ -6020,7 +6025,8 @@ defmodule SymmetryControl.Goals do
           "candidate_identity" => candidate_identity,
           "reason" => blocker_reason
         },
-        Keyword.merge(opts, now: current, settlement_next_wake_at: current)
+        Keyword.merge(opts, now: current, settlement_next_wake_at: current),
+        false
       )
 
     %{
@@ -6144,7 +6150,8 @@ defmodule SymmetryControl.Goals do
               actor_ref,
               body,
               response,
-              Keyword.put(opts, :operator_advance, true)
+              opts,
+              true
             )
 
           goal = Repo.get!(Goal, goal.id)
@@ -6227,7 +6234,8 @@ defmodule SymmetryControl.Goals do
                     actor_ref,
                     body,
                     response,
-                    Keyword.put(opts, :operator_advance, true)
+                    opts,
+                    true
                   )
 
                 if parsed.kind in ["pause", "cancel", "amend"],
@@ -8085,7 +8093,8 @@ defmodule SymmetryControl.Goals do
             response,
             opts
             |> Keyword.put(:event_revision, task.goal_revision)
-            |> Keyword.put(:settlement_next_wake_at, next_wake_at)
+            |> Keyword.put(:settlement_next_wake_at, next_wake_at),
+            false
           )
 
         Map.put(response, "event_sequence", event.sequence)
@@ -8319,7 +8328,16 @@ defmodule SymmetryControl.Goals do
     end
   end
 
-  defp append_event!(goal, mutation_id, kind, actor_ref, body, response, opts) do
+  defp append_event!(
+         goal,
+         mutation_id,
+         kind,
+         actor_ref,
+         body,
+         response,
+         opts,
+         operator_advance
+       ) do
     # Goal events are new v1 domain receipts. Their canonical bytes must not
     # depend on the legacy Orchestration request-hash rollout mode.
     request_hash = RequestHash.canonical(body)
@@ -8329,11 +8347,12 @@ defmodule SymmetryControl.Goals do
     next_wake_at = event_next_wake_at(goal, kind, opts)
     event_revision = Keyword.get(opts, :event_revision, goal.current_revision)
     # Only an operator command advances the version a command must carry. The
-    # internal settlement, admission and reconcile appends leave it where the
-    # operator's last read left it, so an asynchronous advance cannot refuse a
-    # command whose own predicates still hold.
-    next_operator_version =
-      goal.operator_version + if(Keyword.get(opts, :operator_advance, false), do: 1, else: 0)
+    # advance authority is this explicit argument, not a caller option: the
+    # internal settlement, admission and reconcile appends pass false, so they
+    # leave the version where the operator's last read left it and an
+    # asynchronous advance cannot refuse a command whose own predicates still
+    # hold.
+    next_operator_version = goal.operator_version + if(operator_advance, do: 1, else: 0)
 
     response = normalize_map(response)
 

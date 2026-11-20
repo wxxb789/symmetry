@@ -18,7 +18,7 @@ export interface SymmetryGoalReadV1 {
   state: string;
   current_revision: PositiveInteger;
   /**
-   * The Goal's operator-authority version: advanced by exactly one per accepted operator command (creation included) and never by internal reconciliation, settlement or automatic admission. The value every command must carry as expected_version.
+   * The Goal's operator-authority version: advanced by exactly one per accepted operator command (creation included) and never by internal reconciliation, settlement or automatic admission. The value every post-creation command must carry as expected_version.
    */
   version: number;
   updated_at?: string | null;

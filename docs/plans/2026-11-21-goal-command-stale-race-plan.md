@@ -112,12 +112,14 @@ Rejected, with evidence:
 
 - **Advance rule.** One operator command event ⇒ `operator_version + 1`, in the same transaction as
   the event insert and under the same `FOR UPDATE` Goal lock the command already takes
-  (`lock_command_goal/2`, `goals.ex:8588-8595`). A replayed command (`replay_command/3`) returns the
+  (`lock_command_goal/2`). A replayed command (`replay_command/3`) returns the
   stored receipt and advances nothing; an `idempotency_conflict` advances nothing; a refused command
   (`:stale`, `:invalid_transition`, contract failures) advances nothing because it rolls back.
 - **Creation.** A Goal row starts at 1 and its `goal_created` event advances it to 2, exactly what
-  `lock_version` did; the creation receipt and the first read agree, so the served version sequence
-  is unchanged for a Goal driven only by operator commands.
+  `lock_version` did; the creation receipt and the first read agree. The served sequence differs
+  from the old `lock_version` series for the transition commands, which wrote the row twice per
+  command (`transition_goal!/2` plus the event append: `lock_version + 2`) and now advance
+  `operator_version` once — create-then-cancel served 2 → 4 before and 2 → 3 now.
 - **Internal writes.** Reconciliation, settlement, automatic admission and every other system write
   keep bumping `lock_version` (unchanged behavior; the DB-level optimistic lock stays honest for
   every writer) and leave `operator_version` where it was. The receipt snapshots of those internal
@@ -163,7 +165,9 @@ refuse an operator command, while another operator's advance still does":
 Assertion 3's second half fails on pre-fix bytes as well (the served version moved), so the case is
 red for two independent reasons before the fix. Level: `Goals.command/4` + the read model, i.e. the
 server contract both the browser spec and the frontend pass through; no timing, no sleeps, no
-`Oban.drain_queue` (the worker's only job is to call this function).
+`Oban.drain_queue` (the case calls the reconcile function directly; the `WakeupWorker` also runs
+`recover_terminal_settlements`, `recover_unstarted_cancellations` and `recover_goal_controls`
+before it).
 
 ## Evidence plan (all commands FOREGROUND, serialized; never a suite beside a benchmark)
 
@@ -205,7 +209,9 @@ server contract both the browser spec and the frontend pass through; no timing, 
 
 - The frontend: with the server split, a page-held `version` is exactly the token an operator
   command must carry, so neither `commands.ts` nor `detail.tsx` needs a change (in particular no
-  resend-on-409 and no submit-time read for the plan-approval press).
+  resend-on-409 and no submit-time read for the plan-approval press). **Superseded on the merged
+  tree (`655a5f9`, merge with `origin/main`):** #125's `decisionEnvelope` press reads at submit
+  time, and this branch's own frontend delta is the comment-only `servedEnvelope` rewording.
 - The decision-level optimistic lock (`expected_decision_version`, `goals.ex:6487-6517`) and
   `GoalDecision.lock_version`: decisions are only changed by operator commands and by the amend
   supersede, which is itself an operator command.
@@ -240,10 +246,11 @@ server contract both the browser spec and the frontend pass through; no timing, 
 - The Python-era-style failure mode "an internal advance changes something the operator *acted on*
   but not the token": covered by `apply_command!/4`'s own predicates (state, revision, decisions,
   admitted work). Example: an internal settlement that would matter to `achieve` is re-checked
-  against the durable state at command time, so the refusal (if any) is a `422` from the semantic
-  predicate, not a version `409`. If a future internal path ever changes an operator-visible field
-  that no predicate re-checks, the token would lag it; the reading is "internal advances never
-  invalidate operator authority, predicates do".
+  against the durable state at command time, so a refusal is a semantic error —
+  `:invalid_transition` (`422`), or `:invalid_decision` (`409`) when a decision predicate such as
+  `ensure_completion_subject_not_rejected!` disagrees — never a version `409`. If a future internal
+  path ever changes an operator-visible field that no predicate re-checks, the token would lag it;
+  the reading is "internal advances never invalidate operator authority, predicates do".
 - The Elixir suite's four `:portal_assets` cases need the staged frontend bundle; if the pnpm
   staging is unavailable on this host those cases are recorded as pending with the missing
   environment, never as passed (quality.md).

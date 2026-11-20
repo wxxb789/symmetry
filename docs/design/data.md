@@ -133,8 +133,9 @@ Unique `(id,project_id)` enables same-project WorkItem ownership FK.
 `lock_version` is the row-level optimistic lock every Goal writer takes.
 `operator_version` is the Goal's operator-authority version — one advance per accepted operator
 command (creation included), never advanced by internal reconciliation, settlement or automatic
-admission and never by a non-command row write. The served `version` and every command's
-`expected_version` bind it; a stale row `lock_version` alone never refuses an operator command.
+admission and never by a non-command row write. The served `version` and every post-creation
+command's `expected_version` bind it; a stale row `lock_version` alone never refuses an operator
+command.
 
 `goal_revisions`: goal_id FK, revision integer > 0 (composite PK), objective text,
 non_goals jsonb string array, acceptance_contract jsonb, authority_policy jsonb,

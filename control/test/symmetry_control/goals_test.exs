@@ -48,6 +48,7 @@ defmodule SymmetryControl.GoalsTest do
 
     assert created.goal.state == "draft"
     assert created.goal.current_revision == 1
+    assert created.goal.version == 2
 
     assert Map.keys(created.goal) |> Enum.sort() == [
              :current_revision,
@@ -59,6 +60,7 @@ defmodule SymmetryControl.GoalsTest do
            ]
 
     assert {:ok, created_projection} = Goals.fetch_goal(created.goal.id)
+    assert created_projection.version == 2
 
     assert created_projection.revision.execution_policy == %{
              "automatic_execution" => false,
@@ -201,7 +203,9 @@ defmodule SymmetryControl.GoalsTest do
     assert fetch_goal!(goal.id).version == before.version + 1
 
     # Another operator's accepted command is what a stale version still refuses:
-    # the same pre-reconcile version no longer matches after the pause advanced it.
+    # the same pre-reconcile version no longer matches after the pause advanced
+    # it. Both commands carry actor `operator:test`, so the refusal is the token
+    # the pause advanced, not a different actor.
     assert {:error, {:stale, %{current_revision: 1, current_version: current_version}}} =
              Goals.command(
                goal.id,
@@ -212,6 +216,77 @@ defmodule SymmetryControl.GoalsTest do
 
     assert current_version == receipt.goal.version
     assert fetch_goal!(goal.id).state == "paused"
+  end
+
+  test "internal append events never advance the operator version the operator read" do
+    # Two append-path internal writers, each driven with a read taken before it
+    # runs. The `operator_advance` option is passed on purpose: the advance
+    # authority is not readable from a caller's options, so even that call must
+    # leave the token where the operator's read took it.
+    blocker_policy = %{
+      "automatic_execution" => true,
+      "max_parallel_tasks" => 2,
+      "max_task_admissions" => 1,
+      "budget_limit_microusd" => 1_000_000,
+      "allowed_actions" => ["implement"]
+    }
+
+    {blocked_goal, [first_item, _second_item]} = goal_with_items_fixture(blocker_policy, 2)
+
+    assert {:ok, _admitted, :created} =
+             command_current(blocked_goal.id, "admit_task", admission_payload(first_item),
+               rollout_enabled: true
+             )
+
+    set_goal_due!(blocked_goal.id)
+    blocked_before = fetch_goal!(blocked_goal.id)
+    blocked_lock_before = Repo.get!(SymmetryControl.Goals.Goal, blocked_goal.id).lock_version
+
+    assert {:ok, [%{disposition: :blocked, reason: "admission_limit_reached"}]} =
+             Goals.reconcile_due_goals(
+               goal_ids: [blocked_goal.id],
+               now: @now,
+               rollout_enabled: true,
+               validation_profiles: validation_profiles(),
+               operator_advance: true
+             )
+
+    assert_internal_append_leaves_the_operator_version!(
+      blocked_goal,
+      blocked_before,
+      blocked_lock_before,
+      "automatic_admission_blocked"
+    )
+
+    # The rollout-off deferral append (`defer_automatic_reconciliation!`), the
+    # writer the review named.
+    deferred_policy = %{
+      "automatic_execution" => true,
+      "max_parallel_tasks" => 1,
+      "max_task_admissions" => 1,
+      "budget_limit_microusd" => 1_000_000,
+      "allowed_actions" => ["implement"]
+    }
+
+    {deferred_goal, [_item]} = goal_with_items_fixture(deferred_policy)
+    set_goal_due!(deferred_goal.id)
+    deferred_before = fetch_goal!(deferred_goal.id)
+    deferred_lock_before = Repo.get!(SymmetryControl.Goals.Goal, deferred_goal.id).lock_version
+
+    assert {:ok, [%{disposition: :deferred, reason: "goal_admission_disabled"}]} =
+             Goals.reconcile_due_goals(
+               goal_ids: [deferred_goal.id],
+               now: @now,
+               rollout_enabled: false,
+               operator_advance: true
+             )
+
+    assert_internal_append_leaves_the_operator_version!(
+      deferred_goal,
+      deferred_before,
+      deferred_lock_before,
+      "automatic_reconciliation_deferred"
+    )
   end
 
   test "archived projects preserve exact receipts but reject new Goal authority" do
@@ -9257,6 +9332,41 @@ defmodule SymmetryControl.GoalsTest do
       from(goal in SymmetryControl.Goals.Goal, where: goal.id == ^goal_id),
       set: [state: "active", next_wake_at: @now, updated_at: @now]
     )
+  end
+
+  defp assert_internal_append_leaves_the_operator_version!(
+         goal,
+         before,
+         lock_version_before,
+         kind
+       ) do
+    event =
+      Repo.one!(
+        from(event in SymmetryControl.Goals.GoalEvent,
+          where: event.goal_id == ^goal.id and event.kind == ^kind,
+          order_by: [desc: event.sequence],
+          limit: 1
+        )
+      )
+
+    # The internal append wrote the row through the optimistic lock ...
+    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).lock_version > lock_version_before
+    # ... and left the command precondition where the operator's read took it,
+    # in the served goal and in the event's own stored receipt.
+    assert fetch_goal!(goal.id).version == before.version
+    assert event.response["_receipt_v1"]["goal"]["version"] == before.version
+
+    # A command built from that pre-append read is still accepted.
+    assert {:ok, receipt, :created} =
+             Goals.command(
+               goal.id,
+               command(before, "pause", %{reason: "Operator review pause"}),
+               "operator:test",
+               now: @now
+             )
+
+    assert receipt.goal.version == before.version + 1
+    assert fetch_goal!(goal.id).version == before.version + 1
   end
 
   defp command(goal, kind, payload, mutation_id \\ Ecto.UUID.generate()) do
