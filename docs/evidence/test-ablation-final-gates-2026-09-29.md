@@ -29,7 +29,7 @@ go test -p 2 -count=1 -timeout 1200s -json ./internal/app
 
 Exit 0: 897 test pass events, one platform skip, final package pass in 193.001 s. No fail events, malformed lines or stderr.
 
-WSL `symmetry-race`, from `/mnt/q/repos/symmetry/daemon`, with `PATH=/opt/go/bin:/usr/bin:/bin` and `GOMAXPROCS=2`:
+WSL `symmetry-race`, from `path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153`, with `PATH=/opt/go/bin:/usr/bin:/bin` and `GOMAXPROCS=2`:
 
 ```text
 /opt/go/bin/go test -p 2 -race -count=1 -timeout 1200s -json ./internal/app
@@ -48,10 +48,10 @@ The counterexample used the original post-ablation test snapshot SHA-256 `596086
 With `MIX_ENV=test`, private `MIX_BUILD_PATH`, and `ERL_FLAGS='+S 4:4'`, the driver ran:
 
 ```sh
-mix run --no-start /mnt/q/repos/symmetry/.omo/verification/run-control-wrong-tag.exs \
+mix run --no-start path-sha256:23adb30870a0b27f208d2d36450b26d5ef5376e8f73513b000dfa409adba0272 \
   test/symmetry_control/goals/contract_fixture_manifest_test.exs \
-  /mnt/q/repos/symmetry/.omo/verification/control-pre-error-restore_test.exs
-mix run --no-start /mnt/q/repos/symmetry/.omo/verification/run-control-wrong-tag.exs \
+  path-sha256:2b74893dc4aac5948ec1bccdabfb0aef8655c847118ebbe66ab7face0f00cc44
+mix run --no-start path-sha256:23adb30870a0b27f208d2d36450b26d5ef5376e8f73513b000dfa409adba0272 \
   test/symmetry_control/goals/contract_fixture_manifest_test.exs \
   test/symmetry_control/goals/contract_validation_test.exs
 ```
@@ -70,7 +70,7 @@ mix test --seed 0
 
 All exited 0. Final ExUnit result: **800 tests, 0 failures, 20 skipped**, 366.0 s. The earlier pre-correction 799-test pass is historical and did not settle the review finding. The final environment was Elixir 1.19.6, OTP 28 and PostgreSQL 17.11 in WSL, not CI's newer runtime matrix.
 
-The cluster was created exclusively for this run at `/tmp/symmetry-ablation-final.Cgnkmf`, listened only on `127.0.0.1:55443`, and used database `symmetry_ablation_final_01a0ed48` plus a private Mix build directory. The process stopped successfully and the owned directory was removed; `CONTROL_FIXTURE_DISPOSED` was observed. No existing database/service was modified.
+The cluster was created exclusively for this run at `path-sha256:224713ce8358fd53b4694785f2bf68201fac86882c2210003415d9c6420dbeba`, listened only on `127.0.0.1:55443`, and used database `symmetry_ablation_final_01a0ed48` plus a private Mix build directory. The process stopped successfully and the owned directory was removed; `CONTROL_FIXTURE_DISPOSED` was observed. No existing database/service was modified.
 
 Warnings were visible: in-memory module redefinition during the two mutation processes, plus pre-existing unused variables/helper defaults and repeated migration-module loading in unchanged tests. Production `mix compile --warnings-as-errors` passed. No warnings or tests were suppressed.
 

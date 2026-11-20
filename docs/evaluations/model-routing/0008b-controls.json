@@ -77,8 +77,8 @@
       "exit_code": 0,
       "expected": "accept exit 0: the unmodified copy reproduces the accepted receipt",
       "operation": "accept",
-      "output": "{\n  \"accepted\": true,\n  \"receipt_sha256\": \"sha256:ffe5a86e8355decf17c2714e35baf42f2848d8120a54ca18bd116de50a60d101\",\n  \"subject_hash\": \"sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f\",\n  \"task_id\": \"0008b-go-boundary-validator-coverage\"\n}\n",
-      "output_sha256": "sha256:350cbd03629243249623677c432114e2ec5f2bd9c418f92471a155dc5a6349e3"
+      "output": "{\n  \"accepted\": true,\n  \"receipt_sha256\": \"sha256:c5b01b39f01c50c9e4f95d635aee22fd54f06576ab7e499d0c1fd70ee704f53c\",\n  \"subject_hash\": \"sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f\",\n  \"task_id\": \"0008b-go-boundary-validator-coverage\"\n}\n",
+      "output_sha256": "sha256:512d611e452cf66ee105028c277703085ae77004823039154e23e3c2c4168fca"
     },
     {
       "argv": [
@@ -182,7 +182,7 @@
   ],
   "schema": "symmetry-model-routing-evaluation-controls/v1",
   "scope": "Every control ran on a disposable copy of a real 0008b run or of a frozen base revision; no original source, attempt, review or receipt was modified. stdout and stderr are captured in one combined file (the CLI writes its JSON summary to stdout and refusals to stderr), so the recorded digest binds the observed text instead of splitting streams. No mock provider or fixture-only result replaced the live task, and no gate, permission or acceptance condition was weakened to obtain a pass. Host-specific absolute paths are rendered before publication: the operator-specific disposable root of these controls is recorded as the token `<disposable-root>` (rendered with `scripts/ci/model-routing-record-sanitize.py`), so argv and output name no personal path. Each output digest binds the recorded, rendered text with CRLF line endings.",
-  "source_accepted_receipt_sha256": "sha256:ffe5a86e8355decf17c2714e35baf42f2848d8120a54ca18bd116de50a60d101",
+  "source_accepted_receipt_sha256": "sha256:c5b01b39f01c50c9e4f95d635aee22fd54f06576ab7e499d0c1fd70ee704f53c",
   "source_subject_hashes": {
     "base-checkout": "sha256:bdfece43590cf85d3f2999e197388c2f45cdd2fa57df1c3b11686447d9d19c34",
     "go-bounded-regression": "sha256:b10945d7026f081b4aa32df12d6b738f1e95fba87291c82001740734cd5b811f",

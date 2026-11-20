@@ -10,8 +10,8 @@ brief corrects the credential source to the configured virtual key.
 
 | Platform | Executed binary | Bytes | SHA-256 |
 | --- | --- | ---: | --- |
-| Windows host, NT 10.0.26300, x64 | `C:/Users/lhan/AppData/Local/mise/installs/oh-my-pi/18.20.0/omp.exe` | 251502592 | `1b6c7bda8241bc7d948495539f90ec47e6f30d1fec72b6ee097a67a1fc8d8e48` |
-| `wsl.exe -d Ubuntu-24.04`, Ubuntu 24.04.5 LTS, kernel `6.18.58.1-microsoft-standard-WSL2`, x86_64 | `/root/.local/bin/omp` | 287484080 | `c8694be8c6e6a1f45e3636dd8a8e9eaa78878ad629a89000b403ec5e456d3f89` |
+| Windows host, NT 10.0.26300, x64 | `path-sha256:80514feb9a7b53ffe2e39e2c9e0703725f8c62cc0b47aee5cedc997896d311d5` | 251502592 | `1b6c7bda8241bc7d948495539f90ec47e6f30d1fec72b6ee097a67a1fc8d8e48` |
+| `wsl.exe -d Ubuntu-24.04`, Ubuntu 24.04.5 LTS, kernel `6.18.58.1-microsoft-standard-WSL2`, x86_64 | `path-sha256:1461360e860eb236652040362a47d9edb15915cc7ac2d63d426a81b3b9cdcb1a` | 287484080 | `c8694be8c6e6a1f45e3636dd8a8e9eaa78878ad629a89000b403ec5e456d3f89` |
 
 Both report `omp/18.20.0`. A matching version string or mise shim is not an
 equivalent executable. The adapter checks the blob, anchored version and RPC
@@ -405,13 +405,13 @@ the approved relay model `tencent-litellm/deepseek-v4.1-flash-fast`; sanitized r
 
 Reproduction facts that matter: the fixture repository must be small — Subject derivation launches one
 Git process per blob under a 30 s deadline, so the 1,033-blob worktree needed about 79 s and failed
-there. The approved clone (`Q:/repos/fixture-0006h`, 1 blob, HEAD `6adc9ef`) is used instead. The
+there. The approved clone (`path-sha256:da76f350d3bc5cbb058315680d466fc8543d9b30aff044d2ee2de4cfd24a6405`, 1 blob, HEAD `6adc9ef`) is used instead. The
 isolated agent directory (`.tmp/omp-acceptance-agent/models.yml`) is a credential-free JSON catalog
 that references the key by environment-variable name, so no credential is written to disk.
 
 ### Linux native acceptance (real provider turns, partial)
 
-The Linux attempt on the repaired revision (`/root/omp-native-acceptance-linux/linux-omp-native-4172995585`,
+The Linux attempt on the repaired revision (`path-sha256:f4622af1f00cb32ed7bd58b2e13605072b4224be89f1766120f46dfc49f8cb18`,
 58.11 s, 4 native prompts, 7 provider response IDs) attests three of the four classes and fails only the
 in-flight cancellation attestation:
 
@@ -457,7 +457,7 @@ is reported for a separate follow-up goal rather than changed inside this increm
 
 ### Native result decoding repaired from a real Linux turn
 
-The first Linux attempt reached real generation (`/root/omp-native-acceptance-linux/linux-omp-native-3607617203`)
+The first Linux attempt reached real generation (`path-sha256:51cbca9aea4c5116cf5f09742c12e5ddd656ed375742c310ddfbe9b07f5c629b`)
 and produced a normally stopped final assistant message with two content blocks (`thinking`, `text`)
 whose text block held the exact strict TaskResult JSON, while the native client reported
 `prompt_result status:"completed"` followed by `session_settled`; the adapter rejected that message as
