@@ -52,6 +52,9 @@ moved on 2026-11-21 from branch `fix/served-read-closeout`.
 The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
 
+The closed `stopDescendantMonitor` post-timer recheck appended to the `## Retro review follow-ups`
+section below was moved on 2026-11-21 from branch `fix/stop-descendant-recheck`.
+
 The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
 that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 
@@ -2973,6 +2976,69 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       the loaded Windows host aborted that plain command twice at the default 10m test-binary
       timeout (600.509s/600.388s, 0 test failures), and green came with `-timeout 45m`
       (`ok 1119.686s`); CI's `daemon-windows` job runs the package under `-timeout 600s`.
+
+- [ ] Give `stopDescendantMonitor` the post-timer recheck its sibling join already has.
+      `daemon/internal/platform/process_unix.go:752-769` waits on the monitor against a timer
+      (`:763-768`) and returns `ErrLinuxDescendantContainmentUnproven` ("descendant monitor did not stop
+      before deadline") whenever the timer arm wins, without rechecking `monitorDone`. `monitorDone` is a
+      close-only unbuffered channel (`:610` created, `:809` the only close), so it stays ready once
+      closed: a monitor that exits as the deadline expires leaves both arms ready, Go picks uniformly
+      between them, and a monitor whose published reason is already in hand can be reported as a
+      deadline failure. PR #105 (`e64f8c0`) fixed this shape in the barrier join `:665-688`
+      (function `waitForInitialDescendantScan` `:642-696`, the recheck at `:682-686`, pinned by
+      the join probe `process_unix_linux_test.go:2078` and the expired-timer probe
+      `:2136`, whose assertion at `:2157-2158` reddens when the recheck is removed) — and recorded
+      this site as out of scope as work "to be recorded in `docs/TODO.md`"; the same shape also sits
+      in the final-scan RPC's timer arms (`:1042-1043` request, `:1055` result). Fail-closed, so the
+      cost is manufactured
+      unproven-containment results for every caller
+      that joins the monitor's own reason (`:1121`, `:1277`, `:1351`, `:1542`,
+      `containment_supervisor_linux.go:1836`, `prepareDescendantMonitorForOwnerLoss` `:771-794`).
+      Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
+      that never exits still fails) in a separate maintenance change.
+
+      **Closed (2026-11-21, branch `fix/stop-descendant-recheck`): the recheck is applied to
+      `stopDescendantMonitor` and both directions are pinned.** The timer arm now rechecks
+      `monitorDone` with a non-blocking select — the same shape as the barrier join's `:682-686` — so
+      a monitor that exits as the deadline expires is joined instead of being reported as a deadline
+      failure, while an open monitor keeps the unchanged deadline error after the full wait and
+      success is still reported only when the monitor exited (its only production close is `:817`).
+      The entry guard (`remaining <= 0`) is unchanged, as in the barrier join, and the recheck can
+      never wait, so no caller's deadline is extended. Decision: the final-scan RPC timer arms named
+      above are deliberately not changed by this closure — the item's fix sentence pins the stop
+      path's two directions only — and are re-recorded as their own open entry in `docs/TODO.md`
+      (`## Retro review follow-ups`), with anchors rebound to the fixed tree. Pins, both in
+      `daemon/internal/platform/process_unix_linux_test.go`: the expired-timer probe
+      `TestProcessGroupStopDescendantMonitorReportsJoinedMonitorAfterDeadline` reddens when the
+      recheck is removed (mutant: red 4/4 plain with first failures at iterations 37/29/29/36 of the
+      400-iteration 100 ns bucket; red 4/4 under `-race` and 3/3 under `-race -cpu 1` with first
+      failures at 12/3/0/1 and 11/6/6 of the 2 µs bucket — the detecting bucket moves with the build
+      and the 100 ns bucket alone left `-race` green 3/3, which is why the probe walks a deadline
+      ladder instead of one constant), and the deterministic probe
+      `TestProcessGroupStopDescendantMonitorJoinsEndingMonitor` pins that an exited monitor is
+      joined without waiting while an open monitor still consumes the whole deadline and fails.
+      Evidence on the branch, from `daemon/`: WSL Ubuntu-24.04 (go1.27.0) ran the focused probes and
+      the ordinary and `-race` suites of `./internal/platform/` green (focused `ok … 0.3 s`; ordinary
+      `ok … 21.0 s` with 204 top-level PASS and 0 FAIL; `-race ok … 45.1 s`), with the six TCP-peer
+      loopback-dialing tests named-skipped
+      (`-skip "^Test(VerifyLoopbackTCPPeerWithOwnedHelperProcess|VerifyLoopbackTCPPeerWaits|VerifyLoopbackTCPPeerDoesNotExtend|VerifyLoopbackTCPPeerV2|LinuxTCPPeerV2RejectsDifferentNetworkCookie)"`).
+      That exclusion records the guest's own loopback limitation, not this change: on this host no
+      127.0.0.1 connect completes at all (a five-line python listen/connect probe times out), the same
+      dials fail or hang identically against `fdf332d`'s own `process_unix.go` in a throwaway copy
+      carrying only the new probes, and this file already records that guest behaviour (the
+      `daemon/internal/app` intermittent `-race` package-timeout entry names it: the WSL guest hangs
+      `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` on a loopback dial that
+      never answers there).
+      Windows (go1.27.4): `gofmt -l .` empty, `go vet ./...` and `go build ./cmd/...` green; the
+      aggregate `go test -count=1 -timeout 600s ./...` exceeded its package budget in
+      `internal/workspace` on this loaded host (600 s panic in
+      `TestConcurrentPrepareUsesOneReservation` on a `git` child), and the same suite at
+      `-timeout 1200s` failed only `internal/harness/pi`
+      (`TestNativeRepositoryTaskSubjectUsesRepositoryBaseline`: "git rev-parse timed out"), both green
+      on isolated re-run (`./internal/workspace/` `ok … 456.6 s`; `./internal/harness/pi/` `ok … 5.8 s`
+      and the named test `-count=3` `ok … 14.3 s`); neither can come from this change — the changed
+      file is `//go:build linux` and absent from the Windows build file set (`go list` lists 14 files
+      for `./internal/platform` on Windows, none of them it).
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
