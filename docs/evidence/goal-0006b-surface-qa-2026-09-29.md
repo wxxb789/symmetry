@@ -23,31 +23,31 @@ From `daemon/`:
 | Command | Exit | Observation |
 | --- | ---: | --- |
 | `GOMAXPROCS=2 go vet -p=2 ./...` | 0 | All daemon packages vetted on Windows. |
-| `GOMAXPROCS=2 go build -p=2 -o /tmp/symmetry-0006b-win-co2DmmPj/symmetry-daemon.exe ./cmd/symmetry-daemon` | 0 | Produced a 19,577,856-byte executable. |
+| `GOMAXPROCS=2 go build -p=2 -o path-sha256:30c11084b88a959341ebada4e7a025298983f26d3990287cbfd7e9cb5485fecc ./cmd/symmetry-daemon` | 0 | Produced a 19,577,856-byte executable. |
 
 ### Linux amd64 Go surfaces
 
 Distro `symmetry-race` reported kernel `6.18.40.1-microsoft-standard-WSL2`, `x86_64`. The actual versioned tool is `/opt/go/bin/go` and reports `go version go1.27.0 linux/amd64`; `/opt/go/bin/go1.27` does not exist.
 
-From `/mnt/q/repos/symmetry/daemon`:
+From `path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153`:
 
 | Command | Exit | Observation |
 | --- | ---: | --- |
 | `GOMAXPROCS=2 /opt/go/bin/go vet -p=2 ./...` | 0 | All daemon packages vetted on Linux. |
-| `GOMAXPROCS=2 /opt/go/bin/go build -p=2 -o /tmp/symmetry-0006b-linux-XXCicOOn/symmetry-daemon ./cmd/symmetry-daemon` | 0 | Produced a 25,169,457-byte executable. |
-| `GOMAXPROCS=2 /opt/go/bin/go build -p=2 -o /tmp/symmetry-0006b-linux-XXCicOOn/symmetry-linux-launcher ./cmd/symmetry-linux-launcher` | 0 | Produced a 5,208,699-byte executable. |
-| `GOMAXPROCS=2 /opt/go/bin/go build -p=2 -o /tmp/symmetry-0006b-linux-extra-XXDOhjDd/symmetry-linux-clone-bootstrap ./cmd/symmetry-linux-clone-bootstrap` | 0 | Produced a 5,075,463-byte executable. |
+| `GOMAXPROCS=2 /opt/go/bin/go build -p=2 -o path-sha256:afb44e133b8877c0caa7b88cd68d03b1d679e9a8462a2173d3d51a17e8874c36 ./cmd/symmetry-daemon` | 0 | Produced a 25,169,457-byte executable. |
+| `GOMAXPROCS=2 /opt/go/bin/go build -p=2 -o path-sha256:9e2ff3a68a38f18582556d377c85095066351bb77f9ed3d4ce0a6b5530787ace ./cmd/symmetry-linux-launcher` | 0 | Produced a 5,208,699-byte executable. |
+| `GOMAXPROCS=2 /opt/go/bin/go build -p=2 -o path-sha256:b22792e2ec14540e6325cefe97e301e471ec14ea95ba6ace646926df366f689e ./cmd/symmetry-linux-clone-bootstrap` | 0 | Produced a 5,075,463-byte executable. |
 
 ### Linux amd64 C surfaces
 
-Ubuntu-24.04 supplied `/usr/bin/cc`. From `/mnt/q/repos/symmetry`:
+Ubuntu-24.04 supplied `/usr/bin/cc`. From `path-sha256:261a63a82e3d97303ca1040a78d5581a0cab7fa80d6ee1521477592e5899c2eb`:
 
 | Command | Exit | Observation |
 | --- | ---: | --- |
-| `cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -o /tmp/symmetry-0006b-c-01edM44n/symmetry-linux-gate daemon/native/linux-gate/c-gate/gate.c` | 0 | Produced an 808,568-byte static gate. |
-| `cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -o /tmp/symmetry-0006b-c-01edM44n/symmetry-linux-launcher daemon/cmd/symmetry-linux-launcher/c-wrapper/wrapper.c` | 0 | Produced a 794,968-byte static wrapper. |
+| `cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -o path-sha256:7d770ac67421772eb06e827a74559657ee4327a1ace7c4c07415c27ed2fa3d63 daemon/native/linux-gate/c-gate/gate.c` | 0 | Produced an 808,568-byte static gate. |
+| `cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -o path-sha256:dbebcabb36f116db5621da5cebe4928e0f44201e8a9ea07f290e5936b94cec92 daemon/cmd/symmetry-linux-launcher/c-wrapper/wrapper.c` | 0 | Produced a 794,968-byte static wrapper. |
 
-A preliminary Linux invocation followed the task's literal `/opt/go/bin/go1.27` path. `version`, `vet`, and both attempted builds exited 127, so their dependent CLI attempts also exited 127 and produced no artifacts. Inspection then established that `/opt/go/bin/go` is the installed Go 1.27.0 binary, and the successful commands above used it. During the corrected smoke script, an accidental suppressed `go run /mnt/q/repos/symmetry/.omo/nonexistent.go` exited nonzero before the temporary fixture copy; it produced no source or requested build artifact and was not used as evidence.
+A preliminary Linux invocation followed the task's literal `/opt/go/bin/go1.27` path. `version`, `vet`, and both attempted builds exited 127, so their dependent CLI attempts also exited 127 and produced no artifacts. Inspection then established that `/opt/go/bin/go` is the installed Go 1.27.0 binary, and the successful commands above used it. During the corrected smoke script, an accidental suppressed `go run path-sha256:e9db209be215bb3f0d553da7f545c567000c5a6590030d98adb4a4f97254459c` exited nonzero before the temporary fixture copy; it produced no source or requested build artifact and was not used as evidence.
 
 ## Fresh-binary CLI smoke
 
@@ -67,9 +67,9 @@ The valid configuration was the existing credential-free `docker/daemon-config.j
 
 | Command | Exit | Observable result |
 | --- | ---: | --- |
-| `symmetry-daemon -print-state-dir -config /mnt/q/repos/symmetry/docker/daemon-config.json` | 0 | Printed only `/var/lib/symmetry`. |
-| `if [ -e /var/lib/symmetry ]; then stat ...; else printf 'STATE_DIR_AFTER=absent'; fi` | 0 | Reported `STATE_DIR_AFTER=absent`, confirming the print command did not create the StateDir. |
-| `symmetry-daemon -print-state-dir -config /tmp/symmetry-0006b-linux-XXCicOOn/unsafe.json` | 1 | Zero stdout; rejected non-clean dot/parent components. |
+| `symmetry-daemon -print-state-dir -config path-sha256:5569d2426a3790f90d847f0e0ddd49d9a4fe6d804d514f7a13c5ad1fa2a2791e` | 0 | Printed only `path-sha256:cc65a3cf01d383c4c711ecb8654f50a81c4734aa094917dbd23ddcc0def09716`. |
+| `if [ -e path-sha256:cc65a3cf01d383c4c711ecb8654f50a81c4734aa094917dbd23ddcc0def09716 ]; then stat ...; else printf 'STATE_DIR_AFTER=absent'; fi` | 0 | Reported `STATE_DIR_AFTER=absent`, confirming the print command did not create the StateDir. |
+| `symmetry-daemon -print-state-dir -config path-sha256:f364c6b97c4c1852071ad3b0866a643f4c8c113423d64d1573ee2b87327595d2` | 1 | Zero stdout; rejected non-clean dot/parent components. |
 | `env -u SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS symmetry-daemon -linux-v2-native-owner-witness` | 1 | Zero stdout; rejected absent production witness opt-in. |
 | `SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS=1 symmetry-daemon -linux-v2-native-owner-witness -config /nonexistent -request /nonexistent unexpected` | 1 | Zero stdout; strict argument rejection occurred before fixture or host access. |
 

@@ -113,7 +113,7 @@ changing the forwarded response status, headers or body.
 | Elixir (`control/`) | `mix format --check-formatted`; `mix compile --warnings-as-errors`; `mix test` (four portal cases require the staged frontend bundle: `mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build`, or CI's `portal-assets` artifact — see the [portal runbook](../runbooks/portal.md)); release/E2E per current CI |
 | Go (`daemon/`) | `go vet ./...`; `go test ./...`; concurrency changes: `go test -race ./...` |
 | Browser (`browser/`) | `mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile` from the repository root; `mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test`; configured control/daemon fixtures required |
-| TS (goal 0007 target) | frontend typecheck/lint/test/build commands from frontend.md; migrate browser runner to pnpm |
+| TS (`frontend/`) | frontend typecheck/lint/test/build commands from frontend.md; CI runs them in the `contracts` job (`.github/workflows/ci.yml:107-110`); the browser runner is already pnpm (`.github/workflows/ci.yml:618`) |
 | Wire contract | `pnpm contracts:check` (schemas, fixtures through Effect decoders, generated-file drift; regenerate with `pnpm contracts:generate`); Go and Elixir fixture decoders run in their test suites |
 
 Run affected focused checks during development; required CI gates remain required

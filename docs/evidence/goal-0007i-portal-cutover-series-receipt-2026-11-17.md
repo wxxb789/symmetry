@@ -18,7 +18,7 @@ revision are in "Rebase onto `main` `ca29a8e`".
 
 | Item | Value |
 | --- | --- |
-| Repository | `Q:/repos/wt-0007i/symmetry` |
+| Repository | `path-sha256:ffa4186f41ca8755a4a9ff1629fd2a5018ebfcf6cdb4922b72ac4ec80606f48a` |
 | Branch | `feat/0007i-portal-cutover` |
 | Base revision | `ca29a8e8150f84a02b5bd88232e65452c09114ea` (`main`, goal 0007g: scoped engineering conversation) |
 | Delivery commit | `c2eb529d743feb53a910abff42bc96b62e2a197b` (the lockfile repair) on top of `cf00b1ded9e2ac1a9fbc4a49d0dbbfeaa12be5c8` (the rebased delivery) on top of `ca29a8e`; every run on "this revision" ran on the source paths that commit carries. `git diff c2eb529..HEAD -- ':!docs'` is empty — the commit that carries this file is documentation-only and changes no executed byte — and `node .tmp/0007i-subject-digest.mjs ca29a8e` reprints the digest below on the committed tree |
@@ -269,7 +269,7 @@ below was re-run to make a gate green, and no row hides a red run. `pnpm` is `pn
 | Go contracts package | `go test -count=1 ./internal/contracts/...` (daemon) | `ok github.com/wxxb789/symmetry/daemon/internal/contracts 21.504s` (status read through a pipe; `go test` prints `ok` only on success) |
 | Legacy-route audit fence (the CI job's own command) | `scripts/audit-no-legacy-routes.sh` (root, run with Git Bash) | **exit 0** (direct capture) — `No U2 legacy action endpoints found in production contract surfaces: 1298 tracked files audited, 4 intentional exclusions` |
 | Legacy-route audit's own suite (the same job's second step) | `python scripts/ci/test-no-legacy-routes-audit.py` (root, under Git Bash) | **exit 0** (direct capture) — `Ran 6 tests in 18.132s` / `OK` |
-| Legacy-route audit fence under this session's nested bash | `bash scripts/audit-no-legacy-routes.sh` (root) | exit 2 — the script's own fail-closed check: `pwd -P` resolves the worktree to `/mnt/q/...`, which the Windows `git` cannot resolve, so `git ls-files` fails and the fence refuses to audit a tree it cannot enumerate. A harness path-mapping limit, not a fence or tree defect; the row above is the same command under a real Git Bash |
+| Legacy-route audit fence under this session's nested bash | `bash scripts/audit-no-legacy-routes.sh` (root) | exit 2 — the script's own fail-closed check: `pwd -P` resolves the worktree to `path-sha256:899abb2aefe9fd639979c1e1a5b2391a55ce93317102dff270418ba8f6f93209`, which the Windows `git` cannot resolve, so `git ls-files` fails and the fence refuses to audit a tree it cannot enumerate. A harness path-mapping limit, not a fence or tree defect; the row above is the same command under a real Git Bash |
 | No main line dropped | `git diff origin/main..HEAD -- docs/TODO.md | rg '^-' | rg -v '^---'` (root) | prints nothing (`docs/TODO.md` is main's blob plus this delivery's own section, `+46 −0`) |
 | Subject digest (before and after the lockfile repair) | `node .tmp/0007i-subject-digest.mjs ca29a8e` (root) | `paths=58 present=54 deleted=4 crlf_folded=0` both times; digest `sha256:00f8a4a6…` before and `sha256:09b79cdd37896463e0b5673452d33105abd752f4ac6a17a81bab6961600a53c3` after the `pnpm-lock.yaml` repair — the path set did not move |
 
@@ -1067,7 +1067,7 @@ what could not be re-measured — are listed at the end of "Rebase onto
   container — measured again on the rebased revision, the fence and its own test
   suite both pass here under Git Bash (`1298 tracked files audited, 4
   intentional exclusions`, and `Ran 6 tests ... OK`), while this session's nested
-  bash gives the fence the MSYS-style root `/mnt/q/...`, which the Windows `git`
+  bash gives the fence the MSYS-style root `path-sha256:899abb2aefe9fd639979c1e1a5b2391a55ce93317102dff270418ba8f6f93209`, which the Windows `git`
   cannot resolve, so the script's own tracked-file check fails closed there
   (exit 2) rather than auditing a wrong tree; the control suite's run-2 failures are the `pwsh` shim host
   limitation **and** the load-sensitive `GoalsTest` sandbox checkout timeout

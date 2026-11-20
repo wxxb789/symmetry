@@ -428,7 +428,7 @@ witness flags enabled, `go test -count=1 -timeout 900s ./e2e -run
 '^TestProductionLinuxContainment(WitnessSpine|NegativeWitness|ReplayWitness)$'
 -v` passed all three top-level tests without skips at this worktree state.
 Redacted per-case snapshots, crash statuses, provenance, and daemon logs were
-copied to `/tmp/symmetry-0006b-redacted-final/` (75 files, no raw journals).
+copied to `path-sha256:359d0124fad5420c43bf22dac88b55700960ed86e0c8f78c4885a62465d9d29c` (75 files, no raw journals).
 Raw test journals remain machine-local until their scratch roots are removed;
 they must not be published. The production daemon binary SHA-256
 was `8b03e4f161289c1bcb3de4494d1fbd3e0df3e2e527466555abb1fe9d492ab9e6`.
