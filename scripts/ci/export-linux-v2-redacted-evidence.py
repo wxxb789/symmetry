@@ -233,22 +233,102 @@ LEGACY_REPLAY_KEYS = LEGACY_COMMON_KEYS | {
 }
 
 # The restarted daemon's stdout/stderr logs, written into each case root beside
-# witness-evidence.json by the witness at
-# daemon/e2e/production_linux_containment_witness_test.go:1723-1754. Only the
-# tail of a failed run is exported, as a sanitized projection of the daemon's
-# own slog JSON records; the sources are never copied.
+# witness-evidence.json by every restarted-daemon start at
+# daemon/e2e/production_linux_containment_witness_test.go:1723-1754
+# (startLinuxResumeBarrierDaemonWitness) and
+# daemon/e2e/production_daemon_crash_witness_test.go:386-394
+# (startProductionDaemonWitness); the case exports a tail exactly when such a
+# log exists, so a case that never restarted the daemon publishes nothing. Only
+# the tail of a failed run is exported, as a sanitized projection of the
+# daemon's own slog JSON records; the sources are never copied.
 LEGACY_DAEMON_LOG_TAIL_BYTES = 64 << 10
 LEGACY_DAEMON_LOG_LABEL = "second"
 LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
-# The shapes the daemon's own slog.NewJSONHandler writer (daemon/internal/app/app.go:460)
-# produces on stdout (daemon/cmd/symmetry-daemon/main.go:89). Message keys are
-# snake_case identifiers; every other value is an enum-like token, a bounded
-# integer, or private text and identities the projection below never emits.
-DAEMON_LOG_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$")
+# The daemon's own slog.NewJSONHandler writer (daemon/internal/app/app.go:460)
+# emits its JSON on stdout (daemon/cmd/symmetry-daemon/main.go:89). The
+# projection publishes a text value only when it is one of the exact literals
+# the daemon code can write into that field, so a credential-shaped value in
+# one of these generic keys is dropped before publication, not masked:
+#   msg   -- every daemon.log.<Level>("...") message literal under
+#           daemon/internal/app (app.go, cleanup.go, recovery.go, supervisory.go).
+#   state -- the terminal transition states (daemon/internal/state/state.go
+#           isTerminalTransitionState) logged as stateName by
+#           queueTerminalTransitionWithRetry / queueTerminalTransitionAndAcknowledgement
+#           (app.go:7385, 7465); nativeTerminalPayload (app.go:8978) returns the
+#           same three.
+#   stage -- the queueFailure stage literals (app.go:3651-3877) and the
+#           process-exit retry (app.go:7586).
+#   reason -- the literals reaching stopRecoveredJournal (app.go:2857, 2891,
+#           3604, 10375): lease/ownership reasons (app.go:9922-10073, 10918,
+#           11468, 11752) and the protocol.ReconcileDecisionKind decisions
+#           (daemon/internal/protocol/protocol.go:560-564).
+#   outcome -- the acknowledgement outcomes (app.go:7918-7982, 8940-8975, 9524).
+#   kind -- the newIDWithRetry kinds (app.go:7349, 7410, 7414; supervisory.go:85).
+# Maintenance rule: a change that adds a producer or literal for one of these
+# fields must extend the set in the same change; test-linux-v2-evidence.py
+# scans the log call sites and the known producer call sites and fails when a
+# literal is missing from its set. Values reaching these fields through a
+# variable (for example a stateName passed down a helper) are covered by this
+# rule, not by that scan.
+DAEMON_LOG_TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$")
 DAEMON_LOG_LEVELS = ("DEBUG", "INFO", "WARN", "ERROR")
-DAEMON_LOG_MESSAGE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-DAEMON_LOG_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
-DAEMON_LOG_TEXT_KEYS = ("state", "stage", "reason", "outcome", "kind")
+DAEMON_LOG_MESSAGES = frozenset({
+    "advance_lease_expiry_failed", "claim_failed", "cleanup_recovered_workspace_failed",
+    "cleanup_terminal_workspace_failed", "clear_native_usage_recovery_failed",
+    "complete_provide_input_failed", "control_clock_skew_cleared", "control_clock_skew_detected",
+    "delete_enrollment_intent_failed", "delete_stale_enrollment_intent_failed",
+    "delete_terminal_journal_failed", "discard_unready_goal_session_attach_failed",
+    "generate_cancelled_receipt_id_failed", "generate_claim_id_failed",
+    "generate_command_acknowledgement_id_failed", "input_write_timeout",
+    "linux_v2_native_assignment_blocked_by_owner_recovery", "list_cleanup_journals_failed",
+    "list_journals_failed", "load_claim_intent_failed", "load_recovered_goal_session_failed",
+    "load_unready_pi_resume_barrier_failed", "machine_enrolled", "mark_lease_expired_stale_failed",
+    "mark_native_start_lease_expired_stale_failed", "mark_recovered_journal_stale_failed",
+    "mark_workspace_recovery_required_failed", "native_goal_usage_retry_exhausted",
+    "notification_client_stopped", "output_dropped_pending_budget",
+    "persist_native_goal_usage_recovery_failed", "persist_native_terminal_stale_failed",
+    "persist_prepared_startup_stale_failed", "persist_stale_process_exit_failed",
+    "persist_startup_stale_failed", "queue_cancelled_transition_failed",
+    "queue_command_acknowledgement_failed", "queue_completed_transition_failed",
+    "queue_failed_transition_failed", "queue_native_goal_usage_before_cancel_failed",
+    "queue_native_goal_usage_before_terminal_cancel_failed", "queue_native_goal_usage_failed",
+    "queue_native_terminal_transition_failed", "queue_recovered_cancel_transition_failed",
+    "queue_running_failed", "queue_terminal_transition_and_acknowledgement_failed",
+    "queue_terminal_transition_failed", "record_recovered_cancel_process_stop_failed",
+    "record_recovered_process_stop_failed", "record_workspace_failed",
+    "recover_goal_session_attachment_failed", "recover_input_command_intents_failed",
+    "recover_unclosed_goal_sessions_failed", "recover_unclosed_goal_sessions_pending",
+    "recovered_cancel_process_stop_blocked_by_terminal", "recovered_input_process_stop_pending",
+    "recovered_journal_stopped", "recovered_process_stop_blocked_by_terminal",
+    "resolve_recovered_goal_session_stop_failed", "retain_recovered_cancel_workspace_failed",
+    "retain_supervised_workspace_failed", "retain_unknown_goal_workspace_failed",
+    "retry_native_goal_session_close_failed", "retry_native_goal_usage_failed",
+    "runtime_heartbeat_failed", "runtime_poll_failed", "runtime_reconcile_failed",
+    "runtime_registered", "save_claim_grant_failed", "save_claim_intent_failed",
+    "schedule_process_exit_cleanup_failed", "stop_recovered_cancel_goal_session_unproven",
+    "stop_recovered_cancel_process_failed", "stop_recovered_cancel_process_unavailable",
+    "stop_recovered_goal_session_unproven", "stop_recovered_process_failed",
+    "stop_recovered_process_unavailable",
+})
+DAEMON_LOG_TEXT_VALUES = {
+    "state": frozenset({"cancelled", "completed", "failed"}),
+    "stage": frozenset({
+        "build_environment", "encode_input", "goal_admission", "goal_admission_required",
+        "harness_capability", "initial_lease_deadline", "invalid_admission", "linux_v2_required",
+        "mark_workspace_recovery_required", "prepare_workspace", "process_exit", "queue_running",
+        "read_process_identity", "record_process", "start_agent",
+    }),
+    "reason": frozenset({
+        "ack ownership lost", "cancel", "claim ownership lost", "continue", "event ownership lost",
+        "lease expired", "lease expired during renewal", "lease fence is incomplete",
+        "lease renewal failed", "local lease watchdog renewal failed", "not eligible for reconcile",
+        "relative lease deadline elapsed", "relative lease deadline elapsed during renewal",
+        "renewed lease has no safe local deadline", "renewed lease is already unsafe",
+        "stale_stop", "terminal", "transition ownership lost", "unknown_stop",
+    }),
+    "outcome": frozenset({"applied", "failed", "rejected"}),
+    "kind": frozenset({"acknowledgement", "control_failure_event", "terminal transition", "transition"}),
+}
 DAEMON_LOG_INT_KEYS = ("attempt", "bytes", "generation", "lease_safety_margin_ms", "runtime_epoch", "skew_ms")
 DAEMON_LOG_INT_LIMIT = 1 << 31
 
@@ -648,7 +728,8 @@ def project_daemon_log_record(value) -> dict | None:
     The record keeps its time and level whenever both match the shapes the
     daemon's own JSON log handler emits, so the daemon's activity timeline
     survives even when its message text cannot be published. Every other field
-    is dropped: identities, paths, error text and any unknown attribute.
+    is dropped: identities, paths, error text and any unknown attribute. `msg`
+    and the five text fields survive only as literals the daemon code writes.
     """
     if not isinstance(value, dict):
         return None
@@ -659,11 +740,11 @@ def project_daemon_log_record(value) -> dict | None:
         return None
     record = {"time": time_value, "level": level}
     message = value.get("msg")
-    if isinstance(message, str) and DAEMON_LOG_MESSAGE.fullmatch(message):
+    if isinstance(message, str) and message in DAEMON_LOG_MESSAGES:
         record["msg"] = message
-    for key in DAEMON_LOG_TEXT_KEYS:
+    for key, allowed in DAEMON_LOG_TEXT_VALUES.items():
         child = value.get(key)
-        if isinstance(child, str) and DAEMON_LOG_TEXT.fullmatch(child):
+        if isinstance(child, str) and child in allowed:
             record[key] = child
     for key in DAEMON_LOG_INT_KEYS:
         child = value.get(key)

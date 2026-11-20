@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,6 +16,15 @@ import unittest
 
 
 SCRIPT = pathlib.Path(__file__).with_name("export-linux-v2-redacted-evidence.py")
+DAEMON_LOG_SCAN_DIRECTORIES = ("daemon/internal/app", "daemon/internal/platform", "daemon/cmd")
+DAEMON_LOG_SCANNED_PRODUCERS = (
+    # call, zero-based argument index, allowlist field
+    ("queueFailure", 2, "stage"),
+    ("stopRecoveredJournal", 1, "reason"),
+    ("terminateForLease", 1, "reason"),
+    ("handleOrdinaryDeliveryError", 3, "reason"),
+    ("newIDWithRetry", 3, "kind"),
+)
 LEGACY_NAMES = (
     "bind-before-commit", "prepare-before-bind", "commit-before-resume", "lease-arm-before-resume",
     "daemon-after-resume", "daemon-after-resume-clean-seal-boundary", "helper-mirror",
@@ -21,6 +32,60 @@ LEGACY_NAMES = (
     "helper-scan-pending-crash", "literal-pid-reuse", "stop-response-lost",
     "release-response-lost", "helper-dead-mirror",
 )
+
+
+def load_exporter():
+    specification = importlib.util.spec_from_file_location("export_linux_v2_redacted_evidence", SCRIPT)
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def go_call_argument_lists(text: str, call_pattern: str) -> list[list[str]]:
+    # Top-level arguments of every call matching call_pattern, which must end
+    # at the opening parenthesis. String literals and nested parentheses or
+    # composite literals stay inside their argument.
+    found = []
+    for match in re.finditer(call_pattern, text):
+        depth = 1
+        index = match.end()
+        arguments, current, in_string, escaped = [], [], False, False
+        while index < len(text) and depth > 0:
+            character = text[index]
+            index += 1
+            if in_string:
+                current.append(character)
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    in_string = False
+                continue
+            if character == '"':
+                in_string = True
+                current.append(character)
+            elif character in "([{":
+                depth += 1
+                current.append(character)
+            elif character in ")]}":
+                depth -= 1
+                if depth:
+                    current.append(character)
+            elif character == "," and depth == 1:
+                arguments.append("".join(current).strip())
+                current = []
+            else:
+                current.append(character)
+        arguments.append("".join(current).strip())
+        found.append(arguments)
+    return found
+
+
+def go_string_literal(argument: str) -> str | None:
+    if len(argument) >= 2 and argument.startswith('"') and argument.endswith('"'):
+        return argument[1:-1]
+    return None
 
 
 def metadata(replay: bool = False) -> dict:
@@ -484,16 +549,29 @@ class ExporterTest(unittest.TestCase):
         stdout_lines = [
             json.dumps({
                 "time": "2026-11-20T18:42:24.695900552Z", "level": "WARN", "msg": "stop_recovered_process_failed",
-                "run_id": "LEASE-TOKEN-abc123def456", "generation": 1, "stage": "process_exit", "state": "stopping",
-                "reason": "owner_loss", "outcome": "lost", "kind": "stop", "attempt": 2, "runtime_epoch": 7,
-                "skew_ms": -250, "lease_safety_margin_ms": 1500, "command_id": "private-command",
+                "run_id": "LEASE-TOKEN-abc123def456", "generation": 1, "stage": "process_exit", "state": "failed",
+                "reason": "lease renewal failed", "outcome": "failed", "kind": "terminal transition", "attempt": 2,
+                "runtime_epoch": 7, "skew_ms": -250, "lease_safety_margin_ms": 1500, "command_id": "private-command",
                 "error": "open /home/runner/work/symmetry/daemon.json: permission denied",
                 "workspace": "/home/runner/work/_temp/symmetry-linux-containment-witness/lease-arm-before-resume",
+            }).encode(),
+            json.dumps({
+                "time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": "recovered_journal_stopped",
+                "reason": "stale_stop", "kind": "terminal transition",
             }).encode(),
             json.dumps({
                 "time": "2026-11-20T18:42:25Z", "level": "INFO",
                 "msg": "/home/runner/work/_temp/symmetry-linux-containment-witness", "error": "JOINED-TOKEN-77ff",
             }).encode(),
+            # Negative boundaries: a bad time, a non-ASCII digit in the time, a
+            # bad level, made-up text values, an out-of-range integer and a
+            # boolean integer must be dropped without losing the records.
+            json.dumps({"time": "2026-11-20 18:42:25Z", "level": "INFO", "msg": "runtime_registered"}).encode(),
+            json.dumps({"time": "\u0662026-11-20T18:42:25Z", "level": "INFO", "msg": "runtime_registered"}).encode(),
+            json.dumps({"time": "2026-11-20T18:42:25Z", "level": "NOTICE", "msg": "runtime_registered"}).encode(),
+            json.dumps({"time": "2026-11-20T18:42:25Z", "level": "INFO", "msg": "runtime_registered",
+                        "state": "stopping", "reason": "owner_loss", "outcome": "lost", "kind": "stop",
+                        "bytes": 2 ** 31, "attempt": True, "generation": 3}).encode(),
             b"goroutine 1 [running]: /home/runner/work/symmetry/daemon/internal/app/app.go:2148",
             b'{"time":"2026-11-20T18:42:26Z","level":"INFO","msg":"runtime_registered","msg":"duplicated"}',
         ]
@@ -505,12 +583,16 @@ class ExporterTest(unittest.TestCase):
         self.assertEqual((document["version"], document["case"], document["daemon"], document["stream"]),
                          (1, case, "second", "stdout"))
         self.assertFalse(document["truncated"])
-        self.assertEqual(document["dropped_lines"], 2)
+        self.assertEqual(document["dropped_lines"], 5)
         self.assertEqual(document["messages"], [
             {"time": "2026-11-20T18:42:24.695900552Z", "level": "WARN", "msg": "stop_recovered_process_failed",
              "attempt": 2, "generation": 1, "lease_safety_margin_ms": 1500, "runtime_epoch": 7, "skew_ms": -250,
-             "kind": "stop", "outcome": "lost", "reason": "owner_loss", "stage": "process_exit", "state": "stopping"},
+             "kind": "terminal transition", "outcome": "failed", "reason": "lease renewal failed",
+             "stage": "process_exit", "state": "failed"},
+            {"time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": "recovered_journal_stopped",
+             "kind": "terminal transition", "reason": "stale_stop"},
             {"time": "2026-11-20T18:42:25Z", "level": "INFO"},
+            {"time": "2026-11-20T18:42:25Z", "level": "INFO", "msg": "runtime_registered", "generation": 3},
         ])
         stderr_document = json.loads((output / f"{case}-second-daemon-stderr.json").read_text())
         self.assertEqual((stderr_document["messages"], stderr_document["dropped_lines"]), ([], 1))
@@ -518,7 +600,7 @@ class ExporterTest(unittest.TestCase):
             (output / f"{case}-second-daemon-stderr.json").read_bytes()
         for forbidden in (b"/home/runner", b"LEASE-TOKEN-abc123def456", b"JOINED-TOKEN-77ff", b"permission denied",
                           b"private-command", b"goroutine", b"duplicated", b"operation not permitted", b'"error"',
-                          b'"run_id"', b'"workspace"'):
+                          b'"run_id"', b'"workspace"', b"owner_loss", b"NOTICE"):
             self.assertNotIn(forbidden, published)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual(len(manifest["files"]), 18)
@@ -529,7 +611,7 @@ class ExporterTest(unittest.TestCase):
             {"file": f"{case}-second-daemon-stdout.json", "bytes": len((output / f"{case}-second-daemon-stdout.json").read_bytes()),
              "sha256": hashlib.sha256((output / f"{case}-second-daemon-stdout.json").read_bytes()).hexdigest(),
              "kind": "daemon_log_tail", "daemon": "second", "stream": "stdout", "truncated": False,
-             "records": 2, "dropped_lines": 2},
+             "records": 4, "dropped_lines": 5},
         )
         self.assertEqual(entries[f"{case}-second-daemon-stderr.json"]["records"], 0)
         for path, data in originals.items():
@@ -557,7 +639,8 @@ class ExporterTest(unittest.TestCase):
         self.populate_legacy(source)
         case = "lease-arm-before-resume"
         lines = [
-            json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": f"record_{index:04d}"}).encode()
+            json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered",
+                        "generation": index}).encode()
             for index in range(2400)
         ]
         raw = self.write_log(source / case / "second-daemon.stdout.log", lines)
@@ -571,11 +654,11 @@ class ExporterTest(unittest.TestCase):
         document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
         self.assertTrue(document["truncated"])
         boundary = raw.find(b"\n", len(raw) - (64 << 10)) + 1
-        expected = [json.loads(line)["msg"] for line in raw[boundary:].split(b"\n") if line]
-        self.assertEqual([message["msg"] for message in document["messages"]], expected)
+        expected = [json.loads(line) for line in raw[boundary:].split(b"\n") if line]
+        self.assertEqual(document["messages"], expected)
         self.assertEqual(document["dropped_lines"], 0)
         self.assertLess(len(document["messages"]), len(lines))
-        self.assertEqual(document["messages"][-1]["msg"], f"record_{len(lines) - 1:04d}")
+        self.assertEqual(document["messages"][-1]["generation"], len(lines) - 1)
         # No newline anywhere in the tail window: the window is discarded whole
         # rather than kept as one unprojectable partial line (dropped_lines 0).
         cut_window = json.loads((output / "daemon-after-resume-second-daemon-stdout.json").read_text())
@@ -615,7 +698,8 @@ class ExporterTest(unittest.TestCase):
         self.populate_legacy(source)
         case = "lease-arm-before-resume"
         lines = [
-            json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": f"record_{index:05d}"}).encode()
+            json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered",
+                        "generation": index}).encode()
             for index in range(34000)
         ]
         raw = self.write_log(source / case / "second-daemon.stdout.log", lines)
@@ -626,7 +710,7 @@ class ExporterTest(unittest.TestCase):
         self.assertTrue(document["truncated"])
         self.assertEqual(document["dropped_lines"], 0)
         self.assertLess(len(document["messages"]), len(lines))
-        self.assertEqual(document["messages"][-1]["msg"], f"record_{len(lines) - 1:05d}")
+        self.assertEqual(document["messages"][-1]["generation"], len(lines) - 1)
 
     def test_legacy_daemon_log_tail_rejects_nonprivate_or_linked_log(self) -> None:
         for index, kind in enumerate(("permissions", "symlink", "directory")):
@@ -653,13 +737,17 @@ class ExporterTest(unittest.TestCase):
                 self.assertFalse((output / "manifest.json").exists())
 
     def test_legacy_daemon_log_tail_credential_scan_fails_closed(self) -> None:
+        # The value allowlists close every shape-based channel, so the only way
+        # a configured credential can reach a tail document is by literally
+        # being one of the daemon's own emitted values; that must still fail
+        # closed through the configured-credential scan before publication.
         source = self.private_dir("log-secret-source")
         output = self.private_dir("log-secret-output")
         self.populate_legacy(source)
         case = "lease-arm-before-resume"
-        secret = "CANARY-LEASE-TOKEN-9"
+        secret = "lease renewal failed"
         self.write_log(source / case / "second-daemon.stdout.log", [json.dumps({
-            "time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": "claim_failed", "state": secret,
+            "time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": "claim_failed", "reason": secret,
         }).encode()])
         secret_file = self.root / "log-secrets"
         secret_file.write_bytes(secret.encode() + b"\0")
@@ -673,6 +761,77 @@ class ExporterTest(unittest.TestCase):
         self.assertFalse((output / f"{case}-second-daemon-stdout.json").exists())
         self.assertFalse((output / "manifest.json").exists())
         self.assertNotIn(secret.encode(), b"".join(path.read_bytes() for path in output.iterdir()))
+
+    def test_legacy_daemon_log_tail_drops_credential_shaped_values_without_secret_scan(self) -> None:
+        # No --secret-values-file: the projection itself is the leak barrier.
+        # The fixture values are built at runtime so no credential-shaped
+        # literal sits in this file.
+        token = "".join(("probe", "-", "0" * 20, "-", "f" * 32))
+        hex_digest = "d" * 63
+        source = self.private_dir("log-shape-source")
+        output = self.private_dir("log-shape-output")
+        self.populate_legacy(source)
+        case = "lease-arm-before-resume"
+        self.write_log(source / case / "second-daemon.stdout.log", [json.dumps({
+            "time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": hex_digest, "reason": token,
+        }).encode()])
+        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
+        self.assertEqual(document["messages"], [{"time": "2026-11-20T18:42:24Z", "level": "WARN"}])
+        self.assertEqual(document["dropped_lines"], 0)
+        published = (output / f"{case}-second-daemon-stdout.json").read_bytes()
+        self.assertNotIn(token.encode(), published)
+        self.assertNotIn(hex_digest.encode(), published)
+
+    def test_daemon_log_allowlists_match_daemon_producers(self) -> None:
+        # The projection's value sets are derived from the daemon source. This
+        # scan fails when a daemon log call site or known producer introduces a
+        # literal that is missing from its set, so the allowlists cannot drift
+        # silently; values reaching a field through a variable stay under the
+        # maintenance rule documented beside DAEMON_LOG_TEXT_VALUES.
+        repository = SCRIPT.resolve().parents[2]
+        if not (repository / DAEMON_LOG_SCAN_DIRECTORIES[0]).is_dir():
+            self.skipTest(f"daemon sources are not present beside {SCRIPT}")
+        exporter = load_exporter()
+        messages = set()
+        observed = {key: set() for key in exporter.DAEMON_LOG_TEXT_VALUES}
+        log_calls = 0
+        for directory in DAEMON_LOG_SCAN_DIRECTORIES:
+            for path in sorted((repository / directory).rglob("*.go")):
+                if path.name.endswith("_test.go"):
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for arguments in go_call_argument_lists(text, r"\.log\.(?:Info|Warn|Error|Debug)\("):
+                    log_calls += 1
+                    message = go_string_literal(arguments[0]) if arguments else None
+                    self.assertIsNotNone(message, f"{path}: daemon log call without a literal message")
+                    if message is not None:
+                        messages.add(message)
+                    for key, value in zip(arguments, arguments[1:]):
+                        field = go_string_literal(key)
+                        literal = go_string_literal(value)
+                        if field in observed and literal is not None:
+                            observed[field].add(literal)
+                for name, position, field in DAEMON_LOG_SCANNED_PRODUCERS:
+                    for arguments in go_call_argument_lists(text, r"\b" + name + r"\s*\("):
+                        if position < len(arguments):
+                            literal = go_string_literal(arguments[position])
+                            if literal is not None:
+                                observed[field].add(literal)
+        protocol = repository / "daemon/internal/protocol/protocol.go"
+        if protocol.is_file():
+            observed["reason"].update(re.findall(r'Reconcile\w+Kind = "([^"]*)"', protocol.read_text(encoding="utf-8")))
+        self.assertGreater(log_calls, 0, "the daemon log call scan found no call sites")
+        self.assertEqual(sorted(messages - set(exporter.DAEMON_LOG_MESSAGES)), [],
+                         "daemon log messages missing from DAEMON_LOG_MESSAGES")
+        for field, allowed in exporter.DAEMON_LOG_TEXT_VALUES.items():
+            self.assertEqual(sorted(observed[field] - set(allowed)), [],
+                             f"daemon {field} literals missing from DAEMON_LOG_TEXT_VALUES")
+        self.assertIn("process_exit", observed["stage"])
+        self.assertIn("terminal transition", observed["kind"])
+        self.assertIn("lease renewal failed", observed["reason"])
+        self.assertIn("not eligible for reconcile", observed["reason"])
 
     def test_missing_legacy_evidence_writes_failed_incomplete_manifest(self) -> None:
         source = self.private_dir("source")

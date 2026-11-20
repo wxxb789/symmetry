@@ -11,9 +11,13 @@ gains an open entry (`docs/TODO.md`), plus this plan. No Go, workflow, contract 
 1. **Exporter** (`scripts/ci/export-linux-v2-redacted-evidence.py`, 932 lines): in `legacy` mode, when
    the CI-supplied run verdict argument is `failed`, additionally export each witness case's
    restarted-daemon log files — `<witness-root>/<case>/second-daemon.stdout.log` and
-   `.../second-daemon.stderr.log`, written by the witness at
-   `daemon/e2e/production_linux_containment_witness_test.go:1723-1754` into the case root, i.e. beside
-   the `witness-evidence.json` the exporter already reads (`:848`) — as bounded, sanitized JSON
+   `.../second-daemon.stderr.log`, written into the case root by every restarted-daemon start:
+   `startLinuxResumeBarrierDaemonWitness`
+   (`daemon/e2e/production_linux_containment_witness_test.go:1723-1754`, the lease-arm/replay
+   barrier) and `startProductionDaemonWitness`
+   (`daemon/e2e/production_daemon_crash_witness_test.go:386-394`, the bind/prepare/clean-seal
+   restarts) — i.e. beside the `witness-evidence.json` the exporter already reads (`:848`) — as
+   bounded, sanitized JSON
    documents `<case>-second-daemon-stdout.json` / `<case>-second-daemon-stderr.json` in the same
    private output directory. The upload step already globs `*.json` from that directory
    (`.github/workflows/ci.yml:1838-1845`), so no workflow change is needed.
@@ -21,8 +25,9 @@ gains an open entry (`docs/TODO.md`), plus this plan. No Go, workflow, contract 
    "truncated":<bool>,"dropped_lines":<int>,"messages":[<record>,…]}`; every record is projected to an
    allowlist (`time`, `level`, `msg`, `state`, `stage`, `reason`, `outcome`, `kind`, `generation`,
    `bytes`, `attempt`, `runtime_epoch`, `skew_ms`, `lease_safety_margin_ms`) with a per-field shape
-   gate; every other field (notably `error`, `run_id`, `command_id`, `runtime_id`, `machine_id`, any
-   path-bearing key) is dropped before publication. Manifest `files` entries for these documents carry
+   and literal-value gate (see "Record projection"); every other field (notably `error`, `run_id`,
+   `command_id`, `runtime_id`, `machine_id`, any path-bearing key) is dropped before publication.
+   Manifest `files` entries for these documents carry
    `"kind":"daemon_log_tail"`, `"daemon":"second"`, `"stream"`, `"records"`, `"dropped_lines"` and
    `"truncated"`; the existing `raw_logs_included:false` stays untouched and true, because only the
    projection is published, never log bytes.
@@ -47,25 +52,37 @@ gains an open entry (`docs/TODO.md`), plus this plan. No Go, workflow, contract 
   and 9 process snapshots, and the manifest still reports `"complete": true`,
   `"incomplete_evidence_files": []`. The exporter reads files, not the go-test event stream, so "the
   failing case's logs" is implemented as "every case's restarted-daemon log tails, on a run the CI
-  judged failed"; on the observed failure that set is exactly the failing case, because no other case
-  leaves a live second daemon behind. Passed runs publish no log documents (the tail of a green run is
-  noise, and the contract scopes the export to failing cases).
+  judged failed". The decider is the written log, not a live daemon: a case exports a tail exactly
+  when `<case>/second-daemon.{stdout,stderr}.log` exists when the exporter runs. In the legacy case
+  set only four cases reach a restarted-daemon start — `bind-before-commit`,
+  `prepare-before-bind`, `daemon-after-resume-clean-seal-boundary` and the failing
+  `lease-arm-before-resume`; `commit-before-resume` and `daemon-after-resume` return before the
+  restart (production witness `:1000-1012` and the unsealed-mirror branch), so they publish nothing.
+  Passed runs publish no log documents (the tail of a green run is noise, and the contract scopes
+  the export to failing cases).
 - **Bounded tail.** At most 65536 bytes are read from the end of each log file
   (`LEGACY_DAEMON_LOG_TAIL_BYTES`); when the file is larger, `"truncated":true`. When the tail starts
   mid-line, the partial first line is discarded and is **not** counted as dropped (it is a truncation
   artifact, not an unreadable line). A file with no newline in its tail yields zero messages and
   `"truncated":true`.
 - **Record projection.** A line is exported as a record only if it is strictly parsed JSON (duplicate
-  keys rejected) whose `time` matches RFC3339-with-fraction (`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$`)
+  keys rejected) whose `time` matches RFC3339-with-fraction
+  (`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$`,
+  ASCII digits only)
   and whose `level` is one of `DEBUG|INFO|WARN|ERROR` — the shapes the daemon's own
   `slog.NewJSONHandler` writer (`daemon/internal/app/app.go:460`) produces on stdout
-  (`daemon/cmd/symmetry-daemon/main.go:89`). `msg` is kept only when it is an identifier
-  (`^[a-z][a-z0-9_]{0,63}$` — every `daemon.log.*` message key in `daemon/internal/app/app.go` is a
-  snake_case identifier); an unsafe or absent `msg` therefore loses the message text but keeps the
-  record's time+level, so the daemon's activity timeline survives even when its text cannot be
-  published. `state`, `stage`, `reason`, `outcome`, `kind` are kept only when they match
-  `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$` (no spaces, slashes, `=`, `?` — so no path or URL fragment can
-  ride along); `generation`, `bytes`, `attempt`, `runtime_epoch`, `skew_ms`,
+  (`daemon/cmd/symmetry-daemon/main.go:89`). `msg` is kept only when it is one of the message
+  literals of a `daemon.log.<Level>("...")` call site under `daemon/internal/app`; `state`,
+  `stage`, `reason`, `outcome`, `kind` are kept only when the value is one of the literals their
+  daemon producers write: terminal states (`completed|failed|cancelled`), the `queueFailure` stages
+  plus `process_exit`, the `stopRecoveredJournal`/`terminateForLease` lease and ownership reasons
+  (spaces included) plus the `protocol.ReconcileDecisionKind` decisions, the acknowledgement
+  outcomes, and the `newIDWithRetry` kinds (`terminal transition`, `transition`, `acknowledgement`,
+  `control_failure_event`). A text value outside its field's set is dropped while the record keeps
+  its time+level (and its other surviving fields), so made-up or credential-shaped values never
+  publish. The test suite scans the log and producer call sites and fails when a daemon literal is
+  missing from its field's set; a value reaching a field through a variable is covered by the
+  maintenance rule documented beside the sets. `generation`, `bytes`, `attempt`, `runtime_epoch`, `skew_ms`,
   `lease_safety_margin_ms` are kept only as non-boolean integers in `±2^31`. Everything else is
   dropped, including `error`, `run_id`, `command_id`, `runtime_id`, `machine_id` and all path-bearing
   keys: the exporter already treats IDs, paths and log text as intentionally private
@@ -75,11 +92,15 @@ gains an open entry (`docs/TODO.md`), plus this plan. No Go, workflow, contract 
   `main.go` stderr sentence surfaces — as a count, never as text.
 - **Redaction is not a substring filter.** The published bytes are re-validated by the exporter's own
   `validate_document` (`:249`), i.e. the same strict-JSON parse, forbidden-key-name scan and configured
-  credential-value scan every other published document passes. Because the projection only ever emits
-  the allowlisted shapes above, a configured credential can reach it only through an allowlisted value;
-  when it does, the export fails closed (non-zero exit, no manifest) exactly as it does for the other
-  documents, instead of publishing and redacting around it. Host paths need no masking because no
-  emitted field can carry one: `/home/runner/...` fails every shape gate in the projection.
+  credential-value scan every other published document passes. In the CI legacy invocation
+  (`.github/workflows/ci.yml:1815-1825`) no `--secret-values-file` is passed, so that credential scan
+  is vacuous there: the leak barrier is the literal-value enumeration itself, not a configured
+  credential check. Every credential-shaped value outside the daemon's own literals is dropped before
+  publication; the one remaining channel is a credential that is byte-for-byte equal to a daemon
+  literal, and when the export is given such a value through `--secret-values-file` it fails closed
+  (non-zero exit, no manifest) exactly as it does for the other documents, instead of publishing and
+  redacting around it. Host paths need no masking because no emitted field can carry one: no daemon
+  literal contains `/`, and `/home/runner/...` is not in any value set.
 - **Source safety.** Log files are read through the same boundary as every other allowlisted source:
   `lstat` (regular file, mode `0o600`, no symlink), `os.open` with `O_NOFOLLOW|O_CLOEXEC`, `fstat` with
   the inode/dev re-check against the `lstat` result, then the bounded tail read. Two intentional
@@ -104,6 +125,19 @@ so it runs in WSL Ubuntu-24.04.
    cases in place and the exporter restored from `HEAD` (they fail: `Ran 5 tests … FAILED (failures=4,
    errors=2)`), then with the exporter change (the same names pass and the whole suite reports 32 tests,
    `OK`). The exporter file is byte-compared before/after the temporary restore.
+   **Fix round (2026-11-21, value allowlists):** the shape gates were replaced by per-field literal
+   value sets taken from the daemon producers, the drift scan
+   (`test_daemon_log_allowlists_match_daemon_producers`) and a no-`--secret-values-file`
+   credential-shaped-value case were added, and the record fixtures were moved to real producer
+   values. Against the pre-fix exporter the changed/added cases fail under `-k daemon_log`
+   (`Ran 9 tests … FAILED (failures=3)`); with the fix the suite reports 36 tests, `OK`. Each of
+   the five projection-gate mutants M2 (`value check removed`), M4 (`integer bound removed`),
+   M6 (`time/level gate removed`), M7 (`bool-as-int accepted`) and M10 (`time accepted as any
+   string`) exits non-zero under the same filter, and an injected new log-message or
+   `terminateForLease` literal in a scratch daemon tree reddens the drift scan. Windows stays
+   POSIX-only: the pre-fix suite reports 54 failures + 5 errors (34 tests) and the fixed suite
+   55 failures + 5 errors (36 tests); no pre-existing test changed its Windows outcome, the new
+   drift scan passes there, and every other failure is the documented `os.getuid` limitation.
 2. **Mutation check for the failure control** (contract clause 3): replace the projection with a raw
    passthrough (`messages = [{"raw_line": line.decode()} …]`) in the changed exporter, re-run the
    redaction case, and record that it reddens on the `/home/runner` assertion; restore the exporter and
