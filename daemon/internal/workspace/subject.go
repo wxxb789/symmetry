@@ -622,10 +622,12 @@ func hashTreeManifest(ctx context.Context, stream *subjectGitBatchStream, entrie
 		if err := stream.streamObject(entries[index].objectID, hasher, maxSubjectArtifactBlobBytes); err != nil {
 			return fmt.Errorf("read committed blob %q: %w", string(entries[index].path), err)
 		}
-		// Sum appends the digest into the entry's own storage (cap exactly
-		// sha256.Size), so this in-place append both computes and stores the
-		// digest without a per-object buffer or a second store.
-		_ = hasher.Sum(entries[index].digest[:0])
+		// Sum appends into the entry digest storage, so streaming a committed
+		// blob allocates no per-object buffer. The explicit copy keeps the
+		// entry digest correct even if Sum returns a different backing array:
+		// Hash.Sum does not promise that it reused the storage it was given.
+		blobDigest := hasher.Sum(entries[index].digest[:0])
+		copy(entries[index].digest[:], blobDigest)
 	}
 	return nil
 }
@@ -840,8 +842,9 @@ func (stream *subjectGitBatchStream) close(failure error) error {
 
 // finish asks an in-sync batch child to exit and proves that it was reaped. A
 // cancellation that reaches this path still joins the path's unresolved-process
-// fence: the child was stopped by that cancellation policy, never by an exit it
-// recorded itself, so an unproven stop stays observable to the caller.
+// fence: this path cannot observe whether the path's cancellation policy
+// actually stopped the child or the child exited on its own first, so the stop
+// is presumed unproven and stays observable to the caller.
 func (stream *subjectGitBatchStream) finish() error {
 	closeErr := stream.stdin.Close()
 	waitErr := stream.command.Wait()
