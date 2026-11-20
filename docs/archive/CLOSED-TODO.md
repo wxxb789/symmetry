@@ -437,7 +437,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       below keeps its original `docs/TODO.md` pointer for this item; the entry itself now lives
       in this archive.
 
-*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #76).*
+*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stayed there until it moved here on 2026-11-19 (PR #76).*
 
       **Linux terminal reason — fixed at the cause; verification is CI on the new revision, not a
       local green.** `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` failed
@@ -915,6 +915,54 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       browser specs branch on the literal `forbidden` for these paths (the daemon acts on the
       HTTP status and forwards the envelope code), so no other client changed.
 
+- [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
+      `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
+      states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
+      classifier's skip list against the jobs that actually ran before treating the trim as
+      fully accepted.
+      Recorded (2026-11-19, branch `docs/runbook-quality-drift`): the first hosted docs-only
+      sample is PR #29's run `43726243703` — 12 job records (2 success, 10 skipped), 12 s
+      wall-clock (`14:47:12Z`–`14:47:24Z`) on the trim revision — and the first docs-only sample
+      recorded on this branch is PR #99's run `44540158144` — 10 job records (2 success, 8
+      skipped), 12 s wall-clock (`14:06:18Z`–`14:06:30Z`); the trim revision's after runs
+      (PR #28 run `43724904655` attempt 2 and merge push `f47b0c3` run `43726189932`, both
+      12/12) are beside them in the record's measurement table, with the status,
+      clause-coverage and limits sections updated (the audit-surface limit is annotated
+      as true at the trim revision and resolved by #43, `724d915`). Six later PR #99
+      samples on this branch carried the record itself (the count at revision
+      `83f6036`), so `run-records=true` and `record-cleanliness` executed: runs
+      `44540613218` (head `0d0e998`), `44540895110` (head `06502b5`), `44554983915`
+      (head `ad87f9b`), `44560447996` (head `b2a1340`), `44565580363` (head `4b12e59`)
+      and `44566899850` (head `83f6036`) — 10 job records each, 3 success (`changes`,
+      `legacy-route-audit`, `record-cleanliness`), 7 skipped, 19 s / 20 s / 26 s / 22 s /
+      15 s / 18 s wall-clock. Cross-check: the workflow's classifier
+      block over each pull request's first-parent diff (PR #29: its `docs/TODO.md`-only diff
+      against `f47b0c3`; PR #99's first sample: the merge ref's `HEAD^1..HEAD`, the same five `docs/**`
+      paths) reports `run-heavy=false` for both, and the current classifier reports
+      `run-records=false` for both diffs as well; the executed sets still match, because
+      the trim revision has no `record-cleanliness` job — PR #29's ten skips are all
+      `run-heavy`-gated trim jobs, while PR #99's eight are its seven `run-heavy`-gated
+      jobs plus `record-cleanliness` — and `changes` and the ungated `legacy-route-audit`
+      ran in both. Evidence:
+      `gh run view 43726243703 --json jobs,createdAt,updatedAt`; `gh run view
+      44540158144 --json jobs,createdAt,updatedAt`; `gh run view 43724904655
+      --attempt 1 --json jobs`; `gh run view 43724904655 --attempt 2 --json
+      jobs`; `gh run view 43726189932 --json jobs`;
+      `gh api repos/wxxb789/symmetry/actions/runs?created=2026-11-15T14:40:00Z..2026-11-15T15:10:00Z`
+      shows no pull_request run between the trim merge and PR #29's sample;
+      `gh api repos/wxxb789/symmetry/actions/runs/44540613218/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44540895110/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44554983915/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44560447996/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44565580363/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44566899850/jobs?per_page=100`
+      (heads `0d0e998`, `06502b5`, `ad87f9b`, `b2a1340`, `4b12e59`, `83f6036`; 10 check
+      records each: 3 success, 7 skipped);
+      `python3
+      scripts/ci/model-routing-record-sanitize.py --check --root-only
+      docs/evidence/ci-process-trim-2026-11-15.md` exit 0; `bash
+      scripts/audit-no-legacy-routes.sh` exit 0 (1327 tracked files, 4 exclusions).
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover
@@ -1351,7 +1399,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
 
 ## Open findings from the 0008b model-routing review
 
-*Closed part of the item “Revalidate the open class B finding against `daemon/internal/platform/process_windows.go` …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #102).*
+*Closed part of the item “Revalidate the open class B finding against `daemon/internal/platform/process_windows.go` …” in `docs/TODO.md`; the open residual stayed there until it moved here on 2026-11-19 (PR #102).*
 
       **Fixed** (branch `fix/non-durable-close-proof`). `jobContainment.Close`
       now latches the failed physical stop proof into `job.closeErr` in the
@@ -1470,7 +1518,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       in `docs/TODO.md`, with the argv/output-only scope it asked for; each open item was moved
       separately, so this entry carries no residual.
 
-*Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stays there.*
+*Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stayed there until it moved here on 2026-11-19 (PR #99).*
 
       Third pass (the `gpt-6.2-sol` findings, each re-verified against its
       artifact). Closed by restating them against their owners rather than
@@ -1585,6 +1633,101 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       decision note, untouched here; its index-row link was already repointed
       to the archived document by `c514bd9` (#66).
 
+- [ ] Revalidate the runbook claims that are true on this tree but rot without any
+      edit to `docs/runbooks/**` (found while independently resolving every
+      checkable runbook claim on `632b369`). A CI job split or rename invalidates
+      `daemon-process-stop.md`'s "the daemon job runs `go vet`, a scoped ordinary
+      Go pass and the full `-race` suite ... and the `daemon-windows` job runs the
+      full Windows suite"; a harness pin move invalidates
+      `daemon-opencode-peer-ownership.md`'s "OpenCode 2.3.0 is explicitly
+      unsupported" and `control-plane-and-daemon.md`'s "the script-local version
+      guard is `-ExpectedClaudeVersion 2.1.281`, which is not the daemon's
+      promoted Claude pin" (both follow `docs/design/harness.md`); a pnpm bump
+      invalidates every `mise exec pnpm@12.17.0 -- …` command (they follow
+      `package.json`'s `packageManager`); a change to the `development-*` fallbacks
+      invalidates the sign-in and live-check examples (`control/config/runtime.exs`
+      `:63-64`); a rename of the workspace read's health keys invalidates
+      `portal.md`'s four signal names (`health/4` in
+      `control/lib/symmetry_control/workspaces/read_model.ex:471`); and
+      `session-receipt-recovery-e2e.md`'s `mix ecto.drop --force` uses the Ecto
+      option meaning "do not ask for confirmation", not `--force-drop`, so an
+      Ecto-side change to that option would change what the cleanup line does. The
+      runbooks also cite *Commands and gates* in `docs/design/quality.md` as the
+      checks CI actually runs while that section still carries the stale frontend
+      rows tracked under *Deferred review findings (0007i)* below.
+
+      Closed in the second pass (the review findings of `gpt-6.1-sol` on `#70`,
+      each re-verified against its artifact): `connections.md` no longer asserts
+      the `vso.code`/`vso.work`/`vso.build` scope mapping it could not support —
+      the shipped code requests an Entra resource token
+      (`control/lib/symmetry_control/integrations/auth.ex:41-46`) and names no
+      scope — and instead states the read-versus-write requirement the code does
+      establish (`change.upsert`/`change.update` create or update pull requests in
+      `integrations/providers/{github,azure_devops}.ex`), with the scope and
+      permission names explicitly left to the provider. Still rot-prone after that
+      pass, with no artifact that can re-derive them: the runbooks index's
+      precedence rule (it now mirrors `AGENTS.md:24`'s record-the-conflict
+      requirement instead of "the code wins", so a change to that contract
+      bullet invalidates it), `portal.md`'s board-move sentence (the keyboard
+      bindings follow `frontend/src/features/projects/work-surface.tsx:115` and
+      the Goal-managed refusal follows `ensure_legacy_work_item/1`), `portal.md`'s
+      `playwright-report/` location (follows `browser/playwright.config.mjs` and
+      `browser/README.md`), `portal.md`'s CSRF sentence (follows Plug's
+      `@unprotected_methods ~w(HEAD GET OPTIONS)`), and
+      `chat-and-supervisory-control.md`'s supervisory/intent scoping (follows
+      `control_capabilities/4` in `control/lib/symmetry_control/orchestration.ex`
+      and the daemon's autonomy envelope in `daemon/internal/app/app.go`).
+
+      *(Partly superseded by the archived third-pass closure, which restated several of these
+      against their owners; see `docs/archive/CLOSED-TODO.md`. The revalidatable list below stays
+      open.)*
+      Closed part moved to `docs/archive/CLOSED-TODO.md`.
+
+      Still revalidatable, with no artifact that can pre-empt a future edit: the
+      generated-name regex and the `MIX_TEST_PARTITION` behaviour (Ecto/Ecto
+      test-config side), the 45-second skip bound in
+      `daemon/e2e/core_test.go`, the list of variables the production Compose
+      service forwards, the Pi/native provider-bridge gate's exact shape, the
+      installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
+      convention paragraph itself (it restates the precedence the design and
+      protocol documents already carry).
+      Revalidated in full (2026-11-19, branch `docs/runbook-quality-drift`): every claim named
+      below was rechecked against its owner, and the claim | owner | verdict | change table with each
+      owner's current file:line is in the PR body — the CI inventory sentence against
+      `.github/workflows/ci.yml:1171-1345` (`daemon`: gofmt, `go vet`, the scoped ordinary
+      pass and the full `-race` pass) and `:1357-1473` (`daemon-windows`: `go test ./...`
+      plus its named witnesses); OpenCode 2.3.0 against `docs/design/harness.md:15`,
+      `daemon/internal/harness/registry.go:154,326-329` and the mechanical version guard
+      `daemon/internal/harness/opencode/adapter.go:283-284` (TestedVersion `:28`); the
+      Claude smoke guard against
+      `scripts/claude-code-local-transport-smoke.ps1:14` (default `2.1.281`) versus the
+      promoted `harness.md:11` blob; the pnpm commands against `package.json:5`; the
+      `development-*` examples against `control/config/runtime.exs:63-64`; `portal.md`'s four
+      health signals against `control/lib/symmetry_control/workspaces/read_model.ex:504-515`
+      (the item's `:471` was stale); `mix ecto.drop --force` against Ecto 3.14.3's
+      `mix ecto.drop` option docs (`control/mix.lock`; `--force` = "do not ask for
+      confirmation", distinct from `--force-drop`); the generated-name regex and
+      `MIX_TEST_PARTITION` against
+      `control/config/test.exs:14-15` and
+      `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs:1365`;
+      Compose forwarding against `compose.production.yaml:28-36` with the `legacy`/`false`
+      defaults in `control/config/runtime.exs:27,86`; the 45-second skip bound against
+      `daemon/e2e/core_test.go:196,242-245` and CI's `SYMMETRY_LEASE_DURATION_MS=30000` with
+      the named JSON assertion (`.github/workflows/ci.yml:1503,1578-1599`); the Pi
+      provider-bridge gate against `daemon/internal/harness/pi/provider_extension.go:459-467`
+      and `probe.go:242`; the installed-owner vocabulary against
+      `docs/design/quality.md:80-85` (OpenCode side: `registry.go:154`,
+      `harness.md:82,120`); and the docs-index
+      convention paragraph (`README.md:325-330`) against `AGENTS.md:30-31` and
+      `:64-67`. `portal.md`'s `playwright-report/` location and its CSRF
+      sentence were rechecked the same way and still match their owners
+      (`browser/playwright.config.mjs:6-7,20` for the result and report directories; Plug 1.20.3's
+      `@unprotected_methods ~w(HEAD GET OPTIONS)` for the read exemption, `control/mix.lock`).
+      Both edited runbooks now name their owner file or package
+      (`daemon/e2e/core_test.go` in `control-plane-and-daemon.md`; `daemon/internal/harness/pi`
+      in `connections.md`). Evidence: the owner reads above plus the docs-only hosted CI run on
+      this branch; no suite beyond that is required for a docs-only diff.
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Investigate the intermittent Control failure
@@ -1661,6 +1804,19 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       field is tracked and their handler snapshots stay fresh, and they are left unchanged. Host
       note: this host runs ~14 parallel workers, so local browser verdicts are indicative only; CI
       holds the verdict.
+
+- [ ] Revalidate the pre-existing doc drift in `docs/design/quality.md`: line 41 still says the frontend
+      commands "do not exist until goal 0007 builds `frontend/`" and line 116 lists them as a goal-0007
+      target, while `.github/workflows/ci.yml:67-70` has run them since 0007a. Observed while recording
+      the 0007i gate table; update the quality policy in a separate documentation change.
+      Fixed (2026-11-19, branch `docs/runbook-quality-drift`): the *Commands and gates* TS row no
+      longer frames the frontend commands as a goal-0007 target or asks for a browser-runner pnpm
+      migration; it now states the delivered reality — commands owned by `frontend.md`, run by CI in
+      the `contracts` job (`.github/workflows/ci.yml:107-110`; the item's `:67-70` was stale), with
+      the browser runner already pnpm
+      (`.github/workflows/ci.yml:618`). Line 41 was already corrected on main by `f2a759f`; this
+      change corrects :116, and `rg -n 'goal 0007 target|do not exist until goal 0007'
+      docs/design/quality.md` is empty on the committed bytes.
 
 ## Paginated reads must be bound to the cursor that served their pages
 

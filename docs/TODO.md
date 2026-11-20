@@ -75,12 +75,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       shows the importer's wait event, whether it waited on the delivery transaction, and
       whether the delivery backend held `work_items`.
 
-- [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
-      `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
-      states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
-      classifier's skip list against the jobs that actually ran before treating the trim as
-      fully accepted.
-
 ## Deferred review findings (0007f)
 
 - [ ] Give the focused render gate's `browser/tests/portal-goal-managed.spec.mjs` case its fixture
@@ -326,71 +320,37 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Record and documentation hygiene
 
-- [ ] Revalidate the runbook claims that are true on this tree but rot without any
-      edit to `docs/runbooks/**` (found while independently resolving every
-      checkable runbook claim on `632b369`). A CI job split or rename invalidates
-      `daemon-process-stop.md`'s "the daemon job runs `go vet`, a scoped ordinary
-      Go pass and the full `-race` suite ... and the `daemon-windows` job runs the
-      full Windows suite"; a harness pin move invalidates
-      `daemon-opencode-peer-ownership.md`'s "OpenCode 2.3.0 is explicitly
-      unsupported" and `control-plane-and-daemon.md`'s "the script-local version
-      guard is `-ExpectedClaudeVersion 2.1.281`, which is not the daemon's
-      promoted Claude pin" (both follow `docs/design/harness.md`); a pnpm bump
-      invalidates every `mise exec pnpm@12.17.0 -- …` command (they follow
-      `package.json`'s `packageManager`); a change to the `development-*` fallbacks
-      invalidates the sign-in and live-check examples (`control/config/runtime.exs`
-      `:63-64`); a rename of the workspace read's health keys invalidates
-      `portal.md`'s four signal names (`health/4` in
-      `control/lib/symmetry_control/workspaces/read_model.ex:471`); and
-      `session-receipt-recovery-e2e.md`'s `mix ecto.drop --force` uses the Ecto
-      option meaning "do not ask for confirmation", not `--force-drop`, so an
-      Ecto-side change to that option would change what the cleanup line does. The
-      runbooks also cite *Commands and gates* in `docs/design/quality.md` as the
-      checks CI actually runs while that section still carries the stale frontend
-      rows tracked under *Deferred review findings (0007i)* below.
-
-      Closed in the second pass (the review findings of `gpt-6.1-sol` on `#70`,
-      each re-verified against its artifact): `connections.md` no longer asserts
-      the `vso.code`/`vso.work`/`vso.build` scope mapping it could not support —
-      the shipped code requests an Entra resource token
-      (`control/lib/symmetry_control/integrations/auth.ex:41-46`) and names no
-      scope — and instead states the read-versus-write requirement the code does
-      establish (`change.upsert`/`change.update` create or update pull requests in
-      `integrations/providers/{github,azure_devops}.ex`), with the scope and
-      permission names explicitly left to the provider. Still rot-prone after that
-      pass, with no artifact that can re-derive them: the runbooks index's
-      precedence rule (it now mirrors `AGENTS.md:24`'s record-the-conflict
-      requirement instead of "the code wins", so a change to that contract
-      bullet invalidates it), `portal.md`'s board-move sentence (the keyboard
-      bindings follow `frontend/src/features/projects/work-surface.tsx:115` and
-      the Goal-managed refusal follows `ensure_legacy_work_item/1`), `portal.md`'s
-      `playwright-report/` location (follows `browser/playwright.config.mjs` and
-      `browser/README.md`), `portal.md`'s CSRF sentence (follows Plug's
-      `@unprotected_methods ~w(HEAD GET OPTIONS)`), and
-      `chat-and-supervisory-control.md`'s supervisory/intent scoping (follows
-      `control_capabilities/4` in `control/lib/symmetry_control/orchestration.ex`
-      and the daemon's autonomy envelope in `daemon/internal/app/app.go`).
-
-      *(Partly superseded by the archived third-pass closure, which restated several of these
-      against their owners; see `docs/archive/CLOSED-TODO.md`. The revalidatable list below stays
-      open.)*
-      Closed part moved to `docs/archive/CLOSED-TODO.md`.
-
-      Still revalidatable, with no artifact that can pre-empt a future edit: the
-      generated-name regex and the `MIX_TEST_PARTITION` behaviour (Ecto/Ecto
-      test-config side), the 45-second skip bound in
-      `daemon/e2e/core_test.go`, the list of variables the production Compose
-      service forwards, the Pi/native provider-bridge gate's exact shape, the
-      installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
-      convention paragraph itself (it restates the precedence the design and
-      protocol documents already carry).
-
-## Deferred review findings (0007i, rebased onto `ca29a8e`)
-
-- [ ] Revalidate the pre-existing doc drift in `docs/design/quality.md`: line 41 still says the frontend
-      commands "do not exist until goal 0007 builds `frontend/`" and line 116 lists them as a goal-0007
-      target, while `.github/workflows/ci.yml:67-70` has run them since 0007a. Observed while recording
-      the 0007i gate table; update the quality policy in a separate documentation change.
+- [ ] Add a path-and-symbol existence check for the backticked repo paths and
+      identifiers cited in `docs/runbooks/**`, `docs/design/quality.md` and the
+      CLOSED-TODO closures. Location: a new `scripts/ci/` check plus its fixture
+      test, run for pull requests the way the record-cleanliness pair is
+      (`scripts/ci/check-record-cleanliness.py` with
+      `scripts/ci/test-check-record-cleanliness.py`,
+      `.github/workflows/ci.yml:78,1218`): scoped to the changed files it audits
+      but not hidden behind the documentation-only fast path, so a runbook-only
+      pull request still runs it. Why: a cited `file:line` or symbol rots
+      silently when its owner moves — the 2026-11-19 revalidation found the
+      closed item's own `read_model.ex:471` health-signal citation stale
+      (`portal.md` cites `health/4` with no line number), and PR #99's "Review
+      fixes (round 2)" replaced an untracked
+      `control/deps/ecto/...` citation (`control/.gitignore:8` ignores `deps/`)
+      that no index contains. Check that a backticked repo-relative path exists
+      and that the cited identifier occurs in the cited file; do not validate
+      raw `file:line` values (any edit above them would redden the gate).
+      Verification: the check fails on a citation whose path or symbol is absent
+      and passes on the current tree; fixtures pin both outcomes.
+- [ ] Commit a fixture test for the `changes` job's changed-path classifier
+      (`.github/workflows/ci.yml:26-65`), whose proof today is only the removed
+      throwaway harness plus hosted runs. Pattern:
+      `scripts/ci/test-no-legacy-routes-audit.py` (fixture-driven, runs ungated
+      in the `legacy-route-audit` job; `.github/workflows/ci.yml:1355`). Pin:
+      `docs/**`/`*.md`-only diffs report `run-heavy=false`; `docs/evaluations/**`,
+      `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
+      `scripts/ci/check-record-cleanliness.py` changes report `run-records=true`;
+      `legacy-route-audit` runs unconditionally; non-`pull_request` events
+      report both `true`. Companion increment: its `ci.yml` wiring would move
+      line numbers this branch just pinned. Verification: the fixture test
+      fails when any of those routings changes.
 
 ## Lockfiles must carry canonical registry URLs
 
