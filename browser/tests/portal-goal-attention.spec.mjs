@@ -225,7 +225,7 @@ test.describe("Goal attention workspace", () => {
 
     await page.goto(`/portal/goals/${goalId}`);
     await expect(page.getByRole("heading", { level: 1, name: "Lifecycle goal" })).toBeVisible();
-    await expect(page.getByText("plan decision")).toBeVisible();
+    await expect(page.getByRole("heading", { level: 3, name: "plan decision" })).toBeVisible();
     await expect(page.getByText("Accept the proposed plan?")).toBeVisible();
 
     const commands = [];
