@@ -358,8 +358,14 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert read["accounting"]["usage_cost_unknown?"] == true
     assert read["accounting"]["usage_cost_microusd"] == nil
 
-    assert [%{"required?" => true, "settlement" => "repair_required"}] =
-             read["settlement_attention"]
+    assert [
+             %{
+               "required?" => true,
+               "settlement" => "repair_required",
+               "proposed_next_action" => "Run the bound repair",
+               "proposed_next_action_status" => "proposal_only"
+             }
+           ] = read["settlement_attention"]
 
     subject_hash =
       "sha256:" <> Base.encode16(RequestHash.canonical(accepted_subject), case: :lower)
@@ -912,12 +918,17 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   # gate. The row follows what `Goals.create_external_wait!/8` writes, and the
   # identity trigger requires exactly this shape (completed task and run, the
   # run's `task_result` equal to the wait's `result`, the item's repository
-  # resource in the subject), so the row cannot be invented more loosely.
+  # resource in the subject), so the row cannot be invented more loosely. The
+  # embedded blocker carries the future schedule the settle path's task-result
+  # validation requires (`validate_external_blocker/3` refuses a `null`
+  # schedule), copied verbatim from the run's stored result; the wait row's own
+  # `next_check_at` is null because its state is terminal.
   defp insert_unsupported_external_wait!(goal_id, revision, item) do
     subject = item["baseline"]["subject"]
     subject_hash = RequestHash.canonical(subject)
     result_id = Ecto.UUID.generate()
     external_ref = "ci://build/unsupported"
+    next_check_at = DateTime.utc_now() |> DateTime.add(86_400, :second) |> DateTime.to_iso8601()
 
     blocked_result = %{
       "schema_version" => "symmetry.task_result.v1",
@@ -931,7 +942,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
         "kind" => "external",
         "resource_id" => item["repository_resource_id"],
         "external_ref" => external_ref,
-        "next_check_at" => nil
+        "next_check_at" => next_check_at
       },
       "proposed_next_action" => nil,
       "proposal" => nil,

@@ -309,7 +309,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Deferred review findings (0007h)
 
-- [ ] Harden the `workspace-read` row's consumed members the same way. The Goal/attention half of this
+- [ ] Harden the optional-but-consumed members of the served reads: the `workspace-read` row remains.
+      The Goal/attention half of this
       item, and the empty-capture residual it carried, are closed on branch `fix/served-read-closeout`
       (`docs/archive/CLOSED-TODO.md`, this section): every member this item named sits in a `required`
       array at `fdf332d` and is read by the surface it cited, and the real-served controller gate now
@@ -317,17 +318,22 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       validated only as empty arrays — beside the settlement attention it already asserted.
       Still open is the same class on the workspace read, which the 0007h entry scoped out as per-surface
       work: of the 68 members `workspace-read.schema.json` leaves optional (a `jq` walk of
-      `required` arrays), 62 are read by `frontend/src` feature code and only six are not
-      (`RuntimeSnapshot.active_runs`, the `RuntimeCapabilities` members other than `adapter`, and
-      `WorkspaceWorkItem.position` — verified by grep: no feature-code read site for any of them), and
-      those surfaces render their own fallbacks instead of refusing. The 62 read members are the root
+      `required` arrays), 66 are read by `frontend/src` feature code and only two are not
+      (`RuntimeSnapshot.active_runs` and `WorkspaceWorkItem.position` — verified by grep: no
+      feature-code read site for either; the four `RuntimeCapabilities` booleans `interactive`,
+      `provider_access`, `structured_input` and `supervisory_control` are consumed only as the whole
+      map, `frontend/src/features/runtimes/runtimes.tsx:24` serializing it into `data-capabilities`
+      and `browser/tests/portal-live-daemon.spec.mjs:433` asserting that attribute equals the
+      registration-side map, so no member-named read site exists for them), and
+      those surfaces render their own fallbacks instead of refusing. The 66 read members are the root
       `runtimes` and `registered_runtimes`; project `version`, `default_agent_profile`,
       `default_workspace` and `resources`; the resource row's `id`, `project_id`, `connection_id`,
       `kind`, `name`, `provider`, `external_ref`, `url`, `status`, `sync_status`, `status_message`,
       `last_synced_at` and `version`; the registered-runtime row's `runtime_id`, `runtime_name`,
       `agent_profile` and `workspace`; the runtime snapshot's `capacity`, `reserved_capacity`,
       `connection_epoch`, `last_heartbeat_at`, `repository_resource_id`, `agent_profile`, `workspace`
-      and `capabilities.adapter`; the work row's `project_id`, `goal_id`, `description`, `priority`,
+      and `capabilities.adapter`, plus that map's `interactive`, `provider_access`, `structured_input`
+      and `supervisory_control`; the work row's `project_id`, `goal_id`, `description`, `priority`,
       `assignee`, `workspace`, `repository_resource_id`, `repository`, `ci_resource_id`, `ci_resource`,
       `branch`, `pull_request_url`, `ci_status`, `review_status`, `delivery`, `external`, `goal_managed`,
       `version`, `can_start`, `execution` and `updated_at`; the `provider` and `recorded_at` of each

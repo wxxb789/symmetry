@@ -17,11 +17,11 @@ one is read by the frontend after the boundary decode:
 | `goal-read#/definitions/GoalReadAccounting` `known_usage_cost_microusd` | yes | `frontend/src/features/goals/detail.tsx:610` | `control/lib/symmetry_control/goals/read_model.ex:2555` (`accounting_projection/4`, defined `:2539`) |
 | `goal-read#/definitions/SettlementAttention` `proposed_next_action` | yes | `detail.tsx:316` | `read_model.ex:1562` (`settlement_entry/8`, defined `:1536`, which `task_settlement_entry/9` delegates to) |
 | `…/SettlementAttention` `proposed_next_action_status` | yes | `detail.tsx:316` | `read_model.ex:1563` |
-| `goal-read#/definitions/GoalReadExternalWait` `external_ref` | yes | `detail.tsx:626` | `read_model.ex:2610` (`external_wait_projection/1`) |
-| `…/GoalReadExternalWait` `next_check_at` | yes | `detail.tsx:627` | same |
-| `…/GoalReadExternalWait` `check_seq` | yes | `detail.tsx:627` | same |
-| `goal-read#/definitions/GoalReadOutcome` `candidate_subject` | yes | `detail.tsx:534` | `read_model.ex:2255` (`outcome_projection/1`) |
-| `…/GoalReadOutcome` `subject_hash` | yes | `detail.tsx:272,531,537` | same |
+| `goal-read#/definitions/GoalReadExternalWait` `external_ref` | yes | `detail.tsx:626` | `read_model.ex:2623` (`external_wait_projection/1`, defined `:2610`) |
+| `…/GoalReadExternalWait` `next_check_at` | yes | `detail.tsx:627` | `read_model.ex:2626` |
+| `…/GoalReadExternalWait` `check_seq` | yes | `detail.tsx:627` | `read_model.ex:2627` |
+| `goal-read#/definitions/GoalReadOutcome` `candidate_subject` | yes | `detail.tsx:534` | `read_model.ex:2265` (`outcome_projection/1`, defined `:2255`) |
+| `…/GoalReadOutcome` `subject_hash` | yes | `detail.tsx:272,531,537` | `read_model.ex:2266` |
 | `attention-read#/definitions/GoalAttentionEntry` `attention_reasons` | yes | `frontend/src/features/attention/attention.tsx:92` | `read_model.ex:2657` (`attention_entry/1`, defined `:2647`) |
 | `…/GoalAttentionEntry` `active_tasks` | yes | `attention.tsx:90` | `read_model.ex:2658` (`execution.active_task_count`) |
 | `…/GoalAttentionEntry` `nonterminal_tasks` | yes | `attention.tsx:90` | `read_model.ex:2659` (`execution.nonterminal_task_count`) |
@@ -36,10 +36,14 @@ with `jq`, then cross-read against `frontend/src`):
   `settlement_attention`/`updated_at`, the optional `SettlementAttention` members) are
   unconsumed and stay additive.
 - `workspace-read.schema.json` leaves 68 members optional (a `jq` walk of every `required` array in
-  the file); 62 of them are read by `frontend/src` feature code, and only six are not
-  (`RuntimeSnapshot.active_runs`, the `RuntimeCapabilities` members other than `adapter`, and
-  `WorkspaceWorkItem.position`, each with no feature-code read site). That is the item's first
-  residual and the only surviving instance of the class.
+  the file); 66 of them are read by `frontend/src` feature code, and only two are not
+  (`RuntimeSnapshot.active_runs` and `WorkspaceWorkItem.position`, each with no feature-code read
+  site). The four `RuntimeCapabilities` booleans (`interactive`, `provider_access`, `structured_input`
+  and `supervisory_control`) are consumed only as the whole map (`runtimes.tsx:24` serializes
+  `runtime.capabilities` into `data-capabilities`, which
+  `browser/tests/portal-live-daemon.spec.mjs:433` asserts equals the registration-side map), so they
+  have no member-named read site. That is the item's first residual and the only surviving instance
+  of the class.
 
 ## What remains, and the shape of the increment
 
@@ -97,7 +101,9 @@ Increment:
   `next_check_at: null`. The DB check constraint admits the same four states
   (`20260909100000_add_goal_external_wait_unsupported_state` replaced the create-table
   `waiting|checking|unknown` set), so the gate fixture uses the writer's shape and does not
-  invent a state the server cannot serve.
+  invent a state the server cannot serve; the embedded task result it copies verbatim keeps the
+  future blocker schedule the settle path validates (`validate_external_blocker/3` refuses a
+  `null` schedule), so the result bytes are a shape the writer admits.
 - **An accepted outcome's `candidate_subject` is the canonical Subject object** (`resource_id`,
   `commit`, `tree_digest`) and `subject_hash` is served as `sha256:<hex>`
   (`read_model.ex:2828`); the fixture carries both, so the rename probe pins the exact spelling
@@ -134,16 +140,23 @@ Increment:
    (declaring the boundary test's inline documents sufficient) leaves a serving-side rename of
    `external_ref`/`check_seq`/`candidate_subject` passing every gate, because no gate compares a
    populated server response against the schema.
-2. **Residual (1) stays open; the options, not a silent choice.** Option A: make the
-   `workspace-read` row's 62 optional-and-read members required. That is not a local edit —
-   `WorkspaceWorkItem` is one shared definition body across `workspace-read`, `work-detail-read`
-   and `chat-read` (`contracts/generated/effect/index.ts:633`), `contracts/README.md:22-23`
-   records the row's tolerance as a decision ("keeps accepting older partial projections"), and the
-   frontend fixture layer, the surfaces that read those members and the generated Go DTOs follow. Option B
-   (recommended, and what this increment records): keep the tolerance for the workspace row,
-   which is the entry's own scope ("per-surface work outside this class"), and keep the residual
-   as a tracked TODO item. The choice needs the owner because it decides whether an older
-   partial workspace projection is still renderable.
+2. **Residual (1) stays open; the options, not a silent choice.** Option (a): drop the tolerance and
+   require every always-emitted consumed member; because `WorkspaceWorkItem` is one shared definition
+   body across `workspace-read`, `work-detail-read` and `chat-read`
+   (`contracts/generated/effect/index.ts:633`), that single requiredness edit moves the required
+   arrays, the valid fixtures of all three schemas, the frontend fixture layer
+   (`frontend/src/services/api.fixtures.ts`) and the generated Go DTOs together, while the
+   `RuntimeCapabilities` members and the `WorkItemWaitingDecision` packet stay optional either way
+   because the projection passes the stored registration map and the agent's own waiting payload
+   through verbatim. Option (b): keep the tolerance and pin the serving side instead, by validating
+   a real served `workspace-read` document against the contract bundle with the consumed members
+   asserted on that output (`validate_served_document!` today pins `chat-read`, `goal-read` and
+   `attention-read` only, so no gate compares a served workspace read with the contract at all).
+   Recommendation, pending the owner: (b) is the smaller, reversible step and keeps older
+   projections renderable; (a) is the class-consistent one. This increment records neither option;
+   the choice decides whether an older partial workspace projection is still renderable
+   (`contracts/README.md:22-23` records the tolerance as "keeps accepting older partial
+   projections").
 3. **The increment adds no second mechanism.** The gate reuses `ServedDocument`
    (`control/test/support/served_document.ex`), the fixture reuses the manifest, and the probe
    reuses `renameMember/2`; nothing new is introduced beside one fixture file and one manifest

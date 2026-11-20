@@ -26,10 +26,11 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
-The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
-moved on 2026-11-21 from branch `fix/served-read-closeout`.
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
+
+The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
+moved on 2026-11-21 from branch `fix/served-read-closeout`.
 
 ## Model-routing evaluation records
 
@@ -1482,14 +1483,14 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       Revalidated and closed on branch `fix/served-read-closeout` (2026-11-21). Every member the entry
       named already sits in a `required` array at `fdf332d` and is read by the surface the entry cited,
       at the anchors its stale line numbers drifted away from (entry lines were written against
-      `978abba`): `goal-read` accounting `known_usage_cost_microusd` (served
+      `671525c`): `goal-read` accounting `known_usage_cost_microusd` (served
       `control/lib/symmetry_control/goals/read_model.ex:2555`, read
       `frontend/src/features/goals/detail.tsx:610`), settlement attention `proposed_next_action` and
       `proposed_next_action_status` (`read_model.ex:1562-1563`, read `detail.tsx:316`), external wait
-      `external_ref`, `next_check_at` and `check_seq` (`read_model.ex:2610`, read `detail.tsx:626-627`),
-      outcome `candidate_subject` and `subject_hash` (`read_model.ex:2255`, read
-      `detail.tsx:272,531-537`), and the attention entry's `attention_reasons`, `active_tasks` and
-      `nonterminal_tasks` (`read_model.ex:2657-2659`, read
+      `external_ref`, `next_check_at` and `check_seq` (`read_model.ex:2623,2626-2627`, read
+      `detail.tsx:626-627`), outcome `candidate_subject` and `subject_hash`
+      (`read_model.ex:2265-2266`, read `detail.tsx:272,531-537`), and the attention entry's
+      `attention_reasons`, `active_tasks` and `nonterminal_tasks` (`read_model.ex:2657-2659`, read
       `frontend/src/features/attention/attention.tsx:90,92`). The class is re-checked exhaustively
       rather than member-by-member: the optional sets of `goal-read.schema.json` and
       `attention-read.schema.json` were extracted with a `jq` walk of every `required` array (48 and 11
@@ -1500,7 +1501,7 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       elsewhere belong to other definitions (`WorkItem`/`work-detail-read`, the `ProjectBlockedEntry`
       blocker, the planning drafts); the optional members with no reader at all are additive, as the
       entry intends. The only optional-and-consumed members left in the served reads this entry names —
-      the Goal read, the attention read and the workspace-read row — are the workspace row's 62, which
+      the Goal read, the attention read and the workspace-read row — are the workspace row's 66, which
       stay open in `docs/TODO.md`.
       The entry's second residual — the empty `accepted_outcomes`/`settlement_attention`/
       `external_waits` captures — is closed at both gates it named. The real-served controller test
@@ -1516,7 +1517,10 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       keeps `validate_served_document!("goal-read", read)`. Its rows follow the writers' durable shapes:
       the external wait is the only shape the `goal_external_waits` identity trigger admits (completed
       task and run, the run's `task_result` equal to the wait's `result`, a terminal state with no
-      schedule), which is also why the wait could not borrow the failed settlement run.
+      schedule), which is also why the wait could not borrow the failed settlement run; the embedded
+      task result carries the future blocker schedule the settle path validates
+      (`validate_external_blocker/3` refuses a `null` schedule), while the wait row's own
+      `next_check_at` is null for a terminal state.
       That served response is captured, sanitized, as
       `contracts/fixtures/valid/goal-read.accepted-and-external.json` (manifest id
       `goal-read.accepted-and-external`, tag `captured-response`), so the boundary probe "Goal reads
@@ -1524,8 +1528,9 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       (`contracts/scripts/boundary.test.mjs`) renames `candidate_subject`, `subject_hash`,
       `proposed_next_action`, `proposed_next_action_status`, `external_ref`, `next_check_at` and
       `check_seq` over the capture's own bytes instead of the three inline documents the probe wrote
-      before. A serving-side rename or omission of any of those members now fails the bundle gate and
-      the fixture gate, not only the boundary's own document.
+      before. A serving-side rename or omission of any of those members now fails the bundle gate on
+      the served document (and the client Effect boundary) rather than decoding into a silent
+      fallback, while the same rename over the capture's own bytes fails the boundary probe.
       The capture's `subject_hash` is recomputed over its sanitized subject — the sanitization rule
       `contracts/README.md` now states for a replaced preimage — and the probe asserts that binding with
       `subjectHash` over the capture's own `candidate_subject`, so a re-capture that replaces a

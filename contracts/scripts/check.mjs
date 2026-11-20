@@ -240,11 +240,15 @@ const main = async () => {
   }
   for (const directory of ["valid", "invalid"]) {
     const directoryPath = path.join(ROOT_DIR, "contracts", "fixtures", directory);
-    for (const file of await fs.readdir(directoryPath)) {
-      const rows = manifestPathCounts.get(`${directory}/${file}`) ?? 0;
+    for (const entry of await fs.readdir(directoryPath, { withFileTypes: true })) {
+      // The manifest describes `.json` fixtures; a gitignored OS artifact
+      // (`.DS_Store`, an editor swap file) is not a fixture and must not fail
+      // this gate.
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const rows = manifestPathCounts.get(`${directory}/${entry.name}`) ?? 0;
       if (rows !== 1)
         throw new Error(
-          `fixture file ${relativePath(path.join(directoryPath, file))} must have exactly one manifest row, found ${rows}`,
+          `fixture file ${relativePath(path.join(directoryPath, entry.name))} must have exactly one manifest row, found ${rows}`,
         );
     }
   }

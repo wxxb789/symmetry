@@ -503,7 +503,7 @@
             "blocker": {
               "external_ref": "ci://build/unsupported",
               "kind": "external",
-              "next_check_at": null,
+              "next_check_at": "2026-11-16T09:15:00.000000Z",
               "resource_id": "88888888-8888-4888-8888-888888888888"
             },
             "evidence_refs": [],

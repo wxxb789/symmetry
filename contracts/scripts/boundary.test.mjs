@@ -289,7 +289,8 @@ test("Goal reads refuse a renamed consumed member and keep unconsumed members ad
 
   // The capture's digest binds its own preimage: a recapture that replaces the
   // subject's identifiers has to recompute `subject_hash` over the replaced
-  // subject, exactly as the serving projection does before serving it.
+  // subject, matching the digest the writer validated and stored, which the
+  // serving projection serves unchanged.
   assert.equal(
     settled.accepted_outcomes[0].subject_hash,
     await subjectHash(settled.accepted_outcomes[0].candidate_subject),

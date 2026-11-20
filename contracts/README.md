@@ -110,10 +110,12 @@ resolves the positive fixtures through the same bundle. The frontend's
 served-read fixtures import these documents
 (`frontend/src/services/api.fixtures.ts`), so a test override cannot
 reintroduce a member name the server does not send. Update a served-read
-fixture by re-capturing the response, never by editing the expected names; the
-capture is re-serialized with sorted keys before sanitization, so key order
-never depends on the server's serialization order and a refresh stays a
-content diff.
+fixture by re-capturing the response, never by editing the expected names; a
+capture refreshed or added from now on is re-serialized with sorted keys
+before sanitization, so its key order never depends on the server's
+serialization order and its refresh stays a content diff
+(`goal-read.accepted-and-external` already is; the older captures keep the
+server's byte order until their next re-capture).
 Every member the served Goal and attention reads require is one the serving
 projection always emits (a served `null` stays nullable), and the
 Goal-connection reads carry that pin past consumption: a member is required
