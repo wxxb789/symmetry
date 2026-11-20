@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asRecord, asText, attributionOf, ciLabel, ciResourcesOf, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, failureText, nextActionLabel, ownerKey, ownerLabel, reportedResult, reportedText, timelineBoundary, timelineItemKey, timelineItemView, timestamp, type TimelineItemLike } from "./presentation";
+import { asRecord, asText, attributionOf, ciLabel, ciResourcesOf, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, failureText, nextActionLabel, ownerKey, ownerKeyLabel, ownerLabel, reportedResult, reportedText, timelineBoundary, timelineItemKey, timelineItemView, timestamp, type TimelineItemLike } from "./presentation";
 
 const workItemId = "11111111-1111-4111-8111-111111111111";
 const taskId = "22222222-2222-4222-8222-222222222222";
@@ -54,6 +54,48 @@ describe("cost and acceptance truthfulness", () => {
     expect(ownerLabel(undefined)).toBe("Unassigned");
     expect(ownerKey({ type: "agent", name: "Worker", agent_profile: "reviewer" })).toBe("agent:reviewer");
     expect(ownerKey({ type: "human", name: "Ada", agent_profile: null })).toBe("human:Ada");
+    expect(ownerKey({ type: "agent", name: null, agent_profile: null })).toBe("agent:");
+    expect(ownerKey({ type: "human", name: null, agent_profile: null })).toBe("human:");
+  });
+
+  it("round-trips every owner key whose encoder keeps the label's identity", () => {
+    // For these families the round trip is the contract: the filter key carried
+    // in the URL and the label rendered before the rows load are one identity
+    // written and read back. An absent name mints an empty-value sentinel whose
+    // label is the row's own absence label, never the sentinel text: `asText`
+    // maps a blank name to null, so no recorded value mints that key.
+    expect(ownerKeyLabel(ownerKey({ type: "agent", name: "Worker", agent_profile: "reviewer" }))).toBe("Agent · reviewer");
+    expect(ownerKeyLabel(ownerKey({ type: "agent", name: "Worker", agent_profile: null }))).toBe("Agent · Worker");
+    expect(ownerKeyLabel(ownerKey({ type: "human", name: "Ada", agent_profile: null }))).toBe("Ada");
+    expect(ownerKeyLabel(ownerKey({ type: "unassigned", name: null, agent_profile: null }))).toBe("Unassigned");
+    expect(ownerKeyLabel(ownerKey({ type: "agent", name: null, agent_profile: null }))).toBe("Agent");
+    expect(ownerKeyLabel(ownerKey({ type: "human", name: null, agent_profile: null }))).toBe("Human owner not recorded");
+    // A recorded name that equals the legacy sentinel word, or starts with the
+    // escape colon, is escaped by the encoder, so it reads back as the name the
+    // row renders instead of the absence label.
+    expect(ownerKeyLabel(ownerKey({ type: "human", name: "unrecorded", agent_profile: null }))).toBe("unrecorded");
+    expect(ownerKeyLabel(ownerKey({ type: "agent", name: "unrecorded", agent_profile: null }))).toBe("Agent · unrecorded");
+    expect(ownerKeyLabel(ownerKey({ type: "human", name: ":unrecorded", agent_profile: null }))).toBe(":unrecorded");
+  });
+
+  it("labels the legacy sentinel keys old bookmarks carry as the absence they named", () => {
+    // The pre-fix encoder spelled an absent value `unrecorded`; the encoder no
+    // longer mints it, and a URL that still carries it reads as the absence it
+    // named rather than as a recorded name.
+    expect(ownerKeyLabel("agent:unrecorded")).toBe("Agent");
+    expect(ownerKeyLabel("human:unrecorded")).toBe("Human owner not recorded");
+    expect(ownerKeyLabel("agent:")).toBe("Agent");
+    expect(ownerKeyLabel("human:")).toBe("Human owner not recorded");
+  });
+
+  it("pins what the unknown-type key cannot carry instead of asserting a round trip that cannot hold", () => {
+    // The `type:` family drops the served name: the key carries only the type,
+    // so the label renders the type and the name is not recoverable from it.
+    const named = { type: "robot", name: "R2", agent_profile: null };
+    expect(ownerKey(named)).toBe("type:robot");
+    expect(ownerKeyLabel(ownerKey(named))).toBe("Unknown owner type: robot");
+    expect(ownerLabel(named)).toBe("R2");
+    expect(ownerKeyLabel(ownerKey({ type: "robot", name: null, agent_profile: null }))).toBe("Unknown owner type: robot");
   });
 });
 
@@ -74,9 +116,19 @@ describe("CI freshness", () => {
   it("marks provider CI stale outside the freshness window and fresh inside it", () => {
     expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed", tone: "passed" });
     expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00.500+00:00"), syncedResource, now)).toMatchObject({ text: "CI passed", tone: "passed" });
+    // The window's own edges, one minute apart: inside is fresh, outside is stale.
+    expect(ciLabel(ci("passed", "provider", "2026-02-28T12:01:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed", tone: "passed" });
+    expect(ciLabel(ci("passed", "provider", "2026-02-28T11:59:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · stale", tone: "stale" });
     expect(ciLabel(ci("passed", "provider", "2026-02-20T09:00:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · stale", tone: "stale" });
     expect(ciLabel(ci("failed", "provider", "2026-03-01T09:00:00Z"), null, now)).toMatchObject({ text: "CI failed", tone: "failed" });
     expect(ciLabel(ci("pending", "provider", "2026-03-01T09:00:00Z"), null, now)).toMatchObject({ text: "CI pending", tone: "pending" });
+  });
+
+  it("never renders a future-dated record as fresh", () => {
+    // A browser clock behind the server must not turn a record that has not
+    // happened yet into evidence that the pass is recent.
+    expect(ciLabel(ci("passed", "provider", "2026-03-02T12:00:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · freshness unknown", tone: "unknown" });
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T12:01:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · freshness unknown", tone: "unknown" });
   });
 
   it("labels a bound-resource problem as stale instead of fresh", () => {

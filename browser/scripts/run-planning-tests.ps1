@@ -30,9 +30,23 @@ New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
 $serverLog = Join-Path $runRoot "control.log"
 $specLog = Join-Path $runRoot "spec.log"
 
+# The pinned toolchain every mix invocation of this harness runs under. The
+# control-instance isolation contract test drives this script with a recording
+# `mise` stub and asserts these exact argv bytes on every recorded invocation
+# (assertInstanceBuildPath in control-instance-isolation.test.mjs), so the pin
+# lives once, here, for both the PowerShell calls and the cmd launcher below.
+$mixExecutable = "mise"
+$mixPrefix = @("exec", "elixir@1.20.4-otp-29", "erlang@29.1.2", "--", "mix")
+
 $target = [Uri]$PortalUrl
-if ($target.Scheme -ne "http" -or $target.Host -notin @("127.0.0.1", "localhost", "::1")) {
-  throw "PortalUrl must be a loopback http URL, got '$PortalUrl'"
+# Uri.Host brackets an IPv6 literal ('[::1]'); the IDN host form is the
+# unbracketed name the allowlist and the probe below compare. IPv6 loopback is
+# refused on purpose: this harness starts the repository dev configuration, and
+# control/config/dev.exs binds http to {127, 0, 0, 1} only, so `http://[::1]`
+# could never answer here - it would reach the readiness loop and fail as
+# "control plane did not become ready" instead of at this preflight.
+if ($target.Scheme -ne "http" -or $target.IdnHost -notin @("127.0.0.1", "localhost")) {
+  throw "PortalUrl must be http on 127.0.0.1 or localhost, got '$PortalUrl'"
 }
 if ($target.Port -ne $Port) {
   throw "PortalUrl port ($($target.Port)) disagrees with the harness port ($Port): refusing to target a process this harness does not own"
@@ -42,7 +56,7 @@ if (@(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyC
 }
 $probe = New-Object System.Net.Sockets.TcpClient
 try {
-  $attempt = $probe.BeginConnect("127.0.0.1", $Port, $null, $null)
+  $attempt = $probe.BeginConnect($target.IdnHost, $Port, $null, $null)
   if ($attempt.AsyncWaitHandle.WaitOne(1000) -and $probe.Connected) {
     throw "port $Port already accepts connections: refusing to run against a foreign listener"
   }
@@ -84,11 +98,11 @@ try {
   # The acceptance database is dedicated to this harness and recreated on every
   # run, so a growing workspace from earlier runs cannot slow the reads or make
   # the run less reproducible.
-  mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix ecto.drop --quiet
+  & $mixExecutable @mixPrefix ecto.drop --quiet
   if ($LASTEXITCODE -ne 0) { throw "mix ecto.drop failed with exit code ${LASTEXITCODE}: refusing to run on an inherited database" }
-  mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix ecto.create --quiet
+  & $mixExecutable @mixPrefix ecto.create --quiet
   if ($LASTEXITCODE -ne 0) { throw "mix ecto.create failed with exit code ${LASTEXITCODE}: refusing to run on an inherited database" }
-  mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix ecto.migrate --quiet
+  & $mixExecutable @mixPrefix ecto.migrate --quiet
   if ($LASTEXITCODE -ne 0) { throw "mix ecto.migrate failed with exit code ${LASTEXITCODE}: refusing to run against an unmigrated database" }
 } finally {
   Pop-Location
@@ -115,7 +129,7 @@ try {
     "set `"PORT=$Port`" && " +
     "set `"SYMMETRY_OPERATOR_TOKEN=$operatorToken`" && " +
     "cd /d `"$controlRoot`" && " +
-    "mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix phx.server`r`n" +
+    "$mixExecutable $($mixPrefix -join ' ') phx.server`r`n" +
     "echo [harness] control plane exited with %ERRORLEVEL% at %TIME%`r`n" +
     "timeout /t 2 /nobreak > nul`r`n" +
     "goto serve"
@@ -144,9 +158,11 @@ try {
   if (-not $ready) { throw "control plane did not become ready at $PortalUrl ($lastState)" }
 
   # The listener must serve the real application (the server-rendered login
-  # form) and the authenticated shell routes must exist; the SPA build itself is
-  # staged from the working tree into control/priv/static/portal before the run,
-  # so an unstaged build fails here instead of inside the browser.
+  # form) and the staged SPA build — the shell document and the script it names;
+  # the build itself is staged from the working tree into
+  # control/priv/static/portal before the run, so an unstaged build fails here
+  # instead of inside the browser. The authenticated shell routes are exercised
+  # by the spec itself, not probed here.
   $login = Invoke-WebRequest -UseBasicParsing -SkipHttpErrorCheck -Uri "$PortalUrl/portal/login" -TimeoutSec 10
   if ($login.StatusCode -ne 200 -or $login.Content -notmatch "Operator token") {
     throw "login page did not serve the operator form (status $($login.StatusCode))"

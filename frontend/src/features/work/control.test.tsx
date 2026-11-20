@@ -105,8 +105,24 @@ function stubMatchMedia(desktop: boolean) {
 
 beforeEach(() => stubMatchMedia(false));
 
-function renderWorkDetail(options: HarnessOptions = {}) {
+/** The reads neither harness scripts: the workspace snapshot, or the routeless 404. */
+function unscriptedResponse(pathname: string) {
+  if (pathname === "/portal/api/workspace") return new Response(JSON.stringify(workspaceBody()));
+  return new Response("{}", { status: 404 });
+}
+
+/** Mounts the work detail against a scripted fetcher: both harnesses share this skeleton. */
+function renderDetail(fetcher: typeof fetch) {
   const path = `/portal/work/${subjectId}`;
+  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
+  applications.push(application);
+  const history: RouterHistory = createMemoryHistory({ initialEntries: [path] });
+  const router = createAppRouter(application, history);
+  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+  return { application, history };
+}
+
+function renderWorkDetail(options: HarnessOptions = {}) {
   let detailReads = 0;
   let sessionReads = 0;
   const requests: RecordedRequest[] = [];
@@ -130,16 +146,9 @@ function renderWorkDetail(options: HarnessOptions = {}) {
       detailReads += 1;
       return (options.detail ?? (() => new Response(JSON.stringify(runningDetail()))))(detailReads);
     }
-    if (url.pathname === "/portal/api/workspace") {
-      return new Response(JSON.stringify(workspaceBody()));
-    }
-    return new Response("{}", { status: 404 });
+    return unscriptedResponse(url.pathname);
   });
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
-  applications.push(application);
-  const history: RouterHistory = createMemoryHistory({ initialEntries: [path] });
-  const router = createAppRouter(application, history);
-  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+  const { application, history } = renderDetail(fetcher);
   const posts = () => requests.filter((request) => request.method === "POST");
   return { application, history, requests, posts };
 }
@@ -168,22 +177,47 @@ describe("control mutation boundary", () => {
     expect(screen.queryByText("Rejected by the runtime")).toBeNull();
   });
 
-  it("sends each control mutation with the session's CSRF token", async () => {
+  const mutations: readonly {
+    control: string;
+    path: string;
+    served: () => Record<string, unknown>;
+    answer: () => Record<string, unknown>;
+  }[] = [
+    {
+      control: "Start run",
+      path: "run",
+      served: idleDetail,
+      answer: () => ({ disposition: "created", execution: { task_id: taskId, run_id: null, generation: 1, state: "queued" } }),
+    },
+    {
+      control: "Cancel run",
+      path: "cancel",
+      served: runningDetail,
+      answer: () => ({ disposition: "created", command: cancelCommand, execution: { task_id: taskId, run_id: null, generation: 1, state: "cancelling" } }),
+    },
+    {
+      control: "Retry",
+      path: "retry",
+      served: () => detailBody({ execution: { task_id: taskId, run_id: null, generation: 1, state: "running", can_retry: true } }),
+      answer: () => ({
+        disposition: "created",
+        command: { command_id: "88888888-8888-4888-8888-888888888888", task_id: taskId, kind: "retry", state: "pending", acknowledgement_outcome: null },
+        work_item: { id: subjectId },
+        execution: { task_id: taskId, run_id: null, generation: 2, state: "queued" },
+      }),
+    },
+  ];
+
+  it.each(mutations)("sends the $control control with the session's CSRF token", async ({ control, path, served, answer }) => {
     const user = userEvent.setup();
     const harness = renderWorkDetail({
-      command: (path) => accepted(path.endsWith("/cancel")
-        ? { disposition: "created", command: cancelCommand, execution: { task_id: taskId, run_id: null, generation: 1, state: "cancelling" } }
-        : {
-          disposition: "created",
-          command: { command_id: "88888888-8888-4888-8888-888888888888", task_id: taskId, kind: "retry", state: "pending", acknowledgement_outcome: null },
-          work_item: { id: subjectId },
-          execution: { task_id: taskId, run_id: null, generation: 2, state: "queued" },
-        }),
+      detail: () => new Response(JSON.stringify(served())),
+      command: () => accepted(answer()),
     });
     await openDetail();
-    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    await user.click(screen.getByRole("button", { name: control }));
     await waitFor(() => expect(harness.posts()).toHaveLength(1));
-    expect(harness.posts()[0]?.path).toBe(`/portal/api/work-items/${subjectId}/cancel`);
+    expect(harness.posts()[0]?.path).toBe(`/portal/api/work-items/${subjectId}/${path}`);
     expect(harness.posts()[0]?.headers["x-csrf-token"]).toBe("session-token");
     expect(harness.posts()[0]?.headers["x-csrfToken"]).toBeUndefined();
   });
@@ -219,6 +253,38 @@ describe("control mutation boundary", () => {
       return found[0];
     });
     expect(card).toHaveTextContent("If you signed in elsewhere, refresh the page and try again.");
+  });
+
+  it("refuses a control whose attempt has no storable identity instead of sending it unidentified", async () => {
+    const user = userEvent.setup();
+    const harness = renderWorkDetail({
+      command: () => { throw new Error("a control without an attempt identity must not reach the server"); }
+    });
+    await openDetail();
+    // A browser whose session storage refuses every access: the attempt has no
+    // durable identity, and a request without one could be applied twice by a
+    // double click or a lost response, so the surface must refuse it instead.
+    vi.stubGlobal("sessionStorage", {
+      getItem: () => { throw new Error("storage disabled"); },
+      setItem: () => { throw new Error("storage disabled"); },
+      removeItem: () => { throw new Error("storage disabled"); }
+    });
+    try {
+      await user.click(screen.getByRole("button", { name: "Cancel run" }));
+      const card = await waitFor(() => {
+        const found = receiptCards("Not sent");
+        expect(found).toHaveLength(1);
+        return found[0];
+      });
+      expect(card).toHaveAttribute("data-outcome", "not_sent");
+      expect(card).toHaveTextContent("This browser cannot store an attempt identity, so the request was not sent.");
+      // The missing identity, not the request, decides: nothing was sent, and a
+      // second press cannot degrade into sending one unidentified either.
+      await user.click(screen.getByRole("button", { name: "Cancel run" }));
+      expect(harness.posts()).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -281,6 +347,69 @@ describe("control receipts", () => {
     expect(screen.queryByText("Failed")).toBeNull();
   });
 
+  it("keeps a local attempt rendered when the served latest command is not on the rendered page", async () => {
+    const user = userEvent.setup();
+    const commandId = "99999999-9999-4999-8999-999999999999";
+    renderWorkDetail({
+      // Read 1 serves the live cancel control; read 2 serves the snapshot that
+      // names the command as `latest_command` while the rendered timeline page
+      // does not carry its entry.
+      detail: (readIndex) => new Response(JSON.stringify(readIndex === 1
+        ? runningDetail()
+        : detailBody({
+          execution: {
+            task_id: taskId,
+            run_id: null,
+            generation: 1,
+            state: "cancelling",
+            latest_command: {
+              command_id: commandId,
+              task_id: taskId,
+              run_id: null,
+              generation: null,
+              kind: "cancel",
+              payload: {},
+              state: "pending",
+              issued_at: "2026-11-16T10:00:00Z",
+              applied_at: null,
+              acknowledgement_id: null,
+              acknowledgement_outcome: null,
+              acknowledged_at: null,
+            },
+          },
+          timeline: [commandEntry("bbbbbbb2-0000-4000-8000-000000000002", "2026-11-16T09:00:00Z", "guidance", "acknowledged", "applied")],
+        }))),
+      command: () => accepted({
+        disposition: "created",
+        command: { command_id: commandId, task_id: taskId, kind: "cancel", state: "pending", acknowledgement_outcome: null },
+        execution: { task_id: taskId, run_id: null, generation: 1, state: "cancelling" },
+      }),
+    });
+    await openDetail();
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    // The refetched first page is what names the served command without
+    // rendering it; once its own receipt row is on screen the attempt has
+    // settled.
+    await screen.findByText("Applied");
+    // The refreshed check compares millisecond snapshot timestamps, and the
+    // press's own refetch may already have landed when the attempt settled;
+    // the explicit refresh below makes the snapshot the attempt re-reads
+    // strictly newer than its baseline.
+    const pressGap = Promise.withResolvers<void>();
+    setTimeout(pressGap.resolve, 50);
+    await pressGap.promise;
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    // The refreshed snapshot names the command but does not render it: the
+    // attempt must keep its own receipt instead of vanishing unaccounted.
+    await waitFor(() => {
+      const rows = screen.queryAllByText("cancel · generation 1")
+        .map((node) => node.closest(".receipt"))
+        .filter((node): node is HTMLElement => node !== null);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toHaveAttribute("data-outcome", "unknown");
+    });
+  });
+
   it("keeps the receipts of the older pages a refresh re-served at the same boundary", async () => {
     const user = userEvent.setup();
     const newest = commandEntry("aaaaaaa1-0000-4000-8000-000000000001", "2026-11-16T10:00:00Z", "cancel", "applied", null);
@@ -292,7 +421,7 @@ describe("control receipts", () => {
       timeline: () => ({ items: [older], next_before: null }),
     });
     await openDetail();
-    expect(await screen.findByText("Queued for the runtime")).toBeInTheDocument();
+    expect(await screen.findByText("Applied by the control plane")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Load older history" }));
     expect(await screen.findByText("Applied")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Refresh" }));
@@ -315,7 +444,7 @@ describe("control receipts", () => {
       timeline: () => ({ items: [retained], next_before: null }),
     });
     await openDetail();
-    expect(await screen.findByText("Queued for the runtime")).toBeInTheDocument();
+    expect(await screen.findByText("Applied by the control plane")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Load older history" }));
     expect(await screen.findByText("Applied")).toBeInTheDocument();
     expect(harness.cursors).toEqual(["cursor-1"]);
@@ -380,13 +509,8 @@ function renderTimelineHarness(options: {
       return Promise.resolve(new Response(JSON.stringify(options.detail(detailReads))));
     }
     if (url.pathname === "/portal/api/session") return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
-    if (url.pathname === "/portal/api/workspace") return Promise.resolve(new Response(JSON.stringify(workspaceBody())));
-    return Promise.resolve(new Response("{}", { status: 404 }));
+    return Promise.resolve(unscriptedResponse(url.pathname));
   });
-  const application = createApplication({ fetcher, location: { href: `http://localhost/portal/work/${subjectId}`, replace: vi.fn() } });
-  applications.push(application);
-  const history: RouterHistory = createMemoryHistory({ initialEntries: [`/portal/work/${subjectId}`] });
-  const router = createAppRouter(application, history);
-  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+  renderDetail(fetcher);
   return { cursors, detailReads: () => detailReads };
 }

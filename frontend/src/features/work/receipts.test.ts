@@ -16,6 +16,7 @@ function timelineCommand(kind: string, options: {
   recordedAt?: string | null;
   state?: string;
   acknowledgementOutcome?: string | null;
+  acknowledgementId?: string | null;
 } = {}): TimelineItemLike {
   return {
     source: "command",
@@ -29,7 +30,7 @@ function timelineCommand(kind: string, options: {
       state: options.state ?? "pending",
       issued_at: "2026-11-16T10:00:00Z",
       applied_at: null,
-      acknowledgement_id: null,
+      acknowledgement_id: options.acknowledgementId ?? null,
       acknowledgement_outcome: options.acknowledgementOutcome ?? null,
       acknowledged_at: null,
     },
@@ -38,34 +39,57 @@ function timelineCommand(kind: string, options: {
 
 describe("receipt outcomes", () => {
   it("requires the applied acknowledgement outcome for an applied receipt", () => {
-    expect(receiptOutcome({ state: "acknowledged", acknowledgement_outcome: "applied" })).toBe("applied");
-    // A command the control plane recorded as applied while the runtime has not
-    // acknowledged it is a deferred request, never applied.
-    expect(receiptOutcome({ state: "applied", acknowledgement_outcome: null })).toBe("deferred");
-    expect(receiptOutcome({ state: "pending", acknowledgement_outcome: null })).toBe("queued");
+    expect(receiptOutcome({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "applied", acknowledgement_id: "ack-1" })).toBe("applied");
+    // The retry the control plane re-queued into a fresh generation while no
+    // runtime has acknowledged it is a deferred request, never applied.
+    expect(receiptOutcome({ kind: "retry", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("deferred");
+    // A cancel the control plane applied itself on queued or assigned work
+    // never reached a runtime, so it renders the plane's own application.
+    expect(receiptOutcome({ kind: "cancel", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("control_applied");
+    // The supervisory kinds are delivered to the runtime, and the plane
+    // records them `applied` from the runtime's own transition report; the
+    // runtime's acknowledgement may not have arrived yet and none is implied.
+    expect(receiptOutcome({ kind: "pause", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("applied_unacknowledged");
+    expect(receiptOutcome({ kind: "resume", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("applied_unacknowledged");
+    expect(receiptOutcome({ kind: "provide_input", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("applied_unacknowledged");
+    // No writer records a guidance command `applied` without the runtime's
+    // acknowledgement (it stays pending until the ack), so that pair is no
+    // success this surface may claim.
+    expect(receiptOutcome({ kind: "guidance", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("unknown");
+    expect(receiptOutcome({ kind: "guidance", state: "pending", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("queued");
     expect(receiptOutcome(null)).toBe("unknown");
   });
 
-  it("maps the rejected and failed acknowledgements and the terminal cancelled states", () => {
-    expect(receiptOutcome({ state: "acknowledged", acknowledgement_outcome: "rejected" })).toBe("rejected");
-    expect(receiptOutcome({ state: "acknowledged", acknowledgement_outcome: "failed" })).toBe("failed");
-    expect(receiptOutcome({ state: "cancelled", acknowledgement_outcome: null })).toBe("cancelled");
-    expect(receiptOutcome({ state: "superseded", acknowledgement_outcome: null })).toBe("cancelled");
+  it("maps the runtime's and the control plane's rejections and the failed acknowledgement", () => {
+    expect(receiptOutcome({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "rejected", acknowledgement_id: "ack-2" })).toBe("rejected");
+    expect(receiptOutcome({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "failed", acknowledgement_id: "ack-3" })).toBe("failed");
+    // The control plane's own pre-dispatch rejection records the outcome
+    // without a runtime acknowledgement id; the rejection is never attributed
+    // to a runtime that never saw the command.
+    expect(receiptOutcome({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "rejected", acknowledgement_id: null })).toBe("control_rejected");
   });
 
   it("renders an unrecognised state/outcome pair as unknown, never as success", () => {
-    expect(receiptOutcome({ state: "acknowledged", acknowledgement_outcome: "exploded" })).toBe("unknown");
-    expect(receiptOutcome({ state: "acknowledged", acknowledgement_outcome: null })).toBe("unknown");
-    expect(receiptOutcome({ state: "teleporting", acknowledgement_outcome: null })).toBe("unknown");
+    expect(receiptOutcome({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "exploded", acknowledgement_id: "ack-4" })).toBe("unknown");
+    expect(receiptOutcome({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("unknown");
+    // The command state is a closed set (pending|applied|acknowledged), so the
+    // terminal states a cancelled attempt ends in cannot be served as command
+    // states; any state outside the set falls through to unknown.
+    expect(receiptOutcome({ kind: "cancel", state: "cancelled", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("unknown");
+    expect(receiptOutcome({ kind: "cancel", state: "superseded", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("unknown");
+    expect(receiptOutcome({ kind: "guidance", state: "teleporting", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("unknown");
   });
 
   it("labels every durable outcome with its exact text", () => {
     expect(receiptLabel("applied")).toBe("Applied");
+    expect(receiptLabel("control_applied")).toBe("Applied by the control plane");
+    expect(receiptLabel("applied_unacknowledged")).toBe("Applied by the runtime; acknowledgement not recorded");
     expect(receiptLabel("rejected")).toBe("Rejected by the runtime");
+    expect(receiptLabel("control_rejected")).toBe("Rejected by the control plane");
     expect(receiptLabel("failed")).toBe("Failed");
+    expect(receiptLabel("not_sent")).toBe("Not sent");
     expect(receiptLabel("queued")).toBe("Awaiting agent acknowledgement");
     expect(receiptLabel("deferred")).toBe("Queued for the runtime");
-    expect(receiptLabel("cancelled")).toBe("Cancelled");
     expect(receiptLabel("unknown")).toBe("Outcome unknown");
     // A control-plane refusal is the server's own decision; it is never
     // rendered with the runtime's rejection text.
@@ -76,32 +100,37 @@ describe("receipt outcomes", () => {
 describe("receipt history rows", () => {
   it("keeps the served order and each row's own kind, generation and outcome", () => {
     const history = receiptRows([
-      timelineCommand("guidance", { commandId: "c-guidance", generation: 2, state: "applied" }),
+      timelineCommand("resume", { commandId: "c-resume", generation: 2, state: "applied" }),
       timelineCommand("pause", { commandId: "c-pause", generation: 2 }),
       timelineCommand("cancel", { commandId: "c-cancel", generation: null, state: "applied" }),
-      timelineCommand("retry", { commandId: "c-retry", generation: 1 }),
+      timelineCommand("retry", { commandId: "c-retry", generation: 1, state: "applied" }),
     ], []);
-    // A control-plane-applied command the runtime has not acknowledged is a
-    // deferred request, distinct from one still awaiting acknowledgement.
+    // Each row's served kind decides: the retry the control plane re-queued is
+    // deferred, the plane's own cancel renders the plane's outcome, a
+    // supervisory kind the plane recorded from the runtime's transition report
+    // is applied-unacknowledged, and one still awaiting the acknowledgement is
+    // queued.
     expect(history.rows.map((row) => [row.kind, row.generation, row.outcome])).toEqual([
-      ["guidance", 2, "deferred"],
+      ["resume", 2, "applied_unacknowledged"],
       ["pause", 2, "queued"],
-      ["cancel", null, "deferred"],
-      ["retry", 1, "queued"],
+      ["cancel", null, "control_applied"],
+      ["retry", 1, "deferred"],
     ]);
     expect(history.hidden).toBe(0);
   });
 
-  it("renders acknowledged and rejected guidance receipts with their own kind and outcome", () => {
+  it("renders acknowledged, runtime-rejected and control-plane-rejected receipts with their own kind and outcome", () => {
     const history = receiptRows([
-      timelineCommand("guidance", { commandId: "c-applied", state: "acknowledged", acknowledgementOutcome: "applied" }),
-      timelineCommand("pause", { commandId: "c-rejected", state: "acknowledged", acknowledgementOutcome: "rejected" }),
-      timelineCommand("resume", { commandId: "c-failed", state: "acknowledged", acknowledgementOutcome: "failed" }),
+      timelineCommand("guidance", { commandId: "c-applied", state: "acknowledged", acknowledgementOutcome: "applied", acknowledgementId: "ack-5" }),
+      timelineCommand("pause", { commandId: "c-rejected", state: "acknowledged", acknowledgementOutcome: "rejected", acknowledgementId: "ack-6" }),
+      timelineCommand("resume", { commandId: "c-failed", state: "acknowledged", acknowledgementOutcome: "failed", acknowledgementId: "ack-7" }),
+      timelineCommand("guidance", { commandId: "c-control-rejected", state: "acknowledged", acknowledgementOutcome: "rejected" }),
     ], []);
     expect(history.rows.map((row) => [row.kind, row.outcome])).toEqual([
       ["guidance", "applied"],
       ["pause", "rejected"],
       ["resume", "failed"],
+      ["guidance", "control_rejected"],
     ]);
   });
 
@@ -162,10 +191,10 @@ describe("local attempt receipts", () => {
     expect(queued?.headline).toBe("Request queued…");
   });
 
-  it("never renders an unconfirmed command attempt as applied after a refresh", () => {
-    const attempt: ControlAttempt = { ...baseAttempt, commandId: "command-9", command: { state: "applied", acknowledgement_outcome: null } };
-    expect(attemptReceiptView(attempt, baseContext)?.outcome).toBe("deferred");
-    expect(attemptReceiptView(attempt, baseContext)?.headline).toBe("Queued for the runtime");
+  it("renders an unconfirmed command attempt with the control plane's own outcome, never applied, and unknown after a refresh", () => {
+    const attempt: ControlAttempt = { ...baseAttempt, commandId: "command-9", command: { kind: "cancel", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null } };
+    expect(attemptReceiptView(attempt, baseContext)?.outcome).toBe("control_applied");
+    expect(attemptReceiptView(attempt, baseContext)?.headline).toBe("Applied by the control plane");
     // The refreshed snapshot carries the command: the durable row owns it.
     expect(attemptReceiptView(attempt, { ...baseContext, snapshotVersion: 5, carried: new Set(["command-9"]) })).toBeNull();
     // A refresh that cannot show the attempt renders unknown, never applied.

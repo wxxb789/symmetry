@@ -182,20 +182,33 @@ describe("receipts", () => {
   });
 
   it("renders a non-terminal command as awaiting acknowledgement, never applied", () => {
-    const view = chatReceiptView({ state: "pending", acknowledgement_outcome: null }, true);
+    const view = chatReceiptView({ kind: "guidance", state: "pending", acknowledgement_outcome: null, acknowledgement_id: null }, true);
     expect(view).toEqual({ outcome: "queued", headline: "Saved · awaiting agent acknowledgement" });
   });
 
   it("renders applied only from the served acknowledgement outcome", () => {
-    expect(chatReceiptView({ state: "acknowledged", acknowledgement_outcome: "applied" }, true)?.headline).toBe("Applied");
+    expect(chatReceiptView({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "applied", acknowledgement_id: "ack-1" }, true)?.headline).toBe("Applied");
   });
 
-  it("keeps a control-plane-applied command without a runtime acknowledgement queued", () => {
-    expect(chatReceiptView({ state: "applied", acknowledgement_outcome: null }, true)).toEqual({ outcome: "deferred", headline: "Queued for the runtime" });
+  it("renders a cancel the control plane applied itself with the plane's own outcome", () => {
+    expect(chatReceiptView({ kind: "cancel", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null }, true)).toEqual({ outcome: "control_applied", headline: "Applied by the control plane" });
+  });
+
+  it("renders a supervisory command the plane recorded applied without the runtime's acknowledgement as just that", () => {
+    expect(chatReceiptView({ kind: "pause", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null }, true)).toEqual({ outcome: "applied_unacknowledged", headline: "Applied by the runtime; acknowledgement not recorded" });
+  });
+
+  it("keeps the re-queued retry without a runtime acknowledgement queued for the runtime", () => {
+    expect(chatReceiptView({ kind: "retry", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null }, true)).toEqual({ outcome: "deferred", headline: "Queued for the runtime" });
+  });
+
+  it("attributes a pre-dispatch rejection to the control plane, never the runtime", () => {
+    expect(chatReceiptView({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "rejected", acknowledgement_id: null }, true)).toEqual({ outcome: "control_rejected", headline: "Rejected by the control plane" });
+    expect(chatReceiptView({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "rejected", acknowledgement_id: "ack-2" }, true)).toEqual({ outcome: "rejected", headline: "Rejected by the runtime" });
   });
 
   it("never claims a refreshed outcome for a message only a retained page carries", () => {
-    const view = chatReceiptView({ state: "acknowledged", acknowledgement_outcome: "applied" }, false);
+    const view = chatReceiptView({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "applied", acknowledgement_id: "ack-3" }, false);
     expect(view).toEqual({ outcome: "retained", headline: "Acknowledgement not refreshed with this page" });
   });
 });
@@ -318,6 +331,40 @@ describe("execution evidence", () => {
     expect(rows[0]).toMatchObject({ kind: "progress", summary: "Two files changed." });
     expect(rows[1]).toMatchObject({ kind: "guidance", summary: "Awaiting agent acknowledgement" });
     expect(rows[2]).toMatchObject({ kind: "running", summary: "From queued" });
+  });
+
+  it("threads the served kind and acknowledgement identity into the derived receipt", () => {
+    const rows = chatEvidenceRows(run([
+      {
+        source: "command",
+        run_id: "66666666-6666-4666-8666-666666666666",
+        generation: 1,
+        recorded_at: "2026-11-16T09:59:30.000000Z",
+        data: {
+          command_id: "cccccccc-0002-4002-8002-000000000002", task_id: "55555555-5555-4555-8555-555555555555",
+          kind: "retry", payload: {}, state: "applied", issued_at: null, applied_at: "2026-11-16T09:59:30.000000Z",
+          acknowledgement_id: null, acknowledgement_outcome: null, acknowledged_at: null,
+        },
+      },
+      {
+        source: "command",
+        run_id: "66666666-6666-4666-8666-666666666666",
+        generation: 1,
+        recorded_at: "2026-11-16T09:59:00.000000Z",
+        data: {
+          command_id: "cccccccc-0003-4003-8003-000000000003", task_id: "55555555-5555-4555-8555-555555555555",
+          kind: "cancel", payload: {}, state: "acknowledged", issued_at: null, applied_at: null,
+          acknowledgement_id: null, acknowledgement_outcome: "rejected", acknowledged_at: "2026-11-16T09:59:00.000000Z",
+        },
+      },
+    ]));
+    // The re-queued retry is deferred, not the plane's own application, and a
+    // rejection without a runtime acknowledgement id is the plane's own, not
+    // the runtime's: both derivations read the served members.
+    expect(rows.map((row) => [row.kind, row.summary])).toEqual([
+      ["cancel", "Rejected by the control plane"],
+      ["retry", "Queued for the runtime"],
+    ]);
   });
 
   it("names an entry's kind and state instead of rendering an empty row", () => {

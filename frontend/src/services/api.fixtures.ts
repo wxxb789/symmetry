@@ -41,10 +41,13 @@ export interface ReadWorkDetailOptions extends ReadWorkItemOptions {
   outcomeTests?: unknown;
 }
 
+// The unrecorded delivery projection exactly as `effective_delivery` serves
+// it: the `:url` fallback stays null, while the `:status` fallback is served
+// as the value too ("unknown" for CI, "none" for review).
 const readDelivery = () => ({
   pull_request: { value: null, source: "none", generation: null, url: null, status: null },
-  ci: { value: null, source: "none", generation: null, url: null, status: "unknown" },
-  review: { value: null, source: "none", generation: null, url: null, status: "none" },
+  ci: { value: "unknown", source: "none", generation: null, url: null, status: "unknown" },
+  review: { value: "none", source: "none", generation: null, url: null, status: "none" },
 });
 
 /**

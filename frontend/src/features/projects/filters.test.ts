@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkItem } from "../../services/api";
-import { boardColumns, filterWorkItems, filtersOf, ownerOptions, sameWorkSearch, stateOptions, summarizeWork, workSearch, workSummaryText } from "./filters";
+import { boardColumns, filterWorkItems, filtersOf, ownerOptions, sameWorkSearch, stateOptions, summarizeWork, workItemSearch, workSearch, workSummaryText, type WorkSearch } from "./filters";
 
 const firstProjectWork: WorkItem = { id: "11111111-1111-4111-8111-111111111111", key: "ONE-1", title: "Ship the read surface", status: "ready", blocked: false, blocker: null, assignee: { type: "agent", name: null, agent_profile: "default" }, updated_at: null };
 const secondProjectWork: WorkItem = { id: "22222222-2222-4222-8222-222222222222", key: "ONE-2", title: "Review the migration", status: "in_progress", blocked: true, blocker: "Waiting on review", assignee: { type: "human", name: "Ada", agent_profile: null }, updated_at: null };
@@ -15,8 +15,13 @@ describe("work URL state", () => {
   });
 
   it("drops empty and unrecognised parameters instead of rendering a silent filter", () => {
-    expect(workSearch({ view: "grid", q: "   ", state: "", owner: null, blocked: "0", projectId: "" })).toEqual({});
+    expect(workSearch({ view: "grid", q: "   ", state: "", owner: null, blocked: "0" })).toEqual({});
     expect(workSearch({ q: "123" })).toEqual({ q: "123" });
+    // The work item route validates the same filter plus the project the URL
+    // claims: an empty claim is dropped, a real one is kept as written.
+    expect(workItemSearch({ view: "grid", q: "   ", state: "", owner: null, blocked: "0", projectId: "" })).toEqual({});
+    expect(workItemSearch({ q: "123", projectId: "ONE" })).toEqual({ q: "123", projectId: "ONE" });
+    expect(workItemSearch({ projectId: 42 })).toEqual({ projectId: "42" });
   });
 
   it("renders JSON-shaped query text from a foreign URL as the literal it encodes", () => {
@@ -30,6 +35,16 @@ describe("work URL state", () => {
   it("treats an absent view as the list and compares the exact list state", () => {
     expect(sameWorkSearch({}, { view: "list" })).toBe(true);
     expect(sameWorkSearch({ q: "a" }, { q: "b" })).toBe(false);
+    // Each clause the saved-view select compares must discriminate on its own:
+    // a search is the same only when view, q, state, owner and blocked match.
+    const active: WorkSearch = { view: "board", q: "read", state: "ready", owner: "agent:default", blocked: "1" };
+    expect(sameWorkSearch(active, { ...active })).toBe(true);
+    expect(sameWorkSearch(active, { ...active, view: "list" })).toBe(false);
+    expect(sameWorkSearch(active, { ...active, q: "blocked" })).toBe(false);
+    expect(sameWorkSearch(active, { ...active, state: "in_progress" })).toBe(false);
+    expect(sameWorkSearch(active, { ...active, owner: "unassigned" })).toBe(false);
+    // The last comparison differs only in blocked.
+    expect(sameWorkSearch(active, { view: "board", q: "read", state: "ready", owner: "agent:default" })).toBe(false);
   });
 });
 
