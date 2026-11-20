@@ -11,7 +11,7 @@ increment: `frontend/src/features/goals/detail.tsx`, its vitest suite
 
 Option A (owner, 2026-11-20, quoted in the contract): the press envelope is built from a
 submit-time served read the way the plan admission and the page's sibling commands
-(`servedEnvelope`, `detail.tsx:77`) already are, re-deriving the presented decision's own version
+(`servedEnvelope`, `detail.tsx:91`) already are, re-deriving the presented decision's own version
 from that same read, **and** the existing retry-freeze rule stays: a retry of the same press
 resends identical bytes (owner Q4=A). No backward compatibility is required (first release not
 shipped).

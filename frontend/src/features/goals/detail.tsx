@@ -35,6 +35,15 @@ function formatMicroUsd(value: string | null | undefined): string {
   return `$${(micro / 1_000_000).toFixed(4)}`;
 }
 
+// An answer the page can interpret settles a command attempt; a transport
+// failure or an uninterpretable answer leaves its fate unknown, so the frozen
+// bytes are kept for a re-send that replays instead of applying twice.
+function outcomeUnknown(error: unknown): boolean {
+  return error instanceof Network || error instanceof UnexpectedResponse;
+}
+
+type PlanApprovalAttempt = { key: string; resolve: GoalCommandEnvelope; admit: GoalCommandEnvelope | null };
+
 export function GoalDetailPage() {
   const { application } = useRouteContext({ from: "__root__" });
   const { goalId } = useParams({ from: "/goals/$goalId" });
@@ -73,38 +82,32 @@ export function GoalDetailPage() {
    * the versions the server serves now. A worker (the goal-control and wakeup
    * writers enqueue through Oban) can advance the goal after this page's last
    * settled read; an envelope built from the settled read would be refused as
-   * stale. The plan admission performs the same read between its two commands.
-   * The mutation identity comes from the form's frozen logical intent; a
-   * command with no frozen intent (and the plan approval's first attempt)
-   * mints one.
+   * stale. A payload given as a function is derived from that same read, so a
+   * value only the read can serve is read there too, and the function may
+   * refuse the send by throwing. The mutation identity comes from the form's
+   * frozen logical intent; a command with no frozen intent (and the plan
+   * approval's first attempt) mints one.
    */
-  const servedEnvelope = async (kind: CommandKind, payload: ActionPayload, mutationId: string = newMutationId()) => {
+  const servedEnvelope = async (kind: CommandKind, payload: ActionPayload | ((served: GoalProjection) => ActionPayload), mutationId: string = newMutationId()) => {
     const current = await application.api.goal(goalId, new AbortController().signal);
-    return commandEnvelope(kind, payload, { version: current.version, current_revision: current.current_revision }, mutationId);
+    return commandEnvelope(kind, typeof payload === "function" ? payload(current) : payload, { version: current.version, current_revision: current.current_revision }, mutationId);
   };
 
   /**
-   * The envelope of the plan card's decision resolution, built from a
-   * submit-time goal read like every sibling sender's: a worker can advance the
-   * goal after this page's last settled read, and the page-held versions would
-   * be refused as stale. The presented decision's own version is re-derived
-   * from that same read, so the press presents the decision the server serves
-   * now by the identity the card holds. A read that does not serve that
-   * identity sends nothing (the read preloads every decision row of the goal,
-   * so this narrows the lookup rather than a served state; falling back to the
-   * page-held decision would present state the server has moved past).
+   * The plan card's decision resolution: the submit-time read supplies both the
+   * envelope pair and the presented decision's own version, so the press
+   * presents the decision the server serves now by the identity the card holds.
+   * A read that does not serve that identity sends nothing (the read preloads
+   * every decision row of the goal, so this narrows the lookup rather than a
+   * served state; falling back to the page-held decision would present state
+   * the server has moved past).
    */
-  const decisionEnvelope = async (decisionId: string, optionId: string, mutationId: string) => {
-    const current = await application.api.goal(goalId, new AbortController().signal);
-    const servedDecision = current.decisions.find((candidate) => candidate.id === decisionId);
-    if (servedDecision === undefined) throw new Error("The server no longer serves that decision; reload the current state.");
-    return commandEnvelope(
-      "resolve_decision",
-      { decision_id: decisionId, expected_decision_version: servedDecision.version, option_id: optionId, comment: "Accepted from the Goal surface." },
-      { version: current.version, current_revision: current.current_revision },
-      mutationId,
-    );
-  };
+  const decisionEnvelope = async (decisionId: string, optionId: string, mutationId: string) =>
+    servedEnvelope("resolve_decision", (served: GoalProjection) => {
+      const servedDecision = served.decisions.find((candidate) => candidate.id === decisionId);
+      if (servedDecision === undefined) throw new Error("The server no longer serves that decision; reload the current state.");
+      return { decision_id: decisionId, expected_decision_version: servedDecision.version, option_id: optionId, comment: "Accepted from the Goal surface." };
+    }, mutationId);
 
   /**
    * The envelope this page last sent for the identity it was given. A command
@@ -154,12 +157,8 @@ export function GoalDetailPage() {
       setNotice(null);
       setRefusal(error instanceof MutationRefused ? error : null);
       if (!(error instanceof MutationRefused)) setNotice(errorMessage(error));
-      // An answer was received (a refusal or any other status), so the attempt
-      // is settled and its identity released; a transport failure or an
-      // uninterpretable answer leaves the command's fate unknown and keeps the
-      // frozen envelope so a re-send replays instead of applying twice.
-      const unknownOutcome = error instanceof Network || error instanceof UnexpectedResponse;
-      if (!unknownOutcome) releaseAttempt();
+      // An answered attempt is settled and releases its identity and envelope.
+      if (!outcomeUnknown(error)) releaseAttempt();
     },
   });
 
@@ -171,7 +170,7 @@ export function GoalDetailPage() {
    * own receipt produces — and the press's two envelopes stay frozen with it
    * until the server answers.
    */
-  const sentApproval = useRef<{ key: string; resolve: GoalCommandEnvelope; admit: GoalCommandEnvelope | null } | null>(null);
+  const sentApproval = useRef<PlanApprovalAttempt | null>(null);
 
   const approvePlan = useMutation({
     mutationFn: async ({ decision, optionId, proposal, proposalHash }: { decision: GoalDecision; optionId: string; proposal: unknown; proposalHash: string }) => {
@@ -185,7 +184,7 @@ export function GoalDetailPage() {
       // refused for a command that already applied.
       const key = `${decision.id}|${optionId}|${proposalHash}`;
       const frozen = sentApproval.current;
-      const attempt: { key: string; resolve: GoalCommandEnvelope; admit: GoalCommandEnvelope | null } = frozen !== null && frozen.key === key
+      const attempt: PlanApprovalAttempt = frozen !== null && frozen.key === key
         ? frozen
         : { key, resolve: await decisionEnvelope(decision.id, optionId, newMutationId()), admit: null };
       sentApproval.current = attempt;
@@ -196,7 +195,7 @@ export function GoalDetailPage() {
       // Read the goal back so the plan admission carries the versions the
       // resolution produced; the admission is frozen with the attempt too.
       const admit = attempt.admit ?? await servedEnvelope("accept_plan", { proposal, proposal_hash: proposalHash, decision_id: decision.id });
-      sentApproval.current = { ...attempt, admit };
+      attempt.admit = admit;
       return postGoalCommand(application.fetcher, csrf, goalId, admit);
     },
     onSuccess: async () => {
@@ -215,11 +214,8 @@ export function GoalDetailPage() {
       setNotice(null);
       setRefusal(error instanceof MutationRefused ? error : null);
       if (!(error instanceof MutationRefused)) setNotice(errorMessage(error));
-      // Same settle rule as the generic command: an answer releases the press's
-      // frozen bytes, while a transport failure or an uninterpretable answer
-      // leaves its fate unknown and keeps them so a re-press replays.
-      const unknownOutcome = error instanceof Network || error instanceof UnexpectedResponse;
-      if (!unknownOutcome) sentApproval.current = null;
+      // Same settle rule as the generic command.
+      if (!outcomeUnknown(error)) sentApproval.current = null;
     },
   });
 
