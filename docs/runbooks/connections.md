@@ -174,11 +174,12 @@ delivered only in the agent's initial stdin envelope — never in the process
 environment, command arguments, logs or the daemon journal. A native harness takes
 its broker capability out of band on the Goal path instead, and a runtime
 advertises native provider access only when its adapter verifies the bridge — the
-Pi capability gate and its provider-bridge launch validation — so enabling
-`provider_access` on a profile is not by itself evidence that a native broker is
-ready. Each broker request revalidates the current database lease; renewal keeps
-the capability usable, while lease expiry, cancellation, completion, a newer
-generation or daemon re-registration revokes it.
+Pi capability gate and its provider-bridge launch validation
+(`daemon/internal/harness/pi`) — so enabling `provider_access` on a profile is not
+by itself evidence that a native broker is ready. Each broker request revalidates
+the current database lease; renewal keeps the capability usable, while lease
+expiry, cancellation, completion, a newer generation or daemon re-registration
+revokes it.
 
 Connected change operations use server-owned scope. The source branch is the work
 item's branch snapshot and the target branch is the repository's synced default

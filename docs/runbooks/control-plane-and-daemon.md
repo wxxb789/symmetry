@@ -345,10 +345,11 @@ The live suite covers dispatch, capacity, cancellation, waiting for input,
 failure isolation, polling fallback, stale fencing and daemon restart.
 
 Run the control plane for this suite with `SYMMETRY_LEASE_DURATION_MS=30000`: the
-terminal-retry case skips while the remaining lease exceeds 45 seconds and names
-that setting in its skip message, so a package-level pass without it is not that
-case's evidence. CI sets 30 seconds on the release it drives and asserts the named
-cases individually (`scripts/ci/go-test-json-gate.py --assert`).
+terminal-retry case (`TestTerminalTransitionRetriesAfterLeaseExpiry` in
+`daemon/e2e/core_test.go`) skips while the remaining lease exceeds 45 seconds and
+names that setting in its skip message, so a package-level pass without it is not
+that case's evidence. CI sets 30 seconds on the release it drives and asserts the
+named cases individually (`scripts/ci/go-test-json-gate.py --assert`).
 
 Run the real Codex smoke test separately against the same running control plane:
 

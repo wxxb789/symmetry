@@ -13,17 +13,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Model-routing evaluation records
 
-- [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
-      `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
-      `process.communicate(timeout=PROCESS_TREE_REAP_SECONDS)`, which on Windows can keep waiting
-      on the gate's stdout/stderr pipes while a descendant the snapshot tree kill missed still
-      holds the inherited write ends - past the documented reap window and past any caller that
-      expects `check` to return once the kill finished (the timeout-tree fixture's survivor
-      witness was masked this way until the fixture spawned its descendant with `DEVNULL`).
-      Fix direction: close the read ends from a daemon thread, or leave the final handle close to
-      process exit, so a pipe-holding survivor can never extend the reap; add a regression case
-      with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
-
 - [ ] Decide how the Control row in
       `docs/evidence/test-ablation-final-review-2026-09-29.md:148` is bound: its digest
       `e2672276b4f4171391a6df202dc01e9e66ccc705d72e4ee095db7471e7a1c6f9` matches no reachable
@@ -74,12 +63,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       with seed 310068 left the target test green), so the entry stays open; a recurrence now
       shows the importer's wait event, whether it waited on the delivery transaction, and
       whether the delivery backend held `work_items`.
-
-- [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
-      `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
-      states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
-      classifier's skip list against the jobs that actually ran before treating the trim as
-      fully accepted.
 
 ## Deferred review findings (0007h)
 
@@ -321,71 +304,37 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Record and documentation hygiene
 
-- [ ] Revalidate the runbook claims that are true on this tree but rot without any
-      edit to `docs/runbooks/**` (found while independently resolving every
-      checkable runbook claim on `632b369`). A CI job split or rename invalidates
-      `daemon-process-stop.md`'s "the daemon job runs `go vet`, a scoped ordinary
-      Go pass and the full `-race` suite ... and the `daemon-windows` job runs the
-      full Windows suite"; a harness pin move invalidates
-      `daemon-opencode-peer-ownership.md`'s "OpenCode 2.3.0 is explicitly
-      unsupported" and `control-plane-and-daemon.md`'s "the script-local version
-      guard is `-ExpectedClaudeVersion 2.1.281`, which is not the daemon's
-      promoted Claude pin" (both follow `docs/design/harness.md`); a pnpm bump
-      invalidates every `mise exec pnpm@12.17.0 -- …` command (they follow
-      `package.json`'s `packageManager`); a change to the `development-*` fallbacks
-      invalidates the sign-in and live-check examples (`control/config/runtime.exs`
-      `:63-64`); a rename of the workspace read's health keys invalidates
-      `portal.md`'s four signal names (`health/4` in
-      `control/lib/symmetry_control/workspaces/read_model.ex:471`); and
-      `session-receipt-recovery-e2e.md`'s `mix ecto.drop --force` uses the Ecto
-      option meaning "do not ask for confirmation", not `--force-drop`, so an
-      Ecto-side change to that option would change what the cleanup line does. The
-      runbooks also cite *Commands and gates* in `docs/design/quality.md` as the
-      checks CI actually runs while that section still carries the stale frontend
-      rows tracked under *Deferred review findings (0007i)* below.
-
-      Closed in the second pass (the review findings of `gpt-6.1-sol` on `#70`,
-      each re-verified against its artifact): `connections.md` no longer asserts
-      the `vso.code`/`vso.work`/`vso.build` scope mapping it could not support —
-      the shipped code requests an Entra resource token
-      (`control/lib/symmetry_control/integrations/auth.ex:41-46`) and names no
-      scope — and instead states the read-versus-write requirement the code does
-      establish (`change.upsert`/`change.update` create or update pull requests in
-      `integrations/providers/{github,azure_devops}.ex`), with the scope and
-      permission names explicitly left to the provider. Still rot-prone after that
-      pass, with no artifact that can re-derive them: the runbooks index's
-      precedence rule (it now mirrors `AGENTS.md:24`'s record-the-conflict
-      requirement instead of "the code wins", so a change to that contract
-      bullet invalidates it), `portal.md`'s board-move sentence (the keyboard
-      bindings follow `frontend/src/features/projects/work-surface.tsx:115` and
-      the Goal-managed refusal follows `ensure_legacy_work_item/1`), `portal.md`'s
-      `playwright-report/` location (follows `browser/playwright.config.mjs` and
-      `browser/README.md`), `portal.md`'s CSRF sentence (follows Plug's
-      `@unprotected_methods ~w(HEAD GET OPTIONS)`), and
-      `chat-and-supervisory-control.md`'s supervisory/intent scoping (follows
-      `control_capabilities/4` in `control/lib/symmetry_control/orchestration.ex`
-      and the daemon's autonomy envelope in `daemon/internal/app/app.go`).
-
-      *(Partly superseded by the archived third-pass closure, which restated several of these
-      against their owners; see `docs/archive/CLOSED-TODO.md`. The revalidatable list below stays
-      open.)*
-      Closed part moved to `docs/archive/CLOSED-TODO.md`.
-
-      Still revalidatable, with no artifact that can pre-empt a future edit: the
-      generated-name regex and the `MIX_TEST_PARTITION` behaviour (Ecto/Ecto
-      test-config side), the 45-second skip bound in
-      `daemon/e2e/core_test.go`, the list of variables the production Compose
-      service forwards, the Pi/native provider-bridge gate's exact shape, the
-      installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
-      convention paragraph itself (it restates the precedence the design and
-      protocol documents already carry).
-
-## Deferred review findings (0007i, rebased onto `ca29a8e`)
-
-- [ ] Revalidate the pre-existing doc drift in `docs/design/quality.md`: line 41 still says the frontend
-      commands "do not exist until goal 0007 builds `frontend/`" and line 116 lists them as a goal-0007
-      target, while `.github/workflows/ci.yml:67-70` has run them since 0007a. Observed while recording
-      the 0007i gate table; update the quality policy in a separate documentation change.
+- [ ] Add a path-and-symbol existence check for the backticked repo paths and
+      identifiers cited in `docs/runbooks/**`, `docs/design/quality.md` and the
+      CLOSED-TODO closures. Location: a new `scripts/ci/` check plus its fixture
+      test, run for pull requests the way the record-cleanliness pair is
+      (`scripts/ci/check-record-cleanliness.py` with
+      `scripts/ci/test-check-record-cleanliness.py`,
+      `.github/workflows/ci.yml:78,1218`): scoped to the changed files it audits
+      but not hidden behind the documentation-only fast path, so a runbook-only
+      pull request still runs it. Why: a cited `file:line` or symbol rots
+      silently when its owner moves — the 2026-11-19 revalidation found the
+      closed item's own `read_model.ex:471` health-signal citation stale
+      (`portal.md` cites `health/4` with no line number), and PR #99's "Review
+      fixes (round 2)" replaced an untracked
+      `control/deps/ecto/...` citation (`control/.gitignore:8` ignores `deps/`)
+      that no index contains. Check that a backticked repo-relative path exists
+      and that the cited identifier occurs in the cited file; do not validate
+      raw `file:line` values (any edit above them would redden the gate).
+      Verification: the check fails on a citation whose path or symbol is absent
+      and passes on the current tree; fixtures pin both outcomes.
+- [ ] Commit a fixture test for the `changes` job's changed-path classifier
+      (`.github/workflows/ci.yml:26-65`), whose proof today is only the removed
+      throwaway harness plus hosted runs. Pattern:
+      `scripts/ci/test-no-legacy-routes-audit.py` (fixture-driven, runs ungated
+      in the `legacy-route-audit` job; `.github/workflows/ci.yml:1355`). Pin:
+      `docs/**`/`*.md`-only diffs report `run-heavy=false`; `docs/evaluations/**`,
+      `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
+      `scripts/ci/check-record-cleanliness.py` changes report `run-records=true`;
+      `legacy-route-audit` runs unconditionally; non-`pull_request` events
+      report both `true`. Companion increment: its `ci.yml` wiring would move
+      line numbers this branch just pinned. Verification: the fixture test
+      fails when any of those routings changes.
 
 ## Lockfiles must carry canonical registry URLs
 
@@ -479,14 +428,48 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Paginated reads must be bound to the cursor that served their pages
 
-- [ ] Residuals of the completed class scan (2026-11-19): (a) the owner's decision on unifying the
-      chat conversation's keep-and-state treatment with the work history's and the attention feed's
-      retirement — an expanded page the chat keeps renders beside a stated unloaded region, while
-      the other two retire it, and unifying changes one surface's reader-visible behaviour; (b) the
-      browser suites, which CI runs, carry the live-daemon pagination cases (an expanded page
-      disappearing when a live run moves the boundary is covered by the frontend suite only) and
-      were not run on this host. The scan and its fixes are archived in
-      `docs/archive/CLOSED-TODO.md`. Pre-existing, left as-is: `retainServedPage` detects a moved
-      boundary by comparing cursor token bytes, so a re-serve that only re-signs the same boundary
-      position still restarts the chain pointer; deciding whether it should compare the boundary
-      message's id instead belongs to (a).
+- [ ] Residual of the completed class scan (2026-11-19): (b) the live-daemon pagination cases run
+      only under their own gates — `browser/tests/portal-chat-live.spec.mjs`
+      (`SYMMETRY_CHAT_LIVE=1`, run by `browser/scripts/run-chat-daemon-tests.ps1`) and
+      `browser/tests/portal-live-daemon.spec.mjs` (`SYMMETRY_LIVE_DAEMON=1`, run by
+      `pnpm --filter symmetry-browser-acceptance test:live`) — and were not run on this host. CI's
+      browser step names six specs and selects neither, so an expanded page disappearing when a
+      live run moves the boundary is covered by the frontend suite only; running the live cases
+      needs a provisioned live daemon on a quiet host.
+      Closed part moved to `docs/archive/CLOSED-TODO.md`, recording the owner's 2026-11-19 keep
+      decision — the chat conversation keeps its keep-and-state treatment rather than unifying with
+      the work history's and the attention feed's retirement — and the fixed pre-existing
+      `retainServedPage` note (a moved boundary is now judged by the boundary message's id, not the
+      re-signed cursor's bytes); a cursor the reader has paged past is not renewed by later serves,
+      but its refusal after the server's 24-hour `max_age` now restarts the chain from the served
+      page and re-reads it, so the next press renews the token and the re-walk dedupes.
+
+- [ ] The chat surface's in-flight `Load older` guard is still keyed by cursor bytes:
+      `loadingCursor` (`frontend/src/features/chat/chat.tsx:172-221`) admits a second load for the
+      same boundary while the first is in flight once a re-serve has renewed `history.loadCursor`
+      and re-rendered the button (`frontend/src/features/chat/chat.tsx:560`), and a refusal of the
+      superseded request still posts its notice after the retry already loaded the page. (The rest
+      of that damage is fixed — 2026-11-20, fix round 2: a refusal rewinds the chain pointer and
+      re-reads the captured scope only while the press still owns the chain boundary it captured,
+      so a superseded one is only this notice.) Pre-existing: base re-keyed the cursor on every
+      refresh, so the race predates the boundary-id work. Repro on those bytes: press Load older,
+      refresh while its page is in flight, press Load older again (admitted because the cursor
+      bytes changed), and let the first request's refusal settle after the second landed. Fix
+      direction: key pending loads by scope + boundary id (token bytes as the fallback) and
+      suppress the superseded refusal's notice.
+
+- [ ] An ended chat chain never accepts a later served token: a chain drained through its own loads
+      (`nextCursor` null, the recorded `nextBoundaryId` naming an older message) or a read that
+      served the whole history (no continuation was ever established) keeps reporting "oldest
+      history loaded" while a later serve at the same boundary offers a token, so the rows below
+      the served page stay unreachable until a reload or a boundary move. Repro (rows ordered 3–54,
+      so the first page is 5–54 plus a token and the older read 3–4 ends `null`): rows 1–2 becoming
+      visible late — a slow concurrent post commits an older-timestamped row, since `inserted_at`
+      is set at insert inside the transaction and the advisory lock is per action, not per scope —
+      make the next read still bound at 5 and offer a token for it, which the ended chain drops.
+      Found by the r2 review of `fix/chat-history-boundary-id` (2026-11-20), the round that removed
+      the `adopt` branch covering the never-continued shape (the drained shape was never covered by
+      it). Fix direction: treat "ended" as no usable continuation and re-open from the served
+      boundary when a serve offers a token — the offered token's boundary is the served page's
+      oldest message, so the re-walk re-reads the drained region and dedupes against the retained
+      pages.

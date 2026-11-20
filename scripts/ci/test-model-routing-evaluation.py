@@ -8,9 +8,11 @@ import json
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -1144,6 +1146,221 @@ class EvaluationTests(unittest.TestCase):
             "tree from one created after the kill enumerated it (Windows `taskkill /T`) or after the "
             "process group was signalled (POSIX `killpg`): neither kill can reach a process it never saw",
         )
+
+    def test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes(self) -> None:
+        # A descendant the tree kill misses can still hold the gate's inherited
+        # stdout/stderr write ends, so the pipes never reach EOF while it lives. On
+        # Windows closing a read end queues behind the reader blocked in it, so a close
+        # on the reaping thread would wait for the survivor instead of the documented
+        # reap window. The kill is narrowed to the direct child so the survivor is
+        # always missed, standing in for a descendant that escapes `taskkill /T`. The
+        # case proves the fixture really held the pipes (the gate spawned the survivor
+        # before the kill and the survivor still runs), measures the reap against its
+        # window and its documented worst case, checks the lingering branch waited on
+        # the direct child within its own timeout, and on POSIX closes both read ends
+        # and keeps exactly the output already captured before the kill.
+        runner = load_runner_module()
+        handshake = self.root / "lingering-handshake"
+        handshake.mkdir()
+        pid_path = handshake / "survivor.pid"
+        armed_path = handshake / "gate-armed.txt"
+        survivor_code = (
+            "import os, time\n"
+            "from pathlib import Path\n"
+            f"Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='utf-8')\n"
+            "deadline = time.monotonic() + 90.0\n"
+            "while time.monotonic() < deadline:\n"
+            "    time.sleep(0.05)\n"
+        )
+        gate_code = (
+            "import subprocess, sys, time\n"
+            "from pathlib import Path\n"
+            f"subprocess.Popen([sys.executable, '-c', {survivor_code!r}])\n"
+            f"Path({str(armed_path)!r}).write_text('armed', encoding='utf-8')\n"
+            "print('gate-output-before-kill', flush=True)\n"
+            "time.sleep(60)\n"
+        )
+
+        def survivor_pid() -> int | None:
+            if not pid_path.is_file():
+                return None
+            return int(pid_path.read_text(encoding="utf-8"))
+
+        def kill_pid(pid: int) -> None:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
+            else:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+        def terminate_survivor() -> None:
+            pid = survivor_pid()
+            if pid is not None:
+                kill_pid(pid)
+
+        def survivor_running(pid: int) -> bool:
+            if os.name == "nt":
+                listed = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, check=False
+                )
+                return str(pid) in listed.stdout
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            return True
+
+        self.addCleanup(terminate_survivor)
+
+        def parent_only_kill(process) -> None:
+            # The tree kill this replaces cannot reach the survivor; killing only the
+            # direct child leaves the inherited write ends with the survivor exactly as
+            # a descendant that escaped `taskkill /T` would.
+            kill_pid(process.pid)
+
+        original = runner.terminate_owned_process_tree
+        runner.terminate_owned_process_tree = parent_only_kill
+        self.addCleanup(setattr, runner, "terminate_owned_process_tree", original)
+
+        timeout = 2.0
+        # The reap's documented worst case is the initial timeout, one full reap
+        # window, then the kill plus its own bounded wait (a platform tree kill such
+        # as `taskkill` carries no timeout of its own). The guard sits past that worst
+        # case, so a merely slow kill is never reported as a pipe block.
+        bound = timeout + 2.0 * runner.PROCESS_TREE_REAP_SECONDS + 5.0
+        outcome: dict = {}
+        recorded: list = []
+        waits: list = []
+        real_subprocess = runner.subprocess
+
+        class RecordingProcess:
+            """Delegate to the real Popen, recording every wait the runner asks for.
+
+            `kill()` already sets `returncode`, so the recorded wait call is what shows
+            the direct child was waited on rather than merely killed.
+            """
+
+            def __init__(self, process):
+                self._process = process
+
+            def __getattr__(self, name):
+                return getattr(self._process, name)
+
+            def wait(self, timeout=None):
+                waits.append(timeout)
+                return self._process.wait(timeout=timeout)
+
+        class RecordingSubprocess:
+            """Delegate to the real module, recording every Popen the runner builds."""
+
+            def __getattr__(self, name):
+                return getattr(real_subprocess, name)
+
+            def Popen(self, *args, **kwargs):
+                process = RecordingProcess(real_subprocess.Popen(*args, **kwargs))
+                recorded.append(process)
+                return process
+
+        runner.subprocess = RecordingSubprocess()
+        self.addCleanup(setattr, runner, "subprocess", real_subprocess)
+
+        started = time.monotonic()
+
+        def reap() -> None:
+            outcome["reaped"] = runner.run_owned_command(
+                [sys.executable, "-c", gate_code], str(self.root), timeout
+            )
+            outcome["elapsed"] = time.monotonic() - started
+
+        thread = threading.Thread(target=reap, daemon=True)
+        thread.start()
+        thread.join(bound)
+        if thread.is_alive():
+            pid = survivor_pid()
+            was_running = pid is not None and survivor_running(pid)
+            stalled = time.monotonic() - started
+            # Release the survivor (and with it the pipes) so the reaping thread can
+            # finish rather than being abandoned mid-close, then fail on the evidence
+            # the guard collected.
+            terminate_survivor()
+            thread.join(30)
+            finished = not thread.is_alive()
+            measured = (
+                f"reap finished {outcome['elapsed']:.1f}s after the call started"
+                if finished
+                else f"reap still running {stalled:.1f}s after the call started"
+            )
+            self.fail(
+                f"run_owned_command did not return within {bound:.1f}s while a survivor held the "
+                f"gate's pipes: gate armed={armed_path.is_file()}, survivor pid={pid}, "
+                f"survivor running at the bound={was_running}, {measured}, "
+                f"reap finished after release={finished}"
+            )
+        self.assertTrue(
+            armed_path.is_file(),
+            "the gate was killed before it spawned the pipe-holding survivor, so the case proved nothing",
+        )
+        pid = survivor_pid()
+        self.assertIsNotNone(pid, "the pipe-holding survivor never published its pid")
+        self.assertTrue(
+            survivor_running(pid),
+            "the pipe-holding survivor was not running when the reap returned, so the reap never faced it",
+        )
+        exit_code, stdout, stderr, timed_out = outcome["reaped"]
+        self.assertIsNone(exit_code, "a timed-out gate must not report an exit code")
+        self.assertTrue(timed_out, "the reap must report the run as timed out")
+        # Positive control for the premise: the survivor held the write ends until the
+        # test released them, so the reap cannot have returned before its own window
+        # passed. A reap that returns early never faced a held pipe and proved
+        # nothing.
+        elapsed = outcome["elapsed"]
+        self.assertGreaterEqual(
+            elapsed,
+            timeout + runner.PROCESS_TREE_REAP_SECONDS - 2.0,
+            f"the reap returned in {elapsed:.1f}s without consuming a reap window: the survivor "
+            "never held the gate's pipes, so the case proved nothing",
+        )
+        # The other half of the reap contract: the lingering branch waits on the direct
+        # child with its own bounded timeout, not merely kills it, so its exit status is
+        # known before the reap returns. `kill()` already sets `returncode` on both
+        # platforms, so the wait call itself is recorded and asserted.
+        self.assertEqual(len(recorded), 1, "the reap constructed an unexpected number of processes")
+        self.assertEqual(
+            waits,
+            [runner.PROCESS_TREE_REAP_SECONDS],
+            "the lingering reap must wait once on the direct child within its own reap window",
+        )
+        self.assertIsNotNone(
+            recorded[0].returncode,
+            "the reap returned before the direct child's exit status was collected",
+        )
+        if os.name != "nt":
+            # The POSIX lingering branch closes its read ends before returning: its
+            # `communicate` reads on this thread, so the close cannot queue behind the
+            # survivor, and nothing else closes them while the recorded Popen stays alive.
+            self.assertTrue(
+                recorded[0].stdout.closed and recorded[0].stderr.closed,
+                "the POSIX lingering reap must close both read ends before returning",
+            )
+            # The POSIX reap reads chunks while it waits, so output captured before the
+            # kill must come back with the timeout result. Windows `communicate`
+            # cannot read a partial buffer out of a pipe that never reaches EOF, so
+            # the capture is not asserted there.
+            self.assertEqual(
+                stdout,
+                b"gate-output-before-kill\n",
+                "the POSIX reap must return exactly the output captured before the kill",
+            )
+        else:
+            # Windows keeps the read ends open behind the reader thread parked in the
+            # pipe: a close there queues behind the survivor, and the parked reader owns
+            # the final close once the write ends are released, or process exit does.
+            self.assertFalse(
+                recorded[0].stdout.closed,
+                "the Windows lingering reap must leave its read ends open behind the parked reader",
+            )
 
     def test_symlink_targets_are_bound(self) -> None:
         run = self.root / "run-symlink"
