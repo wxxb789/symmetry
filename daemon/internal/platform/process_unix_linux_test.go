@@ -2160,6 +2160,96 @@ func TestProcessGroupBarrierReportsJoinedMonitorAfterDeadline(t *testing.T) {
 	}
 }
 
+// TestProcessGroupStopDescendantMonitorJoinsEndingMonitor is the deterministic
+// probe for the stop path's deadline join: fabricated state, no monitor
+// goroutine and no scheduler dependence. monitorDone is close-only, so an
+// exited monitor stays ready and must be joined without waiting for the
+// deadline, while an open monitor must still consume the whole deadline and
+// keep the unchanged deadline error (fail-closed).
+func TestProcessGroupStopDescendantMonitorJoinsEndingMonitor(t *testing.T) {
+	const deadline = 200 * time.Millisecond
+	for _, test := range []struct {
+		name          string
+		monitorExited bool
+		wantError     bool
+	}{
+		{name: "an exited monitor is joined", monitorExited: true},
+		{name: "an open monitor fails the deadline", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			group := &processGroup{monitorStop: make(chan struct{}), monitorDone: make(chan struct{})}
+			if test.monitorExited {
+				close(group.monitorDone)
+			}
+			start := time.Now()
+			err := group.stopDescendantMonitor(time.Now().Add(deadline))
+			elapsed := time.Since(start)
+			if test.wantError {
+				if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) || !strings.Contains(err.Error(), "did not stop before deadline") {
+					t.Fatalf("stop with an open monitor = %v after %s, want the unchanged deadline error", err, elapsed)
+				}
+				if elapsed < deadline*3/4 {
+					t.Fatalf("stop returned after %s, want it to wait on the open monitor for at least %s", elapsed, deadline*3/4)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("stop with an exited monitor = %v after %s, want the monitor joined", err, elapsed)
+			}
+			if elapsed >= deadline*3/4 {
+				t.Fatalf("stop waited %s for an exited monitor, want an immediate join", elapsed)
+			}
+		})
+	}
+}
+
+// TestProcessGroupStopDescendantMonitorReportsJoinedMonitorAfterDeadline pins
+// the join's expired-timer branch: whenever the wait is evaluated with the
+// deadline already spent, an exited monitor must still be reported as joined
+// rather than as a deadline failure. Unlike the barrier's probe the stop wait
+// has no preceding handshake, so the both-ready window is the interval between
+// the entry guard and the select: each iteration closes monitorDone first and
+// then passes a deadline a chosen fraction of the call overhead ahead, and only
+// the entry guard's own error ("stop deadline elapsed") is tolerated. An exited
+// monitor is fixed state, so no iteration can fail for a correct join; the
+// deadline ladder exists because that window moves with the build's overhead
+// (plain, `-race`, a faster or slower host) and no single value covers them all.
+//
+// Schedule precondition: an iteration detects a removed recheck only when the
+// timer is already due as the select is evaluated; buckets whose deadline the
+// entry guard answers are tolerated and detect nothing. Measured detection of a
+// removed recheck against the pre-fix source (this ladder, 400 iterations per
+// bucket): plain `go test` red 4/4, first failures at iterations 37/29/29/36 of
+// the 100 ns bucket; `go test -race` red 4/4, first failures at 12/3/0/1 of the
+// 2 µs bucket; `go test -race -cpu 1` red 3/3, first failures at 11/6/6 of that
+// bucket. The detecting bucket differs by build, and a single value left the
+// instrumented builds undetected (measured: the 100 ns bucket alone, `-race`
+// mutant green 3/3); that moved window is why the ladder exists rather than one
+// constant.
+func TestProcessGroupStopDescendantMonitorReportsJoinedMonitorAfterDeadline(t *testing.T) {
+	for _, stopDeadline := range []time.Duration{
+		100 * time.Nanosecond,
+		250 * time.Nanosecond,
+		500 * time.Nanosecond,
+		time.Microsecond,
+		2 * time.Microsecond,
+		5 * time.Microsecond,
+	} {
+		for iteration := range 400 {
+			group := &processGroup{monitorStop: make(chan struct{}), monitorDone: make(chan struct{})}
+			close(group.monitorDone)
+			deadline := time.Now().Add(stopDeadline)
+			err := group.stopDescendantMonitor(deadline)
+			if err == nil {
+				continue
+			}
+			if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) || strings.Contains(err.Error(), "did not stop before deadline") {
+				t.Fatalf("deadline %s, iteration %d: stop reported a joined monitor as unstopped: %v", stopDeadline, iteration, err)
+			}
+		}
+	}
+}
+
 func TestAttachProcessWaitsForInitialDescendantScan(t *testing.T) {
 	process, err := os.FindProcess(os.Getpid())
 	if err != nil {

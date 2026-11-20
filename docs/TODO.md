@@ -101,26 +101,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (rerun the two cases, then check whether the failing read is the timer or the intent state), and
       keep both assertions.
 
-- [ ] Give `stopDescendantMonitor` the post-timer recheck its sibling join already has.
-      `daemon/internal/platform/process_unix.go:752-769` waits on the monitor against a timer
-      (`:763-768`) and returns `ErrLinuxDescendantContainmentUnproven` ("descendant monitor did not stop
-      before deadline") whenever the timer arm wins, without rechecking `monitorDone`. `monitorDone` is a
-      close-only unbuffered channel (`:610` created, `:809` the only close), so it stays ready once
-      closed: a monitor that exits as the deadline expires leaves both arms ready, Go picks uniformly
-      between them, and a monitor whose published reason is already in hand can be reported as a
-      deadline failure. PR #105 (`e64f8c0`) fixed this shape in the barrier join `:665-688`
-      (function `waitForInitialDescendantScan` `:642-696`, the recheck at `:682-686`, pinned by
-      the join probe `process_unix_linux_test.go:2078` and the expired-timer probe
-      `:2136`, whose assertion at `:2157-2158` reddens when the recheck is removed) — and recorded
-      this site as out of scope as work "to be recorded in `docs/TODO.md`"; the same shape also sits
-      in the final-scan RPC's timer arms (`:1042-1043` request, `:1055` result). Fail-closed, so the
-      cost is manufactured
-      unproven-containment results for every caller
-      that joins the monitor's own reason (`:1121`, `:1277`, `:1351`, `:1542`,
-      `containment_supervisor_linux.go:1836`, `prepareDescendantMonitorForOwnerLoss` `:771-794`).
-      Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
-      that never exits still fails) in a separate maintenance change.
-
 - [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
       (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
       error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
@@ -199,6 +179,26 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       commands are documented, or add a recreate/reset step to the `test` alias so a stale default
       database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
       the recovery recipe.
+
+- [ ] Give the final-scan RPC's timer arms the post-timer recheck the barrier join and
+      `stopDescendantMonitor` now carry. `requestDescendantMonitorScan`
+      (`daemon/internal/platform/process_unix.go:1021-1058`) waits on a timer twice and returns a
+      timeout whenever the timer arm wins, without rechecking the channel whose result is already in
+      hand. First select `:1038-1044`: the request arm's timer `:1042-1043` returns "descendant monitor
+      final scan request timed out" without rechecking `monitorDone` (close-only, created `:610`,
+      closed `:809`, so it stays ready once closed). Second select `:1045-1057`: the `monitorDone` arm
+      `:1048-1054` does recheck the buffered `resultChannel` (created `:1037`, written by the monitor
+      at `:994` before it can return), but the timer arm `:1055-1056` returns "descendant monitor final
+      scan timed out" without rechecking either channel. A monitor that exits as the deadline expires,
+      or a result already published there, therefore leaves both arms ready; Go picks uniformly
+      between them, and the timeout is reported for a result that is in hand. Fail-closed, so the cost
+      is manufactured unproven-containment results: both errors reach `closeUntil` (`:1188` on the
+      leader-absent path, `:1229` on the post-readback final scan), where they become sticky
+      `descendantScanLost` (`:1240-1244`) or an unproven containment return (`:1197-1199`). Same shape
+      as the barrier join `:665-688` (fixed, with pins, by PR #105 `e64f8c0`) and
+      `stopDescendantMonitor` (fixed, with pins, on branch `fix/stop-descendant-recheck`). Apply the
+      same recheck here and pin both directions (an arm that becomes ready at the deadline is honored;
+      a monitor that never answers still fails closed), in a separate maintenance change.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
