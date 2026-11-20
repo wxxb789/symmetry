@@ -31,6 +31,7 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
 
 The closed callerless projected provider-action chain appended to the same second `## Dead-code
 candidates` section below was moved on 2026-11-20 from branch `fix/provider-action-chain-removal`.
+
 The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
 
