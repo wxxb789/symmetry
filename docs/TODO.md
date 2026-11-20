@@ -229,28 +229,54 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Deferred review findings (0007h)
 
-- [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate
-      silently. The 0007h review confirmed these names are correct today but that the schemas leave them
-      optional while the client reads them: `accounting.known_usage_cost_microusd`
-      (`frontend/src/features/goals/detail.tsx:491`, served unconditionally at
-      `control/lib/symmetry_control/goals/read_model.ex:2539`), `settlement_attention[].proposed_next_action`
-      and `proposed_next_action_status` (`detail.tsx:245`), `external_waits[].external_ref`, `next_check_at`
-      and `check_seq` (`detail.tsx:508`), the attention `attention_reasons`/`active_tasks`/`nonterminal_tasks`
-      sets (`frontend/src/features/attention/attention.tsx:80`), and `accepted_outcomes[].candidate_subject`
-      and `subject_hash` (`detail.tsx:417`). Marking them `required` — as `integration`, `satisfied?` and the
-      unknown-cost member now are — would close the class; additive members staying unvalidated is intended.
-      A smaller residual from the same review lives here too: the rollout-off browser case went unrun in
-      hosted CI for two reasons — before `52cb4bb` its spec file was not in the render step's spec list,
-      and the step passed no `SYMMETRY_GOALS_OFF_URL` (both closed below).
-      Closed part moved to `docs/archive/CLOSED-TODO.md`.
-      The rollout-off browser-case residual is closed (2026-11-19, `fix/ci-render-gate-fixtures`, PR #98):
-      the render step starts a rollout-off release instance and runs the attention spec's rollout-off case
-      at both widths; its closure narrative and hosted evidence are in the same section there.
-      Remaining open: the legacy surfaces that
-      read workspace-read members still render their own fallbacks instead of refusing, which is
-      per-surface work outside this class; and the captures for `accepted_outcomes`, `settlement_attention`
-      and `external_waits` are empty arrays, so those members are pinned by the boundary test and the
-      real-served controller gate rather than by a fixture-level rename probe.
+- [ ] Harden the optional-but-consumed members of the served reads: the `workspace-read` row remains.
+      The Goal/attention half of this
+      item, and the empty-capture residual it carried, are closed on branch `fix/served-read-closeout`
+      (`docs/archive/CLOSED-TODO.md`, this section): every member this item named sits in a `required`
+      array at `fdf332d` and is read by the surface it cited, and the real-served controller gate now
+      serves an accepted outcome and a recorded external wait — the two collections it previously
+      validated only as empty arrays — beside the settlement attention it already asserted.
+      Still open is the same class on the workspace read, which the 0007h entry scoped out as per-surface
+      work: of the 68 members `workspace-read.schema.json` leaves optional (a `jq` walk of
+      `required` arrays), 66 are read by `frontend/src` feature code and only two are not
+      (`RuntimeSnapshot.active_runs` and `WorkspaceWorkItem.position` — verified by grep: no
+      feature-code read site for either; the four `RuntimeCapabilities` booleans `interactive`,
+      `provider_access`, `structured_input` and `supervisory_control` are consumed only as the whole
+      map, `frontend/src/features/runtimes/runtimes.tsx:24` serializing it into `data-capabilities`
+      and `browser/tests/portal-live-daemon.spec.mjs:433` asserting that attribute equals the
+      registration-side map, so no member-named read site exists for them), and
+      those surfaces render their own fallbacks instead of refusing. The 66 read members are the root
+      `runtimes` and `registered_runtimes`; project `version`, `default_agent_profile`,
+      `default_workspace` and `resources`; the resource row's `id`, `project_id`, `connection_id`,
+      `kind`, `name`, `provider`, `external_ref`, `url`, `status`, `sync_status`, `status_message`,
+      `last_synced_at` and `version`; the registered-runtime row's `runtime_id`, `runtime_name`,
+      `agent_profile` and `workspace`; the runtime snapshot's `capacity`, `reserved_capacity`,
+      `connection_epoch`, `last_heartbeat_at`, `repository_resource_id`, `agent_profile`, `workspace`
+      and `capabilities.adapter`, plus that map's `interactive`, `provider_access`, `structured_input`
+      and `supervisory_control`; the work row's `project_id`, `goal_id`, `description`, `priority`,
+      `assignee`, `workspace`, `repository_resource_id`, `repository`, `ci_resource_id`, `ci_resource`,
+      `branch`, `pull_request_url`, `ci_status`, `review_status`, `delivery`, `external`, `goal_managed`,
+      `version`, `can_start`, `execution` and `updated_at`; the `provider` and `recorded_at` of each
+      `delivery` value; `external.provider_owned_fields`; and the waiting-decision packet's `context`,
+      `reason`, `options`, `recommended_option_id` and each option's `id`, `label` and `consequence`.
+      Two options, both needing the owner because they decide whether an older partial workspace
+      projection stays renderable (the tolerance `contracts/README.md:22-23` records as "keeps accepting
+      older partial projections", while the serving projection does emit every one of those members,
+      `control/lib/symmetry_control_web/portal_json.ex:70-101,229-259` and
+      `control/lib/symmetry_control_web/protocol.ex:328-345`): option (a) drops the tolerance and requires
+      every always-emitted consumed member; because `WorkspaceWorkItem` is one shared definition body
+      across `workspace-read`, `work-detail-read` and `chat-read`
+      (`contracts/generated/effect/index.ts:633`), that single requiredness edit moves the required
+      arrays, the valid fixtures of all three schemas, the frontend fixture layer
+      (`frontend/src/services/api.fixtures.ts`) and the generated Go DTOs together, while the
+      `RuntimeCapabilities` members and the `WorkItemWaitingDecision` packet stay optional either way
+      because the projection passes the stored registration map and the agent's own waiting payload
+      through verbatim. Option (b) keeps the tolerance and pins the serving side instead, by validating a
+      real served `workspace-read` document against the contract bundle with the consumed members
+      asserted on that output — `validate_served_document!` today pins `chat-read`, `goal-read` and
+      `attention-read` only, so no gate compares a served workspace read with the contract at all.
+      Recommendation: (b) is the smaller, reversible step and keeps older projections renderable; (a) is
+      the class-consistent one.
 
 ## CI consolidation owner decisions (2026-11-17)
 

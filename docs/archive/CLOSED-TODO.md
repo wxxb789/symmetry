@@ -46,6 +46,9 @@ The revalidated test-database recovery entry appended to `## Retro review follow
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
 
+The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
+moved on 2026-11-21 from branch `fix/served-read-closeout`.
+
 The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
 
@@ -327,13 +330,53 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       digest and controls digest, plus `test-ablation-final-review-2026-09-29.md`'s app-startup
       and Go-probe rows (the cross-record quote this entry named). Evidence: the whole-corpus
       `--check --root-only` sweep reports 0 dirty of 111 files (superseded 2026-11-20: the
-      widened UNC leader pattern flags the two `0008b-go-bounded-regression-strong` specimens
-      named in the records README's accepted false positives; the records were deliberately
-      not re-rendered),
+      widened UNC leader pattern flagged the two `0008b-go-bounded-regression-strong` specimens;
+      both were rendered and every bound digest rebound by the records rebind of the same day,
+      see the entry below),
       `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` exits 0,
       re-running the renderer over all 30 touched files is byte-stable, and
       `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
       (16 tests) pass.
+
+- [ ] Render the two records the widened sanitize flags: `0008b-go-bounded-regression-strong.json`
+      and its `.review.json` still carried the doubly escaped backslash-run UNC specimen a reviewer
+      quoted while describing forbidden-backslash test cases, so the record-cleanliness gate refused
+      them; narrowing the pattern was rejected because a narrower UNC pattern misses a real path and
+      the README records the shape as an accepted false positive. Evidence plan: render both files
+      in the `--root-only` scope (the scope #101 rendered these two files in and the scope the CI
+      gate runs), keep the record JSON valid across the render, and rebind every digest that binds
+      a rendered file.
+
+      **Closed (2026-11-20, branch `chore/model-routing-records-rebind`):** both records were
+      rendered with `scripts/ci/model-routing-record-sanitize.py --root-only` - one substitution
+      per file, the specimen to `path-sha256:0b5e775deeadc067545d33b048502608ec874e7002aaab39e6adf32f4d370ae6`,
+      the odd trailing backslash that escapes the quote closing the quoted specimen kept outside the token -
+      and every digest binding a rendered file was recomputed and rebound:
+
+      | File | `sha256` before | `sha256` after | Bindings rebound |
+      | --- | --- | --- | --- |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.review.json` | `cf1c41b9b6fa8bd3512d6a9c6a4fdc69e6712b0c918728c8ab88a1a3b435bef7` | `d442ed8fc259e354d002e922a6817c334b618d47b0a57e671a7b8086e270e23c` | the rendered receipt's `evidence.frozen_review_sha256` and `review.evidence_sha256`; `0008b-policy.json`'s strong-arm `frozen_input_digests.review_sha256` |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` | `8ad6c2d277dfac86af23fe6e858d7c8eedb9ab9e5961c10ddb8c6934e824332c` | `cf31f14da8a532110b58770e26adbd614d15117b98d4a4d9798440743e3cc94a` | `0008b-policy.json`'s strong-arm `receipt_sha256`; `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s strong receipt row |
+      | `docs/evaluations/model-routing/0008b-policy.json` | `82852890944b405b99da0c95b2404547be6fea994301c631b65b5145bf3f767d` | `02632c1e56d83f734cb5e0309c11a3819398a9f58fa4902439514264e7b89a31` | `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s candidate-policy digest |
+
+      The receipt's after-digest is over its final bytes (the render plus its own internal review
+      rebind). A whole-tree scan finds no other full-length or truncated referrer of the three
+      pre-rebind digests. Evidence: `resolve-digests.py` (retained in the GDD task's `evidence/`)
+      resolves the eleven policy/receipt bindings of the 0008b class and re-runs the corpus sweep -
+      111 records, 0 dirty, 131 checks, 0 failures; the renderer is byte-stable on both rendered
+      files and each parses to the same document otherwise (the token binds the exact replaced
+      bytes); `check-record-cleanliness.py` passes with a `git stash create` commit of the frozen
+      tree as `--head` - 7 changed records against the current `origin/main` and 5 against the
+      branch base, exit 0 each; and the five short `scripts/ci` Python suites pass
+      (`test-model-routing-record-sanitize.py` 54 tests, `test-check-record-cleanliness.py` 19,
+      `test-model-routing-omp-usage.py` 40, `test-model-routing-source-subject.py` 6 with one
+      skip, `test-linux-v2-source-subject.py` 4). The long runner suite
+      `test-model-routing-evaluation.py` (82 tests, real Go fixtures; no `scripts/ci` tool is
+      touched by this change) was not run to completion on this host - 27 of 82 test outcomes with
+      zero failures before the stop, partial output in the GDD evidence. The records README
+      documents the pass and the receipt/tooling rule it sits beside ("Receipt verification and
+      the bound tooling revision (2026-11-20)"), including the fourteen published-receipt `accept`
+      outcomes under the current tooling.
 
 - [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
       `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
@@ -1599,6 +1642,93 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       member stays on the wire as `null` (the frontend still decodes it) and a failed Goal read is
       answered as its mapped protocol status before the projection runs. The residual entry is
       removed from `docs/TODO.md`.
+
+*Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the workspace-read residual stays there.*
+
+      Revalidated and closed on branch `fix/served-read-closeout` (2026-11-21). Every member the entry
+      named already sits in a `required` array at `fdf332d` and is read by the surface the entry cited,
+      at the anchors its stale line numbers drifted away from (entry lines were written against
+      `671525c`): `goal-read` accounting `known_usage_cost_microusd` (served
+      `control/lib/symmetry_control/goals/read_model.ex:2555`, read
+      `frontend/src/features/goals/detail.tsx:610`), settlement attention `proposed_next_action` and
+      `proposed_next_action_status` (`read_model.ex:1562-1563`, read `detail.tsx:316`), external wait
+      `external_ref`, `next_check_at` and `check_seq` (`read_model.ex:2623,2626-2627`, read
+      `detail.tsx:626-627`), outcome `candidate_subject` and `subject_hash`
+      (`read_model.ex:2265-2266`, read `detail.tsx:272,531-537`), and the attention entry's
+      `attention_reasons`, `active_tasks` and `nonterminal_tasks` (`read_model.ex:2657-2659`, read
+      `frontend/src/features/attention/attention.tsx:90,92`). The class is re-checked exhaustively
+      rather than member-by-member: the optional sets of `goal-read.schema.json` and
+      `attention-read.schema.json` were extracted with a `jq` walk of every `required` array (48 and 11
+      distinct names) and cross-read against `frontend/src`. Neither schema has an optional member a
+      surface reads: the Goal read's and the attention read's readers are
+      `frontend/src/features/goals/detail.tsx` and
+      `frontend/src/features/attention/attention.tsx`, and the optional names a name-level grep matches
+      elsewhere belong to other definitions (`WorkItem`/`work-detail-read`, the `ProjectBlockedEntry`
+      blocker, the planning drafts); the optional members with no reader at all are additive, as the
+      entry intends. The only optional-and-consumed members left in the served reads this entry names —
+      the Goal read, the attention read and the workspace-read row — are the workspace row's 66, which
+      stay open in `docs/TODO.md`.
+      The entry's second residual — the empty `accepted_outcomes`/`settlement_attention`/
+      `external_waits` captures — is closed at both gates it named. The real-served controller test
+      "the real served attention and goal reads validate against the contract bundle"
+      (`control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`) now builds a Goal
+      whose served document carries an accepted outcome (the columns
+      `Goals.insert_validation_outcome!/13` writes, over a completed producer run and a bound evidence
+      row; the pipeline's own validate task and run are not built, so that row's `validation_task_id`
+      stays null), a repair-required settlement receipt and a recorded terminal external wait
+      (`state` `unsupported`, `next_check_at: null`, `check_seq: 0`), asserts the consumed values
+      (`candidate_subject` equal to the item's served baseline subject, its `sha256:` digest,
+      `evidence_ids`, `state`, `reason`, `external_ref`, `resource_id`, `next_check_at`, `check_seq`) and
+      keeps `validate_served_document!("goal-read", read)`. Its rows follow the writers' durable shapes:
+      the external wait is the only shape the `goal_external_waits` identity trigger admits (completed
+      task and run, the run's `task_result` equal to the wait's `result`, a terminal state with no
+      schedule), which is also why the wait could not borrow the failed settlement run; the embedded
+      task result carries the future blocker schedule the settle path validates
+      (`validate_external_blocker/3` refuses a `null` schedule), while the wait row's own
+      `next_check_at` is null for a terminal state.
+      That served response is captured, sanitized, as
+      `contracts/fixtures/valid/goal-read.accepted-and-external.json` (manifest id
+      `goal-read.accepted-and-external`, tag `captured-response`), so the boundary probe "Goal reads
+      refuse a renamed consumed member and keep unconsumed members additive"
+      (`contracts/scripts/boundary.test.mjs`) renames `candidate_subject`, `subject_hash`,
+      `proposed_next_action`, `proposed_next_action_status`, `external_ref`, `next_check_at` and
+      `check_seq` over the capture's own bytes instead of the three inline documents the probe wrote
+      before. A serving-side rename or omission of any of those members now fails the bundle gate on
+      the served document (and the client Effect boundary) rather than decoding into a silent
+      fallback, while the same rename over the capture's own bytes fails the boundary probe.
+      The capture's `subject_hash` is recomputed over its sanitized subject — the sanitization rule
+      `contracts/README.md` now states for a replaced preimage — and the probe asserts that binding with
+      `subjectHash` over the capture's own `candidate_subject`, so a re-capture that replaces a
+      subject's identifiers cannot freeze a digest whose preimage it replaced.
+      Recorded before/after, exact commands. `mise x pnpm@12.17.0 -- pnpm contracts:test` fails on the
+      pre-increment fixture corpus with `ENOENT … contracts/fixtures/valid/goal-read.accepted-and-external.json`
+      (exit 1, `tests 35 / pass 34 / fail 1`) and passes with the capture (exit 0, `tests 35 / pass 35 /
+      fail 0`). That digest assertion's own probe: with the capture carrying the pre-sanitization digest
+      (`sha256:a354ae89…`, the value the raw served capture records) `node --test
+      contracts/scripts/boundary.test.mjs` fails at it (`actual: sha256:a354ae89…` against the
+      recomputed `expected: sha256:788053cd…`, exit 1, `tests 26 / pass 25 / fail 1`) and passes with the
+      recomputed digest (exit 0, `pass 26 / fail 0`).
+      The controller gate was probed on the serving side rather than by disabling its fixture rows: with
+      `outcome_projection/1` renamed `candidate_subject` → `candidate_subject_renamed` and
+      `external_wait_projection/1` renamed `check_seq` → `check_seq_renamed`, the gate file fails (exit
+      2, `Result: 11/12 passed`; the served document carries the renamed member); with only the wait's
+      `id` renamed — a required member the gate's own value assertions do not cover — it fails inside
+      `validate_served_document!/2` with `goal-read real served document failed the contract bundle:
+      [{"Required property id was not present.", "#/external_waits/0"}]` (exit 2, `Result: 11/12
+      passed`); restored, the file passes (exit 0, `Result: 12 passed`).
+      Package gates through the `retro-g2` recipe with `MIX_TEST_PARTITION=servedreadcloseout`:
+      `mix format --check-formatted` exit 0, `MIX_ENV=test mix compile --warnings-as-errors` exit 0,
+      the touched file exit 0 (`Result: 12 passed`). The package's full suite on this host reports
+      `Result: 926/936 passed, 21 skipped`; every one of its ten failures sits in a file this increment
+      does not touch (`goal_0006_migration_test.exs`, `goal_external_wait_migration_test.exs`,
+      `portal_integrations_test.exs`, `provider_action_controller_test.exs`, `integrations_test.exs`,
+      `chat_test.exs` — three `DBConnection` connection drops, two 60 s test timeouts, four unmet
+      `assert_receive` deadlines and one chat message-ordering assertion), and those six files re-run
+      together score `210/211`, the remaining failure being a 100 ms `assert_receive` deadline that
+      passes alone (`Result: 1 passed, 14 excluded`). The reversed-import flake closed at `978abba`
+      failed once in that full-suite run (the lock-order test's `assert_receive` for the sync
+      backend's blocked sample unmet after 5 s, mailbox empty) and passed in the isolated six-file
+      re-run; it is a load-sensitive case this increment does not touch.
 
 ## Browser acceptance under host load
 
