@@ -2849,12 +2849,14 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       advance does not refuse an operator command, while another operator's advance still does"
       (`control/test/symmetry_control/goals_test.exs:175`) and by "internal append events never
       advance the operator version the operator read" (same file), which drives the automatic
-      admission-blocker and reconciliation-deferral appends and pins that the advance authority is
-      not readable from a caller's options. The changed precondition contract is documented in
-      `docs/design/protocol.md` and `docs/design/data.md`. #125's option A remains the press's
-      behavior (`decisionEnvelope` reads at submit time); this branch's frontend delta is the
-      comment-only rewording of the `servedEnvelope` rationale
-      (`frontend/src/features/goals/detail.tsx:80-95`).
+      admission-blocker, reconciliation-deferral, automatic-admission and task-settlement appends
+      and pins that the advance authority is not readable from a caller's options. The changed
+      precondition contract is documented in `docs/design/protocol.md` and `docs/design/data.md`.
+      #125's option A remains the press's behavior (`decisionEnvelope` reads at submit time); this
+      branch's frontend delta is comment and test-name wording only — the `servedEnvelope`,
+      `settleGoalRead` and `onSuccess` comments in `detail.tsx`
+      (`frontend/src/features/goals/detail.tsx:80-95`) and three renamed cases in
+      `goal-attention.test.tsx` — with no behavior, envelope, contract or assertion change.
 
 - [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
       rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always

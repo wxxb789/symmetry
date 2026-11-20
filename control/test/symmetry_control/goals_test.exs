@@ -219,7 +219,7 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "internal append events never advance the operator version the operator read" do
-    # Two append-path internal writers, each driven with a read taken before it
+    # Four append-path internal writers, each driven with a read taken before it
     # runs. The `operator_advance` option is passed on purpose: the advance
     # authority is not readable from a caller's options, so even that call must
     # leave the token where the operator's read took it.
@@ -286,6 +286,63 @@ defmodule SymmetryControl.GoalsTest do
       deferred_before,
       deferred_lock_before,
       "automatic_reconciliation_deferred"
+    )
+
+    # The wake path's automatic admission append (`attempt_automatic_admission!`):
+    # an automatic goal with admission capacity admits its root item on reconcile.
+    admission_policy = %{
+      "automatic_execution" => true,
+      "max_parallel_tasks" => 1,
+      "max_task_admissions" => 1,
+      "budget_limit_microusd" => 1_000_000,
+      "allowed_actions" => ["implement"]
+    }
+
+    {admission_goal, [_item]} = goal_with_items_fixture(admission_policy)
+    set_goal_due!(admission_goal.id)
+    admission_before = fetch_goal!(admission_goal.id)
+    admission_lock_before = Repo.get!(SymmetryControl.Goals.Goal, admission_goal.id).lock_version
+
+    assert {:ok, reconciliations} =
+             Goals.reconcile_due_goals(
+               goal_ids: [admission_goal.id],
+               now: @now,
+               rollout_enabled: true,
+               validation_profiles: validation_profiles(),
+               operator_advance: true
+             )
+
+    assert [%{disposition: :admitted, purpose: "implement"}] =
+             Enum.filter(reconciliations, &(&1.disposition == :admitted))
+
+    assert_internal_append_leaves_the_operator_version!(
+      admission_goal,
+      admission_before,
+      admission_lock_before,
+      "automatic_task_admitted"
+    )
+
+    # The settlement append (`settle_task/4`), driven by a terminal candidate
+    # completion for the goal's admitted task.
+    {settlement_goal, _item, settled_task} = admitted_task_fixture()
+    runtime = runtime_fixture()
+    {settlement_run, _fence} = completed_goal_run_fixture(settled_task, runtime)
+
+    settlement_lock_before =
+      Repo.get!(SymmetryControl.Goals.Goal, settlement_goal.id).lock_version
+
+    settlement_before = fetch_goal!(settlement_goal.id)
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(settled_task.id, settlement_run.id, settlement_run.generation,
+               now: @now
+             )
+
+    assert_internal_append_leaves_the_operator_version!(
+      settlement_goal,
+      settlement_before,
+      settlement_lock_before,
+      "task_settled"
     )
   end
 

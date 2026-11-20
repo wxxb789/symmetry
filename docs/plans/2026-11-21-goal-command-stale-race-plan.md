@@ -211,7 +211,9 @@ before it).
   command must carry, so neither `commands.ts` nor `detail.tsx` needs a change (in particular no
   resend-on-409 and no submit-time read for the plan-approval press). **Superseded on the merged
   tree (`655a5f9`, merge with `origin/main`):** #125's `decisionEnvelope` press reads at submit
-  time, and this branch's own frontend delta is the comment-only `servedEnvelope` rewording.
+  time, and this branch's own frontend delta is comment and test-name wording only (the
+  `servedEnvelope`, `settleGoalRead` and `onSuccess` comments in `detail.tsx`, and three renamed
+  cases in `goal-attention.test.tsx`); no behavior, envelope, contract or assertion changed.
 - The decision-level optimistic lock (`expected_decision_version`, `goals.ex:6487-6517`) and
   `GoalDecision.lock_version`: decisions are only changed by operator commands and by the amend
   supersede, which is itself an operator command.
