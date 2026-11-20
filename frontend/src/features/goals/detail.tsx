@@ -1,13 +1,13 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouteContext } from "@tanstack/react-router";
 import { AlertCircle, CircleCheck, Inbox, ScrollText, ShieldAlert } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { goalEventsOptions, goalOptions, sessionOptions, workspaceOptions } from "../../app/application";
 import { useRealtimeEpoch } from "../../app/realtime";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
 import { servedMember, servedText } from "./served-text";
-import { errorMessage, postGoalCommand, type GoalDecision, type GoalEvent, type GoalGraph, type GoalProjection, type GoalWorkItem, type Workspace } from "../../services/api";
-import { canonicalDigest, commandEnvelope, MutationRefused, newMutationId, type CommandKind } from "../../services/commands";
+import { errorMessage, Network, ownValue, postGoalCommand, UnexpectedResponse, type GoalDecision, type GoalEvent, type GoalGraph, type GoalProjection, type GoalWorkItem, type Workspace } from "../../services/api";
+import { commandEnvelope, MutationRefused, newMutationId, planApprovalCommand, type CommandKind, type GoalCommandEnvelope } from "../../services/commands";
 
 type ActionPayload = Record<string, unknown>;
 
@@ -24,7 +24,8 @@ const actionLabels: Record<string, string> = {
 };
 
 function actionLabel(kind: string): string {
-  return actionLabels[kind] ?? `Unknown action: ${kind}`;
+  // A served action string may name a prototype member (`constructor`).
+  return ownValue(actionLabels, kind) ?? `Unknown action: ${kind}`;
 }
 
 function formatMicroUsd(value: string | null | undefined): string {
@@ -73,20 +74,48 @@ export function GoalDetailPage() {
    * writers enqueue through Oban) can advance the goal after this page's last
    * settled read; an envelope built from the settled read would be refused as
    * stale. The plan admission performs the same read between its two commands.
+   * The mutation identity comes from the form's frozen logical intent; a
+   * command with no frozen intent (and both plan-approval commands) mints one.
    */
-  const servedEnvelope = async (kind: CommandKind, payload: ActionPayload) => {
+  const servedEnvelope = async (kind: CommandKind, payload: ActionPayload, mutationId: string = newMutationId()) => {
     const current = await application.api.goal(goalId, new AbortController().signal);
-    return commandEnvelope(kind, payload, { version: current.version, current_revision: current.current_revision });
+    return commandEnvelope(kind, payload, { version: current.version, current_revision: current.current_revision }, mutationId);
+  };
+
+  /**
+   * The envelope this page last sent for the identity it was given. A command
+   * attempt stays frozen until the server answers, and a lost acknowledgement
+   * must replay the same bytes — the mutation identity, both expected versions,
+   * the kind and the payload — because the server replays a command only when
+   * the request body hashes equal to the recorded one (`replay_event`); a body
+   * rebuilt from a fresh read would carry the version the applied command
+   * produced, the same identity with different input, and is answered
+   * `idempotency_conflict` for a command that already applied. A settled
+   * attempt releases its envelope with its identity, and a changed payload is a
+   * different intent with a new identity, hence a new envelope.
+   */
+  const sentEnvelope = useRef<{ mutationId: string; envelope: GoalCommandEnvelope } | null>(null);
+
+  const [identityEpoch, setIdentityEpoch] = useState(0);
+  const releaseAttempt = () => {
+    sentEnvelope.current = null;
+    setIdentityEpoch((epoch) => epoch + 1);
   };
 
   const command = useMutation({
-    mutationFn: async ({ kind, payload }: { kind: CommandKind; payload: ActionPayload }) => {
+    mutationFn: async ({ kind, payload, mutationId }: { kind: CommandKind; payload: ActionPayload; mutationId: string }) => {
       const csrf = session.data?.csrf_token;
       if (!csrf) throw new Error("The session token is unavailable; refresh the page.");
-      return postGoalCommand(application.fetcher, csrf, goalId, await servedEnvelope(kind, payload));
+      const frozen = sentEnvelope.current;
+      const envelope = frozen !== null && frozen.mutationId === mutationId
+        ? frozen.envelope
+        : await servedEnvelope(kind, payload, mutationId);
+      sentEnvelope.current = { mutationId, envelope };
+      return postGoalCommand(application.fetcher, csrf, goalId, envelope);
     },
     onSuccess: async (_body, variables) => {
       setRefusal(null);
+      releaseAttempt();
       // The acceptance notice appears once the served goal has settled on the
       // state this command produced, so the next command's envelope carries the
       // version the server has actually written.
@@ -101,6 +130,12 @@ export function GoalDetailPage() {
       setNotice(null);
       setRefusal(error instanceof MutationRefused ? error : null);
       if (!(error instanceof MutationRefused)) setNotice(errorMessage(error));
+      // An answer was received (a refusal or any other status), so the attempt
+      // is settled and its identity released; a transport failure or an
+      // uninterpretable answer leaves the command's fate unknown and keeps the
+      // frozen envelope so a re-send replays instead of applying twice.
+      const unknownOutcome = error instanceof Network || error instanceof UnexpectedResponse;
+      if (!unknownOutcome) releaseAttempt();
     },
   });
 
@@ -121,7 +156,7 @@ export function GoalDetailPage() {
         application.fetcher,
         csrf,
         goalId,
-        commandEnvelope("resolve_decision", { decision_id: decision.id, expected_decision_version: decision.version ?? null, option_id: optionId, comment: "Accepted from the Goal surface." }, { version: goal.version, current_revision: goal.current_revision }),
+        commandEnvelope("resolve_decision", { decision_id: decision.id, expected_decision_version: decision.version, option_id: optionId, comment: "Accepted from the Goal surface." }, { version: goal.version, current_revision: goal.current_revision }),
       );
       if (!resolved) throw new Error("The server returned no receipt for the decision resolution.");
 
@@ -170,7 +205,7 @@ export function GoalDetailPage() {
     <AcceptedProgress goal={goal} />
     <Blockers goal={goal} />
     <Decisions goal={goal} busy={busy || approvePlan.isPending} onApprovePlan={approvePlan.mutate} />
-    <NextAction goal={goal} busy={busy} onCommand={command.mutate} resources={workspace.data?.projects.find((project) => project.id === goal.project_id)?.resources ?? []} />
+    <NextAction goal={goal} busy={busy} onCommand={command.mutate} identityEpoch={identityEpoch} resources={workspace.data?.projects.find((project) => project.id === goal.project_id)?.resources ?? []} />
     <Budget goal={goal} />
     <WaitingExternal goal={goal} />
     <DependencyGraph graph={goal.graph} />
@@ -294,7 +329,7 @@ function Decisions({ goal, busy, onApprovePlan }: { goal: GoalProjection; busy: 
         <div className="attention-main">
           <div className="goal-row-head"><h3>{decision.kind} decision</h3><StatusBadge status={decision.state} /><span className="item-key">{decision.id}</span></div>
           <p>{decision.question ?? "No question recorded"}</p>
-          <p className="text-small muted">Revision {decision.goal_revision ?? "not recorded"} · version {servedText(decision.version, "not served")}</p>
+          <p className="text-small muted">Revision {decision.goal_revision ?? "not recorded"} · version {decision.version}</p>
           <ul className="decision-options">{decision.options?.map((option, index) => {
             const row = option as Record<string, unknown>;
             const recommended = row["recommended"] === true;
@@ -308,7 +343,11 @@ function Decisions({ goal, busy, onApprovePlan }: { goal: GoalProjection; busy: 
           {approvalOption
             ? <PlanApproval decision={decision} optionId={String(approvalOption["id"])} busy={busy} onApprove={onApprovePlan} />
             : decision["open?"] === true && <p className="text-small muted">{decision.kind === "plan" ? "The served plan decision carries no acceptance option; this surface offers no resolution for it." : "This decision type has no surface action; the server still lists the action it permits, if any."}</p>}
-          {decision["open?"] !== true && <p className="text-small muted">Resolved: {decision.resolution ? JSON.stringify(decision.resolution) : "no resolution recorded"}</p>}
+          {decision["open?"] !== true && <p className="text-small muted">{decision.state === "open"
+            // The server's `open?` is "open at the served revision": an open
+            // decision left at an older revision is stale, not resolved.
+            ? "This decision is no longer open at the served revision."
+            : `Resolved: ${decision.resolution ? JSON.stringify(decision.resolution) : "no resolution recorded"}`}</p>}
         </div>
       </li>;
     })}</ul>
@@ -336,9 +375,15 @@ function planApprovalOption(decision: GoalDecision): Record<string, unknown> | n
 
 /**
  * Plan approval follows the accepted two-step contract: the decision is resolved
- * with the served acceptance option, then `accept_plan` presents the same
- * proposal with the canonical digest this surface computes from the served
- * proposal; the server compares it with its own hash and refuses a mismatch.
+ * with the served acceptance option, then `accept_plan` presents the proposal
+ * with the canonical digest this surface computes over the same per-item
+ * defaults the server applies; the server re-checks that digest and refuses a
+ * mismatch.
+ *
+ * No read serves the proposal document, so the operator pastes the plan the
+ * decision bound (obtained wherever the plan was authored/recorded); the
+ * surface hashes it, presents the defaulted document it hashed, and would
+ * refuse a document the contract cannot normalize before sending anything.
  */
 function PlanApproval({ decision, optionId, busy, onApprove }: { decision: GoalDecision; optionId: string; busy: boolean; onApprove: (request: { decision: GoalDecision; optionId: string; proposal: unknown; proposalHash: string }) => void }) {
   const [proposalText, setProposalText] = useState("");
@@ -347,22 +392,28 @@ function PlanApproval({ decision, optionId, busy, onApprove }: { decision: GoalD
 
   const approve = async () => {
     setParseError(null);
-    let proposal: unknown;
+    let pasted: unknown;
     try {
-      proposal = JSON.parse(proposalText);
+      pasted = JSON.parse(proposalText);
     } catch {
-      setParseError("The proposal must be the JSON document the plan decision carries.");
+      setParseError("The proposal must be pasted as the JSON document the plan holds.");
       return;
     }
-    const hash = await canonicalDigest(proposal);
-    setDigest(hash);
-    onApprove({ decision, optionId, proposal, proposalHash: hash });
+    let approval: { proposal: unknown; proposalHash: string };
+    try {
+      approval = await planApprovalCommand(pasted);
+    } catch {
+      setParseError("The proposal must be the plan document the server admits: an object with its items array.");
+      return;
+    }
+    setDigest(approval.proposalHash);
+    onApprove({ decision, optionId, proposal: approval.proposal, proposalHash: approval.proposalHash });
   };
 
   return <div className="plan-approval">
     <label className="fact-label" htmlFor={`plan-${decision.id}`}>Plan proposal</label>
-    <textarea id={`plan-${decision.id}`} className="plan-input" value={proposalText} rows={4} onChange={(event) => setProposalText(event.currentTarget.value)} placeholder="Paste the proposal JSON exactly as the plan decision carries it" />
-    <p className="text-small muted">The proposal is hashed here exactly as the server does and sent back unchanged; the server validates the hash and refuses a mismatch. A proposal the server does not already hold cannot be approved from this page.</p>
+    <textarea id={`plan-${decision.id}`} className="plan-input" value={proposalText} rows={4} onChange={(event) => setProposalText(event.currentTarget.value)} placeholder="Paste the plan proposal JSON the decision bound" />
+    <p className="text-small muted">This surface is not served the proposal, so paste the document the plan decision was authored with. It is hashed here exactly as the server does — the same per-item defaults and canonical encoding — and sent back with those defaults applied; the server re-checks the hash and refuses a mismatch. A proposal the server does not already hold cannot be approved from this page.</p>
     {parseError && <p className="form-error" role="alert">{parseError}</p>}
     {digest && <p className="text-small mono">canonical digest {digest}</p>}
     <button className="button" type="button" disabled={busy || proposalText.trim() === ""} onClick={() => { void approve(); }}>Resolve the decision with accept</button>
@@ -370,7 +421,7 @@ function PlanApproval({ decision, optionId, busy, onApprove }: { decision: GoalD
   </div>;
 }
 
-function NextAction({ goal, busy, onCommand, resources }: { goal: GoalProjection; busy: boolean; onCommand: (request: { kind: CommandKind; payload: ActionPayload }) => void; resources: NonNullable<Workspace["projects"][number]["resources"]> }) {
+function NextAction({ goal, busy, onCommand, identityEpoch, resources }: { goal: GoalProjection; busy: boolean; onCommand: (request: { kind: CommandKind; payload: ActionPayload; mutationId: string }) => void; identityEpoch: number; resources: NonNullable<Workspace["projects"][number]["resources"]> }) {
   const [reason, setReason] = useState("");
   const [commit, setCommit] = useState("");
   const [treeDigest, setTreeDigest] = useState("");
@@ -378,27 +429,44 @@ function NextAction({ goal, busy, onCommand, resources }: { goal: GoalProjection
   const [modelProfile, setModelProfile] = useState("");
   const [objective, setObjective] = useState(goal.revision?.objective ?? "");
   const [openAction, setOpenAction] = useState<string | null>(null);
-  const [mutationIds, setMutationIds] = useState<Record<string, string>>({});
 
   const allowed = goal.allowed_actions;
   const repositories = resources.filter((resource) => resource.kind === "repository");
-  const integrationItem = goal.work_items.find((item) => item["integration"] === true);
 
-  const identity = (kind: string): string => {
-    const existing = mutationIds[kind];
-    if (existing) return existing;
+  /**
+   * The frozen attempt: one mutation identity per logical intent, keyed by the
+   * kind and the payload the surface builds. The identity below is the one the
+   * form shows and the one the command is sent with; it survives a lost
+   * acknowledgement (the server may still have applied the command) and is
+   * released when the server answers (`identityEpoch` moves on), so the next
+   * intent mints a new one. A changed payload is a different intent and
+   * therefore a different identity.
+   */
+  const [frozenIntent, setFrozenIntent] = useState<{ key: string; mutationId: string; epoch: number } | null>(null);
+
+  const identity = (kind: CommandKind, payload: ActionPayload): string => {
+    const key = `${kind}|${JSON.stringify(payload)}`;
+    if (frozenIntent?.key === key && frozenIntent.epoch === identityEpoch) return frozenIntent.mutationId;
     const fresh = newMutationId();
-    setMutationIds({ ...mutationIds, [kind]: fresh });
+    setFrozenIntent({ key, mutationId: fresh, epoch: identityEpoch });
     return fresh;
   };
 
-  const send = (kind: CommandKind, payload: ActionPayload) => {
-    onCommand({ kind, payload });
-    setMutationIds((current) => { const next = { ...current }; delete next[kind]; return next; });
+  const send = (kind: CommandKind, payload: ActionPayload, mutationId: string) => {
+    onCommand({ kind, payload, mutationId });
     setOpenAction(null);
   };
 
   if (allowed.length === 0) return <section className="goal-section" aria-labelledby="next-action-heading"><div className="section-heading"><h2 id="next-action-heading">Next authorized action</h2></div><p className="muted">The server currently authorizes no action on this goal. An open plan decision is approved from its own card above.</p></section>;
+
+  // The open form's command is built from the current inputs once per render:
+  // the identity the form displays is the mutation identity the send carries.
+  const openPayload = openAction !== null && isCommandKind(openAction)
+    ? actionPayload(openAction, goal, { reason, commit, treeDigest, resourceId, modelProfile, objective })
+    : null;
+  const openIdentity = openAction !== null && isCommandKind(openAction) && openPayload !== null
+    ? identity(openAction, openPayload)
+    : null;
 
   return <section className="goal-section" aria-labelledby="next-action-heading">
     <div className="section-heading"><h2 id="next-action-heading">Next authorized action</h2><span className="muted text-small">Version {goal.version} · revision {goal.current_revision} · mutation identity per action</span></div>
@@ -406,7 +474,7 @@ function NextAction({ goal, busy, onCommand, resources }: { goal: GoalProjection
       {/* The action list is exactly what the server allows; no client rule adds to it. */}
       <button className="button action-button" type="button" disabled={busy} aria-expanded={openAction === kind} onClick={() => setOpenAction(openAction === kind ? null : kind)}>{actionLabel(kind)}</button>
       {openAction === kind && <form className="action-form" onSubmit={(event) => event.preventDefault()}>
-        <p className="text-small muted">Carries the version and revision the server serves at submit and mutation identity {identity(kind)}.</p>
+        {openIdentity !== null && <p className="text-small muted">Carries mutation identity {openIdentity}; this attempt freezes the version and revision the server serves at its first send, so a re-send after a lost acknowledgement repeats the same bytes and the server replays the recorded command instead of applying it twice.</p>}
         {(kind === "pause" || kind === "resume" || kind === "cancel") && <label className="field">Reason<input value={reason} onChange={(event) => setReason(event.currentTarget.value)} required /></label>}
         {kind === "activate" && <p>The current revision {goal.current_revision} is the approved revision this command presents.</p>}
         {kind === "request_plan" && <>
@@ -423,14 +491,13 @@ function NextAction({ goal, busy, onCommand, resources }: { goal: GoalProjection
           <label className="field">Reason<input value={reason} onChange={(event) => setReason(event.currentTarget.value)} required /></label>
           <p className="text-small muted">An amendment opens a new revision and pauses the goal; the accepted authority and execution policy of the current revision are carried unchanged into the new revision.</p>
         </>}
-        {kind === "achieve" && <AchieveForm goal={goal} integrationItem={integrationItem} />}
+        {kind === "achieve" && <AchieveForm goal={goal} />}
         {kind === "accept_plan" && <p>Approve the open plan decision above first; the server admits the plan only from a resolved plan decision.</p>}
         {kind === "resolve_decision" && <p>Decisions are resolved from their own card above; the server validates the decision version you present.</p>}
         {!actionInputs(kind) && kind !== "activate" && kind !== "achieve" && <p className="text-small muted">This surface has no command form for this action; the server still lists it as allowed.</p>}
         <button className="button primary" type="submit" disabled={busy} onClick={() => {
-          if (!isCommandKind(kind)) return;
-          const payload = actionPayload(kind, goal, { reason, commit, treeDigest, resourceId, modelProfile, objective, evidenceSubject: currentSubject(goal, integrationItem) });
-          if (payload) send(kind, payload);
+          if (!isCommandKind(kind) || openPayload === null || openIdentity === null) return;
+          send(kind, openPayload, openIdentity);
         }}>Send {actionLabel(kind)}</button>
       </form>}
     </li>)}</ul>
@@ -448,15 +515,33 @@ function actionInputs(kind: string): boolean {
   return kind === "pause" || kind === "resume" || kind === "cancel" || kind === "request_plan" || kind === "amend";
 }
 
-function currentSubject(goal: GoalProjection, integrationItem: GoalWorkItem | undefined) {
+/**
+ * The single source of the achieve command's context: the integration work
+ * item the server designates, the accepted integration subject and the
+ * evidence of the accepted outcomes bound to that same subject. The server
+ * requires every evidence row to belong to the achieve subject
+ * (`ensure_evidence_subject!` refuses foreign evidence with
+ * `missing_evidence`), so an outcome accepted on another subject contributes
+ * nothing here. The form renders exactly the members the payload sends, so the
+ * preview cannot drift from what is submitted.
+ */
+function achieveContext(goal: GoalProjection) {
+  const integrationItem = goal.work_items.find((item) => item["integration"] === true);
   const outcome = integrationItem?.accepted_outcome ?? (goal.accepted_outcomes ?? [])[0];
-  return outcome?.candidate_subject ?? null;
+  const subjectHash = outcome?.subject_hash ?? null;
+  return {
+    integrationItem,
+    subject: outcome?.candidate_subject ?? null,
+    evidenceIds: subjectHash === null
+      ? []
+      : [...new Set((goal.accepted_outcomes ?? []).filter((accepted) => accepted.subject_hash === subjectHash).flatMap((accepted) => accepted.evidence_ids ?? []))],
+  };
 }
 
 function actionPayload(
   kind: string,
   goal: GoalProjection,
-  input: { reason: string; commit: string; treeDigest: string; resourceId: string; modelProfile: string; objective: string; evidenceSubject: unknown },
+  input: { reason: string; commit: string; treeDigest: string; resourceId: string; modelProfile: string; objective: string },
 ): ActionPayload | null {
   switch (kind) {
     case "activate":
@@ -489,14 +574,13 @@ function actionPayload(
         requested_session_id: null,
       };
     case "achieve": {
-      if (!input.evidenceSubject) return null;
-      const evidenceIds = [...new Set((goal.accepted_outcomes ?? []).flatMap((outcome) => outcome.evidence_ids ?? []))];
-      const integrationWorkItemId = goal.work_items.find((item) => item["integration"] === true)?.id;
+      const { integrationItem, subject, evidenceIds } = achieveContext(goal);
+      if (!subject) return null;
       return {
-        subject: input.evidenceSubject,
+        subject,
         // Exactly-one-required-item contracts bind their integration item
         // server-side; the member is sent only when a designation is served.
-        ...(integrationWorkItemId === undefined ? {} : { integration_work_item_id: integrationWorkItemId }),
+        ...(integrationItem === undefined ? {} : { integration_work_item_id: integrationItem.id }),
         evidence_ids: evidenceIds,
         decision_id: null,
       };
@@ -506,11 +590,10 @@ function actionPayload(
   }
 }
 
-function AchieveForm({ goal, integrationItem }: { goal: GoalProjection; integrationItem: GoalWorkItem | undefined }) {
-  const subject = currentSubject(goal, integrationItem);
-  const evidenceIds = [...new Set((goal.accepted_outcomes ?? []).flatMap((outcome) => outcome.evidence_ids ?? []))];
+function AchieveForm({ goal }: { goal: GoalProjection }) {
+  const { integrationItem, subject, evidenceIds } = achieveContext(goal);
   return <div>
-    <p>The achieve command presents the accepted integration subject and every accepted evidence record: <span className="mono">{subject ? JSON.stringify(subject) : "no accepted subject is served"}</span></p>
+    <p>The achieve command presents the accepted integration subject and the evidence records accepted on that same subject: <span className="mono">{subject ? JSON.stringify(subject) : "no accepted subject is served"}</span></p>
     <p className="text-small muted">Evidence records: {evidenceIds.length === 0 ? "none" : evidenceIds.join(", ")}</p>
     <p className="text-small muted">The server validates the subject, the required outcomes and the exactly-one-required-item binding; a refusal is shown as it arrives.</p>
     {integrationItem && <p className="text-small muted">Integration item: {integrationItem.title}</p>}
@@ -626,7 +709,9 @@ function Receipts({ goalId }: { goalId: string }) {
       <span className="goal-row-title">{entry.kind}</span>
       <span className="muted text-small">{entry.actor_ref ?? "actor not recorded"} · revision {entry.revision ?? "not recorded"} · {entry.inserted_at ?? "time not recorded"}</span>
     </li>)}</ul>}
-    {loadedTail !== null && loadedTail > 0 && <button className="button" type="button" disabled={fetching} onClick={() => setBoundaries([...boundaries, loadedTail])}>{fetching ? "Loading…" : "Load older receipts"}</button>}
+    {/* The served `after` page ascends from sequence 0, so the first page is the
+        oldest slice and this boundary loads newer receipts, never older ones. */}
+    {loadedTail !== null && loadedTail > 0 && <button className="button" type="button" disabled={fetching} onClick={() => setBoundaries([...boundaries, loadedTail])}>{fetching ? "Loading…" : "Load newer receipts"}</button>}
     {loadedTail === null && loaded.length > 0 && <p className="text-small muted"><Inbox size={14} aria-hidden="true" /> All recorded receipts are loaded.</p>}
     {fetching && loaded.length > 0 && <p className="sr-only" role="status">Refreshing receipts</p>}
   </section>;

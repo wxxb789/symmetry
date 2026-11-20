@@ -1,10 +1,7 @@
-import { QueryClientProvider } from "@tanstack/react-query";
-import { createMemoryHistory, RouterProvider, type RouterHistory } from "@tanstack/react-router";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createApplication, type Application } from "../../app/application";
-import { createAppRouter } from "../../app/router";
+import { describe, expect, it, vi } from "vitest";
+import { recordingFetcher, renderRoute, trackApplications } from "../../app/test-harness";
 import { readWorkDetail } from "../../services/api.fixtures";
 
 /**
@@ -82,6 +79,14 @@ interface RequestRecord {
   body: unknown;
 }
 
+/** One recorded call in the log shape above: origin dropped, JSON body parsed. */
+function requestRecord(call: { path: string; init: RequestInit | undefined }): RequestRecord {
+  const url = new URL(call.path, "http://localhost");
+  const method = call.init?.method ?? "GET";
+  const body: unknown = typeof call.init?.body === "string" ? JSON.parse(call.init.body) : undefined;
+  return { method, path: url.pathname + url.search, body };
+}
+
 interface HarnessOptions {
   desktop?: boolean;
   detail?: (workItemId: string) => Record<string, unknown>;
@@ -89,11 +94,7 @@ interface HarnessOptions {
   patch?: (body: unknown) => Response | Promise<Response>;
 }
 
-const applications: Application[] = [];
-afterEach(() => {
-  for (const application of applications) application.queryClient.clear();
-  applications.length = 0;
-});
+const applications = trackApplications();
 
 /** jsdom has no matchMedia; the detail is a drawer above 1024px and a page below it. */
 function stubMatchMedia(desktop: boolean) {
@@ -109,17 +110,12 @@ function stubMatchMedia(desktop: boolean) {
   });
 }
 
-beforeEach(() => stubMatchMedia(false));
-
 function renderWorkDetail(options: HarnessOptions = {}) {
-  const path = `/portal/work/${subjectId}`;
   stubMatchMedia(options.desktop ?? false);
-  const requests: RequestRecord[] = [];
-  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
+  const { fetcher, calls } = recordingFetcher((path, init) => {
+    const url = new URL(path, "http://localhost");
     const method = init?.method ?? "GET";
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-    requests.push({ method, path: url.pathname + url.search, body });
     if (url.pathname === "/portal/api/session") return new Response(JSON.stringify({ csrf_token: "session-token" }));
     if (url.pathname.startsWith("/portal/api/work-items/")) {
       if (url.pathname.endsWith("/timeline")) return new Response(JSON.stringify({ items: [], next_before: null }));
@@ -137,21 +133,18 @@ function renderWorkDetail(options: HarnessOptions = {}) {
     }
     return new Response("{}", { status: 404 });
   });
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
+  const { application, history } = renderRoute(`/portal/work/${subjectId}`, fetcher);
   applications.push(application);
-  const history: RouterHistory = createMemoryHistory({ initialEntries: [path] });
-  const router = createAppRouter(application, history);
-  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
   const countReads = (method: string, matches: (request: RequestRecord) => boolean) =>
-    requests.filter((request) => request.method === method && matches(request)).length;
+    calls.map(requestRecord).filter((request) => request.method === method && matches(request)).length;
   return {
     application,
     history,
-    requests,
+    get requests(): RequestRecord[] { return calls.map(requestRecord); },
     detailReads: (workItemId: string) => countReads("GET", (request) => request.path === `/portal/api/work-items/${workItemId}`),
     projectReads: (requested: string | null) =>
       countReads("GET", (request) => request.path.startsWith("/portal/api/workspace") && new URL(request.path, "http://localhost").searchParams.get("project_id") === requested),
-    patches: () => requests.filter((request) => request.method === "PATCH"),
+    patches: () => calls.map(requestRecord).filter((request) => request.method === "PATCH"),
   };
 }
 
@@ -250,6 +243,34 @@ describe("work assignment", () => {
     expect(edit).toBeDisabled();
     await user.click(edit);
     expect(screen.queryByRole("dialog", { name: "Assignment" })).not.toBeInTheDocument();
+  });
+
+  it("returns focus to the Assignment heading when a pending write disables the opener", async () => {
+    const user = userEvent.setup();
+    let locked = false;
+    const harness = renderWorkDetail({ detail: () => detailBody(subjectId, {}, { intent_locked: locked }) });
+    await screen.findByRole("heading", { level: 1, name: "Subject work item" });
+    // The opener is captured before the dialog opens: Radix hides the rest of
+    // the page from assistive queries while its modal content is mounted.
+    const opener = screen.getByRole("button", { name: "Edit assignment" });
+    await user.click(opener);
+    const dialog = await screen.findByRole("dialog", { name: "Assignment" });
+    expect(opener).toBeEnabled();
+    // A background detail re-read flips `intent_locked` while the dialog is
+    // open, which disables the invoking control underneath it.
+    locked = true;
+    const readsBefore = harness.detailReads(subjectId);
+    await act(async () => {
+      await harness.application.queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId: subjectId }] });
+    });
+    expect(harness.detailReads(subjectId)).toBeGreaterThan(readsBefore);
+    expect(await within(dialog).findByText(/holds this item's intent/)).toBeVisible();
+    expect(opener).toBeDisabled();
+    // Closing cannot hand focus back to the disabled opener: the stable
+    // Assignment heading takes it instead of dropping the keyboard to the body.
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Assignment" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Assignment" })).toHaveFocus();
   });
 
   it("renders the server's refusal code and re-reads the detail", async () => {

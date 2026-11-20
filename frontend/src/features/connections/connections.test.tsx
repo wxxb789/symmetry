@@ -1,11 +1,10 @@
-import { QueryClientProvider } from "@tanstack/react-query";
-import { createMemoryHistory, RouterProvider, type RouterHistory } from "@tanstack/react-router";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import type { RouterHistory } from "@tanstack/react-router";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { Application } from "../../app/application";
+import { recordingFetcher, renderRoute, trackApplications } from "../../app/test-harness";
 import type { Connection } from "../../services/api";
-import { createApplication, type Application } from "../../app/application";
-import { createAppRouter } from "../../app/router";
 
 const connectionId = "20000000-0000-4000-8000-000000000001";
 const projectId = "10000000-0000-4000-8000-000000000001";
@@ -58,6 +57,10 @@ function connection(overrides: Partial<Connection> = {}): Connection {
   };
 }
 
+// The second served connection: the row the operator switches to while a write
+// for the first one is still in flight.
+const secondConnection = () => connection({ id: secondConnectionId, name: "Second connection" });
+
 interface ProjectFixture { id: string; key: string; name: string; description: string | null; status: string; work_items: unknown[]; resources: Record<string, unknown>[] }
 interface RuntimeFixture { runtime_id: string; runtime_name: string; agent_profile: string | null; workspace: string | null }
 
@@ -107,11 +110,7 @@ interface Harness {
   gateWorkspaceReads: (gate: Promise<void> | null) => void;
 }
 
-const applications: Application[] = [];
-afterEach(() => {
-  for (const application of applications) application.queryClient.clear();
-  applications.length = 0;
-});
+const applications = trackApplications();
 
 function renderConnections(
   handler: (request: { method: string; path: string; body: unknown; url: URL }) => Response | Promise<Response>,
@@ -126,8 +125,8 @@ function renderConnections(
   let readGate: Promise<void> | null = options.deferReads ?? null;
   let workspaceGate: Promise<void> | null = null;
   const requests: Harness["requests"] = [];
-  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
+  const { fetcher } = recordingFetcher(async (input, init) => {
+    const url = new URL(input, "http://localhost");
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as unknown : undefined;
     requests.push({ method, path: url.pathname + url.search, body });
@@ -153,11 +152,8 @@ function renderConnections(
     }
     return handler({ method, path: url.pathname + url.search, body, url });
   });
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
+  const { application, history } = renderRoute(path, fetcher);
   applications.push(application);
-  const history = createMemoryHistory({ initialEntries: [path] });
-  const router = createAppRouter(application, history);
-  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
   return {
     application,
     requests,
@@ -171,8 +167,22 @@ function renderConnections(
   };
 }
 
+// The remount and late-response cases all serve the same two-connection list
+// before their first case-specific click.
+async function startTwoConnections(harness: Harness) {
+  const second = secondConnection();
+  const user = userEvent.setup();
+  harness.setConnections([connection(), second]);
+  await user.click(await screen.findByRole("button", { name: "Refresh" }));
+  return { second, user };
+}
+
 const refusal = (status: number, code: string, message: string, fields: Record<string, string[]> | null = null, extra: Record<string, unknown> = {}) =>
   new Response(JSON.stringify({ error: { code, message, ...(fields ? { fields } : {}) }, ...extra }), { status });
+
+// The fallback for a request a case does not expect: an unset call must surface
+// as a refusal instead of a plausible answer.
+const unexpectedRequest = () => refusal(404, "not_found", "unexpected request");
 
 describe("connection management", () => {
   it("lists providers, capabilities and bound resource state without inventing values", async () => {
@@ -199,7 +209,7 @@ describe("connection management", () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) => method === "POST"
       ? pending
-      : refusal(404, "not_found", "unexpected request"));
+      : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     await user.type(screen.getByLabelText("Name"), "Azure delivery");
@@ -227,7 +237,7 @@ describe("connection management", () => {
   it("renders the server's refusal code, message and field errors", async () => {
     renderConnections(({ method }) => method === "POST"
       ? refusal(422, "validation_failed", "request contains invalid fields", { name: ["has already been taken"] })
-      : refusal(404, "not_found", "unexpected request"));
+      : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     await user.type(screen.getByLabelText("Name"), "GitHub engineering");
@@ -240,7 +250,7 @@ describe("connection management", () => {
   it("shows the server's refusal for a stale capability update and keeps the server state", async () => {
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? refusal(409, "stale", "resource changed since it was loaded")
-      : refusal(404, "not_found", "unexpected request"));
+      : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
@@ -257,9 +267,9 @@ describe("connection management", () => {
     });
   });
 
-  it("keeps a failed provider check actionable, redacted and truthful", async () => {
+  it("keeps a failed provider check actionable and renders the server's own reason", async () => {
     const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/check")) return refusal(404, "not_found", "unexpected request");
+      if (method !== "POST" || !path.endsWith("/check")) return unexpectedRequest();
       harness.setConnections([connection({ version: 4, status: "degraded", status_message: "Provider authentication failed", last_checked_at: "2026-11-16T09:00:00.000000Z" })]);
       return refusal(502, "provider_unauthorized", "external provider authentication failed", null, {
         disposition: "checked",
@@ -273,13 +283,46 @@ describe("connection management", () => {
     const detail = screen.getByRole("complementary", { name: "Connection detail" });
     expect(within(detail).getByText("Provider authentication failed")).toBeVisible();
     expect(within(detail).getByText("Degraded")).toBeVisible();
+    // The served strings are already redacted by the server; this case proves
+    // the surface renders them without inventing a credential of its own.
     expect(screen.queryByText(/gho_|Bearer |token/i)).toBeNull();
+  });
+
+  it("renders prototype-name served values as unknown text, never as a known label or a function", async () => {
+    const hostile = connection({
+      provider: "constructor",
+      auth_type: "toString",
+      capabilities: ["constructor"],
+      status: "constructor",
+      resources: [{
+        ...connection().resources[0]!,
+        // `kind`, `status` and `sync_status` are open served strings too.
+        kind: "constructor",
+        status: "toString",
+        sync_status: "constructor",
+      }],
+    });
+    renderConnections(() => unexpectedRequest(), "/portal/connections", {
+      connections: [hostile],
+      projects: [projectFixture({ resources: [resourceFixture({ kind: "constructor", status: "toString", sync_status: "constructor" })] })],
+    });
+    const list = await screen.findByRole("list", { name: "Connections" });
+    // Own-key lookups only: a plain index would return Object's own members, so
+    // this would render "Constructor", a function or crash the row.
+    expect(within(list).getByText("Unknown provider: constructor")).toBeVisible();
+    expect(within(list).getByText(/Unknown authentication: toString/)).toBeVisible();
+    expect(within(list).getByText("Unknown capability: constructor")).toBeVisible();
+    expect(within(list).getByText("Unknown connection status: constructor")).toBeVisible();
+    const resources = await screen.findByRole("list", { name: "Project resources" });
+    expect(within(resources).getByText("Unknown kind: constructor")).toBeVisible();
+    expect(within(resources).getByText("Unknown resource status: toString")).toBeVisible();
+    expect(within(resources).getByText("Unknown sync status: constructor")).toBeVisible();
   });
 
   it("confirms a removal against the version the dialog opened with, even after a background refresh", async () => {
     const harness = renderConnections(({ method }) => method === "DELETE"
       ? refusal(409, "stale", "resource changed since it was loaded")
-      : refusal(404, "not_found", "unexpected request"));
+      : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Remove" }));
@@ -297,7 +340,7 @@ describe("connection management", () => {
   it("re-renders reset bound-resource health after a capability update", async () => {
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4, capabilities: ["repositories", "work_items"] }) }))
-      : refusal(404, "not_found", "unexpected request"));
+      : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     expect(await screen.findByText("Synced")).toBeVisible();
@@ -321,7 +364,7 @@ describe("connection management", () => {
   it("a late create response never closes or hijacks a newer editor", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "POST" ? pending : refusal(404, "not_found", "unexpected request"));
+      method === "POST" ? pending : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     await user.type(screen.getByLabelText("Name"), "First connection");
@@ -351,7 +394,7 @@ describe("connection management", () => {
 
   it("submits a draft against the version it was edited from after a background refresh", async () => {
     const harness = renderConnections(({ method, body }) => {
-      if (method !== "PATCH") return refusal(404, "not_found", "unexpected request");
+      if (method !== "PATCH") return unexpectedRequest();
       const version = typeof body === "object" && body !== null && "version" in body ? body.version : undefined;
       return version === 3
         ? refusal(409, "stale", "resource changed since it was loaded")
@@ -381,7 +424,7 @@ describe("connection management", () => {
     const harness = renderConnections(({ method, path }) =>
       method === "POST" && path.endsWith("/check")
         ? pending
-        : refusal(404, "not_found", "unexpected request"));
+        : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Test connection" }));
@@ -407,7 +450,7 @@ describe("connection management", () => {
   it("keeps check and removal blocked while an editor save is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "PATCH" ? pending : refusal(404, "not_found", "unexpected request"));
+      method === "PATCH" ? pending : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
@@ -437,7 +480,7 @@ describe("connection management", () => {
   it("keeps check and editing blocked while a removal is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
+      method === "DELETE" ? pending : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Remove" }));
@@ -466,12 +509,9 @@ describe("connection management", () => {
 
   it("drops a provider check receipt that arrives after the operator selected another connection", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
     const harness = renderConnections(({ method, path }) =>
-      method === "POST" && path.endsWith("/check") ? pending : refusal(404, "not_found", "unexpected request"));
-    const user = userEvent.setup();
-    harness.setConnections([connection(), second]);
-    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+      method === "POST" && path.endsWith("/check") ? pending : unexpectedRequest());
+    const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Test connection" }));
     expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
@@ -495,12 +535,9 @@ describe("connection management", () => {
 
   it("keeps a pending provider check blocked after the detail remounts", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
     const harness = renderConnections(({ method, path }) =>
-      method === "POST" && path.endsWith("/check") ? pending : refusal(404, "not_found", "unexpected request"));
-    const user = userEvent.setup();
-    harness.setConnections([connection(), second]);
-    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+      method === "POST" && path.endsWith("/check") ? pending : unexpectedRequest());
+    const { user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Test connection" }));
     expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
@@ -530,12 +567,9 @@ describe("connection management", () => {
 
   it("keeps a pending removal blocked after the detail remounts", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
     const harness = renderConnections(({ method }) =>
-      method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
-    const user = userEvent.setup();
-    harness.setConnections([connection(), second]);
-    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+      method === "DELETE" ? pending : unexpectedRequest());
+    const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Remove" }));
     await user.click(screen.getByRole("button", { name: "Remove connection" }));
@@ -569,12 +603,9 @@ describe("connection management", () => {
 
   it("surfaces a check refusal that settles after the operator returned to the same connection", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
     const harness = renderConnections(({ method, path }) =>
-      method === "POST" && path.endsWith("/check") ? pending : refusal(404, "not_found", "unexpected request"));
-    const user = userEvent.setup();
-    harness.setConnections([connection(), second]);
-    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+      method === "POST" && path.endsWith("/check") ? pending : unexpectedRequest());
+    const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Test connection" }));
 
@@ -596,12 +627,9 @@ describe("connection management", () => {
 
   it("does not clear the newly selected connection when a removal settles late", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
     const harness = renderConnections(({ method }) =>
-      method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
-    const user = userEvent.setup();
-    harness.setConnections([connection(), second]);
-    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+      method === "DELETE" ? pending : unexpectedRequest());
+    const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Remove" }));
     await user.click(screen.getByRole("button", { name: "Remove connection" }));
@@ -623,7 +651,7 @@ describe("connection management", () => {
   it("states a removal refusal whose connection the change-discovery re-read removed first", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
+      method === "DELETE" ? pending : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Remove" }));
@@ -650,13 +678,10 @@ describe("connection management", () => {
   });
 
   it("does not navigate back when the operator selects another connection during the save's re-read", async () => {
-    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4 }) }), { status: 200 })
-      : refusal(404, "not_found", "unexpected request"));
-    const user = userEvent.setup();
-    harness.setConnections([connection(), second]);
-    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+      : unexpectedRequest());
+    const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
     await user.click(screen.getByRole("checkbox", { name: "CI" }));
@@ -682,7 +707,7 @@ describe("connection management", () => {
     const harness = renderConnections(({ method }) =>
       method === "POST"
         ? new Response(JSON.stringify({ disposition: "created", connection: { id: connectionId } }), { status: 201 })
-        : refusal(404, "not_found", "unexpected request"));
+        : unexpectedRequest());
     const user = userEvent.setup();
     await screen.findByRole("button", { name: /GitHub engineering/ });
     await user.click(screen.getByRole("button", { name: "New connection" }));
@@ -718,7 +743,7 @@ describe("connection management", () => {
   it("does not pull the operator back after they left the page while a save was pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "PATCH" ? pending : refusal(404, "not_found", "unexpected request"));
+      method === "PATCH" ? pending : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
@@ -736,7 +761,7 @@ describe("connection management", () => {
   });
 
   it("returns keyboard focus to the invoking control when either dialog closes", async () => {
-    renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    renderConnections(() => unexpectedRequest());
     const user = userEvent.setup();
 
     const create = await screen.findByRole("button", { name: "New connection" });
@@ -757,7 +782,7 @@ describe("connection management", () => {
 
   it("keeps focus in the detail when the editor closes while its save is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    renderConnections(({ method }) => method === "PATCH" ? pending : refusal(404, "not_found", "unexpected request"));
+    renderConnections(({ method }) => method === "PATCH" ? pending : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
@@ -781,7 +806,7 @@ describe("connection management", () => {
 
   it("keeps focus in the detail when the removal dialog closes while its removal is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    renderConnections(({ method }) => method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
+    renderConnections(({ method }) => method === "DELETE" ? pending : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Remove" }));
@@ -802,7 +827,7 @@ describe("connection management", () => {
 
   it("hands focus to the surviving page control when a settled removal unmounts the detail", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const harness = renderConnections(({ method }) => method === "DELETE" ? pending : refusal(404, "not_found", "unexpected request"));
+    const harness = renderConnections(({ method }) => method === "DELETE" ? pending : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Remove" }));
@@ -831,7 +856,7 @@ describe("connection management", () => {
   });
 
   it("keeps keyboard focus on the connection row across a background refresh", async () => {
-    const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    const harness = renderConnections(() => unexpectedRequest());
     const row = await screen.findByRole("button", { name: /GitHub engineering/ });
     row.focus();
     expect(row).toHaveFocus();
@@ -845,7 +870,7 @@ describe("connection management", () => {
     const harness = renderConnections(({ method }) =>
       method === "PATCH"
         ? pending
-        : refusal(404, "not_found", "unexpected request"));
+        : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
@@ -869,7 +894,7 @@ describe("connection management", () => {
   });
 
   it("issues a new workspace read when a refresh is clicked while a re-read is in flight", async () => {
-    const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    const harness = renderConnections(() => unexpectedRequest());
     const user = userEvent.setup();
     expect(await screen.findByText("Project not found")).toBeVisible();
 
@@ -896,7 +921,7 @@ describe("connection management", () => {
   });
 
   it("re-reads the project when Try again is clicked while a re-read is in flight", async () => {
-    const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    const harness = renderConnections(() => unexpectedRequest());
     const user = userEvent.setup();
     expect(await screen.findByText("Project not found")).toBeVisible();
 
@@ -925,7 +950,7 @@ describe("connection management", () => {
   });
 
   it("keeps the server's repositories-for-changes coupling observable in the editor", async () => {
-    renderConnections(() => refusal(404, "not_found", "unexpected request"));
+    renderConnections(() => unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     const repositories = screen.getByRole("checkbox", { name: "Repositories" });
@@ -943,7 +968,7 @@ describe("connection management", () => {
 
   it("waits for the provider catalog before opening the create editor", async () => {
     const { promise: gate, resolve: release } = Promise.withResolvers<void>();
-    const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", { deferReads: gate });
+    const harness = renderConnections(() => unexpectedRequest(), "/portal/connections", { deferReads: gate });
     const user = userEvent.setup();
     // The first read (which carries the provider catalog) is still in flight:
     // creation must wait instead of opening a form whose provider select has
@@ -972,11 +997,8 @@ describe("connection management", () => {
   });
 
   it("closes the editor with a notice when the edited connection is removed elsewhere", async () => {
-    const second = connection({ id: "20000000-0000-4000-8000-000000000002", name: "Second connection" });
-    const harness = renderConnections(() => refusal(404, "not_found", "unexpected request"));
-    const user = userEvent.setup();
-    harness.setConnections([connection(), second]);
-    await user.click(await screen.findByRole("button", { name: "Refresh" }));
+    const harness = renderConnections(() => unexpectedRequest());
+    const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
     await user.type(screen.getByLabelText("Name"), " (draft)");
@@ -998,7 +1020,7 @@ describe("connection management", () => {
   it("does not claim a capability reset when the edit only changed the name", async () => {
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4, name: "Renamed engineering" }) }), { status: 200 })
-      : refusal(404, "not_found", "unexpected request"));
+      : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
@@ -1018,7 +1040,7 @@ describe("connection management", () => {
   it("surfaces a replayed create receipt as already applied", async () => {
     const harness = renderConnections(({ method }) => method === "POST"
       ? new Response(JSON.stringify({ disposition: "replayed", connection: { id: connectionId } }), { status: 200 })
-      : refusal(404, "not_found", "unexpected request"));
+      : unexpectedRequest());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     await user.type(screen.getByLabelText("Name"), "GitHub engineering");
@@ -1034,7 +1056,7 @@ describe("project resources", () => {
   it("offers only the connections that grant a kind's capability and submits the served bind payload", async () => {
     const boards = connection({ id: secondConnectionId, provider: "azure_devops", name: "Azure Boards", account_ref: "acme", capabilities: ["work_items"] });
     const harness = renderConnections(({ method }) => {
-      if (method !== "POST") return refusal(404, "not_found", "unexpected request");
+      if (method !== "POST") return unexpectedRequest();
       return new Response(JSON.stringify({ resource: resourceFixture({ name: "checkout service", version: 1 }) }), { status: 201 });
     }, "/portal/connections", { connections: [connection(), boards], projects: [projectFixture()] });
     const user = userEvent.setup();
@@ -1067,7 +1089,7 @@ describe("project resources", () => {
   it("renders the resource form's own field error from the server's refusal", async () => {
     const harness = renderConnections(({ method }) => method === "POST"
       ? refusal(422, "validation_failed", "request contains invalid fields", { external_ref: ["must reference a registered runtime"] })
-      : refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+      : unexpectedRequest(), "/portal/connections", {
       connections: [connection()],
       projects: [projectFixture()],
     });
@@ -1091,7 +1113,7 @@ describe("project resources", () => {
   it("takes a local resource's reference from the workspace's registered runtimes", async () => {
     const harness = renderConnections(({ method }) => method === "POST"
       ? new Response(JSON.stringify({ resource: resourceFixture({ kind: "runtime", name: "review runner" }) }), { status: 201 })
-      : refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+      : unexpectedRequest(), "/portal/connections", {
       projects: [projectFixture()],
       registeredRuntimes: [
         { runtime_id: "77777777-7777-4777-8777-777777777771", runtime_name: "builder-a", agent_profile: "oss-default", workspace: "/work/alpha" },
@@ -1128,7 +1150,7 @@ describe("project resources", () => {
 
   it("offers no connection for a kind whose capability no connection grants", async () => {
     const boards = connection({ id: secondConnectionId, provider: "azure_devops", name: "Azure Boards", account_ref: "acme", capabilities: ["work_items"] });
-    renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", { connections: [boards], projects: [projectFixture()] });
+    renderConnections(() => unexpectedRequest(), "/portal/connections", { connections: [boards], projects: [projectFixture()] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Bind resource" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
@@ -1141,7 +1163,7 @@ describe("project resources", () => {
   });
 
   it("renders the served resource state, including a failed sync and an unknown kind", async () => {
-    renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+    renderConnections(() => unexpectedRequest(), "/portal/connections", {
       projects: [projectFixture({
         resources: [
           resourceFixture(),
@@ -1194,7 +1216,7 @@ describe("project resources", () => {
       url: null, status: "unknown", sync_status: "unknown", last_synced_at: null, version: 5,
     });
     const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/sync")) return refusal(404, "not_found", "unexpected request");
+      if (method !== "POST" || !path.endsWith("/sync")) return unexpectedRequest();
       harness.setProjects([projectFixture({ resources: [{ ...target, status: "degraded", sync_status: "failed", status_message: "Resource has no external connection" }] })]);
       return refusal(409, "not_connected", "resource has no external connection");
     }, "/portal/connections", { projects: [projectFixture({ resources: [target] })] });
@@ -1214,7 +1236,7 @@ describe("project resources", () => {
   it("renders the served capability refusal with the capability-specific next step", async () => {
     const target = resourceFixture();
     const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/sync")) return refusal(404, "not_found", "unexpected request");
+      if (method !== "POST" || !path.endsWith("/sync")) return unexpectedRequest();
       harness.setProjects([projectFixture({ resources: [{ ...target, status: "degraded", sync_status: "failed", status_message: "Connection capability is not granted" }] })]);
       return refusal(403, "capability_not_granted", "connection capability is not granted");
     }, "/portal/connections", { projects: [projectFixture({ resources: [target] })] });
@@ -1230,7 +1252,7 @@ describe("project resources", () => {
   it("keeps a failed provider read explicit and never renders it as synchronized", async () => {
     const failed = resourceFixture({ status: "degraded", sync_status: "failed", status_message: "Provider returned HTTP 500", version: 5 });
     const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/sync")) return refusal(404, "not_found", "unexpected request");
+      if (method !== "POST" || !path.endsWith("/sync")) return unexpectedRequest();
       harness.setProjects([projectFixture({ resources: [failed] })]);
       return refusal(502, "provider_failure", "external provider request failed", null, { resource: failed });
     }, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
@@ -1251,7 +1273,7 @@ describe("project resources", () => {
   it("reports the project sync count from the served receipt", async () => {
     const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
       ? new Response(JSON.stringify({ synced_resource_ids: [alphaId, betaId] }))
-      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Synchronize project" }));
     expect(await screen.findByText("Project resources synchronized: 2 resources updated.")).toBeVisible();
@@ -1260,7 +1282,7 @@ describe("project resources", () => {
 
   it("renders an aggregate project sync failure with the server's code and re-reads the project", async () => {
     const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/sync")) return refusal(404, "not_found", "unexpected request");
+      if (method !== "POST" || !path.endsWith("/sync")) return unexpectedRequest();
       return refusal(502, "provider_failure", "external provider request failed", null, {
         causes: [{ code: "provider_failure", message: "external provider request failed", count: 1 }],
         results: [{ resource_id: alphaId, status: "failed", error: { code: "provider_failure", message: "external provider request failed" } }],
@@ -1277,7 +1299,7 @@ describe("project resources", () => {
   it("submits the version the update dialog opened with and renders the stale refusal", async () => {
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? refusal(409, "stale", "resource changed since it was loaded")
-      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Update checkout service" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Update resource" }));
@@ -1303,7 +1325,7 @@ describe("project resources", () => {
   it("renders a not-found update refusal with the server's reason instead of assuming success", async () => {
     renderConnections(({ method }) => method === "PATCH"
       ? refusal(404, "not_found", "resource was not found")
-      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Update checkout service" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Update resource" }));
@@ -1316,7 +1338,7 @@ describe("project resources", () => {
   it("submits the version the unbind dialog opened with and renders the state conflict", async () => {
     const harness = renderConnections(({ method }) => method === "DELETE"
       ? refusal(409, "state_conflict", "state has already advanced")
-      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Unbind checkout service" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Unbind checkout service?" }));
@@ -1334,7 +1356,7 @@ describe("project resources", () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
       ? pending
-      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Sync checkout service" }));
     expect(screen.getByRole("button", { name: "Bind resource" })).toBeDisabled();
@@ -1368,7 +1390,7 @@ describe("project resources", () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
       ? pending
-      : refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+      : unexpectedRequest(), "/portal/connections", {
       projects: [
         projectFixture({ resources: [resourceFixture()] }),
         projectFixture({ id: secondProjectId, key: "SEC", name: "Second engineering", resources: [beta] }),
@@ -1407,7 +1429,7 @@ describe("project resources", () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/resources")
       ? pending
-      : refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture()] });
+      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture()] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Bind resource" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
@@ -1430,7 +1452,7 @@ describe("project resources", () => {
   });
 
   it("disables every mutation control for an archived project with a visible reason", async () => {
-    renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", {
+    renderConnections(() => unexpectedRequest(), "/portal/connections", {
       projects: [projectFixture({ status: "archived", resources: [resourceFixture()] })],
     });
     expect(await screen.findByText(/This project is archived, so binding, updating, unbinding and synchronizing its resources are disabled\./)).toBeVisible();
@@ -1445,7 +1467,7 @@ describe("project resources", () => {
   });
 
   it("returns keyboard focus to the invoking control when a resource dialog closes", async () => {
-    renderConnections(() => refusal(404, "not_found", "unexpected request"), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    renderConnections(() => unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     const bind = await screen.findByRole("button", { name: "Bind resource" });
     await user.click(bind);
@@ -1464,7 +1486,7 @@ describe("project resources", () => {
 
   it("renders the project-not-found state for an unknown scope instead of another project's rows", async () => {
     const missingId = "10000000-0000-4000-8000-0000000000ff";
-    renderConnections(() => refusal(404, "not_found", "unexpected request"), `/portal/connections?projectId=${missingId}`, {
+    renderConnections(() => unexpectedRequest(), `/portal/connections?projectId=${missingId}`, {
       projects: [projectFixture({ resources: [resourceFixture()] })],
     });
     expect(await screen.findByRole("heading", { name: "Project not found" })).toBeVisible();

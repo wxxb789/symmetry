@@ -20,6 +20,7 @@ import {
   WireJsonError,
 } from "../ts/index.ts";
 import { parsePresentationJson, parseWireJson } from "../ts/wire-json.ts";
+import { canonicalJson } from "../ts/semantics.ts";
 import {
   allOf,
   arrayConstraints,
@@ -53,6 +54,20 @@ test("raw decoding rejects unsafe numeric lexemes before schema validation", asy
     assert.ok(result.left instanceof WireJsonError);
     assert.equal(result.left.code, "noncanonical_number");
   }
+});
+
+test("canonical JSON escapes control characters exactly as the control plane's Jason does", () => {
+  // Jason's `escape_json/1` emits the shorthand escapes for `\b\t\n\f\r"\\`
+  // and an uppercase `\u00XX` for every other C0 control
+  // (`control/deps/jason/lib/encode.ex`), while `JSON.stringify` emits
+  // lowercase hex. The control plane hashes the exact text
+  // `RequestHash.canonical/1` produces, so the two forms hash as different
+  // bytes. U+000B and U+001B are schema-valid in a LongText description, which
+  // bans only U+0000.
+  assert.equal(
+    canonicalJson({ schema_version: "symmetry.plan.v1", items: [{ description: "before\u000Bafter\u001Bend" }] }),
+    '{"items":[{"description":"before\\u000Bafter\\u001Bend"}],"schema_version":"symmetry.plan.v1"}',
+  );
 });
 
 test("WorkspaceRead accepts fractional and exponent metadata without changing command policy", async () => {
@@ -95,7 +110,7 @@ test("ConnectionsRead keeps unknown presentation values renderable and consumed 
     new URL("../fixtures/valid/connections-read.unknown-values.json", import.meta.url),
   );
   const decoded = await Effect.runPromise(ConnectionsRead.decodeJson(bytes));
-  assert.equal(decoded.connections[0].status, "degraded");
+  assert.equal(decoded.connections[0].status, "future_status");
   assert.equal(decoded.connections[0].resources[0].sync_status, "stale");
   assert.deepEqual(decoded, JSON.parse(bytes.toString("utf8")));
 

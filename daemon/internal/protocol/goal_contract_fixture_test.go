@@ -91,7 +91,7 @@ func TestConnectionsReadDTOFillsNullableFields(t *testing.T) {
 		t.Fatalf("decoded %d connections, want 1", len(decoded.Connections))
 	}
 	connection := decoded.Connections[0]
-	if connection.Status != "degraded" || connection.StatusMessage == nil || *connection.StatusMessage != "Provider authentication failed" {
+	if connection.Status != "future_status" || connection.StatusMessage == nil || *connection.StatusMessage != "Provider authentication failed" {
 		t.Fatalf("nullable status fields did not decode: status=%q message=%v", connection.Status, connection.StatusMessage)
 	}
 	if connection.LastCheckedAt == nil {

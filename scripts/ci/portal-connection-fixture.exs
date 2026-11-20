@@ -1,6 +1,11 @@
 # Fixture launcher for the connection-management browser acceptance run.
 #
-#   PHX_SERVER=true PORT=4021 mix run --no-halt scripts/ci/portal-connection-fixture.exs
+#   PHX_SERVER=true PORT=4021 mix run --no-halt --no-start scripts/ci/portal-connection-fixture.exs
+#
+# `--no-start` is required, not optional: this script installs the fixture
+# transports before it starts the application, so no boot-time provider
+# recovery can reach a real HTTP client or CLI session. That is how
+# `browser/scripts/run-connection-fixture-tests.ps1` starts it.
 #
 # The browser suite drives the real Portal API, the real PostgreSQL state and
 # the real GitHub/Azure DevOps provider modules. Only each provider's external

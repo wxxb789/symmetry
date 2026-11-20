@@ -4,15 +4,19 @@
 // there (or the dev code reloader that compile feeds) decides what the other
 // one loads and reloads - observed 2026-11-17 as a foreign session's server
 // answering this worktree's browser runs with `# unhandled` error pages.
+// The connection harness must own one more thing per run: it drops and
+// recreates the database it configures, so a second run sharing that database
+// would destroy the first run's rows. Its database name carries the port, like
+// its build path.
 //
 // The contract is the environment the harness hands to the processes it
 // starts, so each case below drives the real harness script with `mise`
 // replaced by a recording stub on PATH: every `mise exec … -- mix …`
 // invocation - the database tasks and the Control instance itself - is
-// recorded with the MIX_BUILD_PATH the harness set for it. No Control
-// instance, database, lockfile check or browser starts here, and the harness
-// is stopped as soon as the recorded server invocation proves what it was
-// started with.
+// recorded with the MIX_BUILD_PATH and POSTGRES_DB the harness set for it. No
+// Control instance, database, lockfile check or browser starts here, and the
+// harness is stopped as soon as the recorded server invocation proves what it
+// was started with.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -38,7 +42,12 @@ const harnesses = {
   },
   "run-connection-fixture-tests.ps1": {
     instance: "connections",
-    serverInvocation: /-- mix run --no-halt --no-start [^\s]*portal-connection-fixture\.exs$/
+    serverInvocation: /-- mix run --no-halt --no-start [^\s]*portal-connection-fixture\.exs$/,
+    // The run-owned database this harness must configure for every invocation:
+    // derived from its port so a second concurrent run cannot drop the rows the
+    // first one is serving. The planning harness takes its database as a
+    // `-DbName` parameter owned by the caller instead.
+    databaseName: (port) => `symmetry_0007e_test_${port}`
   }
 };
 const databaseInvocations = ["mix ecto.drop", "mix ecto.create", "mix ecto.migrate"];
@@ -90,7 +99,7 @@ function createRecorder() {
     [
       "@echo off",
       // `^|` escapes the pipe; the fields are what this invocation received.
-      '>>"%MISE_STUB_LOG%" echo %MIX_BUILD_PATH%^|%CD%^|%*',
+      '>>"%MISE_STUB_LOG%" echo %MIX_BUILD_PATH%^|%POSTGRES_DB%^|%CD%^|%*',
       "exit /b 0",
       ""
     ].join("\r\n")
@@ -108,8 +117,8 @@ function recordedCalls(logFile) {
     .split(/\r?\n/)
     .filter((line) => line.length > 0)
     .map((line) => {
-      const [mixBuildPath = "", cwd = "", argv = ""] = line.split("|");
-      return { mixBuildPath, cwd, argv };
+      const [mixBuildPath = "", postgresDb = "", cwd = "", argv = ""] = line.split("|");
+      return { mixBuildPath, postgresDb, cwd, argv };
     });
 }
 
@@ -183,7 +192,9 @@ function assertInstanceBuildPath(run, { script, port, inheritedBuildPath }) {
   );
 
   const expectedBuildPath = normalize(path.join(instanceRoot, `${harnesses[script].instance}-${port}`));
+  const expectedDatabase = harnesses[script].databaseName?.(port);
   const buildPaths = new Set();
+  const databases = new Set();
   for (const call of calls) {
     // The pinned toolchain every invocation runs under: this contract is about
     // which mix runs where, so a pin edit must not silently change every
@@ -216,13 +227,28 @@ function assertInstanceBuildPath(run, { script, port, inheritedBuildPath }) {
       );
     }
     buildPaths.add(buildPath);
+    if (expectedDatabase !== undefined) {
+      assert.equal(
+        call.postgresDb,
+        expectedDatabase,
+        `${script} ran '${call.argv}' with POSTGRES_DB ${call.postgresDb}, not the run-owned database ${expectedDatabase} its port ${port} gives it:\n${output}`
+      );
+      databases.add(call.postgresDb);
+    }
   }
   assert.equal(
     buildPaths.size,
     1,
     `${script} used ${buildPaths.size} build paths for one instance: ${[...buildPaths].join(", ")}`
   );
-  return [...buildPaths][0];
+  if (expectedDatabase !== undefined) {
+    assert.equal(
+      databases.size,
+      1,
+      `${script} used ${databases.size} databases for one run: ${[...databases].join(", ")}`
+    );
+  }
+  return { buildPath: [...buildPaths][0], database: expectedDatabase };
 }
 
 for (const script of Object.keys(harnesses)) {
@@ -240,9 +266,16 @@ for (const script of Object.keys(harnesses)) {
       { script, port: secondPort }
     );
     assert.notEqual(
-      first,
-      second,
-      `${script} gave two runs on ports ${firstPort} and ${secondPort} the same build path ${first}`
+      first.buildPath,
+      second.buildPath,
+      `${script} gave two runs on ports ${firstPort} and ${secondPort} the same build path ${first.buildPath}`
     );
+    if (harnesses[script].databaseName) {
+      assert.notEqual(
+        first.database,
+        second.database,
+        `${script} gave two runs on ports ${firstPort} and ${secondPort} the same database ${first.database}`
+      );
+    }
   });
 }

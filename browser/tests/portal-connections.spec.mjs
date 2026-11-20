@@ -47,6 +47,7 @@ import {
   monitorBrowserErrors,
   test
 } from "./fixtures.mjs";
+import { capture } from "./readable-fixtures.mjs";
 
 const fixtureVariables = [
   "SYMMETRY_OPERATOR_TOKEN",
@@ -81,8 +82,10 @@ const portalOrigin = portalUrl.origin;
 
 // The acceptance control plane runs on a loaded developer host: measured reads
 // on this surface are sub-second, but a page that re-reads behind several
-// mutations can take seconds, so this file's assertions get a wider budget than
-// the shared 10s default. Server-side latency is measured separately.
+// mutations can take seconds, so this file pins both budgets explicitly: the
+// 30s assertion timeout that playwright.config.mjs already sets as the shared
+// default, and a 120s per-test budget double the shared 60s test timeout.
+// Server-side latency is measured separately.
 const expect = baseExpect.configure({ timeout: 30_000 });
 test.describe.configure({ timeout: 120_000 });
 
@@ -353,16 +356,6 @@ async function assertNoCredentials(page, recorded) {
   for (const error of recorded.pageErrors) {
     expect(error, "page errors must not contain a provider credential").not.toMatch(secretPattern);
   }
-}
-
-async function capture(page, testInfo, name, observations) {
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  const image = testInfo.outputPath(`${name}.png`);
-  await page.screenshot({ path: image, fullPage: true });
-  await testInfo.attach(name, { path: image, contentType: "image/png" });
-  await fs.writeFile(testInfo.outputPath(`${name}.json`), JSON.stringify({
-    url: page.url(), viewport: page.viewportSize(), observations
-  }, null, 2));
 }
 
 async function createThroughConsole(page, { provider, name, account, capabilities }) {
@@ -1415,6 +1408,14 @@ test("Azure DevOps repository, board and pipeline resources bind and sync agains
 
   // The Boards sync imported the fixture work item with its exact provider
   // identity, and the pipeline document supplied the CI metadata.
+  //
+  // Fixture limit: the fixture transport answers `_apis/wit/wiql` and
+  // `_apis/wit/workitemsbatch` from its own state
+  // (`dev_azure_work_item_ids/3`, default `[101]`) without reading the request
+  // body, and its `az` handler returns the fixture token for any argument list
+  // (`scripts/ci/portal-connection-fixture.exs`). This case therefore pins the
+  // served import result - id 101 and its fields - not which ids or which query
+  // the server asked for.
   const workspace = await readWorkspace(page, projectId);
   const imported = projectFromWorkspace(workspace, projectId).work_items.filter((item) => item.external?.resource_id === boardResource.id);
   expect(imported.map((item) => item.external.id)).toEqual(["101"]);
