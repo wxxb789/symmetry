@@ -1225,9 +1225,10 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
-      `control/test/symmetry_control/integrations_test.exs:1161` (`assert
-      String.contains?(query, "\"work_items\"")` inside `assert_sync_waiting_on_work_item/3`,
-      with Postgrex connections disconnecting in the same log). Observed in run 43891279765
+      `control/test/symmetry_control/integrations_test.exs:1204` (`:1161` at the failing run's
+      revision; `assert String.contains?(query, "\"work_items\"")` inside
+      `assert_sync_waiting_on_work_item/3`, with Postgrex connections disconnecting in the same
+      log). Observed in run 43891279765
       job 133383740181 on the 0008a PR (`839/840 passed, 21 skipped`), green on rerun of the
       same job (that run then completed successfully). Revalidate whether the captured SQL can
       be asserted before the sync query is issued; keep the assertion itself and leave the fix
@@ -1261,7 +1262,7 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
       was the prelock the assertion exists for, while the failed sample at `15:02:09.897` printed
       the pre-sync `matching_repository` lookup as `pg_stat_activity.query`. The fields disagree
       because `pg_stat_get_activity` copies the shared activity array into a materialized result
-      when the sampling statement starts (`src/backend/utils/adt/pgstatfuncs.c:331-345`;
+      when the sampling statement starts (`src/backend/utils/adt/pgstatfuncs.c:331-345` (REL_18_STABLE);
       `src/backend/utils/activity/backend_status.c:813-836`, "if not already done in this
       transaction"), so `query` is fixed at that snapshot while `pg_blocking_pids()`/`pg_locks`
       read live lock data later in the same statement; the prelock's own text is reported at
@@ -1276,14 +1277,19 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
       (`:758-782` collection, `:971-981` writes) runs after that ascending prelock; the failure
       log records no `40P01`/deadlock, and the two Postgrex disconnects are the same
       `after`-block teardown. The deferred maintenance fix is PR #87 (`3c71aec`), exactly what
-      the entry asked to leave separate; the assertion stays. Reproduced outside the suite on
-      PostgreSQL 18.6 (probe scripts kept with the investigation): a poll in one transaction
-      returns `blocked=true` with `query` = the pre-lookup statement,
+      the entry asked to leave separate; the lock-order witness tests stay (PR #87 re-predicated
+      the wait sample on lock-manager facts). Reproduced outside the suite on PostgreSQL 18.6
+      (probe scripts kept with the investigation): a poll in one transaction returns
+      `blocked=true` with `query` = the pre-lookup statement,
       `String.contains?(query, "\"work_items\"")` false, while the helper's lock-manager sample
       on the same wait reports `blocked=true`, `ungranted=true`,
-      `waiter_on_delivery_xid=true` and `blocker_holds_work_items=true`; 25 varied-seed runs of
-      the two lock-order tests (`integrations_test.exs:1204`, `:1352`) plus `--seed 310068` stay
-      green on the committed helper.
+      `waiter_on_delivery_xid=true` and `blocker_holds_work_items=true`; the local demonstration
+      bounds the snapshot window with a transaction; it does not recreate the CI timing itself;
+      25 varied-seed runs of the two lock-order tests (`integrations_test.exs:1204`, `:1352`) plus
+      `--seed 310068` stay green on the committed helper. A paginated sweep of the 369 `ci.yml`
+      runs created 2026-11-14..2026-11-20 (77 runs that can hold a failed `control` job; 23
+      failed `control` job logs grepped across all their attempts) finds exactly one occurrence
+      of the failure: run `43891279765` attempt 1, job `133383740181`.
 
 ## Deferred review findings (0007f)
 
