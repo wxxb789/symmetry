@@ -709,6 +709,471 @@ describe("goal detail surface", () => {
     expect(admit.payload?.["proposal_hash"]).toBe("sha256:e9a1f1719763b645d05e4b1fcc241b7c7fb71c0594876ae16428757a7e222805");
   });
 
+  it("builds the decision resolution from a submit-time read so a worker-advanced goal is not sent stale", async () => {
+    const decision = {
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      kind: "plan",
+      state: "open",
+      "open?": true,
+      version: 3,
+      goal_revision: 1,
+      question: "Accept the proposed plan?",
+      options: [
+        { id: "accept", label: "Accept", consequence: "Apply the approved action." },
+        { id: "reject", label: "Reject", consequence: "Keep the current approved state." },
+      ],
+      resolution: null,
+    };
+    // The page settles on goal version 4 and decision version 3; a worker then
+    // advances the goal to 5 with the revision unchanged (the reachable advance
+    // the entry identifies). The decision's own drift to 4 is a fixture premise
+    // for the re-derivation, not a worker effect: the only writer that bumps an
+    // open decision without resolving it is the amend supersede, which also
+    // advances the revision. The resolution the press applies moves the goal to
+    // 6 and the decision to 5.
+    let advanced = false;
+    let applied = false;
+    const servedPair = () => (applied ? { goal: 6, decision: 5 } : advanced ? { goal: 5, decision: 4 } : { goal: 4, decision: 3 });
+    const commands: Array<{ kind: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> }> = [];
+    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        const pair = servedPair();
+        return jsonResponse(readGoalProjection({
+          id: goalId,
+          projectId,
+          projectName: "Project One",
+          title: "Plan approval advance goal",
+          state: "draft",
+          version: pair.goal,
+          currentRevision: 1,
+          allowedActions: ["amend", "cancel"],
+          decisions: [applied
+            ? { ...decision, state: "resolved", "open?": false, version: pair.decision, resolution: { option_id: "accept" } }
+            : { ...decision, version: pair.decision }],
+        }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        const envelope = JSON.parse(rawBody) as { kind: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> };
+        commands.push(envelope);
+        const pair = servedPair();
+        // The server validates the envelope pair first (ensure_preconditions!),
+        // then the decision's own version (invalid_decision).
+        if (envelope.expected_version !== pair.goal || envelope.expected_revision !== 1) {
+          return jsonResponse({ error: { code: "stale", message: "resource changed since it was loaded", current_version: pair.goal, current_revision: 1, allowed_actions: ["amend", "cancel"] } }, 409);
+        }
+        if (envelope.kind === "resolve_decision") {
+          if (envelope.payload["expected_decision_version"] !== pair.decision || envelope.payload["decision_id"] !== decision.id || envelope.payload["option_id"] !== "accept") {
+            return jsonResponse({ error: { code: "invalid_decision", message: "decision is no longer valid for this Goal" } }, 409);
+          }
+          applied = true;
+          return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 2, kind: "resolve_decision", revision: 1 } });
+        }
+        return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 3, kind: "accept_plan", revision: 1 } });
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    const user = userEvent.setup();
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Plan approval advance goal" });
+    // The settled page still shows version 4 and decision version 3.
+    expect(screen.getByText(/· revision 1 · version 4$/)).toBeVisible();
+    expect(screen.getByText("Revision 1 · version 3")).toBeVisible();
+    // A JSON document contains braces that user-event's keyboard parser reads as
+    // key descriptors; set the controlled textarea value directly instead.
+    fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify({ schema_version: "symmetry.plan.v1", items: [] }) } });
+    // The worker advances the goal and the decision before the press.
+    advanced = true;
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    await waitFor(() => expect(commands.map((command) => command.kind)).toEqual(["resolve_decision", "accept_plan"]));
+    const [resolve, admit] = commands;
+    if (!resolve || !admit) throw new Error("the approval commands were not sent");
+    // The resolution carries the versions the server serves now — the envelope
+    // pair and the presented decision's own version. Pre-fix it carries the
+    // settled 4/3 pair and the server answers the 409 stale conflict instead.
+    expect(resolve.expected_version).toBe(5);
+    expect(resolve.expected_revision).toBe(1);
+    expect(resolve.payload["decision_id"]).toBe(decision.id);
+    expect(resolve.payload["expected_decision_version"]).toBe(4);
+    expect(resolve.payload["option_id"]).toBe("accept");
+    // The admission follows the applied resolution's own read (the goal moved
+    // to 6), exactly as the two-step contract states.
+    expect(admit.kind).toBe("accept_plan");
+    expect(admit.expected_version).toBe(6);
+    // The acceptance notice waits for the served goal to settle (bounded), so
+    // this wait allows for that bound.
+    expect(await screen.findByText("The server admitted the plan.", {}, { timeout: 5_000 })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "The goal changed since this page loaded" })).not.toBeInTheDocument();
+  }, 15_000);
+
+  it("replays the plan approval's decision resolution byte for byte after a lost acknowledgement", async () => {
+    const decision = {
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      kind: "plan",
+      state: "open",
+      "open?": true,
+      version: 3,
+      goal_revision: 1,
+      question: "Accept the proposed plan?",
+      options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }],
+      resolution: null,
+    };
+    let advanced = false;
+    let applied = false;
+    const resolveBodies: string[] = [];
+    let recorded: string | null = null;
+    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        const pair = applied ? { goal: 6, decision: 5 } : advanced ? { goal: 5, decision: 4 } : { goal: 4, decision: 3 };
+        return jsonResponse(readGoalProjection({
+          id: goalId,
+          projectId,
+          projectName: "Project One",
+          title: "Replay plan approval goal",
+          state: "draft",
+          version: pair.goal,
+          currentRevision: 1,
+          allowedActions: ["amend", "cancel"],
+          decisions: [applied
+            ? { ...decision, state: "resolved", "open?": false, version: pair.decision, resolution: { option_id: "accept" } }
+            : { ...decision, version: pair.decision }],
+        }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        const envelope = JSON.parse(rawBody) as { kind: string; expected_version: number; payload: Record<string, unknown> };
+        if (envelope.kind === "resolve_decision") {
+          resolveBodies.push(rawBody);
+          if (recorded === null) {
+            // The first attempt reaches the server, applies, and its
+            // acknowledgement is lost at the transport layer. The applied
+            // resolution moved the goal to 6 and resolved the decision (5).
+            recorded = rawBody;
+            applied = true;
+            throw new TypeError("network down");
+          }
+          if (rawBody !== recorded) {
+            // A body rebuilt from a fresh read is not the recorded request: the
+            // server refuses the resolved decision instead of replaying.
+            return jsonResponse({ error: { code: "invalid_decision", message: "decision is no longer valid for this Goal" } }, 409);
+          }
+          return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 2, kind: "resolve_decision", revision: 1 } });
+        }
+        return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 3, kind: "accept_plan", revision: 1 } });
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    const user = userEvent.setup();
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Replay plan approval goal" });
+    // A JSON document contains braces that user-event's keyboard parser reads as
+    // key descriptors; set the controlled textarea value directly instead.
+    fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify({ schema_version: "symmetry.plan.v1", items: [] }) } });
+    advanced = true;
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    expect(await screen.findByText(/Cannot reach the server/)).toBeVisible();
+    expect(resolveBodies).toHaveLength(1);
+    // The first attempt read at submit: it carries the served 5/4 pair.
+    const first = JSON.parse(resolveBodies[0] ?? "{}") as { expected_version: number; payload: Record<string, unknown> };
+    expect(first.expected_version).toBe(5);
+    expect(first.payload["expected_decision_version"]).toBe(4);
+    // Re-pressing the same intent resends the recorded bytes, so the server
+    // replays the applied resolution instead of refusing the resolved decision;
+    // a body rebuilt from a fresh read (6/5, resolved) is not the recorded
+    // request and would be refused.
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    await waitFor(() => expect(resolveBodies).toHaveLength(2));
+    expect(resolveBodies[1]).toBe(resolveBodies[0]);
+    // The admission follows the applied resolution's read and is acknowledged
+    // with the notice, which waits for the served goal to settle (bounded).
+    expect(await screen.findByText("The server admitted the plan.", {}, { timeout: 5_000 })).toBeVisible();
+  }, 15_000);
+
+  it("replays the plan approval's admission byte for byte when its acknowledgement is lost", async () => {
+    const decision = {
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      kind: "plan",
+      state: "open",
+      "open?": true,
+      version: 3,
+      goal_revision: 1,
+      question: "Accept the proposed plan?",
+      options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }],
+      resolution: null,
+    };
+    // The press's two commands are acknowledged differently: the resolution is
+    // answered, and the admission is applied by the server while its
+    // acknowledgement is lost in transit. The re-press must resend the recorded
+    // admission too — a rebuilt one carries the post-admission versions under a
+    // fresh identity, which the server refuses for a command that already
+    // applied instead of replaying it.
+    let resolutionApplied = false;
+    let admissionApplied = false;
+    const resolveBodies: string[] = [];
+    const admitBodies: string[] = [];
+    let recordedResolve: string | null = null;
+    let recordedAdmit: string | null = null;
+    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        // The resolution moves the goal to 6 (revision unchanged) and bumps the
+        // decision's lock version to 4; the admission moves the goal to 7 with
+        // the revision unchanged — only the amendment branch advances
+        // `current_revision` (`goals.ex:6337`).
+        const pair = admissionApplied ? { goal: 7, revision: 1 } : resolutionApplied ? { goal: 6, revision: 1 } : { goal: 4, revision: 1 };
+        return jsonResponse(readGoalProjection({
+          id: goalId,
+          projectId,
+          projectName: "Project One",
+          title: "Frozen plan admission goal",
+          state: "draft",
+          version: pair.goal,
+          currentRevision: pair.revision,
+          allowedActions: ["amend", "cancel"],
+          decisions: [resolutionApplied
+            ? { ...decision, state: "resolved", "open?": false, version: 4, resolution: { option_id: "accept" } }
+            : { ...decision, version: 3 }],
+        }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        const envelope = JSON.parse(rawBody) as { kind: string };
+        if (envelope.kind === "resolve_decision") {
+          resolveBodies.push(rawBody);
+          if (rawBody !== recordedResolve) {
+            if (recordedResolve !== null) {
+              // The recorded bytes replay; a resolution rebuilt from a fresh read
+              // presents the resolved decision (5) and is refused instead.
+              return jsonResponse({ error: { code: "invalid_decision", message: "decision is no longer valid for this Goal" } }, 409);
+            }
+            recordedResolve = rawBody;
+            resolutionApplied = true;
+          }
+          return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 2, kind: "resolve_decision", revision: 1 } });
+        }
+        admitBodies.push(rawBody);
+        if (rawBody !== recordedAdmit) {
+          if (recordedAdmit !== null) {
+            // The admission already applied: the rebuilt identity has no recorded
+            // event, so it is not replayed, and the plan validation refuses the
+            // already-admitted items with the protocol's own invalid_plan
+            // (`protocol.ex:101`, 422).
+            return jsonResponse({ error: { code: "invalid_plan", message: "plan does not satisfy Goal contract" } }, 422);
+          }
+          recordedAdmit = rawBody;
+          admissionApplied = true;
+          throw new TypeError("network down");
+        }
+        return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 3, kind: "accept_plan", revision: 1 } });
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    const user = userEvent.setup();
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Frozen plan admission goal" });
+    // A JSON document contains braces that user-event's keyboard parser reads as
+    // key descriptors; set the controlled textarea value directly instead.
+    fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify({ schema_version: "symmetry.plan.v1", items: [] }) } });
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    expect(await screen.findByText(/Cannot reach the server/)).toBeVisible();
+    expect(resolveBodies).toHaveLength(1);
+    expect(admitBodies).toHaveLength(1);
+    // The admission of the first press carries the resolution's own read (the
+    // goal moved to 6), which is the version the server recorded for it.
+    const first = JSON.parse(admitBodies[0] ?? "{}") as { expected_version: number };
+    expect(first.expected_version).toBe(6);
+    // Re-pressing the same intent resends the recorded admission bytes, so the
+    // server replays the applied admission; a body rebuilt from the post-admission
+    // read (7/1) is not the recorded request and would be refused.
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    await waitFor(() => expect(admitBodies).toHaveLength(2));
+    expect(resolveBodies[1]).toBe(resolveBodies[0]);
+    expect(admitBodies[1]).toBe(admitBodies[0]);
+    // The replay is acknowledged with the notice, which waits for the served goal
+    // to settle (bounded).
+    expect(await screen.findByText("The server admitted the plan.", {}, { timeout: 5_000 })).toBeVisible();
+  }, 15_000);
+
+  it("releases the plan approval attempt when the server answers its resolution", async () => {
+    const decision = {
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      kind: "plan",
+      state: "open",
+      "open?": true,
+      version: 3,
+      goal_revision: 1,
+      question: "Accept the proposed plan?",
+      options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }],
+      resolution: null,
+    };
+    // The first press reads the served 5/3 pair and its resolution is answered
+    // 409 stale: a worker advances the goal (6) after that read and before the
+    // POST. An answered refusal settles the attempt, so the next press must
+    // rebuild from a fresh read instead of resending the refused bytes forever.
+    let servedVersion = 5;
+    let workerAdvanced = false;
+    let decisionResolved = false;
+    const resolveBodies: Array<{ mutation_id: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> }> = [];
+    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({
+          id: goalId,
+          projectId,
+          projectName: "Project One",
+          title: "Answered refusal plan goal",
+          state: "draft",
+          version: servedVersion,
+          currentRevision: 1,
+          allowedActions: ["amend", "cancel"],
+          decisions: [decisionResolved
+            ? { ...decision, state: "resolved", "open?": false, version: 4, resolution: { option_id: "accept" } }
+            : decision],
+        }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        const envelope = JSON.parse(rawBody) as { kind: string; mutation_id: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> };
+        if (envelope.kind === "resolve_decision") {
+          resolveBodies.push(envelope);
+          // The worker advances the goal between the press's own read and this
+          // POST, so the first attempt presents the pair the server just moved
+          // past — the refusal the submit-time read cannot prevent.
+          if (!workerAdvanced) {
+            workerAdvanced = true;
+            servedVersion = 6;
+          }
+          if (envelope.expected_version !== servedVersion) {
+            return jsonResponse({ error: { code: "stale", message: "resource changed since it was loaded", current_version: servedVersion, current_revision: 1, allowed_actions: ["amend", "cancel"] } }, 409);
+          }
+          decisionResolved = true;
+          servedVersion += 1;
+          return jsonResponse({ goal_id: goalId, mutation_id: envelope.mutation_id, event: { id: envelope.mutation_id, sequence: 2, kind: "resolve_decision", revision: 1 } });
+        }
+        if (envelope.expected_version !== servedVersion) {
+          return jsonResponse({ error: { code: "stale", message: "resource changed since it was loaded", current_version: servedVersion, current_revision: 1, allowed_actions: ["amend", "cancel"] } }, 409);
+        }
+        servedVersion += 1;
+        return jsonResponse({ goal_id: goalId, mutation_id: envelope.mutation_id, event: { id: envelope.mutation_id, sequence: 3, kind: "accept_plan", revision: 1 } });
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    const user = userEvent.setup();
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Answered refusal plan goal" });
+    // A JSON document contains braces that user-event's keyboard parser reads as
+    // key descriptors; set the controlled textarea value directly instead.
+    fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify({ schema_version: "symmetry.plan.v1", items: [] }) } });
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    expect(await screen.findByRole("heading", { name: "The goal changed since this page loaded" })).toBeVisible();
+    expect(resolveBodies).toHaveLength(1);
+    expect(resolveBodies[0]?.expected_version).toBe(5);
+    // The released attempt rebuilds: a fresh identity and the pair the server
+    // serves now. A kept attempt resends the refused bytes (5) under the first
+    // identity, and the server answers the same refusal again.
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    await waitFor(() => expect(resolveBodies).toHaveLength(2));
+    expect(resolveBodies[1]?.mutation_id).not.toBe(resolveBodies[0]?.mutation_id);
+    expect(resolveBodies[1]?.expected_version).toBe(6);
+    expect(resolveBodies[1]?.expected_revision).toBe(1);
+    expect(resolveBodies[1]?.payload["expected_decision_version"]).toBe(3);
+    // The acceptance notice waits for the served goal to settle (bounded), so
+    // this wait allows for that bound.
+    expect(await screen.findByText("The server admitted the plan.", {}, { timeout: 5_000 })).toBeVisible();
+  }, 15_000);
+
+  it("does not replay a frozen approval for a different proposal", async () => {
+    const decision = {
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      kind: "plan",
+      state: "open",
+      "open?": true,
+      version: 3,
+      goal_revision: 1,
+      question: "Accept the proposed plan?",
+      options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }],
+      resolution: null,
+    };
+    // The first press's resolution is answered by nothing: its response is lost
+    // at the transport layer before the server recorded it, which keeps the
+    // attempt frozen. Editing the pasted proposal is a different logical intent
+    // (a different freeze key), so the next press must mint its own identity and
+    // admit the document the operator confirmed — not the frozen attempt's bytes.
+    let resolveAttempts = 0;
+    let decisionResolved = false;
+    let servedVersion = 5;
+    const resolveBodies: Array<{ mutation_id: string }> = [];
+    const admitBodies: Array<{ mutation_id: string; payload: Record<string, unknown> }> = [];
+    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({
+          id: goalId,
+          projectId,
+          projectName: "Project One",
+          title: "Changed proposal plan goal",
+          state: "draft",
+          version: servedVersion,
+          currentRevision: 1,
+          allowedActions: ["amend", "cancel"],
+          decisions: [decisionResolved
+            ? { ...decision, state: "resolved", "open?": false, version: 4, resolution: { option_id: "accept" } }
+            : decision],
+        }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        const envelope = JSON.parse(rawBody) as { kind: string; mutation_id: string; payload: Record<string, unknown> };
+        if (envelope.kind === "resolve_decision") {
+          resolveBodies.push(envelope);
+          // The attempted resolution never applied: the response is lost before
+          // the outcome is known, and the fixture does not record the request.
+          if (resolveAttempts++ === 0) throw new TypeError("network down");
+          decisionResolved = true;
+          servedVersion += 1;
+          return jsonResponse({ goal_id: goalId, mutation_id: envelope.mutation_id, event: { id: envelope.mutation_id, sequence: 2, kind: "resolve_decision", revision: 1 } });
+        }
+        admitBodies.push(envelope);
+        servedVersion += 1;
+        return jsonResponse({ goal_id: goalId, mutation_id: envelope.mutation_id, event: { id: envelope.mutation_id, sequence: 3, kind: "accept_plan", revision: 1 } });
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    const user = userEvent.setup();
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Changed proposal plan goal" });
+    // A JSON document contains braces that user-event's keyboard parser reads as
+    // key descriptors; set the controlled textarea value directly instead.
+    fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify({ schema_version: "symmetry.plan.v1", items: [] }) } });
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    expect(await screen.findByText(/Cannot reach the server/)).toBeVisible();
+    expect(resolveBodies).toHaveLength(1);
+    // The operator edits the pasted proposal, which is the changed intent.
+    fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify({ schema_version: "symmetry.plan.v1", items: [{ title: "Admit the corrected plan" }] }) } });
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    await waitFor(() => expect(resolveBodies).toHaveLength(2));
+    // The changed intent mints its own identity; replaying the frozen attempt
+    // would resend the first attempt's bytes under the first identity.
+    expect(resolveBodies[1]?.mutation_id).not.toBe(resolveBodies[0]?.mutation_id);
+    await waitFor(() => expect(admitBodies).toHaveLength(1));
+    // The admission carries the document the operator confirmed, not the frozen
+    // attempt's. The vector is the server's own digest for the defaulted
+    // document, computed in this worktree with the portable Elixir toolchain and
+    // cross-checked with Python hashlib and Node:
+    //   mix run --no-start -e 'IO.puts("sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(%{"schema_version" => "symmetry.plan.v1", "items" => [%{"title" => "Admit the corrected plan", "integration" => false, "change_target" => nil}]}), case: :lower))'
+    // i.e. sha256 over
+    // {"items":[{"change_target":null,"integration":false,"title":"Admit the corrected plan"}],"schema_version":"symmetry.plan.v1"}.
+    expect(admitBodies[0]?.payload["proposal_hash"]).toBe("sha256:749eb3c4bb07d2d9ef09496c0472b11a3e1384b527a5e63ac0b1dfa5e9712afd");
+    expect(await screen.findByText("The server admitted the plan.", {}, { timeout: 5_000 })).toBeVisible();
+  }, 15_000);
+
   it("hashes the plan proposal the server validates, with the per-item defaults applied", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", kind: "plan", state: "open", "open?": true, version: 2, goal_revision: 1, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: null };
     const commands: Array<Record<string, unknown>> = [];
