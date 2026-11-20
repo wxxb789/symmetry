@@ -21,28 +21,28 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Dead-code candidates
 
-- [ ] Revalidate and remove the callerless projected provider-action chain in
-      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
-      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
-      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
-      document names it — and the chain behind it is its own:
-      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
-      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
-      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
-      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
-      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
-      were live. Inside that chain one disjunct can never match on any path the code gives it: the
-      clause `{:error, reason} when reason in [:stale, :state_conflict,
-      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
-      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
-      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
-      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
-      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
-      declares no such error key. `:capability_not_granted` is produced by
-      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
-      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
-      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
-      producer; revalidate the surviving provider-action tests either way.
+- [ ] Revalidate and remove two pre-existing dead surfaces found while applying the
+      provider-action-chain-removal simplify findings (2026-11-21).
+      (a) `Integrations.execute_accepted_resource_sync/2` and its catch-all
+      (`control/lib/symmetry_control/integrations.ex:554`, `:579`) have zero callers tree-wide:
+      `git grep -nw "execute_accepted_resource_sync" -- control/` matches only those two definition
+      clauses (the unanchored form also matches the `_unprojected` sibling's name), while the live
+      sibling `execute_accepted_resource_sync_unprojected/2` is called at
+      `control/lib/symmetry_control/integrations/provider_access.ex:1569`, `:1808`.
+      `record_provider_action_failure/2` (`integrations.ex:1111`) is reachable only from its two call
+      sites `:572`, `:575` inside this function and is dead with it; removing (a) must remove it too
+      (`compile --warnings-as-errors` will otherwise fail).
+      (b) The `{:provider_action_failure, code, outcome}` 3-tuple clause of `provider_failure/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:2311`) has no producer: its only
+      literal builder was the non-nil-outcome clause of `provider_action_failure_result/2`
+      (`integrations.ex:1134-1135` before the apply stage removed it), fed by the then-existing
+      `outcome` argument of `record_provider_action_failure/3`; it was unreachable once the
+      callerless projected chain was deleted. The surviving builders emit only the 4-tuple form:
+      the sole literal builder is `unprojected_provider_action_failure/1` (`integrations.ex:369`,
+      pass-through at `:364-365`), while `:514` is the clause head of
+      `project_provider_action_failure/2` matching the 4-tuple and `provider_access.ex:2315` the
+      4-tuple clause head of `provider_failure/1`.
+      Do not delete either surface here; revalidate and remove in a separate maintenance change.
 
 ## Retro review follow-ups
 
@@ -71,27 +71,31 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (rerun the two cases, then check whether the failing read is the timer or the intent state), and
       keep both assertions.
 
-- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
-      submit-time served one. `approvePlan` builds its envelope from `query.data`
-      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
-      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
-      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
-      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
-      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
-      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
-      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
-      the original note: every accepted command appends an event through `append_event!/7`
-      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
-      and reconcile writers go through `Goal.transition_changeset`
-      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
-      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
-      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
-      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
-      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
-      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
-      direction: build the press's envelope from a submit-time read the way the plan admission does,
-      re-deriving the presented decision's own version from that same read, or keep the page version and
-      record the refusal plus reload as the intended recovery.
+- [ ] The Goal surface offers no admission path for a resolved plan decision whose admission was
+      never accepted.
+      `PlanApproval` renders only for an open plan decision: `planApprovalOption`
+      (`frontend/src/features/goals/detail.tsx:408`) returns null unless `decision["open?"] === true`,
+      the render (`:381-382`) mounts no other admission affordance, and the resolved card shows
+      "Resolved: …" only. `NextAction` has no `accept_plan` payload path: its `accept_plan` branch
+      renders a note only ("Approve the open plan decision above first …", `:533`), `actionPayload`
+      returns null for every kind it does not build (`:626-627`), and the send button returns without
+      sending anything. The dead end is reachable through the press's own two commands by two paths.
+      (a) An answered admission refusal releases the whole attempt (`:218`), so a re-press re-resolves
+      a decision the server serves `resolved` and is refused `invalid_decision` (`apply_command!`
+      requires `decision.state == "open"`, `control/lib/symmetry_control/goals.ex:6491-6495`), while
+      the server would accept a fresh `accept_plan` built from a current read (`goals.ex:6395-6414`).
+      (b) A lost resolution acknowledgement keeps the attempt, but the goal invalidation the committed
+      resolution published before its response
+      (`control/lib/symmetry_control_web/plugs/portal_invalidations.ex:28-32`) refetches the card and
+      the `open?` gate (`:408`) unmounts the control; the server would replay the frozen resolution
+      bytes, and the admission would still need a fresh read. Pre-existing (the pre-fix press also
+      applied the resolution and could not admit) and outside `fix/resolve-decision-submit-read`'s
+      contract scope; that branch records the frozen attempt's release rule and the precondition of
+      the lost-acknowledgement replay, not this dead end. Fix direction: keep a retry control while
+      `sentApproval` holds a frozen attempt for that decision id (its frozen resolution replays
+      through `replay_event` and the admission is built from a fresh read), which covers only (b), or
+      serve `accept_plan` as an allowed action for a resolved plan decision that is not yet admitted,
+      so `NextAction` can present it through a payload path, which covers both paths.
 
 - [ ] Give the final-scan RPC's timer arms the post-timer recheck the barrier join and
       `stopDescendantMonitor` now carry. `requestDescendantMonitorScan`
@@ -234,28 +238,54 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Deferred review findings (0007h)
 
-- [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate
-      silently. The 0007h review confirmed these names are correct today but that the schemas leave them
-      optional while the client reads them: `accounting.known_usage_cost_microusd`
-      (`frontend/src/features/goals/detail.tsx:491`, served unconditionally at
-      `control/lib/symmetry_control/goals/read_model.ex:2539`), `settlement_attention[].proposed_next_action`
-      and `proposed_next_action_status` (`detail.tsx:245`), `external_waits[].external_ref`, `next_check_at`
-      and `check_seq` (`detail.tsx:508`), the attention `attention_reasons`/`active_tasks`/`nonterminal_tasks`
-      sets (`frontend/src/features/attention/attention.tsx:80`), and `accepted_outcomes[].candidate_subject`
-      and `subject_hash` (`detail.tsx:417`). Marking them `required` — as `integration`, `satisfied?` and the
-      unknown-cost member now are — would close the class; additive members staying unvalidated is intended.
-      A smaller residual from the same review lives here too: the rollout-off browser case went unrun in
-      hosted CI for two reasons — before `52cb4bb` its spec file was not in the render step's spec list,
-      and the step passed no `SYMMETRY_GOALS_OFF_URL` (both closed below).
-      Closed part moved to `docs/archive/CLOSED-TODO.md`.
-      The rollout-off browser-case residual is closed (2026-11-19, `fix/ci-render-gate-fixtures`, PR #98):
-      the render step starts a rollout-off release instance and runs the attention spec's rollout-off case
-      at both widths; its closure narrative and hosted evidence are in the same section there.
-      Remaining open: the legacy surfaces that
-      read workspace-read members still render their own fallbacks instead of refusing, which is
-      per-surface work outside this class; and the captures for `accepted_outcomes`, `settlement_attention`
-      and `external_waits` are empty arrays, so those members are pinned by the boundary test and the
-      real-served controller gate rather than by a fixture-level rename probe.
+- [ ] Harden the optional-but-consumed members of the served reads: the `workspace-read` row remains.
+      The Goal/attention half of this
+      item, and the empty-capture residual it carried, are closed on branch `fix/served-read-closeout`
+      (`docs/archive/CLOSED-TODO.md`, this section): every member this item named sits in a `required`
+      array at `fdf332d` and is read by the surface it cited, and the real-served controller gate now
+      serves an accepted outcome and a recorded external wait — the two collections it previously
+      validated only as empty arrays — beside the settlement attention it already asserted.
+      Still open is the same class on the workspace read, which the 0007h entry scoped out as per-surface
+      work: of the 68 members `workspace-read.schema.json` leaves optional (a `jq` walk of
+      `required` arrays), 66 are read by `frontend/src` feature code and only two are not
+      (`RuntimeSnapshot.active_runs` and `WorkspaceWorkItem.position` — verified by grep: no
+      feature-code read site for either; the four `RuntimeCapabilities` booleans `interactive`,
+      `provider_access`, `structured_input` and `supervisory_control` are consumed only as the whole
+      map, `frontend/src/features/runtimes/runtimes.tsx:24` serializing it into `data-capabilities`
+      and `browser/tests/portal-live-daemon.spec.mjs:433` asserting that attribute equals the
+      registration-side map, so no member-named read site exists for them), and
+      those surfaces render their own fallbacks instead of refusing. The 66 read members are the root
+      `runtimes` and `registered_runtimes`; project `version`, `default_agent_profile`,
+      `default_workspace` and `resources`; the resource row's `id`, `project_id`, `connection_id`,
+      `kind`, `name`, `provider`, `external_ref`, `url`, `status`, `sync_status`, `status_message`,
+      `last_synced_at` and `version`; the registered-runtime row's `runtime_id`, `runtime_name`,
+      `agent_profile` and `workspace`; the runtime snapshot's `capacity`, `reserved_capacity`,
+      `connection_epoch`, `last_heartbeat_at`, `repository_resource_id`, `agent_profile`, `workspace`
+      and `capabilities.adapter`, plus that map's `interactive`, `provider_access`, `structured_input`
+      and `supervisory_control`; the work row's `project_id`, `goal_id`, `description`, `priority`,
+      `assignee`, `workspace`, `repository_resource_id`, `repository`, `ci_resource_id`, `ci_resource`,
+      `branch`, `pull_request_url`, `ci_status`, `review_status`, `delivery`, `external`, `goal_managed`,
+      `version`, `can_start`, `execution` and `updated_at`; the `provider` and `recorded_at` of each
+      `delivery` value; `external.provider_owned_fields`; and the waiting-decision packet's `context`,
+      `reason`, `options`, `recommended_option_id` and each option's `id`, `label` and `consequence`.
+      Two options, both needing the owner because they decide whether an older partial workspace
+      projection stays renderable (the tolerance `contracts/README.md:22-23` records as "keeps accepting
+      older partial projections", while the serving projection does emit every one of those members,
+      `control/lib/symmetry_control_web/portal_json.ex:70-101,229-259` and
+      `control/lib/symmetry_control_web/protocol.ex:328-345`): option (a) drops the tolerance and requires
+      every always-emitted consumed member; because `WorkspaceWorkItem` is one shared definition body
+      across `workspace-read`, `work-detail-read` and `chat-read`
+      (`contracts/generated/effect/index.ts:633`), that single requiredness edit moves the required
+      arrays, the valid fixtures of all three schemas, the frontend fixture layer
+      (`frontend/src/services/api.fixtures.ts`) and the generated Go DTOs together, while the
+      `RuntimeCapabilities` members and the `WorkItemWaitingDecision` packet stay optional either way
+      because the projection passes the stored registration map and the agent's own waiting payload
+      through verbatim. Option (b) keeps the tolerance and pins the serving side instead, by validating a
+      real served `workspace-read` document against the contract bundle with the consumed members
+      asserted on that output — `validate_served_document!` today pins `chat-read`, `goal-read` and
+      `attention-read` only, so no gate compares a served workspace read with the contract at all.
+      Recommendation: (b) is the smaller, reversible step and keeps older projections renderable; (a) is
+      the class-consistent one.
 
 ## CI consolidation owner decisions (2026-11-17)
 
