@@ -372,8 +372,6 @@ const ControlExecution = Schema.Struct({
   run_id: Schema.NullOr(Schema.String),
   generation: Schema.Number,
   state: Schema.String,
-  waiting: Schema.optional(Schema.NullOr(Schema.Unknown)),
-  latest_command: Schema.optional(Schema.NullOr(Schema.Unknown)),
 });
 const ControlCommand = Schema.Struct({
   command_id: Schema.String,
@@ -435,10 +433,9 @@ const ChatMessageResponse = Schema.Struct({
   command: Schema.NullOr(ChatPostedCommand),
 });
 
-type ControlExecutionValue = typeof ControlExecution.Type;
 type ControlCommandValue = typeof ControlCommand.Type;
 
-export type ControlExecution = Omit<ControlExecutionValue, "waiting" | "latest_command">;
+export type ControlExecution = typeof ControlExecution.Type;
 export type ControlReceipt = ControlCommandValue;
 
 export interface StartOutcome {

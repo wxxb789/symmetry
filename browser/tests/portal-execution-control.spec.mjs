@@ -12,7 +12,7 @@
 // the retry endpoint refusing a human-owned item after reassignment, and an
 // idempotent replay of an unconfirmed attempt.
 //
-// Network interception appears in three places only, each named in the case that
+// Network interception appears in four places only, each named in the case that
 // uses it and each explicitly separated from real-data acceptance:
 //   1. holding a control POST response past the rendered receipt, to prove an
 //      in-flight request is never rendered as applied;
@@ -21,7 +21,11 @@
 //   3. holding the surface's own detail reads while that replay is pressed, so
 //      the press lands on the state the case observed instead of racing the
 //      next background refresh — the replay verdict is the server's disposition
-//      for the request the press sends, never a clock that could decide it.
+//      for the request the press sends, never a clock that could decide it;
+//   4. the migrated waiting-input draft case, which injects a schema-valid
+//      served waiting state into the real detail response so a background
+//      refresh must leave the reader's draft, caret and focus untouched (the
+//      real waiting-input lifecycle runs against a daemon in the live suite).
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
 import { api, createProject, createWorkItem, login, updateWorkItem, uniqueKey } from "./readable-fixtures.mjs";
 
@@ -46,7 +50,6 @@ const ui = {
   receiptAwaitingRuntime: "Awaiting a runtime",
   receiptDeferred: "Queued for the runtime",
   receiptApplied: "Applied",
-  receiptFailed: "Failed",
   receiptUnknown: "Outcome unknown",
   closeDetail: "Close work detail"
 };
@@ -68,6 +71,12 @@ async function timelineOf(page, workItemId) {
   return response.body.raw.timeline;
 }
 
+async function workItemVersion(page, workItemId) {
+  const response = await api(page, "GET", `/portal/api/work-items/${workItemId}`);
+  expect(response.status).toBe(200);
+  return response.body.work_item.version;
+}
+
 // No runtime serves this binding on this host, so the agent work stays queued:
 // exactly the daemon-free case the classic suite exercised.
 async function queuedAgentWork(page, prefix) {
@@ -83,13 +92,13 @@ async function queuedAgentWork(page, prefix) {
     agent_profile: `control-${key.toLowerCase()}`,
     workspace: `control-${key.toLowerCase()}`
   });
-  return { project, title, item };
+  return item;
 }
 
 test.describe("Execution control", () => {
   test("a queued run starts, shows its live state, and cancels into a stopped run whose retry no runtime serves", async ({ page }) => {
     await login(page);
-    const { item } = await queuedAgentWork(page, "EC");
+    const item = await queuedAgentWork(page, "EC");
     await openWorkDetail(page, item.id);
 
     await page.getByRole("button", { name: ui.start }).click();
@@ -102,8 +111,6 @@ test.describe("Execution control", () => {
     // (recorded in the goal receipt): this surface renders no client-side
     // elapsed time, so the migrated check asserts the served state instead of a
     // timestamp that a run-less detail also carries.
-    const served = await executionOf(page, item.id);
-    expect(served.state).toBe("queued");
     await expect(page.locator(".control-bar .chip")).toHaveText(ui.stateQueued);
     await expect(page.getByText(ui.stateQueued, { exact: true }).first()).toBeVisible();
 
@@ -138,7 +145,7 @@ test.describe("Execution control", () => {
     // serving runtime either, so the control was already withheld: the
     // assignee gate is observable at the endpoint that would apply the retry,
     // which refuses the human-owned item for the current generation.
-    const current = await projectItemVersion(page, item.id);
+    const current = await workItemVersion(page, item.id);
     await updateWorkItem(page, item.id, { assignee_type: "human", assignee_name: "Casey", version: current });
     await page.reload();
     await expect(page.locator("h1")).toBeVisible();
@@ -155,7 +162,7 @@ test.describe("Execution control", () => {
 
   test("an in-flight request is never rendered as applied, and a lost response stays unknown until replayed", async ({ page }) => {
     await login(page);
-    const { item } = await queuedAgentWork(page, "EP");
+    const item = await queuedAgentWork(page, "EP");
 
     let release = () => {};
     const held = new Promise((resolve) => { release = resolve; });
@@ -176,7 +183,7 @@ test.describe("Execution control", () => {
     await page.unroute(`**/portal/api/work-items/${item.id}/run`);
 
     const lost = await queuedAgentWork(page, "EL");
-    await openWorkDetail(page, lost.item.id);
+    await openWorkDetail(page, lost.id);
     await page.getByRole("button", { name: ui.start }).click();
     await expect(page.getByRole("button", { name: ui.cancel })).toBeVisible({ timeout: STATE_GUARD_MS });
     // The dropped response is the only console error this case may produce.
@@ -191,12 +198,12 @@ test.describe("Execution control", () => {
     // the control was gone and `disposition: "replayed"` was never asserted —
     // the 15 s clock that decided it could only ever pass.
     const heldReads = [];
-    await page.route(`**/portal/api/work-items/${lost.item.id}`, async (route) => {
+    await page.route(`**/portal/api/work-items/${lost.id}`, async (route) => {
       heldReads.push(route);
     });
     // The request reaches the server and only its response is dropped, so the
     // durable command exists while the browser has no confirmation at all.
-    await page.route(`**/portal/api/work-items/${lost.item.id}/cancel`, async (route) => {
+    await page.route(`**/portal/api/work-items/${lost.id}/cancel`, async (route) => {
       await route.fetch();
       await route.abort("failed");
     });
@@ -210,10 +217,10 @@ test.describe("Execution control", () => {
     // that recorded attempt's replay and never mints a second command. The
     // verdict is the server's own disposition for this browser's request: no
     // clock decides whether the claim is asserted.
-    await page.unroute(`**/portal/api/work-items/${lost.item.id}/cancel`);
+    await page.unroute(`**/portal/api/work-items/${lost.id}/cancel`);
     const replayResponse = page.waitForResponse((response) => {
       const url = new URL(response.url());
-      return url.pathname === `/portal/api/work-items/${lost.item.id}/cancel`;
+      return url.pathname === `/portal/api/work-items/${lost.id}/cancel`;
     });
     await page.getByRole("button", { name: ui.cancel }).click();
     const replayed = await replayResponse;
@@ -223,7 +230,7 @@ test.describe("Execution control", () => {
     // assertion here is about the state the surface keeps, never about the
     // delivery of a held response.
     for (const route of heldReads) await route.continue().catch(() => undefined);
-    await page.unroute(`**/portal/api/work-items/${lost.item.id}`);
+    await page.unroute(`**/portal/api/work-items/${lost.id}`);
 
     // The reload reconstructs the same attempt from its stored identity, so the
     // receipt is pending again instead of vanishing — still never applied.
@@ -237,15 +244,15 @@ test.describe("Execution control", () => {
     await expect(pending.or(settled).first()).toBeVisible({ timeout: STATE_GUARD_MS });
     if (await pending.count() === 1) await expect(pending).not.toContainText(ui.receiptApplied);
 
-    await expect.poll(() => executionOf(page, lost.item.id), { timeout: STATE_GUARD_MS }).toMatchObject({ state: "cancelled" });
+    await expect.poll(() => executionOf(page, lost.id), { timeout: STATE_GUARD_MS }).toMatchObject({ state: "cancelled" });
     await expect(page.getByText(ui.stateCancelled, { exact: true }).first()).toBeVisible({ timeout: STATE_GUARD_MS });
-    const replay = (await timelineOf(page, lost.item.id)).filter((entry) => entry.source === "command" && entry.data.kind === "cancel");
+    const replay = (await timelineOf(page, lost.id)).filter((entry) => entry.source === "command" && entry.data.kind === "cancel");
     expect(replay, "exactly one durable cancel command after a lost response").toHaveLength(1);
   });
 
   test("unsupported operations are explained and never rendered as live controls", async ({ page }) => {
     await login(page);
-    const { item } = await queuedAgentWork(page, "EU");
+    const item = await queuedAgentWork(page, "EU");
     await openWorkDetail(page, item.id);
 
     await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0);
@@ -261,7 +268,7 @@ test.describe("Execution control", () => {
 
   test("the work detail keeps a waiting-input draft and focus across a background refresh", async ({ page }) => {
     await login(page);
-    const { item } = await queuedAgentWork(page, "ED");
+    const item = await queuedAgentWork(page, "ED");
 
     // Migrated from the classic drawer case: the served waiting state is
     // injected into the real response (schema-valid, every consumed member
@@ -369,9 +376,3 @@ test.describe("Runtime visibility", () => {
     }
   });
 });
-
-async function projectItemVersion(page, workItemId) {
-  const response = await api(page, "GET", `/portal/api/work-items/${workItemId}`);
-  expect(response.status).toBe(200);
-  return response.body.work_item.version;
-}

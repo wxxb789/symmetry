@@ -56,7 +56,7 @@ defmodule PortalPlanningFixture do
     # goals.current_revision has a DEFERRABLE FK into goal_revisions, so the
     # goal row, its revision and the membership write commit as one transaction
     # - the same shape the Goal admission path uses.
-    goal =
+    {:ok, goal} =
       Repo.transaction(fn ->
         goal =
           %Goal{}
@@ -107,10 +107,7 @@ defmodule PortalPlanningFixture do
         goal
       end)
 
-    case goal do
-      {:ok, goal} -> IO.puts("goal-managed #{work_item.id} goal #{goal.id}")
-      {:error, reason} -> raise "goal-managed fixture failed: #{inspect(reason)}"
-    end
+    IO.puts("goal-managed #{work_item.id} goal #{goal.id}")
   end
 
   def main(["--provider-owned", work_item_id, resource_id, provider, external_id]) do

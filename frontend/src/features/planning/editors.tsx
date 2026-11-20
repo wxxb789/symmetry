@@ -217,6 +217,8 @@ interface WorkItemDraftState {
   failure: unknown;
   pending: boolean;
   retryable: boolean;
+  owned: ReadonlySet<string>;
+  delivery: { pullRequest: boolean; ci: boolean; review: boolean };
   hasIntent: boolean;
   targetVersion: number | null;
   submit: () => void;
@@ -295,8 +297,9 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
       // form: every attempt of this draft replays the same identity verbatim.
       submitted = { kind: "create", payload: { ...workItemDraftOf(form, { includeStatus: true, deliveryEditable: delivery }), creation_id: workItemCreationId(project.id) } };
     } else {
-      const intended = workItemUpdatePayload(form, target.version, delivery) as Record<string, unknown>;
-      const payload = withoutProviderOwned(workItemUpdatePayload(form, target.version, delivery), owned);
+      const intendedDraft = workItemUpdatePayload(form, target.version, delivery);
+      const intended = intendedDraft as Record<string, unknown>;
+      const payload = withoutProviderOwned(intendedDraft, owned);
       const served = item as unknown as Record<string, unknown>;
       // Only a field the operator actually changed counts: the served row is
       // the comparison, and a control whose served shape differs (the owner is
@@ -355,6 +358,8 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
     failure,
     pending,
     retryable: failure !== null && failureMode(failure) === "retryable",
+    owned,
+    delivery,
     hasIntent: intent !== null,
     targetVersion: target === null ? null : target.version,
     submit,
@@ -365,13 +370,7 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
 }
 
 function WorkItemEditorDialog({ project, item, presentation, drawerHost, draft }: WorkItemEditorProps & { draft: WorkItemDraftState }) {
-  const { form, set, failure, pending, retryable, hasIntent, targetVersion, submit, retry, close, openerRef } = draft;
-  const owned = providerOwnedControlsOf(item ?? {});
-  const delivery = {
-    pullRequest: deliveryValueEditable(item?.delivery?.pull_request),
-    ci: deliveryValueEditable(item?.delivery?.ci),
-    review: deliveryValueEditable(item?.delivery?.review),
-  };
+  const { form, set, failure, pending, retryable, owned, delivery, hasIntent, targetVersion, submit, retry, close, openerRef } = draft;
   const resources = project.resources ?? [];
   const repositories = resources.filter((resource) => resource.kind === "repository");
   const ciResources = resources.filter((resource) => resource.kind === "ci");

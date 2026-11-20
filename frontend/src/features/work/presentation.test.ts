@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asRecord, asText, attributionOf, ciLabel, ciResourcesOf, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, failureText, nextActionLabel, ownerKey, ownerLabel, reportedResult, reportedText, timelineBoundary, timelineItemKey, timelineItemView, timestamp, type TimelineItemLike } from "./presentation";
+import { asRecord, asText, attributionOf, ciLabel, ciResourcesOf, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, failureText, nextActionLabel, ownerKey, ownerKeyLabel, ownerLabel, reportedResult, reportedText, timelineBoundary, timelineItemKey, timelineItemView, timestamp, type TimelineItemLike } from "./presentation";
 
 const workItemId = "11111111-1111-4111-8111-111111111111";
 const taskId = "22222222-2222-4222-8222-222222222222";
@@ -54,6 +54,16 @@ describe("cost and acceptance truthfulness", () => {
     expect(ownerLabel(undefined)).toBe("Unassigned");
     expect(ownerKey({ type: "agent", name: "Worker", agent_profile: "reviewer" })).toBe("agent:reviewer");
     expect(ownerKey({ type: "human", name: "Ada", agent_profile: null })).toBe("human:Ada");
+  });
+
+  it("labels every owner key its own encoder mints, so a format change cannot drift apart", () => {
+    // The round trip is the contract: the filter key carried in the URL and the
+    // label rendered before the rows load are one identity written and read back.
+    expect(ownerKeyLabel(ownerKey({ type: "agent", name: "Worker", agent_profile: "reviewer" }))).toBe("Agent · reviewer");
+    expect(ownerKeyLabel(ownerKey({ type: "agent", name: "Worker", agent_profile: null }))).toBe("Agent · Worker");
+    expect(ownerKeyLabel(ownerKey({ type: "human", name: "Ada", agent_profile: null }))).toBe("Ada");
+    expect(ownerKeyLabel(ownerKey({ type: "unassigned", name: null, agent_profile: null }))).toBe("Unassigned");
+    expect(ownerKeyLabel(ownerKey({ type: "robot", name: null, agent_profile: null }))).toBe("Unknown owner type: robot");
   });
 });
 

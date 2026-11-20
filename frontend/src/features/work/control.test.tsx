@@ -105,8 +105,24 @@ function stubMatchMedia(desktop: boolean) {
 
 beforeEach(() => stubMatchMedia(false));
 
-function renderWorkDetail(options: HarnessOptions = {}) {
+/** The reads neither harness scripts: the workspace snapshot, or the routeless 404. */
+function unscriptedResponse(pathname: string) {
+  if (pathname === "/portal/api/workspace") return new Response(JSON.stringify(workspaceBody()));
+  return new Response("{}", { status: 404 });
+}
+
+/** Mounts the work detail against a scripted fetcher: both harnesses share this skeleton. */
+function renderDetail(fetcher: typeof fetch) {
   const path = `/portal/work/${subjectId}`;
+  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
+  applications.push(application);
+  const history: RouterHistory = createMemoryHistory({ initialEntries: [path] });
+  const router = createAppRouter(application, history);
+  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+  return { application, history };
+}
+
+function renderWorkDetail(options: HarnessOptions = {}) {
   let detailReads = 0;
   let sessionReads = 0;
   const requests: RecordedRequest[] = [];
@@ -130,16 +146,9 @@ function renderWorkDetail(options: HarnessOptions = {}) {
       detailReads += 1;
       return (options.detail ?? (() => new Response(JSON.stringify(runningDetail()))))(detailReads);
     }
-    if (url.pathname === "/portal/api/workspace") {
-      return new Response(JSON.stringify(workspaceBody()));
-    }
-    return new Response("{}", { status: 404 });
+    return unscriptedResponse(url.pathname);
   });
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
-  applications.push(application);
-  const history: RouterHistory = createMemoryHistory({ initialEntries: [path] });
-  const router = createAppRouter(application, history);
-  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+  const { application, history } = renderDetail(fetcher);
   const posts = () => requests.filter((request) => request.method === "POST");
   return { application, history, requests, posts };
 }
@@ -219,6 +228,38 @@ describe("control mutation boundary", () => {
       return found[0];
     });
     expect(card).toHaveTextContent("If you signed in elsewhere, refresh the page and try again.");
+  });
+
+  it("refuses a control whose attempt has no storable identity instead of sending it unidentified", async () => {
+    const user = userEvent.setup();
+    const harness = renderWorkDetail({
+      command: () => { throw new Error("a control without an attempt identity must not reach the server"); }
+    });
+    await openDetail();
+    // A browser whose session storage refuses every access: the attempt has no
+    // durable identity, and a request without one could be applied twice by a
+    // double click or a lost response, so the surface must refuse it instead.
+    vi.stubGlobal("sessionStorage", {
+      getItem: () => { throw new Error("storage disabled"); },
+      setItem: () => { throw new Error("storage disabled"); },
+      removeItem: () => { throw new Error("storage disabled"); }
+    });
+    try {
+      await user.click(screen.getByRole("button", { name: "Cancel run" }));
+      const card = await waitFor(() => {
+        const found = receiptCards("Failed");
+        expect(found).toHaveLength(1);
+        return found[0];
+      });
+      expect(card).toHaveAttribute("data-outcome", "failed");
+      expect(card).toHaveTextContent("This browser cannot store an attempt identity, so the request was not sent.");
+      // The missing identity, not the request, decides: nothing was sent, and a
+      // second press cannot degrade into sending one unidentified either.
+      await user.click(screen.getByRole("button", { name: "Cancel run" }));
+      expect(harness.posts()).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -380,13 +421,8 @@ function renderTimelineHarness(options: {
       return Promise.resolve(new Response(JSON.stringify(options.detail(detailReads))));
     }
     if (url.pathname === "/portal/api/session") return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
-    if (url.pathname === "/portal/api/workspace") return Promise.resolve(new Response(JSON.stringify(workspaceBody())));
-    return Promise.resolve(new Response("{}", { status: 404 }));
+    return Promise.resolve(unscriptedResponse(url.pathname));
   });
-  const application = createApplication({ fetcher, location: { href: `http://localhost/portal/work/${subjectId}`, replace: vi.fn() } });
-  applications.push(application);
-  const history: RouterHistory = createMemoryHistory({ initialEntries: [`/portal/work/${subjectId}`] });
-  const router = createAppRouter(application, history);
-  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+  renderDetail(fetcher);
   return { cursors, detailReads: () => detailReads };
 }

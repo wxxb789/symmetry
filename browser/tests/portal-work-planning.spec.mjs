@@ -17,13 +17,17 @@
 import { allowBrowserError, assertNoBrowserErrors, expect, monitorBrowserErrors, test } from "./fixtures.mjs";
 import {
   api,
-  attachResource,
   capture,
-  createProject,
-  createWorkItem,
+  closeDetail,
+  detailSurface,
   login,
+  projectItem,
+  projectUrl,
+  seedProject as seedFixtureProject,
+  servedColumnTitles,
   snapshotMetrics,
   uniqueKey,
+  workUrl,
   workspace
 } from "./readable-fixtures.mjs";
 import { applyGoalManaged, applyProviderOwned } from "./planning-fixtures.mjs";
@@ -57,10 +61,6 @@ const ui = {
   save: "Save",
   cancel: "Cancel",
   tryAgain: "Try again",
-  refresh: "Refresh",
-  closeDetail: "Close work detail",
-  backToProject: /^Back to projects?$/,
-  board: "Work board",
   project: "Project"
 };
 
@@ -69,27 +69,13 @@ const ui = {
 const statusNotice = (scope, text) => scope.locator('p[role="status"]', { hasText: text });
 const alertNotice = (scope, text) => scope.locator('p[role="alert"]', { hasText: text });
 
-const projectUrl = (id, params = {}) => {
-  const query = new URLSearchParams(params).toString();
-  return `/portal/projects/${id}${query ? `?${query}` : ""}`;
-};
-const workUrl = (id, params = {}) => {
-  const query = new URLSearchParams(params).toString();
-  return `/portal/work/${id}${query ? `?${query}` : ""}`;
-};
-
-const detailSurface = (page, isMobile, title) =>
-  isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: title });
-
-async function seedProject(page, { prefix, items = [], resources = [] }) {
-  const key = uniqueKey(prefix);
-  const project = await createProject(page, { key, name: `Planning ${key}`, description: `${prefix} planning fixture` });
-  const attached = [];
-  for (const resource of resources) attached.push(await attachResource(page, project.id, resource));
-  const created = new Map();
-  for (const item of items) created.set(item.title, await createWorkItem(page, project.id, item));
-  return { ...project, resources: attached, items: created };
-}
+// This suite's fixture identity over the shared seeder: planning-named projects.
+const seedProject = (page, options) =>
+  seedFixtureProject(page, {
+    ...options,
+    name: (key) => `Planning ${key}`,
+    description: () => `${options.prefix} planning fixture`
+  });
 
 async function storedProject(page, projectId) {
   const response = await workspace(page, projectId);
@@ -97,25 +83,9 @@ async function storedProject(page, projectId) {
   return response.body.projects.find((candidate) => candidate.id === projectId);
 }
 
-async function storedItem(page, projectId, title) {
-  const project = await storedProject(page, projectId);
-  expect(project, `project ${projectId} in the workspace read`).toBeTruthy();
-  const item = project.work_items.find((candidate) => candidate.title === title);
-  expect(item, `work item "${title}" in the workspace read`).toBeTruthy();
-  return item;
-}
-
 async function projectIdOf(page, name) {
-  return page.evaluate(async (projectName) => {
-    const response = await fetch("/portal/api/workspace", { credentials: "same-origin", headers: { Accept: "application/json" } });
-    const body = await response.json();
-    return body.projects.find((project) => project.name === projectName)?.id ?? "";
-  }, name);
-}
-
-async function closeDetail(page, isMobile) {
-  if (isMobile) await page.getByRole("link", { name: ui.backToProject }).click();
-  else await page.getByRole("button", { name: ui.closeDetail }).click();
+  const body = (await api(page, "GET", "/portal/api/workspace")).body;
+  return body.projects.find((project) => project.name === name)?.id ?? "";
 }
 
 const boardCard = (page, title) => page.getByRole("link", { name: title });
@@ -124,11 +94,6 @@ const columnOf = (page, title) => page.locator("[data-board-card]", { has: board
 const boardColumn = (page, state) =>
   page.locator(".board-column", { has: page.getByRole("heading", { name: new RegExp(`^${state.replaceAll("_", " ")}$`, "i") }) });
 const focusedLabel = (page) => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? "");
-const readyColumnTitles = async (page, projectId) =>
-  (await storedProject(page, projectId)).work_items
-    .filter((item) => item.status === "ready")
-    .sort((left, right) => left.position - right.position)
-    .map((item) => item.title);
 
 async function moveByKeyboard(page, title, key) {
   const card = boardCard(page, title);
@@ -208,10 +173,7 @@ test.describe("planning project mutations", () => {
     await expect(dialog.getByText("has already been taken")).toBeVisible();
     await expect(dialog).toBeVisible();
     await expect(dialog.getByLabel("Key")).toHaveValue(existing.key);
-    const body = await page.evaluate(async () => {
-      const response = await fetch("/portal/api/workspace", { credentials: "same-origin", headers: { Accept: "application/json" } });
-      return response.json();
-    });
+    const body = (await api(page, "GET", "/portal/api/workspace")).body;
     expect(body.projects.filter((project) => project.key === existing.key)).toHaveLength(1);
   });
 
@@ -319,7 +281,7 @@ test.describe("planning work-item mutations", () => {
     await dialog.getByRole("button", { name: ui.create }).click();
     await expect(statusNotice(page, "Work item created.")).toBeVisible();
 
-    const item = await storedItem(page, project.id, title);
+    const item = await projectItem(page, project.id, title);
     expect(item).toMatchObject({
       status: "ready",
       priority: "urgent",
@@ -346,7 +308,7 @@ test.describe("planning work-item mutations", () => {
     await editor.getByRole("button", { name: ui.save }).click();
     await expect(statusNotice(detail, "Work item updated.")).toBeVisible();
     await expect(detail.getByRole("heading", { level: 1, name: edited })).toBeVisible();
-    const editedItem = await storedItem(page, project.id, edited);
+    const editedItem = await projectItem(page, project.id, edited);
     expect(editedItem.priority).toBe("high");
     expect(editedItem.assignee).toMatchObject({ type: "human", name: "Mira" });
     expect(editedItem.pull_request_url).toBe("https://example.invalid/pr/0007c");
@@ -360,7 +322,7 @@ test.describe("planning work-item mutations", () => {
     await expect(statusNotice(page, /Moved to/)).toBeVisible();
     await expect.poll(() => columnOf(page, edited)).toBe("in_progress");
     await expect.poll(() => focusedLabel(page)).toBe(edited);
-    expect((await storedItem(page, project.id, edited)).status).toBe("in_progress");
+    expect((await projectItem(page, project.id, edited)).status).toBe("in_progress");
     await capture(page, testInfo, "planning-board-moved", { surface: "board", url: page.url(), column: "in_progress" });
   });
 
@@ -416,7 +378,7 @@ test.describe("planning work-item mutations", () => {
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toEqual(bodies[0]);
     expect(bodies[0].version).toBe(item.version);
-    const stored = await storedItem(page, project.id, renamed);
+    const stored = await projectItem(page, project.id, renamed);
     expect(stored.title).toBe(renamed);
     expect(stored.version).toBe(item.version + 1);
   });
@@ -455,7 +417,7 @@ test.describe("planning work-item mutations", () => {
 
     await editor.getByRole("button", { name: ui.save }).click();
     await expect(statusNotice(detail, "Work item updated.")).toBeVisible();
-    const stored = await storedItem(page, project.id, "Refresh draft");
+    const stored = await projectItem(page, project.id, "Refresh draft");
     expect(stored.branch).toBe("feat/draft-survives");
     expect(stored.blocked).toBe(true);
     expect(stored.blocker).toBe("Half-typed note");
@@ -493,7 +455,7 @@ test.describe("planning work-item mutations", () => {
       await expect(alertNotice(competing, "resource changed since it was loaded (stale)")).toBeVisible();
       await expect(competingEditor).toHaveCount(0);
       await expect(detailSurface(competing, isMobile, "Shared work current")).toBeVisible();
-      expect((await storedItem(authoring, project.id, "Shared work current")).title).toBe("Shared work current");
+      expect((await projectItem(authoring, project.id, "Shared work current")).title).toBe("Shared work current");
     } finally {
       try {
         assertNoBrowserErrors(authoring, competing);
@@ -530,7 +492,7 @@ test.describe("planning work-item mutations", () => {
     await page.getByLabel(ui.project).selectOption(second.id);
     await expect(page.getByRole("heading", { level: 1, name: second.name })).toBeVisible();
     gate.resolve();
-    await expect.poll(async () => (await storedItem(page, first.id, "Held move")).status).toBe("ready");
+    await expect.poll(async () => (await projectItem(page, first.id, "Held move")).status).toBe("ready");
     await expect(page.getByRole("heading", { level: 1, name: second.name })).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
     await expect(page.getByText(/Moved to/)).toHaveCount(0);
@@ -558,27 +520,27 @@ test.describe("planning work-item mutations", () => {
     await expect(statusNotice(page, /Moved to/)).toBeVisible();
     await expect.poll(() => columnOf(page, "Keyboard alpha")).toBe("ready");
     await expect.poll(() => focusedLabel(page)).toBe("Keyboard alpha");
-    await expect.poll(() => readyColumnTitles(page, project.id)).toEqual(["Keyboard gamma", "Keyboard alpha"]);
+    await expect.poll(() => servedColumnTitles(page, project.id)).toEqual(["Keyboard gamma", "Keyboard alpha"]);
 
     // Reorder up: the moved card takes the first position it asks for.
     await moveByKeyboard(page, "Keyboard alpha", "ArrowUp");
     await expect(statusNotice(page, /Moved up/)).toBeVisible();
-    await expect.poll(() => readyColumnTitles(page, project.id)).toEqual(["Keyboard alpha", "Keyboard gamma"]);
+    await expect.poll(() => servedColumnTitles(page, project.id)).toEqual(["Keyboard alpha", "Keyboard gamma"]);
     await expect.poll(() => focusedLabel(page)).toBe("Keyboard alpha");
 
     // Reorder down: appending after the last card of the column.
     await moveByKeyboard(page, "Keyboard alpha", "ArrowDown");
     await expect(statusNotice(page, /Moved down/)).toBeVisible();
-    await expect.poll(() => readyColumnTitles(page, project.id)).toEqual(["Keyboard gamma", "Keyboard alpha"]);
+    await expect.poll(() => servedColumnTitles(page, project.id)).toEqual(["Keyboard gamma", "Keyboard alpha"]);
     await expect.poll(() => focusedLabel(page)).toBe("Keyboard alpha");
 
     // Unmoved neighbour: at the first position, "up" is a no-op without a request.
     await moveByKeyboard(page, "Keyboard gamma", "ArrowUp");
-    await expect.poll(() => readyColumnTitles(page, project.id)).toEqual(["Keyboard gamma", "Keyboard alpha"]);
+    await expect.poll(() => servedColumnTitles(page, project.id)).toEqual(["Keyboard gamma", "Keyboard alpha"]);
 
     await page.reload();
     await expect.poll(() => columnOf(page, "Keyboard alpha")).toBe("ready");
-    await expect.poll(() => readyColumnTitles(page, project.id)).toEqual(["Keyboard gamma", "Keyboard alpha"]);
+    await expect.poll(() => servedColumnTitles(page, project.id)).toEqual(["Keyboard gamma", "Keyboard alpha"]);
     await capture(page, testInfo, "planning-keyboard-moves", {
       surface: "board",
       url: page.url(),
@@ -604,7 +566,7 @@ test.describe("planning work-item mutations", () => {
     await moveByKeyboard(page, "Empty column target", "ArrowRight");
     await expect(statusNotice(page, /Moved to/)).toBeVisible();
     await expect.poll(() => columnOf(page, "Empty column target")).toBe("ready");
-    const stored = await storedItem(page, project.id, "Empty column target");
+    const stored = await projectItem(page, project.id, "Empty column target");
     expect(stored.status).toBe("ready");
     await capture(page, testInfo, "planning-empty-column-move", {
       surface: "board",
@@ -639,7 +601,7 @@ test.describe("planning work-item mutations", () => {
 
     await moveByKeyboard(page, "Filtered move", "ArrowRight");
     await expect(statusNotice(page, /Moved to/)).toBeVisible();
-    const stored = await storedItem(page, project.id, "Filtered move");
+    const stored = await projectItem(page, project.id, "Filtered move");
     expect(stored.status).toBe("ready");
     await expect(boardCard(page, "Filtered ready")).toHaveCount(0);
     await expect(ready.locator("[data-board-card]")).toHaveCount(0);
@@ -765,7 +727,7 @@ test.describe("planning work-item mutations", () => {
 
     await editor.getByRole("button", { name: ui.save }).click();
     await expect(statusNotice(page, "Work item updated.")).toBeVisible();
-    const stored = await storedItem(page, project.id, "Resize draft");
+    const stored = await projectItem(page, project.id, "Resize draft");
     expect(stored.branch).toBe("feat/resize-draft");
     await capture(page, testInfo, "planning-resize-draft", {
       surface: "detail after the breakpoint crossings",
@@ -817,7 +779,7 @@ test.describe("unwritable item kinds", () => {
     const moveRefusal = await api(page, "PATCH", `/portal/api/work-items/${item.id}/move`, { version: item.version, status: "review", before_id: null });
     expect(moveRefusal.status).toBe(403);
     expect(moveRefusal.body.error.code).toBe("goal_authority_required");
-    expect((await storedItem(page, project.id, "Goal owned")).status).toBe("ready");
+    expect((await projectItem(page, project.id, "Goal owned")).status).toBe("ready");
     await capture(page, testInfo, "planning-goal-managed-item", { surface: isMobile ? "detail (narrow)" : "detail drawer", url: page.url() });
   });
 
@@ -862,7 +824,7 @@ test.describe("unwritable item kinds", () => {
     const refusal = await api(page, "PATCH", `/portal/api/work-items/${item.id}`, { version: item.version, title: "Legacy rewrite" });
     expect(refusal.status).toBe(409);
     expect(refusal.body.error.code).toBe("provider_owned");
-    const stored = await storedItem(page, project.id, "Provider owned");
+    const stored = await projectItem(page, project.id, "Provider owned");
     expect(stored.title).toBe("Provider owned");
     expect(stored.external.state).toBe("open");
     expect(stored.external.provider_owned_fields).toContain("title");
@@ -898,7 +860,7 @@ test.describe("archived project read-only", () => {
     await moveByKeyboard(page, "Retained work", "ArrowRight");
     await expect(statusNotice(page, /restore it to move work/)).toBeVisible();
     expect(moves).toHaveLength(0);
-    expect((await storedItem(page, project.id, "Retained work")).status).toBe("backlog");
+    expect((await projectItem(page, project.id, "Retained work")).status).toBe("backlog");
 
     await page.getByRole("link", { name: "Retained work" }).click();
     const detail = detailSurface(page, isMobile, "Retained work");

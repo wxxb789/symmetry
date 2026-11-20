@@ -113,8 +113,8 @@ $raceConfig = New-FixtureConfig -Name "race" -Profile "goal2-race-$fixtureSuffix
 # the resolved binaries matches its repository pin the daemon still registers an
 # honest all-unsupported record, which is the same comparison.
 $harnessProvider = @(
-  @{ Name = "pi"; Command = (Get-Command pi -ErrorAction SilentlyContinue).Source; Kind = "pi"; VersionCommand = "pi"; AdapterVersion = "pi-rpc-v1"; ProtocolVersion = 1 },
-  @{ Name = "omo"; Command = (Get-Command omo -ErrorAction SilentlyContinue).Source; Kind = "omo"; VersionCommand = "omo"; AdapterVersion = "omo-rpc-v1"; ProtocolVersion = 1 }
+  @{ Command = (Get-Command pi -ErrorAction SilentlyContinue).Source; Kind = "pi"; AdapterVersion = "pi-rpc-v1"; ProtocolVersion = 1 },
+  @{ Command = (Get-Command omo -ErrorAction SilentlyContinue).Source; Kind = "omo"; AdapterVersion = "omo-rpc-v1"; ProtocolVersion = 1 }
 ) | Where-Object { $_.Command } | Select-Object -First 1
 
 # The probed native version line, read from the same executable the daemon will
@@ -123,11 +123,10 @@ $harnessProvider = @(
 # than passing with an invented version.
 $harnessVersion = $null
 if ($harnessProvider) {
-  $versionOutput = & $harnessProvider.VersionCommand --version 2>$null | Select-Object -First 1
+  $versionOutput = & $harnessProvider.Kind --version 2>$null | Select-Object -First 1
   if ($LASTEXITCODE -eq 0 -and $versionOutput) { $harnessVersion = ($versionOutput -split "`n")[0].Trim() }
 }
 
-$harnessConfig = $null
 $harnessRuntimeKey = $null
 $harnessRepositoryFile = Join-Path $runRoot "harness-repository.json"
 $processes = @()
