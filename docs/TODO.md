@@ -91,27 +91,31 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
       that never exits still fails) in a separate maintenance change.
 
-- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
-      submit-time served one. `approvePlan` builds its envelope from `query.data`
-      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
-      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
-      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
-      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
-      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
-      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
-      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
-      the original note: every accepted command appends an event through `append_event!/7`
-      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
-      and reconcile writers go through `Goal.transition_changeset`
-      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
-      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
-      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
-      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
-      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
-      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
-      direction: build the press's envelope from a submit-time read the way the plan admission does,
-      re-deriving the presented decision's own version from that same read, or keep the page version and
-      record the refusal plus reload as the intended recovery.
+- [ ] The Goal surface offers no admission path for a resolved plan decision whose admission was
+      never accepted.
+      `PlanApproval` renders only for an open plan decision: `planApprovalOption`
+      (`frontend/src/features/goals/detail.tsx:408`) returns null unless `decision["open?"] === true`,
+      the render (`:381-382`) mounts no other admission affordance, and the resolved card shows
+      "Resolved: …" only. `NextAction` has no `accept_plan` payload path: its `accept_plan` branch
+      renders a note only ("Approve the open plan decision above first …", `:533`), `actionPayload`
+      returns null for every kind it does not build (`:626-627`), and the send button returns without
+      sending anything. The dead end is reachable through the press's own two commands by two paths.
+      (a) An answered admission refusal releases the whole attempt (`:218`), so a re-press re-resolves
+      a decision the server serves `resolved` and is refused `invalid_decision` (`apply_command!`
+      requires `decision.state == "open"`, `control/lib/symmetry_control/goals.ex:6491-6495`), while
+      the server would accept a fresh `accept_plan` built from a current read (`goals.ex:6395-6414`).
+      (b) A lost resolution acknowledgement keeps the attempt, but the goal invalidation the committed
+      resolution published before its response
+      (`control/lib/symmetry_control_web/plugs/portal_invalidations.ex:28-32`) refetches the card and
+      the `open?` gate (`:408`) unmounts the control; the server would replay the frozen resolution
+      bytes, and the admission would still need a fresh read. Pre-existing (the pre-fix press also
+      applied the resolution and could not admit) and outside `fix/resolve-decision-submit-read`'s
+      contract scope; that branch records the frozen attempt's release rule and the precondition of
+      the lost-acknowledgement replay, not this dead end. Fix direction: keep a retry control while
+      `sentApproval` holds a frozen attempt for that decision id (its frozen resolution replays
+      through `replay_event` and the admission is built from a fresh read), which covers only (b), or
+      serve `accept_plan` as an allowed action for a resolved plan decision that is not yet admitted,
+      so `NextAction` can present it through a payload path, which covers both paths.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
