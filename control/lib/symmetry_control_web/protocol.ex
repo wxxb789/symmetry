@@ -450,9 +450,19 @@ defmodule SymmetryControlWeb.Protocol do
       input: task.input
     }
 
-    if task.required_capabilities == %{},
-      do: work,
-      else: Map.put(work, :required_capabilities, task.required_capabilities)
+    # The daemon's wire type for `required_capabilities` is a boolean map
+    # (`map[string]bool` in `daemon/internal/protocol`, whose unmarshaller
+    # rejects other values), so only the requirement's boolean members cross
+    # the wire. Control keeps the full map — including nested adapter
+    # requirements — as scheduling data. An empty projection is omitted
+    # exactly as an empty stored requirement always was.
+    requirement = boolean_capabilities(task.required_capabilities)
+
+    if requirement == %{}, do: work, else: Map.put(work, :required_capabilities, requirement)
+  end
+
+  defp boolean_capabilities(required_capabilities) when is_map(required_capabilities) do
+    Map.filter(required_capabilities, fn {_capability, value} -> is_boolean(value) end)
   end
 
   defp decision(decision) do

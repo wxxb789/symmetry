@@ -39,9 +39,6 @@ defmodule SymmetryControl.Portal.Invalidations do
     :ok
   end
 
-  @doc "The normalized payload shape a publish accepts, for tests and publishers."
-  def fields, do: @fields
-
   # A goal change carries the goal's own event sequence as its cursor, so a
   # connected receipt list continues from the last sequence it rendered. The
   # lookup is a hint only: when it fails the change is still published (without a

@@ -47,4 +47,12 @@ describe("one-time legacy hash repair", () => {
       "/portal/attention?unavailable=chat_scope%3Drun",
     );
   });
+
+  it("explains a classic project link whose escape does not decode", () => {
+    // `%E0%A4%A` is a malformed escape: `decodeURIComponent` throws, and the
+    // repair runs at bootstrap, so it must neither crash the document nor invent a
+    // destination — the unavailable notice is the same answer as any other broken
+    // classic link.
+    expect(legacyDestination("#project/%E0%A4%A")).toBe("/portal/attention?unavailable=legacy");
+  });
 });

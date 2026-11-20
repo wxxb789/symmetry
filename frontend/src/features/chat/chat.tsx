@@ -62,7 +62,10 @@ const route = getRouteApi("/chat");
 /** The run's execution as the directory's work projections carry it. */
 type DirectoryExecution = NonNullable<WorkItem["execution"]>;
 
-/** The server's own wording for the guidance byte bound; the same bound it enforces. */
+/**
+ * The guidance byte bound the server enforces; the client states it here in
+ * its own words and renders its own sentence for a draft beyond it.
+ */
 const guidanceByteLimit = 32_768;
 
 /** A run the served work projections expose for the picker. */
@@ -133,7 +136,6 @@ export function ChatPage() {
       canGuide: servedRunExecution.can_guide === true,
       canPause: servedRunExecution.can_pause === true,
       canResume: servedRunExecution.can_resume === true,
-      hasDecision: decision !== null,
       pauseUnsupported: pauseIsUnsupported,
     }
     : null;
@@ -155,6 +157,16 @@ export function ChatPage() {
   const targetProjectId = urlScope === "project" ? urlProjectId ?? "" : state.targetProjectId;
 
   const history = chatHistoryView(state.pages, state.nextCursor);
+  // The empty claim requires a served read: while no read answered this scope
+  // the note stays silent, and a failed read names itself instead of
+  // presenting an unverified empty as fact.
+  const historyNote = history.messages.length > 0
+    ? `${history.messages.length} messages loaded${history.loadCursor === null ? " · oldest history loaded" : " · older history available"}.`
+    : conversation.data !== undefined
+      ? "No messages recorded in this context."
+      : conversation.isError
+        ? "Messages could not be loaded."
+        : null;
 
   useEffect(() => {
     const served = conversation.data;
@@ -259,12 +271,15 @@ export function ChatPage() {
     if (!conversation.isFetching) void conversation.refetch();
   };
 
-  /** A composer change abandons an unconfirmed send: what is visible is then the new intent. */
+  /**
+   * A composer change rewrites what is visible: the unconfirmed notice belongs
+   * to the previous intent and clears, while the frozen attempt stays — a
+   * retry reuses its identity exactly when the rebuilt body is byte-equal.
+   */
   const edit = (patch: Parameters<typeof update>[1]) => {
     updateWith(key, (current) => ({
       ...current,
       ...patch,
-      frozen: null,
       status: current.status.kind === "unconfirmed" ? { kind: "idle" } : current.status,
     }));
   };
@@ -295,7 +310,9 @@ export function ChatPage() {
         const refused = definitiveRefusal(error);
         updateWith(sendKey, (current) => ({
           ...current,
-          status: refused ? { kind: "refused", message: errorMessage(error) } : { kind: "unconfirmed" },
+          status: refused
+            ? { kind: "refused", message: errorMessage(error) }
+            : { kind: "unconfirmed", source: request.intent === "decision" ? "decision" : "composer" },
           frozen: refused ? null : current.frozen,
         }));
       },
@@ -310,7 +327,8 @@ export function ChatPage() {
     };
     const content = state.draft;
     if (intent === "guidance" && new TextEncoder().encode(content).byteLength > guidanceByteLimit) {
-      // The server's own bound and its own wording; the draft and selection stay.
+      // The server's own bound, stated here in the client's own words; the
+      // draft and selection stay.
       update(key, { status: { kind: "notice", message: "Guidance must be 32,768 UTF-8 bytes or fewer." } });
       return null;
     }
@@ -351,21 +369,24 @@ export function ChatPage() {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    // The composer is disabled for an incomplete scope; the guard also keeps a
+    // programmatic submit from asking the server for a scope it cannot resolve.
+    if (!scopeComplete) return;
     if (state.status.kind === "sending") return;
-    // A retry resends the frozen object itself: the same action id and a
-    // byte-equivalent body, so the server replays its recorded message.
-    if (state.frozen !== null) {
-      send(state.frozen);
-      return;
-    }
     const request = buildRequest();
-    if (request !== null) send(request);
+    if (request === null) return;
+    // A retry rebuilds the payload from what is visible now and reuses the
+    // frozen attempt's identity exactly when the rebuilt body is byte-equal
+    // (ignoring the action id), so the server replays its recorded message
+    // instead of applying a second operation.
+    const frozen = state.frozen;
+    send(frozen !== null && sameRequestBody(frozen, request) ? { ...request, action_id: frozen.action_id } : request);
   };
 
   const sendDecision = (option: ChatDecisionOption) => {
     if (state.status.kind === "sending") return;
     if (servedRunItem === null || servedRunExecution === null || waiting === null || urlRunId === null) return;
-    send({
+    const request: ChatMessageRequest = {
       scope: urlScope,
       run_id: urlRunId,
       intent: "decision",
@@ -377,7 +398,12 @@ export function ChatPage() {
       // buttons, so a stale packet is the server's refusal to give.
       waiting_transition_id: waiting.transition_id,
       option_id: option.id,
-    });
+    };
+    // The same rule as the composer retry: a re-chosen option that rebuilds
+    // the frozen body byte for byte reuses its identity; a different option,
+    // or a moved packet, is a new operation and mints a new id.
+    const frozen = state.frozen;
+    send(frozen !== null && sameRequestBody(frozen, request) ? { ...request, action_id: frozen.action_id } : request);
   };
 
   // The offset this scope leaves with is the pane's own position at the moment
@@ -471,7 +497,7 @@ export function ChatPage() {
       </div>}
     </section>
 
-    {decision !== null && <section id="chat-decision" className="chat-decision" aria-labelledby="chat-decision-question">
+    {urlScope === "run" && decision !== null && <section id="chat-decision" className="chat-decision" aria-labelledby="chat-decision-question">
       <h2 id="chat-decision-question">{decision.question ?? "The run is waiting for a decision."}</h2>
       {decision.context !== null && <p>{decision.context}</p>}
       <ul className="decision-options">
@@ -548,11 +574,7 @@ export function ChatPage() {
       >
         Entries between the loaded history and the retained older pages were not loaded; Load older history loads one page per press, so filling the gap may take more than one press.
       </p>}
-      <p id="chat-history-note" className="muted text-small">
-        {history.messages.length === 0
-          ? "No messages recorded in this context."
-          : `${history.messages.length} messages loaded${history.loadCursor === null ? " · oldest history loaded" : " · older history available"}.`}
-      </p>
+      {historyNote !== null && <p id="chat-history-note" className="muted text-small">{historyNote}</p>}
       {history.loadCursor !== null && <button
         id="chat-load-older"
         className="button"
@@ -565,7 +587,7 @@ export function ChatPage() {
     <form id="chat-form" className="chat-form" aria-busy={state.status.kind === "sending"} onSubmit={submit}>
       <div className="chat-field">
         <label htmlFor="chat-intent">Intent</label>
-        <select id="chat-intent" value={intent} onChange={(event) => { edit({ intent: event.currentTarget.value as ChatIntent }); }}>
+        <select id="chat-intent" value={intent} disabled={!scopeComplete} onChange={(event) => { edit({ intent: event.currentTarget.value as ChatIntent }); }}>
           {intents.map((candidate) => <option key={candidate} value={candidate}>{chatIntentLabel(candidate)}</option>)}
         </select>
       </div>
@@ -575,7 +597,7 @@ export function ChatPage() {
         <div className="chat-start-grid">
           <div className="chat-field">
             <label htmlFor="chat-work-title">Work item title (optional)</label>
-            <input id="chat-work-title" type="text" value={state.workTitle} onChange={(event) => { edit({ workTitle: event.currentTarget.value }); }} />
+            <input id="chat-work-title" type="text" value={state.workTitle} disabled={!scopeComplete} onChange={(event) => { edit({ workTitle: event.currentTarget.value }); }} />
           </div>
           <div className="chat-field">
             <label htmlFor="chat-target-project">Target project</label>
@@ -583,8 +605,13 @@ export function ChatPage() {
               id="chat-target-project"
               required={urlScope === "workspace"}
               value={targetProjectId}
-              disabled={urlScope === "project"}
-              onChange={(event) => { edit({ targetProjectId: event.currentTarget.value }); }}
+              disabled={!scopeComplete || urlScope === "project"}
+              onChange={(event) => {
+                // The resource lists re-key to the new target project, so the
+                // previous repository and CI selections no longer name its
+                // resources and are cleared with it.
+                edit({ targetProjectId: event.currentTarget.value, repositoryId: "", ciId: "" });
+              }}
             >
               {urlScope === "workspace" && <option value="">Select a project…</option>}
               {urlScope === "project"
@@ -594,14 +621,14 @@ export function ChatPage() {
           </div>
           <div className="chat-field">
             <label htmlFor="chat-repository">Repository resource</label>
-            <select id="chat-repository" value={state.repositoryId} onChange={(event) => { edit({ repositoryId: event.currentTarget.value }); }}>
+            <select id="chat-repository" value={state.repositoryId} disabled={!scopeComplete} onChange={(event) => { edit({ repositoryId: event.currentTarget.value }); }}>
               <option value="">None</option>
               {repositories.map((resource) => <option key={resource.id} value={resource.id}>{resource.name}</option>)}
             </select>
           </div>
           <div className="chat-field">
             <label htmlFor="chat-ci">CI resource</label>
-            <select id="chat-ci" value={state.ciId} onChange={(event) => { edit({ ciId: event.currentTarget.value }); }}>
+            <select id="chat-ci" value={state.ciId} disabled={!scopeComplete} onChange={(event) => { edit({ ciId: event.currentTarget.value }); }}>
               <option value="">None</option>
               {ciResources.map((resource) => <option key={resource.id} value={resource.id}>{resource.name}</option>)}
             </select>
@@ -615,12 +642,13 @@ export function ChatPage() {
         className="chat-content"
         required
         rows={3}
+        disabled={!scopeComplete}
         value={state.draft}
         placeholder={intent === "start_work" ? "State the goal this work should accomplish." : "Write the message this scope should keep."}
         onChange={(event) => { edit({ draft: event.currentTarget.value }); }}
       />
       <div className="chat-composer-actions">
-        <button id="chat-send" className="button control-button-primary" type="submit">Send</button>
+        <button id="chat-send" className="button control-button-primary" type="submit" disabled={!scopeComplete}>Send</button>
         <p id="chat-send-status" className="chat-send-status" role="status" aria-live="polite">{chatSendStatusText(state.status)}</p>
       </div>
     </form>
@@ -666,6 +694,15 @@ function ChatMessageRow({ message, receipt }: {
 function definitiveRefusal(error: unknown): boolean {
   return error instanceof Conflict || error instanceof Validation || error instanceof Forbidden || error instanceof Unsupported ||
     (error instanceof ServerRefusal && error.status >= 400 && error.status < 500);
+}
+
+/**
+ * True when two attempts carry byte-equivalent bodies apart from the action
+ * id. Only then may a retry reuse the frozen attempt's identity; a body the
+ * operator changed is a new operation and gets a newly minted id.
+ */
+function sameRequestBody(frozen: ChatMessageRequest, rebuilt: ChatMessageRequest): boolean {
+  return JSON.stringify({ ...frozen, action_id: "" }) === JSON.stringify({ ...rebuilt, action_id: "" });
 }
 
 /**

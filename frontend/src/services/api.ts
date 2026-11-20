@@ -276,9 +276,11 @@ export interface WorkItemReceipt extends WriteReceipt {
 const Session = Schema.Struct({
   csrf_token: Schema.NonEmptyString,
   // Additive: this release's server always serves it (pinned by the control
-  // session test and by the real socket connect in the browser gate), and an
-  // older partial bootstrap would leave the invalidation socket unconnectable
-  // while the visible client keeps polling.
+  // session test and by the real socket connect in the browser gate). A partial
+  // bootstrap that serves none is still tolerated: the shell connects the
+  // invalidation client regardless, and its empty-token branch reports
+  // `disconnected` and starts the polling fallback, so a visible client keeps
+  // converging without a socket.
   socket_token: Schema.optionalWith(Schema.String, { default: () => "" }),
 });
 export type Session = typeof Session.Type;

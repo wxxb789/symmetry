@@ -18,15 +18,12 @@ declare module "phoenix" {
   export interface PhoenixSocketOptions {
     authToken?: string | (() => string);
     params?: Record<string, unknown>;
-    heartbeatIntervalMs?: number;
-    reconnectAfterMs?: (tries: number) => number;
   }
 
   export class Socket {
     constructor(endPoint: string, options?: PhoenixSocketOptions);
     connect(): void;
     disconnect(callback?: () => void): void;
-    isConnected(): boolean;
     onOpen(callback: () => void): void;
     onClose(callback: (event?: unknown) => void): void;
     onError(callback: (error?: unknown) => void): void;

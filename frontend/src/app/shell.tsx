@@ -197,15 +197,18 @@ export function WorkspaceRoot() {
   const signedOut = useSyncExternalStore(application.auth.subscribe, application.auth.getSnapshot);
   const session = useQuery({ ...sessionOptions(application.api), enabled: !signedOut });
   // The bootstrap read is the only minter of the short-lived socket token, so the
-  // invalidation client connects when that token arrives (and re-connects with a
-  // fresh one after a logout/login rotation). Until it is connected the same
-  // client polls, so no surface depends on the socket being up.
+  // invalidation client connects once that read has resolved and the shell is
+  // still signed in: with the token when the session serves one (a rotation is
+  // picked up on the client's own next attempt), and without when a partial
+  // bootstrap serves none — the client's own empty-token branch reports
+  // `disconnected` and starts the polling fallback, so no surface depends on the
+  // socket being up.
   const socketToken = session.data?.socket_token ?? "";
   useEffect(() => {
-    if (socketToken === "" || signedOut) return;
-    application.rememberSocketToken(socketToken);
+    if (signedOut || session.data === undefined) return;
+    if (socketToken !== "") application.rememberSocketToken(socketToken);
     application.realtime.connect();
-  }, [application, socketToken, signedOut]);
+  }, [application, socketToken, signedOut, session.data]);
   // The invalidation client's lifetime is the signed-in shell's, not the bootstrap
   // token's: the effect above re-runs on a rotated token without reopening the
   // socket, so its release is keyed to the mount and to the session ending. A shell

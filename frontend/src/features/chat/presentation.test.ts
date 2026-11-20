@@ -74,7 +74,7 @@ const adapter = (operations: Partial<NonNullable<ChatAdapterRecord["operations"]
 });
 
 const signals = (overrides: Partial<ChatRunSignals>): ChatRunSignals => ({
-  canGuide: false, canPause: false, canResume: false, hasDecision: false, pauseUnsupported: false,
+  canGuide: false, canPause: false, canResume: false, pauseUnsupported: false,
   ...overrides,
 });
 
@@ -84,8 +84,10 @@ describe("intent vocabulary", () => {
     expect(applicableChatIntents({ scope: "workspace", run: null, hasProjects: false })).toEqual(["discuss", "status"]);
     expect(applicableChatIntents({ scope: "project", run: null, hasProjects: false })).toEqual(["discuss", "status", "start_work"]);
     expect(applicableChatIntents({ scope: "run", run: null, hasProjects: true })).toEqual(["discuss", "status"]);
-    expect(applicableChatIntents({ scope: "run", run: signals({ canGuide: true, canPause: true, canResume: true, hasDecision: true }), hasProjects: true }))
-      .toEqual(["discuss", "status", "guidance", "pause", "resume", "decision"]);
+    // A waiting decision packet never adds the composer's own `decision`
+    // intent: the packet's own buttons are the only path to that intent.
+    expect(applicableChatIntents({ scope: "run", run: signals({ canGuide: true, canPause: true, canResume: true }), hasProjects: true }))
+      .toEqual(["discuss", "status", "guidance", "pause", "resume"]);
   });
 
   it("never offers pause when the runtime's adapter cannot pause", () => {
@@ -203,9 +205,10 @@ describe("send status text", () => {
     expect(chatSendStatusText({ kind: "idle" })).toBe("Messages are saved to this context.");
     expect(chatSendStatusText({ kind: "sending" })).toBe("Sending…");
     expect(chatSendStatusText({ kind: "saved-question" })).toBe("Saved to this context.");
-    expect(chatSendStatusText({ kind: "saved-command" })).toBe("Saved · awaiting agent acknowledgement");
+    expect(chatSendStatusText({ kind: "saved-command" })).toBe("Message saved; the transcript receipt tracks the acknowledgement.");
     expect(chatSendStatusText({ kind: "refused", message: "The action id was already used." })).toBe("Refused: The action id was already used.");
-    expect(chatSendStatusText({ kind: "unconfirmed" })).toBe("Send not confirmed. The draft is kept; retry reuses the same action identity.");
+    expect(chatSendStatusText({ kind: "unconfirmed", source: "composer" })).toBe("Send not confirmed. The draft is kept; retry reuses the same action identity.");
+    expect(chatSendStatusText({ kind: "unconfirmed", source: "decision" })).toBe("Decision not confirmed. Choosing the same option again reuses the same action identity.");
     expect(chatSendStatusText({ kind: "notice", message: "Guidance must be 32,768 UTF-8 bytes or fewer." })).toBe("Guidance must be 32,768 UTF-8 bytes or fewer.");
   });
 });

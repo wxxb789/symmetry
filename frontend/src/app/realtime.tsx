@@ -1,6 +1,6 @@
 import { useRouteContext } from "@tanstack/react-router";
 import { useCallback, useSyncExternalStore } from "react";
-import type { RefreshPass, RealtimeStatus } from "../services/realtime";
+import type { RealtimeHandle, RefreshPass, RealtimeStatus } from "../services/realtime";
 
 /**
  * The established-connection counter of the operator invalidation socket.
@@ -11,26 +11,12 @@ import type { RefreshPass, RealtimeStatus } from "../services/realtime";
  * stopped instead of dropping the notifications it missed while disconnected.
  */
 export function useRealtimeEpoch(): number {
-  const { application } = useRouteContext({ from: "__root__" });
-  const realtime = application.realtime;
-  // The handle's members are closures over its own state, so the subscription is
-  // wrapped to keep `useSyncExternalStore` from being handed a bare method.
-  const subscribe = useCallback(
-    (listener: () => void) => realtime.subscribe(listener),
-    [realtime],
-  );
-  return useSyncExternalStore(subscribe, () => realtime.epoch());
+  return useRealtimeValue((realtime) => realtime.epoch());
 }
 
 /** The live connection status, for surfaces that must state degraded freshness. */
 export function useRealtimeStatus(): RealtimeStatus {
-  const { application } = useRouteContext({ from: "__root__" });
-  const realtime = application.realtime;
-  const subscribe = useCallback(
-    (listener: () => void) => realtime.subscribe(listener),
-    [realtime],
-  );
-  return useSyncExternalStore(subscribe, () => realtime.status());
+  return useRealtimeValue((realtime) => realtime.status());
 }
 
 /**
@@ -40,11 +26,17 @@ export function useRealtimeStatus(): RealtimeStatus {
  * when those reads finished.
  */
 export function useRealtimeRefresh(): RefreshPass | null {
+  return useRealtimeValue((realtime) => realtime.lastRefresh());
+}
+
+// The handle's members are closures over its own state, so the subscription is
+// wrapped to keep `useSyncExternalStore` from being handed a bare method.
+function useRealtimeValue<T>(select: (realtime: RealtimeHandle) => T): T {
   const { application } = useRouteContext({ from: "__root__" });
   const realtime = application.realtime;
   const subscribe = useCallback(
     (listener: () => void) => realtime.subscribe(listener),
     [realtime],
   );
-  return useSyncExternalStore(subscribe, () => realtime.lastRefresh());
+  return useSyncExternalStore(subscribe, () => select(realtime));
 }
