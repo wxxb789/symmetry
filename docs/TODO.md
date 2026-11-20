@@ -38,6 +38,22 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       before and after `MIX_TEST_PARTITION=66` runs of the retro-b5 apply stage) and test-only; drop the
       parameter and the callers' pass-through in separate maintenance.
 
+- [ ] Revalidate and remove two pre-existing dead surfaces found while applying the
+      provider-action-chain-removal simplify findings (2026-11-21).
+      (a) `Integrations.execute_accepted_resource_sync/2` and its catch-all
+      (`control/lib/symmetry_control/integrations.ex:554`, `:579`) have zero callers tree-wide:
+      `git grep -n "execute_accepted_resource_sync" -- control/` matches only those two definition
+      clauses, while the live sibling `execute_accepted_resource_sync_unprojected/2` is called at
+      `control/lib/symmetry_control/integrations/provider_access.ex:1569`, `:1808`. Its body was
+      what nominally kept `record_provider_action_failure`'s `outcome` input alive before the apply
+      stage removed that dead parameter.
+      (b) The `{:provider_action_failure, code, outcome}` 3-tuple clause of `provider_failure/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:2311`) has no producer: its only
+      literal builder was the outcome branch of `record_provider_action_failure` (`integrations.ex:1135`
+      before removal), unreachable since the callerless projected chain was deleted and removed in the
+      apply stage; the surviving producers all build the 4-tuple form (`integrations.ex:369`, `:514`).
+      Do not delete either surface here; revalidate and remove in a separate maintenance change.
+
 ## Retro review follow-ups
 
 - [ ] Investigate the intermittent Control failure class behind the provider-action cases at

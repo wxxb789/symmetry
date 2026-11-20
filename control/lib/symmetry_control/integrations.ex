@@ -1108,7 +1108,7 @@ defmodule SymmetryControl.Integrations do
 
   defp provider_action_error(reason), do: reason |> failure() |> elem(0)
 
-  defp record_provider_action_failure(resource, reason, outcome \\ nil) do
+  defp record_provider_action_failure(resource, reason) do
     case provider_action_error(reason) do
       code
       when code in [
@@ -1119,20 +1119,15 @@ defmodule SymmetryControl.Integrations do
              :state_conflict,
              :ownership_lost
            ] ->
-        provider_action_failure_result(code, outcome)
+        {:error, code}
 
       provider_error ->
         case record_resource_failure(resource, reason) do
-          {:error, _code, _degraded} -> provider_action_failure_result(provider_error, outcome)
-          {:error, _update_reason} -> provider_action_failure_result(provider_error, outcome)
+          {:error, _code, _degraded} -> {:error, provider_error}
+          {:error, _update_reason} -> {:error, provider_error}
         end
     end
   end
-
-  defp provider_action_failure_result(code, nil), do: {:error, code}
-
-  defp provider_action_failure_result(code, outcome),
-    do: {:error, {:provider_action_failure, code, outcome}}
 
   defp maybe_put_delivery(attrs, delivery, source, target) do
     if Map.has_key?(delivery, source),

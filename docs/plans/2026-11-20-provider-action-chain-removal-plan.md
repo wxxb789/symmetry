@@ -88,6 +88,15 @@ Kept, with the surviving reference that keeps each one alive:
   `:399`; `provider_action_error/1` at `:1196`; `require_capabilities/2` at `:331` and the
   `require_capability/2` wrappers).
 
+Apply-stage note (2026-11-21, findings S1/S4): the `record_provider_action_failure/3` row above —
+and the matching sentence in `Deliverable shape` item 1 ("every helper the chain used is still
+referenced by a live path") — overstate liveness: both surviving call sites sit inside
+`execute_accepted_resource_sync/2`, a function with zero callers tree-wide (its two definition
+clauses only; `provider_access.ex` calls the `_unprojected` sibling), and its `outcome` input was
+consequently dead; the parameter (`/3` -> `/2`) was removed in the apply stage. The callerless
+function and `provider_access.ex`'s producerless `provider_failure/1` 3-tuple clause are recorded
+in `docs/TODO.md` (`## Dead-code candidates`) for a separate maintenance change.
+
 The deletion is therefore exactly the entry's fix direction: the chain and the disjunct inside it,
 nothing more. `mix compile --warnings-as-errors` is the mechanical backstop: any of the kept
 helpers that had silently depended on the chain would surface as an unused-private warning.
