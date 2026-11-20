@@ -543,11 +543,14 @@ type subjectGitBatchStream struct {
 }
 
 func gitTreeDigest(ctx context.Context, repository, commit string) (string, error) {
-	return gitTreeDigestWithReaders(ctx, repository, commit,
-		func(ctx context.Context, repository string, maxBytes int, limitErr error, arguments ...string) ([]byte, error) {
-			command := gitNoReplaceObjectsCommand(ctx, repository, arguments...)
-			return gitCommandOutputLimited(ctx, command, maxBytes, limitErr)
-		}, openSubjectGitBatch)
+	return gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput, openSubjectGitBatch)
+}
+
+// subjectGitOutput runs the bounded workspace Git command used for the
+// committed tree listing of the subject digest.
+func subjectGitOutput(ctx context.Context, repository string, maxBytes int, limitErr error, arguments ...string) ([]byte, error) {
+	command := gitNoReplaceObjectsCommand(ctx, repository, arguments...)
+	return gitCommandOutputLimited(ctx, command, maxBytes, limitErr)
 }
 
 func gitTreeDigestWithReaders(ctx context.Context, repository, commit string, readOutput subjectGitOutputReader, openBatch subjectGitBatchOpener) (string, error) {
@@ -616,11 +619,13 @@ func hashTreeManifest(ctx context.Context, stream *subjectGitBatchStream, entrie
 			return err
 		}
 		hasher.Reset()
-		if err := stream.hashObject(entries[index].objectID, hasher, maxSubjectArtifactBlobBytes); err != nil {
+		if err := stream.streamObject(entries[index].objectID, hasher, maxSubjectArtifactBlobBytes); err != nil {
 			return fmt.Errorf("read committed blob %q: %w", string(entries[index].path), err)
 		}
 		// Sum appends into the entry digest storage, so streaming a committed
-		// blob allocates no per-object buffer.
+		// blob allocates no per-object buffer. The explicit copy keeps the
+		// entry digest correct even if Sum returns a different backing array:
+		// Hash.Sum does not promise that it reused the storage it was given.
 		blobDigest := hasher.Sum(entries[index].digest[:0])
 		copy(entries[index].digest[:], blobDigest)
 	}
@@ -702,14 +707,26 @@ func startSubjectGitBatch(ctx context.Context, command *exec.Cmd, budget context
 			budget()
 		}
 		_ = stdin.Close()
+		// Start never runs on this path, so Start's own descriptor cleanup
+		// cannot release the child's read end that StdinPipe installed on the
+		// command; without this close the descriptor survives until the
+		// os.File finalizer runs.
+		if closer, ok := command.Stdin.(io.Closer); ok {
+			_ = closer.Close()
+		}
 		return nil, err
 	}
 	if err := command.Start(); err != nil {
+		// Snapshot the context before releasing the path's budget: the budget's
+		// cancel function cancels this very context on the Linux clone path, so
+		// reading it afterwards would report a live launch failure as a caller
+		// cancellation and drop the real error.
+		ctxErr := ctx.Err()
 		if budget != nil {
 			budget()
 		}
 		_ = stdin.Close()
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr != nil {
 			return nil, ctxErr
 		}
 		return nil, err
@@ -721,64 +738,55 @@ func startSubjectGitBatch(ctx context.Context, command *exec.Cmd, budget context
 	}, nil
 }
 
-// hashObject requests one committed object from the batch child and streams
+// streamObject requests one committed object from the batch child and streams
 // its content into content. It refuses missing objects, non-blob responses and
 // content beyond maxBytes without retaining the object.
-func (stream *subjectGitBatchStream) hashObject(objectID string, content io.Writer, maxBytes int64) error {
+func (stream *subjectGitBatchStream) streamObject(objectID string, content io.Writer, maxBytes int64) error {
 	if err := stream.ctx.Err(); err != nil {
 		return err
 	}
 	stream.request = append(stream.request[:0], objectID...)
 	stream.request = append(stream.request, '\n')
 	if _, err := stream.stdin.Write(stream.request); err != nil {
-		stream.desynced = true
-		return stream.streamError(fmt.Errorf("request object %s from Git batch stream: %w", objectID, err))
+		return stream.desync(stream.streamError(fmt.Errorf("request object %s from Git batch stream: %w", objectID, err)))
 	}
 	header, err := stream.stdout.ReadSlice('\n')
 	if err != nil {
-		stream.desynced = true
-		return stream.streamError(fmt.Errorf("read Git batch response header for object %s: %w", objectID, err))
+		return stream.desync(stream.streamError(fmt.Errorf("read Git batch response header for object %s: %w", objectID, err)))
 	}
 	fields := bytes.Split(bytes.TrimSuffix(header, []byte{'\n'}), []byte{' '})
 	if len(fields) == 2 && string(fields[0]) == objectID && string(fields[1]) == "missing" {
 		return fmt.Errorf("committed object %s is missing from the repository", objectID)
 	}
 	if len(fields) != 3 || string(fields[0]) != objectID {
-		stream.desynced = true
-		return fmt.Errorf("Git batch stream returned an invalid response header for object %s", objectID)
+		return stream.desync(fmt.Errorf("Git batch stream returned an invalid response header for object %s", objectID))
 	}
 	if string(fields[1]) != "blob" {
-		stream.desynced = true
-		return fmt.Errorf("Git batch stream returned type %q for object %s", string(fields[1]), objectID)
+		return stream.desync(fmt.Errorf("Git batch stream returned type %q for object %s", string(fields[1]), objectID))
 	}
 	size, err := strconv.ParseInt(string(fields[2]), 10, 64)
 	if err != nil || size < 0 {
-		stream.desynced = true
-		return fmt.Errorf("Git batch stream returned an invalid size for object %s", objectID)
+		return stream.desync(fmt.Errorf("Git batch stream returned an invalid size for object %s", objectID))
 	}
 	if size > maxBytes {
-		stream.desynced = true
-		return fmt.Errorf("%w: object %s is %d bytes", ErrSubjectArtifactTooLarge, objectID, size)
+		return stream.desync(fmt.Errorf("%w: object %s is %d bytes", ErrSubjectArtifactTooLarge, objectID, size))
 	}
-	if err := stream.hashContent(content, size); err != nil {
-		stream.desynced = true
-		return stream.streamError(fmt.Errorf("read content of object %s from Git batch stream: %w", objectID, err))
+	if err := stream.copyExact(content, size); err != nil {
+		return stream.desync(stream.streamError(fmt.Errorf("read content of object %s from Git batch stream: %w", objectID, err)))
 	}
 	trailer, err := stream.stdout.ReadByte()
 	if err != nil {
-		stream.desynced = true
-		return stream.streamError(fmt.Errorf("read content terminator of object %s from Git batch stream: %w", objectID, err))
+		return stream.desync(stream.streamError(fmt.Errorf("read content terminator of object %s from Git batch stream: %w", objectID, err)))
 	}
 	if trailer != '\n' {
-		stream.desynced = true
-		return fmt.Errorf("Git batch stream did not terminate object %s content", objectID)
+		return stream.desync(fmt.Errorf("Git batch stream did not terminate object %s content", objectID))
 	}
 	return nil
 }
 
-// hashContent copies exactly size bytes of batch output into content through
-// the stream's reusable buffer.
-func (stream *subjectGitBatchStream) hashContent(content io.Writer, size int64) error {
+// copyExact copies exactly size bytes of batch output into content through the
+// stream's reusable buffer.
+func (stream *subjectGitBatchStream) copyExact(content io.Writer, size int64) error {
 	for remaining := size; remaining > 0; {
 		chunk := int64(len(stream.buffer))
 		if remaining < chunk {
@@ -804,6 +812,15 @@ func (stream *subjectGitBatchStream) streamError(err error) error {
 	return err
 }
 
+// desync marks the stream desynced before returning err. Every refusal that
+// leaves the last batch response unconsumed to a record boundary must go
+// through here: close() derives its terminate-versus-ask-to-exit choice from
+// that flag.
+func (stream *subjectGitBatchStream) desync(err error) error {
+	stream.desynced = true
+	return err
+}
+
 // close completes the batch stream: it waits for the child and joins the
 // caller's digest failure with the path's teardown result. A desynced child is
 // terminated through the path's cancellation policy instead of being asked to
@@ -823,15 +840,20 @@ func (stream *subjectGitBatchStream) close(failure error) error {
 	return errors.Join(stream.sentinel, failure, terminateErr, waitErr)
 }
 
-// finish asks an in-sync batch child to exit and proves that it was reaped.
+// finish asks an in-sync batch child to exit and proves that it was reaped. A
+// cancellation that reaches this path still joins the path's unresolved-process
+// fence: this path cannot observe whether the path's cancellation policy
+// actually stopped the child or the child exited on its own first, so the stop
+// is presumed unproven and stays observable to the caller.
 func (stream *subjectGitBatchStream) finish() error {
 	closeErr := stream.stdin.Close()
 	waitErr := stream.command.Wait()
+	ctxErr := stream.ctx.Err()
+	if ctxErr != nil {
+		return errors.Join(stream.sentinel, ctxErr, closeErr, waitErr)
+	}
 	if waitErr == nil && closeErr == nil {
 		return nil
-	}
-	if ctxErr := stream.ctx.Err(); ctxErr != nil {
-		return errors.Join(ctxErr, closeErr, waitErr)
 	}
 	return fmt.Errorf("finish Git batch stream: %w", errors.Join(closeErr, waitErr))
 }

@@ -1800,6 +1800,64 @@ func TestLinuxCloneTreeDigestHonorsContextCancellation(t *testing.T) {
 	assertNoOwnedGitChildProcesses(t)
 }
 
+// TestLinuxCloneTreeDigestBatchBudgetStopsStalledChild pins the Linux clone
+// batch command budget that docs/design/protocol.md states as the preserved
+// five-minute single-command budget, once per batch. The timeout is shortened
+// here and the batch child is a stalled scripted process that never answers,
+// while the caller context never expires: the digest can only stop with the
+// budget's own DeadlineExceeded joined with the path's unresolved-process
+// fence, so a dropped or caller-owned budget stays observable instead of
+// passing after a teardown the budget did not choose.
+func TestLinuxCloneTreeDigestBatchBudgetStopsStalledChild(t *testing.T) {
+	repository := newSubjectRepository(t)
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+	readyPath := filepath.Join(t.TempDir(), "batch-ready")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stream *subjectGitBatchStream
+	result := make(chan error, 1)
+	go func() {
+		_, err := gitTreeDigestWithReaders(ctx, repository, commit, linuxCloneGitOutput,
+			func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
+				opened, openErr := startLinuxCloneBatchStream(openContext, 500*time.Millisecond, func(budgetContext context.Context) *exec.Cmd {
+					command := exec.CommandContext(budgetContext, os.Args[0], "-test.run=^TestWorkspaceBatchHelper$", "--", "ready-block", readyPath)
+					command.Env = append(os.Environ(), "SYMMETRY_WORKSPACE_BATCH_HELPER=1")
+					return command
+				})
+				stream = opened
+				return opened, openErr
+			})
+		result <- err
+	}()
+
+	var digestErr error
+	select {
+	case digestErr = <-result:
+	case <-time.After(testHangGuard):
+		t.Fatalf("Linux clone tree digest did not stop against a stalled batch child within %s", testHangGuard)
+	}
+	if digestErr == nil {
+		t.Fatal("Linux clone tree digest against a stalled batch child = success, want the batch budget refusal")
+	}
+	if !errors.Is(digestErr, context.DeadlineExceeded) {
+		t.Fatalf("Linux clone tree digest error = %v, want the batch budget's DeadlineExceeded", digestErr)
+	}
+	if !errors.Is(digestErr, ErrLinuxCloneProcessUnresolved) {
+		t.Fatalf("Linux clone tree digest error = %v, want the unresolved process fence of the stopped batch stream", digestErr)
+	}
+	if stream == nil {
+		t.Fatal("Linux clone tree digest did not open the batch stream")
+	}
+	state := stream.command.ProcessState
+	if state == nil {
+		t.Fatal("batch budget stop left the stalled batch child unreaped")
+	}
+	if state.Success() {
+		t.Fatal("stalled batch child exited on its own instead of being stopped by the batch budget")
+	}
+}
+
 // TestLinuxCloneTreeDigestRefusesOversizedBlob keeps the per-blob size refusal
 // on the Linux clone consumer together with its unresolved-process fence: the
 // batch child is terminated mid-response and never left running.

@@ -146,6 +146,53 @@ const preserveGoEvidenceBatchItem = (contents) => {
 const preserveGoEvidenceKindName = (contents) =>
   contents.replace(/\bReceiptKind\b/gu, "SymmetryEvidenceV1Kind");
 
+// The goal-command schema states the achieve semantics on its own achieve
+// payload branch. Return that description so the Go normalizer below can
+// remove the flattened copies of text that only applies to that branch.
+const goalCommandAchievePayloadDescription = (schemas) => {
+  const goalCommand = schemas.find(({ key }) => key === "goal-command");
+  const achieve = goalCommand?.schema?.oneOf?.find(
+    (branch) => branch?.properties?.kind?.const === "achieve",
+  );
+  const description = achieve?.properties?.payload?.description;
+  if (typeof description !== "string" || description.trim() === "") {
+    throw new Error("goal-command schema has no achieve payload description to unflatten");
+  }
+  return description;
+};
+
+// quicktype flattens the goal-command oneOf branches into a single shared Go
+// Payload type, so the achieve-only payload description would otherwise become
+// the doc comment of that shared type and of every kind's payload field. Remove
+// those flattened copies and keep the achieve semantics on their per-kind home
+// in contracts/v1/goal-command.schema.json; each removed block is verified
+// against the schema description so a quicktype change fails loudly instead of
+// dropping an unrelated comment.
+const preserveGoPerKindGoalPayloadDocs = (contents, description) => {
+  const flattened = description.replace(/\s+/gu, " ").trim();
+  const paragraph = /^[ \t]*\/\/ Operator achieve\.[^\n]*\n(?:[ \t]*\/\/[^\n]*\n)+/gmu;
+  let removed = 0;
+  const result = contents.replace(paragraph, (block) => {
+    const text = block
+      .split("\n")
+      .map((line) => line.replace(/^[ \t]*\/\//u, "").trim())
+      .join(" ")
+      .replace(/\s+/gu, " ")
+      .trim();
+    if (text !== flattened) {
+      throw new Error("quicktype Go output flattened an unexpected goal-command payload comment");
+    }
+    removed += 1;
+    return "";
+  });
+  if (removed !== 2) {
+    throw new Error(
+      `quicktype Go output carried ${removed} flattened goal-command payload comments, want 2`,
+    );
+  }
+  return result;
+};
+
 // json-schema-to-typescript preserves the Draft 7 allOf validation shape for
 // Admission as an intersection, which otherwise leaves the handoff-only source
 // field optional in every TypeScript branch. Preserve the wire schema and emit
@@ -268,12 +315,15 @@ const generate = async (check = false) => {
       "just-types-and-package": "true",
     },
   });
-  const normalizedGo = preserveGoEvidenceKindName(
-    preserveGoEvidenceBatchItem(
-      preserveGoNullableMicrousd(
-        preserveGoWireTimestamps(normalizeGoImports(goResult.lines.join("\n"))),
+  const normalizedGo = preserveGoPerKindGoalPayloadDocs(
+    preserveGoEvidenceKindName(
+      preserveGoEvidenceBatchItem(
+        preserveGoNullableMicrousd(
+          preserveGoWireTimestamps(normalizeGoImports(goResult.lines.join("\n"))),
+        ),
       ),
     ),
+    goalCommandAchievePayloadDescription(schemas),
   );
   const goContents = await formatGo(
     [
