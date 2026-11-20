@@ -376,21 +376,47 @@ def strict_json(raw: bytes, source: str, limit: int) -> Any:
         )
     except json.JSONDecodeError as error:
         raise Refused(f"{source} is not valid JSON: {error}")
+    except ValueError:
+        # `json.loads` refuses an integer literal past its conversion-digit limit
+        # with a plain ValueError; that is a refusal about the document's numbers,
+        # not a crash.
+        raise Refused(f"{source} carries an integer outside the supported range")
     except RecursionError:
         raise Refused(f"{source} nests too deeply")
 
 
+def contains_non_finite(value: Any) -> bool:
+    """Whether one serializable structure holds a nan or infinity float anywhere.
+
+    The classifier gives a non-finite value its own refusal message and keeps the
+    encoder's `ValueError` from being read as one: `allow_nan=False` reports a
+    nan or inf float and a finite integer past Python's conversion-digit limit
+    through the same exception class.
+    """
+
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(contains_non_finite(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_non_finite(item) for item in value)
+    return False
+
+
 def canonical_json(value: Any) -> bytes:
     try:
+        if contains_non_finite(value):
+            raise Refused("value contains a non-finite number")
         text = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False)
     except RecursionError:
         raise Refused("value nests too deeply to serialize")
     except UnicodeEncodeError:
         raise Refused("value contains text that is not valid UTF-8")
     except ValueError:
-        # `allow_nan=False` turns a nan or inf float into a ValueError instead of
-        # writing the non-JSON `NaN`/`Infinity` literals this tool must never publish.
-        raise Refused("value contains a non-finite number")
+        # `allow_nan=False` would report a nan or inf float here, and every one was
+        # checked above; what remains is a value Python cannot serialize - an integer
+        # past its conversion-digit limit - which must not be called non-finite.
+        raise Refused("value contains a number outside the serializable range")
     try:
         return text.encode("utf-8") + b"\n"
     except UnicodeEncodeError:
@@ -532,16 +558,16 @@ def number_sum(values: Iterable[int | float], source: str) -> int | float:
     Every addend passed a finite-number check on its own, but Python converts an int
     to float when it meets a float total, and an int or int total beyond float range
     raises OverflowError there; it must refuse as a value instead of escaping as an
-    uncaught traceback. A float total that reaches infinity is refused later by
-    canonical_json when the receipt is serialized.
+    uncaught traceback. The built-in `sum` is the summation: its own semantics (the
+    compensated float path on this interpreter) are what every derived total has
+    always been computed with, and only its OverflowError becomes a refusal. A float
+    total that reaches infinity is refused later by canonical_json when the receipt
+    is serialized.
     """
-    total: int | float = 0
     try:
-        for value in values:
-            total += value
+        return sum(values)
     except OverflowError:
         raise Refused(f"{source} exceeds the finite number range")
-    return total
 
 
 def require_value_in(value: Any, source: str, allowed: Iterable[str]) -> str:
@@ -2132,10 +2158,12 @@ def execute_gate(
         except OSError as failure:
             error = f"could not execute gate argv: {failure}"
     # The derived cross-checks below run exactly when the gate command itself ran and
-    # exited 0 and the gate declares that cross-check's engine fields: `go_tests` with
-    # `go_package` and a `go` argv for the package list, `exunit_tests`, `vitest_tests`;
-    # a plain exit-0 gate derives none. Keep its error before a reported list failure
-    # is appended.
+    # exited 0 and the gate's fields derive that cross-check's argv: a derivable
+    # `go test -list` needs `go_tests` with `go_package`, a `go` argv and no `/` in a
+    # test name (a subtest name has no `-list` spelling), the ExUnit trace run needs
+    # `exunit_tests`, the vitest structured report needs `vitest_tests`; a plain
+    # exit-0 gate derives none. Keep its error before a reported list failure is
+    # appended.
     gate_command_error = error
     write_bytes(gate_dir / "stdout.bin", stdout_raw)
     write_bytes(gate_dir / "stderr.bin", stderr_raw)

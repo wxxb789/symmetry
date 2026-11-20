@@ -125,7 +125,7 @@ Measured outcome: format exit 0; compile exit 0 (66.1 s operator-observed; that 
 ### U1. Runner extensions in place, with tests
 
 - `validate_gate`: accept optional `exunit_tests` (unique exact test names) with `exunit_files` (relative paths, required when `exunit_tests` is present), and optional `env` (allowlisted names, short values, secret-shaped keys refused).
-- `execute_gate`: apply the gate `env` to that gate's process only; run the derived ExUnit trace command when `exunit_tests` is present; record the trace argv, exit code and stdout/stderr digests in the gate result (the per-test observations are recomputed from the stored bytes when the evidence is re-verified); refuse on missing, duplicated, skipped or failed named tests.
+- `execute_gate`: apply the gate `env` to that gate's process only; run the derived ExUnit trace command when the main gate command exited 0 and `exunit_tests` is present; record the trace argv, exit code and stdout/stderr digests in the gate result (the per-test observations are recomputed from the stored bytes when the evidence is re-verified); refuse on missing, duplicated, skipped or failed named tests.
 - `prepare --environment-json`: merge measured non-secret fields into `run["environment"]`; refuse unknown/secret-shaped keys and oversized values.
 - Regression tests cover: named test present/absent/duplicated/skipped/failing; gate env applied and refused for secret-shaped names; measured environment round-trip, refusal, and receipt inclusion; existing Go behaviour unchanged.
 

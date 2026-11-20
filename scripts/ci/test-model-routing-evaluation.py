@@ -658,6 +658,24 @@ class EvaluationTests(unittest.TestCase):
         self.assert_refused(self.accept(run=zero_run, receipt_path=negative_zero), "canonical serialization")
         self.assert_ok(self.accept(run=zero_run))
 
+    def test_number_sum_keeps_the_builtin_sum_semantics(self) -> None:
+        # STD-B06: replacing the built-in `sum` with `+=` dropped its compensated
+        # float path, so `[1e16, 1.0, 1.0]` stopped rounding the way `sum` does.
+        runner = load_runner_module()
+        self.assertEqual(runner.number_sum([1e16, 1.0, 1.0], "fixture"), sum([1e16, 1.0, 1.0]))
+        self.assertNotEqual(runner.number_sum([1e16, 1.0, 1.0], "fixture"), 1e16)
+        with self.assertRaisesRegex(runner.Refused, "finite number range"):
+            runner.number_sum([10 ** 400, 0.5], "fixture")
+
+    def test_canonical_json_distinguishes_non_finite_from_unserializable(self) -> None:
+        # Opus P3: `allow_nan=False` and the integer conversion-digit limit share a
+        # ValueError, so the message must name the actual cause.
+        runner = load_runner_module()
+        with self.assertRaisesRegex(runner.Refused, "non-finite number"):
+            runner.canonical_json({"n": float("inf")})
+        with self.assertRaisesRegex(runner.Refused, "outside the serializable range"):
+            runner.canonical_json({"n": 10 ** 4301})
+
     def test_source_edit_after_checks_or_review_is_refused_and_preserved(self) -> None:
         run = self.root / "run-late"
         self.assert_ok(self.prepare(run=run))
@@ -1997,6 +2015,33 @@ class EvaluationTests(unittest.TestCase):
         partials_usage.write_bytes((json.dumps(partials, indent=2, sort_keys=True) + "\n").encode("utf-8"))
         refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(partials_usage))
         self.assert_refused(refused, "finite number range")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # An integer literal past Python's conversion-digit limit refuses as a value:
+        # `json.loads` raises a plain ValueError for it, not a traceback.
+        limit = sys.get_int_max_str_digits()
+        if limit:
+            oversized = self.root / "inputs" / "oversized-integer-usage.json"
+            raw_usage = json.dumps(self.usage_rows(), indent=2, sort_keys=True) + "\n"
+            oversized.write_bytes(
+                raw_usage.replace('"input": 10', '"input": ' + "9" * (limit + 1), 1).encode("utf-8")
+            )
+            refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(oversized))
+            self.assert_refused(refused, "integer outside the supported range")
+            self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # Three 4300-digit token totals sum to a 4301-digit integer that parses fine but
+        # cannot be serialized: the refusal must name the serializable range instead of
+        # calling a finite integer non-finite. The phase known subtotals must not carry
+        # the giant value: their own finite-number check refuses an int beyond float
+        # range first, and this case is about the sum the receipt then cannot write.
+        giant = self.usage_rows(tokens={"input": int("9" * 4300), "output": 2, "cached": 0})
+        for phase in giant["phases"]:
+            phase.get("known_subtotals", {}).pop("input", None)
+        giant_usage = self.root / "inputs" / "unserializable-total-usage.json"
+        giant_usage.write_bytes((json.dumps(giant, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(giant_usage))
+        self.assert_refused(refused, "outside the serializable range")
         self.assertNotIn("Traceback", refused.stderr + refused.stdout)
 
         refused = self.check("--timeout", "-1", run=run)

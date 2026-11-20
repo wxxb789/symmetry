@@ -109,8 +109,15 @@ def safe_label(value):
 
 
 def path_like(value):
-    """Whether one safe-token value spells a filesystem path rather than a name."""
-    return "\\" in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value) is not None
+    """Whether one safe-token value spells a filesystem location rather than a name.
+
+    A backslash anywhere, an absolute POSIX spelling, a Windows drive prefix and a
+    `file:` URL (any case spelling of the scheme is the same URL) are all location
+    spellings a session-controlled value may carry.
+    """
+    return ("\\" in value or value.startswith("/")
+            or re.match(r"^[A-Za-z]:", value) is not None
+            or re.match(r"(?i:file):", value) is not None)
 
 
 def export_session_identifier(value, message, code, note):
@@ -118,11 +125,11 @@ def export_session_identifier(value, message, code, note):
 
     Values that fail safe_token() keep the caller's refusal message, so an
     unsafe value is still refused rather than partially leaked. Values that fit
-    safe_token() but look like filesystem paths -- backslash-separated,
-    absolute POSIX, or a Windows drive prefix -- are exported as a digest and
-    recorded as a limitation, so a private location never leaves this tool. A
-    provider-qualified model may contain `/` and stays raw: only a leading
-    slash counts as path-like.
+    safe_token() but look like filesystem locations -- backslash-separated,
+    absolute POSIX, a Windows drive prefix, or a `file:` URL -- are exported as
+    a digest and recorded as a limitation, so a private location never leaves
+    this tool. A provider-qualified model may contain `/` and stays raw: only a
+    leading slash counts as path-like.
     """
     refuse(safe_token(value), message)
     if path_like(value):
@@ -146,13 +153,19 @@ def summed_number(left, right):
 
     Every addend passed observed_number on its own, but two finite floats can sum to
     infinity and an int beyond float range meeting a float total raises OverflowError;
-    the extractor never publishes a non-JSON constant, so both refuse.
+    an int-only total can itself sit beyond float range, where the runner's
+    finite-number check would refuse the emitted row downstream. The extractor never
+    defers a total it can already see is out of range, so all three refuse here.
     """
     try:
         total = left + right
     except OverflowError:
         raise UsageRefusal("session usage totals exceed the finite number range")
-    if isinstance(total, float) and not math.isfinite(total):
+    try:
+        magnitude = float(total)
+    except OverflowError:
+        raise UsageRefusal("session usage totals exceed the finite number range")
+    if not math.isfinite(magnitude):
         raise UsageRefusal("session usage totals exceed the finite number range")
     return total
 
@@ -295,6 +308,11 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                 record = strict_json(line)
             except json.JSONDecodeError:
                 raise UsageRefusal("session record is not valid JSON")
+            except ValueError:
+                # `json.loads` refuses an integer literal past its conversion-digit
+                # limit with a plain ValueError; a line that carries one is a
+                # structured refusal about the record's numbers, not a traceback.
+                raise UsageRefusal("session record carries an integer outside the supported range")
             refuse(isinstance(record, dict), "session record is not a JSON object")
             record_type = record.get("type")
             refuse(safe_token(record_type), "session record has a missing or unsafe type")
@@ -371,7 +389,14 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                                               and not isinstance(value, bool) and value >= 0),
                         "session thinking change has an unsafe level",
                     )
-                    level = value
+                    # A level spelling is session-controlled, so it may export only
+                    # against the known level tokens (or a numeric level): any other
+                    # string can be a path or another private value in level's
+                    # clothing and stays unexported.
+                    if isinstance(value, int) or value in THINKING_SUFFIXES:
+                        level = value
+                    else:
+                        note("thinking_level_change_unrecognized")
                     break
                 if level is None:
                     note("thinking_level_change_unrecognized")
@@ -621,6 +646,17 @@ def token_argument(value):
     return value
 
 
+def contains_non_finite(value):
+    """Whether one emitted structure holds a nan or infinity float anywhere."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(contains_non_finite(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_non_finite(item) for item in value)
+    return False
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Extract allowlisted routing and usage metadata from one OMP session JSONL "
@@ -650,9 +686,13 @@ def main(argv=None):
     try:
         line = json.dumps(row, separators=(",", ":"), allow_nan=False)
     except ValueError:
-        # The single emit point is the last line of defense: an Infinity or NaN
-        # anywhere in the row must refuse here rather than leave the tool.
-        print("refused: usage row carries a non-finite number", file=sys.stderr)
+        # The single emit point is the last line of defense: a value the encoder
+        # refuses must not leave the tool, and the message names the actual cause -
+        # a nan or infinity float is a non-finite number, while a finite integer
+        # past Python's conversion-digit limit is not.
+        reason = ("a non-finite number"
+                  if contains_non_finite(row) else "a number outside the serializable range")
+        print(f"refused: usage row carries {reason}", file=sys.stderr)
         return 1
     print(line)
     return 0

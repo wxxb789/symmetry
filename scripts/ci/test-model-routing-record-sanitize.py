@@ -14,6 +14,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -145,6 +146,95 @@ class SanitizeTextTests(unittest.TestCase):
             MODULE.sanitize_text("worktree " + sibling, [r"C:\Work\run"], root_only=True),
             "worktree " + digest_of(sibling),
         )
+
+    def test_disposable_root_does_not_absorb_a_space_continued_sibling(self):
+        # STD-B10: `C:/Work/run user/private` names the sibling `run user`, one
+        # space-continued path token; pressing the root's token over its prefix left
+        # `user/private` standing as if it were a child of the token. The root is a
+        # whole-name boundary, and a space-continued chunk continues the name.
+        root = r"C:\Work\run"
+        sibling = "C:/Work/run user/private"
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(sibling, [root], root_only=root_only)
+                self.assertEqual(rendered, digest_of(sibling))
+                self.assertEqual(MODULE.sanitize_text(rendered, [root], root_only=root_only), rendered)
+        # A prose word after the root is not a continuation: the root still renders.
+        self.assertEqual(
+            MODULE.sanitize_text(root + " and the run continues", [root], root_only=True),
+            "<disposable-root> and the run continues",
+        )
+        # A terminal chunk is the same rule: `run user` may be one sibling name, so
+        # the root does not claim the token's prefix either - the whole token renders
+        # (the drive-path renderer hashes it), never a token plus a residue.
+        terminal = "C:/Work/run user"
+        for root_only in (True, False):
+            with self.subTest(shape="terminal", root_only=root_only):
+                self.assertEqual(
+                    MODULE.sanitize_text(terminal, [root], root_only=root_only),
+                    digest_of(terminal),
+                )
+
+    def test_a_root_only_claims_its_own_separator_kind(self):
+        # STD-B10: a root's leading separator run is kind-specific. The UNC root
+        # `\\work\run` must not tokenize `/work/run/child` - a POSIX location that
+        # merely spells the same segments - and a slash-led root must not claim the
+        # backslash-led spelling either.
+        unc_root = _BS * 2 + "work" + _BS + "run"
+        self.assertEqual(
+            MODULE.sanitize_text("/work/run/child", [unc_root], root_only=True),
+            "/work/run/child",
+        )
+        record_spelling = _BS * 2 + "work" + _BS + "run" + _BS + "child"
+        self.assertEqual(
+            MODULE.sanitize_text(record_spelling, [unc_root], root_only=True),
+            "<disposable-root>" + _BS + "child",
+        )
+        # The JSON-escaped run of the same UNC root is its own spelling too.
+        escaped = _BS * 4 + "work" + _BS * 2 + "run" + _BS * 2 + "child"
+        self.assertEqual(
+            MODULE.sanitize_text(escaped, [unc_root], root_only=True),
+            "<disposable-root>" + _BS * 2 + "child",
+        )
+        # The symmetric case: a POSIX root is not the UNC spelling of its segments,
+        # and its own escaped spelling still renders.
+        posix_root = "/work/run"
+        self.assertEqual(
+            MODULE.sanitize_text(record_spelling, [posix_root], root_only=True),
+            digest_of(record_spelling),
+        )
+        self.assertEqual(
+            MODULE.sanitize_text("/work/run/child", [posix_root], root_only=True),
+            "<disposable-root>/child",
+        )
+
+    def test_a_rendered_root_keeps_its_escaped_descendant_suffix(self):
+        # STD-B10: the default scope's escaped-POSIX pattern matched the `\/` a
+        # rendered token leaves behind and hashed the short suffix, so the token's
+        # own trailing structure came back as a second digest instead of staying in
+        # place.
+        root = r"C:\Work\run"
+        text = root + _BS + _FS + "child"
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [root], root_only=root_only)
+                self.assertEqual(rendered, "<disposable-root>" + _BS + _FS + "child")
+                self.assertEqual(MODULE.sanitize_text(rendered, [root], root_only=root_only), rendered)
+
+    def test_root_match_over_a_long_separator_run_is_linear(self):
+        # STD-B02: the root matcher's separator used to be an overlapping
+        # alternation repeated as a group (`(?:\\+|/|\\/)+`), which parses one run
+        # of N backslashes 2**(N-1) ways: `C:` + N backslashes + `Worker/run` took
+        # 0.017s / 0.14s / 1.1s for N = 18 / 21 / 24, doubling per backslash. One
+        # character class matches the run once, so the failed match stays linear.
+        root = r"C:\Work\run"
+        text = "C:" + _BS * 4000 + "Worker/run"
+        started = time.monotonic()
+        rendered = MODULE.sanitize_text(text, [root], root_only=True)
+        self.assertLess(time.monotonic() - started, 5.0)
+        # The root does not match (`Worker` is not the root's segment); the
+        # drive-path renderer still owns the whole token.
+        self.assertEqual(rendered, digest_of(text))
 
     def test_other_windows_path_renders_to_hashed_token(self):
         path = r"C:\Users\operator\AppData\Local\Temp\symmetry-0008b-probe"
@@ -592,6 +682,49 @@ class SanitizeCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, path)
             self.assertEqual(result.stdout, "", path)
             self.assertIn("refused", result.stderr)
+
+    def test_cli_root_only_check_refuses_boundary_spelled_roots(self):
+        # STD-B01/B10: a root beside a non-name character - `>` glue, trailing
+        # punctuation, a shell `|` or a URL query/fragment - is still the root, and
+        # `--check --root-only` must refuse the input.
+        drive_root = "C:" + _BS + "Work" + _BS + "run"
+        posix_root = "/srv/store"
+        cases = (
+            ("go test ./... 2>" + drive_root + _BS + "stderr.txt\n", drive_root),
+            ("<b>" + drive_root + _BS + "x\n", drive_root),
+            (drive_root + ".\n", drive_root),
+            (drive_root + "!\n", drive_root),
+            (drive_root + "|x\n", drive_root),
+            ("stored under " + posix_root + ".\n", posix_root),
+            ("see " + posix_root + "!\n", posix_root),
+            ("path=" + posix_root + "|x\n", posix_root),
+            ("fetch " + posix_root + "?x=1\n", posix_root),
+            ("anchor " + posix_root + "#frag\n", posix_root),
+        )
+        for text, root in cases:
+            with self.subTest(text=text):
+                result = self.run_cli(text, "--check", "--root-only", "--root", root)
+                self.assertEqual(result.returncode, 1, text)
+                self.assertEqual(result.stdout, "", text)
+                self.assertIn("refused", result.stderr)
+
+    def test_cli_root_only_leaves_name_continued_spellings_literal(self):
+        # The boundary negatives: a longer name (`-user`, `.bak`), a name glued in
+        # front (`aaC:\...`) or a relative spelling (`../srv/store`) is not this
+        # root, so the root-only check refuses nothing.
+        posix_root = "/srv/store"
+        drive_root = "C:" + _BS + "Work" + _BS + "run"
+        for text, root in (
+            (posix_root + "-user/x\n", posix_root),
+            (posix_root + ".bak/x\n", posix_root),
+            (posix_root + "-user\n", posix_root),
+            (".." + posix_root + "/x\n", posix_root),
+            ("aa" + drive_root + _BS + "x\n", drive_root),
+        ):
+            with self.subTest(text=text):
+                result = self.run_cli(text, "--check", "--root-only", "--root", root)
+                self.assertEqual(result.returncode, 0, text)
+                self.assertEqual(result.stdout, "", text)
 
     def test_cli_refuses_a_record_that_does_not_decode_as_utf8(self):
         # Checked as mojibake, either spelling of a UTF-16 record's host path would pass:

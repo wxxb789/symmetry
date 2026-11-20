@@ -88,12 +88,20 @@ _HOST_SEP = r"(?:/|\\/)"
 # nesting level, so a backslash separator is any positive run and a forward slash
 # may be escaped as `\/`.
 _SEPARATOR = r"(?:\\|(?:\\{2})+|/|\\/)"
-# One separator of a disposable root as recorded text spells it: a run of
-# backslashes (raw, or the JSON-escaped spelling at any nesting depth), a forward
-# slash, or its `\/` escape - and concatenations of these, because a root's
-# separators may be spelled differently from each other. `_root_pattern` joins the
-# root's segments with it, so one compiled matcher accepts every recorded spelling.
-_ROOT_SEPARATOR = r"(?:\\+|/|\\/)+"
+# One separator run of a disposable root as recorded text spells it: any nonempty
+# mix of backslashes (raw, or the JSON-escaped run at any nesting depth) and
+# forward slashes or their `\/` escape - the units concatenate, so every recorded
+# spelling is this one character class. `_root_pattern` joins the root's segments
+# with it, so one compiled matcher accepts every recorded spelling, and a single
+# class also keeps a long non-matching separator run linear: an overlapping
+# alternation written as a repetition (`(?:\\+|/|\\/)+`) parses one run of N
+# backslashes 2**(N-1) ways and turns a failed match exponential.
+_ROOT_SEPARATOR = r"[\\/]+"
+# The name characters a recorded path token continues with. A root boundary is a
+# name boundary: a root glued to a name on either side (`.../run-user`,
+# `.../run.bak`) names a different location, while punctuation (`.../run.`,
+# `.../run!`) leaves the root the whole name.
+_ROOT_NAME_CHAR = r"[A-Za-z0-9_-]"
 # The scheme a `file:` URL carries is case-insensitive - `FILE:`, `File:` and
 # `file:` are the same scheme - so a record spelling it any other way must not
 # pass the checker unchanged.
@@ -164,8 +172,13 @@ _COLON_POSIX_PATH = re.compile(r"(?<=:)/(?!/)(?:" + _POSIX_SEGMENT + r"/)*" + _P
 # keeps URL authorities (`https:\/\/tmp` - the pair after the colon, and the pair
 # after a separator) and relative paths out, and every separator must be the
 # escaped pairing, so an unescaped `/` cannot drift this pattern into a URL.
+# A rendered root token is one more boundary: the root pass leaves an escaped
+# descendant separator behind it (`C:\Work\run\/child` renders as
+# `<disposable-root>\/child`), and that separator is the token's trailing
+# structure, not the start of a new escaped location.
 _ESCAPED_POSIX_PATH = re.compile(
-    r"(?<![A-Za-z0-9_:\\/])(?:\\/)(?:" + _ESCAPED_SEGMENT + r"\\/)*" + _ESCAPED_SEGMENT
+    r"(?<!" + re.escape(DISPOSABLE_ROOT_TOKEN) + r")(?<![A-Za-z0-9_:\\/])"
+    + r"(?:\\/)(?:" + _ESCAPED_SEGMENT + r"\\/)*" + _ESCAPED_SEGMENT
 )
 # A forward-slash authority path (`//server/share`), with each separator optionally
 # escaped or a backslash (the mixed spellings are the same UNC location). The
@@ -269,12 +282,16 @@ def _root_pattern(root: str) -> re.Pattern[str] | None:
     """Compile the bounded matcher for one disposable root.
 
     The match consumes the root only when it is spelled with a recorded separator
-    mixture (`_ROOT_SEPARATOR`), and only at a path boundary: the leading
-    lookbehind mirrors the host-path patterns, so a root inside a longer token
-    stays unmatched, and the trailing lookahead requires a separator or a
-    terminator, so a longer sibling name such as ``...-user`` is never absorbed
-    into the token. A root that leads with a separator keeps that run in the
-    match. ``None`` means the root names no segment (a bare ``/``).
+    mixture (`_ROOT_SEPARATOR`) and only at a whole-name boundary: the leading
+    lookbehind refuses a name character glued in front, and the trailing lookahead
+    refuses a name continuation behind it - a further name character, a
+    ``.``-continued name, or a space-continued path chunk (`...-user`,
+    ``.../run.bak``, ``.../run user/private``, the same continuation the path
+    tails absorb). A root that leads with a separator keeps that run in the
+    match, spelled only with the separator kind the root itself carries, so a UNC
+    root never claims the POSIX spelling of its segments and the reverse; a root
+    without a leading separator matches only after a non-separator boundary.
+    ``None`` means the root names no segment (a bare ``/``).
     """
 
     stripped = root.rstrip("\\/")
@@ -283,8 +300,19 @@ def _root_pattern(root: str) -> re.Pattern[str] | None:
         return None
     body = _ROOT_SEPARATOR.join(re.escape(segment) for segment in segments)
     if re.match(r"[\\/]", stripped):
-        body = _ROOT_SEPARATOR + body
-    return re.compile(r"(?<![A-Za-z0-9_/\\>])" + body + r"(?=$|[\\/]|[\s\"'`,;:)\]}>])")
+        # The root's own leading separator kind gates the match: a backslash-led
+        # root (a UNC or device spelling) matches only a backslash run, and a
+        # slash-led root only the forward-slash spellings, so the two never claim
+        # each other's locations.
+        body = (r"\\+" if stripped.startswith("\\") else r"(?:/|\\/)+") + body
+        lookbehind = r"(?<![A-Za-z0-9_.\-])"
+    else:
+        # A separator-less root (a drive path) must not sit behind a separator
+        # either: that spelling continues a longer location (a device namespace's
+        # `\\?\C:`, say), not this root.
+        lookbehind = r"(?<![A-Za-z0-9_.\-\\/])"
+    after = r"(?!" + _ROOT_NAME_CHAR + r"|\." + _ROOT_NAME_CHAR + r"|" + _SPACE_CHUNK + r")"
+    return re.compile(lookbehind + body + after)
 
 
 def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
