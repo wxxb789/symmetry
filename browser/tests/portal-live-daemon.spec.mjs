@@ -225,7 +225,10 @@ test.describe("Goal 2 live daemon acceptance", () => {
     expect(inputCommand.data.acknowledgement_outcome, "the daemon acknowledged the input command").toBe("applied");
     // The rendered receipt for that served command is its acknowledgement, and
     // never the pending text of a request the runtime already applied.
-    await expect(page.locator(".receipt").filter({ hasText: ui.receiptApplied }).first()).toBeVisible();
+    // The acknowledged outcome is the only one that renders `data-outcome="applied"`
+    // (a control-plane-applied command renders a distinct outcome whose text also
+    // contains "Applied"), so the receipt is located by its outcome first.
+    await expect(page.locator('.receipt[data-outcome="applied"]').first()).toContainText(ui.receiptApplied);
     await expect(page.locator(".receipt").filter({ hasText: ui.receiptQueued })).toHaveCount(0);
 
     // Failure-repair retry: generation 1 fails, the corrected intent is
@@ -336,7 +339,7 @@ test.describe("Goal 2 live daemon acceptance", () => {
     const cancelledDetail = await detailOf(page, cancelled.id);
     const cancelOutcome = cancelledDetail.raw.timeline.find((entry) => entry.source === "command" && entry.data.kind === "cancel");
     expect(cancelOutcome.data.acknowledgement_outcome, "the terminated run acknowledged its cancel").toBe("applied");
-    await expect(page.locator(".receipt").filter({ hasText: ui.receiptApplied }).first()).toBeVisible();
+    await expect(page.locator('.receipt[data-outcome="applied"]').first()).toContainText(ui.receiptApplied);
     await expect(page.getByRole("button", { name: ui.retry })).toBeVisible();
 
     // (3) An unconfirmed attempt after a lost response: the request really

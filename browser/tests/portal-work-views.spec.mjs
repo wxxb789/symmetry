@@ -709,7 +709,7 @@ test.describe("Readable work views", () => {
     monitorBrowserErrors(fresh);
     try {
       const document = await fresh.goto(workDetailLink);
-      expect(document.status(), "the release must serve the authenticated work detail document").toBe(200);
+      expect(document.status(), "the signed-out work detail deep link lands on the login document").toBe(200);
       await expect(fresh).toHaveURL(/\/portal\/login\?return_to=/);
       expect(new URL(fresh.url()).searchParams.get("return_to")).toBe(workDetailLink);
       await fresh.getByLabel("Operator token").fill(operatorToken);
@@ -779,7 +779,7 @@ test.describe("Readable work views", () => {
     monitorBrowserErrors(fresh);
     try {
       const document = await fresh.goto(projectLink);
-      expect(document.status(), "the release must serve the authenticated project document").toBe(200);
+      expect(document.status(), "the signed-out project deep link lands on the login document").toBe(200);
       await expect(fresh).toHaveURL(/\/portal\/login\?return_to=/);
       expect(new URL(fresh.url()).searchParams.get("return_to")).toBe(projectLink);
       await fresh.getByLabel("Operator token").fill(operatorToken);

@@ -48,8 +48,7 @@ const ui = {
   stateCancelled: "Cancelled",
   receiptRequested: "Request sent",
   receiptAwaitingRuntime: "Awaiting a runtime",
-  receiptDeferred: "Queued for the runtime",
-  receiptApplied: "Applied",
+  receiptControlApplied: "Applied by the control plane",
   receiptUnknown: "Outcome unknown",
   closeDetail: "Close work detail"
 };
@@ -103,7 +102,7 @@ test.describe("Execution control", () => {
 
     await page.getByRole("button", { name: ui.start }).click();
     await expect(page.locator(".receipt").first()).toContainText(ui.receiptRequested);
-    await expect(page.locator(".receipt").first()).not.toContainText(ui.receiptApplied);
+    await expect(page.locator('.receipt[data-outcome="applied"]')).toHaveCount(0);
     await expect.poll(() => executionOf(page, item.id), { timeout: STATE_GUARD_MS }).toMatchObject({ state: "queued", generation: 1 });
 
     // The queued execution renders the served state in the control bar and in
@@ -120,13 +119,13 @@ test.describe("Execution control", () => {
 
     const cancel = (await timelineOf(page, item.id)).filter((entry) => entry.source === "command" && entry.data.kind === "cancel");
     expect(cancel, "one durable cancel command").toHaveLength(1);
-    // A task-scoped cancel command carries no run-scoped generation, and it is
-    // recorded by the control plane without a runtime acknowledgement, so its
-    // receipt renders as queued for the runtime — never as applied.
+    // A task-scoped cancel command carries no run-scoped generation, and the
+    // control plane applies it itself without a runtime acknowledgement, so its
+    // receipt renders the control plane's own outcome — never the runtime's.
     expect(cancel[0].generation).toBeNull();
     expect(cancel[0].data.acknowledgement_outcome).toBeNull();
-    await expect(page.locator(".receipt").filter({ hasText: ui.receiptDeferred }).first()).toBeVisible();
-    await expect(page.locator(".receipt").filter({ hasText: ui.receiptApplied })).toHaveCount(0);
+    await expect(page.locator('.receipt[data-outcome="control_applied"]').first()).toContainText(ui.receiptControlApplied, { timeout: STATE_GUARD_MS });
+    await expect(page.locator('.receipt[data-outcome="applied"]')).toHaveCount(0);
 
     // Retry availability is the server's own signal: retry re-queues into
     // assignment, no runtime serves this binding, and the capability-bound
@@ -172,11 +171,11 @@ test.describe("Execution control", () => {
     await openWorkDetail(page, item.id);
     await page.getByRole("button", { name: ui.start }).click();
     await expect(page.locator(".receipt").first()).toContainText(ui.receiptRequested);
-    await expect(page.locator(".receipt").first()).not.toContainText(ui.receiptApplied);
+    await expect(page.locator('.receipt[data-outcome="applied"]')).toHaveCount(0);
     // A background refresh arriving while the request is open changes nothing
     // about the pending receipt.
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await expect(page.locator(".receipt").first()).not.toContainText(ui.receiptApplied);
+    await expect(page.locator('.receipt[data-outcome="applied"]')).toHaveCount(0);
     release();
     await expect(page.locator(".receipt").first()).toContainText(ui.receiptAwaitingRuntime, { timeout: STATE_GUARD_MS });
     await page.unroute(`**/portal/api/work-items/${item.id}/run`);
@@ -209,7 +208,7 @@ test.describe("Execution control", () => {
     await page.getByRole("button", { name: ui.cancel }).click();
     const unknownReceipt = page.locator(".receipt").filter({ hasText: ui.receiptUnknown }).first();
     await expect(unknownReceipt).toBeVisible({ timeout: STATE_GUARD_MS });
-    await expect(unknownReceipt).not.toContainText(ui.receiptApplied);
+    await expect(page.locator('.receipt[data-outcome="applied"]')).toHaveCount(0);
 
     // The durable command exists, so the execution settles from the server even
     // though this browser never saw a response; pressing the control again is
@@ -231,17 +230,18 @@ test.describe("Execution control", () => {
     for (const route of heldReads) await route.continue().catch(() => undefined);
     await page.unroute(`**/portal/api/work-items/${lost.id}`);
 
-    // The reload reconstructs the same attempt from its stored identity, so the
-    // receipt is pending again instead of vanishing — still never applied.
+    // The confirmed replay cleared the stored attempt identity, and the settled
+    // run offers no live cancel capability, so the reload reconstructs no
+    // pending attempt: the receipt list renders the durable cancel command the
+    // control plane applied itself, and no receipt ever claims the runtime's
+    // acknowledgement.
     await page.reload();
     await expect(page.getByRole("button", { name: ui.closeDetail }).or(page.locator("h1")).first()).toBeVisible();
-    const pending = page.locator(".receipt").filter({ hasText: ui.receiptRequested }).first();
-    const settled = page.getByText(ui.stateCancelled, { exact: true }).first();
-    /* The reload reconstructs the attempt before the detail snapshot arrives; if
-       the snapshot lands first, the durable command owns the receipt and the
-       attempt renders nothing. Either way it is never applied. */
-    await expect(pending.or(settled).first()).toBeVisible({ timeout: STATE_GUARD_MS });
-    if (await pending.count() === 1) await expect(pending).not.toContainText(ui.receiptApplied);
+    const cancelReceipt = page.locator('.receipt[data-outcome="control_applied"]').first();
+    await expect(cancelReceipt).toContainText(ui.receiptControlApplied, { timeout: STATE_GUARD_MS });
+    // The durable row is on screen; no receipt anywhere claims the runtime's
+    // acknowledgement.
+    await expect(page.locator('.receipt[data-outcome="applied"]')).toHaveCount(0);
 
     await expect.poll(() => executionOf(page, lost.id), { timeout: STATE_GUARD_MS }).toMatchObject({ state: "cancelled" });
     await expect(page.getByText(ui.stateCancelled, { exact: true }).first()).toBeVisible({ timeout: STATE_GUARD_MS });
@@ -351,9 +351,14 @@ test.describe("Runtime visibility", () => {
     // The empty state names the filter it read and cites the served registered
     // count; it never claims the deployment's registry itself is empty.
     await expect(page.locator(".empty-state h2")).toHaveText("No compatible runtimes");
+    // The product renders the singular at exactly one registered runtime; the
+    // spec mirrors that pluralization instead of phrasing a count it never
+    // renders.
     const registryPhrase = registered.length === 0
       ? "No runtime is registered with this deployment"
-      : `${registered.length} runtimes are registered with this deployment`;
+      : registered.length === 1
+        ? "1 runtime is registered with this deployment"
+        : `${registered.length} runtimes are registered with this deployment`;
     await expect(page.getByText(registryPhrase)).toBeVisible();
     await expect(page.getByText("No runtimes registered")).toHaveCount(0);
 

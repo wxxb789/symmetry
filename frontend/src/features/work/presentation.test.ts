@@ -56,13 +56,26 @@ describe("cost and acceptance truthfulness", () => {
     expect(ownerKey({ type: "human", name: "Ada", agent_profile: null })).toBe("human:Ada");
   });
 
-  it("labels every owner key its own encoder mints, so a format change cannot drift apart", () => {
-    // The round trip is the contract: the filter key carried in the URL and the
-    // label rendered before the rows load are one identity written and read back.
+  it("round-trips every owner key whose encoder keeps the label's identity", () => {
+    // For these families the round trip is the contract: the filter key carried
+    // in the URL and the label rendered before the rows load are one identity
+    // written and read back. An absent name mints a sentinel key whose label is
+    // the row's own absence label, never the sentinel text.
     expect(ownerKeyLabel(ownerKey({ type: "agent", name: "Worker", agent_profile: "reviewer" }))).toBe("Agent · reviewer");
     expect(ownerKeyLabel(ownerKey({ type: "agent", name: "Worker", agent_profile: null }))).toBe("Agent · Worker");
     expect(ownerKeyLabel(ownerKey({ type: "human", name: "Ada", agent_profile: null }))).toBe("Ada");
     expect(ownerKeyLabel(ownerKey({ type: "unassigned", name: null, agent_profile: null }))).toBe("Unassigned");
+    expect(ownerKeyLabel(ownerKey({ type: "agent", name: null, agent_profile: null }))).toBe("Agent");
+    expect(ownerKeyLabel(ownerKey({ type: "human", name: null, agent_profile: null }))).toBe("Human owner not recorded");
+  });
+
+  it("pins what the unknown-type key cannot carry instead of asserting a round trip that cannot hold", () => {
+    // The `type:` family drops the served name: the key carries only the type,
+    // so the label renders the type and the name is not recoverable from it.
+    const named = { type: "robot", name: "R2", agent_profile: null };
+    expect(ownerKey(named)).toBe("type:robot");
+    expect(ownerKeyLabel(ownerKey(named))).toBe("Unknown owner type: robot");
+    expect(ownerLabel(named)).toBe("R2");
     expect(ownerKeyLabel(ownerKey({ type: "robot", name: null, agent_profile: null }))).toBe("Unknown owner type: robot");
   });
 });
@@ -84,9 +97,19 @@ describe("CI freshness", () => {
   it("marks provider CI stale outside the freshness window and fresh inside it", () => {
     expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed", tone: "passed" });
     expect(ciLabel(ci("passed", "provider", "2026-03-01T09:00:00.500+00:00"), syncedResource, now)).toMatchObject({ text: "CI passed", tone: "passed" });
+    // The window's own edges, one minute apart: inside is fresh, outside is stale.
+    expect(ciLabel(ci("passed", "provider", "2026-02-28T12:01:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed", tone: "passed" });
+    expect(ciLabel(ci("passed", "provider", "2026-02-28T11:59:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · stale", tone: "stale" });
     expect(ciLabel(ci("passed", "provider", "2026-02-20T09:00:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · stale", tone: "stale" });
     expect(ciLabel(ci("failed", "provider", "2026-03-01T09:00:00Z"), null, now)).toMatchObject({ text: "CI failed", tone: "failed" });
     expect(ciLabel(ci("pending", "provider", "2026-03-01T09:00:00Z"), null, now)).toMatchObject({ text: "CI pending", tone: "pending" });
+  });
+
+  it("never renders a future-dated record as fresh", () => {
+    // A browser clock behind the server must not turn a record that has not
+    // happened yet into evidence that the pass is recent.
+    expect(ciLabel(ci("passed", "provider", "2026-03-02T12:00:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · freshness unknown", tone: "unknown" });
+    expect(ciLabel(ci("passed", "provider", "2026-03-01T12:01:00Z"), syncedResource, now)).toMatchObject({ text: "CI passed · freshness unknown", tone: "unknown" });
   });
 
   it("labels a bound-resource problem as stale instead of fresh", () => {

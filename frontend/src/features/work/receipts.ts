@@ -12,24 +12,39 @@ import type { ActionKind } from "../../services/control-actions";
 import { asRecord, asText, timelineItemKey, type TimelineItemLike } from "./presentation";
 
 /**
- * The outcomes durable evidence can produce. `deferred` is a request the
- * control plane has already recorded and dispatched (a retry moves the task
- * into a new queued generation) but that no runtime has acknowledged — it is
- * never rendered as `applied`, and it is distinct from `queued`, which awaits
- * the runtime's acknowledgement of a command that was delivered to it.
- * `refused` is the control plane's own typed refusal of a local attempt; the
- * runtime's rejection of a delivered command stays `rejected` with its own
- * text, so a control-plane decision is never attributed to the runtime.
+ * The outcomes durable evidence can produce. `applied` requires the runtime's
+ * own acknowledgement outcome. `deferred` is the retry the control plane
+ * re-queued (moving the task into a new queued generation) without a runtime
+ * acknowledgement — it is never rendered as `applied`, and it is distinct from
+ * `queued`, which awaits the runtime's acknowledgement of a command delivered
+ * to it. `control_applied` is a command the control plane applied itself
+ * (cancel on queued/assigned work, pause, resume, provide_input) and never
+ * dispatched to a runtime, so no acknowledgement exists and none is implied.
+ * `refused` is the control plane's own typed refusal of a local attempt, and
+ * `not_sent` a request this surface refused before sending it (no storable
+ * attempt identity), so nothing reached the server; the runtime's rejection of
+ * a delivered command stays `rejected` with its own text, and the control
+ * plane's pre-dispatch rejection (recorded without an acknowledgement id) is
+ * `control_rejected`, so a control-plane decision is never attributed to the
+ * runtime.
  */
-export type ReceiptOutcome = "applied" | "rejected" | "refused" | "failed" | "queued" | "deferred" | "cancelled" | "unknown";
+export type ReceiptOutcome = "applied" | "control_applied" | "rejected" | "control_rejected" | "refused" | "failed" | "not_sent" | "queued" | "deferred" | "unknown";
 
 /** What a receipt card renders: a durable outcome, or `requested` while an attempt is unconfirmed. */
 export type ReceiptViewOutcome = ReceiptOutcome | "requested";
 
 /** The served command projection members a receipt outcome is derived from. */
 export interface ReceiptCommand {
+  /** The served command kind; `retry` is the one kind the control plane re-queues. */
+  readonly kind: string;
   readonly state: string;
   readonly acknowledgement_outcome: string | null;
+  /**
+   * The runtime's acknowledgement identity. Only the runtime's acknowledgement
+   * path records it, so a null id means the control plane decided the outcome
+   * itself and no runtime was involved.
+   */
+  readonly acknowledgement_id: string | null;
   readonly applied_at?: string | null;
 }
 
@@ -49,32 +64,41 @@ const pendingCommandStates: Record<string, true> = { pending: true };
 /** Command states the control plane itself applied without runtime acknowledgement. */
 const controlAppliedCommandStates: Record<string, true> = { applied: true };
 
-/** Command states that end an attempt without an acknowledgement outcome. */
-const cancelledCommandStates: Record<string, true> = { cancelled: true, superseded: true };
-
 /**
  * Derives one receipt outcome from the served command projection. A command
  * whose state is still in flight and whose acknowledgement outcome is null is
- * `queued`, never `applied`; anything the evidence cannot place is `unknown`.
+ * `queued`, never `applied`; a command the control plane recorded `applied`
+ * without an acknowledgement is the re-queued `retry` (`deferred`) or the
+ * control plane's own application (`control_applied`); anything the evidence
+ * cannot place is `unknown`.
  */
 export function receiptOutcome(command: ReceiptCommand | null): ReceiptOutcome {
   if (command === null) return "unknown";
   const acknowledgement = command.acknowledgement_outcome;
-  if (acknowledgement !== null) return outcomesByAcknowledgement[acknowledgement] ?? "unknown";
-  if (cancelledCommandStates[command.state] === true) return "cancelled";
+  if (acknowledgement !== null) {
+    if (acknowledgement === "rejected" && command.acknowledgement_id === null) return "control_rejected";
+    return outcomesByAcknowledgement[acknowledgement] ?? "unknown";
+  }
   if (pendingCommandStates[command.state] === true) return "queued";
-  if (controlAppliedCommandStates[command.state] === true) return "deferred";
+  if (controlAppliedCommandStates[command.state] === true) {
+    // The command state is a closed set (pending|applied|acknowledged); of the
+    // states recorded applied without a runtime acknowledgement, only a retry
+    // was dispatched anywhere — as a fresh queued generation.
+    return command.kind === "retry" ? "deferred" : "control_applied";
+  }
   return "unknown";
 }
 
 const receiptLabels: Record<ReceiptOutcome, string> = {
   applied: "Applied",
+  control_applied: "Applied by the control plane",
   rejected: "Rejected by the runtime",
+  control_rejected: "Rejected by the control plane",
   refused: "Refused by the server",
   failed: "Failed",
+  not_sent: "Not sent",
   queued: "Awaiting agent acknowledgement",
   deferred: "Queued for the runtime",
-  cancelled: "Cancelled",
   unknown: "Outcome unknown",
 };
 
@@ -126,17 +150,20 @@ export function receiptRows(
     const key = commandId ?? timelineItemKey(item);
     if (seen.has(key)) continue;
     seen.add(key);
+    const kind = asText(command["kind"]) ?? "command";
     const state = asText(command["state"]) ?? "unknown";
     const acknowledgementOutcome = asText(command["acknowledgement_outcome"]);
     rows.push({
       key,
       commandId,
-      kind: asText(command["kind"]) ?? "command",
+      kind,
       generation: typeof item.generation === "number" ? item.generation : null,
       recordedAt: asText(item.recorded_at),
       outcome: receiptOutcome({
+        kind,
         state,
         acknowledgement_outcome: acknowledgementOutcome,
+        acknowledgement_id: asText(command["acknowledgement_id"]),
         applied_at: asText(command["applied_at"]),
       }),
     });

@@ -215,6 +215,8 @@ interface WorkItemDraftState {
   form: WorkItemFormState;
   set: (patch: Partial<WorkItemFormState>) => void;
   failure: unknown;
+  /** The create refusal when this browser cannot mint an item identity. */
+  identityFailure: string | null;
   pending: boolean;
   retryable: boolean;
   owned: ReadonlySet<string>;
@@ -252,6 +254,7 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
   const [target] = useState(() => item === null ? null : { id: item.id, version: item.version });
   const [form, setForm] = useState<WorkItemFormState>(() => workItemFormStateOf(project, item));
   const [intent, setIntent] = useState<WorkItemIntent | null>(null);
+  const [identityFailure, setIdentityFailure] = useState<string | null>(null);
   const inFlightRef = useRef(false);
   /** Truthful notes about fields the submission could not carry. */
   const notesRef = useRef<readonly string[]>([]);
@@ -290,42 +293,92 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
   const set = (patch: Partial<WorkItemFormState>) => setForm((current) => ({ ...current, ...patch }));
   const submit = () => {
     if (pending || inFlightRef.current) return;
+    setIdentityFailure(null);
     let submitted: WorkItemIntent;
     if (target === null || item === null) {
       notesRef.current = [];
       // The creation identity travels with the frozen intent, not with the
       // form: every attempt of this draft replays the same identity verbatim.
-      submitted = { kind: "create", payload: { ...workItemDraftOf(form, { includeStatus: true, deliveryEditable: delivery }), creation_id: workItemCreationId(project.id) } };
+      // A browser that cannot mint one refuses visibly instead of sending a
+      // create the server could apply twice.
+      const creationId = workItemCreationId(project.id);
+      if (creationId === null) {
+        setIdentityFailure("This browser cannot mint an item identity, so the request was not sent.");
+        return;
+      }
+      submitted = { kind: "create", payload: { ...workItemDraftOf(form, { includeStatus: true, deliveryEditable: delivery }), creation_id: creationId } };
     } else {
       const intendedDraft = workItemUpdatePayload(form, target.version, delivery);
-      const intended = intendedDraft as Record<string, unknown>;
       const payload = withoutProviderOwned(intendedDraft, owned);
-      const served = item as unknown as Record<string, unknown>;
       // Only a field the operator actually changed counts: the served row is
-      // the comparison, and a control whose served shape differs (the owner is
-      // served as `assignee`) stays unreported instead of producing a false
-      // claim about a dropped change.
-      const servedValue = (key: string): unknown => {
-        if (key in served) return served[key];
-        const assignee = served["assignee"] as { type?: string; name?: string } | undefined;
-        if (key === "assignee_type") return assignee?.type;
-        if (key === "assignee_name") return assignee?.name;
-        return undefined;
+      // the comparison, read through the typed members of each side so a
+      // control whose served shape differs (the owner is served as `assignee`)
+      // stays unreported instead of producing a false claim about a dropped
+      // change.
+      const intendedValue = (key: string): unknown => {
+        switch (key) {
+          case "title": return intendedDraft.title;
+          case "description": return intendedDraft.description;
+          case "priority": return intendedDraft.priority;
+          case "assignee_type": return intendedDraft.assignee_type;
+          case "assignee_name": return intendedDraft.assignee_name;
+          case "agent_profile": return intendedDraft.agent_profile;
+          case "workspace": return intendedDraft.workspace;
+          case "repository_resource_id": return intendedDraft.repository_resource_id;
+          case "ci_resource_id": return intendedDraft.ci_resource_id;
+          case "branch": return intendedDraft.branch;
+          case "blocked": return intendedDraft.blocked;
+          case "blocker": return intendedDraft.blocker;
+          case "pull_request_url": return intendedDraft.pull_request_url;
+          case "ci_status": return intendedDraft.ci_status;
+          case "review_status": return intendedDraft.review_status;
+          case "version": return intendedDraft.version;
+          default: return undefined;
+        }
       };
-      const dropped = Object.keys(intended).filter((key) => {
+      const servedValue = (key: string): unknown => {
+        switch (key) {
+          case "title": return item.title;
+          case "description": return item.description;
+          case "priority": return item.priority;
+          case "assignee_type": return item.assignee?.type;
+          case "assignee_name": return item.assignee?.name;
+          case "agent_profile": return item.assignee?.agent_profile;
+          case "workspace": return item.workspace;
+          case "repository_resource_id": return item.repository_resource_id;
+          case "ci_resource_id": return item.ci_resource_id;
+          case "branch": return item.branch;
+          case "blocked": return item.blocked;
+          case "blocker": return item.blocker;
+          case "pull_request_url": return item.pull_request_url;
+          case "ci_status": return item.ci_status;
+          case "review_status": return item.review_status;
+          case "version": return item.version;
+          default: return undefined;
+        }
+      };
+      const dropped = Object.keys(intendedDraft).filter((key) => {
         if (key === "version" || key in payload) return false;
         const before = servedValue(key);
-        return before !== undefined && JSON.stringify(intended[key]) !== JSON.stringify(before);
+        return before !== undefined && JSON.stringify(intendedValue(key)) !== JSON.stringify(before);
       });
       const notes = dropped.length === 0
         ? []
         : [dropped.length === 1
             ? `The server reports ${dropped[0]} as owned elsewhere, so it was not sent.`
             : `The server reports ${dropped.join(", ")} as owned elsewhere, so they were not sent.`];
-      // Control's update changeset refuses a nil pull request URL, so an empty
-      // control cannot clear a recorded one: say so instead of reporting success.
-      if (delivery.pullRequest && form.pull_request_url === "" && item.pull_request_url) {
-        notes.push("The server keeps the recorded pull request URL: a manual value cannot be cleared from this form.");
+      // The owner rewrite discards what the payload carries for the non-agent
+      // owner types (workspaces.ex forces these NULL); the values are named
+      // from the payload that was actually sent.
+      const ownerDiscarded: readonly (readonly [string, string])[] = form.assignee_type === "human"
+        ? [["agent_profile", "agent profile"], ["workspace", "workspace"]]
+        : form.assignee_type === "unassigned"
+          ? [["assignee_name", "owner name"], ["agent_profile", "agent profile"], ["workspace", "workspace"]]
+          : [];
+      const discarded = ownerDiscarded.filter(([key]) => key in payload).map(([, label]) => label);
+      if (discarded.length > 0) {
+        const owner = form.assignee_type === "human" ? "a human owner" : "an unassigned item";
+        notes.push(`Control records no ${discarded.join(", ")} for ${owner}, so ${discarded.length === 1 ? "that value was" : "those values were"} not applied.`);
       }
       // A delivery value whose served source became a provider or reported
       // evidence while the form was open is no longer offered: the typed value
@@ -356,6 +409,7 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
     form,
     set,
     failure,
+    identityFailure,
     pending,
     retryable: failure !== null && failureMode(failure) === "retryable",
     owned,
@@ -370,7 +424,7 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
 }
 
 function WorkItemEditorDialog({ project, item, presentation, drawerHost, draft }: WorkItemEditorProps & { draft: WorkItemDraftState }) {
-  const { form, set, failure, pending, retryable, owned, delivery, hasIntent, targetVersion, submit, retry, close, openerRef } = draft;
+  const { form, set, failure, identityFailure, pending, retryable, owned, delivery, hasIntent, targetVersion, submit, retry, close, openerRef } = draft;
   const resources = project.resources ?? [];
   const repositories = resources.filter((resource) => resource.kind === "repository");
   const ciResources = resources.filter((resource) => resource.kind === "ci");
@@ -481,9 +535,7 @@ function WorkItemEditorDialog({ project, item, presentation, drawerHost, draft }
           {delivery.ci
             ? <select id="work-item-ci-status" name="ci_status" value={form.ci_status} disabled={pending}
               onChange={(event) => { const ci_status = event.currentTarget.value; set({ ci_status }); }}>
-              {/* Control's update changeset refuses a nil CI status, so the
-                  empty choice exists only to represent one already recorded. */}
-              {form.ci_status === "" && <option value="">Not recorded</option>}
+              <option value="">Not recorded</option>
               <option value="unknown">Unknown</option>
               <option value="pending">Pending</option>
               <option value="passed">Passed</option>
@@ -496,7 +548,7 @@ function WorkItemEditorDialog({ project, item, presentation, drawerHost, draft }
           {delivery.review
             ? <select id="work-item-review-status" name="review_status" value={form.review_status} disabled={pending}
               onChange={(event) => { const review_status = event.currentTarget.value; set({ review_status }); }}>
-              {form.review_status === "" && <option value="">Not recorded</option>}
+              <option value="">Not recorded</option>
               <option value="none">None</option>
               <option value="required">Required</option>
               <option value="changes_requested">Changes requested</option>
@@ -518,6 +570,7 @@ function WorkItemEditorDialog({ project, item, presentation, drawerHost, draft }
 
           {someProviderOwned && <p className="muted text-small">Fields owned by the external work tracker ({[...owned].join(", ")}) are shown read-only; edit them in the tracker.</p>}
           {failure !== null && failureMode(failure) !== "authoritative" && <p className="notice notice-error" role="alert">{refusalNotice(failure)}</p>}
+          {identityFailure !== null && <p className="notice notice-error" role="alert">{identityFailure}</p>}
           <div className="dialog-actions">
             <button className="button button-primary" type="submit" disabled={pending}>{pending ? "Saving…" : item === null ? "Create" : "Save"}</button>
             {retryable && hasIntent && <button className="button" type="button" disabled={pending} onClick={retry}>Try again</button>}

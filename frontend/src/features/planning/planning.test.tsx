@@ -5,9 +5,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApplication, type Application } from "../../app/application";
 import { createAppRouter } from "../../app/router";
-import type { Project, WorkItem } from "../../services/api";
+import { ServerRefusal, type Project, type WorkItem } from "../../services/api";
 import { readWorkDetail } from "../../services/api.fixtures";
-import { boardMoveRequest, failureMode, providerOwnedControlsOf, resetPendingWorkItemCreations, workItemDraftOf, workItemFormStateOf, type BoardColumnSnapshot } from "./write-policy";
+import { boardMoveRequest, failureMode, providerOwnedControlsOf, refusalNotice, resetPendingWorkItemCreations, workItemDraftOf, workItemFormStateOf, workItemUpdatePayload, type BoardColumnSnapshot } from "./write-policy";
 
 // This suite drives the real component tree against a stateful HTTP double: the
 // double keeps a served revision per row and applies the same rules the Control
@@ -73,8 +73,8 @@ function workItem(overrides: Partial<WorkItem> & { id: string; title: string }):
     assignee: { type: "unassigned", name: null, agent_profile: null },
     delivery: {
       pull_request: { value: null, source: "none", generation: null, url: null, status: null },
-      ci: { value: null, source: "none", generation: null, url: null, status: "unknown" },
-      review: { value: null, source: "none", generation: null, url: null, status: "none" },
+      ci: { value: "unknown", source: "none", generation: null, url: null, status: "unknown" },
+      review: { value: "none", source: "none", generation: null, url: null, status: "none" },
     },
     execution: null,
     external: null,
@@ -387,6 +387,38 @@ describe("planning write policy", () => {
     expect(draft).toMatchObject({ title: "Title", branch: "feat/x", blocked: true });
     expect(failureMode(new Error("x"))).toBe("authoritative");
   });
+
+  it("does not seed delivery controls from the projection's unrecorded fallback", () => {
+    // The served source is "none": the unrecorded projection serves "unknown"
+    // for CI and "none" for review as values, and an untouched control must
+    // stay empty instead of recording what the operator never entered.
+    const form = formStateOf(workItem({ id: "i", title: "Title" }));
+    expect(form.ci_status).toBe("");
+    expect(form.review_status).toBe("");
+    expect(form.pull_request_url).toBe("");
+  });
+
+  it("clears an empty editable delivery control and leaves an uneditable one alone", () => {
+    const form = formStateOf(workItem({ id: "i", title: "Title" }));
+    const editable = { pullRequest: true, ci: true, review: true };
+    expect(workItemUpdatePayload(form, 2, editable)).toMatchObject({ pull_request_url: null, ci_status: null, review_status: null });
+    const evidenceOwned = { pullRequest: false, ci: false, review: false };
+    const payload = workItemUpdatePayload(form, 2, evidenceOwned);
+    expect(payload).not.toHaveProperty("pull_request_url");
+    expect(payload).not.toHaveProperty("ci_status");
+    expect(payload).not.toHaveProperty("review_status");
+  });
+
+  it("keeps a described server fault retryable and states what an invalid request does", () => {
+    // A 5xx is no authoritative answer even when the server's own envelope makes
+    // it parseable: the write may have been applied, so it stays retryable.
+    expect(failureMode(new ServerRefusal({ status: 500, code: "internal_error", message: "internal server error", fields: null }))).toBe("retryable");
+    expect(failureMode(new ServerRefusal({ status: 409, code: "stale", message: "resource changed since it was loaded", fields: null }))).toBe("authoritative");
+    // `invalid_request` closes the editor as authoritative, so the guidance
+    // states what happens instead of promising a correction this surface cannot take.
+    expect(refusalNotice(new ServerRefusal({ status: 400, code: "invalid_request", message: "request is invalid", fields: null })))
+      .toBe("request is invalid (invalid_request) — This request cannot be corrected here; the editor closes and the server's current state is shown.");
+  });
 });
 
 describe("project planning", () => {
@@ -495,12 +527,23 @@ describe("project planning", () => {
     await user.type(name, "Half-typed");
     const project = projectOf(harness.state, firstProjectId);
     if (project === undefined) throw new Error("project missing");
+    // The row advances elsewhere while the editor is open: the refresh serves
+    // the new revision, and the frozen intent must still target the revision
+    // the editor was opened from.
+    project.version += 1;
+    project.name = "Renamed elsewhere";
     await act(async () => { await application.queryClient.invalidateQueries({ queryKey: ["workspace"] }); });
     expect(screen.getByLabelText("Name")).toHaveValue("Half-typed");
     expect(screen.getByRole("dialog")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByText("Project updated.");
-    expect(patchesOf(harness, `/portal/api/projects/${firstProjectId}`)[0]?.body).toMatchObject({ version: 3 });
+    // The submission carries the opened-at revision, not the refreshed one, so
+    // the server refuses it as stale instead of rebasing onto state the
+    // operator never saw.
+    expect(await screen.findByRole("alert")).toHaveTextContent("resource changed since it was loaded (stale)");
+    const submitted = patchesOf(harness, `/portal/api/projects/${firstProjectId}`)[0];
+    expect(submitted?.body).toMatchObject({ version: 3, name: "Half-typed" });
+    expect(submitted?.body).not.toHaveProperty("version", 4);
+    expect(projectOf(harness.state, firstProjectId)?.name).toBe("Renamed elsewhere");
   });
 
   it("clears the optional fields the operator empties on the update path", async () => {
@@ -511,18 +554,33 @@ describe("project planning", () => {
     servedItem["version"] = 1;
     servedItem["description"] = "Recorded description";
     servedItem["branch"] = "feat/recorded";
+    // Recorded manual delivery values, so every editable delivery control
+    // holds a value the operator can empty.
+    servedItem["delivery"] = {
+      pull_request: { value: "https://example.invalid/pr/1", source: "manual", generation: null, url: "https://example.invalid/pr/1", status: null },
+      ci: { value: "passed", source: "manual", generation: null, url: null, status: "passed" },
+      review: { value: "approved", source: "manual", generation: null, url: null, status: "approved" },
+    };
     harness.state.detail[firstItemId] = served;
     renderWorkspace(`/portal/work/${firstItemId}`, harness);
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
     await user.clear(screen.getByLabelText("Description"));
     await user.clear(screen.getByLabelText("Branch"));
+    await user.clear(screen.getByLabelText("Pull request URL"));
+    await user.selectOptions(screen.getByLabelText("CI"), "");
+    await user.selectOptions(screen.getByLabelText("Review"), "");
     await user.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText("Work item updated.");
     // An emptied control is an explicit clear: Ecto reads "" as "no change",
-    // so the payload has to carry null for the value to be removed.
+    // so the payload has to carry null for the value to be removed. The
+    // delivery controls clear the same way: a nil change is accepted there too.
     const update = patchesOf(harness, `/portal/api/work-items/${firstItemId}`)[0];
-    expect(update?.body).toMatchObject({ version: 1, description: null, branch: null });
-    expect(itemOf(harness.state, firstItemId)?.item.description).toBeNull();
+    expect(update?.body).toMatchObject({ version: 1, description: null, branch: null, pull_request_url: null, ci_status: null, review_status: null });
+    const item = itemOf(harness.state, firstItemId)?.item;
+    expect(item?.description).toBeNull();
+    expect(item?.pull_request_url).toBeNull();
+    expect(item?.ci_status).toBeNull();
+    expect(item?.review_status).toBeNull();
   });
 
   it("restores an archived project through the one write it accepts", async () => {
@@ -539,7 +597,6 @@ describe("project planning", () => {
   });
 
   it("does not apply a late board move to the project the operator switched to", async () => {
-    const user = userEvent.setup();
     const harness = createHarness();
     const history = createMemoryHistory({ initialEntries: [`/portal/projects/${firstProjectId}?view=board`] });
     const application = createApplication({ fetcher: harness.fetcher, location: { href: "http://localhost/portal/projects", replace: vi.fn() } });
@@ -551,13 +608,19 @@ describe("project planning", () => {
     card.focus();
     fireEvent.keyDown(card, { key: "ArrowRight", shiftKey: true });
     await waitFor(() => expect(patchesOf(harness, `/portal/api/work-items/${firstItemId}/move`)).toHaveLength(1));
-    // A move is not modal, so the operator can leave while it is in flight.
-    await user.selectOptions(screen.getByLabelText("Project"), secondProjectId);
+    // A move is not modal, so the operator can leave while it is in flight. The
+    // switch keeps the board view, so project two's board — the surface the
+    // late move's announcement would have to land on — is mounted and is what
+    // the negatives below observe.
+    await act(async () => { await router.navigate({ to: "/projects/$projectId", params: { projectId: secondProjectId }, search: { view: "board" } }); });
     await screen.findByRole("heading", { level: 1, name: "Project Two" });
+    const board = await screen.findByRole("region", { name: "Work board" });
+    expect(within(board).getByRole("link", { name: "Archived item" })).toBeVisible();
     release();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(screen.getByRole("heading", { level: 1, name: "Project Two" })).toBeVisible();
-    expect(screen.getByText(/This project is archived/)).toBeVisible();
+    expect(screen.getByText(/This project is archived\. Its work stays visible here/)).toBeVisible();
+    expect(screen.getByRole("region", { name: "Work board" })).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText("Moved to ready")).toBeNull();
     expect(itemOf(harness.state, firstItemId)?.item.status).toBe("ready");
@@ -654,6 +717,31 @@ describe("work item planning", () => {
     expect(projectOf(harness.state, firstProjectId)?.work_items.filter((item) => item.title === "Reopened draft")).toHaveLength(1);
   });
 
+  it("refuses a create visibly when this browser cannot mint an item identity", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness();
+    renderWorkspace(`/portal/projects/${firstProjectId}`, harness);
+    await user.click(await screen.findByRole("button", { name: "New work item" }));
+    await user.type(screen.getByLabelText("Title"), "Unidentified item");
+    // A non-secure origin without Web Crypto: the create has no idempotency
+    // identity, and one sent without could be duplicated by a retry.
+    vi.stubGlobal("crypto", {});
+    try {
+      await user.click(screen.getByRole("button", { name: "Create" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("This browser cannot mint an item identity, so the request was not sent.");
+      expect(screen.getByLabelText("Title")).toHaveValue("Unidentified item");
+      expect(postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`)).toHaveLength(0);
+      // With an identity available again the same press sends and clears the refusal.
+      vi.unstubAllGlobals();
+      await user.click(screen.getByRole("button", { name: "Create" }));
+      await screen.findByText("Work item created.");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`)).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("moves the focused card between columns, keeps focus on it and re-reads the new order", async () => {
     const harness = createHarness();
     renderWorkspace(`/portal/projects/${firstProjectId}?view=board`, harness);
@@ -709,6 +797,41 @@ describe("work item planning", () => {
     expect(update?.body).not.toHaveProperty("title");
     expect(update?.body).not.toHaveProperty("priority");
     expect(update?.body).not.toHaveProperty("status");
+  });
+
+  it("names the fields Control discards for a human owner", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness();
+    const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
+    const servedItem = served["work_item"] as Record<string, unknown>;
+    servedItem["version"] = 1;
+    harness.state.detail[firstItemId] = served;
+    renderWorkspace(`/portal/work/${firstItemId}`, harness);
+    await user.click(await screen.findByRole("button", { name: "Edit work item" }));
+    // The draft carries the recorded agent profile and the project workspace;
+    // Control records neither for a human owner, and the note must say so.
+    await user.selectOptions(screen.getByLabelText("Owner type"), "human");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const notice = await screen.findByText(/Work item updated\./);
+    expect(notice).toHaveTextContent("Control records no agent profile, workspace for a human owner, so those values were not applied.");
+  });
+
+  it("names the fields Control discards for an unassigned item", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness();
+    const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
+    const servedItem = served["work_item"] as Record<string, unknown>;
+    servedItem["version"] = 1;
+    // A recorded owner name: every field the unassigned rewrite discards is
+    // carried by the payload and named in the fixed owner-name-first order.
+    servedItem["assignee"] = { type: "agent", name: "Ada", agent_profile: "default" };
+    harness.state.detail[firstItemId] = served;
+    renderWorkspace(`/portal/work/${firstItemId}`, harness);
+    await user.click(await screen.findByRole("button", { name: "Edit work item" }));
+    await user.selectOptions(screen.getByLabelText("Owner type"), "unassigned");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const notice = await screen.findByText(/Work item updated\./);
+    expect(notice).toHaveTextContent("Control records no owner name, agent profile, workspace for an unassigned item, so those values were not applied.");
   });
 
   it("names the fields a mid-edit ownership change kept out of the submission", async () => {
@@ -793,11 +916,15 @@ describe("work item planning", () => {
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
     await user.clear(screen.getByLabelText("Title"));
     await user.type(screen.getByLabelText("Title"), "Local rewrite");
+    const readsBeforeSave = harness.requests.filter((request) => request.method === "GET" && request.path === "/portal/api/workspace").length;
     await user.click(screen.getByRole("button", { name: "Save" }));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Goal authority is required for this operation (goal_authority_required)");
     expect(alert).toHaveTextContent("Goal-managed work is changed through Goal admission");
     expect(screen.queryByRole("dialog", { name: "Edit work item" })).toBeNull();
     expect(found.item.title).toBe("Legacy item");
+    // The authoritative refusal re-reads the server's workspace state instead
+    // of leaving the surface on the snapshot the refused write was built from.
+    await waitFor(() => expect(harness.requests.filter((request) => request.method === "GET" && request.path === "/portal/api/workspace")).toHaveLength(readsBeforeSave + 1));
   });
 });

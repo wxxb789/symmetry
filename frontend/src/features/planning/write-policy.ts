@@ -66,9 +66,13 @@ export type VersionedWorkItem = WorkItem & { version: number };
 const pendingCreationIds = new Map<string, string>();
 
 /** The identity every attempt of this project's pending create draft replays. */
-export function workItemCreationId(projectId: string): string {
+export function workItemCreationId(projectId: string): string | null {
   const pending = pendingCreationIds.get(projectId);
   if (pending !== undefined) return pending;
+  // Without Web Crypto there is no identity for the attempt, and a create
+  // without one could be applied twice by a double click or a lost response.
+  // Refuse instead, as the control path's un-storable attempt identity does.
+  if (typeof crypto?.randomUUID !== "function") return null;
   const minted = crypto.randomUUID();
   pendingCreationIds.set(projectId, minted);
   return minted;
@@ -103,6 +107,10 @@ export type FailureMode = "fields" | "retryable" | "authoritative";
 
 export function failureMode(error: unknown): FailureMode {
   if (error instanceof ServerRefusal) {
+    // A server-side fault is no authoritative answer even when it arrives in
+    // the server's own error envelope: the write may have been applied, so the
+    // frozen intent stays retryable, exactly as `definitiveRefusal` classifies.
+    if (error.status >= 500) return "retryable";
     return error.code === "validation_failed" ? "fields" : "authoritative";
   }
   if (error instanceof Network) return "retryable";
@@ -118,7 +126,7 @@ const refusalGuidance: Record<string, string> = {
   goal_authority_required: "Goal-managed work is changed through Goal admission, not this surface.",
   not_found: "The server's current state is shown instead.",
   validation_failed: "Correct the highlighted fields and submit again.",
-  invalid_request: "Correct the request and submit again.",
+  invalid_request: "This request cannot be corrected here; the editor closes and the server's current state is shown.",
   forbidden: "Refresh the page and sign in again if the session was renewed elsewhere.",
 };
 
@@ -238,6 +246,19 @@ export interface WorkItemFormState {
   review_status: string;
 }
 
+/**
+ * The value one delivery control seeds from. The served projection substitutes
+ * a fallback for a value no one recorded (`effective_delivery` in
+ * portal_json.ex serves "unknown" for CI and "none" for review with
+ * `source: "none"`): that fallback is the projection's default, never an
+ * operator value, and seeding it would record a value the operator never
+ * entered, so only a recorded source seeds the control.
+ */
+function recordedDeliveryValue(entry: { source: string; value: string | null } | null | undefined): string {
+  if (entry === null || entry === undefined || entry.source === "none") return "";
+  return entry.value ?? "";
+}
+
 export function workItemFormStateOf(project: Project, item: WorkItem | null): WorkItemFormState {
   return {
     title: item?.title ?? "",
@@ -254,8 +275,8 @@ export function workItemFormStateOf(project: Project, item: WorkItem | null): Wo
     blocked: item?.blocked ?? false,
     blocker: item?.blocker ?? "",
     pull_request_url: item?.delivery?.pull_request.value ?? item?.pull_request_url ?? "",
-    ci_status: item?.delivery?.ci.value ?? "",
-    review_status: item?.delivery?.review.value ?? "",
+    ci_status: recordedDeliveryValue(item?.delivery?.ci),
+    review_status: recordedDeliveryValue(item?.delivery?.review),
   };
 }
 
@@ -283,10 +304,11 @@ export function workItemDraftOf(form: WorkItemFormState, options: { includeStatu
 
 /**
  * The update payload is the draft plus the fields the operator *cleared*: Ecto
- * treats an empty string as "no change", so a deliberate clear travels as null
- * for the fields Control can clear. The delivery statuses and the pull request
- * URL are not clearable through Control's update changeset (its validators
- * refuse nil), so an empty control there is left out and reported instead.
+ * treats an empty string as "no change", so a deliberate clear travels as null.
+ * An empty, editable delivery control clears the same way (Ecto skips a nil
+ * change, and the delivery column CHECKs pass NULL); only the live-attempt
+ * guard can refuse one of those clears, because the pull request URL is
+ * execution-defining and a run holding the item refuses its change.
  */
 export function workItemUpdatePayload(form: WorkItemFormState, version: number, deliveryEditable: { pullRequest: boolean; ci: boolean; review: boolean }): WorkItemChanges {
   const draft = workItemDraftOf(form, { includeStatus: false, deliveryEditable });
@@ -294,6 +316,9 @@ export function workItemUpdatePayload(form: WorkItemFormState, version: number, 
   for (const key of ["description", "assignee_name", "agent_profile", "workspace", "branch", "blocker"] as const) {
     if (form[key] === "" && !(key in draft)) cleared[key] = null;
   }
+  if (deliveryEditable.pullRequest && form.pull_request_url === "" && !("pull_request_url" in draft)) cleared["pull_request_url"] = null;
+  if (deliveryEditable.ci && form.ci_status === "" && !("ci_status" in draft)) cleared["ci_status"] = null;
+  if (deliveryEditable.review && form.review_status === "" && !("review_status" in draft)) cleared["review_status"] = null;
   return { ...draft, ...cleared, version };
 }
 

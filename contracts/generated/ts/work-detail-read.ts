@@ -186,7 +186,7 @@ export interface WorkItemWaitingDecisionOption {
   [k: string]: unknown | undefined;
 }
 /**
- * Protocol.command/1: latest guidance command receipt for the current generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.
+ * Protocol.command/1: the latest command receipt for the current generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.
  */
 export interface WorkItemCommand {
   command_id: UUID;

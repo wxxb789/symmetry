@@ -32,16 +32,21 @@ $specLog = Join-Path $runRoot "spec.log"
 
 # The pinned toolchain every mix invocation of this harness runs under. The
 # control-instance isolation contract test drives this script with a recording
-# `mise` stub and asserts these exact argv bytes, so the pin lives once, here,
-# for both the PowerShell calls and the cmd launcher below.
+# `mise` stub and asserts these exact argv bytes on every recorded invocation
+# (assertInstanceBuildPath in control-instance-isolation.test.mjs), so the pin
+# lives once, here, for both the PowerShell calls and the cmd launcher below.
 $mixExecutable = "mise"
 $mixPrefix = @("exec", "elixir@1.20.4-otp-29", "erlang@29.1.2", "--", "mix")
 
 $target = [Uri]$PortalUrl
 # Uri.Host brackets an IPv6 literal ('[::1]'); the IDN host form is the
-# unbracketed name the allowlist and the probe below compare.
-if ($target.Scheme -ne "http" -or $target.IdnHost -notin @("127.0.0.1", "localhost", "::1")) {
-  throw "PortalUrl must be a loopback http URL, got '$PortalUrl'"
+# unbracketed name the allowlist and the probe below compare. IPv6 loopback is
+# refused on purpose: this harness starts the repository dev configuration, and
+# control/config/dev.exs binds http to {127, 0, 0, 1} only, so `http://[::1]`
+# could never answer here - it would reach the readiness loop and fail as
+# "control plane did not become ready" instead of at this preflight.
+if ($target.Scheme -ne "http" -or $target.IdnHost -notin @("127.0.0.1", "localhost")) {
+  throw "PortalUrl must be http on 127.0.0.1 or localhost, got '$PortalUrl'"
 }
 if ($target.Port -ne $Port) {
   throw "PortalUrl port ($($target.Port)) disagrees with the harness port ($Port): refusing to target a process this harness does not own"

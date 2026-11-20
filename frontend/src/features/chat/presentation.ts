@@ -176,9 +176,11 @@ export interface ChatReceiptView {
 
 /**
  * The receipt one message renders, or null when the message carries no command.
- * `applied` requires the served acknowledgement outcome; a command only an
- * older retained page carries is never refreshed against the current page, so
- * it says exactly that instead of claiming an outcome.
+ * `applied` requires the served acknowledgement outcome; a command the control
+ * plane applied or rejected itself renders the plane's own outcome instead of a
+ * runtime's; a command only an older retained page carries is never refreshed
+ * against the current page, so it says exactly that instead of claiming an
+ * outcome.
  */
 export function chatReceiptView(command: ReceiptCommand | null, carriedByCurrentPage: boolean): ChatReceiptView | null {
   if (command === null) return null;
@@ -362,8 +364,10 @@ export function chatEvidenceRows(run: ChatConversationRun | null): readonly Chat
     } else {
       const kind = item.data.kind;
       const outcome = receiptOutcome({
+        kind,
         state: item.data.state,
         acknowledgement_outcome: item.data.acknowledgement_outcome,
+        acknowledgement_id: asText(item.data.acknowledgement_id),
         applied_at: item.data.applied_at,
       });
       rows.push({ key: `command:${item.data.command_id}:${index}`, source: "command", kind, summary: receiptLabel(outcome) });

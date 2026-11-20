@@ -6,9 +6,10 @@
 #     the all-or-nothing membership (goal_id, admitted_revision,
 #     acceptance_contract) plus the repository baseline the first admission
 #     requires. This is the ownership state the legacy boundary refuses writes
-#     for, written with the same changesets and database constraints the Goal
-#     admission path uses; the Goal plan/approve flow itself belongs to 0007h
-#     and is not exercised here.
+#     for, written with Control's own changesets and database constraints; the
+#     seeded revision is a database-level freeze whose documents are outside
+#     the published contracts, not the product's admission shape. The Goal
+#     plan/approve flow itself belongs to 0007h and is not exercised here.
 #
 #   --provider-owned <work_item_id> <resource_id> <provider> <external_id>
 #     Applies WorkItem.provider_changeset/2 with an external work-tracker
@@ -54,8 +55,10 @@ defmodule PortalPlanningFixture do
     repository_resource = fetch_repository_resource(repository_resource_id)
 
     # goals.current_revision has a DEFERRABLE FK into goal_revisions, so the
-    # goal row, its revision and the membership write commit as one transaction
-    # - the same shape the Goal admission path uses.
+    # goal row, its revision and the membership write commit as one transaction.
+    # The revision is a database-level freeze written through Control's own
+    # changesets and constraints, not the product's admission shape: its
+    # documents are outside the published contracts.
     {:ok, goal} =
       Repo.transaction(fn ->
         goal =

@@ -61,16 +61,21 @@ describe("usage capability values", () => {
 });
 
 describe("operation rows", () => {
+  const booleanOperations = ["start", "events", "cancel", "resume", "handoff", "approval_response", "hard_cost_limit"] as const;
+
   it("covers all ten advertised operations in the record's own order", () => {
     const rows = operationRows({
+      // The booleans alternate in pairs, so a row that read its neighbour would
+      // show a different label; the flip test below pins the members that still
+      // share a value (two labels cannot make seven booleans all distinct).
       start: true,
-      events: true,
-      cancel: true,
-      resume: false,
+      events: false,
+      cancel: false,
+      resume: true,
       handoff: false,
+      approval_response: true,
       guidance: "next_turn",
       pause: "unsupported",
-      approval_response: false,
       usage: "unknown",
       hard_cost_limit: false,
     });
@@ -88,16 +93,33 @@ describe("operation rows", () => {
     ]);
     expect(rows.map((row) => row.label)).toEqual([
       "Supported",
-      "Supported",
-      "Supported",
       "Not supported",
+      "Not supported",
+      "Supported",
       "Not supported",
       "Delivered with the next turn",
       "Not supported",
-      "Not supported",
+      "Supported",
       "Unknown",
       "Not supported",
     ]);
+  });
+
+  it("reads every boolean row from its own member", () => {
+    // Flip one member at a time: under any swap of two members exactly the
+    // wrong row would turn Supported, so this pins the member each row reads.
+    for (const member of booleanOperations) {
+      const supported = operationRows({
+        start: member === "start",
+        events: member === "events",
+        cancel: member === "cancel",
+        resume: member === "resume",
+        handoff: member === "handoff",
+        approval_response: member === "approval_response",
+        hard_cost_limit: member === "hard_cost_limit",
+      }).filter((row) => row.label === "Supported").map((row) => row.key);
+      expect(supported, `flipped ${member}`).toEqual([member]);
+    }
   });
 
   it("keeps explicit negatives and unmeasured usage distinct", () => {

@@ -1,7 +1,9 @@
 /**
  * Presentation of work-item data for the project surface and the work detail.
  * Every rendered value is either read from the decoded envelope or explicitly
- * labelled as unknown; nothing here invents acceptance, cost, or freshness.
+ * labelled as unknown; cost and acceptance are always labelled, never invented,
+ * and a freshness claim requires a recorded time inside the freshness window
+ * (a future-dated or unusable time stays unknown).
  */
 
 import type { SymmetryWorkspaceReadV1, SymmetryWorkTimelineReadV1 } from "@symmetry/contracts";
@@ -95,8 +97,11 @@ export function ownerKeyLabel(key: string): string {
   const separator = key.indexOf(":");
   const kind = separator === -1 ? key : key.slice(0, separator);
   const value = separator === -1 ? "" : key.slice(separator + 1);
-  if (kind === "agent") return `Agent · ${value}`;
-  if (kind === "human") return value;
+  // An absent name mints a sentinel key, which labels as the row's own absence
+  // label instead of the sentinel text; a `type:` key cannot carry the name its
+  // row renders, so it labels the type alone.
+  if (kind === "agent") return value === "unrecorded" ? "Agent" : `Agent · ${value}`;
+  if (kind === "human") return value === "unrecorded" ? "Human owner not recorded" : value;
   return `Unknown owner type: ${value || kind}`;
 }
 
@@ -247,7 +252,9 @@ export function ciLabel(delivery: DeliveryLike | null | undefined, resource?: Ci
   if (status !== "passed") return { text: `CI ${status}`, tone: status === "failed" ? "failed" : "pending", title };
   if (signal !== null) return { text: `CI passed · bound resource ${signal}`, tone: "stale", title };
   const recorded = recordedAt === null || !strictAbsoluteTimestamp.test(recordedAt) ? Number.NaN : Date.parse(recordedAt);
-  if (Number.isNaN(recorded)) return { text: "CI passed · freshness unknown", tone: "unknown", title };
+  // A time that does not parse, or that has not happened yet, is not evidence
+  // of freshness: a clock behind the server must not make a future record fresh.
+  if (Number.isNaN(recorded) || now - recorded < 0) return { text: "CI passed · freshness unknown", tone: "unknown", title };
   if (asText(ci?.source) !== "provider") return { text: "CI passed · unverified source", tone: "unknown", title };
   if (resource === null || resource === undefined) return { text: "CI passed · binding not confirmed", tone: "unknown", title };
   if (now - recorded > ciFreshnessWindowMs) return { text: "CI passed · stale", tone: "stale", title };
