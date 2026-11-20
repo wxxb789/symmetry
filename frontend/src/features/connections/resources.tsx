@@ -40,7 +40,6 @@ const refusalGuidance: Record<string, string> = {
   not_found: "Reload the page to see the server's current state.",
   forbidden: "Grant the required provider permissions, then test the connection again.",
   not_connected: "Bind the resource to a connection first.",
-  provider_owned: "This field is authored by the provider; change it in the provider, then synchronize again.",
   capability_not_granted: "Grant the connection the capability this resource kind needs, then try again.",
   provider_unauthorized: "Reauthenticate the provider session on this server, then test the connection again.",
   provider_failure: "Check provider availability, then test the connection again.",

@@ -1110,6 +1110,28 @@ describe("project resources", () => {
     expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
   });
 
+  it("leaves a provider_owned refusal to the server's own message, without assignment-surface guidance", async () => {
+    // No connections-page command can answer `provider_owned`: its only producer
+    // is the work-item update behind the assignment surface, which carries its
+    // own guidance. The page's fold must render the server's message alone
+    // instead of guidance for a code no call site here can receive.
+    const harness = renderConnections(({ method }) => method === "POST"
+      ? refusal(409, "provider_owned", "field is authoritative in the external provider")
+      : unexpectedRequest(), "/portal/connections", {
+      connections: [connection()],
+      projects: [projectFixture()],
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Bind resource" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
+    await user.type(dialog.getByLabelText("Name"), "checkout service");
+    await user.type(dialog.getByLabelText("Reference"), "acme/checkout");
+    await user.click(dialog.getByRole("button", { name: "Bind" }));
+    expect(await dialog.findByText("field is authoritative in the external provider (provider_owned)")).toBeVisible();
+    expect(dialog.queryByText(/This field is authored by the provider/)).toBeNull();
+    expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
+  });
+
   it("takes a local resource's reference from the workspace's registered runtimes", async () => {
     const harness = renderConnections(({ method }) => method === "POST"
       ? new Response(JSON.stringify({ resource: resourceFixture({ kind: "runtime", name: "review runner" }) }), { status: 201 })

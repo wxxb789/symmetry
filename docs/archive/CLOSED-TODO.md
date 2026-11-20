@@ -26,6 +26,10 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
+two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
+moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -1296,6 +1300,44 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
       23 failed `control` job logs grepped across all their attempts) finds exactly one occurrence
       of the failure: run `43891279765` attempt 1, job `133383740181`.
 
+- `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
+  Revalidated and removed (2026-11-20/21, branch `fix/test-db-recovery-docs`): the premise no longer
+  holds at `fdf332d` — the index row (`docs/goals/README.md:336`) links
+  `archive/0006h-credentialed-provider-accounting.md`, its row link fixed by `c514bd9` (#66); the
+  prose sentence at `:178` has linked the archived path since the archiving commit `10f5b69` (#18);
+  the file exists at the linked path (checked with
+  `ls docs/goals/archive/0006h-credentialed-provider-accounting.md`). The only other live mention,
+  the goal id `` `0006h` `` at `:214`, names no path. No fix remained to make, so the note was
+  removed from `docs/TODO.md` (the increment's contract directs the removal over the file's
+  marker-less-note rule) and carries no open action.
+
+- `frontend/src/features/connections/resources.tsx` `refusalGuidance.provider_owned`: no
+  call site of `refusalNotice` on that page can receive the code. Its only producer is
+  `Workspaces.provider_owned_fields_editable` answered by `update_work_item`
+  (`control/lib/symmetry_control/workspaces.ex`), i.e. the assignment surface, which
+  carries its own `assignmentGuidance`. Recorded by the retro-b4-goals-connections review
+  (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
+  (fix round 1); revalidate and remove in a separate maintenance change.
+  **Closed (2026-11-20/21, branch `fix/test-db-recovery-docs`): revalidated and removed.** The claim
+  holds at `fdf332d`: `:provider_owned` has exactly one producer in the control plane —
+  `provider_owned_fields_editable/2` (`control/lib/symmetry_control/workspaces.ex:994-1007`,
+  returning at `:1003`), answered only by `update_work_item/2` (`:203`) — and that function's sole
+  caller is `PortalApiController.update_work_item`
+  (`control/lib/symmetry_control_web/controllers/portal_api_controller.ex:265`) serving
+  `PATCH /portal/api/work-items/:work_item_id` (`control/lib/symmetry_control_web/router.ex:82`),
+  the assignment surface, which carries its own guidance
+  (`frontend/src/features/planning/write-policy.ts:125`,
+  `frontend/src/features/work/assignment.tsx:82`). The connections page's `refusalNotice` call
+  sites (`resources.tsx:338,443-444,486-487,617,633`; `connections.tsx:176-177,226,241,291`) answer
+  only resource and connection commands, none of which can return the code — unlike the sibling
+  `capability_not_granted` entry, whose code the server was changed to serve instead
+  (`fix/connections-refusal-guidance`, PR #96), this code has no connections-page flow to serve it.
+  The `provider_owned` key was removed from `refusalGuidance`; the shared fold renders the server's
+  own message for it. Pinned by `frontend/src/features/connections/connections.test.tsx` —
+  "leaves a provider_owned refusal to the server's own message, without assignment-surface
+  guidance" (failed before the removal with the guidance suffix rendered, passes after; before/after
+  runs in `answer.md`).
+
 ## Deferred review findings (0007f)
 
 - [ ] Revalidate the `/portal/connections?projectId=…` session return target.
@@ -2273,3 +2315,48 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
       (`contracts/v1/workspace-read.schema.json`, `contracts/v1/work-detail-read.schema.json`,
       `contracts/v1/chat-read.schema.json`), with the generated bindings refreshed through the
       repository generator.
+
+- [ ] Document how to recover the repository-default test database, or reset it from the test alias.
+      The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where
+      `MIX_TEST_PARTITION` is appended as a literal suffix, so a partition run selects a different
+      database name that the test alias creates and migrates when absent), and `mix test` runs
+      `symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet` first
+      (`control/mix.exs:79`). Create and migrate make a missing or
+      migration-behind database usable, but nothing drops or truncates one: a pending migration whose
+      table already exists fails the alias's migrate step before any test runs. Observed 2026-11-20
+      while gating an unrelated Control change: an unpartitioned `mix test` stopped with Postgrex
+      `42P07` (`duplicate_table`) on a migration whose table already existed — `schema_migrations`
+      named a revision older than the object set — while the same change ran green on a partition
+      database. A maintainer reads that as a code
+      failure, and the repository documents no recovery: `ecto.reset` exists as an alias
+      (`control/mix.exs:70`) but no doc names it for the default test database, and the only documented
+      resets belong to harness-owned databases (`docs/runbooks/session-receipt-recovery-e2e.md`). Fix
+      direction: document the drop-and-recreate path for the default test database where the suite's
+      commands are documented, or add a recreate/reset step to the `test` alias so a stale default
+      database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
+      the recovery recipe.
+      **Closed (2026-11-20/21, branch `fix/test-db-recovery-docs`): documented, not aliased.** Reproduced
+      on the throwaway database `symmetry_control_test_tdbrec` on a dedicated disposable PostgreSQL
+      18.6 instance, with the exact commands the documentation now names (`MIX_ENV=test` throughout):
+      `mix ecto.create --quiet` and `mix ecto.migrate --quiet` exit 0; deleting the
+      `harness_session_attach_receipts` migration's `schema_migrations` row (`20260911000000`) while
+      its table exists makes `mix test test/mix/tasks/symmetry_check_test_db_test.exs` stop in the
+      alias's migrate step with `** (Postgrex.Error) ERROR 42P07 (duplicate_table) relation
+      "harness_session_attach_receipts" already exists` and exit 1 before any test runs;
+      `MIX_ENV=test mix ecto.drop` exits 0 (`The database for SymmetryControl.Repo has been dropped`),
+      and the same `mix test` then recreates and migrates the database and reports `Result: 11 passed`,
+      exit 0. `docs/design/quality.md` (Commands and gates) now documents the recovery beside the
+      suite's commands: the database `config/test.exs` resolves (`POSTGRES_DB`, repository default
+      `symmetry_control_test`, with `MIX_TEST_PARTITION` appended as a literal suffix), the failure
+      signature, the two commands, why `MIX_ENV=test` is load-bearing, and that
+      `symmetry.check_test_db` refuses browser acceptance databases. The `test` alias is unchanged
+      (the increment's contract prefers documentation over an alias change), and `MIX_TEST_PARTITION`
+      stays the CI-parallel path, not the recovery recipe. Evidence: the recorded before/after runs in
+      `answer.md` — create and migrate exit 0, the stale run exits 1 before any test (`42P07`,
+      `duplicate_table`, the pending migration's `CREATE TABLE`), `mix ecto.drop` exits 0 and the
+      recovered run recreates and migrates the database (`Result: 11 passed`, exit 0), with the
+      throwaway database dropped afterwards and zero residue in `pg_database`. The sequence ran
+      against a dedicated disposable PostgreSQL 18.6 instance (`127.0.0.1:5433`), kept because the
+      shared 5432 instance was saturated by concurrent agent suites when the sequence was first
+      attempted; no test was added because the change is documentation-only — the reproduction is
+      the pin.

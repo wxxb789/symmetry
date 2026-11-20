@@ -116,6 +116,30 @@ changing the forwarded response status, headers or body.
 | TS (`frontend/`) | frontend typecheck/lint/test/build commands from frontend.md; CI runs them in the `contracts` job (`.github/workflows/ci.yml:107-110`); the browser runner is already pnpm (`.github/workflows/ci.yml:618`) |
 | Wire contract | `pnpm contracts:check` (schemas, fixtures through Effect decoders, generated-file drift; regenerate with `pnpm contracts:generate`); Go and Elixir fixture decoders run in their test suites |
 
+The Control suite runs against the database `control/config/test.exs` resolves:
+`POSTGRES_DB` (repository default `symmetry_control_test`) with
+`MIX_TEST_PARTITION` appended as a literal suffix. The `test` alias runs
+`symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet`
+first, so create and migrate heal a missing or migration-behind database — but
+nothing drops or truncates one. A database whose `schema_migrations` names a
+revision older than its objects stops the alias's migrate step before any test
+runs, as Postgrex `42P07` (`duplicate_table`) on the pending migration's
+`CREATE TABLE`. That is stale local state, not a code failure; recover by
+dropping the database the test environment resolves and re-running the suite,
+which recreates and migrates it:
+
+```sh
+cd control
+MIX_ENV=test mix ecto.drop
+mix test
+```
+
+`MIX_ENV=test` is load-bearing: a bare `mix ecto.drop` resolves the development
+database. `symmetry.check_test_db` is the first step of the `ecto.drop` alias
+too, so the recipe cannot drop a browser acceptance database; with
+`MIX_TEST_PARTITION` set, both commands name that partition's own suffixed
+database, which stays the CI-parallel path rather than the recovery recipe.
+
 Run affected focused checks during development; required CI gates remain required
 before merge. Native credentialed harness tests and Windows behavior cannot be
 inferred from fake-agent tests or Linux compilation. Mark unavailable checks
