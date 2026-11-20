@@ -458,6 +458,30 @@ describe("readable work views", () => {
     expect(screen.getByRole("heading", { name: "No matching work items" })).toBeVisible();
   });
 
+  it("selects the row's own owner option for a legacy sentinel bookmark instead of an absent duplicate", async () => {
+    const unnamedAgentTitle = "Unnamed agent work item";
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const requestPath = input instanceof Request ? input.url : String(input);
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
+      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
+      return Promise.resolve(new Response(JSON.stringify({
+        selected_project_id: null,
+        projects: [{ id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active",
+          work_items: projectId === firstProjectId ? [
+            { id: subjectId, key: "ONE-9", title: unnamedAgentTitle, status: "ready", blocked: false, blocker: null, assignee: { type: "agent", name: null, agent_profile: null } },
+          ] : [] }],
+        health: { status: "unknown" },
+      })));
+    });
+    renderWorkspace(`/portal/projects/${firstProjectId}?owner=agent%3Aunrecorded`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Project One" });
+    const owner = screen.getByLabelText("Work owner");
+    expect(owner).toHaveValue("agent:");
+    expect(within(owner).getByRole("option", { name: "Agent" })).toHaveValue("agent:");
+    expect(within(owner).queryByRole("option", { name: /not in this project/ })).not.toBeInTheDocument();
+    expect(within(await screen.findByRole("list", { name: "Work items" })).getByText(unnamedAgentTitle)).toBeVisible();
+  });
+
   it("applies rapid compound filter changes on the latest search instead of a stale render", async () => {
     const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`, workReadFetcher({ detail: subjectDetail() }));
     await screen.findByRole("heading", { level: 1, name: "Project One" });

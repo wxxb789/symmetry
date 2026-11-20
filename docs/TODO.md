@@ -11,19 +11,6 @@ Manual tasks and deferred maintenance discovered during scoped changes.
 A bullet that carries no `- [ ]`/`- [x]` marker is a decision note, not a tracked item: it stays
 where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted with it.
 
-## Model-routing evaluation records
-
-- [ ] Decide how the Control row in
-      `docs/evidence/test-ablation-final-review-2026-09-29.md:148` is bound: its digest
-      `e2672276b4f4171391a6df202dc01e9e66ccc705d72e4ee095db7471e7a1c6f9` matches no reachable
-      revision of any `test-ablation*` file (every distinct blob revision of the fourteen such
-      paths across all refs, under LF/CRLF, BOM and no-final-newline variants: 0 hits), and the
-      row has read that way since `72bcf8e`. Observed during the record render pass (PR #101),
-      which rebound the app-startup and Go-probe rows in the same table and left this one as
-      recorded; pre-existing, not introduced by that pass. Do not edit the record before the
-      decision, in a separate maintenance change: rebind the row to the reviewed artifact's
-      committed bytes, or annotate it as the as-reviewed artifact rather than the committed bytes.
-
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
@@ -66,13 +53,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Decide in a separate maintenance change whether the projected variant is dead surface — delete the
       chain and the disjunct together — or missing its caller, in which case the disjunct needs a
       producer; revalidate the surviving provider-action tests either way.
-
-- [ ] Drop the unused `conn` parameter in
-      `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:650-651)
-      passes `conn` to `portal_command!/4` (:653), which never reads it (it builds its own `api_conn()`),
-      so every run reports `warning: variable "conn" is unused` at :653. Pre-existing (present in both the
-      before and after `MIX_TEST_PARTITION=66` runs of the retro-b5 apply stage) and test-only; drop the
-      parameter and the callers' pass-through in separate maintenance.
 
 ## Retro review follow-ups
 
@@ -121,31 +101,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
       that never exits still fails) in a separate maintenance change.
 
-- [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
-      (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
-      error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
-      gone), and no test pins that branch: the scripted batch child
-      (`daemon/internal/workspace/subject_test.go:1114-1147`) serves `frame <variant> <content>`
-      (valid, missing, wrong-oid, wrong-type, malformed-size, negative-size, oversized,
-      malformed-header, truncated-header, partial-content, bad-trailer, missing-trailer) and
-      `blocked-header`, and every case of `TestSubjectBatchStreamRejectsMalformedResponses`
-      (`:1315-1379`) writes exactly one request while the child is still alive, so the failure
-      surfaces on the response read (`:753`) rather than on the write. The missing case needs a new
-      child variant that answers its first request with a complete in-sync frame and then closes its
-      read end, with the close ordered so it is observable before the second request (closing before
-      the response is written, or an equivalent deterministic wait for the child's exit, works
-      because the digest writes its second request only after consuming the first response); a
-      variant that only exits after answering can still take the write into the pipe buffer, so the
-      refusal can otherwise surface on the response read instead. Every existing
-      exit-after-one-response variant answers a refusal that desyncs and aborts the digest on the
-      first blob, and the one-response exit at `:1206-1208` covers every variant except `valid` and
-      `missing`, which keep serving (`serveWorkspaceBatchFrames` `:1155-1210`); drive a multi-blob
-      commit (the fixture exists: `subjectDigestManyBlobs` `:588` with
-      `writeSubjectDigestManyBlobsFixture` `:810`) so the second request write lands on the gone
-      child. Assert that the refusal names the object, marks the stream desynced and still reaps the
-      child (the reap contract `:1373-1376` pins that for response failures), keeping the context
-      alive so `streamError` (`:808-813`) reports the pipe error instead of a cancellation.
-
 - [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
       submit-time served one. `approvePlan` builds its envelope from `query.data`
       (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
@@ -167,18 +122,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       direction: build the press's envelope from a submit-time read the way the plan admission does,
       re-deriving the presented decision's own version from that same read, or keep the page version and
       record the refusal plus reload as the intended recovery.
-
-- [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
-      rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always
-      answers false", repeated in `work-detail-read.schema.json:142` and
-      `workspace-read.schema.json:281`), and the read model serves it
-      (`control/lib/symmetry_control/chat/read_model.ex:51-59` forces it for a historical projection),
-      but the case that exercises exactly that shape — "historical run chat remains pinned after retry
-      and cannot control a newer attempt" (`control/test/symmetry_control/chat_test.exs:644-789`) —
-      asserts `historical` (`:734`) and `refute …can_cancel` (`:735`) and never `can_retry`; the file
-      contains no `can_retry` occurrence at all, and no other case targets a pinned historical chat
-      entry. Add the assertion in a separate maintenance change and keep the case's other assertions:
-      the rule is behavioural, so the pin must fail if the historical branch stops forcing the flag.
 
 - [ ] Document how to recover the repository-default test database, or reset it from the test alias.
       The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where
@@ -238,38 +181,32 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       both the escaped-escape case and the raw single-backslash spelling must be pinned in the
       tester. Suggested owner area: `scripts/ci` record tooling.
 
-- [ ] Re-point legacy work-surface owner bookmarks that carry the pre-#111 sentinel. The `owner`
-      param is read at `frontend/src/features/projects/filters.ts:50` and normalised at `:80-87`,
-      and the row comparison sits at `:94` (`ownerKey(item.assignee) === filters.owner`); #111
-      (`db31838`) changed the encoder (`frontend/src/features/work/presentation.ts:99-106`): an
-      agent row with no recorded name used to mint `agent:unrecorded` and now mints `agent:`
-      (`ownerKeyValue` `:94-97` escapes a recorded name that equals the legacy word or starts with
-      `:`, so a row genuinely named `unrecorded` mints `agent::unrecorded`), and `human:` keys
-      moved the same way; `human:unrecorded` likewise matches no row. A bookmark or hand-typed
-      link carrying `?owner=agent:unrecorded` matches no row, while `ownerKeyLabel` (`:110-126`)
-      still reads that key as the row's own absence label: the Work owner select
-      (`frontend/src/features/projects/work-surface.tsx:141,170`) shows "Agent (not in this
-      project)" above an empty list, even when the project has an unnamed-agent row; the label
-      side is already pinned, and
-      its own case documents the intent the filter does not keep — "labels the legacy sentinel keys
-      old bookmarks carry as the absence they named" (`frontend/src/features/work/presentation.test.ts:81-89`,
-      whose comment reads "a URL that still carries it reads as the absence it named rather than as
-      a recorded name") — while the filter case covers only `unassigned`
-      (`frontend/src/features/projects/filters.test.ts:52-59`, the owner case at `:56`), never the
-      legacy value.
-      Reproduced at `978abba` against the repository's own modules (a throwaway Node ESM probe
-      that imports `filters.ts` and `presentation.ts` through a type-stripping resolve hook; no
-      test file added and no dependency install): `ownerKey` printed `"agent:"`,
-      `"agent::unrecorded"` and `"agent:builder"` for those three assignees (rows built as
-      `{key, title, status: "ready", blocked: false, assignee}` with assignees
-      `{type: "agent", name: null, agent_profile: null}`,
-      `{type: "agent", name: "unrecorded", agent_profile: null}`,
-      `{type: "agent", name: "builder", agent_profile: "builder"}`),
-      `filterWorkItems(rows, filtersOf({owner: "agent:unrecorded"})).length` was `0` of `3`,
-      `ownerKeyLabel("agent:unrecorded")` printed `"Agent"`, and the currently minted key `agent:`
-      matched `1` of `3`. Fix direction: read a filter key through one normalising reader so the
-      legacy sentinel word maps to the empty-value sentinel the encoder now mints (or redirect the
-      legacy value at the surface), and pin the compatibility case in
+- [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
+      current encoder escapes a recorded value that starts with `:` by prefixing one
+      (`frontend/src/features/work/presentation.ts:94-97`), so a recorded name `:Ada` mints
+      `human:::Ada` (`agent:::Ada` on the agent side), while the pre-#111 encoder spelled it
+      unescaped — `human::Ada`. The reader committed with the legacy-sentinel fix
+      (`ownerKeyFilter`, `:135-139`) maps only the two sentinel words, so a bookmark or hand-typed
+      link carrying the pre-#111 spelling normalises to itself and matches no row, and the
+      pre-#111 key for a recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to
+      the escape the current encoder mints for the recorded name `unrecorded`, so it silently
+      selects that other row and cannot be disambiguated (the collision repeats for deeper colon
+      prefixes: for a recorded name with `k >= 2` leading colons, the pre-#111 key equals the
+      current mint for the same name with `k-1` leading colons, for example legacy `human:::Ada`
+      (name `::Ada`) is the current mint for `:Ada`). Reproduced at `3c705d7` (production bytes
+      identical to `7f62afe`) with a throwaway vitest probe over the repository's own modules
+      (deleted after the run, no test file kept): rows named `:Ada`, `::Ada`, `:unrecorded` and
+      `unrecorded` mint `human:::Ada`, `human::::Ada`, `human:::unrecorded` and
+      `human::unrecorded`; the legacy key `human::Ada` kept its spelling and `filterWorkItems`
+      selected `[]`; the legacy key `human::unrecorded` selected the row named `unrecorded`; the
+      legacy key `human:::Ada` selected the row named `:Ada` instead (the deeper-prefix
+      collision); and `ownerKeyLabel("human::Ada")` prints `Ada`, dropping the colon.
+      Reachable: `assignee_name` and `agent_profile` are length-bounded only
+      (`control/lib/symmetry_control/workspaces/schemas.ex:472-473`), so a colon-leading name can
+      be served. The shape was recorded as an explicit residual of the legacy-sentinel increment
+      (`docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`, "Out of scope"). Fix direction:
+      decide the reading for the colon-leading pre-#111 keys (re-point them like the sentinel, or
+      accept the collision and document it), then pin both shapes in
       `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
       work-surface/frontend.
 
