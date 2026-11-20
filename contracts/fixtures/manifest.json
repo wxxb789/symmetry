@@ -2552,6 +2552,20 @@
       ]
     },
     {
+      "id": "goal-read.accepted-and-external",
+      "schema": "goal-read",
+      "path": "valid/goal-read.accepted-and-external.json",
+      "valid": true,
+      "tags": [
+        "read-projection",
+        "goal-read",
+        "accepted-outcome",
+        "settlement-attention",
+        "external-wait",
+        "captured-response"
+      ]
+    },
+    {
       "id": "goal-read.missing-allowed-actions",
       "schema": "goal-read",
       "path": "invalid/goal-read.missing-allowed-actions.json",
