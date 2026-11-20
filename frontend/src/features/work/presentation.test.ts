@@ -54,19 +54,38 @@ describe("cost and acceptance truthfulness", () => {
     expect(ownerLabel(undefined)).toBe("Unassigned");
     expect(ownerKey({ type: "agent", name: "Worker", agent_profile: "reviewer" })).toBe("agent:reviewer");
     expect(ownerKey({ type: "human", name: "Ada", agent_profile: null })).toBe("human:Ada");
+    expect(ownerKey({ type: "agent", name: null, agent_profile: null })).toBe("agent:");
+    expect(ownerKey({ type: "human", name: null, agent_profile: null })).toBe("human:");
   });
 
   it("round-trips every owner key whose encoder keeps the label's identity", () => {
     // For these families the round trip is the contract: the filter key carried
     // in the URL and the label rendered before the rows load are one identity
-    // written and read back. An absent name mints a sentinel key whose label is
-    // the row's own absence label, never the sentinel text.
+    // written and read back. An absent name mints an empty-value sentinel whose
+    // label is the row's own absence label, never the sentinel text: `asText`
+    // maps a blank name to null, so no recorded value mints that key.
     expect(ownerKeyLabel(ownerKey({ type: "agent", name: "Worker", agent_profile: "reviewer" }))).toBe("Agent · reviewer");
     expect(ownerKeyLabel(ownerKey({ type: "agent", name: "Worker", agent_profile: null }))).toBe("Agent · Worker");
     expect(ownerKeyLabel(ownerKey({ type: "human", name: "Ada", agent_profile: null }))).toBe("Ada");
     expect(ownerKeyLabel(ownerKey({ type: "unassigned", name: null, agent_profile: null }))).toBe("Unassigned");
     expect(ownerKeyLabel(ownerKey({ type: "agent", name: null, agent_profile: null }))).toBe("Agent");
     expect(ownerKeyLabel(ownerKey({ type: "human", name: null, agent_profile: null }))).toBe("Human owner not recorded");
+    // A recorded name that equals the legacy sentinel word, or starts with the
+    // escape colon, is escaped by the encoder, so it reads back as the name the
+    // row renders instead of the absence label.
+    expect(ownerKeyLabel(ownerKey({ type: "human", name: "unrecorded", agent_profile: null }))).toBe("unrecorded");
+    expect(ownerKeyLabel(ownerKey({ type: "agent", name: "unrecorded", agent_profile: null }))).toBe("Agent · unrecorded");
+    expect(ownerKeyLabel(ownerKey({ type: "human", name: ":unrecorded", agent_profile: null }))).toBe(":unrecorded");
+  });
+
+  it("labels the legacy sentinel keys old bookmarks carry as the absence they named", () => {
+    // The pre-fix encoder spelled an absent value `unrecorded`; the encoder no
+    // longer mints it, and a URL that still carries it reads as the absence it
+    // named rather than as a recorded name.
+    expect(ownerKeyLabel("agent:unrecorded")).toBe("Agent");
+    expect(ownerKeyLabel("human:unrecorded")).toBe("Human owner not recorded");
+    expect(ownerKeyLabel("agent:")).toBe("Agent");
+    expect(ownerKeyLabel("human:")).toBe("Human owner not recorded");
   });
 
   it("pins what the unknown-type key cannot carry instead of asserting a round trip that cannot hold", () => {

@@ -303,12 +303,15 @@ export function workItemDraftOf(form: WorkItemFormState, options: { includeStatu
 }
 
 /**
- * The update payload is the draft plus the fields the operator *cleared*: Ecto
- * treats an empty string as "no change", so a deliberate clear travels as null.
- * An empty, editable delivery control clears the same way (Ecto skips a nil
- * change, and the delivery column CHECKs pass NULL); only the live-attempt
- * guard can refuse one of those clears, because the pull request URL is
- * execution-defining and a run holding the item refuses its change.
+ * The update payload is the draft plus the fields the operator *cleared*: an
+ * empty string is "no change" to the changeset's cast, so a deliberate clear
+ * travels as null — the cast records the nil (only validators skip nil, which
+ * is why the clear reaches the column) and the delivery column CHECKs pass
+ * NULL. One server guard can still refuse such a change:
+ * `execution_fields_editable` refuses any execution-defining field while the
+ * item names an orchestration task in a state other than failed or cancelled,
+ * completed included. The editor states that guard while the item names such a
+ * task.
  */
 export function workItemUpdatePayload(form: WorkItemFormState, version: number, deliveryEditable: { pullRequest: boolean; ci: boolean; review: boolean }): WorkItemChanges {
   const draft = workItemDraftOf(form, { includeStatus: false, deliveryEditable });
@@ -320,6 +323,54 @@ export function workItemUpdatePayload(form: WorkItemFormState, version: number, 
   if (deliveryEditable.ci && form.ci_status === "" && !("ci_status" in draft)) cleared["ci_status"] = null;
   if (deliveryEditable.review && form.review_status === "" && !("review_status" in draft)) cleared["review_status"] = null;
   return { ...draft, ...cleared, version };
+}
+
+/** The payload members Control's owner rewrite discards for a non-agent owner. */
+type OwnerDependentField = "assignee_name" | "agent_profile" | "workspace";
+
+/**
+ * The owner-dependent fields Control's owner rewrite discards: its
+ * `normalize_work_item_attrs` forces them NULL for a `human` or `unassigned`
+ * owner whatever the payload carried. Paired with the label the note uses.
+ */
+const ownerDiscardedFields: Record<string, readonly (readonly [OwnerDependentField, string])[]> = {
+  human: [["agent_profile", "agent profile"], ["workspace", "workspace"]],
+  unassigned: [["assignee_name", "owner name"], ["agent_profile", "agent profile"], ["workspace", "workspace"]],
+};
+
+/**
+ * The note naming the owner-dependent values a create or update payload
+ * carried that Control's owner rewrite drops, or null when it carried none.
+ * A null value is a deliberate clear — the server applies it, so it is not a
+ * value that failed to apply — and an omitted key never travelled.
+ */
+export function ownerDiscardNote(assigneeType: string, payload: Partial<Record<OwnerDependentField, unknown>>): string | null {
+  const discarded = (ownerDiscardedFields[assigneeType] ?? [])
+    .filter(([key]) => payload[key] !== null && payload[key] !== undefined)
+    .map(([, label]) => label);
+  if (discarded.length === 0) return null;
+  const owner = assigneeType === "human" ? "a human owner" : "an unassigned item";
+  return `Control records no ${discarded.join(", ")} for ${owner}, so ${discarded.length === 1 ? "that value was" : "those values were"} not applied.`;
+}
+
+/**
+ * The orchestration-task states that accept a change to an execution-defining
+ * field. The server refuses the change while the item names a task in any
+ * other state (`execution_fields_editable`), and no path clears the item's
+ * task id, so a completed task keeps refusing.
+ */
+const executionEditableTaskStates: Record<string, true> = { failed: true, cancelled: true };
+
+/**
+ * Whether the server would refuse a change to an execution-defining field
+ * (title, description, owner, agent profile, workspace, repository, CI
+ * resource, branch, pull request URL) for this item. Keyed on the served
+ * execution — never on a client-side liveness guess — so a task any state
+ * other than failed or cancelled, completed included, freezes those writes.
+ */
+export function executionDefiningWritesRefused(item: { execution?: { state?: string | null } | null }): boolean {
+  const state = item.execution?.state;
+  return state !== null && state !== undefined && executionEditableTaskStates[state] !== true;
 }
 
 /**

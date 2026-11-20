@@ -6,7 +6,9 @@ import { ServerRefusal, type Api, type Project, type ProjectChanges, type Projec
 import {
   acknowledgeWorkItemCreation,
   deliveryValueEditable,
+  executionDefiningWritesRefused,
   failureMode,
+  ownerDiscardNote,
   projectCreatePayload,
   projectFormStateOf,
   projectUpdatePayload,
@@ -296,7 +298,6 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
     setIdentityFailure(null);
     let submitted: WorkItemIntent;
     if (target === null || item === null) {
-      notesRef.current = [];
       // The creation identity travels with the frozen intent, not with the
       // form: every attempt of this draft replays the same identity verbatim.
       // A browser that cannot mint one refuses visibly instead of sending a
@@ -306,7 +307,12 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
         setIdentityFailure("This browser cannot mint an item identity, so the request was not sent.");
         return;
       }
-      submitted = { kind: "create", payload: { ...workItemDraftOf(form, { includeStatus: true, deliveryEditable: delivery }), creation_id: creationId } };
+      const draft = workItemDraftOf(form, { includeStatus: true, deliveryEditable: delivery });
+      // The owner rewrite discards the same fields on create: the values
+      // travel in the payload, so the note names them there too.
+      const createNote = ownerDiscardNote(form.assignee_type, draft);
+      notesRef.current = createNote === null ? [] : [createNote];
+      submitted = { kind: "create", payload: { ...draft, creation_id: creationId } };
     } else {
       const intendedDraft = workItemUpdatePayload(form, target.version, delivery);
       const payload = withoutProviderOwned(intendedDraft, owned);
@@ -369,17 +375,10 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
             : `The server reports ${dropped.join(", ")} as owned elsewhere, so they were not sent.`];
       // The owner rewrite discards what the payload carries for the non-agent
       // owner types (workspaces.ex forces these NULL); the values are named
-      // from the payload that was actually sent.
-      const ownerDiscarded: readonly (readonly [string, string])[] = form.assignee_type === "human"
-        ? [["agent_profile", "agent profile"], ["workspace", "workspace"]]
-        : form.assignee_type === "unassigned"
-          ? [["assignee_name", "owner name"], ["agent_profile", "agent profile"], ["workspace", "workspace"]]
-          : [];
-      const discarded = ownerDiscarded.filter(([key]) => key in payload).map(([, label]) => label);
-      if (discarded.length > 0) {
-        const owner = form.assignee_type === "human" ? "a human owner" : "an unassigned item";
-        notes.push(`Control records no ${discarded.join(", ")} for ${owner}, so ${discarded.length === 1 ? "that value was" : "those values were"} not applied.`);
-      }
+      // from the payload that was actually sent, and a deliberate clear (null)
+      // is applied by the server, never reported as not applied.
+      const ownerNote = ownerDiscardNote(form.assignee_type, payload);
+      if (ownerNote !== null) notes.push(ownerNote);
       // A delivery value whose served source became a provider or reported
       // evidence while the form was open is no longer offered: the typed value
       // cannot be sent, and the notice names it instead of reporting success.
@@ -569,6 +568,7 @@ function WorkItemEditorDialog({ project, item, presentation, drawerHost, draft }
           <FieldErrors error={failure} field="blocker" />
 
           {someProviderOwned && <p className="muted text-small">Fields owned by the external work tracker ({[...owned].join(", ")}) are shown read-only; edit them in the tracker.</p>}
+          {item !== null && executionDefiningWritesRefused(item) && <p className="muted text-small">Control refuses changes to execution-defining fields (title, description, owner, agent profile, workspace, repository, CI resource, branch, pull request URL) while this item's orchestration task is not failed or cancelled; a cleared value is refused the same way.</p>}
           {failure !== null && failureMode(failure) !== "authoritative" && <p className="notice notice-error" role="alert">{refusalNotice(failure)}</p>}
           {identityFailure !== null && <p className="notice notice-error" role="alert">{identityFailure}</p>}
           <div className="dialog-actions">

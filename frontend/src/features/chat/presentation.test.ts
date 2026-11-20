@@ -188,8 +188,12 @@ describe("receipts", () => {
     expect(chatReceiptView({ kind: "guidance", state: "acknowledged", acknowledgement_outcome: "applied", acknowledgement_id: "ack-1" }, true)?.headline).toBe("Applied");
   });
 
-  it("renders a guidance command the control plane applied itself with the plane's own outcome", () => {
-    expect(chatReceiptView({ kind: "guidance", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null }, true)).toEqual({ outcome: "control_applied", headline: "Applied by the control plane" });
+  it("renders a cancel the control plane applied itself with the plane's own outcome", () => {
+    expect(chatReceiptView({ kind: "cancel", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null }, true)).toEqual({ outcome: "control_applied", headline: "Applied by the control plane" });
+  });
+
+  it("renders a supervisory command the plane recorded applied without the runtime's acknowledgement as just that", () => {
+    expect(chatReceiptView({ kind: "pause", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null }, true)).toEqual({ outcome: "applied_unacknowledged", headline: "Applied by the runtime; acknowledgement not recorded" });
   });
 
   it("keeps the re-queued retry without a runtime acknowledgement queued for the runtime", () => {

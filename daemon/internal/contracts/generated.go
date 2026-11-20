@@ -282,9 +282,9 @@ type PurpleTaskControls struct {
 	SupervisoryControl bool `json:"supervisory_control"`
 }
 
-// Protocol.command/1: the latest command receipt for the current generation. Task-scoped
-// commands (a cancel or retry recorded before any run exists) carry run_id and generation
-// as null; run-scoped commands carry both.
+// Protocol.command/1: the task's newest command, any generation. Task-scoped commands (a
+// cancel or retry recorded before any run exists) carry run_id and generation as null;
+// run-scoped commands carry both.
 type PurpleWorkItemCommand struct {
 	AcknowledgedAt         *string                `json:"acknowledged_at"`
 	AcknowledgementID      *string                `json:"acknowledgement_id"`
@@ -1533,9 +1533,9 @@ type FluffyTaskControls struct {
 	SupervisoryControl bool `json:"supervisory_control"`
 }
 
-// Protocol.command/1: the latest command receipt for the current generation. Task-scoped
-// commands (a cancel or retry recorded before any run exists) carry run_id and generation
-// as null; run-scoped commands carry both.
+// Protocol.command/1: the task's newest command, any generation. Task-scoped commands (a
+// cancel or retry recorded before any run exists) carry run_id and generation as null;
+// run-scoped commands carry both.
 type FluffyWorkItemCommand struct {
 	AcknowledgedAt         *string                `json:"acknowledged_at"`
 	AcknowledgementID      *string                `json:"acknowledgement_id"`
@@ -1900,9 +1900,9 @@ type TentacledWorkItemExecution struct {
 	Waiting            *TentacledWorkItemWaiting        `json:"waiting"`
 }
 
-// Protocol.command/1: the latest command receipt for the current generation. Task-scoped
-// commands (a cancel or retry recorded before any run exists) carry run_id and generation
-// as null; run-scoped commands carry both.
+// Protocol.command/1: the task's newest command, any generation. Task-scoped commands (a
+// cancel or retry recorded before any run exists) carry run_id and generation as null;
+// run-scoped commands carry both.
 type TentacledWorkItemCommand struct {
 	AcknowledgedAt         *string                `json:"acknowledged_at"`
 	AcknowledgementID      *string                `json:"acknowledgement_id"`

@@ -81,12 +81,27 @@ export function ownerLabel(assignee: AssigneeLike | null | undefined): string {
   return name ?? `Unknown owner type: ${type}`;
 }
 
+/** The word the pre-fix encoder spelled an absent name with; a recorded name can equal it. */
+const legacyAbsentValue = "unrecorded";
+
+/**
+ * The value portion of an owner key. `asText` maps an absent or blank name to
+ * null, so the empty value is a sentinel no served name can mint; a recorded
+ * value that would collide with the legacy sentinel word or with the escape
+ * itself travels with a leading colon instead. The encoder is injective, so
+ * `ownerKeyLabel` reads every minted key back as the row's own label.
+ */
+function ownerKeyValue(value: string | null): string {
+  if (value === null) return "";
+  return value === legacyAbsentValue || value.startsWith(":") ? `:${value}` : value;
+}
+
 export function ownerKey(assignee: AssigneeLike | null | undefined): string {
   const type = asText(assignee?.type) ?? "unassigned";
   const name = asText(assignee?.name);
   const profile = asText(assignee?.agent_profile);
-  if (type === "agent") return `agent:${profile ?? name ?? "unrecorded"}`;
-  if (type === "human") return `human:${name ?? "unrecorded"}`;
+  if (type === "agent") return `agent:${ownerKeyValue(profile ?? name)}`;
+  if (type === "human") return `human:${ownerKeyValue(name)}`;
   if (type === "unassigned") return "unassigned";
   return `type:${type}`;
 }
@@ -96,12 +111,16 @@ export function ownerKeyLabel(key: string): string {
   if (key === "unassigned") return "Unassigned";
   const separator = key.indexOf(":");
   const kind = separator === -1 ? key : key.slice(0, separator);
-  const value = separator === -1 ? "" : key.slice(separator + 1);
-  // An absent name mints a sentinel key, which labels as the row's own absence
-  // label instead of the sentinel text; a `type:` key cannot carry the name its
-  // row renders, so it labels the type alone.
-  if (kind === "agent") return value === "unrecorded" ? "Agent" : `Agent · ${value}`;
-  if (kind === "human") return value === "unrecorded" ? "Human owner not recorded" : value;
+  const raw = separator === -1 ? "" : key.slice(separator + 1);
+  // An absent name mints the empty-value sentinel, which labels as the row's
+  // own absence label; the legacy sentinel word old bookmarks carry labels the
+  // same way, and the encoder escapes a real name that equals it, so those two
+  // never disagree. An escaped value drops the leading colon, and a `type:` key
+  // cannot carry the name its row renders, so it labels the type alone.
+  const value = raw.startsWith(":") ? raw.slice(1) : raw;
+  const absent = raw === "" || raw === legacyAbsentValue;
+  if (kind === "agent") return absent ? "Agent" : `Agent · ${value}`;
+  if (kind === "human") return absent ? "Human owner not recorded" : value;
   return `Unknown owner type: ${value || kind}`;
 }
 

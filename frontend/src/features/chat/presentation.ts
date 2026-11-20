@@ -177,10 +177,11 @@ export interface ChatReceiptView {
 /**
  * The receipt one message renders, or null when the message carries no command.
  * `applied` requires the served acknowledgement outcome; a command the control
- * plane applied or rejected itself renders the plane's own outcome instead of a
- * runtime's; a command only an older retained page carries is never refreshed
- * against the current page, so it says exactly that instead of claiming an
- * outcome.
+ * plane applied or rejected itself renders the plane's own outcome, and a
+ * supervisory command the plane recorded applied from the runtime's transition
+ * report renders applied-unacknowledged until the runtime acknowledges it; a
+ * command only an older retained page carries is never refreshed against the
+ * current page, so it says exactly that instead of claiming an outcome.
  */
 export function chatReceiptView(command: ReceiptCommand | null, carriedByCurrentPage: boolean): ChatReceiptView | null {
   if (command === null) return null;

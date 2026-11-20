@@ -43,11 +43,19 @@ describe("receipt outcomes", () => {
     // The retry the control plane re-queued into a fresh generation while no
     // runtime has acknowledged it is a deferred request, never applied.
     expect(receiptOutcome({ kind: "retry", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("deferred");
-    // A command the control plane applied itself and never dispatched to a
-    // runtime cannot carry the runtime's acknowledgement; it renders the
-    // plane's own outcome.
+    // A cancel the control plane applied itself on queued or assigned work
+    // never reached a runtime, so it renders the plane's own application.
     expect(receiptOutcome({ kind: "cancel", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("control_applied");
-    expect(receiptOutcome({ kind: "pause", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("control_applied");
+    // The supervisory kinds are delivered to the runtime, and the plane
+    // records them `applied` from the runtime's own transition report; the
+    // runtime's acknowledgement may not have arrived yet and none is implied.
+    expect(receiptOutcome({ kind: "pause", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("applied_unacknowledged");
+    expect(receiptOutcome({ kind: "resume", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("applied_unacknowledged");
+    expect(receiptOutcome({ kind: "provide_input", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("applied_unacknowledged");
+    // No writer records a guidance command `applied` without the runtime's
+    // acknowledgement (it stays pending until the ack), so that pair is no
+    // success this surface may claim.
+    expect(receiptOutcome({ kind: "guidance", state: "applied", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("unknown");
     expect(receiptOutcome({ kind: "guidance", state: "pending", acknowledgement_outcome: null, acknowledgement_id: null })).toBe("queued");
     expect(receiptOutcome(null)).toBe("unknown");
   });
@@ -75,6 +83,7 @@ describe("receipt outcomes", () => {
   it("labels every durable outcome with its exact text", () => {
     expect(receiptLabel("applied")).toBe("Applied");
     expect(receiptLabel("control_applied")).toBe("Applied by the control plane");
+    expect(receiptLabel("applied_unacknowledged")).toBe("Applied by the runtime; acknowledgement not recorded");
     expect(receiptLabel("rejected")).toBe("Rejected by the runtime");
     expect(receiptLabel("control_rejected")).toBe("Rejected by the control plane");
     expect(receiptLabel("failed")).toBe("Failed");
@@ -91,16 +100,18 @@ describe("receipt outcomes", () => {
 describe("receipt history rows", () => {
   it("keeps the served order and each row's own kind, generation and outcome", () => {
     const history = receiptRows([
-      timelineCommand("guidance", { commandId: "c-guidance", generation: 2, state: "applied" }),
+      timelineCommand("resume", { commandId: "c-resume", generation: 2, state: "applied" }),
       timelineCommand("pause", { commandId: "c-pause", generation: 2 }),
       timelineCommand("cancel", { commandId: "c-cancel", generation: null, state: "applied" }),
       timelineCommand("retry", { commandId: "c-retry", generation: 1, state: "applied" }),
     ], []);
     // Each row's served kind decides: the retry the control plane re-queued is
-    // deferred, every other command it applied itself renders the plane's own
-    // outcome, and one still awaiting the runtime's acknowledgement is queued.
+    // deferred, the plane's own cancel renders the plane's outcome, a
+    // supervisory kind the plane recorded from the runtime's transition report
+    // is applied-unacknowledged, and one still awaiting the acknowledgement is
+    // queued.
     expect(history.rows.map((row) => [row.kind, row.generation, row.outcome])).toEqual([
-      ["guidance", 2, "control_applied"],
+      ["resume", 2, "applied_unacknowledged"],
       ["pause", 2, "queued"],
       ["cancel", null, "control_applied"],
       ["retry", 1, "deferred"],

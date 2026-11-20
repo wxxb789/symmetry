@@ -7,7 +7,7 @@ import { createApplication, type Application } from "../../app/application";
 import { createAppRouter } from "../../app/router";
 import { ServerRefusal, type Project, type WorkItem } from "../../services/api";
 import { readWorkDetail } from "../../services/api.fixtures";
-import { boardMoveRequest, failureMode, providerOwnedControlsOf, refusalNotice, resetPendingWorkItemCreations, workItemDraftOf, workItemFormStateOf, workItemUpdatePayload, type BoardColumnSnapshot } from "./write-policy";
+import { boardMoveRequest, executionDefiningWritesRefused, failureMode, ownerDiscardNote, providerOwnedControlsOf, refusalNotice, resetPendingWorkItemCreations, workItemDraftOf, workItemFormStateOf, workItemUpdatePayload, type BoardColumnSnapshot } from "./write-policy";
 
 // This suite drives the real component tree against a stateful HTTP double: the
 // double keeps a served revision per row and applies the same rules the Control
@@ -409,6 +409,33 @@ describe("planning write policy", () => {
     expect(payload).not.toHaveProperty("review_status");
   });
 
+  it("freezes execution-defining writes while the served task is not failed or cancelled", () => {
+    // The server's own guard (execution_fields_editable) refuses a change to an
+    // execution-defining field whenever the item names an orchestration task in
+    // any state other than failed or cancelled — completed included — and no
+    // path clears the item's task id, so a completed task keeps refusing.
+    for (const state of ["queued", "assigned", "claimed", "running", "paused", "waiting_for_input", "cancelling", "completed"]) {
+      expect(executionDefiningWritesRefused({ execution: { state } })).toBe(true);
+    }
+    expect(executionDefiningWritesRefused({ execution: { state: "failed" } })).toBe(false);
+    expect(executionDefiningWritesRefused({ execution: { state: "cancelled" } })).toBe(false);
+    expect(executionDefiningWritesRefused({ execution: null })).toBe(false);
+    expect(executionDefiningWritesRefused({})).toBe(false);
+  });
+
+  it("names only the owner-dependent values the payload actually carried", () => {
+    expect(ownerDiscardNote("human", { agent_profile: "reviewer", workspace: "primary" }))
+      .toBe("Control records no agent profile, workspace for a human owner, so those values were not applied.");
+    expect(ownerDiscardNote("unassigned", { workspace: "primary" }))
+      .toBe("Control records no workspace for an unassigned item, so that value was not applied.");
+    // A null is a deliberate clear the server applies, so it is not a value
+    // that failed to apply; an omitted field never travelled at all.
+    expect(ownerDiscardNote("human", { agent_profile: null, workspace: "primary" }))
+      .toBe("Control records no workspace for a human owner, so that value was not applied.");
+    expect(ownerDiscardNote("human", {})).toBeNull();
+    expect(ownerDiscardNote("agent", { agent_profile: "default", workspace: "primary" })).toBeNull();
+  });
+
   it("keeps a described server fault retryable and states what an invalid request does", () => {
     // A 5xx is no authoritative answer even when the server's own envelope makes
     // it parseable: the write may have been applied, so it stays retryable.
@@ -609,9 +636,10 @@ describe("project planning", () => {
     fireEvent.keyDown(card, { key: "ArrowRight", shiftKey: true });
     await waitFor(() => expect(patchesOf(harness, `/portal/api/work-items/${firstItemId}/move`)).toHaveLength(1));
     // A move is not modal, so the operator can leave while it is in flight. The
-    // switch keeps the board view, so project two's board — the surface the
-    // late move's announcement would have to land on — is mounted and is what
-    // the negatives below observe.
+    // announcement is the announcing board's own local state and that board
+    // instance unmounts with the navigation, so no surface — including project
+    // two's mounted board, which the negatives below observe — can render the
+    // late announcement.
     await act(async () => { await router.navigate({ to: "/projects/$projectId", params: { projectId: secondProjectId }, search: { view: "board" } }); });
     await screen.findByRole("heading", { level: 1, name: "Project Two" });
     const board = await screen.findByRole("region", { name: "Work board" });
@@ -637,7 +665,7 @@ describe("work item planning", () => {
     await user.selectOptions(screen.getByLabelText("Status"), "ready");
     await user.selectOptions(screen.getByLabelText("Repository"), repositoryResourceId);
     await user.click(screen.getByRole("button", { name: "Create" }));
-    await screen.findByText("Work item created.");
+    await screen.findByText(/Work item created\./);
     expect(postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`)[0]?.body)
       .toMatchObject({ title: "Planned item", status: "ready", repository_resource_id: repositoryResourceId });
     expect(await screen.findByRole("link", { name: "Planned item" })).toBeVisible();
@@ -666,7 +694,7 @@ describe("work item planning", () => {
     harness.failNextMutation.current = true;
     await user.click(screen.getByRole("button", { name: "Create" }));
     await user.click(await screen.findByRole("button", { name: "Try again" }));
-    await screen.findByText("Work item created.");
+    await screen.findByText(/Work item created\./);
     const posts = postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`);
     expect(posts).toHaveLength(2);
     const firstIdentity = posts[0]?.body?.["creation_id"];
@@ -687,7 +715,7 @@ describe("work item planning", () => {
     harness.loseNextCreateResponse.current = true;
     await user.click(screen.getByRole("button", { name: "Create" }));
     await user.click(await screen.findByRole("button", { name: "Try again" }));
-    await screen.findByText("Work item already existed; the server returned the original row, so this submission was not applied.");
+    await screen.findByText(/Work item already existed; the server returned the original row, so this submission was not applied\./);
     expect(projectOf(harness.state, firstProjectId)?.work_items.filter((item) => item.title === "Lost answer")).toHaveLength(1);
     const posts = postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`);
     expect(posts).toHaveLength(2);
@@ -710,7 +738,7 @@ describe("work item planning", () => {
     await user.click(screen.getByRole("button", { name: "New work item" }));
     await user.type(screen.getByLabelText("Title"), "Reopened draft");
     await user.click(screen.getByRole("button", { name: "Create" }));
-    await screen.findByText("Work item already existed; the server returned the original row, so this submission was not applied.");
+    await screen.findByText(/Work item already existed; the server returned the original row, so this submission was not applied\./);
     const posts = postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`);
     expect(posts).toHaveLength(2);
     expect(posts[1]?.body?.["creation_id"]).toBe(posts[0]?.body?.["creation_id"]);
@@ -734,7 +762,7 @@ describe("work item planning", () => {
       // With an identity available again the same press sends and clears the refusal.
       vi.unstubAllGlobals();
       await user.click(screen.getByRole("button", { name: "Create" }));
-      await screen.findByText("Work item created.");
+      await screen.findByText(/Work item created\./);
       expect(screen.queryByRole("alert")).toBeNull();
       expect(postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`)).toHaveLength(1);
     } finally {
@@ -816,6 +844,28 @@ describe("work item planning", () => {
     expect(notice).toHaveTextContent("Control records no agent profile, workspace for a human owner, so those values were not applied.");
   });
 
+  it("does not report a deliberate clear as a value that failed to apply", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness();
+    const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
+    const servedItem = served["work_item"] as Record<string, unknown>;
+    servedItem["version"] = 1;
+    harness.state.detail[firstItemId] = served;
+    renderWorkspace(`/portal/work/${firstItemId}`, harness);
+    await user.click(await screen.findByRole("button", { name: "Edit work item" }));
+    // The operator clears the recorded agent profile and records a human owner:
+    // the clear travels as null and the server applies it, so the note names
+    // only the workspace the owner rewrite discards.
+    await user.selectOptions(screen.getByLabelText("Owner type"), "human");
+    await user.clear(screen.getByLabelText("Agent profile"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const notice = await screen.findByText(/Work item updated\./);
+    const update = patchesOf(harness, `/portal/api/work-items/${firstItemId}`)[0];
+    expect(update?.body).toMatchObject({ assignee_type: "human", agent_profile: null, workspace: "primary" });
+    expect(notice).toHaveTextContent("Control records no workspace for a human owner, so that value was not applied.");
+    expect(notice).not.toHaveTextContent("agent profile");
+  });
+
   it("names the fields Control discards for an unassigned item", async () => {
     const user = userEvent.setup();
     const harness = createHarness();
@@ -832,6 +882,38 @@ describe("work item planning", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
     const notice = await screen.findByText(/Work item updated\./);
     expect(notice).toHaveTextContent("Control records no owner name, agent profile, workspace for an unassigned item, so those values were not applied.");
+  });
+
+  it("names the fields Control discards for an unassigned create", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness();
+    renderWorkspace(`/portal/projects/${firstProjectId}`, harness);
+    await user.click(await screen.findByRole("button", { name: "New work item" }));
+    await user.type(screen.getByLabelText("Title"), "Unassigned create");
+    await user.type(screen.getByLabelText("Owner"), "Ada");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    const notice = await screen.findByText(/Work item created\./);
+    // The typed owner name and the workspace prefilled from the project
+    // default travel with the create, and Control records neither for an
+    // unassigned item: the dialog says so instead of reporting a clean create.
+    expect(postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`)[0]?.body)
+      .toMatchObject({ assignee_name: "Ada", workspace: "primary" });
+    expect(notice).toHaveTextContent("Control records no owner name, workspace for an unassigned item, so those values were not applied.");
+  });
+
+  it("states the execution guard the served task will trigger on an execution-defining change", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness();
+    // The item's task completed: it is not failed or cancelled, so the
+    // server's guard refuses execution-defining changes and the editor states
+    // that before the operator submits one.
+    const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item", execution: { state: "completed" } });
+    const servedItem = served["work_item"] as Record<string, unknown>;
+    servedItem["version"] = 1;
+    harness.state.detail[firstItemId] = served;
+    renderWorkspace(`/portal/work/${firstItemId}`, harness);
+    await user.click(await screen.findByRole("button", { name: "Edit work item" }));
+    expect(await screen.findByText(/Control refuses changes to execution-defining fields/)).toBeVisible();
   });
 
   it("names the fields a mid-edit ownership change kept out of the submission", async () => {

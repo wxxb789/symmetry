@@ -230,11 +230,9 @@ test.describe("Execution control", () => {
     for (const route of heldReads) await route.continue().catch(() => undefined);
     await page.unroute(`**/portal/api/work-items/${lost.id}`);
 
-    // The confirmed replay cleared the stored attempt identity, and the settled
-    // run offers no live cancel capability, so the reload reconstructs no
-    // pending attempt: the receipt list renders the durable cancel command the
-    // control plane applied itself, and no receipt ever claims the runtime's
-    // acknowledgement.
+    // After the confirmed replay and the settled run, the receipt list renders
+    // the durable cancel command the control plane applied itself, and no
+    // receipt ever claims the runtime's acknowledgement.
     await page.reload();
     await expect(page.getByRole("button", { name: ui.closeDetail }).or(page.locator("h1")).first()).toBeVisible();
     const cancelReceipt = page.locator('.receipt[data-outcome="control_applied"]').first();

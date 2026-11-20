@@ -49,6 +49,7 @@ const ui = {
   receiptRequested: "Request sent",
   receiptQueued: "Awaiting agent acknowledgement",
   receiptApplied: "Applied",
+  receiptDeferred: "Queued for the runtime",
   receiptRejected: "Rejected by the runtime",
   receiptFailed: "Failed",
   receiptUnknown: "Outcome unknown"
@@ -274,7 +275,10 @@ test.describe("Goal 2 live daemon acceptance", () => {
     expect(retryCommand.data.acknowledgement_outcome, "a retry is recorded by the control plane, not acknowledged by a runtime").toBeNull();
     // The rendered history refreshes after the retry settles; the server's own
     // record is asserted above, and the rendered history must agree with it.
-    await expect(page.locator(".receipt").filter({ hasText: ui.receiptDeferred }).first()).toBeVisible({ timeout: 20_000 });
+    // The retry is located by its own outcome first, as the other receipt pins
+    // in this file are: a retry must render as deferred, and any other outcome
+    // (or its absence) fails this line.
+    await expect(page.locator('.receipt[data-outcome="deferred"]').first()).toContainText(ui.receiptDeferred, { timeout: 20_000 });
     await expect(page.locator(".receipt").first()).not.toContainText(ui.receiptUnknown);
   });
 
