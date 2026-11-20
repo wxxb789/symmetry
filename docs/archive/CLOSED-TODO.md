@@ -1381,7 +1381,11 @@ candidates` section below was moved on 2026-11-20 from branch `fix/provider-acti
       `no_assoc_constraint(:provider_action_intents)` (`integrations/schemas.ex:87`) is the error key
       the disjunct maps to `:state_conflict`. The live unprojected path
       (`execute_unprojected_provider_action/5` and `/6`) and every helper the chain shared with it
-      are kept, and the surviving provider-action tests pass unchanged. Pinned by
+      are kept, and the surviving provider-action tests pass unchanged. Its consequence was removed in
+      the same branch (`9be4364`): with every non-default caller gone,
+      `record_provider_action_failure/3`'s `outcome` input became dead, so it is now `/2` and
+      `provider_action_failure_result/2` is deleted; the two surviving 2-arg call sites
+      (`integrations.ex:572`, `:575`) return the same values as before. Pinned by
       `control/test/symmetry_control/integrations_test.exs`, "the callerless projected
       provider-action variant stays out of the module surface" (recorded failing at `fdf332d` and
       passing after the deletion, in the increment's answer).

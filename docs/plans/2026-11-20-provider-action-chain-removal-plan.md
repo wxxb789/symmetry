@@ -88,14 +88,17 @@ Kept, with the surviving reference that keeps each one alive:
   `:399`; `provider_action_error/1` at `:1196`; `require_capabilities/2` at `:331` and the
   `require_capability/2` wrappers).
 
-Apply-stage note (2026-11-21, findings S1/S4): the `record_provider_action_failure/3` row above —
+Apply-stage note (2026-11-21, findings S1-S4): the `record_provider_action_failure/3` row above —
 and the matching sentence in `Deliverable shape` item 1 ("every helper the chain used is still
 referenced by a live path") — overstate liveness: both surviving call sites sit inside
 `execute_accepted_resource_sync/2`, a function with zero callers tree-wide (its two definition
 clauses only; `provider_access.ex` calls the `_unprojected` sibling), and its `outcome` input was
 consequently dead; the parameter (`/3` -> `/2`) was removed in the apply stage. The callerless
 function and `provider_access.ex`'s producerless `provider_failure/1` 3-tuple clause are recorded
-in `docs/TODO.md` (`## Dead-code candidates`) for a separate maintenance change.
+in `docs/TODO.md` (`## Dead-code candidates`) for a separate maintenance change. The S2/S3 edits
+landed there as well: `integrations_test.exs:1004` now reads "shared dispatch guards" and the
+pinning test's comment (`:1776`) names `/6` as the broker entry with `/5` as its delegate; no
+separate note was written in the implement report.
 
 The deletion is therefore exactly the entry's fix direction: the chain and the disjunct inside it,
 nothing more. `mix compile --warnings-as-errors` is the mechanical backstop: any of the kept
@@ -121,14 +124,17 @@ helpers that had silently depended on the chain would surface as an unused-priva
   *inside the chain* (the `:capability_not_granted` clause above). The reading is recorded here
   because the entry's compressed sentence can be read against this disjunct too.
 - **Failure classification on the deleted chain is not re-pinned.** `record_provider_action_failure/3`
-  is called with `:definite` in the deleted clause and `:ambiguous`/`mutation_failure_outcome/1`
-  in `persist_provider_delivery/5`; no test asserts the deleted clause's classification (the
+  is called with `:definite` in the deleted clause, with `mutation_failure_outcome/1` in
+  `execute_authenticated_provider_action/7` (`:577`) and with `:ambiguous` in
+  `persist_provider_delivery/5` (`:608`, `:611`); no test asserts the deleted clause's
+  classification (the
   integration test at `integrations_test.exs:976` that pins "a pre-dispatch capability refusal is
   classified definite" drives `execute_unprojected_provider_action/5`, whose own `with` produces
   the same definite classification through `unprojected_provider_action_failure/1`), so deletion
-  changes no pinned outcome. The surviving test's comment names "projected guards"; the guards it
-  describes are the unprojected path's own shared guards (`:330-333`), which are unchanged, so the
-  comment is not rewritten by this change (noted in the report).
+  changes no pinned outcome. The surviving test's comment named "projected guards"; the guards it
+  describes are the unprojected path's own shared guards (`:330-333`), which are unchanged; the
+  adjective was reworded to "shared dispatch guards" in the apply stage
+  (`integrations_test.exs:1004`) and the promised implement-report note was not written.
 - **The controller surface is untouched.** The public HTTP behavior for provider actions flows
   through `ProviderAccess` (`provider_access.ex:1578`, `:2243-2270`) and is unchanged; the
   provider-action controller tests reference `ProviderAccess`, not `Integrations.execute_provider_action`,
