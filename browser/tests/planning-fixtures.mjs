@@ -18,15 +18,28 @@ const fixtureScript = fileURLToPath(new URL("../../scripts/ci/portal-planning-fi
 // changeset's effect is read back over HTTP by the case that uses it).
 const FIXTURE_GUARD_MS = 180_000;
 
+// Locally the fixture runs under the pinned Elixir through `mise exec`. A CI
+// render job installs that same Elixir directly (erlef/setup-beam) and has no
+// mise, so it sets this to the mix executable on its PATH; the pinned versions
+// stay the local default.
+const mixInvocation = process.env.SYMMETRY_FIXTURE_MIX
+  ? [process.env.SYMMETRY_FIXTURE_MIX]
+  : ["mise", "exec", "elixir@1.20.4-otp-29", "erlang@29.1.2", "--", "mix"];
+
 function runFixture(args) {
+  // A release-shell harness exports PHX_SERVER for the release processes it
+  // starts. The fixture starts a second copy of the application to write the
+  // row and must not bind the port the release under test already owns, so the
+  // flag is dropped from its environment.
+  const { PHX_SERVER: _phxServer, ...fixtureEnvironment } = process.env;
   // File mode: `mix run file.exs -- args` would put the literal "--" into
   // System.argv/0, so the fixture args follow the script path directly.
   const output = execFileSync(
-    "mise",
-    ["exec", "elixir@1.20.4-otp-29", "erlang@29.1.2", "--", "mix", "run", "--no-start", fixtureScript, ...args],
+    mixInvocation[0],
+    [...mixInvocation.slice(1), "run", "--no-start", fixtureScript, ...args],
     {
       cwd: controlRoot,
-      env: process.env,
+      env: fixtureEnvironment,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "inherit"],
       timeout: FIXTURE_GUARD_MS

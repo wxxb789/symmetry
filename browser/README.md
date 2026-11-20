@@ -123,10 +123,12 @@ The focused release-shell gate (also what CI runs against the release) is:
 
 ```sh
 SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
+SYMMETRY_GOALS_OFF_URL=http://127.0.0.1:4002 \
 POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55442 POSTGRES_DB=symmetry_control_dev \
 mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test \
   tests/workspace-shell.spec.mjs tests/portal-work-views.spec.mjs \
   tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs \
+  tests/portal-goal-attention.spec.mjs \
   tests/portal-cutover.spec.mjs tests/portal-chat.spec.mjs
 ```
 
@@ -142,18 +144,30 @@ outcome with the same attempt replayed once; the runtimes list's scoped and
 unscoped empty states; plus the Goal-managed detail, whose row is written by
 `scripts/ci/portal-planning-fixture.exs` through Control's own changesets — the
 `POSTGRES_*` variables above must name the database the release serves, and
-without them that case skips with its missing environment named instead of
-passing. That case asserts the served `goal_id`, no run/cancel/retry control,
+without them that case skips locally with its missing environment named instead
+of passing. That case asserts the served `goal_id`, no run/cancel/retry control,
 the 403 `goal_authority_required` refusals of the legacy paths and a sibling
 legacy item that keeps its control.
 The expiry URL must serve the same release and fixture database with
 `SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2`; without it the true-TTL expiry cases
-are explicitly skipped, not passed. The focused suite also checks Attention
+are explicitly skipped locally, not passed. The primary release serves with
+`SYMMETRY_GOALS_ROLLOUT_ENABLED=true` (the attention suite approves plans
+through `accept_plan`, which goal rollout gates) and the Goal-rollout URL must
+serve the same release and database with `SYMMETRY_GOALS_ROLLOUT_ENABLED=false`;
+without that URL the rollout-off attention case is explicitly skipped locally,
+not passed. In CI the render step exports `SYMMETRY_RENDER_GATE_REQUIRED=1`
+for this invocation: a missing `POSTGRES_*`, expiry URL or Goal-rollout URL
+then aborts collection of the whole invocation — before any case runs —
+instead of skipping, and the run's own JSON report is asserted so a gated case
+that still skipped would fail the job. Where no `mise` is installed (CI
+installs the toolchain directly), `SYMMETRY_FIXTURE_MIX=mix` points the
+planning fixture at the `mix` on PATH.
+The focused suite also checks Attention
 scope through selection, history, navigation and login with real fractional
 resource metadata, legacy `/portal` project-board links repaired to their SPA
 destination through real logout and login, plus logout after another
 shared-cookie tab renews its
-session. CI starts both release instances and saves the render report.
+session. CI starts the three release instances and saves the render report.
 Fixture-only project/work/resource creation uses the existing
 authenticated APIs; the React shell's own mutation surfaces are connection
 management at `/portal/connections`, project/work-item planning on the project

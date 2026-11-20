@@ -19,6 +19,10 @@ from branch `chore/deadcode-revalidation`.
 The closed class scan appended to `## Paginated reads must be bound to the cursor that served their
 pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-binding`.
 
+The 0007f render-gate fixture item and the 0007h rollout-off residual appended to the `## Deferred
+review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 from branch
+`fix/ci-render-gate-fixtures`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -1265,6 +1269,30 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       controls, plus the runtime-less local transitions and the retained supervisory requirement;
       the work-detail render test covers the withheld Cancel/Retry.
 
+- [ ] Give the focused render gate's `browser/tests/portal-goal-managed.spec.mjs` case its fixture
+      environment in CI. The case writes its real Goal-managed row through
+      `scripts/ci/portal-planning-fixture.exs`, so it needs `POSTGRES_*` naming the database the
+      release serves plus the Elixir toolchain; `.github/workflows/ci.yml`'s render job has neither,
+      so the case reports an environment-named skip there. Either add the setup-beam and
+      `mix deps.get`/compile steps to that job, or run the case from a harness job that owns them.
+      The local focused-gate run in the 0007f review round executes it for real.
+      Closed on branch `fix/ci-render-gate-fixtures` (2026-11-19, PR #98). The control job exports
+      `POSTGRES_PORT: 5432` beside its other `POSTGRES_*` variables, so the case's fixture environment
+      is complete; `browser/tests/planning-fixtures.mjs` launches the fixture through the
+      `SYMMETRY_FIXTURE_MIX` command (the render step sets `mix`, from the job's setup-beam PATH; the
+      pinned `mise exec` chain stays the local default) and drops an inherited `PHX_SERVER` so the
+      fixture's own application copy cannot bind the release-under-test port; and the control job
+      compiles the fixture's development build (`mix compile`) before the render step so the case's
+      180 s fixture guard covers the run, not a cold compile. Hosted evidence, run `44540137977`,
+      revision `52cb4bb` (the same spec bytes as the docs revision `254f1de`, run `44542025823`;
+      both predate the collection guards, so the quoted `:36:3` is that revision's position),
+      control job `135617161165`: `✓ 27 [desktop-chromium] › tests/portal-goal-managed.spec.mjs:36:3 ›
+      Goal-managed work › a real Goal-managed work item presents no legacy path, and the server
+      refuses one (1.7s)` and the same case on mobile (`✓ 74`, 1.6s). The render step's own summary
+      moved from `73 passed, 3 skipped` on the previous main revision (run `44524043823`, control job
+      `135560685485`) to `93 passed (2.6m)`, `1 skipped`; the one remaining skip is the mobile-project
+      concurrency case that is desktop-only by design.
+
 ## Deferred review findings (0007h)
 
 *Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the open residual stays there.*
@@ -1303,6 +1331,27 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       the goal work item's planning/assignee fields, which the work surfaces read from their own read's
       definition; and the attention read's entry `blockers`/`settlement_attention`/`updated_at` plus its
       `GoalBlocker` and `SettlementAttention` members, which no surface consumes there.
+
+*Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; its `:goal_admission_disabled` residual and the notes stay there.*
+
+      Closed on branch `fix/ci-render-gate-fixtures` (2026-11-19, PR #98). The original text: “the
+      rollout-off browser case skips in hosted CI because it needs `SYMMETRY_GOALS_OFF_URL`”. The render
+      step now starts a third release instance with `SYMMETRY_GOALS_ROLLOUT_ENABLED=false`
+      (`PORT=4002 RELEASE_NODE=symmetry_goals_off`, health-probed like the other two), runs the primary
+      release with `SYMMETRY_GOALS_ROLLOUT_ENABLED=true` because the attention suite's plan cases admit
+      plans through `accept_plan` (admission-gated), adds `tests/portal-goal-attention.spec.mjs` to the
+      render step's spec list and passes `SYMMETRY_GOALS_OFF_URL=http://127.0.0.1:4002`. The case is
+      discriminating for the instance's rollout state: creation and the attention read succeed against
+      a rollout-on server too, so the case also sends one contract-valid `request_plan` command to
+      that instance and requires the server's 409 `goal_admission_disabled` refusal, and pointing the
+      URL at a rollout-on server now fails it instead of passing it. Hosted evidence, run `44540137977`,
+      revision `52cb4bb` (the same spec bytes as the docs revision `254f1de`, run `44542025823`; the run
+      predates the collection guards and the discriminating probe, so the quoted `:454:3` is that
+      revision's position), control job `135617161165`: all nine attention cases pass at both
+      widths, including `✓ 25 [desktop-chromium] › tests/portal-goal-attention.spec.mjs:454:3 › Goal
+      attention workspace › with Goal rollout off a present Goal still serves its real attention entry
+      (914ms)` and `✓ 72 [mobile-chromium] › … (832ms)`; the render step reports `93 passed (2.6m)`,
+      `1 skipped`.
 
 ## Browser acceptance under host load
 

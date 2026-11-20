@@ -11,6 +11,15 @@ const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operat
 // A second release instance started with Goal rollout off. Without it the
 // rollout-off case is explicitly skipped, never passed on the primary instance.
 const goalsOffUrl = process.env.SYMMETRY_GOALS_OFF_URL;
+// The render gate exports SYMMETRY_RENDER_GATE_REQUIRED=1 and starts that
+// instance: a gate run missing its URL is half-configured and fails collection
+// instead of skipping green, while the local default stays the named skip.
+if (process.env.SYMMETRY_RENDER_GATE_REQUIRED === "1" && !goalsOffUrl) {
+  throw new Error(
+    "SYMMETRY_GOALS_OFF_URL must be set: SYMMETRY_RENDER_GATE_REQUIRED=1 makes the render gate " +
+      "fail collection instead of skipping the rollout-off case",
+  );
+}
 
 async function login(page, path = "/portal/attention", base = "") {
   await page.goto(`${base}/portal/login?return_to=${encodeURIComponent(path)}`);
@@ -286,13 +295,26 @@ test.describe("Goal attention workspace", () => {
     await page.getByRole("textbox", { name: "Objective" }).fill("Stale amendment attempt");
     await page.getByLabel("Reason").fill("Attempted with a stale page");
 
-    // Another operator moves the goal first: the open decision carries a fresh
-    // version the page has not loaded.
-    const moved = await goalCommand(page, goalId, "cancel", { reason: "Concurrent operator decision" });
-    expect(moved.response.status).toBe(200);
+    // The surface re-reads the served versions at submit time, so the stale
+    // window left is a write that lands while the command is in flight: the
+    // Amend POST is held at the network boundary, another operator cancels the
+    // goal, and the released command then carries a version the server has
+    // already advanced. The in-flight request is passed through unchanged.
+    let cancelIssued = false;
+    let cancelStatus = null;
+    await page.route(`**/portal/api/goals/${goalId}/commands`, async (route) => {
+      if (!cancelIssued) {
+        cancelIssued = true;
+        const cancelled = await goalCommand(page, goalId, "cancel", { reason: "Concurrent operator decision" });
+        cancelStatus = cancelled.response.status;
+      }
+      await route.continue();
+    });
 
     await page.getByRole("button", { name: "Send Amend" }).click();
     await expect(page.getByRole("heading", { name: "The goal changed since this page loaded" })).toBeVisible();
+    expect(cancelIssued, "the concurrent cancel was issued while the command was in flight").toBe(true);
+    expect(cancelStatus).toBe(200);
     await expect(page.getByText(/Server state: version/)).toBeVisible();
     await expect(page.locator("code")).toHaveText("stale");
     await expect(page.getByRole("button", { name: "Reload the current state" })).toBeVisible();
@@ -456,8 +478,8 @@ test.describe("Goal attention workspace", () => {
     await login(page, "/portal/attention", goalsOffUrl);
     const project = await createProject(page, "J", { blocked: true });
 
-    // Admission is disabled on this instance, but creation is an ordinary
-    // accepted command; the read is what this case binds.
+    // Creation is an ordinary accepted command on this instance; the
+    // admission refusal below and the read are what this case binds.
     const created = await api(page, "POST", `/portal/api/projects/${project.id}/goals`, {
       schema_version: "symmetry.goal_create.v1",
       mutation_id: crypto.randomUUID(),
@@ -474,6 +496,28 @@ test.describe("Goal attention workspace", () => {
     });
     expect(created.status).toBe(201);
     const goalId = created.body.goal.id;
+
+    // Discriminating probe: creation and the read below succeed against a
+    // rollout-on server too, so the case binds this instance's admission gate
+    // directly. The command is contract-valid (the request_plan payload
+    // requires all five members, and `subject.resource_id` must equal
+    // `repository_resource_id`), so a 409 here is the admission gate's
+    // refusal, never a validator's.
+    allowBrowserError(page, /status of 409/);
+    const probeRepositoryId = crypto.randomUUID();
+    const refused = await goalCommand(page, goalId, "request_plan", {
+      model_profile: "codex",
+      repository_resource_id: probeRepositoryId,
+      subject: {
+        resource_id: probeRepositoryId,
+        commit: "0".repeat(40),
+        tree_digest: `sha256:${"0".repeat(64)}`
+      },
+      session_mode: "fresh",
+      requested_session_id: null
+    });
+    expect(refused.response.status).toBe(409);
+    expect(refused.response.body.error.code).toBe("goal_admission_disabled");
 
     // What the rollout-off server actually serves: the Goal entry beside the
     // project blockers, with no unavailable feed stated.

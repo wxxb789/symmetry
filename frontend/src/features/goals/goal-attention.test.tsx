@@ -295,6 +295,54 @@ describe("goal detail surface", () => {
     expect(calls.filter((call) => call.path.includes("/commands")).length).toBe(1);
   });
 
+  // The acceptance notice waits for the served goal to settle on the applied
+  // state (bounded at 2.5 s), so this case allows that bound; pre-fix bytes
+  // never reach the notice and fail on the assertion with the stale conflict.
+  it("re-reads the served versions at submit time so a worker-advanced goal is not sent stale", async () => {
+    // The page settles on version 8; a worker then advances the goal to 9 with
+    // the revision unchanged, exactly like the release's goal-control and
+    // wakeup writers. The command must carry the version the server serves at
+    // submit, not the settled one, or the server refuses it as stale.
+    let advanced = false;
+    const commands: Array<{ expected_version: number; expected_revision: number }> = [];
+    const { fetcher } = recordingFetcher((path, init) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Worker-advanced goal", state: "active", currentRevision: 1, version: advanced ? 9 : 8, allowedActions: ["pause", "amend", "cancel"] }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        const envelope = JSON.parse(rawBody) as { expected_version: number; expected_revision: number; kind: string };
+        commands.push(envelope);
+        if (envelope.expected_version !== 9) {
+          return jsonResponse({ error: { code: "stale", message: "resource changed since it was loaded", current_version: 9, current_revision: 1, allowed_actions: ["pause", "amend", "cancel"] } }, 409);
+        }
+        return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 4, kind: "amend", revision: 1 } });
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
+      return jsonResponse(workspaceResponse(projectId));
+    });
+
+    const user = userEvent.setup();
+    render(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Worker-advanced goal" });
+    // The settled page still shows version 8: the worker's advance is not read yet.
+    expect(screen.getByText(/· revision 1 · version 8$/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Amend" }));
+    await user.type(screen.getByRole("textbox", { name: "Objective" }), "Amended while a worker advanced the goal");
+    await user.type(screen.getByLabelText("Reason"), "Operator amendment");
+    // The worker advances the goal's version with the revision unchanged.
+    advanced = true;
+    await user.click(screen.getByRole("button", { name: "Send Amend" }));
+    // The command carries the version the server serves now; pre-fix it carries
+    // the settled 8 and the server answers the stale conflict instead.
+    await waitFor(() => expect(commands).toHaveLength(1));
+    expect(commands[0]?.expected_version).toBe(9);
+    expect(commands[0]?.expected_revision).toBe(1);
+    expect(await screen.findByText("Amend accepted by the server.", {}, { timeout: 5_000 })).toBeVisible();
+  }, 15_000);
+
   it("carries a fresh mutation identity per logical action attempt and reports the server receipt", async () => {
     const identities: string[] = [];
     const { fetcher } = recordingFetcher((path, init) => {

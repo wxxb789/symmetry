@@ -46,12 +46,11 @@ export function GoalDetailPage() {
 
   /**
    * The server acknowledges a command before its worker applies it, and the
-   * applied write lands a moment later. Every command envelope carries the
-   * versions this page holds, so the acceptance notice waits for the served goal
-   * to settle on the version the applied write produced instead of announcing
-   * acceptance while the page still holds the pre-application version, which
-   * would make the operator's next command stale. Bounded: a command with no
-   * further write is not delayed beyond the bound.
+   * applied write lands a moment later. The acceptance notice waits for the
+   * served goal to settle on the version the applied write produced instead of
+   * announcing acceptance while the page still holds the pre-application
+   * version. Bounded: a command with no further write is not delayed beyond
+   * the bound.
    */
   const settleGoalRead = async (acknowledged: GoalProjection | undefined) => {
     const deadline = Date.now() + 2_500;
@@ -68,14 +67,23 @@ export function GoalDetailPage() {
     }
   };
 
+  /**
+   * Reads the served goal back at submit time and builds the envelope carrying
+   * the versions the server serves now. A worker (the goal-control and wakeup
+   * writers enqueue through Oban) can advance the goal after this page's last
+   * settled read; an envelope built from the settled read would be refused as
+   * stale. The plan admission performs the same read between its two commands.
+   */
+  const servedEnvelope = async (kind: CommandKind, payload: ActionPayload) => {
+    const current = await application.api.goal(goalId, new AbortController().signal);
+    return commandEnvelope(kind, payload, { version: current.version, current_revision: current.current_revision });
+  };
+
   const command = useMutation({
     mutationFn: async ({ kind, payload }: { kind: CommandKind; payload: ActionPayload }) => {
-      const goal = query.data;
-      if (!goal) throw new Error("The goal is not loaded.");
       const csrf = session.data?.csrf_token;
       if (!csrf) throw new Error("The session token is unavailable; refresh the page.");
-      const envelope = commandEnvelope(kind, payload, { version: goal.version, current_revision: goal.current_revision });
-      return postGoalCommand(application.fetcher, csrf, goalId, envelope);
+      return postGoalCommand(application.fetcher, csrf, goalId, await servedEnvelope(kind, payload));
     },
     onSuccess: async (_body, variables) => {
       setRefusal(null);
@@ -118,13 +126,7 @@ export function GoalDetailPage() {
       if (!resolved) throw new Error("The server returned no receipt for the decision resolution.");
 
       // Read the goal back so the plan admission carries the served versions.
-      const current = await application.api.goal(goalId, new AbortController().signal);
-      return postGoalCommand(
-        application.fetcher,
-        csrf,
-        goalId,
-        commandEnvelope("accept_plan", { proposal, proposal_hash: proposalHash, decision_id: decision.id }, { version: current.version, current_revision: current.current_revision }),
-      );
+      return postGoalCommand(application.fetcher, csrf, goalId, await servedEnvelope("accept_plan", { proposal, proposal_hash: proposalHash, decision_id: decision.id }));
     },
     onSuccess: async () => {
       setRefusal(null);
@@ -404,7 +406,7 @@ function NextAction({ goal, busy, onCommand, resources }: { goal: GoalProjection
       {/* The action list is exactly what the server allows; no client rule adds to it. */}
       <button className="button action-button" type="button" disabled={busy} aria-expanded={openAction === kind} onClick={() => setOpenAction(openAction === kind ? null : kind)}>{actionLabel(kind)}</button>
       {openAction === kind && <form className="action-form" onSubmit={(event) => event.preventDefault()}>
-        <p className="text-small muted">Carries expected_version {goal.version}, expected_revision {goal.current_revision} and mutation identity {identity(kind)}.</p>
+        <p className="text-small muted">Carries the version and revision the server serves at submit and mutation identity {identity(kind)}.</p>
         {(kind === "pause" || kind === "resume" || kind === "cancel") && <label className="field">Reason<input value={reason} onChange={(event) => setReason(event.currentTarget.value)} required /></label>}
         {kind === "activate" && <p>The current revision {goal.current_revision} is the approved revision this command presents.</p>}
         {kind === "request_plan" && <>
