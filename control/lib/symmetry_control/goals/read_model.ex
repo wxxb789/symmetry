@@ -189,7 +189,7 @@ defmodule SymmetryControl.Goals.ReadModel do
       current_revision: current_revision,
       next_wake_at: map_value(goal, :next_wake_at),
       updated_at: map_value(goal, :updated_at),
-      version: map_value(goal, :lock_version),
+      version: map_value(goal, :operator_version),
       lifecycle: lifecycle_projection(map_value(goal, :state, "draft")),
       revision: revision_projection(revision),
       blockers: blockers,

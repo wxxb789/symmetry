@@ -172,6 +172,48 @@ defmodule SymmetryControl.GoalsTest do
              )
   end
 
+  test "an internal reconcile advance does not refuse an operator command, while another operator's advance still does" do
+    {goal, _item, _task} = admitted_task_fixture()
+
+    # The operator's read: the version every command must carry, taken before the
+    # reconcile runs. The row's own lock_version is not that version.
+    before = fetch_goal!(goal.id)
+    lock_version_before = Repo.get!(SymmetryControl.Goals.Goal, goal.id).lock_version
+
+    assert {:ok, [%{disposition: :noop}]} =
+             Goals.reconcile_due_goals(goal_ids: [goal.id], now: @now)
+
+    # The due reconcile advanced the row through the optimistic-lock path ...
+    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).lock_version > lock_version_before
+    # ... and left the command precondition where the operator read it.
+    assert fetch_goal!(goal.id).version == before.version
+
+    assert {:ok, receipt, :created} =
+             Goals.command(
+               goal.id,
+               command(before, "pause", %{reason: "Operator review pause"}),
+               "operator:test",
+               now: @now
+             )
+
+    assert receipt.goal.state == "paused"
+    assert receipt.goal.version == before.version + 1
+    assert fetch_goal!(goal.id).version == before.version + 1
+
+    # Another operator's accepted command is what a stale version still refuses:
+    # the same pre-reconcile version no longer matches after the pause advanced it.
+    assert {:error, {:stale, %{current_revision: 1, current_version: current_version}}} =
+             Goals.command(
+               goal.id,
+               command(before, "resume", %{reason: "Operator review complete"}),
+               "operator:test",
+               now: @now
+             )
+
+    assert current_version == receipt.goal.version
+    assert fetch_goal!(goal.id).state == "paused"
+  end
+
   test "archived projects preserve exact receipts but reject new Goal authority" do
     project = project_fixture()
     attrs = goal_attrs(Ecto.UUID.generate())

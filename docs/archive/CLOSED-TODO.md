@@ -40,6 +40,9 @@ The revalidated test-database recovery entry appended to `## Retro review follow
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
 
+The resolved `resolve_decision` page-version item appended to `## Retro review follow-ups` below was
+moved on 2026-11-21 from branch `fix/goal-command-stale-race`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -2529,6 +2532,50 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       the loaded Windows host aborted that plain command twice at the default 10m test-binary
       timeout (600.509s/600.388s, 0 test failures), and green came with `-timeout 45m`
       (`ok 1119.686s`); CI's `daemon-windows` job runs the package under `-timeout 600s`.
+
+- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
+      submit-time served one. `approvePlan` builds its envelope from `query.data`
+      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
+      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
+      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
+      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
+      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
+      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
+      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
+      the original note: every accepted command appends an event through `append_event!/7`
+      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
+      and reconcile writers go through `Goal.transition_changeset`
+      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
+      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
+      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
+      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
+      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
+      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
+      direction: build the press's envelope from a submit-time read the way the plan admission does,
+      re-deriving the presented decision's own version from that same read, or keep the page version and
+      record the refusal plus reload as the intended recovery.
+
+      **Resolved (2026-11-21; branch `fix/goal-command-stale-race`):** the page-held version is kept,
+      and the server half that made it hazardous is fixed. The Goal row's served `version` is no
+      longer `lock_version`: the new `goals.operator_version` (migration
+      `20261121000000_add_goal_operator_version.exs`) advances by exactly one per accepted operator
+      command and never for the internal reconciliation, settlement and automatic-admission appends
+      and transition writes this entry identifies, while `lock_version` stays the row-level optimistic
+      lock every Goal writer takes. The read model serves `version: map_value(goal, :operator_version)`
+      (`control/lib/symmetry_control/goals/read_model.ex:192`) and `ensure_preconditions!/2` compares
+      it, so the asynchronous advance this entry names no longer answers 409 `stale` for an action the
+      operator would simply repeat; pinned red-then-green by "an internal reconcile advance does not
+      refuse an operator command, while another operator's advance still does"
+      (`control/test/symmetry_control/goals_test.exs:175`), which takes the served version, runs
+      `Goals.reconcile_due_goals/1`, and then accepts the command built from that pre-advance read,
+      while a second operator command built from the same read is still refused. A genuine concurrent
+      operator command still advances the token and still answers 409 with the served state, so this
+      entry's recorded recovery — the conflict card and the operator's reload
+      (`frontend/src/features/goals/detail.tsx:217-226`) — remains the intended one for that case and
+      no frontend change was needed. The entry's `goals.ex:8308`/`:8359`/`:8571-8585` coordinates were
+      written against the revision it names and had drifted by `bba6d3a` (`append_event!/7` at
+      `:8314`, its `optimistic_lock` at `:8365`, `ensure_preconditions!/2` at `:8577`); the changed
+      precondition contract is documented in `docs/design/protocol.md` and `docs/design/data.md`.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 

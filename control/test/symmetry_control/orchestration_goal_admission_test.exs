@@ -1860,7 +1860,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     resume = %{
       schema_version: "symmetry.goal_command.v1",
       mutation_id: Ecto.UUID.generate(),
-      expected_version: goal.lock_version,
+      expected_version: goal.operator_version,
       expected_revision: goal.current_revision,
       kind: "resume",
       payload: %{reason: "resume after pause"}
@@ -2556,7 +2556,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                %{
                  schema_version: "symmetry.goal_command.v1",
                  mutation_id: Ecto.UUID.generate(),
-                 expected_version: goal.lock_version,
+                 expected_version: goal.operator_version,
                  expected_revision: goal.current_revision,
                  kind: "pause",
                  payload: %{reason: "Stop new execution before control delivery."}
@@ -3938,7 +3938,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                %{
                  schema_version: "symmetry.goal_command.v1",
                  mutation_id: Ecto.UUID.generate(),
-                 expected_version: goal.lock_version,
+                 expected_version: goal.operator_version,
                  expected_revision: goal.current_revision,
                  kind: "pause",
                  payload: %{reason: "Stop new execution before control delivery."}

@@ -6132,12 +6132,20 @@ defmodule SymmetryControl.Goals do
             "goal_id" => goal.id,
             "mutation_id" => mutation_id,
             "state" => "draft",
-            "version" => goal.lock_version + 1,
+            "version" => goal.operator_version + 1,
             "current_revision" => revision.revision
           }
 
           event =
-            append_event!(goal, mutation_id, "goal_created", actor_ref, body, response, opts)
+            append_event!(
+              goal,
+              mutation_id,
+              "goal_created",
+              actor_ref,
+              body,
+              response,
+              Keyword.put(opts, :operator_advance, true)
+            )
 
           goal = Repo.get!(Goal, goal.id)
           {:created, receipt!(goal, event)}
@@ -6219,7 +6227,7 @@ defmodule SymmetryControl.Goals do
                     actor_ref,
                     body,
                     response,
-                    opts
+                    Keyword.put(opts, :operator_advance, true)
                   )
 
                 if parsed.kind in ["pause", "cancel", "amend"],
@@ -8320,6 +8328,13 @@ defmodule SymmetryControl.Goals do
     current = now(opts)
     next_wake_at = event_next_wake_at(goal, kind, opts)
     event_revision = Keyword.get(opts, :event_revision, goal.current_revision)
+    # Only an operator command advances the version a command must carry. The
+    # internal settlement, admission and reconcile appends leave it where the
+    # operator's last read left it, so an asynchronous advance cannot refuse a
+    # command whose own predicates still hold.
+    next_operator_version =
+      goal.operator_version + if(Keyword.get(opts, :operator_advance, false), do: 1, else: 0)
+
     response = normalize_map(response)
 
     receipt =
@@ -8331,7 +8346,8 @@ defmodule SymmetryControl.Goals do
         event_revision,
         response,
         next_wake_at,
-        current
+        current,
+        next_operator_version
       )
 
     stored_response = Map.put(response, "_receipt_v1", encode_receipt_snapshot(receipt))
@@ -8361,7 +8377,11 @@ defmodule SymmetryControl.Goals do
 
     updated_goal =
       goal
-      |> Changeset.change(event_sequence: sequence, next_wake_at: next_wake_at)
+      |> Changeset.change(
+        event_sequence: sequence,
+        next_wake_at: next_wake_at,
+        operator_version: next_operator_version
+      )
       |> Changeset.optimistic_lock(:lock_version)
       |> stamp_update(current)
       |> Repo.update!()
@@ -8414,14 +8434,15 @@ defmodule SymmetryControl.Goals do
          event_revision,
          response,
          next_wake_at,
-         current
+         current,
+         next_operator_version
        ) do
     %{
       "schema_version" => "symmetry.goal_receipt.v1",
       "goal" => %{
         "id" => goal.id,
         "state" => goal.state,
-        "version" => goal.lock_version + 1,
+        "version" => next_operator_version,
         "current_revision" => goal.current_revision,
         "next_wake_at" => nullable_datetime(next_wake_at),
         "updated_at" => DateTime.to_iso8601(current)
@@ -8546,7 +8567,7 @@ defmodule SymmetryControl.Goals do
       %{
         "goal_id" => goal.id,
         "state" => goal.state,
-        "version" => goal.lock_version + 1,
+        "version" => goal.operator_version + 1,
         "current_revision" => goal.current_revision
       },
       normalize_map(details)
@@ -8575,14 +8596,14 @@ defmodule SymmetryControl.Goals do
   end
 
   defp ensure_preconditions!(goal, parsed) do
-    if goal.lock_version != parsed.expected_version or
+    if goal.operator_version != parsed.expected_version or
          goal.current_revision != parsed.expected_revision do
       {:ok, projection} = ReadModel.fetch(goal)
 
       rollback(
         {:stale,
          %{
-           current_version: goal.lock_version,
+           current_version: goal.operator_version,
            current_revision: goal.current_revision,
            allowed_actions: projection.allowed_actions
          }}
