@@ -26,6 +26,9 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The closed callerless projected provider-action chain appended to the same second `## Dead-code
+candidates` section below was moved on 2026-11-20 from branch `fix/provider-action-chain-removal`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -1295,6 +1298,52 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
       `44687273091` (created `06:21:56Z`) with `control` = success and no `reversed import` line;
       23 failed `control` job logs grepped across all their attempts) finds exactly one occurrence
       of the failure: run `43891279765` attempt 1, job `133383740181`.
+
+- [ ] Revalidate and remove the callerless projected provider-action chain in
+      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
+      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
+      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
+      document names it — and the chain behind it is its own:
+      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
+      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
+      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
+      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
+      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
+      were live. Inside that chain one disjunct can never match on any path the code gives it: the
+      clause `{:error, reason} when reason in [:stale, :state_conflict,
+      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
+      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
+      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
+      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
+      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
+      declares no such error key. `:capability_not_granted` is produced by
+      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
+      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
+      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
+      producer; revalidate the surviving provider-action tests either way.
+
+      **Closed (2026-11-20, branch `fix/provider-action-chain-removal`): dead surface; the chain and
+      its unreachable disjunct were deleted.** The revalidation the entry asked for was run at
+      `fdf332d` over all tracked files with the entry's own citation excluded
+      (`git grep -n "execute_provider_action" -- . ':!docs/TODO.md'`): only the two definition
+      clauses match; `execute_authenticated_provider_action/7` has the single call the entry names
+      (`:296`) and `persist_provider_delivery/5` the single call `:574`, both inside the deleted
+      chain, and no `apply`/capture/`function_exported?`/string spelling names any of them
+      anywhere in the repository. With zero callers and no shipped release, the entry's fork is
+      settled as dead surface: `execute_provider_action/5`, its catch-all clause and the two private
+      helpers behind it are gone, together with the `:capability_not_granted` member of the
+      `[:stale, :state_conflict, :capability_not_granted]` clause that died with its only containing
+      function (on that path the value has no producer: `require_capabilities/2` runs in the outer
+      `with`, before the case). The `:provider_action_intents` disjunct of `normalize_stale_result`
+      is unchanged and stays: it is live through `delete_connection/2`, which pipes
+      `Connection.delete_changeset/1` through it, and that changeset's
+      `no_assoc_constraint(:provider_action_intents)` (`integrations/schemas.ex:87`) is the error key
+      the disjunct maps to `:state_conflict`. The live unprojected path
+      (`execute_unprojected_provider_action/5` and `/6`) and every helper the chain shared with it
+      are kept, and the surviving provider-action tests pass unchanged. Pinned by
+      `control/test/symmetry_control/integrations_test.exs`, "the callerless projected
+      provider-action variant stays out of the module surface" (recorded failing at `fdf332d` and
+      passing after the deletion, in the increment's answer).
 
 ## Deferred review findings (0007f)
 

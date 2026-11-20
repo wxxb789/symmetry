@@ -44,29 +44,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
   (fix round 1); revalidate and remove in a separate maintenance change.
 
-- [ ] Revalidate and remove the callerless projected provider-action chain in
-      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
-      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
-      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
-      document names it — and the chain behind it is its own:
-      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
-      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
-      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
-      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
-      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
-      were live. Inside that chain one disjunct can never match on any path the code gives it: the
-      clause `{:error, reason} when reason in [:stale, :state_conflict,
-      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
-      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
-      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
-      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
-      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
-      declares no such error key. `:capability_not_granted` is produced by
-      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
-      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
-      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
-      producer; revalidate the surviving provider-action tests either way.
-
 - [ ] Drop the unused `conn` parameter in
       `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:650-651)
       passes `conn` to `portal_command!/4` (:653), which never reads it (it builds its own `api_conn()`),
