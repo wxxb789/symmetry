@@ -26,6 +26,9 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The citation existence check and the changed-path classifier fixture appended to `## Record and
+documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
+
 The resolved-decision press item appended to the `## Retro review follow-ups` section below was
 moved on 2026-11-20 from branch `fix/resolve-decision-submit-read`.
 
@@ -42,9 +45,16 @@ candidates` section below was moved on 2026-11-20 from branch `fix/provider-acti
 The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
 
+The closed control-character canonical JSON item appended to the `## Retro review follow-ups
+(second pass, 2026-11-20)` section below was moved on 2026-11-20 from branch
+`fix/go-canonical-c0-case`.
+
 The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
+
+The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
+moved on 2026-11-21 from branch `fix/served-read-closeout`.
 
 The closed JSON-escape path-tail item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below, together with the PR #119 round-5 follow-up it closes, was moved on
@@ -52,6 +62,12 @@ The closed JSON-escape path-tail item appended to the `## Retro review follow-up
 
 The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
+
+The closed `stopDescendantMonitor` post-timer recheck appended to the `## Retro review follow-ups`
+section below was moved on 2026-11-21 from branch `fix/stop-descendant-recheck`.
+
+The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
+that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 
 ## Model-routing evaluation records
 
@@ -331,13 +347,53 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       digest and controls digest, plus `test-ablation-final-review-2026-09-29.md`'s app-startup
       and Go-probe rows (the cross-record quote this entry named). Evidence: the whole-corpus
       `--check --root-only` sweep reports 0 dirty of 111 files (superseded 2026-11-20: the
-      widened UNC leader pattern flags the two `0008b-go-bounded-regression-strong` specimens
-      named in the records README's accepted false positives; the records were deliberately
-      not re-rendered),
+      widened UNC leader pattern flagged the two `0008b-go-bounded-regression-strong` specimens;
+      both were rendered and every bound digest rebound by the records rebind of the same day,
+      see the entry below),
       `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` exits 0,
       re-running the renderer over all 30 touched files is byte-stable, and
       `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
       (16 tests) pass.
+
+- [ ] Render the two records the widened sanitize flags: `0008b-go-bounded-regression-strong.json`
+      and its `.review.json` still carried the doubly escaped backslash-run UNC specimen a reviewer
+      quoted while describing forbidden-backslash test cases, so the record-cleanliness gate refused
+      them; narrowing the pattern was rejected because a narrower UNC pattern misses a real path and
+      the README records the shape as an accepted false positive. Evidence plan: render both files
+      in the `--root-only` scope (the scope #101 rendered these two files in and the scope the CI
+      gate runs), keep the record JSON valid across the render, and rebind every digest that binds
+      a rendered file.
+
+      **Closed (2026-11-20, branch `chore/model-routing-records-rebind`):** both records were
+      rendered with `scripts/ci/model-routing-record-sanitize.py --root-only` - one substitution
+      per file, the specimen to `path-sha256:0b5e775deeadc067545d33b048502608ec874e7002aaab39e6adf32f4d370ae6`,
+      the odd trailing backslash that escapes the quote closing the quoted specimen kept outside the token -
+      and every digest binding a rendered file was recomputed and rebound:
+
+      | File | `sha256` before | `sha256` after | Bindings rebound |
+      | --- | --- | --- | --- |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.review.json` | `cf1c41b9b6fa8bd3512d6a9c6a4fdc69e6712b0c918728c8ab88a1a3b435bef7` | `d442ed8fc259e354d002e922a6817c334b618d47b0a57e671a7b8086e270e23c` | the rendered receipt's `evidence.frozen_review_sha256` and `review.evidence_sha256`; `0008b-policy.json`'s strong-arm `frozen_input_digests.review_sha256` |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` | `8ad6c2d277dfac86af23fe6e858d7c8eedb9ab9e5961c10ddb8c6934e824332c` | `cf31f14da8a532110b58770e26adbd614d15117b98d4a4d9798440743e3cc94a` | `0008b-policy.json`'s strong-arm `receipt_sha256`; `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s strong receipt row |
+      | `docs/evaluations/model-routing/0008b-policy.json` | `82852890944b405b99da0c95b2404547be6fea994301c631b65b5145bf3f767d` | `02632c1e56d83f734cb5e0309c11a3819398a9f58fa4902439514264e7b89a31` | `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s candidate-policy digest |
+
+      The receipt's after-digest is over its final bytes (the render plus its own internal review
+      rebind). A whole-tree scan finds no other full-length or truncated referrer of the three
+      pre-rebind digests. Evidence: `resolve-digests.py` (retained in the GDD task's `evidence/`)
+      resolves the eleven policy/receipt bindings of the 0008b class and re-runs the corpus sweep -
+      111 records, 0 dirty, 131 checks, 0 failures; the renderer is byte-stable on both rendered
+      files and each parses to the same document otherwise (the token binds the exact replaced
+      bytes); `check-record-cleanliness.py` passes with a `git stash create` commit of the frozen
+      tree as `--head` - 7 changed records against the current `origin/main` and 5 against the
+      branch base, exit 0 each; and the five short `scripts/ci` Python suites pass
+      (`test-model-routing-record-sanitize.py` 54 tests, `test-check-record-cleanliness.py` 19,
+      `test-model-routing-omp-usage.py` 40, `test-model-routing-source-subject.py` 6 with one
+      skip, `test-linux-v2-source-subject.py` 4). The long runner suite
+      `test-model-routing-evaluation.py` (82 tests, real Go fixtures; no `scripts/ci` tool is
+      touched by this change) was not run to completion on this host - 27 of 82 test outcomes with
+      zero failures before the stop, partial output in the GDD evidence. The records README
+      documents the pass and the receipt/tooling rule it sits beside ("Receipt verification and
+      the bound tooling revision (2026-11-20)"), including the fourteen published-receipt `accept`
+      outcomes under the current tooling.
 
 - [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
       `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
@@ -824,8 +880,8 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
       9 skipped) with two Control compiles running on the same host; the same test passed
       twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
-      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
-      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
+      (`git show ca29a8e:control/priv/portal_assets/portal.js`) and the resource routes are
+      unmodified by 0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
       Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the case no longer
       exists to revalidate. On main, the file revision introduced by `7a92ca4` (#31, 0007b)
       still carried it when `5c2e0ad` (#35, 0007c) replaced it in the same file with
@@ -888,13 +944,13 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       against the base revision. Revalidate the classic toast branch that reports an update when
       the edit dialog was opened from the detail drawer; keep the assertion.
       Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the same retirement as
-      the desktop entry above — main's `browser/tests/portal.spec.mjs` lost `project, resource,
-      work-item, filtering, ordering, and persistence` at `5c2e0ad` (#35, 0007c), and the 0007i
-      cutover deleted the file (`ca1bdad`). The classic toast branch this item asked to
-      revalidate (the detail drawer's work-item update receipt) went with the classic renderer:
-      the SPA renders its own `role="status"` notices from its own state, no `toast` element
-      exists in `frontend/src`, `control/lib` or `control/priv`, and the live detail-surface
-      successor cases assert `statusNotice(detail, "Work item updated.")` in
+      the desktop entry above — main's `git show 5c2e0ad^:browser/tests/portal.spec.mjs` lost
+      `project, resource, work-item, filtering, ordering, and persistence` at `5c2e0ad` (#35,
+      0007c), and the 0007i cutover deleted the file (`ca1bdad`). The classic toast branch this
+      item asked to revalidate (the detail drawer's work-item update receipt) went with the
+      classic renderer: the SPA renders its own `role="status"` notices from its own state, no
+      `toast` element exists in `frontend/src`, `control/lib` or `control/priv`, and the live
+      detail-surface successor cases assert `statusNotice(detail, "Work item updated.")` in
       `browser/tests/portal-work-planning.spec.mjs`. The mobile-chromium project's successors for
       these flows run in `browser/tests/portal-connections.spec.mjs` and
       `browser/tests/portal-work-views.spec.mjs` per `browser/README.md`; no assertion of this
@@ -1604,6 +1660,93 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       answered as its mapped protocol status before the projection runs. The residual entry is
       removed from `docs/TODO.md`.
 
+*Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the workspace-read residual stays there.*
+
+      Revalidated and closed on branch `fix/served-read-closeout` (2026-11-21). Every member the entry
+      named already sits in a `required` array at `fdf332d` and is read by the surface the entry cited,
+      at the anchors its stale line numbers drifted away from (entry lines were written against
+      `671525c`): `goal-read` accounting `known_usage_cost_microusd` (served
+      `control/lib/symmetry_control/goals/read_model.ex:2555`, read
+      `frontend/src/features/goals/detail.tsx:610`), settlement attention `proposed_next_action` and
+      `proposed_next_action_status` (`read_model.ex:1562-1563`, read `detail.tsx:316`), external wait
+      `external_ref`, `next_check_at` and `check_seq` (`read_model.ex:2623,2626-2627`, read
+      `detail.tsx:626-627`), outcome `candidate_subject` and `subject_hash`
+      (`read_model.ex:2265-2266`, read `detail.tsx:272,531-537`), and the attention entry's
+      `attention_reasons`, `active_tasks` and `nonterminal_tasks` (`read_model.ex:2657-2659`, read
+      `frontend/src/features/attention/attention.tsx:90,92`). The class is re-checked exhaustively
+      rather than member-by-member: the optional sets of `goal-read.schema.json` and
+      `attention-read.schema.json` were extracted with a `jq` walk of every `required` array (48 and 11
+      distinct names) and cross-read against `frontend/src`. Neither schema has an optional member a
+      surface reads: the Goal read's and the attention read's readers are
+      `frontend/src/features/goals/detail.tsx` and
+      `frontend/src/features/attention/attention.tsx`, and the optional names a name-level grep matches
+      elsewhere belong to other definitions (`WorkItem`/`work-detail-read`, the `ProjectBlockedEntry`
+      blocker, the planning drafts); the optional members with no reader at all are additive, as the
+      entry intends. The only optional-and-consumed members left in the served reads this entry names —
+      the Goal read, the attention read and the workspace-read row — are the workspace row's 66, which
+      stay open in `docs/TODO.md`.
+      The entry's second residual — the empty `accepted_outcomes`/`settlement_attention`/
+      `external_waits` captures — is closed at both gates it named. The real-served controller test
+      "the real served attention and goal reads validate against the contract bundle"
+      (`control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`) now builds a Goal
+      whose served document carries an accepted outcome (the columns
+      `Goals.insert_validation_outcome!/13` writes, over a completed producer run and a bound evidence
+      row; the pipeline's own validate task and run are not built, so that row's `validation_task_id`
+      stays null), a repair-required settlement receipt and a recorded terminal external wait
+      (`state` `unsupported`, `next_check_at: null`, `check_seq: 0`), asserts the consumed values
+      (`candidate_subject` equal to the item's served baseline subject, its `sha256:` digest,
+      `evidence_ids`, `state`, `reason`, `external_ref`, `resource_id`, `next_check_at`, `check_seq`) and
+      keeps `validate_served_document!("goal-read", read)`. Its rows follow the writers' durable shapes:
+      the external wait is the only shape the `goal_external_waits` identity trigger admits (completed
+      task and run, the run's `task_result` equal to the wait's `result`, a terminal state with no
+      schedule), which is also why the wait could not borrow the failed settlement run; the embedded
+      task result carries the future blocker schedule the settle path validates
+      (`validate_external_blocker/3` refuses a `null` schedule), while the wait row's own
+      `next_check_at` is null for a terminal state.
+      That served response is captured, sanitized, as
+      `contracts/fixtures/valid/goal-read.accepted-and-external.json` (manifest id
+      `goal-read.accepted-and-external`, tag `captured-response`), so the boundary probe "Goal reads
+      refuse a renamed consumed member and keep unconsumed members additive"
+      (`contracts/scripts/boundary.test.mjs`) renames `candidate_subject`, `subject_hash`,
+      `proposed_next_action`, `proposed_next_action_status`, `external_ref`, `next_check_at` and
+      `check_seq` over the capture's own bytes instead of the three inline documents the probe wrote
+      before. A serving-side rename or omission of any of those members now fails the bundle gate on
+      the served document (and the client Effect boundary) rather than decoding into a silent
+      fallback, while the same rename over the capture's own bytes fails the boundary probe.
+      The capture's `subject_hash` is recomputed over its sanitized subject — the sanitization rule
+      `contracts/README.md` now states for a replaced preimage — and the probe asserts that binding with
+      `subjectHash` over the capture's own `candidate_subject`, so a re-capture that replaces a
+      subject's identifiers cannot freeze a digest whose preimage it replaced.
+      Recorded before/after, exact commands. `mise x pnpm@12.17.0 -- pnpm contracts:test` fails on the
+      pre-increment fixture corpus with `ENOENT … contracts/fixtures/valid/goal-read.accepted-and-external.json`
+      (exit 1, `tests 35 / pass 34 / fail 1`) and passes with the capture (exit 0, `tests 35 / pass 35 /
+      fail 0`). That digest assertion's own probe: with the capture carrying the pre-sanitization digest
+      (`sha256:a354ae89…`, the value the raw served capture records) `node --test
+      contracts/scripts/boundary.test.mjs` fails at it (`actual: sha256:a354ae89…` against the
+      recomputed `expected: sha256:788053cd…`, exit 1, `tests 26 / pass 25 / fail 1`) and passes with the
+      recomputed digest (exit 0, `pass 26 / fail 0`).
+      The controller gate was probed on the serving side rather than by disabling its fixture rows: with
+      `outcome_projection/1` renamed `candidate_subject` → `candidate_subject_renamed` and
+      `external_wait_projection/1` renamed `check_seq` → `check_seq_renamed`, the gate file fails (exit
+      2, `Result: 11/12 passed`; the served document carries the renamed member); with only the wait's
+      `id` renamed — a required member the gate's own value assertions do not cover — it fails inside
+      `validate_served_document!/2` with `goal-read real served document failed the contract bundle:
+      [{"Required property id was not present.", "#/external_waits/0"}]` (exit 2, `Result: 11/12
+      passed`); restored, the file passes (exit 0, `Result: 12 passed`).
+      Package gates through the `retro-g2` recipe with `MIX_TEST_PARTITION=servedreadcloseout`:
+      `mix format --check-formatted` exit 0, `MIX_ENV=test mix compile --warnings-as-errors` exit 0,
+      the touched file exit 0 (`Result: 12 passed`). The package's full suite on this host reports
+      `Result: 926/936 passed, 21 skipped`; every one of its ten failures sits in a file this increment
+      does not touch (`goal_0006_migration_test.exs`, `goal_external_wait_migration_test.exs`,
+      `portal_integrations_test.exs`, `provider_action_controller_test.exs`, `integrations_test.exs`,
+      `chat_test.exs` — three `DBConnection` connection drops, two 60 s test timeouts, four unmet
+      `assert_receive` deadlines and one chat message-ordering assertion), and those six files re-run
+      together score `210/211`, the remaining failure being a 100 ms `assert_receive` deadline that
+      passes alone (`Result: 1 passed, 14 excluded`). The reversed-import flake closed at `978abba`
+      failed once in that full-suite run (the lock-order test's `assert_receive` for the sync
+      backend's blocked sample unmet after 5 s, mailbox empty) and passed in the isolated six-file
+      re-run; it is a load-sensitive case this increment does not touch.
+
 ## Browser acceptance under host load
 
 *Closed part of the item “Re-measure the pre-existing browser suites on a quiesced host …” in `docs/TODO.md`; the open residual stays there.*
@@ -1943,7 +2086,7 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       (2026-11-19)".
 
 - [ ] Revalidate the stale 0008-series prerequisite text:
-      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
+      `docs/goals/archive/0008d-typescript-model-routing.md:13` says "the accepted 0008b
       and 0008c results" while the 0008b candidate policy is produced and awaiting
       the owner's verdict. Pre-existing and not introduced by the 0008b evidence
       change; correct the wording once the 0008b verdict lands. (The `0006h`
@@ -2092,6 +2235,188 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       receipts stay verifiable against the revision tagged `0008b-produced-tooling` and fail closed
       on submission under the current runner by design; a submission that requires current bytes
       re-executes the runs.
+
+- [ ] Add a path-and-symbol existence check for the backticked repo paths and
+      identifiers cited in `docs/runbooks/**`, `docs/design/quality.md` and the
+      CLOSED-TODO closures. Location: a new `scripts/ci/` check plus its fixture
+      test, run for pull requests the way the record-cleanliness pair is
+      (`scripts/ci/check-record-cleanliness.py` with
+      `scripts/ci/test-check-record-cleanliness.py`,
+      `.github/workflows/ci.yml:78,1218`): scoped to the changed files it audits
+      but not hidden behind the documentation-only fast path, so a runbook-only
+      pull request still runs it. Why: a cited `file:line` or symbol rots
+      silently when its owner moves — the 2026-11-19 revalidation found the
+      closed item's own `read_model.ex:471` health-signal citation stale
+      (`portal.md` cites `health/4` with no line number), and PR #99's "Review
+      fixes (round 2)" replaced an untracked
+      `control/deps/ecto/...` citation (`control/.gitignore:8` ignores `deps/`)
+      that no index contains. Check that a backticked repo-relative path exists
+      and that the cited identifier occurs in the cited file; do not validate
+      raw `file:line` values (any edit above them would redden the gate).
+      Verification: the check fails on a citation whose path or symbol is absent
+      and passes on the current tree; fixtures pin both outcomes.
+
+      **Closed (2026-11-20, `fix/ci-classifier-gates`):** the gate exists as
+      `scripts/ci/check-citation-existence.py`. For a revision range it selects the audited
+      documents the range adds or modifies (statuses A/M/T, `--no-renames`, text read from the
+      head revision's own blob, never the working tree) under its one corpus constant
+      `AUDITED_PATHS`, and checks each backticked path citation against the head revision's
+      tree, plus each symbol citation the prose binds to a file-shaped citation against that
+      file's head blob. The revision-range machinery - the base fallback to the `origin/main`
+      merge base and then `HEAD^`, its narrowing, the changed-path selection and the head-blob
+      read - is shared with the record gate through the new `scripts/ci/revision_scope.py`
+      instead of being copied; `scripts/ci/test-check-record-cleanliness.py` (nineteen tests,
+      observed `Ran 19 tests ... OK` on Windows and on WSL Ubuntu-24.04) is that extraction's
+      regression evidence. The module also drops the inherited `GIT_DIR`-family variables from
+      every git call, so an exported `GIT_DIR` cannot silently redirect a gate to another
+      repository and turn its range into a vacuous pass.
+      `.github/workflows/ci.yml` reports a third classifier output, `run-citations`, for a change
+      to `docs/runbooks/**`, `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md`, and the
+      `citation-existence` job runs whenever it is true - independently of the
+      documentation-only fast path, so a runbook-only pull request runs the gate - with
+      `CITATION_BASE` folded from the event exactly like `RECORD_BASE`.
+      `scripts/ci/test-check-citation-existence.py` (forty-eight tests at the round-2 fix's final
+      tree, observed `Ran 48 tests ... OK` on Windows and on WSL Ubuntu-24.04) pins the grammar
+      (line-suffixed, `:line:col`, and
+      file-shaped citations, the directory form, wildcard families including `...`/`…`, the
+      fence blanking at any indentation, in a blockquote or in a nested list item, with a closing
+      fence that carries the same character, at least the opener's count and no info string, the
+      connective list without `and`/`or`, and the path-first and whole-word symbol branches), the
+      resolution boundary (the head tree, or the head revision's own ignore rules for generated
+      output, with a per-citation notice naming the rule, the notice read from case-exact
+      committed bytes and the ignore arm deciding before a removal is reported) and the range
+      side (an unchanged, deleted or non-corpus document selects nothing; the head blob decides
+      and not the working tree; a rollback range is compared with its requested base; an
+      inherited `GIT_DIR` cannot redirect the audit).
+      The boundaries are deliberate and pinned, not omissions: a raw `file:line` value is never
+      read (the suffix is stripped before the path is resolved), a bare file name
+      (`read_model.ex`) names no repo-relative path, an extensionless multi-segment token is
+      indistinguishable from the branch names this file writes in backticks
+      (`docs/close-linux-platform-flakes`), a command or URL is not a citation, and a citation
+      the head revision's own ignore rules cover as generated output stays legal - that is what
+      keeps `docs/runbooks/portal.md`'s staged-bundle path and its `index.html` readable as
+      written. The fix round of PR #122 (2026-11-21) applied the conductor decisions recorded in
+      `docs/plans/2026-11-20-ci-classifier-gates-plan.md`: a bound symbol on an ignore-covered or
+      absent path no longer aborts the run (the symbol check skips a path the head tree does not
+      hold; the missing non-ignored path is reported by the path arm, named, at exit 1, with no
+      "does not hold exactly one entry" abort); ignore rules are read from the head revision's
+      own `.gitignore` blobs in a scratch checkout, never from the working tree, and a notice is
+      accepted only when `check-ignore -v` names a case-exact committed rule source (a
+      case-insensitive filesystem otherwise resolves a differently-cased directory to a
+      materialized ignore file and exempts what a Linux checkout refuses); and a multi-segment
+      citation whose first segment the head lacks but a commit reachable from the head held
+      (`git rev-list -1 <head> -- <segment>`, cached per segment) is refused, so a removed or
+      renamed top-level tree no longer hides the citations under it - the removal need not lie
+      inside the comparison range, because the repair lands on the next pull request that touches
+      the citing document. The head revision's own ignore rules decide first: a removed tree their
+      bytes cover is reported as a per-citation notice and the run passes, a recorded precedence
+      with a fixture of its own. A single-segment token is never resolved that way, and a first
+      segment neither the head nor its history holds at the top level (a subdirectory-relative
+      `config/test.exs`, an upstream `src/backend/...`) stays unaudited, pinned in both
+      directions; on a shallow clone the history arm sees only the fetched history and degrades
+      to the previous behaviour.
+      The gate's own first tree-wide run found five citations the corpus no longer held, all in
+      this file, and they were repaired here with the revision-pinned form this file already
+      uses: the two pre-cutover revisions of the deleted browser spec, whose three sites went with
+      the classic renderer in `ca1bdad`, as `git show 5c2e0ad^:browser/tests/portal.spec.mjs` for
+      the case `5c2e0ad` replaced and `git show ca29a8e:browser/tests/portal.spec.mjs`; the classic
+      bundle as `git show ca29a8e:control/priv/portal_assets/portal.js`; and
+      `docs/goals/archive/0008d-typescript-model-routing.md:13` for the moved goal document.
+      Observed end to end:
+      `python3 scripts/ci/check-citation-existence.py --base $(git rev-list --max-parents=0 HEAD)
+      --head HEAD` exited 1 with those five refusals before the repairs and 0 with
+      `10 changed document(s) pass the path and symbol check (365 path citation(s))` after them
+      (the after run bound the uncommitted repairs and this increment's own new files with a
+      dangling `git commit-tree` snapshot built from a temporary `GIT_INDEX_FILE`); at the
+      round-1 revision of the fix round the same command exits 0 with
+      `10 changed document(s) pass the path and symbol check (374 path citation(s))` (the delta
+      from the pre-merge 365 is this range's own `main` merge and the fix round's record edits;
+      the merge had already moved the count to 368), and the round-2 fix's final tree exits 0
+      with `10 changed document(s) pass the path and symbol check (381 path citation(s))`: the
+      round-2 delta of +7 is this file's own new record prose - it adds nine citations (two bare
+      `docs/` directory citations, one `docs/**` glob, one `docs/runbooks/` directory citation,
+      and the five appended by this very closing sentence, all resolving at the head) - less the
+      two `.github/workflows/ci.yml` line-number pointers removed from `docs/design/quality.md`
+      (15 citations there became 13), whose line numbers the fix round's second pass replaced
+      with job/step names. The round-3 fix (2026-11-21) repairs the fence boundary the round-2
+      grammar missed - a backtick fence's info string may not contain a backtick, so a line that
+      begins with an inline triple-backtick span is prose, not an opener that blanks the rest of
+      the document - and pins it with a fixture that brings the suite to forty-nine tests
+      (observed `Ran 49 tests ... OK` on Windows and on WSL Ubuntu-24.04); the tree carrying it
+      exits 0 with `10 changed document(s) pass the path and symbol check (410 path citation(s))`
+      over the whole corpus and `2 changed document(s) pass the path and symbol check (365 path
+      citation(s))` over 7a55b46..HEAD on both platforms - three more than the merge's 407 and
+      362, one from the TS row in `docs/design/quality.md` naming the `control` job's `Render
+      authenticated release shell on desktop and mobile` step and two from this sentence's own
+      backticked paths.
+
+- [ ] Commit a fixture test for the `changes` job's changed-path classifier
+      (`.github/workflows/ci.yml:26-65`), whose proof today is only the removed
+      throwaway harness plus hosted runs. Pattern:
+      `scripts/ci/test-no-legacy-routes-audit.py` (fixture-driven, runs ungated
+      in the `legacy-route-audit` job; `.github/workflows/ci.yml:1355`). Pin:
+      `docs/**`/`*.md`-only diffs report `run-heavy=false`; `docs/evaluations/**`,
+      `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
+      `scripts/ci/check-record-cleanliness.py` changes report `run-records=true`;
+      `legacy-route-audit` runs unconditionally; non-`pull_request` events
+      report both `true`. Companion increment: its `ci.yml` wiring would move
+      line numbers this branch just pinned. Verification: the fixture test
+      fails when any of those routings changes.
+
+      **Closed (2026-11-20, `fix/ci-classifier-gates`):**
+      `scripts/ci/test-ci-changed-path-classifier.py` (eighteen tests, observed `Ran 18 tests ...
+      OK` on Windows and on WSL Ubuntu-24.04, exit 0 on both) extracts the classifier program out
+      of the `changes` job's `id: paths` step in `.github/workflows/ci.yml` and runs the
+      workflow's own text - never a copy - in sixteen scratch two-commit repositories whose diffs
+      are the fixtures, so every expectation below is a measured classifier run. Pinned: a
+      `docs/**`-only and a `*.md`-only diff report `run-heavy=false`, and the round-2 fix adds
+      the discriminating pair - a `docs/**` file that is not Markdown (the suite's `example.json`
+      fixture) reports all three outputs `false`, so the `.md` exemption is what excuses a
+      documentation path, not the `docs/` prefix; `docs/evaluations/**`,
+      `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
+      `scripts/ci/check-record-cleanliness.py` report `run-records=true`; the citation gate's
+      `AUDITED_PATHS` entries report `run-citations=true` and nothing else (the corpus is
+      imported from the gate's own module, each entry required by its family-complete literal - a
+      directory entry by its trailing-slash prefix, so one file under it cannot stand in for the
+      family - and either a corpus entry the classifier forgets or a classifier literal no
+      corpus entry - or citation tool path - explains fails the suite); a
+      daemon change reports `run-heavy=true`; a rename across the documentation boundary reports
+      both sides under `--no-renames` (the fixture moves a non-Markdown file, because a `*.md`
+      path is exempt from the heavy predicate on both sides and would pin nothing); a deleted
+      runbook still reports `run-citations=true`.
+      The fix round of PR #122 (2026-11-21) added the self-triggering tool paths the first cut
+      missed: `scripts/ci/revision_scope.py` (the shared base fallback, narrowing, diff selection
+      and head-blob read) reports `run-records=true` and `run-citations=true`, and
+      `scripts/ci/check-citation-existence.py` with
+      `scripts/ci/test-check-citation-existence.py` report `run-citations=true` - so a change to
+      a gate program or to the module it reads runs that gate end to end on a real checkout's
+      event shape instead of only through fixtures. The three `*Modified` fixtures above pin each
+      tool path's triple through the real program, and an explicit `CITATION_TOOL_FIXTURES`
+      allowance beside the audited-corpus check keeps the explained-literal assertion tight (an
+      unexplained `run-citations` literal still fails).
+      The routing is modelled closed-world over the real job blocks: only `changes` and
+      `legacy-route-audit` may lack a classifier gate, `record-cleanliness` reads `run-records`,
+      `citation-existence` reads `run-citations` (the output and job the companion entry above
+      adds), every other job reads `run-heavy` and depends on `changes`, and the three `changes`
+      output folds are pinned to `github.event_name != 'pull_request' || steps.paths.outputs.<key>
+      == 'true'`, which the test folds to `true` for `push` and `workflow_dispatch` and evaluates
+      per fixture for `pull_request`; an unrecognized `if:` shape refuses instead of passing.
+      The round-2 fix also parses the heredoc step's own scalar keys: its `id: paths` and its
+      pull-request-only `if:` are pinned, because a step GitHub skips leaves every output unset
+      and skips every gated job even with the fold and the program text unchanged. Ten mutation
+      cases measure that the pins bite - dropping the `docs/evaluations/` clause,
+      making the heavy predicate ignore `docs/` and `*.md`, excusing only the `.md` arm of
+      `docs/` (the non-Markdown docs fixture must flip heavy), narrowing `docs/runbooks/` to one
+      file (the family-coverage check must fail), re-gating `citation-existence` on
+      `run-heavy`, conditioning `legacy-route-audit`, dropping an output fold, moving the
+      classify step's `if:` off `pull_request`, and dropping either `revision_scope.py` clause
+      (records or citations) each change the measured routing and fail the pinned comparison -
+      so "the fixture test fails when any of those routings changes" is pinned inside the suite,
+      not by editing `ci.yml` by hand. It runs
+      ungated in the `legacy-route-audit` job, after that job's own audit fixture test. Observed
+      before/after: with `HEAD`'s pre-change `ci.yml` in place the suite fails at collection -
+      `the classifier must emit exactly ['run-citations', 'run-heavy', 'run-records']; emitted
+      ['run-heavy', 'run-records']`, exit 5 - and passes on this branch's workflow, exit 0.
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
@@ -2321,6 +2646,193 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       The gap is tracked as the open TODO entry "An ended chat chain never accepts a later served
       token" (`docs/TODO.md`); this closure is kept as recorded.
 
+      **Annotation (2026-11-21, branch `fix/chat-history-chain`):** two claims recorded above are
+      superseded, and the closure is otherwise kept as recorded. The served token an ended chain
+      dropped is no longer dropped: `retainServedPage` re-opens the chain from the served boundary
+      when a serve offers a token while no continuation is live, so the gap this block names as open
+      work — the entry "An ended chat chain never accepts a later served token" — is closed below.
+      And a definitive refusal a later load advanced past no longer "carries only its notice": its
+      reset and notice are suppressed, because the pointer belongs to the newer chain the reader's
+      next press walks (the closure below states the one-settle-tick re-read window) — the entry
+      "The chat surface's in-flight `Load older` guard is still keyed by cursor bytes" is closed
+      below. Both closures state their own pins.
+
+- [ ] The chat surface's in-flight `Load older` guard is still keyed by cursor bytes:
+      `loadingCursor` (`frontend/src/features/chat/chat.tsx:172-221`) admits a second load for the
+      same boundary while the first is in flight once a re-serve has renewed `history.loadCursor`
+      and re-rendered the button (`frontend/src/features/chat/chat.tsx:560`), and a refusal of the
+      superseded request still posts its notice after the retry already loaded the page. (The rest
+      of that damage is fixed — 2026-11-20, fix round 2: a refusal rewinds the chain pointer and
+      re-reads the captured scope only while the press still owns the chain boundary it captured,
+      so a superseded one is only this notice.) Pre-existing: base re-keyed the cursor on every
+      refresh, so the race predates the boundary-id work. Repro on those bytes: press Load older,
+      refresh while its page is in flight, press Load older again (admitted because the cursor
+      bytes changed), and let the first request's refusal settle after the second landed. Fix
+      direction: key pending loads by scope + boundary id (token bytes as the fallback) and
+      suppress the superseded refusal's notice.
+
+      **Closed (2026-11-21, `fix/chat-history-chain`):** a pending press is identified by scope +
+      boundary message id — cursor bytes only as the fallback while either side lacks a boundary
+      id — through `pendingOlderLoadFor` (`frontend/src/features/chat/scopes.ts`), the same
+      two-sided comparison `ownsChainPointer` already makes, extended by the scope key so a press
+      belongs to the scope that made it; `chat.tsx` holds one record per press in flight, admits no
+      second press for a boundary one already holds there, clears only its own record, and renders
+      the button's `aria-disabled` from that same predicate, so a token the server re-signs at the
+      same boundary leaves the press in flight unrepeatable while a press at a moved boundary is
+      still its own load. The refusal's reset and notice are one committed write judged by
+      `ownsChainPointer`: an owning press resets the pointer to the served page's own token and
+      re-reads the captured scope exactly as fix round 2 established, while a superseded refusal
+      neither resets the pointer nor posts its notice — the pointer belongs to the newer chain the
+      reader's next press walks, so the notice would contradict what the reader can see, and the
+      refused press's region is only reachable from that chain, not already loaded. The re-read
+      gate is the one judgment outside that write: it reads the last committed snapshot while the
+      write decides against the store's queued record, so inside one settle tick a refusal the
+      write judges superseded may still re-read the captured scope once — one benign read, never a
+      wrong cursor (the source comment in `chat.tsx` documents the window; the r1 fix round
+      rewrote this sentence).
+      Decision kept from the entry's reading: only a refusal's notice is
+      suppressed, because a non-refusal failure's outcome is unproven and suppressing it too would
+      hide transient read failures the reader can still act on. Pinning cases: "does not admit a
+      second Load older for the boundary already in flight when the cursor re-signs" (new; red on
+      the pre-fix bytes at `expected [ 'cursor-5', 'cursor-5-resigned' ] to deeply equal
+      [ 'cursor-5' ]`), "leaves the chain alone when the refused press no longer owns it"
+      (re-pinned: the renewal-based supersession it relied on is unreachable under the new guard,
+      so the press is superseded by a served boundary that moved instead; the case keeps its
+      no-reset/no-re-read assertions — `reads` stays 2 and `requested` reaches `cursor-2` — and
+      replaces "stays the notice" with the suppressed notice, red on the pre-fix bytes at
+      `Expected element to have text content: Messages are saved to this context. / Received: The
+      server returned an unexpected response.`), and "renews the served cursor at an unchanged
+      boundary only while the reader has not paged past it" (re-pinned to the new admission rule,
+      red on the pre-fix bytes at `Expected the element to have attribute: aria-disabled="true" /
+      Received: aria-disabled="false"`).
+
+      **Annotation (2026-11-21, branch `fix/chat-history-chain`, apply stage of the simplify review):**
+      one sentence above is inaccurate, and two pins were added. `pendingOlderLoadFor` is two-sided
+      — the boundary message's id while both sides name one, cursor bytes while either does not —
+      but `ownsChainPointer` is not: it decides on the captured side's id alone and never falls back
+      to bytes while it has one, so the two predicates can classify one press/store pair
+      differently (a press naming a boundary message is superseded by a store that holds only cursor
+      bytes at that position while the same press still holds the pendency). The predicate itself is
+      unchanged and is what the contract asks for; the source comment was corrected (`scopes.ts`),
+      and `docs/plans/2026-11-20-chat-history-chain-plan.md` carries the same annotation. The scope
+      fence's own claim — a press "must neither block nor be blocked by another scope's" — is now
+      pinned by "does not let one scope's press in flight block another scope's Load older at the
+      same cursor bytes" (red against a `pendingOlderLoadFor` without the scope term at `Expected
+      the element to have attribute: aria-disabled="false" / Received: aria-disabled="true"`, and
+      red on the pre-fix bytes at the same assertion), and the refusal-only notice decision by
+      "keeps a non-refusal failure's notice when the press no longer owns the chain" (kills both
+      "silence every superseded notice" and "silence every non-refusal notice" at `Expected element
+      to have text content: The server is temporarily unavailable. / Received: Messages are saved to
+      this context.`; green on the pre-fix bytes — it pins that decision, not the regression).
+
+- [ ] An ended chat chain never accepts a later served token: a chain drained through its own loads
+      (`nextCursor` null, the recorded `nextBoundaryId` naming an older message) or a read that
+      served the whole history (no continuation was ever established) keeps reporting "oldest
+      history loaded" while a later serve at the same boundary offers a token, so the rows below
+      the served page stay unreachable until a reload or a boundary move. Repro (rows ordered 3–54,
+      so the first page is 5–54 plus a token and the older read 3–4 ends `null`): rows 1–2 becoming
+      visible late — a slow concurrent post commits an older-timestamped row, since `inserted_at`
+      is set at insert inside the transaction and the advisory lock is per action, not per scope —
+      make the next read still bound at 5 and offer a token for it, which the ended chain drops.
+      Found by the r2 review of `fix/chat-history-boundary-id` (2026-11-20), the round that removed
+      the `adopt` branch covering the never-continued shape (the drained shape was never covered by
+      it). Fix direction: treat "ended" as no usable continuation and re-open from the served
+      boundary when a serve offers a token — the offered token's boundary is the served page's
+      oldest message, so the re-walk re-reads the drained region and dedupes against the retained
+      pages.
+
+      **Closed (2026-11-21, `fix/chat-history-chain`):** "ended" is now no usable continuation:
+      `retainServedPage` (`frontend/src/features/chat/scopes.ts`) re-opens the chain from the
+      served boundary when a serve offers a token, the served page names a boundary and
+      `state.nextCursor === null` — the reader drained the chain through its own loads, or the read
+      served the whole history — while a chain that is not ended keeps the existing rule. The
+      adopted token is signed from the served page's oldest message, so the next press re-walks the
+      drained region; `chatHistoryView` dedupes the retained pages by id and `historyGap` still
+      reaches every retained page through its captured `fetchBeforeId`, so the region renders
+      contiguous and the note reports older history again instead of "oldest history loaded". Kept
+      limit: a serve in a drained scope re-offers the button even when nothing new exists to read —
+      the server cannot know the client's retained set — so the reader re-walks the drained region
+      one press per page, each press re-reading exactly one page and the retained copies deduped
+      only at render, until it drains again; every not-moved serve re-offers the token, a plain
+      re-sign with no new rows included (an explicit refresh, a window-focus refetch, a realtime
+      `chat` invalidation, a send), and the rule cannot tell a late-visible row from such a
+      re-sign. A second kept limit is the query cache's own: the surface applies a serve when the
+      conversation query's data object changes, TanStack Query's default structural sharing keeps
+      the applied object for a refetch whose bytes deep-equal it, and the served cursor's bytes
+      change per response except when the server signed two responses in the same millisecond
+      (the signed token's embedded timestamp defaults to milliseconds; the same coincidence
+      `presentation.ts` names), so a re-serve that both re-signs identical bytes and carries
+      identical messages never reaches the surface, and the ended chain waits for the next
+      differing serve — a throwaway probe on the delivered bytes confirmed the collapse (the
+      refetch kept the first read's data object, the note stayed "oldest history loaded" and the
+      button stayed hidden). Anchoring the application on response arrival rather than object
+      identity (e.g. `structuralSharing: false` on `chatConversationOptions`) is the remedy if
+      that coincidence ever matters; the r1 fix round records it as a bounded limit. Pinning cases:
+      "re-opens a drained chain when a later serve offers a token at the served boundary" (new;
+      red on the pre-fix bytes at `Expected element to have text content: 4 messages loaded · older
+      history available / Received: 4 messages loaded · oldest history loaded.`) and "re-opens a
+      chain that never continued when a later serve offers a token at the served boundary" (new;
+      red on the pre-fix bytes at `Expected element to have text content: 2 messages loaded · older
+      history available / Received: 2 messages loaded · oldest history loaded.`).
+
+      Gates for both closures above, on branch `fix/chat-history-chain`, each row bound to the
+      revision it was measured at. Apply stage (`750a496`, this host, 2026-11-21, before that
+      commit's merge of `origin/main` `adf6d38` — which changed no `frontend/src/features/chat`
+      file but did add main-side frontend files, `router.test.tsx`, `filters.test.ts`,
+      `filters.ts`, `saved-views.test.ts` and `work/presentation.ts`): `vitest run
+      src/features/chat --no-file-parallelism` rc 0 (2 files, 86 tests); `pnpm --dir frontend test`
+      rc 0 (20 files, 498 tests); `typecheck` rc 0; `lint` rc 0; `build` rc 0 (bundle
+      `index-wiT0iX5k.js`, md5 `7d2f0e696cbf59900139eedeec33e05c`, 885870 B); `git diff --check`
+      rc 0 (the frontend has no formatter script). R1 fix round of the whole-increment review
+      (this host, 2026-11-21, re-measured at the delivered tree — `8e91434` plus the fix round's
+      record and test edits): `pnpm install --frozen-lockfile` rc 0; `vitest run src/features/chat
+      --no-file-parallelism` rc 0 (2 files, 87 tests); `pnpm --dir frontend test` rc 0 (20 files,
+      502 tests); `typecheck` rc 0; `lint` rc 0; `git diff --check` rc 0. Every new and re-pinned
+      case was also run against the pre-fix `chat.tsx`/`scopes.ts` — byte-identical copies of
+      `git show fdf332d:…`, digest-checked before and after the run — with that stage's delivered
+      test bytes: 6 failed / 41 passed (47) at the apply stage, 7 failed / 41 passed (48) at the
+      r1 fix round, rc 1, each for the reason its closure names or the pin's own claim names (the
+      r1 round's added case reddens at `expect(element).toHaveAttribute("aria-disabled",
+      "true")`). Each added pin was mutation-checked against the wrong rule it exists to kill, and
+      reddens exactly there:
+      dropping the scope key from `pendingOlderLoadFor` reddens "does not let one scope's press in
+      flight block another scope's Load older at the same cursor bytes" (`Expected the element to
+      have attribute: aria-disabled="false" / Received: aria-disabled="true"`), and both "silence
+      every superseded notice" and "silence every non-refusal notice" redden "keeps a non-refusal
+      failure's notice when the press no longer owns the chain" (`Expected element to have text
+      content: The server is temporarily unavailable. / Received: Messages are saved to this
+      context.`); the r1 fix round's two new pins kill their own rules — a `pendingOlderLoadFor`
+      comparing boundary ids whenever either side names one (leaving the bytes fallback
+      unreachable) reddens "does not admit a Load older at the same cursor bytes while either side
+      cannot name a boundary id" alone (1 failed / 47 passed), and a `.finally` clearing every
+      press record reddens the busy assertion that case and "does not let one scope's press in
+      flight block another scope's Load older at the same cursor bytes" now carry (2 failed /
+      46 passed) — while in the other direction a superseded refusal delayed past the r1 round's
+      settlement fence reddens "leaves the chain alone when the refused press no longer owns it"
+      at `expected 'pending' to be 'error'` instead of passing its negative assertions unrun; each
+      mutant reddened only the pins named and left the chat suite's other cases green. The r1
+      round also confirmed the re-open's named structural-sharing limit with a throwaway probe
+      (deleted after the run): a byte-identical re-serve kept the applied data object, the note
+      stayed "oldest history loaded", and no button appeared. The path-triggered render gate
+      (`SYMMETRY_RENDER_GATE_REQUIRED=1`, the seven focused spec files, desktop and mobile Chromium,
+      against three release instances of `750a496` serving its bundle on this host):
+      93 expected, 1 skipped (the by-design concurrency skip), 0 unexpected, rc 0 (8.5 m), and
+      `scripts/ci/assert-playwright-json.py` rc 0 over CI's own expected set; the chat spec's 12
+      cases are all expected in it. The release instances were proved to serve the bundle built at
+      `750a496`: the asset body's md5 `7d2f0e69…` matched from all three ports, port 4010 measured
+      `/portal/assets/index-wiT0iX5k.js` → HTTP 200 with 885870 B, and the pre-apply
+      `index-CS3_ZMmm.js` answered HTTP 404 (also measured on 4010). The implement-stage numbers
+      measured before the apply — 84 tests, 496 tests, 5 failed / 40 passed (45), bundle
+      `index-CS3_ZMmm.js` md5 `45798f9b…`, 93 expected / 1 skipped / 11.8 m — are superseded by
+      the apply-stage numbers above; the pre-apply receipt's earlier flaky invocation (92 expected
+      / 1 unexpected, the fixture-gated goal-context case under host load) has no counterpart in
+      the apply run. The r1 review's own re-measure at `8e91434` hit one flaky case there: the
+      untouched, load-sensitive `src/tool-cache-config.test.ts` exceeded vitest's 5 s default
+      timeout under suite parallelism (twice; green in isolation). This fix round's full-suite run
+      at the delivered tree passed 20 files / 502 tests, and the isolated file re-measured rc 0
+      (2 tests); the flake is recorded as host load acting on an untouched file, not normalized by
+      reruns.
+
 ## Deferred review findings (0007g)
 
 *Both items of this section moved here on 2026-11-19; `docs/TODO.md` keeps no residual under it.*
@@ -2330,8 +2842,9 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       `run_id`; the migrated `/portal/chat` is reachable from the shell's Chat entry (whose run
       picker lists the served runs) but the React work detail added by 0007f has no such link, so a
       waiting decision is only reachable by picking the run in Chat. Adding the link is work-detail
-      surface work (0007f's file) and was outside the 0007g diff; `browser/tests/portal.spec.mjs`
-      keeps the classic drawer's own buttons until the 0007i cutover.
+      surface work (0007f's file) and was outside the 0007g diff;
+      `git show ca29a8e:browser/tests/portal.spec.mjs` keeps the classic drawer's own buttons
+      until the 0007i cutover.
 
       **Closed (2026-11-19, `feat/work-detail-chat-link`):** the React work detail
       (`frontend/src/features/work/detail.tsx`) now renders "Open in Chat" beside the execution
@@ -2343,10 +2856,10 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       one is answered on the detail itself.
       Pure navigation: no server member was added or changed. Pinned by
       `frontend/src/features/work/detail.test.tsx` (exact href, both labels, and no link without a
-      run). The item's closing clause about `browser/tests/portal.spec.mjs` was already stale when
-      written: no file under `browser/tests/` referenced `Open Chat`, `Review decision`,
-      `open-chat-button` or `decision-chat-button` at `ca29a8e`, and the file was deleted by the
-      0007i cutover (`ca1bdad`), so nothing kept the classic buttons either way.
+      run). The item's closing clause about `git show ca29a8e:browser/tests/portal.spec.mjs` was
+      already stale when written: no file under `browser/tests/` referenced `Open Chat`,
+      `Review decision`, `open-chat-button` or `decision-chat-button` at `ca29a8e`, and the file
+      was deleted by the 0007i cutover (`ca1bdad`), so nothing kept the classic buttons either way.
 
 - [ ] Redirect the documented `#chat` hash location to `/portal/chat`. The frontend design fixes
       "old `/portal#chat` … redirect once to the new equivalent URL", and
@@ -2658,6 +3171,69 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       timeout (600.509s/600.388s, 0 test failures), and green came with `-timeout 45m`
       (`ok 1119.686s`); CI's `daemon-windows` job runs the package under `-timeout 600s`.
 
+- [ ] Give `stopDescendantMonitor` the post-timer recheck its sibling join already has.
+      `daemon/internal/platform/process_unix.go:752-769` waits on the monitor against a timer
+      (`:763-768`) and returns `ErrLinuxDescendantContainmentUnproven` ("descendant monitor did not stop
+      before deadline") whenever the timer arm wins, without rechecking `monitorDone`. `monitorDone` is a
+      close-only unbuffered channel (`:610` created, `:809` the only close), so it stays ready once
+      closed: a monitor that exits as the deadline expires leaves both arms ready, Go picks uniformly
+      between them, and a monitor whose published reason is already in hand can be reported as a
+      deadline failure. PR #105 (`e64f8c0`) fixed this shape in the barrier join `:665-688`
+      (function `waitForInitialDescendantScan` `:642-696`, the recheck at `:682-686`, pinned by
+      the join probe `process_unix_linux_test.go:2078` and the expired-timer probe
+      `:2136`, whose assertion at `:2157-2158` reddens when the recheck is removed) — and recorded
+      this site as out of scope as work "to be recorded in `docs/TODO.md`"; the same shape also sits
+      in the final-scan RPC's timer arms (`:1042-1043` request, `:1055` result). Fail-closed, so the
+      cost is manufactured
+      unproven-containment results for every caller
+      that joins the monitor's own reason (`:1121`, `:1277`, `:1351`, `:1542`,
+      `containment_supervisor_linux.go:1836`, `prepareDescendantMonitorForOwnerLoss` `:771-794`).
+      Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
+      that never exits still fails) in a separate maintenance change.
+
+      **Closed (2026-11-21, branch `fix/stop-descendant-recheck`): the recheck is applied to
+      `stopDescendantMonitor` and both directions are pinned.** The timer arm now rechecks
+      `monitorDone` with a non-blocking select — the same shape as the barrier join's `:682-686` — so
+      a monitor that exits as the deadline expires is joined instead of being reported as a deadline
+      failure, while an open monitor keeps the unchanged deadline error after the full wait and
+      success is still reported only when the monitor exited (its only production close is `:817`).
+      The entry guard (`remaining <= 0`) is unchanged, as in the barrier join, and the recheck can
+      never wait, so no caller's deadline is extended. Decision: the final-scan RPC timer arms named
+      above are deliberately not changed by this closure — the item's fix sentence pins the stop
+      path's two directions only — and are re-recorded as their own open entry in `docs/TODO.md`
+      (`## Retro review follow-ups`), with anchors rebound to the fixed tree. Pins, both in
+      `daemon/internal/platform/process_unix_linux_test.go`: the expired-timer probe
+      `TestProcessGroupStopDescendantMonitorReportsJoinedMonitorAfterDeadline` reddens when the
+      recheck is removed (mutant: red 4/4 plain with first failures at iterations 37/29/29/36 of the
+      400-iteration 100 ns bucket; red 4/4 under `-race` and 3/3 under `-race -cpu 1` with first
+      failures at 12/3/0/1 and 11/6/6 of the 2 µs bucket — the detecting bucket moves with the build
+      and the 100 ns bucket alone left `-race` green 3/3, which is why the probe walks a deadline
+      ladder instead of one constant), and the deterministic probe
+      `TestProcessGroupStopDescendantMonitorJoinsEndingMonitor` pins that an exited monitor is
+      joined without waiting while an open monitor still consumes the whole deadline and fails.
+      Evidence on the branch, from `daemon/`: WSL Ubuntu-24.04 (go1.27.0) ran the focused probes and
+      the ordinary and `-race` suites of `./internal/platform/` green (focused `ok … 0.3 s`; ordinary
+      `ok … 21.0 s` with 204 top-level PASS and 0 FAIL; `-race ok … 45.1 s`), with the six TCP-peer
+      loopback-dialing tests named-skipped
+      (`-skip "^Test(VerifyLoopbackTCPPeerWithOwnedHelperProcess|VerifyLoopbackTCPPeerWaits|VerifyLoopbackTCPPeerDoesNotExtend|VerifyLoopbackTCPPeerV2|LinuxTCPPeerV2RejectsDifferentNetworkCookie)"`).
+      That exclusion records the guest's own loopback limitation, not this change: on this host no
+      127.0.0.1 connect completes at all (a five-line python listen/connect probe times out), the same
+      dials fail or hang identically against `fdf332d`'s own `process_unix.go` in a throwaway copy
+      carrying only the new probes, and this file already records that guest behaviour (the
+      `daemon/internal/app` intermittent `-race` package-timeout entry names it: the WSL guest hangs
+      `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` on a loopback dial that
+      never answers there).
+      Windows (go1.27.4): `gofmt -l .` empty, `go vet ./...` and `go build ./cmd/...` green; the
+      aggregate `go test -count=1 -timeout 600s ./...` exceeded its package budget in
+      `internal/workspace` on this loaded host (600 s panic in
+      `TestConcurrentPrepareUsesOneReservation` on a `git` child), and the same suite at
+      `-timeout 1200s` failed only `internal/harness/pi`
+      (`TestNativeRepositoryTaskSubjectUsesRepositoryBaseline`: "git rev-parse timed out"), both green
+      on isolated re-run (`./internal/workspace/` `ok … 456.6 s`; `./internal/harness/pi/` `ok … 5.8 s`
+      and the named test `-count=3` `ok … 14.3 s`); neither can come from this change — the changed
+      file is `//go:build linux` and absent from the Windows build file set (`go list` lists 14 files
+      for `./internal/platform` on Windows, none of them it).
+
 ## Retro review follow-ups (second pass, 2026-11-20)
 
 - [ ] Re-point legacy work-surface owner bookmarks that carry the pre-#111 sentinel. The `owner`
@@ -2752,6 +3328,96 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       passed at both widths in every run. The gate's environment, its carrier deviations and the
       failure classification are in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`; CI
       remains the merge gate.
+
+- [ ] Align the control-character escape case in the canonical JSON bytes both languages hash.
+      `protocol.CanonicalizeJSON` (`daemon/internal/protocol/goal_subject.go:102`) re-encodes every
+      string through `encoding/json` (`writeCanonicalJSON` `:122`, its string arm `:132-137`;
+      `marshalJSONString` `:186` with HTML escaping off), and Go spells every control character
+      below U+0020 that has no shorthand escape as `\u00xx` with lowercase hex digits, while the
+      Elixir side hashes `SymmetryControl.RequestHash.canonical/1`
+      (`control/lib/symmetry_control/request_hash.ex:5`, `Jason.encode!/1`; Jason 1.4.5 per
+      `control/mix.lock:10`) and Jason spells the same character `\u001F` with uppercase hex.
+      Each language is self-consistent — in Go both
+      `{"value":"\u001F"}` and `{"value":"\u001f"}` canonicalize to `{"value":"\u001f"}` — so the
+      defect is the pair: one logical value carries two canonical digests, one per language.
+      Reproduced at `978abba` with throwaway probes (not committed): a Go test over
+      `CanonicalizeJSON` printed `{"value":"\u001f"}` with
+      `sha256:b43e9944b5d28b7f3e6bad4b289642d1786aa5ba80658cf2ed8bf87ecd642e51`, and
+      `Jason.encode!(%{"value" => <<0x1F>>})` printed `{"value":"\u001F"}` with
+      `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`. The Elixir reading is
+      not a lone choice: the contracts layer already mirrors it deliberately — `encodeJsonString`
+      (`contracts/ts/semantics.ts:69-80`) emits the shorthand escapes plus an uppercase `\u00XX`
+      for every other C0 control, documented as "exactly as Elixir `Jason` encodes it", and the pin
+      is the boundary test "canonical JSON escapes control characters exactly as the control
+      plane's Jason does" (`contracts/scripts/boundary.test.mjs:59-71`, U+000B and U+001B inside a
+      schema-valid LongText description), which names `RequestHash.canonical/1` as the hashed text;
+      `contracts:check` verifies the canonical sorted JSON Subject hash through that same TypeScript
+      encoder (`contracts/README.md:62-66`). So the Go canonicalizer is the side that disagrees
+      with the other two, and it is unpinned: its escaping test pins `\u0000` and the shorthand
+      escapes but no `\u00xx` escape carrying a hex letter
+      (`daemon/internal/protocol/goal_subject_test.go:64-73`),
+      and a case-sensitive search for an uppercase-hex control escape
+      (`grep -rn 'u00[0-9]*[A-F]' daemon/ --include='*.go'`) returns 0 lines. The normalization the
+      hash must follow is written at `docs/design/protocol.md:311-316` and does not name the C0
+      escape case, so deciding it stays the open choice.
+      Reachable through the context snapshot: Control builds it from free text — `approved_goal`
+      `"objective"` (`control/lib/symmetry_control/goals.ex:2151`) and `work_contract`
+      `"title"`/`"description"` (`:2156-2157`) — and stamps the snapshot's `content_hash` with
+      Jason (`context_content_hash` `:2602-2606`, via `RequestHash.canonical`), which the daemon
+      recomputes with Go and refuses on mismatch
+      (`daemon/internal/control/validation.go:1744-1772`, "context.content_hash does not match
+      canonical snapshot"; the same rule at `daemon/internal/protocol/goal_schema.go:48-70`).
+      The contracts boundary test states U+000B/U+001B are schema-valid inside a LongText
+      description (`contracts/scripts/boundary.test.mjs:59-71`), so a work item whose description
+      carries U+001F yields a snapshot the daemon rejects — a source-traced consequence, not
+      executed end to end in this record. The `Subject` the daemon binds cannot carry C0
+      characters (its fields are a UUID, a git object id and a sha256, `Subject.Validate`
+      `goal_subject.go:39-47`; `Subject.Hash` `:81-88`), and `goals.ex:2636` hashes that same
+      restricted value, so neither is the reachable seam. Fix direction: decide the canonical
+      case once — the spelling the other two implementations already share (uppercase, i.e. Jason's
+      bytes) or a shortest-escape normalization written into the rule itself — then add the missing
+      Go pin (and a shared fixture if the choice tightens the rule), and treat any recorded digest
+      over a control-bearing value as invalidated by the change. Suggested owner area: daemon
+      protocol plus the Control hash owners, with the contracts owner for the normalization text.
+
+      **Decided and closed (2026-11-20, branch `fix/go-canonical-c0-case`):** option (a) — Go
+      adopts the spelling the other two implementations already share (uppercase `\u00XX`, i.e.
+      Jason's bytes); `RequestHash.canonical/1`, the contracts TypeScript encoder and their pins
+      stay the reference, and the normalization rule now names the case
+      (`docs/design/protocol.md:311-320`). `normalizeJSONStringEscapes`
+      (`daemon/internal/protocol/goal_subject.go`, formerly `normalizeJSONStringLineSeparators`)
+      uppercases the hex digits of every surviving C0 escape token (00-prefixed) in the same
+      scanner that keeps `U+2028`/`U+2029` raw and leaves a literal `\\u001f` text unchanged; the
+      shorthand escapes, key order and numeric handling are unchanged, so only the nine C0 controls
+      whose escape carries a hex letter (`U+000B`, `U+000E`, `U+000F`, `U+001A`-`U+001F`) change
+      bytes. Pinned by `TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane` and
+      `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest`, red before
+      the fix (lowercase hex where uppercase was wanted, both tests, exit 1) and green after: the
+      first pins the entry's value (`{"value":"\u001F"}`, the digest Jason 1.4.5 computes,
+      `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`), the nine
+      hex-letter escapes, the document the contracts boundary test pins
+      (`sha256:401bf74e8085ac0cce504b465cabbc82043e4fc8c6ec73625d60a43292656fd8`) and the literal
+      `\\u001f` text; the second pins the canonical plan-proposal text the daemon recomputes
+      before admission (`goal_contract_semantics.go` `canonicalPlanProposalSHA256`) against the
+      control plane's digest the frontend pin already records for a description carrying
+      U+000B/U+001B (`sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5`).
+      A third pin, `TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged`, holds
+      the 00-token scope of the rewrite itself (it reddens against a rewrite of every four-digit
+      token).
+      The reproduction no longer reproduces: the post-fix Go canonicalizer's bytes
+      equal Jason 1.4.5's byte for byte over the entry's value, the nine hex-letter controls, that
+      boundary document and the plan proposal above; the digit-only C0 escapes are unchanged
+      because the rewrite only maps the hex letters a-f, and U+0000 stays pinned by the existing
+      escaping test. No repository-asserted digest or fixture over affected bytes is invalidated:
+      no hex-letter C0 escape predates this change in any daemon source, test, fixture or testdata
+      file, and the uppercase pins named above stay valid. Two recorded digest classes are
+      superseded rather than reused: the pre-fix probe digest quoted above (its value now
+      canonicalizes to the uppercase bytes) and persisted daemon-side digests over affected bytes
+      such as `ProviderActionIntent.RequestDigest` (`daemon/internal/app/pi_provider_bridge.go`,
+      replayed at `daemon/internal/state/provider_action.go`), where a pre-fix journal fails
+      closed with `local_idempotency_conflict` and no duplicate external effect; backward
+      compatibility is waived because the first release is not shipped. The reachable end-to-end
+      refusal stays source-traced; the plan is `docs/plans/2026-11-20-go-canonical-c0-case-plan.md`.
 
 - [ ] Stop the Windows-family path tail from absorbing a JSON escape that follows the path.
       `_WINDOWS_TAIL` (`scripts/ci/model-routing-record-sanitize.py:110`) admits a bare backslash

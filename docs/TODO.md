@@ -71,26 +71,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (rerun the two cases, then check whether the failing read is the timer or the intent state), and
       keep both assertions.
 
-- [ ] Give `stopDescendantMonitor` the post-timer recheck its sibling join already has.
-      `daemon/internal/platform/process_unix.go:752-769` waits on the monitor against a timer
-      (`:763-768`) and returns `ErrLinuxDescendantContainmentUnproven` ("descendant monitor did not stop
-      before deadline") whenever the timer arm wins, without rechecking `monitorDone`. `monitorDone` is a
-      close-only unbuffered channel (`:610` created, `:809` the only close), so it stays ready once
-      closed: a monitor that exits as the deadline expires leaves both arms ready, Go picks uniformly
-      between them, and a monitor whose published reason is already in hand can be reported as a
-      deadline failure. PR #105 (`e64f8c0`) fixed this shape in the barrier join `:665-688`
-      (function `waitForInitialDescendantScan` `:642-696`, the recheck at `:682-686`, pinned by
-      the join probe `process_unix_linux_test.go:2078` and the expired-timer probe
-      `:2136`, whose assertion at `:2157-2158` reddens when the recheck is removed) — and recorded
-      this site as out of scope as work "to be recorded in `docs/TODO.md`"; the same shape also sits
-      in the final-scan RPC's timer arms (`:1042-1043` request, `:1055` result). Fail-closed, so the
-      cost is manufactured
-      unproven-containment results for every caller
-      that joins the monitor's own reason (`:1121`, `:1277`, `:1351`, `:1542`,
-      `containment_supervisor_linux.go:1836`, `prepareDescendantMonitorForOwnerLoss` `:771-794`).
-      Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
-      that never exits still fails) in a separate maintenance change.
-
 - [ ] The Goal surface offers no admission path for a resolved plan decision whose admission was
       never accepted.
       `PlanApproval` renders only for an open plan decision: `planApprovalOption`
@@ -117,58 +97,36 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       serve `accept_plan` as an allowed action for a resolved plan decision that is not yet admitted,
       so `NextAction` can present it through a payload path, which covers both paths.
 
-## Retro review follow-ups (second pass, 2026-11-20)
+- [ ] Give the final-scan RPC's timer arms the post-timer recheck the barrier join and
+      `stopDescendantMonitor` now carry. `requestDescendantMonitorScan`
+      (`daemon/internal/platform/process_unix.go:1029-1066`) waits on a timer twice and returns a
+      timeout whenever the timer arm wins, without rechecking the channel whose result is already in
+      hand. First select `:1046-1052`: the request arm's timer `:1050-1051` returns "descendant monitor
+      final scan request timed out" without rechecking `monitorDone` (close-only, created `:610`,
+      closed `:817`, so it stays ready once closed). Second select `:1053-1065`: the `monitorDone` arm
+      `:1056-1062` does recheck the buffered `resultChannel` (created `:1045`, written by the monitor
+      at `:1002` before it can return), but the timer arm `:1063-1064` returns "descendant monitor final
+      scan timed out" without rechecking either channel. A monitor that exits as the deadline expires,
+      or a result already published there, therefore leaves both arms ready; Go picks uniformly
+      between them, and the timeout is reported for a result that is in hand. Fail-closed, so the cost
+      is manufactured unproven-containment results: both errors reach `closeUntil` (`:1196` on the
+      leader-absent path, `:1237` on the post-readback final scan), where they become sticky
+      `descendantScanLost` (`:1248-1252`) or an unproven containment return (`:1205-1207`), and the
+      same manufactured errors also reach the supervisor mirror path —
+      `containment_supervisor_linux.go:1801` (`verifyMirrorObservation`, returned as-is) and `:2026`
+      (`sealInitialMirrorScanForWitness`, whose pre-resume witness scan wraps the error). Same shape
+      as the barrier join `:665-688` (fixed, with pins, by PR #105 `e64f8c0`) and
+      `stopDescendantMonitor` (fixed, with pins, on branch `fix/stop-descendant-recheck`). Apply the
+      same recheck here and pin both directions (an arm that becomes ready at the deadline is honored;
+      a monitor that never answers still fails closed), in a separate maintenance change. This entry's
+      inventory is scoped to the RPC arms: two further pre-existing arms of the same class —
+      `containment_supervisor_linux.go`'s `sealInitialMirrorScanForWitness` (`:2046-2048`, timer arm on
+      `mirror.monitorDone`) and `waitForScanEvents` (`:1232-1235`, timer arm on `done`, the channel
+      `serveScanEvents` closes at `:1084`) — are recorded for completeness but not part of this fix
+      direction.
+      Closed part moved to `docs/archive/CLOSED-TODO.md`.
 
-- [ ] Align the control-character escape case in the canonical JSON bytes both languages hash.
-      `protocol.CanonicalizeJSON` (`daemon/internal/protocol/goal_subject.go:102`) re-encodes every
-      string through `encoding/json` (`writeCanonicalJSON` `:122`, its string arm `:132-137`;
-      `marshalJSONString` `:186` with HTML escaping off), and Go spells every control character
-      below U+0020 that has no shorthand escape as `\u00xx` with lowercase hex digits, while the
-      Elixir side hashes `SymmetryControl.RequestHash.canonical/1`
-      (`control/lib/symmetry_control/request_hash.ex:5`, `Jason.encode!/1`; Jason 1.4.5 per
-      `control/mix.lock:10`) and Jason spells the same character `\u001F` with uppercase hex.
-      Each language is self-consistent — in Go both
-      `{"value":"\u001F"}` and `{"value":"\u001f"}` canonicalize to `{"value":"\u001f"}` — so the
-      defect is the pair: one logical value carries two canonical digests, one per language.
-      Reproduced at `978abba` with throwaway probes (not committed): a Go test over
-      `CanonicalizeJSON` printed `{"value":"\u001f"}` with
-      `sha256:b43e9944b5d28b7f3e6bad4b289642d1786aa5ba80658cf2ed8bf87ecd642e51`, and
-      `Jason.encode!(%{"value" => <<0x1F>>})` printed `{"value":"\u001F"}` with
-      `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`. The Elixir reading is
-      not a lone choice: the contracts layer already mirrors it deliberately — `encodeJsonString`
-      (`contracts/ts/semantics.ts:69-80`) emits the shorthand escapes plus an uppercase `\u00XX`
-      for every other C0 control, documented as "exactly as Elixir `Jason` encodes it", and the pin
-      is the boundary test "canonical JSON escapes control characters exactly as the control
-      plane's Jason does" (`contracts/scripts/boundary.test.mjs:59-71`, U+000B and U+001B inside a
-      schema-valid LongText description), which names `RequestHash.canonical/1` as the hashed text;
-      `contracts:check` verifies the canonical sorted JSON Subject hash through that same TypeScript
-      encoder (`contracts/README.md:62-66`). So the Go canonicalizer is the side that disagrees
-      with the other two, and it is unpinned: its escaping test pins `\u0000` and the shorthand
-      escapes but no `\u00xx` escape carrying a hex letter
-      (`daemon/internal/protocol/goal_subject_test.go:64-73`),
-      and a case-sensitive search for an uppercase-hex control escape
-      (`grep -rn 'u00[0-9]*[A-F]' daemon/ --include='*.go'`) returns 0 lines. The normalization the
-      hash must follow is written at `docs/design/protocol.md:311-316` and does not name the C0
-      escape case, so deciding it stays the open choice.
-      Reachable through the context snapshot: Control builds it from free text — `approved_goal`
-      `"objective"` (`control/lib/symmetry_control/goals.ex:2151`) and `work_contract`
-      `"title"`/`"description"` (`:2156-2157`) — and stamps the snapshot's `content_hash` with
-      Jason (`context_content_hash` `:2602-2606`, via `RequestHash.canonical`), which the daemon
-      recomputes with Go and refuses on mismatch
-      (`daemon/internal/control/validation.go:1744-1772`, "context.content_hash does not match
-      canonical snapshot"; the same rule at `daemon/internal/protocol/goal_schema.go:48-70`).
-      The contracts boundary test states U+000B/U+001B are schema-valid inside a LongText
-      description (`contracts/scripts/boundary.test.mjs:59-71`), so a work item whose description
-      carries U+001F yields a snapshot the daemon rejects — a source-traced consequence, not
-      executed end to end in this record. The `Subject` the daemon binds cannot carry C0
-      characters (its fields are a UUID, a git object id and a sha256, `Subject.Validate`
-      `goal_subject.go:39-47`; `Subject.Hash` `:81-88`), and `goals.ex:2636` hashes that same
-      restricted value, so neither is the reachable seam. Fix direction: decide the canonical
-      case once — the spelling the other two implementations already share (uppercase, i.e. Jason's
-      bytes) or a shortest-escape normalization written into the rule itself — then add the missing
-      Go pin (and a shared fixture if the choice tightens the rule), and treat any recorded digest
-      over a control-bearing value as invalidated by the change. Suggested owner area: daemon
-      protocol plus the Control hash owners, with the contracts owner for the normalization text.
+## Retro review follow-ups (second pass, 2026-11-20)
 
 - Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
   workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
@@ -193,28 +151,54 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Deferred review findings (0007h)
 
-- [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate
-      silently. The 0007h review confirmed these names are correct today but that the schemas leave them
-      optional while the client reads them: `accounting.known_usage_cost_microusd`
-      (`frontend/src/features/goals/detail.tsx:491`, served unconditionally at
-      `control/lib/symmetry_control/goals/read_model.ex:2539`), `settlement_attention[].proposed_next_action`
-      and `proposed_next_action_status` (`detail.tsx:245`), `external_waits[].external_ref`, `next_check_at`
-      and `check_seq` (`detail.tsx:508`), the attention `attention_reasons`/`active_tasks`/`nonterminal_tasks`
-      sets (`frontend/src/features/attention/attention.tsx:80`), and `accepted_outcomes[].candidate_subject`
-      and `subject_hash` (`detail.tsx:417`). Marking them `required` — as `integration`, `satisfied?` and the
-      unknown-cost member now are — would close the class; additive members staying unvalidated is intended.
-      A smaller residual from the same review lives here too: the rollout-off browser case went unrun in
-      hosted CI for two reasons — before `52cb4bb` its spec file was not in the render step's spec list,
-      and the step passed no `SYMMETRY_GOALS_OFF_URL` (both closed below).
-      Closed part moved to `docs/archive/CLOSED-TODO.md`.
-      The rollout-off browser-case residual is closed (2026-11-19, `fix/ci-render-gate-fixtures`, PR #98):
-      the render step starts a rollout-off release instance and runs the attention spec's rollout-off case
-      at both widths; its closure narrative and hosted evidence are in the same section there.
-      Remaining open: the legacy surfaces that
-      read workspace-read members still render their own fallbacks instead of refusing, which is
-      per-surface work outside this class; and the captures for `accepted_outcomes`, `settlement_attention`
-      and `external_waits` are empty arrays, so those members are pinned by the boundary test and the
-      real-served controller gate rather than by a fixture-level rename probe.
+- [ ] Harden the optional-but-consumed members of the served reads: the `workspace-read` row remains.
+      The Goal/attention half of this
+      item, and the empty-capture residual it carried, are closed on branch `fix/served-read-closeout`
+      (`docs/archive/CLOSED-TODO.md`, this section): every member this item named sits in a `required`
+      array at `fdf332d` and is read by the surface it cited, and the real-served controller gate now
+      serves an accepted outcome and a recorded external wait — the two collections it previously
+      validated only as empty arrays — beside the settlement attention it already asserted.
+      Still open is the same class on the workspace read, which the 0007h entry scoped out as per-surface
+      work: of the 68 members `workspace-read.schema.json` leaves optional (a `jq` walk of
+      `required` arrays), 66 are read by `frontend/src` feature code and only two are not
+      (`RuntimeSnapshot.active_runs` and `WorkspaceWorkItem.position` — verified by grep: no
+      feature-code read site for either; the four `RuntimeCapabilities` booleans `interactive`,
+      `provider_access`, `structured_input` and `supervisory_control` are consumed only as the whole
+      map, `frontend/src/features/runtimes/runtimes.tsx:24` serializing it into `data-capabilities`
+      and `browser/tests/portal-live-daemon.spec.mjs:433` asserting that attribute equals the
+      registration-side map, so no member-named read site exists for them), and
+      those surfaces render their own fallbacks instead of refusing. The 66 read members are the root
+      `runtimes` and `registered_runtimes`; project `version`, `default_agent_profile`,
+      `default_workspace` and `resources`; the resource row's `id`, `project_id`, `connection_id`,
+      `kind`, `name`, `provider`, `external_ref`, `url`, `status`, `sync_status`, `status_message`,
+      `last_synced_at` and `version`; the registered-runtime row's `runtime_id`, `runtime_name`,
+      `agent_profile` and `workspace`; the runtime snapshot's `capacity`, `reserved_capacity`,
+      `connection_epoch`, `last_heartbeat_at`, `repository_resource_id`, `agent_profile`, `workspace`
+      and `capabilities.adapter`, plus that map's `interactive`, `provider_access`, `structured_input`
+      and `supervisory_control`; the work row's `project_id`, `goal_id`, `description`, `priority`,
+      `assignee`, `workspace`, `repository_resource_id`, `repository`, `ci_resource_id`, `ci_resource`,
+      `branch`, `pull_request_url`, `ci_status`, `review_status`, `delivery`, `external`, `goal_managed`,
+      `version`, `can_start`, `execution` and `updated_at`; the `provider` and `recorded_at` of each
+      `delivery` value; `external.provider_owned_fields`; and the waiting-decision packet's `context`,
+      `reason`, `options`, `recommended_option_id` and each option's `id`, `label` and `consequence`.
+      Two options, both needing the owner because they decide whether an older partial workspace
+      projection stays renderable (the tolerance `contracts/README.md:22-23` records as "keeps accepting
+      older partial projections", while the serving projection does emit every one of those members,
+      `control/lib/symmetry_control_web/portal_json.ex:70-101,229-259` and
+      `control/lib/symmetry_control_web/protocol.ex:328-345`): option (a) drops the tolerance and requires
+      every always-emitted consumed member; because `WorkspaceWorkItem` is one shared definition body
+      across `workspace-read`, `work-detail-read` and `chat-read`
+      (`contracts/generated/effect/index.ts:633`), that single requiredness edit moves the required
+      arrays, the valid fixtures of all three schemas, the frontend fixture layer
+      (`frontend/src/services/api.fixtures.ts`) and the generated Go DTOs together, while the
+      `RuntimeCapabilities` members and the `WorkItemWaitingDecision` packet stay optional either way
+      because the projection passes the stored registration map and the agent's own waiting payload
+      through verbatim. Option (b) keeps the tolerance and pins the serving side instead, by validating a
+      real served `workspace-read` document against the contract bundle with the consumed members
+      asserted on that output — `validate_served_document!` today pins `chat-read`, `goal-read` and
+      `attention-read` only, so no gate compares a served workspace read with the contract at all.
+      Recommendation: (b) is the smaller, reversible step and keeps older projections renderable; (a) is
+      the class-consistent one.
 
 ## CI consolidation owner decisions (2026-11-17)
 
@@ -427,40 +411,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       render-step specs were not re-run here, and this entry's first clause (re-measure the
       pre-existing suites on a quiesced host) stays open.
 
-## Record and documentation hygiene
-
-- [ ] Add a path-and-symbol existence check for the backticked repo paths and
-      identifiers cited in `docs/runbooks/**`, `docs/design/quality.md` and the
-      CLOSED-TODO closures. Location: a new `scripts/ci/` check plus its fixture
-      test, run for pull requests the way the record-cleanliness pair is
-      (`scripts/ci/check-record-cleanliness.py` with
-      `scripts/ci/test-check-record-cleanliness.py`,
-      `.github/workflows/ci.yml:78,1218`): scoped to the changed files it audits
-      but not hidden behind the documentation-only fast path, so a runbook-only
-      pull request still runs it. Why: a cited `file:line` or symbol rots
-      silently when its owner moves — the 2026-11-19 revalidation found the
-      closed item's own `read_model.ex:471` health-signal citation stale
-      (`portal.md` cites `health/4` with no line number), and PR #99's "Review
-      fixes (round 2)" replaced an untracked
-      `control/deps/ecto/...` citation (`control/.gitignore:8` ignores `deps/`)
-      that no index contains. Check that a backticked repo-relative path exists
-      and that the cited identifier occurs in the cited file; do not validate
-      raw `file:line` values (any edit above them would redden the gate).
-      Verification: the check fails on a citation whose path or symbol is absent
-      and passes on the current tree; fixtures pin both outcomes.
-- [ ] Commit a fixture test for the `changes` job's changed-path classifier
-      (`.github/workflows/ci.yml:26-65`), whose proof today is only the removed
-      throwaway harness plus hosted runs. Pattern:
-      `scripts/ci/test-no-legacy-routes-audit.py` (fixture-driven, runs ungated
-      in the `legacy-route-audit` job; `.github/workflows/ci.yml:1355`). Pin:
-      `docs/**`/`*.md`-only diffs report `run-heavy=false`; `docs/evaluations/**`,
-      `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
-      `scripts/ci/check-record-cleanliness.py` changes report `run-records=true`;
-      `legacy-route-audit` runs unconditionally; non-`pull_request` events
-      report both `true`. Companion increment: its `ci.yml` wiring would move
-      line numbers this branch just pinned. Verification: the fixture test
-      fails when any of those routings changes.
-
 ## Lockfiles must carry canonical registry URLs
 
 - [ ] Regenerate `pnpm-lock.yaml` only with the repository-pinned pnpm and a canonical registry, and check the result before
@@ -569,32 +519,18 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       but its refusal after the server's 24-hour `max_age` now restarts the chain from the served
       page and re-reads it, so the next press renews the token and the re-walk dedupes.
 
-- [ ] The chat surface's in-flight `Load older` guard is still keyed by cursor bytes:
-      `loadingCursor` (`frontend/src/features/chat/chat.tsx:172-221`) admits a second load for the
-      same boundary while the first is in flight once a re-serve has renewed `history.loadCursor`
-      and re-rendered the button (`frontend/src/features/chat/chat.tsx:560`), and a refusal of the
-      superseded request still posts its notice after the retry already loaded the page. (The rest
-      of that damage is fixed — 2026-11-20, fix round 2: a refusal rewinds the chain pointer and
-      re-reads the captured scope only while the press still owns the chain boundary it captured,
-      so a superseded one is only this notice.) Pre-existing: base re-keyed the cursor on every
-      refresh, so the race predates the boundary-id work. Repro on those bytes: press Load older,
-      refresh while its page is in flight, press Load older again (admitted because the cursor
-      bytes changed), and let the first request's refusal settle after the second landed. Fix
-      direction: key pending loads by scope + boundary id (token bytes as the fallback) and
-      suppress the superseded refusal's notice.
+## Deferred review findings (PR #133)
 
-- [ ] An ended chat chain never accepts a later served token: a chain drained through its own loads
-      (`nextCursor` null, the recorded `nextBoundaryId` naming an older message) or a read that
-      served the whole history (no continuation was ever established) keeps reporting "oldest
-      history loaded" while a later serve at the same boundary offers a token, so the rows below
-      the served page stay unreachable until a reload or a boundary move. Repro (rows ordered 3–54,
-      so the first page is 5–54 plus a token and the older read 3–4 ends `null`): rows 1–2 becoming
-      visible late — a slow concurrent post commits an older-timestamped row, since `inserted_at`
-      is set at insert inside the transaction and the advisory lock is per action, not per scope —
-      make the next read still bound at 5 and offer a token for it, which the ended chain drops.
-      Found by the r2 review of `fix/chat-history-boundary-id` (2026-11-20), the round that removed
-      the `adopt` branch covering the never-continued shape (the drained shape was never covered by
-      it). Fix direction: treat "ended" as no usable continuation and re-open from the served
-      boundary when a serve offers a token — the offered token's boundary is the served page's
-      oldest message, so the re-walk re-reads the drained region and dedupes against the retained
-      pages.
+- [ ] Align the TypeScript canonical encoders' object-key sort with the UTF-8 byte order Go and
+      Elixir sort by. `contracts/ts/semantics.ts:37-47` sorts keys with `Object.keys(...).sort()`
+      and the frontend `canonicalJson` (`frontend/src/services/commands.ts:53-58`, comparator at
+      `:57`) compares UTF-16 code units, while Go `sort.Strings`
+      (`daemon/internal/protocol/goal_subject.go` `writeCanonicalJSON`'s object arm) compares
+      bytes and Elixir `Enum.sort_by(&elem(&1, 0))`
+      (`control/lib/symmetry_control/request_hash.ex:31-36`) compares binaries byte-wise, so two
+      keys that straddle the orders disagree — for example U+1F600 and U+E000: UTF-16 puts the
+      emoji first, UTF-8 the U+E000 key. Hashed documents appear to carry only ASCII keys today
+      (inference from the schema shapes, not exhaustively proved), so the class is not reachable
+      through the current seams. Found by the round-1 review of PR #133, outside that PR's
+      scope. Fix direction: sort by UTF-8 bytes (or code points) in both TypeScript encoders
+      and pin a cross-language vector with a non-ASCII key in each layer's suite.

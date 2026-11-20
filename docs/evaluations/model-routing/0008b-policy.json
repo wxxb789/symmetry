@@ -204,7 +204,7 @@
           "cost_estimated_usd": 0.5011912000000001,
           "cost_reported_usd": null,
           "frozen_input_digests": {
-            "review_sha256": "sha256:cf1c41b9b6fa8bd3512d6a9c6a4fdc69e6712b0c918728c8ab88a1a3b435bef7",
+            "review_sha256": "sha256:d442ed8fc259e354d002e922a6817c334b618d47b0a57e671a7b8086e270e23c",
             "routes_sha256": "sha256:c4c2d8452b725cc0b782035a30130aafb4b01291cc280043365434b2006959b9",
             "task_sha256": "sha256:d3422209a7ece34e235e0d28a52d4dd0af17037b96513bd86d64385190d99d86",
             "usage_sha256": "sha256:84d7d16ac94a6c30bda6f94fe538a66fc8f7b1cbe66f4db62b85d0ed9947bffe"
@@ -263,7 +263,7 @@
               "sha256": "sha256:791e0a1aff952be706dd1ca4b9840f9d4dd6a8b29e3f3a4110e0d90798f42f9d"
             }
           ],
-          "receipt_sha256": "sha256:8ad6c2d277dfac86af23fe6e858d7c8eedb9ab9e5961c10ddb8c6934e824332c",
+          "receipt_sha256": "sha256:cf31f14da8a532110b58770e26adbd614d15117b98d4a4d9798440743e3cc94a",
           "repair_count": 0,
           "review_time_seconds": 224.874,
           "review_verdict": "pass",
