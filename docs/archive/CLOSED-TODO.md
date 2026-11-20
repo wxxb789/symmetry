@@ -29,11 +29,12 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
 
+The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
+2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
+
 The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
-The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
-2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
 
 ## Model-routing evaluation records
 
@@ -2380,8 +2381,9 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       the recovery recipe.
       **Closed (2026-11-20/21, branch `fix/test-db-recovery-docs`): documented, not aliased.** Reproduced
       on the throwaway database `symmetry_control_test_tdbrec` on a dedicated disposable PostgreSQL
-      18.6 instance, with the same two commands the documentation names (`MIX_ENV=test` throughout,
-      the throwaway database set explicitly in `POSTGRES_DB` as the documented prose allows):
+      18.6 instance, in the documented explicit-name form of the two commands (`env -u MIX_TEST_PARTITION
+      POSTGRES_DB=symmetry_control_test_tdbrec` throughout, `MIX_ENV=test` on the drop); fix round 2
+      re-ran the sequence with exactly those bytes and these results:
       `mix ecto.create --quiet` and `mix ecto.migrate --quiet` exit 0; deleting the
       `harness_session_attach_receipts` migration's `schema_migrations` row (`20260911000000`) while
       its table exists makes `mix test test/mix/tasks/symmetry_check_test_db_test.exs` stop in the
@@ -2397,10 +2399,16 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       `symmetry_0007c_/d_/e_` families), and the documented recipe pins its target: it unsets
       `POSTGRES_DB` and `MIX_TEST_PARTITION`, so it always drops `symmetry_control_test`
       (`symmetry_control_dev` and other ambient names are never reached); a different dedicated
-      test database is recovered by naming it explicitly in `POSTGRES_DB`. The `test` alias is unchanged
+      test database is recovered by naming it explicitly in `POSTGRES_DB`. The recipe's default form
+      (`env -u POSTGRES_DB -u MIX_TEST_PARTITION`) was exercised end to end by fix round 2 on the same
+      instance under a hostile shell (`POSTGRES_DB=symmetry_control_dev`, `MIX_TEST_PARTITION=hostile`):
+      its `MIX_ENV=test mix ecto.drop` removed exactly `symmetry_control_test` and never created
+      `symmetry_control_dev`; `mix run --no-start` probes print `symmetry_control_test` for that form and
+      `symmetry_control_test_x` for the explicit-name form. The `test` alias is unchanged
       (the increment's contract prefers documentation over an alias change), and `MIX_TEST_PARTITION`
       stays the CI-parallel path, not the recovery recipe. Evidence: the recorded before/after runs in
-      `answer.md` — create and migrate exit 0, the stale run exits 1 before any test (`42P07`,
+      `answer.md`, and fix round 2's re-run of the same sequence with the documented explicit-name
+      bytes — create and migrate exit 0, the stale run exits 1 before any test (`42P07`,
       `duplicate_table`, the pending migration's `CREATE TABLE`), `mix ecto.drop` exits 0 and the
       recovered run recreates and migrates the database (`Result: 11 passed`, exit 0), with the
       throwaway database dropped afterwards and zero residue in `pg_database`. The sequence ran

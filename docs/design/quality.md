@@ -139,12 +139,15 @@ env -u POSTGRES_DB -u MIX_TEST_PARTITION mix test
 `MIX_ENV=test` is load-bearing: a bare `mix ecto.drop` resolves the development
 database. Both commands unset `POSTGRES_DB` and `MIX_TEST_PARTITION`, so the
 recipe always targets `symmetry_control_test` whatever the shell exported; to
-recover a different dedicated test database, set `POSTGRES_DB` to that name
-explicitly. `symmetry.check_test_db` is the first step of the `ecto.drop` alias
+recover a different dedicated test database, name it in place of the unset:
+`env -u MIX_TEST_PARTITION POSTGRES_DB=<name> MIX_ENV=test mix ecto.drop`,
+then `env -u MIX_TEST_PARTITION POSTGRES_DB=<name> mix test`.
+`symmetry.check_test_db` is the first step of the `ecto.drop` alias
 too, so the recipe is still refused for harness-owned databases only
 (`symmetry_dev` and the `symmetry_0007c_/d_/e_` families). `MIX_TEST_PARTITION`
 stays the CI-parallel path rather than the recovery recipe: exported, it names
-that partition's own suffixed database, and the recipe's `env -u` drops it.
+that partition's own suffixed database, and the recipe's `env -u` unsets it, so
+the partition database is left alone.
 
 Run affected focused checks during development; required CI gates remain required
 before merge. Native credentialed harness tests and Windows behavior cannot be
