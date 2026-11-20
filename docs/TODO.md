@@ -44,6 +44,47 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       4-tuple clause head of `provider_failure/1`.
       Do not delete either surface here; revalidate and remove in a separate maintenance change.
 
+- [ ] Revalidate and remove three daemon surfaces the re-scoped dead-code sweep left in
+      `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
+      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
+      (`daemon/internal/state/goal_session.go:1044`), `Store.EnsureGoalSessionLineageAvailable`
+      (`:592`) and `Store.FailUnresolvedProvideInput` (`daemon/internal/state/state.go:4175`) are
+      unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
+      alike, and `git grep -nw <symbol>` matches only each definition plus its doc comment — no
+      call site, no test, no doc citation anywhere. They were outside that sweep's owned file set;
+      reproduction is the three `deadcode` runs plus the grep, as recorded in the plan.
+
+- [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
+      referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
+      branch and plan). All sit in the same three-target `deadcode -test` intersection:
+      `control.NewOperatorClient` (`client.go:485`) with `SubmitTask`/`GetTask`/
+      `CreateTaskCommand`/`operatorRequest`/`operatorRequestWithStatus` and
+      `control.WithMaxResponseBytes` (`:99`) — callers `daemon/e2e/core_test.go:696`,
+      `e2e/production_linux_containment_witness_test.go:2046`, the control tests, and
+      `app/pi_provider_bridge_test.go:409` (the oversized-response case of the live `NewClient`);
+      the legacy task validators (`control/validation.go:209-629`) — kept live by
+      `control/client.go:992,:1007,:1022,:1034` and `control/supervisory_validation_test.go`;
+      the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
+      `e2e/core_test.go`); `harness.NewClaudeAdapterWithRunner` (`registry.go:254`, three test
+      files) and the shadowed root probe paths `probeCodexExecutableWithRunner` (`:388`) and
+      `probeClaudeExecutable` (`:308`), which are still main-reachable through
+      `NewCodexAdapter`/`NewClaudeAdapter` and belong to the probe/registry dedup instead.
+      Removing any of them needs an owner for `daemon/e2e/**` and the app/control test seams.
+
+## Build-tag parity (arm64 oracle)
+
+- [ ] `GOOS=linux GOARCH=arm64 go vet ./...` cannot pass until
+      `daemon/internal/state/linux_clone_journal_test.go` stops calling an amd64-only method
+      (found 2026-11-21 while running the re-scoped W1-06 oracle). The test file is
+      `//go:build linux` and calls `reader.verify(...)` (`:1077`), whose only definition is
+      `daemon/internal/state/linux_clone_cleanup_reader_linux_amd64.go:154` under
+      `//go:build linux && amd64`; the arm64 vet therefore reports
+      `reader.verify undefined (type *LinuxCloneCleanupReader has no field or method verify, but
+      does have method Verify)`. Pre-existing: both files are at the same lines in the baseline
+      revision `a3039f0`, and CI's `go vet ./...` runs on the amd64 host, so nothing in the
+      pipeline sees it. Fix by widening the reader's tag or narrowing the test's, not by deleting
+      the assertion. The four packages W1-06 touched vet clean on all three targets.
+
 ## Retro review follow-ups
 
 - [ ] Investigate the intermittent Control failure class behind the provider-action cases at
