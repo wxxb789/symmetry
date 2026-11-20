@@ -2357,4 +2357,7 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       message assertion; dropping `desync` from the branch reddens it on the desynced assertion
       after the test's own `testHangGuard` deadline, because the in-sync `finish()` route cannot end
       a blocked child; the restored branch is green. Run on Windows and WSL Ubuntu-24.04
-      (`go test ./internal/workspace/... -count=1`; plus `-race` on Linux).
+      (`go test ./internal/workspace/... -count=1`; plus `-race` on Linux). On the final test bytes
+      the loaded Windows host aborted that plain command twice at the default 10m test-binary
+      timeout (600.509s/600.388s, 0 test failures), and green came with `-timeout 45m`
+      (`ok 1119.686s`); CI's `daemon-windows` job runs the package under `-timeout 600s`.

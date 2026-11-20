@@ -33,7 +33,7 @@ Ordering — the contract's central edge case. The child:
 4. blocks without exiting.
 
 The digest reaches request #2 only after consuming response #1 to its record boundary (header,
-exact content, trailer; `subject.go:753-772`), which requires step 3's bytes to have reached the
+exact content, trailer; `subject.go:753-783`), which requires step 3's bytes to have reached the
 pipe, which is ordered after step 2's close returned. So when the digest writes request #2, the
 pipe provably has no reader: the write is refused on every platform, and the refusal cannot hide
 in the pipe buffer. A variant that answers first and only then closes or exits can leave request
@@ -80,7 +80,10 @@ the pinned branch with both runs recorded in `answer.md`:
   verification carries no `subject.go` diff.
 
 Gates, run on the frozen tree: Windows `gofmt -l internal/workspace`, `go vet ./...`,
-`go test ./internal/workspace/... -count=1`; WSL Ubuntu-24.04 the same three plus
+`go test ./internal/workspace/... -count=1` — on the final test bytes the loaded host aborted
+this plain command twice at the default 10m test-binary timeout (600.509s/600.388s, 0 test
+failures), and green came with `-timeout 45m` (`ok 1119.686s`); CI's `daemon-windows` job runs
+the package under `-timeout 600s`. WSL Ubuntu-24.04 the same three plus
 `go test -race ./internal/workspace/... -count=1` (the new path exercises process/pipe teardown);
 `git diff --check`. Not required by the touched paths: Elixir/Portal/contracts/frontend suites
 (no such file touched), no measurement harness is involved. No measurement/benchmark run is
