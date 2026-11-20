@@ -26,6 +26,9 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The resolved-decision press item appended to the `## Retro review follow-ups` section below was
+moved on 2026-11-20 from branch `fix/resolve-decision-submit-read`.
+
 The closed unused-parameter attention-test warning appended to the second `## Dead-code candidates`
 section below and the closed pinned-`can_retry` entry appended to `## Retro review follow-ups` below
 were moved on 2026-11-20 from branch `fix/control-test-pins`.
@@ -33,12 +36,18 @@ were moved on 2026-11-20 from branch `fix/control-test-pins`.
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
 
+The closed callerless projected provider-action chain appended to the same second `## Dead-code
+candidates` section below was moved on 2026-11-20 from branch `fix/provider-action-chain-removal`.
+
 The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
 
 The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
+
+The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
+moved on 2026-11-21 from branch `fix/served-read-closeout`.
 
 The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
@@ -324,13 +333,53 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       digest and controls digest, plus `test-ablation-final-review-2026-09-29.md`'s app-startup
       and Go-probe rows (the cross-record quote this entry named). Evidence: the whole-corpus
       `--check --root-only` sweep reports 0 dirty of 111 files (superseded 2026-11-20: the
-      widened UNC leader pattern flags the two `0008b-go-bounded-regression-strong` specimens
-      named in the records README's accepted false positives; the records were deliberately
-      not re-rendered),
+      widened UNC leader pattern flagged the two `0008b-go-bounded-regression-strong` specimens;
+      both were rendered and every bound digest rebound by the records rebind of the same day,
+      see the entry below),
       `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` exits 0,
       re-running the renderer over all 30 touched files is byte-stable, and
       `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
       (16 tests) pass.
+
+- [ ] Render the two records the widened sanitize flags: `0008b-go-bounded-regression-strong.json`
+      and its `.review.json` still carried the doubly escaped backslash-run UNC specimen a reviewer
+      quoted while describing forbidden-backslash test cases, so the record-cleanliness gate refused
+      them; narrowing the pattern was rejected because a narrower UNC pattern misses a real path and
+      the README records the shape as an accepted false positive. Evidence plan: render both files
+      in the `--root-only` scope (the scope #101 rendered these two files in and the scope the CI
+      gate runs), keep the record JSON valid across the render, and rebind every digest that binds
+      a rendered file.
+
+      **Closed (2026-11-20, branch `chore/model-routing-records-rebind`):** both records were
+      rendered with `scripts/ci/model-routing-record-sanitize.py --root-only` - one substitution
+      per file, the specimen to `path-sha256:0b5e775deeadc067545d33b048502608ec874e7002aaab39e6adf32f4d370ae6`,
+      the odd trailing backslash that escapes the quote closing the quoted specimen kept outside the token -
+      and every digest binding a rendered file was recomputed and rebound:
+
+      | File | `sha256` before | `sha256` after | Bindings rebound |
+      | --- | --- | --- | --- |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.review.json` | `cf1c41b9b6fa8bd3512d6a9c6a4fdc69e6712b0c918728c8ab88a1a3b435bef7` | `d442ed8fc259e354d002e922a6817c334b618d47b0a57e671a7b8086e270e23c` | the rendered receipt's `evidence.frozen_review_sha256` and `review.evidence_sha256`; `0008b-policy.json`'s strong-arm `frozen_input_digests.review_sha256` |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` | `8ad6c2d277dfac86af23fe6e858d7c8eedb9ab9e5961c10ddb8c6934e824332c` | `cf31f14da8a532110b58770e26adbd614d15117b98d4a4d9798440743e3cc94a` | `0008b-policy.json`'s strong-arm `receipt_sha256`; `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s strong receipt row |
+      | `docs/evaluations/model-routing/0008b-policy.json` | `82852890944b405b99da0c95b2404547be6fea994301c631b65b5145bf3f767d` | `02632c1e56d83f734cb5e0309c11a3819398a9f58fa4902439514264e7b89a31` | `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s candidate-policy digest |
+
+      The receipt's after-digest is over its final bytes (the render plus its own internal review
+      rebind). A whole-tree scan finds no other full-length or truncated referrer of the three
+      pre-rebind digests. Evidence: `resolve-digests.py` (retained in the GDD task's `evidence/`)
+      resolves the eleven policy/receipt bindings of the 0008b class and re-runs the corpus sweep -
+      111 records, 0 dirty, 131 checks, 0 failures; the renderer is byte-stable on both rendered
+      files and each parses to the same document otherwise (the token binds the exact replaced
+      bytes); `check-record-cleanliness.py` passes with a `git stash create` commit of the frozen
+      tree as `--head` - 7 changed records against the current `origin/main` and 5 against the
+      branch base, exit 0 each; and the five short `scripts/ci` Python suites pass
+      (`test-model-routing-record-sanitize.py` 54 tests, `test-check-record-cleanliness.py` 19,
+      `test-model-routing-omp-usage.py` 40, `test-model-routing-source-subject.py` 6 with one
+      skip, `test-linux-v2-source-subject.py` 4). The long runner suite
+      `test-model-routing-evaluation.py` (82 tests, real Go fixtures; no `scripts/ci` tool is
+      touched by this change) was not run to completion on this host - 27 of 82 test outcomes with
+      zero failures before the stop, partial output in the GDD evidence. The records README
+      documents the pass and the receipt/tooling rule it sits beside ("Receipt verification and
+      the bound tooling revision (2026-11-20)"), including the fourteen published-receipt `accept`
+      outcomes under the current tooling.
 
 - [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
       `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
@@ -1354,6 +1403,56 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       23 failed `control` job logs grepped across all their attempts) finds exactly one occurrence
       of the failure: run `43891279765` attempt 1, job `133383740181`.
 
+- [ ] Revalidate and remove the callerless projected provider-action chain in
+      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
+      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
+      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
+      document names it — and the chain behind it is its own:
+      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
+      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
+      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
+      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
+      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
+      were live. Inside that chain one disjunct can never match on any path the code gives it: the
+      clause `{:error, reason} when reason in [:stale, :state_conflict,
+      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
+      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
+      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
+      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
+      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
+      declares no such error key. `:capability_not_granted` is produced by
+      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
+      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
+      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
+      producer; revalidate the surviving provider-action tests either way.
+
+      **Closed (2026-11-20, branch `fix/provider-action-chain-removal`): dead surface; the chain and
+      its unreachable disjunct were deleted.** The revalidation the entry asked for was run at
+      `fdf332d` over all tracked files with the entry's own citation excluded
+      (`git grep -n "execute_provider_action" -- . ':!docs/TODO.md'`): only the two definition
+      clauses match; `execute_authenticated_provider_action/7` has the single call the entry names
+      (`:296`) and `persist_provider_delivery/5` the single call `:574`, both inside the deleted
+      chain, and no `apply`/capture/`function_exported?`/string spelling names any of them
+      anywhere in the repository. With zero callers and no shipped release, the entry's fork is
+      settled as dead surface: `execute_provider_action/5`, its catch-all clause and the two private
+      helpers behind it are gone, together with the `:capability_not_granted` member of the
+      `[:stale, :state_conflict, :capability_not_granted]` clause that died with its only containing
+      function (on that path the value has no producer: `require_capabilities/2` runs in the outer
+      `with`, before the case). The `:provider_action_intents` disjunct of `normalize_stale_result`
+      is unchanged and stays: it is live through `delete_connection/2`, which pipes
+      `Connection.delete_changeset/1` through it, and that changeset's
+      `no_assoc_constraint(:provider_action_intents)` (`integrations/schemas.ex:87`) is the error key
+      the disjunct maps to `:state_conflict`. The live unprojected path
+      (`execute_unprojected_provider_action/5` and `/6`) and every helper the chain shared with it
+      are kept, and the surviving provider-action tests pass unchanged. Its consequence was removed in
+      the same branch (`9be4364`): with every non-default caller gone,
+      `record_provider_action_failure/3`'s `outcome` input became dead, so it is now `/2` and
+      `provider_action_failure_result/2` is deleted; the two surviving 2-arg call sites
+      (`integrations.ex:572`, `:575`) return the same values as before. Pinned by
+      `control/test/symmetry_control/integrations_test.exs`, "the callerless projected
+      provider-action variant stays out of the module surface" (recorded failing at `fdf332d` and
+      passing after the deletion, in the increment's answer).
+
 - [ ] Drop the unused `conn` parameter in
       `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:650-651)
       passes `conn` to `portal_command!/4` (:653), which never reads it (it builds its own `api_conn()`),
@@ -1546,6 +1645,93 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       member stays on the wire as `null` (the frontend still decodes it) and a failed Goal read is
       answered as its mapped protocol status before the projection runs. The residual entry is
       removed from `docs/TODO.md`.
+
+*Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the workspace-read residual stays there.*
+
+      Revalidated and closed on branch `fix/served-read-closeout` (2026-11-21). Every member the entry
+      named already sits in a `required` array at `fdf332d` and is read by the surface the entry cited,
+      at the anchors its stale line numbers drifted away from (entry lines were written against
+      `671525c`): `goal-read` accounting `known_usage_cost_microusd` (served
+      `control/lib/symmetry_control/goals/read_model.ex:2555`, read
+      `frontend/src/features/goals/detail.tsx:610`), settlement attention `proposed_next_action` and
+      `proposed_next_action_status` (`read_model.ex:1562-1563`, read `detail.tsx:316`), external wait
+      `external_ref`, `next_check_at` and `check_seq` (`read_model.ex:2623,2626-2627`, read
+      `detail.tsx:626-627`), outcome `candidate_subject` and `subject_hash`
+      (`read_model.ex:2265-2266`, read `detail.tsx:272,531-537`), and the attention entry's
+      `attention_reasons`, `active_tasks` and `nonterminal_tasks` (`read_model.ex:2657-2659`, read
+      `frontend/src/features/attention/attention.tsx:90,92`). The class is re-checked exhaustively
+      rather than member-by-member: the optional sets of `goal-read.schema.json` and
+      `attention-read.schema.json` were extracted with a `jq` walk of every `required` array (48 and 11
+      distinct names) and cross-read against `frontend/src`. Neither schema has an optional member a
+      surface reads: the Goal read's and the attention read's readers are
+      `frontend/src/features/goals/detail.tsx` and
+      `frontend/src/features/attention/attention.tsx`, and the optional names a name-level grep matches
+      elsewhere belong to other definitions (`WorkItem`/`work-detail-read`, the `ProjectBlockedEntry`
+      blocker, the planning drafts); the optional members with no reader at all are additive, as the
+      entry intends. The only optional-and-consumed members left in the served reads this entry names —
+      the Goal read, the attention read and the workspace-read row — are the workspace row's 66, which
+      stay open in `docs/TODO.md`.
+      The entry's second residual — the empty `accepted_outcomes`/`settlement_attention`/
+      `external_waits` captures — is closed at both gates it named. The real-served controller test
+      "the real served attention and goal reads validate against the contract bundle"
+      (`control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`) now builds a Goal
+      whose served document carries an accepted outcome (the columns
+      `Goals.insert_validation_outcome!/13` writes, over a completed producer run and a bound evidence
+      row; the pipeline's own validate task and run are not built, so that row's `validation_task_id`
+      stays null), a repair-required settlement receipt and a recorded terminal external wait
+      (`state` `unsupported`, `next_check_at: null`, `check_seq: 0`), asserts the consumed values
+      (`candidate_subject` equal to the item's served baseline subject, its `sha256:` digest,
+      `evidence_ids`, `state`, `reason`, `external_ref`, `resource_id`, `next_check_at`, `check_seq`) and
+      keeps `validate_served_document!("goal-read", read)`. Its rows follow the writers' durable shapes:
+      the external wait is the only shape the `goal_external_waits` identity trigger admits (completed
+      task and run, the run's `task_result` equal to the wait's `result`, a terminal state with no
+      schedule), which is also why the wait could not borrow the failed settlement run; the embedded
+      task result carries the future blocker schedule the settle path validates
+      (`validate_external_blocker/3` refuses a `null` schedule), while the wait row's own
+      `next_check_at` is null for a terminal state.
+      That served response is captured, sanitized, as
+      `contracts/fixtures/valid/goal-read.accepted-and-external.json` (manifest id
+      `goal-read.accepted-and-external`, tag `captured-response`), so the boundary probe "Goal reads
+      refuse a renamed consumed member and keep unconsumed members additive"
+      (`contracts/scripts/boundary.test.mjs`) renames `candidate_subject`, `subject_hash`,
+      `proposed_next_action`, `proposed_next_action_status`, `external_ref`, `next_check_at` and
+      `check_seq` over the capture's own bytes instead of the three inline documents the probe wrote
+      before. A serving-side rename or omission of any of those members now fails the bundle gate on
+      the served document (and the client Effect boundary) rather than decoding into a silent
+      fallback, while the same rename over the capture's own bytes fails the boundary probe.
+      The capture's `subject_hash` is recomputed over its sanitized subject — the sanitization rule
+      `contracts/README.md` now states for a replaced preimage — and the probe asserts that binding with
+      `subjectHash` over the capture's own `candidate_subject`, so a re-capture that replaces a
+      subject's identifiers cannot freeze a digest whose preimage it replaced.
+      Recorded before/after, exact commands. `mise x pnpm@12.17.0 -- pnpm contracts:test` fails on the
+      pre-increment fixture corpus with `ENOENT … contracts/fixtures/valid/goal-read.accepted-and-external.json`
+      (exit 1, `tests 35 / pass 34 / fail 1`) and passes with the capture (exit 0, `tests 35 / pass 35 /
+      fail 0`). That digest assertion's own probe: with the capture carrying the pre-sanitization digest
+      (`sha256:a354ae89…`, the value the raw served capture records) `node --test
+      contracts/scripts/boundary.test.mjs` fails at it (`actual: sha256:a354ae89…` against the
+      recomputed `expected: sha256:788053cd…`, exit 1, `tests 26 / pass 25 / fail 1`) and passes with the
+      recomputed digest (exit 0, `pass 26 / fail 0`).
+      The controller gate was probed on the serving side rather than by disabling its fixture rows: with
+      `outcome_projection/1` renamed `candidate_subject` → `candidate_subject_renamed` and
+      `external_wait_projection/1` renamed `check_seq` → `check_seq_renamed`, the gate file fails (exit
+      2, `Result: 11/12 passed`; the served document carries the renamed member); with only the wait's
+      `id` renamed — a required member the gate's own value assertions do not cover — it fails inside
+      `validate_served_document!/2` with `goal-read real served document failed the contract bundle:
+      [{"Required property id was not present.", "#/external_waits/0"}]` (exit 2, `Result: 11/12
+      passed`); restored, the file passes (exit 0, `Result: 12 passed`).
+      Package gates through the `retro-g2` recipe with `MIX_TEST_PARTITION=servedreadcloseout`:
+      `mix format --check-formatted` exit 0, `MIX_ENV=test mix compile --warnings-as-errors` exit 0,
+      the touched file exit 0 (`Result: 12 passed`). The package's full suite on this host reports
+      `Result: 926/936 passed, 21 skipped`; every one of its ten failures sits in a file this increment
+      does not touch (`goal_0006_migration_test.exs`, `goal_external_wait_migration_test.exs`,
+      `portal_integrations_test.exs`, `provider_action_controller_test.exs`, `integrations_test.exs`,
+      `chat_test.exs` — three `DBConnection` connection drops, two 60 s test timeouts, four unmet
+      `assert_receive` deadlines and one chat message-ordering assertion), and those six files re-run
+      together score `210/211`, the remaining failure being a 100 ms `assert_receive` deadline that
+      passes alone (`Result: 1 passed, 14 excluded`). The reversed-import flake closed at `978abba`
+      failed once in that full-suite run (the lock-order test's `assert_receive` for the sync
+      backend's blocked sample unmet after 5 s, mailbox empty) and passed in the isolated six-file
+      re-run; it is a load-sensitive case this increment does not touch.
 
 ## Browser acceptance under host load
 
@@ -2573,6 +2759,71 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       (`contracts/v1/workspace-read.schema.json`, `contracts/v1/work-detail-read.schema.json`,
       `contracts/v1/chat-read.schema.json`), with the generated bindings refreshed through the
       repository generator.
+
+- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
+      submit-time served one. `approvePlan` builds its envelope from `query.data`
+      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
+      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
+      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
+      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
+      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
+      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
+      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
+      the original note: every accepted command appends an event through `append_event!/7`
+      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
+      and reconcile writers go through `Goal.transition_changeset`
+      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
+      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
+      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
+      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
+      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
+      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
+      direction: build the press's envelope from a submit-time read the way the plan admission does,
+      re-deriving the presented decision's own version from that same read, or keep the page version and
+      record the refusal plus reload as the intended recovery.
+
+      **Decided and closed (2026-11-20, owner; branch `fix/resolve-decision-submit-read`):** option A —
+      the press presents the submit-time served read, and the retry-freeze rule stays (the owner's
+      Q4=A); no backward compatibility (the first release is not shipped). `detail.tsx`'s
+      `decisionEnvelope` builds the `resolve_decision` envelope from a fresh `application.api.goal`
+      read taken inside the press: `expected_version`/`expected_revision` come from that read, and
+      `expected_decision_version` is re-derived from the same read's served decision found by the
+      decision id the card holds; a read that no longer serves that decision sends nothing (the read
+      preloads every decision row of the goal, so this narrows the lookup, not a served state). The
+      press's two envelopes — resolution, then admission — are frozen per logical intent (decision id,
+      option id, proposal hash) until the server answers, so a re-press after a lost acknowledgement
+      resends the recorded bytes: `replay_event` replays only a body whose hash equals the recorded
+      `request_hash`, and a body rebuilt from a fresh read would carry the post-application pair for a
+      command that already applied. The attempt is released on success and on any answer that settles
+      it, and kept on a transport failure or an uninterpretable answer — the settle rule the generic
+      command already applies. This recovery is usable only until the goal read refetches: the
+      committed resolution publishes its goal invalidation before its response is sent
+      (`portal_invalidations.ex:28-32`), so a client that refetches first (the resolution's own
+      publication, a reconnect, refocus or the fallback read) sees the decision resolved, the approval
+      control unmounts (`planApprovalOption`'s `open?` gate) and the frozen attempt keeps no trigger;
+      the resolved-but-unadmitted dead end that can leave behind is recorded as an open entry in
+      `docs/TODO.md`. Pinned by `frontend/src/features/goals/goal-attention.test.tsx`:
+      "builds the decision resolution from a submit-time read so a worker-advanced goal is not sent
+      stale" (red on the pre-fix bytes — the resolution carried the page's settled 4/3 pair and the
+      fixture answered the 409 `stale`, so no admission followed; green after: 5/4, then 6),
+      "replays the plan approval's decision resolution byte for byte after a lost acknowledgement"
+      (pre-fix the press failed earlier, at its first assertion `expect(first.expected_version).toBe(5)`
+      — the resolution carried the page's settled pair; green — the re-press repeated the recorded
+      bytes under the recorded identity and both commands were acknowledged) and "replays the plan
+      approval's admission byte for byte when its acknowledgement is lost" (the only pin of the frozen
+      admission half; red when the `attempt.admit ??` reuse is removed — 1 failed | 26 skipped (27) —
+      green on the branch). The fix round added two pins of the freeze's release rule: "releases the
+      plan approval attempt when the server answers its resolution" — red on `7a55b46`'s `detail.tsx`
+      and red when only the answered-error release is deleted (1 failed | 28 passed (29), the case
+      alone) — and "does not replay a frozen approval for a different proposal" — red when only the
+      freeze-key check is deleted (1 failed | 28 passed (29), the case alone); the latter stays green
+      on `7a55b46`'s `detail.tsx` by construction, because the pre-fix press keeps no attempt whose
+      bytes could leak into a changed intent. Recorded runs: implement stage (26 cases) 2 failed |
+      24 passed (26), exit 1, on `7a55b46`'s `detail.tsx`, and 26 passed (26), exit 0, on the
+      implement commit; apply stage (27 cases) 3 failed | 24 passed (27), exit 1, on `7a55b46`'s
+      `detail.tsx`, and 27 passed (27), exit 0, on the branch; fix stage (29 cases) 4 failed |
+      25 passed (29), exit 1, on `7a55b46`'s `detail.tsx` (the three pins plus the release pin), and
+      29 passed (29), exit 0, on the branch.
 
 - [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
       rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always
