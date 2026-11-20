@@ -1,11 +1,10 @@
 defmodule SymmetryControlWeb.ChatControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
-  alias SymmetryControl.ContractSchema
-  alias SymmetryControl.Workspaces
-  alias SymmetryControlWeb.PortalSession
+  import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
 
-  @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
+  alias SymmetryControl.Workspaces
 
   test "chat is authenticated and unsafe requests remain CSRF protected", %{conn: conn} do
     assert %{"error" => %{"code" => "unauthenticated"}} =
@@ -132,32 +131,5 @@ defmodule SymmetryControlWeb.ChatControllerTest do
     assert length(conversation["messages"]) == 4
     assert hd(conversation["runs"])["work_item"]["id"] == work_item_id
     validate_served_document!("chat-read", conversation)
-  end
-
-  defp api_conn do
-    Phoenix.ConnTest.build_conn()
-    |> init_test_session(%{portal_operator: PortalSession.issue("test-operator-token")})
-    |> put_private(:plug_skip_csrf_protection, true)
-    |> put_req_header("accept", "application/json")
-  end
-
-  defp validate_served_document!(name, document) do
-    bundle = @schema_bundle |> File.read!() |> Jason.decode!()
-
-    schema =
-      bundle
-      |> Map.fetch!("#{name}.schema.json")
-      |> ContractSchema.rewrite_pcre2_pattern_escapes()
-      |> ExJsonSchema.Schema.resolve()
-
-    case ExJsonSchema.Validator.validate(schema, document) do
-      :ok ->
-        :ok
-
-      {:error, errors} ->
-        flunk(
-          "#{name} real served document failed the contract bundle: #{inspect(errors, pretty: true)}"
-        )
-    end
   end
 end

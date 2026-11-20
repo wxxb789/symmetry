@@ -7341,21 +7341,27 @@ defmodule SymmetryControl.Goals do
     ensure_required_evidence!(revision.acceptance_contract, evidence, subject_hash)
   end
 
-  # The completion contract owns the integration designation: an
-  # exactly-one-required-item revision designates that item, and an explicit
-  # designation or payload that selects a different item contradicts the
-  # contract instead of overriding it. Other required counts keep the explicit
-  # payload and the admitted designation.
+  # The designation rule lives in ContractValidation.integration_designation/1.
   defp resolve_integration_item!(current_items, required_items, integration_work_item_id) do
     case required_items do
       [required_item] ->
-        if Enum.any?(current_items, &(&1.integration and &1.id != required_item.id)),
-          do: rollback(:invalid_plan)
+        designation =
+          current_items
+          |> Enum.map(fn item ->
+            {item.id, item.id == required_item.id, item.integration == true}
+          end)
+          |> ContractValidation.integration_designation()
 
-        case integration_work_item_id do
-          nil -> required_item
-          id when id == required_item.id -> required_item
-          _other -> rollback(:integration_outcome_required)
+        case designation do
+          {:conflict} ->
+            rollback(:invalid_plan)
+
+          _designation ->
+            case integration_work_item_id do
+              nil -> required_item
+              id when id == required_item.id -> required_item
+              _other -> rollback(:integration_outcome_required)
+            end
         end
 
       _other_count ->
@@ -9112,33 +9118,35 @@ defmodule SymmetryControl.Goals do
 
   defp plan_admission_preflight?(_items, _opts), do: false
 
-  # The completion contract owns the integration designation: a plan with
-  # exactly one required item designates that item, and an explicit designation
-  # on any other item contradicts the contract instead of overriding it. Every
-  # other required count keeps the explicit designation.
+  # The designation rule lives in ContractValidation.integration_designation/1.
   defp plan_integration_designated?(items) do
-    case required_plan_items(items) do
-      [required_item] ->
-        Enum.all?(items, fn item ->
-          value(item, :integration, false) != true or
-            value(item, :key) == value(required_item, :key)
-        end)
-
-      _other_count ->
-        Enum.any?(items, &(value(&1, :integration, false) == true))
+    items
+    |> designation_triples()
+    |> ContractValidation.integration_designation()
+    |> case do
+      {:conflict} -> false
+      {:derived, _ref} -> true
+      {:explicit, refs} -> refs != []
     end
   end
-
-  defp required_plan_items(items),
-    do: Enum.filter(items, &(value(&1, :required, true) == true))
 
   # Only the exactly-one-required-item case derives a designation, and the
   # admission preflight already refused a contradicting explicit one.
   defp derived_integration_key(items) do
-    case required_plan_items(items) do
-      [required_item] -> value(required_item, :key)
-      _other_count -> nil
+    items
+    |> designation_triples()
+    |> ContractValidation.integration_designation()
+    |> case do
+      {:derived, ref} -> ref
+      _other -> nil
     end
+  end
+
+  defp designation_triples(items) do
+    Enum.map(items, fn item ->
+      {value(item, :key), value(item, :required, true) == true,
+       value(item, :integration, false) == true}
+    end)
   end
 
   defp plan_item_dependencies_valid?(item, items_by_key) do

@@ -1,11 +1,11 @@
 defmodule SymmetryControlWeb.PortalControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  import SymmetryControlWeb.PortalFixtures, only: [create_project: 2]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0, operator_token: 0]
+
   alias SymmetryControlWeb.PortalAssets
   alias SymmetryControlWeb.PortalBundle
-  alias SymmetryControlWeb.PortalSession
-
-  @operator_token "test-operator-token"
 
   # `:portal_assets` marks the cases that need the staged frontend build; see `PortalBundle`.
   @tag :portal_assets
@@ -35,7 +35,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
       conn
       |> recycle()
       |> skip_csrf()
-      |> post("/portal/login", %{"operator_token" => @operator_token})
+      |> post("/portal/login", %{"operator_token" => operator_token()})
 
     assert redirected_to(authenticated, 302) == "/portal"
     assert get_session(authenticated, :portal_operator)
@@ -44,7 +44,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     body = html_response(page, 200)
     assert body =~ ~s(<div id="root")
     assert body =~ "/portal/assets/"
-    refute body =~ @operator_token
+    refute body =~ operator_token()
     assert get_resp_header(page, "cache-control") == ["no-store"]
 
     logged_out = page |> recycle() |> skip_csrf() |> post("/portal/logout")
@@ -64,6 +64,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
           "/portal/projects",
           "/portal/projects/project-123",
           "/portal/work/work-123",
+          "/portal/goals/goal-123",
           "/portal/runtimes"
         ] do
       page = api_conn() |> put_req_header("accept", "text/html") |> get(path)
@@ -429,27 +430,11 @@ defmodule SymmetryControlWeb.PortalControllerTest do
       |> Enum.find(&(&1["id"] == project["id"]))
       |> Map.fetch!("work_items")
 
-    assert length(items) == 2
-
     assert Enum.sort(Enum.map(items, & &1["id"])) ==
              Enum.sort([work_item_id, second_work_item_id])
-
-    assert Enum.count(items, &(&1["id"] == work_item_id)) == 1
   end
 
-  defp create_project do
-    %{"project" => project} =
-      api_conn()
-      |> post("/portal/api/projects", %{
-        "name" => "Symmetry",
-        "key" => "SYM",
-        "default_agent_profile" => "codex",
-        "default_workspace" => "primary"
-      })
-      |> json_response(201)
-
-    project
-  end
+  defp create_project, do: create_project("SYM", "Symmetry")
 
   defp create_work_item(project_id) do
     %{"work_item" => item} =
@@ -466,13 +451,6 @@ defmodule SymmetryControlWeb.PortalControllerTest do
       |> json_response(201)
 
     item
-  end
-
-  defp api_conn do
-    Phoenix.ConnTest.build_conn()
-    |> init_test_session(%{portal_operator: PortalSession.issue(@operator_token)})
-    |> skip_csrf()
-    |> put_req_header("accept", "application/json")
   end
 
   defp skip_csrf(conn), do: put_private(conn, :plug_skip_csrf_protection, true)

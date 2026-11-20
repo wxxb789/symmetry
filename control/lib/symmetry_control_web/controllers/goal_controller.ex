@@ -2,6 +2,7 @@ defmodule SymmetryControlWeb.GoalController do
   use SymmetryControlWeb, :controller
 
   import Ecto.Query
+  import SymmetryControlWeb.QueryParams
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Repo
@@ -110,18 +111,6 @@ defmodule SymmetryControlWeb.GoalController do
     |> Map.new(&{&1.id, &1.lock_version})
   end
 
-  # The router's own path params travel with the query params in `conn.params`,
-  # so a read's allowlist only governs the parameters a caller actually added.
-  defp allowed_query_params?(conn, params, allowed) do
-    path_keys = MapSet.new(Map.keys(conn.path_params))
-
-    params
-    |> Map.keys()
-    |> MapSet.new()
-    |> MapSet.difference(path_keys)
-    |> MapSet.subset?(MapSet.new(allowed))
-  end
-
   defp body_params(conn) when is_map(conn.body_params), do: conn.body_params
   defp body_params(_conn), do: %{}
 
@@ -132,7 +121,7 @@ defmodule SymmetryControlWeb.GoalController do
     # `limit` is the served page size, capped at the read model's own maximum.
     with true <- allowed_query_params?(conn, params, ["after", "limit"]),
          {:ok, after_sequence} <- nonnegative_integer(Map.get(params, "after")),
-         {:ok, limit} <- positive_integer(Map.get(params, "limit")),
+         {:ok, limit} <- optional_positive_integer(Map.get(params, "limit")),
          true <- is_nil(limit) or limit <= 100 do
       {:ok, [] |> maybe_put(:after, after_sequence) |> maybe_put(:limit, limit)}
     else
@@ -144,8 +133,8 @@ defmodule SymmetryControlWeb.GoalController do
 
   defp attention_options(params) when is_map(params) do
     with true <- MapSet.subset?(MapSet.new(Map.keys(params)), MapSet.new(["cursor", "limit"])),
-         {:ok, cursor} <- cursor(Map.get(params, "cursor")),
-         {:ok, limit} <- positive_integer(Map.get(params, "limit")) do
+         {:ok, cursor} <- optional_text(Map.get(params, "cursor")),
+         {:ok, limit} <- optional_positive_integer(Map.get(params, "limit")) do
       {:ok, [] |> maybe_put(:cursor, cursor) |> maybe_put(:limit, limit)}
     else
       _ -> {:error, :invalid_request}
@@ -167,23 +156,4 @@ defmodule SymmetryControlWeb.GoalController do
   end
 
   defp nonnegative_integer(_value), do: {:error, :invalid_request}
-
-  defp positive_integer(nil), do: {:ok, nil}
-  defp positive_integer(value) when is_integer(value) and value > 0, do: {:ok, value}
-
-  defp positive_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, ""} when parsed > 0 -> {:ok, parsed}
-      _ -> {:error, :invalid_request}
-    end
-  end
-
-  defp positive_integer(_value), do: {:error, :invalid_request}
-
-  defp cursor(nil), do: {:ok, nil}
-  defp cursor(value) when is_binary(value) and byte_size(value) > 0, do: {:ok, value}
-  defp cursor(_value), do: {:error, :invalid_request}
-
-  defp maybe_put(options, _key, nil), do: options
-  defp maybe_put(options, key, value), do: Keyword.put(options, key, value)
 end

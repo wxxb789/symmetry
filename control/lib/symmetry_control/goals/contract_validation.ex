@@ -214,6 +214,33 @@ defmodule SymmetryControl.Goals.ContractValidation do
     })
   end
 
+  @doc """
+  The completion contract owns the integration designation.
+
+  With exactly one required item that item is the designation: any integration
+  mark on another item contradicts the contract and the designation is
+  refused. Every other required count keeps the explicit integration marks.
+  Callers pass `{ref, required?, integration?}` triples extracted from their
+  own representation and map the outcome onto their authority.
+  """
+  @spec integration_designation([{term(), boolean(), boolean()}]) ::
+          {:derived, term()} | {:explicit, [term()]} | {:conflict}
+  def integration_designation(items) when is_list(items) do
+    case Enum.filter(items, fn {_ref, required?, _integration?} -> required? end) do
+      [{required_ref, _required?, _integration?}] ->
+        if Enum.any?(items, fn {ref, _required?, integration?} ->
+             integration? and ref != required_ref
+           end) do
+          {:conflict}
+        else
+          {:derived, required_ref}
+        end
+
+      _other_count ->
+        {:explicit, for({ref, _required?, true} <- items, do: ref)}
+    end
+  end
+
   defp validate(kind, data, opts) when is_list(opts) do
     with :ok <- ensure_ex_json_schema(),
          {:ok, schema_root} <- schema_root(opts),

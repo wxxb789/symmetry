@@ -393,6 +393,57 @@ defmodule SymmetryControl.WorkspacesTest do
     assert {:ok, legacy} = Workspaces.create_work_item(project.id, %{title: "Legacy item"})
     assert legacy.creation_id == nil
     assert Repo.aggregate(WorkItem, :count) == count + 3
+
+    # The accepted boundary is the full documented range (1..128 bytes): the
+    # largest identity is created and replayed verbatim.
+    boundary_creation_id = String.duplicate("b", 128)
+
+    assert {:ok, boundary} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Boundary identity",
+               creation_id: boundary_creation_id
+             })
+
+    assert boundary.creation_id == boundary_creation_id
+
+    assert {:replayed, boundary_replay} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Boundary replay",
+               creation_id: boundary_creation_id
+             })
+
+    assert boundary_replay.id == boundary.id
+    assert boundary_replay.title == "Boundary identity"
+
+    # The smallest accepted identity is one byte.
+    assert {:ok, single_byte} =
+             Workspaces.create_work_item(project.id, %{title: "Single byte", creation_id: "x"})
+
+    assert single_byte.creation_id == "x"
+    assert Repo.aggregate(WorkItem, :count) == count + 5
+  end
+
+  test "the persisted creation identity guard counts bytes, not graphemes" do
+    project = project_fixture()
+    assert {:ok, item} = Workspaces.create_work_item(project.id, %{title: "Guarded identity"})
+
+    # 65 graphemes / 130 bytes: the create path's own predicate refuses an identity this
+    # long before the changeset runs, so the persisted guard is asserted directly — it is
+    # the last line for any other writer.
+    multibyte_id = String.duplicate("é", 65)
+    assert String.length(multibyte_id) == 65
+    assert byte_size(multibyte_id) == 130
+
+    multibyte_errors =
+      errors_on(WorkItem.changeset(item, %{creation_id: multibyte_id})).creation_id
+
+    assert "should be at most 128 byte(s)" in multibyte_errors
+
+    boundary_id = String.duplicate("b", 128)
+    boundary = WorkItem.changeset(item, %{creation_id: boundary_id})
+
+    assert boundary.valid?
+    assert boundary.changes.creation_id == boundary_id
   end
 
   test "retry binding fails closed without a loaded project" do

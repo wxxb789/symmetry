@@ -11,6 +11,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   alias SymmetryControl.Orchestration.{Run, RunTransition, Runtime, Task}
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Repo
+  alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
   alias SymmetryControlWeb.PortalSession
@@ -45,26 +46,18 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   setup context do
     daemon = context.daemon
     agent = context.agent
-    previous_http = Application.get_env(:symmetry_control, :integration_http_client)
-    previous_auth = Application.get_env(:symmetry_control, :integration_auth_provider)
-    previous_providers = Application.get_env(:symmetry_control, :integration_providers)
     previous_orchestration = Application.fetch_env!(:symmetry_control, :orchestration)
 
-    Application.put_env(:symmetry_control, :integration_http_client, HTTPStub)
+    TestEnv.put!(:integration_http_client, HTTPStub)
 
-    Application.put_env(
-      :symmetry_control,
-      :integration_auth_provider,
-      SymmetryControl.Integrations.AuthStub
-    )
+    TestEnv.put!(:integration_auth_provider, SymmetryControl.Integrations.AuthStub)
 
-    Application.put_env(:symmetry_control, :integration_providers,
+    TestEnv.put!(:integration_providers,
       github: SymmetryControl.Integrations.Providers.GitHub,
       azure_devops: SymmetryControl.Integrations.Providers.AzureDevOps
     )
 
-    Application.put_env(
-      :symmetry_control,
+    TestEnv.put!(
       :orchestration,
       Keyword.merge(previous_orchestration,
         heartbeat_interval_ms: 100,
@@ -75,13 +68,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
 
     HTTPStub.stop_shared()
 
-    on_exit(fn ->
-      HTTPStub.stop_shared()
-      restore_env(:integration_http_client, previous_http)
-      restore_env(:integration_auth_provider, previous_auth)
-      restore_env(:integration_providers, previous_providers)
-      Application.put_env(:symmetry_control, :orchestration, previous_orchestration)
-    end)
+    on_exit(fn -> HTTPStub.stop_shared() end)
 
     ingress_recorder =
       if context[:artifact_validation_e2e] do
@@ -1663,7 +1650,4 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
     |> put_private(:plug_skip_csrf_protection, true)
     |> put_req_header("accept", "application/json")
   end
-
-  defp restore_env(key, nil), do: Application.delete_env(:symmetry_control, key)
-  defp restore_env(key, value), do: Application.put_env(:symmetry_control, key, value)
 end

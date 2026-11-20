@@ -79,7 +79,7 @@ defmodule SymmetryControl.Integrations do
 
   def create_connection(attrs) when is_map(attrs) do
     with :ok <- reject_secret_attrs(attrs),
-         {:ok, auth_type} <- auth_type_for(attr_value(attrs, :provider)) do
+         {:ok, auth_type} <- connection_auth_type(attr_value(attrs, :provider)) do
       attrs =
         attrs
         |> drop_attrs([:status, :status_message, :metadata, :last_checked_at])
@@ -1919,9 +1919,14 @@ defmodule SymmetryControl.Integrations do
     value |> Enum.filter(&is_binary/1) |> Enum.uniq() |> Enum.sort()
   end
 
-  defp auth_type_for("github"), do: {:ok, "gh_cli"}
-  defp auth_type_for("azure_devops"), do: {:ok, "entra_id"}
-  defp auth_type_for(_provider), do: {:error, :invalid_request}
+  # The connection schema owns the provider→auth-type policy (`auth_types/1`);
+  # a provider without exactly one auth type is an unknown provider.
+  defp connection_auth_type(provider) do
+    case Connection.auth_types(provider) do
+      [auth_type] -> {:ok, auth_type}
+      _other -> {:error, :invalid_request}
+    end
+  end
 
   defp fetch(schema, id) when is_binary(id) do
     with {:ok, id} <- Ecto.UUID.cast(id), value when not is_nil(value) <- Repo.get(schema, id) do

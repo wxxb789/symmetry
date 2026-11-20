@@ -1358,7 +1358,7 @@ defmodule SymmetryControl.Workspaces do
         {:ok, nil}
 
       creation_id when is_binary(creation_id) ->
-        if byte_size(creation_id) in 1..128 and not String.contains?(creation_id, <<0>>),
+        if valid_client_identity?(creation_id),
           do: {:ok, creation_id},
           else: {:error, :invalid_request}
 
@@ -1366,6 +1366,14 @@ defmodule SymmetryControl.Workspaces do
         {:error, :invalid_request}
     end
   end
+
+  # The creation identity and the action id are client-minted identifiers with
+  # one format rule: 1..128 bytes with no NUL byte. The persisted column keeps
+  # its own length guard in WorkItem's changeset (`workspaces/schemas.ex`).
+  defp valid_client_identity?(value) when is_binary(value),
+    do: byte_size(value) in 1..128 and not String.contains?(value, <<0>>)
+
+  defp valid_client_identity?(_value), do: false
 
   defp find_work_item_by_creation_id(_project_id, nil), do: nil
 
@@ -1381,7 +1389,7 @@ defmodule SymmetryControl.Workspaces do
   end
 
   defp validate_action_id(action_id) do
-    if byte_size(action_id) in 1..128 and not String.contains?(action_id, <<0>>),
+    if valid_client_identity?(action_id),
       do: :ok,
       else: {:error, :invalid_request}
   end

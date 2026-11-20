@@ -111,13 +111,14 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   use SymmetryControlWeb.ConnCase, async: false
 
   import Ecto.Query
+  import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Repo
+  alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
-  alias SymmetryControlWeb.PortalSession
 
-  @operator_token "test-operator-token"
   @delivery_url "https://github.com/acme/symmetry/pull/42"
   # The manual seed is GitHub's diff permalink, so the provider's own canonical
   # answer stays distinguishable from the value the work item was given.
@@ -127,20 +128,12 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   @delivery_ci_url "https://github.com/acme/symmetry/actions/runs/9"
 
   setup do
-    previous_providers = Application.get_env(:symmetry_control, :integration_providers)
-    previous_steering = Application.get_env(:symmetry_control, :portal_resources_steering)
-
-    Application.put_env(:symmetry_control, :integration_providers,
+    TestEnv.put!(:integration_providers,
       github: SymmetryControlWeb.PortalResourcesTest.Provider,
       azure_devops: SymmetryControlWeb.PortalResourcesTest.Provider
     )
 
-    Application.put_env(:symmetry_control, :portal_resources_steering, %{})
-
-    on_exit(fn ->
-      restore_env(:integration_providers, previous_providers)
-      restore_env(:portal_resources_steering, previous_steering)
-    end)
+    TestEnv.put!(:portal_resources_steering, %{})
 
     :ok
   end
@@ -391,7 +384,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
     assert failed["status"] == "degraded"
     assert failed["sync_status"] == "failed"
-    refute failed["sync_status"] == "synced"
     assert failed["status_message"] == "Provider transport failed"
     assert failed["last_synced_at"] == synced["last_synced_at"]
 
@@ -635,7 +627,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert delivery["pull_request"]["recorded_at"] == DateTime.to_iso8601(@delivery_updated_at)
 
     assert served["pull_request_url"] == @delivery_url
-    refute served["pull_request_url"] == @delivery_seed_url
 
     assert delivery["ci"]["source"] == "provider"
     assert delivery["ci"]["provider"] == "github"
@@ -976,33 +967,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert Enum.map(project_read(project["id"])["resources"], & &1["id"]) == [repository["id"]]
   end
 
-  defp create_project(key) do
-    %{"project" => project} =
-      api_conn()
-      |> post("/portal/api/projects", %{
-        "name" => "Resource project #{key}",
-        "key" => key,
-        "default_agent_profile" => "codex",
-        "default_workspace" => "primary"
-      })
-      |> json_response(201)
-
-    project
-  end
-
-  defp create_connection(provider, name, account_ref, capabilities) do
-    %{"connection" => connection} =
-      api_conn()
-      |> post("/portal/api/connections", %{
-        "provider" => provider,
-        "name" => name,
-        "account_ref" => account_ref,
-        "capabilities" => capabilities
-      })
-      |> json_response(201)
-
-    connection
-  end
+  defp create_project(key), do: create_project(key, "Resource project #{key}")
 
   defp create_resource(project, connection, kind, name, external_ref) do
     %{"resource" => resource} =
@@ -1178,14 +1143,4 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   defp provider_url(%{"provider" => "azure_devops", "account_ref" => account_ref}, external_ref),
     do: "https://dev.azure.com/#{account_ref}/" <> external_ref
-
-  defp restore_env(key, nil), do: Application.delete_env(:symmetry_control, key)
-  defp restore_env(key, value), do: Application.put_env(:symmetry_control, key, value)
-
-  defp api_conn do
-    Phoenix.ConnTest.build_conn()
-    |> init_test_session(%{portal_operator: PortalSession.issue(@operator_token)})
-    |> put_private(:plug_skip_csrf_protection, true)
-    |> put_req_header("accept", "application/json")
-  end
 end
