@@ -120,7 +120,7 @@ import signal
 import stat
 import subprocess
 import sys
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 SCHEMA = "symmetry-model-routing-evaluation/v1"
 SUBJECT_NAMESPACE = b"symmetry-acceptance-subject/v1"
@@ -169,9 +169,11 @@ MEASURED_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 # Elixir 1.20.4 rewrites one trace line per finished test, preceded by a carriage
 # return; ANSI escapes wrap the description on color terminals. The measured shape is
 # `  * test <description> (<n>.<d>ms) [L#<line>]` for a finished test and
-# `  * test <description> (skipped|excluded) [L#<line>]` otherwise, where a test
-# declared inside a `describe` block renders as `<describe> <name>`, so a named test
-# must be declared at module level to match its frozen description exactly.
+# `  * test <description> (skipped|excluded) [L#<line>]` otherwise. The matcher
+# compares the rendered description as a whole, so a test declared inside a `describe`
+# block - rendered as `<describe> <name>` - matches a frozen name only when it spells
+# that name in full; declaring tests at module level is the frozen convention, not a
+# parser rule.
 EXUNIT_ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 EXUNIT_OBSERVATION_PATTERN = re.compile(
     r"^  \* test (?P<name>.+?) \((?P<descriptor>[^()]*)\) \[L#[0-9]+\]$"
@@ -374,17 +376,47 @@ def strict_json(raw: bytes, source: str, limit: int) -> Any:
         )
     except json.JSONDecodeError as error:
         raise Refused(f"{source} is not valid JSON: {error}")
+    except ValueError:
+        # `json.loads` refuses an integer literal past its conversion-digit limit
+        # with a plain ValueError; that is a refusal about the document's numbers,
+        # not a crash.
+        raise Refused(f"{source} carries an integer outside the supported range")
     except RecursionError:
         raise Refused(f"{source} nests too deeply")
 
 
+def contains_non_finite(value: Any) -> bool:
+    """Whether one serializable structure holds a nan or infinity float anywhere.
+
+    The classifier gives a non-finite value its own refusal message and keeps the
+    encoder's `ValueError` from being read as one: `allow_nan=False` reports a
+    nan or inf float and a finite integer past Python's conversion-digit limit
+    through the same exception class.
+    """
+
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(contains_non_finite(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_non_finite(item) for item in value)
+    return False
+
+
 def canonical_json(value: Any) -> bytes:
     try:
-        text = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False)
+        if contains_non_finite(value):
+            raise Refused("value contains a non-finite number")
+        text = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False)
     except RecursionError:
         raise Refused("value nests too deeply to serialize")
     except UnicodeEncodeError:
         raise Refused("value contains text that is not valid UTF-8")
+    except ValueError:
+        # `allow_nan=False` would report a nan or inf float here, and every one was
+        # checked above; what remains is a value Python cannot serialize - an integer
+        # past its conversion-digit limit - which must not be called non-finite.
+        raise Refused("value contains a number outside the serializable range")
     try:
         return text.encode("utf-8") + b"\n"
     except UnicodeEncodeError:
@@ -503,7 +535,13 @@ def require_optional_integer(value: Any, source: str, minimum: int = 0) -> int |
 def require_number(value: Any, source: str, minimum: float = 0.0) -> float | int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise Refused(f"{source} must be a number >= {minimum}")
-    if not math.isfinite(float(value)) or float(value) < minimum:
+    try:
+        number = float(value)
+    except OverflowError:
+        # A JSON integer beyond float range must refuse as a value: converting it for
+        # the finiteness check must not escape validation as an uncaught traceback.
+        raise Refused(f"{source} must be a finite number >= {minimum}")
+    if not math.isfinite(number) or number < minimum:
         raise Refused(f"{source} must be a finite number >= {minimum}")
     return value
 
@@ -512,6 +550,24 @@ def require_optional_number(value: Any, source: str, minimum: float = 0.0) -> fl
     if value is None:
         return None
     return require_number(value, source, minimum)
+
+
+def number_sum(values: Iterable[int | float], source: str) -> int | float:
+    """Sum validated numbers, refusing an int/float mix beyond the float range.
+
+    Every addend passed a finite-number check on its own, but Python converts an int
+    to float when it meets a float total, and an int or int total beyond float range
+    raises OverflowError there; it must refuse as a value instead of escaping as an
+    uncaught traceback. The built-in `sum` is the summation: its own semantics (the
+    compensated float path on this interpreter) are what every derived total has
+    always been computed with, and only its OverflowError becomes a refusal. A float
+    total that reaches infinity is refused later by canonical_json when the receipt
+    is serialized.
+    """
+    try:
+        return sum(values)
+    except OverflowError:
+        raise Refused(f"{source} exceeds the finite number range")
 
 
 def require_value_in(value: Any, source: str, allowed: Iterable[str]) -> str:
@@ -660,24 +716,22 @@ def utf8_path_key(path: str) -> bytes:
         raise Refused("the checkout contains a path that is not valid UTF-8")
 
 
-def git_config_bool(checkout: pathlib.Path, key: str) -> bool:
-    command = ["git", "-c", f"safe.directory={checkout}", "-C", str(checkout), "config", "--bool", key]
-    try:
-        completed = subprocess.run(command, capture_output=True, check=False)
-    except OSError as error:
-        raise Refused(f"could not read git config {key}: {error}")
-    if completed.returncode != 0:
-        return True  # git's own default for core.filemode is true
-    return completed.stdout.decode("utf-8", "replace").strip() != "false"
-
-
 def executable_bits_tracked(checkout: pathlib.Path) -> bool:
     """Whether this host and checkout can represent Git's executable bit.
 
     When they cannot, Git itself ignores mode-only differences, and so does the seal:
     reporting a pristine executable file as modified would be a false positive.
     """
-    return os.name == "posix" and git_config_bool(checkout, "core.filemode")
+    if os.name != "posix":
+        return False
+    command = ["git", "-c", f"safe.directory={checkout}", "-C", str(checkout), "config", "--bool", "core.filemode"]
+    try:
+        completed = subprocess.run(command, capture_output=True, check=False)
+    except OSError as error:
+        raise Refused(f"could not read git config core.filemode: {error}")
+    if completed.returncode != 0:
+        return True  # git's own default for core.filemode is true
+    return completed.stdout.decode("utf-8", "replace").strip() != "false"
 
 
 def iter_source_paths(checkout: pathlib.Path) -> list[str]:
@@ -1158,6 +1212,45 @@ def validate_gate_env(value: Any, source: str) -> dict[str, str]:
     return {name: env[name] for name in sorted(env)}
 
 
+def validate_engine_test_fields(
+    value: dict[str, Any], source: str, engine: str
+) -> tuple[list[str] | None, list[str] | None]:
+    """Validate one engine's `*_tests`/`*_files` gate pair.
+
+    `exunit_*` and `vitest_*` carry the same caps, pairing and NUL rules; the
+    entry-point check stays with the caller because `mix` names and vitest entry
+    detection differ.
+    """
+    tests = None
+    if f"{engine}_tests" in value:
+        tests = require_text_list(
+            value[f"{engine}_tests"], f"{source} {engine}_tests", minimum=1, unique=True, max_length=300
+        )
+        if len(tests) > 50:
+            raise Refused(f"{source} {engine}_tests must list at most 50 tests")
+        if any("\0" in name for name in tests):
+            raise Refused(f"{source} {engine}_tests must not contain NUL")
+        # The ExUnit trace matcher counts `name.replace("\n", " ")` against rendered
+        # trace lines, so two frozen names rendering identically would both be
+        # satisfied by one executed test; the vitest report compares names as written,
+        # and this shared helper freezes both engines to unique rendered spellings.
+        rendered = [name.replace("\n", " ") for name in tests]
+        if len(set(rendered)) != len(rendered):
+            raise Refused(f"{source} {engine}_tests entries must stay unique after newlines render as spaces")
+    files = None
+    if f"{engine}_files" in value:
+        files = require_path_list(value[f"{engine}_files"], f"{source} {engine}_files", allow_glob=False)
+        if not files:
+            raise Refused(f"{source} {engine}_files must list at least 1 file")
+        if len(files) > 20:
+            raise Refused(f"{source} {engine}_files must list at most 20 files")
+    if files is not None and tests is None:
+        raise Refused(f"{source} {engine}_files requires {engine}_tests")
+    if tests is not None and files is None:
+        raise Refused(f"{source} {engine}_tests requires {engine}_files")
+    return tests, files
+
+
 def validate_gate(value: Any, index: int) -> dict[str, Any]:
     source = f"task JSON gate #{index + 1}"
     require_object(value, source, GATE_KEYS, REQUIRED_GATE_KEYS)
@@ -1179,52 +1272,14 @@ def validate_gate(value: Any, index: int) -> dict[str, Any]:
         go_package = require_text(value["go_package"], source + " go_package", max_length=500)
         if go_tests is None:
             raise Refused(f"{source} go_package requires go_tests")
-    exunit_tests = None
-    if "exunit_tests" in value:
-        exunit_tests = require_text_list(
-            value["exunit_tests"], source + " exunit_tests", minimum=1, unique=True, max_length=300
-        )
-        if len(exunit_tests) > 50:
-            raise Refused(f"{source} exunit_tests must list at most 50 tests")
-        if any("\0" in name for name in exunit_tests):
-            raise Refused(f"{source} exunit_tests must not contain NUL")
-    exunit_files = None
-    if "exunit_files" in value:
-        exunit_files = require_path_list(value["exunit_files"], source + " exunit_files", allow_glob=False)
-        if not exunit_files:
-            raise Refused(f"{source} exunit_files must list at least 1 file")
-        if len(exunit_files) > 20:
-            raise Refused(f"{source} exunit_files must list at most 20 files")
-    if exunit_files is not None and exunit_tests is None:
-        raise Refused(f"{source} exunit_files requires exunit_tests")
-    if exunit_tests is not None:
-        if exunit_files is None:
-            raise Refused(f"{source} exunit_tests requires exunit_files")
-        if pathlib.PurePath(argv[0]).name.lower() not in ("mix", "mix.exe", "mix.bat", "mix.cmd"):
-            raise Refused(f"{source} exunit_tests requires a mix gate command")
-    vitest_tests = None
-    if "vitest_tests" in value:
-        vitest_tests = require_text_list(
-            value["vitest_tests"], source + " vitest_tests", minimum=1, unique=True, max_length=300
-        )
-        if len(vitest_tests) > 50:
-            raise Refused(f"{source} vitest_tests must list at most 50 tests")
-        if any("\0" in name for name in vitest_tests):
-            raise Refused(f"{source} vitest_tests must not contain NUL")
-    vitest_files = None
-    if "vitest_files" in value:
-        vitest_files = require_path_list(value["vitest_files"], source + " vitest_files", allow_glob=False)
-        if not vitest_files:
-            raise Refused(f"{source} vitest_files must list at least 1 file")
-        if len(vitest_files) > 20:
-            raise Refused(f"{source} vitest_files must list at most 20 files")
-    if vitest_files is not None and vitest_tests is None:
-        raise Refused(f"{source} vitest_files requires vitest_tests")
-    if vitest_tests is not None:
-        if vitest_files is None:
-            raise Refused(f"{source} vitest_tests requires vitest_files")
-        if not is_vitest_entry(argv):
-            raise Refused(f"{source} vitest_tests requires a vitest entry-point gate command")
+    exunit_tests, exunit_files = validate_engine_test_fields(value, source, "exunit")
+    if exunit_tests is not None and pathlib.PurePath(argv[0]).name.lower() not in (
+        "mix", "mix.exe", "mix.bat", "mix.cmd"
+    ):
+        raise Refused(f"{source} exunit_tests requires a mix gate command")
+    vitest_tests, vitest_files = validate_engine_test_fields(value, source, "vitest")
+    if vitest_tests is not None and not is_vitest_entry(argv):
+        raise Refused(f"{source} vitest_tests requires a vitest entry-point gate command")
     return {
         "id": gate_id,
         "cwd": cwd,
@@ -2103,12 +2158,17 @@ def execute_gate(
         except OSError as failure:
             error = f"could not execute gate argv: {failure}"
     # The derived cross-checks below run exactly when the gate command itself ran and
-    # exited 0, so keep its error before a reported list failure is appended.
+    # exited 0 and the gate's fields derive that cross-check's argv: a derivable
+    # `go test -list` needs `go_tests` with `go_package`, a `go` argv and no `/` in a
+    # test name (a subtest name has no `-list` spelling), the ExUnit trace run needs
+    # `exunit_tests`, the vitest structured report needs `vitest_tests`; a plain
+    # exit-0 gate derives none. Keep its error before a reported list failure is
+    # appended.
     gate_command_error = error
     write_bytes(gate_dir / "stdout.bin", stdout_raw)
     write_bytes(gate_dir / "stderr.bin", stderr_raw)
     list_argv = go_list_argv(gate)
-    list_ran = list_argv is not None and error is None and not timed_out and exit_code == 0
+    list_ran = list_argv is not None and gate_command_error is None and not timed_out and exit_code == 0
     list_exit_code: int | None = None
     list_stdout_raw = b""
     list_stderr_raw = b""
@@ -2275,8 +2335,6 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
     vitest_argv = vitest_report_argv(gate, gate_dir)
     if result["vitest_argv"] != vitest_argv:
         raise Refused(f"the stored result for gate {gate['id']} does not match the derived vitest report command")
-    # The derived list and trace runs happen exactly when the gate command itself ran and
-    # exited 0.
     # The stored error conflates the gate command error, a reported list failure and the
     # post-execution "source changed" note, so peel those off before deciding. The note is
     # appended bare when the gate command itself reported no error.
@@ -2900,46 +2958,64 @@ def build_receipt(
     model_rows = [row for row in rows if row["session_ref"] is not None]
     token_fields = ("input", "output", "cached")
 
-    def known_token_total(field: str) -> int | float:
+    def known_subtotal(
+        value_of: Callable[[dict[str, Any]], Any],
+        partial_of: Callable[[dict[str, Any]], dict[str, Any] | None],
+        source: str,
+    ) -> int | float:
         # A complete row contributes its session total; a row whose session total is
         # unknown contributes its validated partial-session observation, if any, so
-        # observed tokens from a mixed session never collapse to zero.
-        total: int | float = 0
+        # observed usage from a mixed session never collapses to zero.
+        contributions: list[int | float] = []
         for row in model_rows:
-            value = row["tokens"][field]
+            value = value_of(row)
             if value is not None:
-                total += value
+                contributions.append(value)
                 continue
-            partial = (row.get("known_subtotals") or {}).get(field)
+            partial = partial_of(row)
             if partial is not None:
-                total += partial["sum"]
-        return total
+                contributions.append(partial["sum"])
+        return number_sum(contributions, source)
+
+    def known_token_total(field: str) -> int | float:
+        return known_subtotal(
+            lambda row: row["tokens"][field],
+            lambda row: (row.get("known_subtotals") or {}).get(field),
+            f"the known {field} token subtotal",
+        )
 
     tokens: dict[str, int | None] = {}
     for field in token_fields:
         values = [row["tokens"][field] for row in model_rows]
-        tokens[field] = None if not values or any(value is None for value in values) else sum(values)
+        tokens[field] = (
+            None if not values or any(value is None for value in values)
+            else number_sum(values, f"the {field} token total")
+        )
         tokens["known_" + field + "_subtotal"] = known_token_total(field)
     unknown_token_rows = sum(
         1 for row in model_rows if any(row["tokens"][field] is None for field in token_fields)
     )
     reported_values = [row["reported_cost"] for row in model_rows]
     estimated_values = [row["estimated_cost"] for row in model_rows]
-    reported_total = None if not model_rows or any(value is None for value in reported_values) else sum(reported_values)
-    estimated_total = None if not model_rows or any(value is None for value in estimated_values) else sum(estimated_values)
+    reported_total = (
+        None if not model_rows or any(value is None for value in reported_values)
+        else number_sum(reported_values, "the reported cost total")
+    )
+    estimated_total = (
+        None if not model_rows or any(value is None for value in estimated_values)
+        else number_sum(estimated_values, "the estimated cost total")
+    )
     # Only observed provider-reported costs feed the reported channel; the extractor's
     # validated cost subtotals are harness estimates, so they feed the estimated channel
     # (never provider billing) when a mixed session has no complete cost total.
-    known_reported_cost = sum(value for value in reported_values if value is not None)
-    known_estimated_cost: int | float = 0
-    for row in model_rows:
-        value = row["estimated_cost"]
-        if value is not None:
-            known_estimated_cost += value
-            continue
-        partial_cost = (row.get("known_subtotals") or {}).get("cost", {}).get("total")
-        if partial_cost is not None:
-            known_estimated_cost += partial_cost["sum"]
+    known_reported_cost = number_sum(
+        (value for value in reported_values if value is not None), "the known reported cost subtotal"
+    )
+    known_estimated_cost: int | float = known_subtotal(
+        lambda row: row["estimated_cost"],
+        lambda row: (row.get("known_subtotals") or {}).get("cost", {}).get("total"),
+        "the known estimated cost subtotal",
+    )
     unknown_reported_rows = sum(1 for row in model_rows if row["reported_cost"] is None)
     unknown_estimated_rows = sum(1 for row in model_rows if row["estimated_cost"] is None)
     unknown_price_rows = sum(1 for row in model_rows if row["price_version"] is None)
@@ -3061,7 +3137,9 @@ def build_receipt(
             "incomplete_reasons": reasons,
         },
         "wall_time": wall_time,
-        "review_time": sum(row["wall_time"] for row in rows if row["stage"] == "review"),
+        "review_time": number_sum(
+            (row["wall_time"] for row in rows if row["stage"] == "review"), "the review time total"
+        ),
         "repair_count": repair_count,
         "accepted": not blockers,
         "acceptance_blockers": blockers,
@@ -3801,7 +3879,13 @@ def first_difference(left: Any, right: Any, path: str = "$") -> str | None:
     if isinstance(left, bool) or isinstance(right, bool):
         return None if left is right else f"{path}: {left!r} != {right!r}"
     if isinstance(left, (int, float)) and isinstance(right, (int, float)):
-        return None if left == right else f"{path}: {left!r} != {right!r}"
+        # JSON number classes are part of the compared document: `accept` prints the
+        # submitted bytes' digest, so an int spelling and a float spelling of the same
+        # mathematical value are different documents even though Python's `==` says
+        # they are equal.
+        if type(left) is not type(right) or left != right:
+            return f"{path}: {left!r} != {right!r}"
+        return None
     if isinstance(left, dict) and isinstance(right, dict):
         if set(left) != set(right):
             missing = sorted(set(left) - set(right))
@@ -3835,9 +3919,15 @@ def command_accept(arguments: argparse.Namespace) -> int:
     submitted = strict_json(submitted_raw, "submitted receipt", MAX_RECEIPT_BYTES)
     scan_no_secret_keys(submitted, "submitted receipt")
     expected = derive_receipt(run_dir)
-    difference = first_difference(submitted, expected)
-    if difference is not None:
-        raise Refused("the submitted receipt does not match the derived evidence at " + difference)
+    expected_raw = canonical_json(expected)
+    if submitted_raw != expected_raw:
+        difference = first_difference(submitted, expected)
+        if difference is not None:
+            raise Refused("the submitted receipt does not match the derived evidence at " + difference)
+        raise Refused(
+            "the submitted receipt is not the canonical serialization of the derived receipt "
+            "(the bytes differ with no structural difference: number spelling or formatting)"
+        )
     if not expected["accepted"]:
         raise Refused("the submitted receipt is a nonaccepted row: " + "; ".join(expected["acceptance_blockers"]))
     print(json.dumps({

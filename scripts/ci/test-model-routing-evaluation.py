@@ -139,6 +139,9 @@ FILES = {
     ".gitignore": "*.local.*\n",
 }
 
+# The uncommitted main.go edit every accepted-flow test installs before sealing.
+EDITED_MAIN_GO = "package app\n\nfunc Main() int { return 2 }\n"
+
 
 class EvaluationTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -209,6 +212,15 @@ class EvaluationTests(unittest.TestCase):
 
     def gate_plain(self, gate_id="plain", code=EMIT_OK, cwd="."):
         return {"id": gate_id, "cwd": cwd, "argv": [sys.executable, "-c", code]}
+
+    def go_gate(self):
+        return {
+            "id": "go-gate",
+            "cwd": ".",
+            "argv": ["go", "test", "-json", "-count=1", "./app"],
+            "go_tests": ["TestWitnessGo"],
+            "go_package": "example.com/fixture/app",
+        }
 
     def task(self, *, gates=None, allowed_paths=None, protected_paths=None, **overrides):
         value = {
@@ -522,13 +534,12 @@ class EvaluationTests(unittest.TestCase):
         frozen_task = task if task is not None else self.task()
         if load_runner_module().requires_dependency_provisioning(frozen_task):
             self.bind_tree(run_path)
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run_path)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run_path)
         self.edit("app/new_test.go", "package app\n\nimport \"testing\"\n\nfunc TestWitness2(t *testing.T) {}\n", run=run_path)
-        sealed = self.assert_ok(self.seal(run=run_path))
+        self.assert_ok(self.seal(run=run_path))
         checked = self.assert_ok(self.check(run=run_path))
         self.assert_ok(self.import_review(self.review_record(checked, run=run_path), run=run_path))
         self.assert_ok(self.receipt(self.usage_rows() if usage is None else usage, run=run_path))
-        return sealed, checked
 
     # -- tests ---------------------------------------------------------------
 
@@ -539,7 +550,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertTrue(prepared["routes_sha256"].startswith("sha256:"))
         self.assertTrue(prepared["base_tree_digest"].startswith("sha256:"))
 
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n")
+        self.edit("app/main.go", EDITED_MAIN_GO)
         self.edit("app/new_test.go", "package app\n\nimport \"testing\"\n\nfunc TestWitness2(t *testing.T) {}\n")
         sealed = self.assert_ok(self.seal())
         self.assertEqual(sealed["head"], self.base)
@@ -595,10 +606,80 @@ class EvaluationTests(unittest.TestCase):
         missing.pop("cost")
         self.assert_refused(self.accept(receipt_path=self.write_json(self.root / "missing.json", missing)))
 
+    def test_accept_requires_the_canonical_serialization(self) -> None:
+        runner = load_runner_module()
+        # `accept` re-derives the receipt and requires the submitted bytes to be its
+        # canonical serialization; `first_difference` only explains where a structural
+        # mismatch is. An int and a float spelling of one value, `-0.0` and `0.0`, and
+        # a boolean against a number are therefore all different documents even though
+        # Python's `==` disagrees.
+        self.assertIsNone(runner.first_difference({"wall_time": 60}, {"wall_time": 60}))
+        self.assertIsNone(runner.first_difference({"wall_time": 60.0}, {"wall_time": 60.0}))
+        self.assertNotEqual(runner.first_difference({"wall_time": 60}, {"wall_time": 60.0}), None)
+        self.assertNotEqual(runner.first_difference({"wall_time": 60.0}, {"wall_time": 60}), None)
+        self.assertNotEqual(runner.first_difference({"succeeded": True}, {"succeeded": 1}), None)
+        self.assertNotEqual(runner.first_difference({"succeeded": 1}, {"succeeded": True}), None)
+        self.assertIsNone(runner.first_difference(-0.0, 0.0))
+
+        run = self.root / "run-number-spellings"
+        self.accepted_run(run=run)
+        receipt = self.stored_receipt(run)
+        self.assertIsInstance(receipt["wall_time"], float)
+        respelled = self.root / "inputs" / "respelled-receipt.json"
+        respelled.write_bytes(
+            (json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+            .replace('"wall_time": 12.0', '"wall_time": 12', 1)
+            .encode("utf-8")
+        )
+        self.assert_refused(self.accept(run=run, receipt_path=respelled), "does not match the derived evidence")
+        # `1.2e1` parses to the same float as `12.0`, so the structural comparison
+        # finds no difference and only the byte comparison can refuse the respelling.
+        float_respelled = self.root / "inputs" / "float-respelled-receipt.json"
+        float_respelled.write_bytes(
+            (json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+            .replace('"wall_time": 12.0', '"wall_time": 1.2e1', 1)
+            .encode("utf-8")
+        )
+        self.assert_refused(self.accept(run=run, receipt_path=float_respelled), "canonical serialization")
+        self.assert_ok(self.accept(run=run))
+
+        # A receipt whose float cost is `0.0` is respelled `-0.0`: the parsed values
+        # compare equal, so only the bytes distinguish the submitted document.
+        zero_run = self.root / "run-negative-zero"
+        self.accepted_run(run=zero_run, usage=self.usage_rows(estimated_cost=0.0))
+        zero_receipt = self.stored_receipt(zero_run)
+        self.assertIsInstance(zero_receipt["cost"]["estimated_cost"], float)
+        negative_zero = self.root / "inputs" / "negative-zero-receipt.json"
+        negative_zero.write_bytes(
+            (json.dumps(zero_receipt, indent=2, sort_keys=True) + "\n")
+            .replace('"estimated_cost": 0.0', '"estimated_cost": -0.0', 1)
+            .encode("utf-8")
+        )
+        self.assert_refused(self.accept(run=zero_run, receipt_path=negative_zero), "canonical serialization")
+        self.assert_ok(self.accept(run=zero_run))
+
+    def test_number_sum_keeps_the_builtin_sum_semantics(self) -> None:
+        # STD-B06: replacing the built-in `sum` with `+=` dropped its compensated
+        # float path, so `[1e16, 1.0, 1.0]` stopped rounding the way `sum` does.
+        runner = load_runner_module()
+        self.assertEqual(runner.number_sum([1e16, 1.0, 1.0], "fixture"), sum([1e16, 1.0, 1.0]))
+        self.assertNotEqual(runner.number_sum([1e16, 1.0, 1.0], "fixture"), 1e16)
+        with self.assertRaisesRegex(runner.Refused, "finite number range"):
+            runner.number_sum([10 ** 400, 0.5], "fixture")
+
+    def test_canonical_json_distinguishes_non_finite_from_unserializable(self) -> None:
+        # Opus P3: `allow_nan=False` and the integer conversion-digit limit share a
+        # ValueError, so the message must name the actual cause.
+        runner = load_runner_module()
+        with self.assertRaisesRegex(runner.Refused, "non-finite number"):
+            runner.canonical_json({"n": float("inf")})
+        with self.assertRaisesRegex(runner.Refused, "outside the serializable range"):
+            runner.canonical_json({"n": 10 ** 4301})
+
     def test_source_edit_after_checks_or_review_is_refused_and_preserved(self) -> None:
         run = self.root / "run-late"
         self.assert_ok(self.prepare(run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.assert_ok(self.check(run=run))
         self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
@@ -629,7 +710,7 @@ class EvaluationTests(unittest.TestCase):
                 run = self.root / ("run-" + label)
                 task = self.task(gates=[self.gate_events(code=code)])
                 self.assert_ok(self.prepare(task=task, run=run))
-                self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+                self.edit("app/main.go", EDITED_MAIN_GO, run=run)
                 self.assert_ok(self.seal(run=run))
                 checked = self.check(run=run)
                 self.assertNotEqual(checked.returncode, 0, checked.stdout)
@@ -645,7 +726,7 @@ class EvaluationTests(unittest.TestCase):
         run = self.root / "run-partial"
         task = self.task(gates=[self.gate_plain("first"), self.gate_plain("second")])
         self.assert_ok(self.prepare(task=task, run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         partial = self.check("--gate", "first", run=run)
         summary = json.loads(partial.stdout)
@@ -660,7 +741,7 @@ class EvaluationTests(unittest.TestCase):
         run = self.root / "run-broken-cwd"
         task = self.task(gates=[self.gate_plain("broken", cwd="missing-dir")])
         self.assert_ok(self.prepare(task=task, run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         failed = self.check(run=run)
         self.assertNotEqual(failed.returncode, 0, failed.stdout)
@@ -757,7 +838,7 @@ class EvaluationTests(unittest.TestCase):
 
     def test_review_record_requires_independent_accepted_evidence(self) -> None:
         self.assert_ok(self.prepare())
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n")
+        self.edit("app/main.go", EDITED_MAIN_GO)
         self.assert_ok(self.seal())
         checked = self.assert_ok(self.check())
         cases = (
@@ -1056,7 +1137,7 @@ class EvaluationTests(unittest.TestCase):
 
         run = self.root / "run-nonfinite"
         self.assert_ok(self.prepare(run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.assert_ok(self.check(run=run))
         self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
@@ -1090,18 +1171,18 @@ class EvaluationTests(unittest.TestCase):
 
     def test_prepare_validates_task_routes_and_base(self) -> None:
         cases = (
-            ("base-length", self.task(base="0" * 39), None, 0, "40-hex commit id"),
-            ("base-missing", self.task(base="0" * 40), None, 0, "failed"),
-            ("absolute-allowed", self.task(allowed_paths=["/etc/passwd"]), None, 0, "must be relative"),
-            ("parent-allowed", self.task(allowed_paths=["app/../etc"]), None, 0, "must not contain"),
-            ("empty-argv", self.task(gates=[{"id": "bad", "cwd": ".", "argv": []}]), None, 0, "argv must be a non-empty list"),
-            ("absolute-cwd", self.task(gates=[{"id": "bad", "cwd": "/tmp", "argv": [sys.executable, "-c", "pass"]}]), None, 0, "must be relative"),
-            ("package-without-tests", self.task(gates=[{"id": "bad", "cwd": ".", "argv": [sys.executable, "-c", "pass"], "go_package": "x"}]), None, 0, "go_package requires go_tests"),
-            ("routes-missing-role", None, {"worker": self.routes()["worker"]}, 0, "missing keys"),
-            ("routes-secret", None, {"worker": self.routes()["worker"], "reviewer": {**self.routes()["reviewer"], "api_key": "x"}}, 0, "secret-like key"),
-            ("routes-authorization", None, {"worker": self.routes()["worker"], "reviewer": {k: v for k, v in self.routes()["reviewer"].items() if k != "authorization_ref"}}, 0, "missing keys"),
+            ("base-length", self.task(base="0" * 39), None, "40-hex commit id"),
+            ("base-missing", self.task(base="0" * 40), None, "failed"),
+            ("absolute-allowed", self.task(allowed_paths=["/etc/passwd"]), None, "must be relative"),
+            ("parent-allowed", self.task(allowed_paths=["app/../etc"]), None, "must not contain"),
+            ("empty-argv", self.task(gates=[{"id": "bad", "cwd": ".", "argv": []}]), None, "argv must be a non-empty list"),
+            ("absolute-cwd", self.task(gates=[{"id": "bad", "cwd": "/tmp", "argv": [sys.executable, "-c", "pass"]}]), None, "must be relative"),
+            ("package-without-tests", self.task(gates=[{"id": "bad", "cwd": ".", "argv": [sys.executable, "-c", "pass"], "go_package": "x"}]), None, "go_package requires go_tests"),
+            ("routes-missing-role", None, {"worker": self.routes()["worker"]}, "missing keys"),
+            ("routes-secret", None, {"worker": self.routes()["worker"], "reviewer": {**self.routes()["reviewer"], "api_key": "x"}}, "secret-like key"),
+            ("routes-authorization", None, {"worker": self.routes()["worker"], "reviewer": {k: v for k, v in self.routes()["reviewer"].items() if k != "authorization_ref"}}, "missing keys"),
         )
-        for index, (label, task, routes, _unused, needle) in enumerate(cases):
+        for index, (label, task, routes, needle) in enumerate(cases):
             with self.subTest(case=label):
                 run = self.root / f"run-validate-{index}"
                 self.assert_refused(self.prepare(task=task, routes=routes, run=run), needle)
@@ -1115,7 +1196,7 @@ class EvaluationTests(unittest.TestCase):
         task = self.task(gates=[self.gate_plain("writer", WRITE_DURING_GATE)])
         run = self.root / "run-writer"
         self.assert_ok(self.prepare(task=task, run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.check(run=run)
         self.assertNotEqual(checked.returncode, 0, checked.stdout)
@@ -1167,7 +1248,7 @@ class EvaluationTests(unittest.TestCase):
         run = self.root / "run-timeout-tree"
         task = self.task(gates=[self.gate_plain("slow", gate_code)])
         self.assert_ok(self.prepare(task=task, run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         handshake = run / "timeout-tree-handshake"
         handshake.mkdir(parents=True)
@@ -1455,7 +1536,7 @@ class EvaluationTests(unittest.TestCase):
         )
         if filemode.stdout.strip() == "false":
             self.skipTest("core.filemode is disabled in the isolated checkout")
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         first = self.assert_ok(self.seal(run=run))
         os.chmod(self.checkout(run) / "app/main.go", 0o755)
         second = self.assert_ok(self.seal(run=run))
@@ -1501,7 +1582,7 @@ class EvaluationTests(unittest.TestCase):
 
         # Case C: the same trick on an allowed file must still be reported.
         self.stage_stale_mtime("app/main.go", run)
-        self.write(checkout / "app/main.go", "package app\n\nfunc Main() int { return 2 }\n")
+        self.write(checkout / "app/main.go", EDITED_MAIN_GO)
         os.utime(checkout / "app/main.go", (1577836800, 1577836800))
         self.assertEqual(self.git_text("diff", "--name-status", cwd=checkout), "")
         sealed = self.assert_ok(self.seal(run=run))
@@ -1529,7 +1610,7 @@ class EvaluationTests(unittest.TestCase):
         self.write(checkout / "app/main_test.go", FILES["app/main_test.go"])
         sealed = self.assert_ok(self.seal(run=run))
         self.assertEqual(sealed["changed_paths"], [])
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         sealed = self.assert_ok(self.seal(run=run))
         self.assertEqual([change["path"] for change in sealed["changed_paths"]], ["app/main.go"])
 
@@ -1607,7 +1688,7 @@ class EvaluationTests(unittest.TestCase):
         self.assert_refused(self.seal(run=run), "baseline test")
         self.write(checkout / "app/main_test.go", FILES["app/main_test.go"])
         self.assertEqual(self.assert_ok(self.seal(run=run))["changed_paths"], [])
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         sealed = self.assert_ok(self.seal(run=run))
         self.assertEqual([change["path"] for change in sealed["changed_paths"]], ["app/main.go"])
 
@@ -1685,13 +1766,7 @@ class EvaluationTests(unittest.TestCase):
         honest = "package app\n\nimport \"testing\"\n\nfunc TestWitnessGo(t *testing.T) {}\n"
         task = self.task(
             allowed_paths=["app/gate_test.go"],
-            gates=[{
-                "id": "go-gate",
-                "cwd": ".",
-                "argv": ["go", "test", "-json", "-count=1", "./app"],
-                "go_tests": ["TestWitnessGo"],
-                "go_package": "example.com/fixture/app",
-            }],
+            gates=[self.go_gate()],
         )
 
         run = self.root / "run-go-forged"
@@ -1736,13 +1811,7 @@ class EvaluationTests(unittest.TestCase):
         )
         task = self.task(
             allowed_paths=["app/gate_test.go"],
-            gates=[{
-                "id": "go-gate",
-                "cwd": ".",
-                "argv": ["go", "test", "-json", "-count=1", "./app"],
-                "go_tests": ["TestWitnessGo"],
-                "go_package": "example.com/fixture/app",
-            }],
+            gates=[self.go_gate()],
         )
         run = self.root / "run-go-writer"
         self.assert_ok(self.prepare(task=task, run=run))
@@ -1908,6 +1977,73 @@ class EvaluationTests(unittest.TestCase):
         self.assert_refused(refused, "refused")
         self.assertNotIn("Traceback", refused.stderr + refused.stdout)
 
+        huge = self.usage_rows()
+        # A JSON integer beyond float range must refuse as a value: converting it to a
+        # float must not escape validation as an uncaught OverflowError traceback.
+        huge["wall_time"] = 10 ** 400
+        huge_usage = self.root / "inputs" / "huge-int-usage.json"
+        huge_usage.write_bytes((json.dumps(huge, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(huge_usage))
+        self.assert_refused(refused, "finite number")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # An int token total beyond float range passes require_integer on its own; it
+        # must refuse as a value when the derived subtotal meets a float partial from
+        # another phase, not escape addition as an uncaught OverflowError traceback.
+        mixed = self.usage_rows()
+        mixed["phases"][0]["tokens"]["input"] = 10 ** 400
+        # The phase's stale complete subtotal (10) would refuse as a disagreement
+        # before the derivation adds anything, so drop it and let the huge int meet
+        # the float partial in the known subtotal.
+        mixed["phases"][0]["known_subtotals"].pop("input")
+        mixed["phases"][1]["tokens"]["input"] = None
+        mixed["phases"][1]["known_subtotals"]["input"] = {"sum": 0.5, "messages": 1}
+        mixed_usage = self.root / "inputs" / "mixed-overflow-usage.json"
+        mixed_usage.write_bytes((json.dumps(mixed, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(mixed_usage))
+        self.assert_refused(refused, "finite number range")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # Two int partial cost subtotals within float range add to an int beyond it;
+        # the third addend is a float, so the int total converts to float in the sum
+        # and must refuse the same way.
+        partials = self.usage_rows()
+        for index, value in ((0, 10 ** 308), (1, 10 ** 308), (3, 0.5)):
+            partials["phases"][index]["estimated_cost"] = None
+            partials["phases"][index]["known_subtotals"]["cost"] = {"total": {"sum": value, "messages": 1}}
+        partials_usage = self.root / "inputs" / "partial-overflow-usage.json"
+        partials_usage.write_bytes((json.dumps(partials, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(partials_usage))
+        self.assert_refused(refused, "finite number range")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # An integer literal past Python's conversion-digit limit refuses as a value:
+        # `json.loads` raises a plain ValueError for it, not a traceback.
+        limit = sys.get_int_max_str_digits()
+        if limit:
+            oversized = self.root / "inputs" / "oversized-integer-usage.json"
+            raw_usage = json.dumps(self.usage_rows(), indent=2, sort_keys=True) + "\n"
+            oversized.write_bytes(
+                raw_usage.replace('"input": 10', '"input": ' + "9" * (limit + 1), 1).encode("utf-8")
+            )
+            refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(oversized))
+            self.assert_refused(refused, "integer outside the supported range")
+            self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # Three 4300-digit token totals sum to a 4301-digit integer that parses fine but
+        # cannot be serialized: the refusal must name the serializable range instead of
+        # calling a finite integer non-finite. The phase known subtotals must not carry
+        # the giant value: their own finite-number check refuses an int beyond float
+        # range first, and this case is about the sum the receipt then cannot write.
+        giant = self.usage_rows(tokens={"input": int("9" * 4300), "output": 2, "cached": 0})
+        for phase in giant["phases"]:
+            phase.get("known_subtotals", {}).pop("input", None)
+        giant_usage = self.root / "inputs" / "unserializable-total-usage.json"
+        giant_usage.write_bytes((json.dumps(giant, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(giant_usage))
+        self.assert_refused(refused, "outside the serializable range")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
         refused = self.check("--timeout", "-1", run=run)
         self.assert_refused(refused, "--timeout")
 
@@ -1923,6 +2059,17 @@ class EvaluationTests(unittest.TestCase):
         usage["phases"][0]["metadata"] = {"note": "\ud800"}
         refused = self.receipt(usage, run=run)
         self.assert_refused(refused, "not valid UTF-8")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # A float total that reaches infinity derives fine but cannot be serialized:
+        # canonical_json refuses the receipt instead of publishing the non-JSON
+        # `Infinity` literal.
+        nonfinite = self.usage_rows()
+        for index in (0, 1, 3):
+            nonfinite["phases"][index]["estimated_cost"] = 1e308
+            nonfinite["phases"][index]["known_subtotals"]["cost"] = {"total": {"sum": 1e308, "messages": 1}}
+        refused = self.receipt(nonfinite, run=run)
+        self.assert_refused(refused, "non-finite number")
         self.assertNotIn("Traceback", refused.stderr + refused.stdout)
 
         # The candidate rows validated and the receipt derived, but the receipt could
@@ -2008,7 +2155,19 @@ class EvaluationTests(unittest.TestCase):
                 f"missing {second}",
             ),
             ("exited-non-zero", observations + summary, 1, "the traced run exited with 1"),
-            ("reported-failures", (observations[0], observations[1], "", "Result: 1/2 passed", "Failed: 1 test"), 0, "the traced run reported 1 failures"),
+            ("reported-failures", (observations[0], observations[1], "", "Result: 1/4 passed", "Failed: 3 tests"), 0, "the traced run reported 3 failures"),
+            (
+                "reported-failures-tail",
+                (observations[0], observations[1], "", "Result: 2 passed, 3 failed"),
+                0,
+                "the traced run reported 3 failures",
+            ),
+            (
+                "reported-failures-line",
+                (observations[0], observations[1], "", "Result: 2 passed", "Failed: 3 tests"),
+                0,
+                "the traced run reported 3 failures",
+            ),
             ("no-summary", observations, 0, "the traced run reported no ExUnit summary"),
         )
         for label, lines, trace_exit, needle in variants:
@@ -2017,7 +2176,7 @@ class EvaluationTests(unittest.TestCase):
                 run = self.root / ("run-exunit-" + label)
                 task = self.task(gates=[self.exunit_gate(mix, tests=expected)])
                 self.assert_ok(self.prepare(task=task, run=run))
-                self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+                self.edit("app/main.go", EDITED_MAIN_GO, run=run)
                 self.assert_ok(self.seal(run=run))
                 checked = self.check(run=run)
                 self.assertNotEqual(checked.returncode, 0, checked.stdout + checked.stderr)
@@ -2042,6 +2201,34 @@ class EvaluationTests(unittest.TestCase):
                     receipt_summary["acceptance_blockers"],
                 )
                 self.assert_refused(self.accept(run=run), "nonaccepted row")
+
+    def test_exunit_frozen_names_render_embedded_newlines_as_spaces(self) -> None:
+        # A frozen task name may carry a newline (`require_text_list` only forbids
+        # NUL), while the trace line renders it as a space; the observation matcher
+        # must map the frozen spelling back or every launched test reads as missing.
+        frozen = "receipts\nrecover through the boundary"
+        rendered = frozen.replace("\n", " ")
+        mix = self.install_fake_mix((
+            "\r  * test " + rendered + " (0.4ms) [L#7]",
+            "",
+            "Result: 1 passed",
+        ))
+        run = self.root / "run-exunit-newline"
+        task = self.task(gates=[self.exunit_gate(mix, tests=(frozen,))])
+        self.accepted_run(task=task, run=run)
+        check = self.stored_receipt(run)["checks"][0]
+        self.assertEqual(check["exunit_tests"], [frozen])
+        self.assertEqual(check["exunit_exit_code"], 0)
+        self.assertIsNone(check["exunit_error"])
+
+    def test_exunit_frozen_names_must_stay_unique_after_rendering(self) -> None:
+        # Two frozen names that render identically as trace descriptions would both be
+        # satisfied by one executed test, so the pair must be refused at prepare time.
+        mix = self.install_fake_mix()
+        run = self.root / "run-exunit-aliased"
+        task = self.task(gates=[self.exunit_gate(mix, tests=("receipts\nrecover", "receipts recover"))])
+        self.assert_refused(self.prepare(task=task, run=run), "unique after newlines render as spaces")
+        self.assertFalse(run.exists(), "a refused prepare must not leave a run directory")
 
     def test_prepare_validates_exunit_gate_and_environment_fields(self) -> None:
         runner = load_runner_module()
@@ -2074,6 +2261,11 @@ class EvaluationTests(unittest.TestCase):
                 "nul-test-name",
                 {**plain, "exunit_files": ["test/x_test.exs"], "exunit_tests": ["test one\0two"]},
                 "must not contain NUL",
+            ),
+            (
+                "aliasing-tests",
+                {**plain, "exunit_files": ["test/x_test.exs"], "exunit_tests": ["receipts\nrecover", "receipts recover"]},
+                "unique after newlines render as spaces",
             ),
             (
                 "empty-files",
@@ -2179,7 +2371,7 @@ class EvaluationTests(unittest.TestCase):
         run = self.root / "run-exunit-verify"
         task = self.task(gates=[self.exunit_gate(mix, tests=expected)])
         self.assert_ok(self.prepare(task=task, run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         self.assert_ok(self.check(run=run))
         gate_dir = run / "checks" / "attempt-0001" / "exunit-gate"
@@ -2241,7 +2433,7 @@ class EvaluationTests(unittest.TestCase):
         run = self.root / "run-exunit-gate-failure"
         task = self.task(gates=[self.exunit_gate(failing, tests=expected)])
         self.assert_ok(self.prepare(task=task, run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.check(run=run)
         self.assertNotEqual(checked.returncode, 0, checked.stdout)
@@ -2262,7 +2454,7 @@ class EvaluationTests(unittest.TestCase):
 
         run = self.root / "run-plain-verify"
         self.assert_ok(self.prepare(task=self.task(gates=[self.gate_plain()]), run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         self.assert_ok(self.check(run=run))
         gate_dir = run / "checks" / "attempt-0001" / "plain"
@@ -2280,7 +2472,7 @@ class EvaluationTests(unittest.TestCase):
     def test_tool_cache_run_state_inside_the_checkout_is_refused(self) -> None:
         run = self.root / "run-tool-cache"
         self.assert_ok(self.prepare(run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         # vitest/vite run state is redirected outside a sealed checkout, so a cache
         # file that still appears inside one is ordinary source the manifest binds.
         # Each spelling refuses on its own (STD-A12): one combined seal only proved
@@ -2302,7 +2494,7 @@ class EvaluationTests(unittest.TestCase):
     def test_package_files_under_node_modules_stay_bound(self) -> None:
         run = self.root / "run-node-modules-package"
         self.assert_ok(self.prepare(run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.edit("app/node_modules/react/index.js", "module.exports = {};\n", run=run)
         self.assert_refused(self.seal(run=run), "outside allowed_paths")
         (self.checkout(run) / "app" / "node_modules" / "react" / "index.js").unlink()
@@ -2316,7 +2508,7 @@ class EvaluationTests(unittest.TestCase):
         )
         run = self.root / "run-tool-cache-gate"
         self.assert_ok(self.prepare(task=self.task(gates=[self.gate_plain(code=write_cache)]), run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.check(run=run)
         self.assertNotEqual(checked.returncode, 0, checked.stdout)
@@ -2338,7 +2530,7 @@ class EvaluationTests(unittest.TestCase):
         # resolves `.vite-temp` against, outside every sealed checkout.
         self.assertTrue((run / "node_modules").is_dir())
         self.assertEqual(list((run / "node_modules").iterdir()), [])
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.assert_ok(self.check(run=run))
         gate_dir = run / "checks" / checked["attempt_id"] / "plain"
@@ -2402,8 +2594,7 @@ class EvaluationTests(unittest.TestCase):
         return document
 
     def test_vitest_report_gate_requires_every_named_test_once(self) -> None:
-        first = "renders one row per served boolean capability member"
-        second = "never claims a capability the record does not carry"
+        first, second = VITEST_NAMED_TESTS
         expected = (first, second)
         entry = self.install_fake_vitest(
             self.vitest_report(((first, "passed", ()), (second, "passed", ())))
@@ -2554,7 +2745,7 @@ class EvaluationTests(unittest.TestCase):
                 task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
                 self.assert_ok(self.prepare(task=task, run=run))
                 self.bind_tree(run)
-                self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+                self.edit("app/main.go", EDITED_MAIN_GO, run=run)
                 self.assert_ok(self.seal(run=run))
                 checked = self.check(run=run)
                 self.assertNotEqual(checked.returncode, 0, checked.stdout + checked.stderr)
@@ -2629,8 +2820,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual((len(inventory), len(reached), len(uncovered)), (17, 15, 2))
 
     def test_vitest_report_runs_only_when_the_gate_command_passes(self) -> None:
-        first = "renders one row per served boolean capability member"
-        second = "never claims a capability the record does not carry"
+        first, second = VITEST_NAMED_TESTS
         expected = (first, second)
         entry = self.install_fake_vitest(
             self.vitest_report(((first, "passed", ()), (second, "passed", ()))), gate_exit=3
@@ -2639,7 +2829,7 @@ class EvaluationTests(unittest.TestCase):
         task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
         self.assert_ok(self.prepare(task=task, run=run))
         self.bind_tree(run)
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.check(run=run)
         self.assertNotEqual(checked.returncode, 0, checked.stdout)
@@ -2658,7 +2848,7 @@ class EvaluationTests(unittest.TestCase):
     def test_if_absent_vitest_carrier_fields_stay_null(self) -> None:
         run = self.root / "run-vitest-plain-verify"
         self.assert_ok(self.prepare(task=self.task(gates=[self.gate_plain()]), run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         self.assert_ok(self.check(run=run))
         gate_dir = run / "checks" / "attempt-0001" / "plain"
@@ -2720,15 +2910,17 @@ class EvaluationTests(unittest.TestCase):
                 "without glob",
             ),
         )
-        for label, gate, needle in cases:
+        for index, (label, gate, needle) in enumerate(cases):
             with self.subTest(case=label):
                 with self.assertRaises(runner.Refused, msg=f"validate_gate accepted {label}") as refusal:
                     runner.validate_gate(gate, 0)
                 self.assertIn(needle, str(refusal.exception))
+                run = self.root / f"run-vitest-gate-validation-{index}"
+                self.assert_refused(self.prepare(task=self.task(gates=[gate]), run=run), needle)
+                self.assertFalse(run.exists(), "a refused prepare must not leave a run directory")
 
     def test_vitest_report_evidence_is_reverified_from_stored_bytes(self) -> None:
-        first = "renders one row per served boolean capability member"
-        second = "never claims a capability the record does not carry"
+        first, second = VITEST_NAMED_TESTS
         expected = (first, second)
         entry = self.install_fake_vitest(
             self.vitest_report(((first, "passed", ()), (second, "passed", ())))
@@ -2748,7 +2940,7 @@ class EvaluationTests(unittest.TestCase):
             ],
         )
         cases = (
-            ("events", lambda value: value.update(vitest_tests=["other"]), "does not match the frozen gate vitest_tests"),
+            ("tests", lambda value: value.update(vitest_tests=["other"]), "does not match the frozen gate vitest_tests"),
             ("files", lambda value: value.update(vitest_files=["src/other.test.tsx"]), "does not match the frozen gate vitest_files"),
             ("exit-code", lambda value: value.update(vitest_exit_code=7), "but its evidence says"),
             (
@@ -2980,7 +3172,7 @@ class EvaluationTests(unittest.TestCase):
         self.assert_refused(self.cli(
             "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log)
         ), "already records a provisioning step")
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.assert_ok(self.check(run=run))
         self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
@@ -3046,7 +3238,7 @@ class EvaluationTests(unittest.TestCase):
         run = self.root / "run-ts-requirement"
         task = self.task(language="typescript", gates=[self.gate_plain()])
         self.assert_ok(self.prepare(task=task, run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         self.assert_refused(self.check(run=run), "before check or receipt")
         self.assert_refused(self.receipt(self.usage_rows(), run=run), "before check or receipt")
@@ -3147,7 +3339,7 @@ class EvaluationTests(unittest.TestCase):
         task = self.task(gates=[self.gate_plain(code=tamper)])
         self.assert_ok(self.prepare(task=task, run=run))
         self.bind_tree(run)
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.check(run=run)
         self.assertNotEqual(checked.returncode, 0, checked.stdout)
@@ -3198,7 +3390,7 @@ class EvaluationTests(unittest.TestCase):
         # step it executed under, so the late binding refuses until a fresh check runs.
         run = self.run_dir()
         self.assert_ok(self.prepare(run=run))
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.assert_ok(self.check(run=run))
         self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
@@ -3234,7 +3426,7 @@ class EvaluationTests(unittest.TestCase):
         task = self.task(language="typescript", gates=[self.gate_plain()])
         self.assert_ok(self.prepare(task=task, run=run))
         self.bind_tree(run)
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         other = self.root / "node_modules-other"
         self.write(other / "react" / "index.js", "module.exports = {}\n")
@@ -3282,7 +3474,7 @@ class EvaluationTests(unittest.TestCase):
         )
         self.write(run / "node_modules" / ".vite" / "deps.json", "{}\n")
         self.bind_tree(run)
-        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         self.assert_ok(self.check(run=run))
         self.write(run / "node_modules" / "react" / "index.js", "module.exports = {};\n")
