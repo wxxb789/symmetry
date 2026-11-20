@@ -22,7 +22,7 @@ defmodule SymmetryControlWeb.DaemonController do
            ) do
         {:ok, %{machine: enrolled, token: token}, disposition} ->
           conn
-          |> put_status(disposition_status(disposition))
+          |> put_status(created_or_ok(disposition))
           |> json(%{machine_id: enrolled.id, machine_token: token})
 
         {:error, reason} ->
@@ -351,11 +351,11 @@ defmodule SymmetryControlWeb.DaemonController do
         {:ok, response, disposition} ->
           receipt(conn, response, disposition)
 
-        {:error, {:idempotency_conflict, fields} = reason} ->
-          append_evidence_conflict(conn, evidence, fields, reason)
+        {:error, {:idempotency_conflict, fields}} ->
+          append_evidence_conflict(conn, evidence, fields)
 
         {:error, :idempotency_conflict} ->
-          Protocol.error(conn, idempotency_conflict_error(evidence))
+          Protocol.error(conn, conflict_error(evidence))
 
         {:error, reason} ->
           Protocol.error(conn, reason)
@@ -380,16 +380,15 @@ defmodule SymmetryControlWeb.DaemonController do
 
   defp valid_batch_conflict_details?(_details), do: false
 
-  defp append_evidence_conflict(conn, evidence, fields, reason) do
+  defp append_evidence_conflict(conn, evidence, fields) do
     if batch_evidence?(evidence) and valid_batch_conflict_details?(fields) do
-      Protocol.error(conn, reason)
+      Protocol.error(conn, {:idempotency_conflict, fields})
     else
-      error = if(batch_evidence?(evidence), do: :invalid_request, else: reason)
-      Protocol.error(conn, error)
+      Protocol.error(conn, conflict_error(evidence))
     end
   end
 
-  defp idempotency_conflict_error(evidence),
+  defp conflict_error(evidence),
     do: if(batch_evidence?(evidence), do: :invalid_request, else: :idempotency_conflict)
 
   defp batch_evidence?(%{"schema_version" => "symmetry.evidence_batch.v1"}), do: true
@@ -576,8 +575,8 @@ defmodule SymmetryControlWeb.DaemonController do
   defp receipt(conn, response, :created), do: conn |> put_status(:created) |> json(response)
   defp receipt(conn, response, :replayed), do: json(conn, response)
 
-  defp disposition_status(:created), do: :created
-  defp disposition_status(_disposition), do: :ok
+  defp created_or_ok(:created), do: :created
+  defp created_or_ok(_disposition), do: :ok
 
   defp mutation_params(conn, path_keys) when is_struct(conn, Plug.Conn),
     do: conn |> body_params() |> Map.drop(path_keys)

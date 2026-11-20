@@ -7,17 +7,13 @@ defmodule SymmetryControlWeb.Plugs.EnrollmentAuth do
   def init(options), do: options
 
   def call(conn, _options) do
-    case Protocol.machine_token(conn) do
-      {:ok, token} ->
-        case Protocol.credential_class(token) do
-          :enrollment -> assign(conn, :enrollment_token, token)
-          :unknown -> conn |> Protocol.error(:unauthenticated) |> halt()
-          _known_credential -> conn |> Protocol.error(:forbidden) |> halt()
-        end
-
-      {:error, :unauthenticated} ->
-        conn |> Protocol.error(:unauthenticated) |> halt()
-    end
+    Protocol.authenticate(conn, fn token ->
+      case Protocol.credential_class(token) do
+        :enrollment -> assign(conn, :enrollment_token, token)
+        :unknown -> conn |> Protocol.error(:unauthenticated) |> halt()
+        _known_credential -> conn |> Protocol.error(:forbidden) |> halt()
+      end
+    end)
   end
 end
 
@@ -30,22 +26,18 @@ defmodule SymmetryControlWeb.Plugs.MachineAuth do
   def init(options), do: options
 
   def call(conn, _options) do
-    case Protocol.machine_token(conn) do
-      {:ok, token} ->
-        case Protocol.credential_class(token) do
-          {:machine, machine} ->
-            assign(conn, :machine, machine)
+    Protocol.authenticate(conn, fn token ->
+      case Protocol.credential_class(token) do
+        {:machine, machine} ->
+          assign(conn, :machine, machine)
 
-          :unknown ->
-            conn |> Protocol.error(:unauthenticated) |> halt()
+        :unknown ->
+          conn |> Protocol.error(:unauthenticated) |> halt()
 
-          _known_credential ->
-            conn |> Protocol.error(:forbidden) |> halt()
-        end
-
-      {:error, :unauthenticated} ->
-        conn |> Protocol.error(:unauthenticated) |> halt()
-    end
+        _known_credential ->
+          conn |> Protocol.error(:forbidden) |> halt()
+      end
+    end)
   end
 end
 
@@ -58,16 +50,12 @@ defmodule SymmetryControlWeb.Plugs.OperatorAuth do
   def init(options), do: options
 
   def call(conn, _options) do
-    case Protocol.machine_token(conn) do
-      {:ok, token} ->
-        case Protocol.credential_class(token) do
-          :operator -> conn
-          :unknown -> conn |> Protocol.error(:unauthenticated) |> halt()
-          _known_credential -> conn |> Protocol.error(:forbidden) |> halt()
-        end
-
-      {:error, :unauthenticated} ->
-        conn |> Protocol.error(:unauthenticated) |> halt()
-    end
+    Protocol.authenticate(conn, fn token ->
+      case Protocol.credential_class(token) do
+        :operator -> conn
+        :unknown -> conn |> Protocol.error(:unauthenticated) |> halt()
+        _known_credential -> conn |> Protocol.error(:forbidden) |> halt()
+      end
+    end)
   end
 end

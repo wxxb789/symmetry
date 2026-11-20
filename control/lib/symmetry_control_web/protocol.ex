@@ -150,6 +150,13 @@ defmodule SymmetryControlWeb.Protocol do
     end
   end
 
+  def authenticate(conn, credential_fun) do
+    case machine_token(conn) do
+      {:ok, token} -> credential_fun.(token)
+      {:error, :unauthenticated} -> conn |> error(:unauthenticated) |> halt()
+    end
+  end
+
   def configured_token(kind),
     do: Application.fetch_env!(:symmetry_control, :orchestration) |> Keyword.fetch!(kind)
 
@@ -398,7 +405,7 @@ defmodule SymmetryControlWeb.Protocol do
   def parse_event_times(events) when is_list(events) do
     case parse_events(events) do
       {:ok, parsed} -> {:ok, Enum.reverse(parsed)}
-      {:error, reason} -> {:error, reason}
+      error -> error
     end
   end
 
