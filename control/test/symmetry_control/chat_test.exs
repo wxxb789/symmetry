@@ -5,6 +5,7 @@ defmodule SymmetryControl.ChatTest do
   alias SymmetryControl.Chat.{Action, Message}
   alias SymmetryControl.Orchestration.{Command, Machine, Run, Runtime, Task}
   alias SymmetryControl.Workspaces.{Project, WorkItem}
+  alias SymmetryControl.TelemetryReads
   alias Ecto.Adapters.SQL.Sandbox
 
   test "reading a conversation does not create durable conversation state" do
@@ -957,7 +958,7 @@ defmodule SymmetryControl.ChatTest do
       handler_id,
       [:symmetry_control, :repo, :query],
       fn _event, _measurements, metadata, %{reader: reader, forms: forms} ->
-        if conversation_read?(metadata.params, forms),
+        if TelemetryReads.read?(metadata.params, forms),
           do: send(reader, {:conversation_read, self(), to_string(metadata.query)})
       end,
       %{reader: reader, forms: forms}
@@ -968,7 +969,7 @@ defmodule SymmetryControl.ChatTest do
     assert {:ok, conversation} = Chat.conversation(%{scope: "workspace"})
     assert is_list(conversation.runs)
 
-    reads = conversation_reads([])
+    reads = TelemetryReads.drain(:conversation_read)
     queries = Enum.map(reads, fn {_pid, query} -> query end)
     processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
 
@@ -980,24 +981,6 @@ defmodule SymmetryControl.ChatTest do
 
     assert processes == [reader],
            "expected every conversation read query on #{inspect(reader)}, got #{inspect(processes)}"
-  end
-
-  defp conversation_reads(reads) do
-    receive do
-      {:conversation_read, pid, query} -> conversation_reads([{pid, query} | reads])
-    after
-      0 -> reads
-    end
-  end
-
-  defp conversation_read?(params, forms) do
-    params
-    |> List.wrap()
-    |> Enum.any?(fn
-      value when is_binary(value) -> value in forms
-      values when is_list(values) -> Enum.any?(values, &(&1 in forms))
-      _value -> false
-    end)
   end
 
   # Bounded wait on observable server state, never a sleep: the launcher is

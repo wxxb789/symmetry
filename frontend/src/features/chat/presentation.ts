@@ -9,7 +9,7 @@
  * execution data is never a source here: evidence rows read the read's semantic
  * timeline only.
  */
-import { asRecord, asRecords, asText, executionStateLabel, safeUrl } from "../work/presentation";
+import { asRecord, asRecords, asText, decisionRecord, executionStateLabel, safeUrl } from "../work/presentation";
 import { receiptLabel, receiptOutcome, type ReceiptCommand, type ReceiptOutcome } from "../work/receipts";
 import type { ChatConversationMessage, ChatConversationRun, ChatScope, Runtime } from "../../services/api";
 import type { ChatHistoryPage, ChatIntent, ChatSendStatus } from "./scopes";
@@ -398,7 +398,7 @@ export interface ChatDecisionPacket {
  */
 export function chatDecisionPacket(waiting: ChatWaitingProjection | null): ChatDecisionPacket | null {
   if (waiting === null) return null;
-  const packet = asRecord(waiting.decision) ?? asRecord(asRecord(waiting.payload)?.["decision"]);
+  const packet = decisionRecord(waiting);
   if (packet === null) return null;
   const recommended = asText(packet["recommended_option_id"]);
   const options = asRecords(packet["options"]).flatMap((option): ChatDecisionOption[] => {

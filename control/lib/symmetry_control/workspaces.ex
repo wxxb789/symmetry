@@ -491,8 +491,8 @@ defmodule SymmetryControl.Workspaces do
   fails closed instead of raising on the missing association.
   """
   @spec retry_binding(WorkItem.t(), map() | nil) :: %{
-          agent_profile: String.t(),
-          workspace: String.t(),
+          agent_profile: String.t() | nil,
+          workspace: String.t() | nil,
           required_capabilities: map()
         }
   def retry_binding(%WorkItem{} = work_item, current_required_capabilities \\ nil) do
@@ -512,21 +512,43 @@ defmodule SymmetryControl.Workspaces do
     }
   end
 
+  @doc """
+  The re-admission binding a retry of `task` would apply to `work_item`: the
+  work item's corrected binding (`retry_binding/2`, including the attempt's
+  supervisory requirement) tagged with the task being replaced.
+
+  The workspace read and the command responses resolve the served retry gate
+  from this value, so both answer the same binding the retry would apply.
+  """
+  @spec retry_binding_for(Task.t(), WorkItem.t()) :: Orchestration.retry_binding()
+  def retry_binding_for(%Task{} = task, %WorkItem{} = work_item) do
+    Map.merge(%{task_id: task.id}, retry_binding(work_item, task.required_capabilities))
+  end
+
+  @doc """
+  Loads the work item's project and provider-bound resources for the served
+  execution projection.
+
+  One connection per read: parallel preloads spawn sibling tasks that in the SQL
+  sandbox queue for the caller's single owned connection, where DBConnection
+  drops a checkout that waits past its queue window. Ecto only skips parallel
+  preloads when `Ecto.Adapters.SQL.checked_out?/1` is true - an open transaction
+  or explicit checkout - which sandbox ownership is not, so the read states the
+  rule itself.
+  """
+  @spec preload_binding(WorkItem.t()) :: WorkItem.t()
+  def preload_binding(%WorkItem{} = work_item) do
+    Repo.preload(
+      work_item,
+      [:project, :repository_resource, :ci_resource, :external_work_item_resource],
+      in_parallel: false
+    )
+  end
+
   @spec work_item_snapshot(Ecto.UUID.t()) :: {:ok, map()} | {:error, atom()}
   def work_item_snapshot(work_item_id) do
     with {:ok, work_item} <- fetch(WorkItem, work_item_id) do
-      # One connection per read: parallel preloads spawn sibling tasks that in
-      # the SQL sandbox queue for the caller's single owned connection, where
-      # DBConnection drops a checkout that waits past its queue window. Ecto
-      # only skips parallel preloads when `Ecto.Adapters.SQL.checked_out?/1` is
-      # true - an open transaction or explicit checkout - which sandbox
-      # ownership is not, so the read states the rule itself.
-      work_item =
-        Repo.preload(
-          work_item,
-          [:project, :repository_resource, :ci_resource, :external_work_item_resource],
-          in_parallel: false
-        )
+      work_item = preload_binding(work_item)
 
       case work_item.orchestration_task_id do
         nil ->
@@ -804,19 +826,6 @@ defmodule SymmetryControl.Workspaces do
       :external_work_item_resource,
       repository_resource: :connection
     ])
-  end
-
-  # The command responses serve the same execution projection as the read
-  # (`PortalJSON.execution/2` resolves the retry gate from the work item's
-  # binding), which reads the project status and derives that binding from the
-  # item's provider-bound resources. Same one-connection rationale as
-  # work_item_snapshot/1.
-  defp preload_binding(work_item) do
-    Repo.preload(
-      work_item,
-      [:project, :repository_resource, :ci_resource, :external_work_item_resource],
-      in_parallel: false
-    )
   end
 
   defp lock_resource_with_project(resource_id) do

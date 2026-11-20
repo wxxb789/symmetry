@@ -409,11 +409,92 @@ defmodule SymmetryControl.WorkspacesTest do
     # The project's defaults are unreachable, so the item's own blank values
     # stand alone and match no runtime: the served retry gate withholds the
     # control instead of the read raising on the missing association.
-    assert %{agent_profile: nil, workspace: nil, required_capabilities: %{}} =
-             Workspaces.retry_binding(item)
+    blank = Workspaces.retry_binding(item)
+
+    assert %{agent_profile: nil, workspace: nil, required_capabilities: %{}} = blank
 
     assert %{required_capabilities: %{"supervisory_control" => true}} =
              Workspaces.retry_binding(item, %{"supervisory_control" => true})
+
+    # Power for the refutation: the registered runtime is selectable for a real
+    # binding, and the blank binding with the same task identity matches no
+    # runtime (fails closed).
+    register_adapter_runtime()
+    task_id = Ecto.UUID.generate()
+
+    assert Orchestration.retry_runtime_eligible?(
+             Map.merge(blank, %{task_id: task_id, agent_profile: "codex", workspace: "primary"})
+           )
+
+    refute Orchestration.retry_runtime_eligible?(Map.put(blank, :task_id, task_id))
+  end
+
+  test "retry binding resolves a blank binding as the project's defaults" do
+    project = project_fixture()
+
+    # A row with a blank agent binding cannot be written: the
+    # `work_items_owner_fields_check` constraint requires an agent's profile and
+    # workspace, so this arm is defensive and resolves the project defaults
+    # instead of letting a blank binding match no runtime.
+    item = %WorkItem{agent_profile: nil, workspace: nil, project: project}
+
+    assert %{agent_profile: "codex", workspace: "primary", required_capabilities: %{}} =
+             Workspaces.retry_binding(item)
+  end
+
+  # One enrolled machine with an adapter-backed runtime for the default binding,
+  # advertising `start`: a binding a registered runtime can actually select.
+  defp register_adapter_runtime do
+    enrollment_key = Ecto.UUID.generate()
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(
+               %{name: "retry-binding-machine", machine_token: "token-#{enrollment_key}"},
+               enrollment_key,
+               enrollment_token: "enrollment-secret",
+               expected_enrollment_token: "enrollment-secret"
+             )
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(
+               enrolled.machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "retry-binding-runtime",
+                   name: "Retry binding runtime",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   harness_kind: "generic",
+                   harness_version: "generic-v1",
+                   adapter_version: "generic-v1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "adapter" => %{
+                       "kind" => "generic",
+                       "native_version" => "generic-v1",
+                       "implementation_version" => "generic-v1",
+                       "protocol_version" => 1,
+                       "operations" => %{
+                         "start" => true,
+                         "events" => true,
+                         "cancel" => true,
+                         "resume" => false,
+                         "handoff" => false,
+                         "guidance" => "unsupported",
+                         "pause" => "unsupported",
+                         "approval_response" => false,
+                         "usage" => "unknown",
+                         "hard_cost_limit" => false
+                       }
+                     }
+                   }
+                 }
+               ]
+             )
+
+    runtime
   end
 
   defp project_fixture do

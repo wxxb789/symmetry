@@ -228,7 +228,7 @@ defmodule SymmetryControl.Chat.ReadModel do
       end
 
     query = if work_item_id, do: where(query, [item], item.id == ^work_item_id), else: query
-    # Same one-connection rationale as Workspaces.work_item_snapshot/1: sibling
+    # Same one-connection rationale as Workspaces.preload_binding/1: sibling
     # preloader tasks would queue on the caller's single sandbox connection.
     Repo.all(query, in_parallel: false)
   end

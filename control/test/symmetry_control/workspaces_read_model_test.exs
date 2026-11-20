@@ -4,6 +4,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.ReadModel
+  alias SymmetryControl.TelemetryReads
   alias SymmetryControlWeb.PortalJSON
 
   @now ~U[2026-09-04 10:00:00.000000Z]
@@ -258,7 +259,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       register_runtime(machine, "cap-supported",
         agent_profile: "cap-supported",
         workspace: "cap-supported",
-        metadata: adapter_metadata(),
+        extra_fields: adapter_metadata(),
         capabilities: adapter_capabilities(start: true, cancel: true)
       )
 
@@ -266,7 +267,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       register_runtime(machine, "cap-no-cancel",
         agent_profile: "cap-no-cancel",
         workspace: "cap-no-cancel",
-        metadata: adapter_metadata(),
+        extra_fields: adapter_metadata(),
         capabilities: adapter_capabilities(start: true, cancel: false)
       )
 
@@ -274,7 +275,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       register_runtime(machine, "cap-no-start",
         agent_profile: "cap-no-start",
         workspace: "cap-no-start",
-        metadata: adapter_metadata(),
+        extra_fields: adapter_metadata(),
         capabilities: adapter_capabilities(start: false, cancel: false)
       )
 
@@ -359,7 +360,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       register_runtime(machine, "cap-no-start-other",
         agent_profile: "cap-no-start",
         workspace: "cap-no-start",
-        metadata: adapter_metadata(),
+        extra_fields: adapter_metadata(),
         capabilities: adapter_capabilities(start: true, cancel: true)
       )
 
@@ -463,7 +464,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     register_runtime(machine, "cap-supervised-retry-unsupervised",
       agent_profile: "cap-supervised-retry",
       workspace: "cap-supervised-retry",
-      metadata: adapter_metadata(),
+      extra_fields: adapter_metadata(),
       capabilities: adapter_capabilities(start: true, cancel: true)
     )
 
@@ -475,7 +476,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     register_runtime(machine, "cap-supervised-retry-supervisor",
       agent_profile: "cap-supervised-retry",
       workspace: "cap-supervised-retry",
-      metadata: adapter_metadata(),
+      extra_fields: adapter_metadata(),
       capabilities: supervised_adapter_capabilities()
     )
 
@@ -492,7 +493,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       register_runtime(machine, "cap-supervised",
         agent_profile: "cap-supervised",
         workspace: "cap-supervised",
-        metadata: adapter_metadata(),
+        extra_fields: adapter_metadata(),
         capabilities: supervised_adapter_capabilities()
       )
 
@@ -560,7 +561,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       handler_id,
       [:symmetry_control, :repo, :query],
       fn _event, _measurements, metadata, %{reader: reader, forms: forms} ->
-        if snapshot_read?(metadata.params, forms),
+        if TelemetryReads.read?(metadata.params, forms),
           do: send(reader, {:snapshot_read, self(), to_string(metadata.query)})
       end,
       %{reader: reader, forms: forms}
@@ -571,7 +572,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     assert {:ok, %{work_items: work_items}} = Workspaces.workspace_snapshot(project.id)
     assert Enum.any?(work_items, &(&1.id == item.id))
 
-    reads = snapshot_reads([])
+    reads = TelemetryReads.drain(:snapshot_read)
 
     queries = Enum.map(reads, fn {_pid, query} -> query end)
     processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
@@ -584,24 +585,6 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
 
     assert processes == [reader],
            "expected every workspace snapshot read query on #{inspect(reader)}, got #{inspect(processes)}"
-  end
-
-  defp snapshot_reads(reads) do
-    receive do
-      {:snapshot_read, pid, query} -> snapshot_reads([{pid, query} | reads])
-    after
-      0 -> reads
-    end
-  end
-
-  defp snapshot_read?(params, forms) do
-    params
-    |> List.wrap()
-    |> Enum.any?(fn
-      value when is_binary(value) -> value in forms
-      values when is_list(values) -> Enum.any?(values, &(&1 in forms))
-      _value -> false
-    end)
   end
 
   defp project_fixture do
@@ -646,7 +629,9 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
                      workspace: Keyword.get(opts, :workspace, "primary"),
                      capabilities: Keyword.get(opts, :capabilities, %{})
                    },
-                   Keyword.get(opts, :metadata, %{})
+                   # Extra top-level registration fields (harness and adapter
+                   # versions), not the runtime's metadata column.
+                   Keyword.get(opts, :extra_fields, %{})
                  )
                ],
                now: @now
