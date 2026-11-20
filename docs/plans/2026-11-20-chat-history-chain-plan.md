@@ -37,9 +37,12 @@ Source entries (locate by title in `docs/TODO.md`, read fully before this plan):
 - `aria-disabled` follows the same rule, so the rendered button reports the boundary it is
   already loading through a renewed token as busy.
 - A **definitive refusal** (`definitiveReadRefusal`) whose press no longer owns the chain
-  boundary it captured is superseded: it neither rewinds the pointer, nor re-reads the scope
-  (both already implemented), **nor posts its notice** — the newer chain already reaches the
-  region the press wanted, so the notice would contradict what the reader can see.
+  boundary it captured is superseded: it neither rewinds the pointer **nor posts its notice** —
+  the pointer belongs to the newer chain the reader's next press walks, so the notice would
+  contradict what the reader can see. The re-read gate reads the last committed snapshot while
+  the write judges the store's queued record, so within one settle tick a superseded refusal may
+  still issue one benign re-read of the captured scope (the source comment in `chat.tsx`
+  documents the window).
 - A refusal whose press still owns the boundary keeps today's behavior exactly: rewind to the
   served page's own token, re-read the captured scope, notice on the status line, button ready.
 
@@ -56,14 +59,19 @@ Source entries (locate by title in `docs/TODO.md`, read fully before this plan):
   message, so the first page below it re-reads the drained region; `chatHistoryView` dedupes the
   retained pages by id and `historyGap` reaches them (their `fetchBeforeId` is the served
   boundary), so the note reports the region as loaded and contiguous.
-- A chain that is not ended keeps today's rule: a serve whose token cannot be re-signed for the
-  position the reader's loads reached (the moved-boundary case) leaves the reader's own
-  continuation alone.
+- A chain that is not ended keeps today's rule in both directions: a serve at the reader's own
+  boundary renews its token, a serve whose boundary *moved* re-points the chain to the served
+  token and boundary (the case the existing pin "keeps the chain a refresh re-signs at the same
+  boundary and restarts it at a moved one" names), and a not-moved serve whose token does not
+  designate the position the reader's loads reached — the reader paged past the served boundary —
+  leaves the reader's own continuation alone.
 - Accepted consequence, stated rather than hidden: a serve in a *drained* scope now re-offers
   the button even when nothing new is being served, because the server cannot know the client's
-  retained set; one press re-reads the drained region, dedupes and drains again. This is the
-  direction the entry states ("the re-walk re-reads the drained region and dedupes"), and the
-  browser walk's post-drain assertions are on the gap and the id set; its two button assertions —
+  retained set; the reader re-walks the drained region one press per page — each press reads
+  exactly one page and the retained copies are deduped only at render — until it drains again.
+  This is the direction the entry states ("the re-walk re-reads the drained region and dedupes"),
+  and the browser walk's post-drain assertions are on the gap and the id set; its two button
+  assertions —
   `#chat-load-older` hidden right after the drain and again after the full API paging walk
   (`browser/tests/portal-chat.spec.mjs:319`, `:359`) — hold because no serve at the same boundary
   intervenes while the chain is ended, and that is what the render gate re-checks.
@@ -140,7 +148,11 @@ cases pin:
 - The re-open rule cannot distinguish "a late-visible row exists below" from "the reader has
   everything": any serve with a token in an ended scope re-offers the button, and the reader's
   press decides by reading. The entry chooses this direction; the cost is one duplicate-read
-  press per drain-then-serve, deduped at render.
+  press per drained page on every not-moved serve (an explicit refresh, a window-focus refetch, a
+  realtime `chat` invalidation, a send), deduped at render, and the query cache's default
+  structural sharing keeps a deep-equal re-serve — same-millisecond token bytes with unchanged
+  messages — from reaching the surface at all (recorded in `docs/archive/CLOSED-TODO.md` by the
+  r1 review round, which accepted the record-level option).
 - The two re-pinned cases cover behavior the contract reverses; the report states each old pin
   and its replacement assertion explicitly.
 - The render gate may not be reachable on this host; if so it is recorded pending with the

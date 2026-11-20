@@ -29,10 +29,11 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
 
-The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
-that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
+
+The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
+that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 
 ## Model-routing evaluation records
 
@@ -2229,11 +2230,18 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       second press for a boundary one already holds there, clears only its own record, and renders
       the button's `aria-disabled` from that same predicate, so a token the server re-signs at the
       same boundary leaves the press in flight unrepeatable while a press at a moved boundary is
-      still its own load. The refusal's two effects are one committed write judged by
+      still its own load. The refusal's reset and notice are one committed write judged by
       `ownsChainPointer`: an owning press resets the pointer to the served page's own token and
       re-reads the captured scope exactly as fix round 2 established, while a superseded refusal
-      neither resets, nor re-reads, nor posts its notice — the newer chain already reaches the
-      region it wanted. Decision kept from the entry's reading: only a refusal's notice is
+      neither resets the pointer nor posts its notice — the pointer belongs to the newer chain the
+      reader's next press walks, so the notice would contradict what the reader can see, and the
+      refused press's region is only reachable from that chain, not already loaded. The re-read
+      gate is the one judgment outside that write: it reads the last committed snapshot while the
+      write decides against the store's queued record, so inside one settle tick a refusal the
+      write judges superseded may still re-read the captured scope once — one benign read, never a
+      wrong cursor (the source comment in `chat.tsx` documents the window; the r1 fix round
+      rewrote this sentence).
+      Decision kept from the entry's reading: only a refusal's notice is
       suppressed, because a non-refusal failure's outcome is unproven and suppressing it too would
       hide transient read failures the reader can still act on. Pinning cases: "does not admit a
       second Load older for the boundary already in flight when the cursor re-signs" (new; red on
@@ -2294,44 +2302,87 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       reaches every retained page through its captured `fetchBeforeId`, so the region renders
       contiguous and the note reports older history again instead of "oldest history loaded". Kept
       limit: a serve in a drained scope re-offers the button even when nothing new exists to read —
-      the server cannot know the client's retained set — so one press may re-walk an
-      already-drained region and drain again. Pinning cases: "re-opens a drained chain when a later
-      serve offers a token at the served boundary" (new; red on the pre-fix bytes at `Expected
-      element to have text content: 4 messages loaded · older history available / Received: 4
-      messages loaded · oldest history loaded.`) and "re-opens a chain that never continued when a
-      later serve offers a token at the served boundary" (new; red on the pre-fix bytes at
-      `Expected element to have text content: 2 messages loaded · older history available /
-      Received: 2 messages loaded · oldest history loaded.`).
+      the server cannot know the client's retained set — so the reader re-walks the drained region
+      one press per page, each press re-reading exactly one page and the retained copies deduped
+      only at render, until it drains again; every not-moved serve re-offers the token, a plain
+      re-sign with no new rows included (an explicit refresh, a window-focus refetch, a realtime
+      `chat` invalidation, a send), and the rule cannot tell a late-visible row from such a
+      re-sign. A second kept limit is the query cache's own: the surface applies a serve when the
+      conversation query's data object changes, TanStack Query's default structural sharing keeps
+      the applied object for a refetch whose bytes deep-equal it, and the served cursor's bytes
+      change per response except when the server signed two responses in the same millisecond
+      (the signed token's embedded timestamp defaults to milliseconds; the same coincidence
+      `presentation.ts` names), so a re-serve that both re-signs identical bytes and carries
+      identical messages never reaches the surface, and the ended chain waits for the next
+      differing serve — a throwaway probe on the delivered bytes confirmed the collapse (the
+      refetch kept the first read's data object, the note stayed "oldest history loaded" and the
+      button stayed hidden). Anchoring the application on response arrival rather than object
+      identity (e.g. `structuralSharing: false` on `chatConversationOptions`) is the remedy if
+      that coincidence ever matters; the r1 fix round records it as a bounded limit. Pinning cases:
+      "re-opens a drained chain when a later serve offers a token at the served boundary" (new;
+      red on the pre-fix bytes at `Expected element to have text content: 4 messages loaded · older
+      history available / Received: 4 messages loaded · oldest history loaded.`) and "re-opens a
+      chain that never continued when a later serve offers a token at the served boundary" (new;
+      red on the pre-fix bytes at `Expected element to have text content: 2 messages loaded · older
+      history available / Received: 2 messages loaded · oldest history loaded.`).
 
-      Gates for both closures above, on the delivered bytes of branch `fix/chat-history-chain`
-      (this host, 2026-11-21; re-measured after the apply of the simplify review, which added the
-      two pins the annotation above names and corrected one comment): `vitest run
+      Gates for both closures above, on branch `fix/chat-history-chain`, each row bound to the
+      revision it was measured at. Apply stage (`750a496`, this host, 2026-11-21, before that
+      commit's merge of `origin/main` `adf6d38` — which changed no `frontend/src/features/chat`
+      file but did add main-side frontend files, `router.test.tsx`, `filters.test.ts`,
+      `filters.ts`, `saved-views.test.ts` and `work/presentation.ts`): `vitest run
       src/features/chat --no-file-parallelism` rc 0 (2 files, 86 tests); `pnpm --dir frontend test`
       rc 0 (20 files, 498 tests); `typecheck` rc 0; `lint` rc 0; `build` rc 0 (bundle
       `index-wiT0iX5k.js`, md5 `7d2f0e696cbf59900139eedeec33e05c`, 885870 B); `git diff --check`
-      rc 0 (the frontend has no formatter script). Every new and re-pinned case was also run against
-      the pre-fix `chat.tsx`/`scopes.ts` — byte-identical copies of `git show fdf332d:…`,
-      digest-checked before and after the run — with the delivered test bytes: 6 failed /
-      41 passed (47), rc 1, each for the reason its closure names. Each added pin was
-      mutation-checked against the wrong rule it exists to kill, and reddens exactly there:
+      rc 0 (the frontend has no formatter script). R1 fix round of the whole-increment review
+      (this host, 2026-11-21, re-measured at the delivered tree — `8e91434` plus the fix round's
+      record and test edits): `pnpm install --frozen-lockfile` rc 0; `vitest run src/features/chat
+      --no-file-parallelism` rc 0 (2 files, 87 tests); `pnpm --dir frontend test` rc 0 (20 files,
+      502 tests); `typecheck` rc 0; `lint` rc 0; `git diff --check` rc 0. Every new and re-pinned
+      case was also run against the pre-fix `chat.tsx`/`scopes.ts` — byte-identical copies of
+      `git show fdf332d:…`, digest-checked before and after the run — with that stage's delivered
+      test bytes: 6 failed / 41 passed (47) at the apply stage, 7 failed / 41 passed (48) at the
+      r1 fix round, rc 1, each for the reason its closure names or the pin's own claim names (the
+      r1 round's added case reddens at `expect(element).toHaveAttribute("aria-disabled",
+      "true")`). Each added pin was mutation-checked against the wrong rule it exists to kill, and
+      reddens exactly there:
       dropping the scope key from `pendingOlderLoadFor` reddens "does not let one scope's press in
       flight block another scope's Load older at the same cursor bytes" (`Expected the element to
       have attribute: aria-disabled="false" / Received: aria-disabled="true"`), and both "silence
       every superseded notice" and "silence every non-refusal notice" redden "keeps a non-refusal
       failure's notice when the press no longer owns the chain" (`Expected element to have text
       content: The server is temporarily unavailable. / Received: Messages are saved to this
-      context.`); each mutant left the rest of the suite green. The path-triggered render gate
+      context.`); the r1 fix round's two new pins kill their own rules — a `pendingOlderLoadFor`
+      comparing boundary ids whenever either side names one (leaving the bytes fallback
+      unreachable) reddens "does not admit a Load older at the same cursor bytes while either side
+      cannot name a boundary id" alone (1 failed / 47 passed), and a `.finally` clearing every
+      press record reddens the busy assertion that case and "does not let one scope's press in
+      flight block another scope's Load older at the same cursor bytes" now carry (2 failed /
+      46 passed) — while in the other direction a superseded refusal delayed past the r1 round's
+      settlement fence reddens "leaves the chain alone when the refused press no longer owns it"
+      at `expected 'pending' to be 'error'` instead of passing its negative assertions unrun; each
+      mutant reddened only the pins named and left the chat suite's other cases green. The r1
+      round also confirmed the re-open's named structural-sharing limit with a throwaway probe
+      (deleted after the run): a byte-identical re-serve kept the applied data object, the note
+      stayed "oldest history loaded", and no button appeared. The path-triggered render gate
       (`SYMMETRY_RENDER_GATE_REQUIRED=1`, the seven focused spec files, desktop and mobile Chromium,
-      against three release instances of this revision serving the delivered bundle on this host):
+      against three release instances of `750a496` serving its bundle on this host):
       93 expected, 1 skipped (the by-design concurrency skip), 0 unexpected, rc 0 (8.5 m), and
       `scripts/ci/assert-playwright-json.py` rc 0 over CI's own expected set; the chat spec's 12
-      cases are all expected in it. The release instances were proved to serve the delivered
-      bundle: `/portal/assets/index-wiT0iX5k.js` → HTTP 200, 885870 B and md5 `7d2f0e69…` from all
-      three ports, while the pre-apply `index-CS3_ZMmm.js` is HTTP 404. The implement-stage numbers
+      cases are all expected in it. The release instances were proved to serve the bundle built at
+      `750a496`: the asset body's md5 `7d2f0e69…` matched from all three ports, port 4010 measured
+      `/portal/assets/index-wiT0iX5k.js` → HTTP 200 with 885870 B, and the pre-apply
+      `index-CS3_ZMmm.js` answered HTTP 404 (also measured on 4010). The implement-stage numbers
       measured before the apply — 84 tests, 496 tests, 5 failed / 40 passed (45), bundle
-      `index-CS3_ZMmm.js` md5 `45798f9b…`, 93 expected / 1 skipped / 11.8 m — are superseded by the
-      numbers above; the pre-apply receipt's earlier flaky invocation (92 expected / 1 unexpected,
-      the fixture-gated goal-context case under host load) has no counterpart in the apply run.
+      `index-CS3_ZMmm.js` md5 `45798f9b…`, 93 expected / 1 skipped / 11.8 m — are superseded by
+      the apply-stage numbers above; the pre-apply receipt's earlier flaky invocation (92 expected
+      / 1 unexpected, the fixture-gated goal-context case under host load) has no counterpart in
+      the apply run. The r1 review's own re-measure at `8e91434` hit one flaky case there: the
+      untouched, load-sensitive `src/tool-cache-config.test.ts` exceeded vitest's 5 s default
+      timeout under suite parallelism (twice; green in isolation). This fix round's full-suite run
+      at the delivered tree passed 20 files / 502 tests, and the isolated file re-measured rc 0
+      (2 tests); the flake is recorded as host load acting on an untouched file, not normalized by
+      reruns.
 
 ## Deferred review findings (0007g)
 

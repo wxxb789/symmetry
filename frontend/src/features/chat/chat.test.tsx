@@ -1173,7 +1173,7 @@ describe("history", () => {
       "cursor-6": [message(2, { insertedAt: at(2) }), message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) }), message(5, { insertedAt: at(5) })],
       "cursor-2": [message(1, { insertedAt: at(1) })],
     };
-    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+    const { application } = renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
       conversation: (url) => {
         const before = url.searchParams.get("before");
         if (before !== null) {
@@ -1218,8 +1218,12 @@ describe("history", () => {
 
     // The refused press no longer owns the chain: its refusal neither rewinds
     // the pointer, nor re-reads the scope, nor posts a notice contradicting the
-    // page that landed — the newer chain already reaches the region it wanted.
+    // page that landed — the newer chain is the one the reader walks.
     held.resolve();
+    // The refusal's settlement is observable in the read's own query: the held
+    // read lands there as an error before its handler judges the press, so the
+    // negative assertions below cannot pass while that judgment is unrun.
+    await waitFor(() => expect(application.queryClient.getQueryState(["chat-older", { scope: "project", projectId, runId: null, before: "cursor-5" }])?.status).toBe("error"));
     await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false"));
     expect(statusRegion()).toHaveTextContent("Messages are saved to this context.");
     expect(reads).toBe(2);
@@ -1395,9 +1399,8 @@ describe("history", () => {
         const served = [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) })];
         return new Response(JSON.stringify(reads === 1
           ? conversationBody({ scope: "project", projectId, messages: served, nextBefore: "cursor-5" })
-          // The same boundary position served again: rows older than the
-          // drained end became visible after the first read, so this serve
-          // offers a token again.
+          // A later serve at the same boundary position offers a token again;
+          // here rows older than the drained end became visible in between.
           : conversationBody({ scope: "project", projectId, messages: served, nextBefore: "cursor-5-late" })));
       },
     });
@@ -1680,11 +1683,71 @@ describe("history", () => {
     await screen.findByText("workspace history");
     expect(messageIds()).toEqual([messageId(1)]);
 
+    // The workspace press's settlement cleared only its own record: the held
+    // project press still owns its boundary, so the project's button reports
+    // itself busy when the reader returns while that press is in flight.
+    await user.selectOptions(scopeSelect(), "project");
+    expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "true");
+
     // The held project page still lands in the scope that pressed it.
     held.resolve();
-    await user.selectOptions(scopeSelect(), "project");
     await screen.findByText("message 7");
     expect(messageIds()).toEqual([7, 8, 9, 10].map(messageId));
+  });
+
+  it("does not admit a Load older at the same cursor bytes while either side cannot name a boundary id", async () => {
+    const user = userEvent.setup();
+    const requested: string[] = [];
+    let reads = 0;
+    const held = Promise.withResolvers<void>();
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before === "cursor-5") {
+          requested.push(before);
+          // The press carries the boundary message it was admitted at and is
+          // held in flight.
+          return held.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(1, { insertedAt: at(1) })], nextBefore: null }))));
+        }
+        if (before === "cursor-7") {
+          requested.push(before);
+          // The moved boundary's own page comes back empty but carries a token
+          // whose bytes are the held press's cursor, so the chain pointer then
+          // names no boundary message at all and only the bytes can decide.
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [], nextBefore: "cursor-5" })));
+        }
+        reads += 1;
+        return new Response(JSON.stringify(reads === 1
+          ? conversationBody({ scope: "project", projectId, messages: [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) })], nextBefore: "cursor-5" })
+          // A serve that moved the boundary, so a press there is its own load.
+          : conversationBody({ scope: "project", projectId, messages: [message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })], nextBefore: "cursor-7" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 5");
+
+    // The press leaves through cursor-5, minted at the boundary message 5, and
+    // is held in flight.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+
+    // The moved boundary admits its own press; that page's token leaves the
+    // chain pointer at the held press's own cursor bytes without a boundary id.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 7");
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-5", "cursor-7"]));
+
+    // The pending press is identified by its bytes while either side lacks a
+    // boundary id, so the button reports the region busy instead of admitting a
+    // second press at the position the held one already owns.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "true"));
+
+    // The held press's page settles without continuing the chain — the pointer
+    // no longer names its boundary — and its record clears only itself.
+    held.resolve();
+    await screen.findByText("message 1");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false"));
   });
 
   it("keeps the loaded conversation visible as stale when a read fails", async () => {

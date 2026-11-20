@@ -104,8 +104,11 @@ export function chatScopeKey(scope: ChatScope, projectId: string | null, runId: 
  * bytes — is what proves two reads paginate from the same position; at an
  * unchanged boundary the served token renews the reader's own cursor while
  * the reader's chain still designates that boundary. A chain that is not
- * ended keeps its own continuation when the served token cannot re-sign it,
- * while an ended one is re-opened from the served boundary.
+ * ended keeps its own continuation when the served boundary did not move and
+ * the reader has paged past it — the served token does not designate the
+ * position the reader's loads reached — while a moved boundary re-points the
+ * chain to the served token and boundary, and an ended one is re-opened from
+ * the served boundary.
  */
 export function retainServedPage(
   state: ChatScopeState,
