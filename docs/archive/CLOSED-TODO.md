@@ -2314,3 +2314,50 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       (`contracts/v1/workspace-read.schema.json`, `contracts/v1/work-detail-read.schema.json`,
       `contracts/v1/chat-read.schema.json`), with the generated bindings refreshed through the
       repository generator.
+
+- [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
+      (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
+      error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
+      gone), and no test pins that branch: the scripted batch child
+      (`daemon/internal/workspace/subject_test.go:1114-1147`) serves `frame <variant> <content>`
+      (valid, missing, wrong-oid, wrong-type, malformed-size, negative-size, oversized,
+      malformed-header, truncated-header, partial-content, bad-trailer, missing-trailer) and
+      `blocked-header`, and every case of `TestSubjectBatchStreamRejectsMalformedResponses`
+      (`:1315-1379`) writes exactly one request while the child is still alive, so the failure
+      surfaces on the response read (`:753`) rather than on the write. The missing case needs a new
+      child variant that answers its first request with a complete in-sync frame and then closes its
+      read end, with the close ordered so it is observable before the second request (closing before
+      the response is written, or an equivalent deterministic wait for the child's exit, works
+      because the digest writes its second request only after consuming the first response); a
+      variant that only exits after answering can still take the write into the pipe buffer, so the
+      refusal can otherwise surface on the response read instead. Every existing
+      exit-after-one-response variant answers a refusal that desyncs and aborts the digest on the
+      first blob, and the one-response exit at `:1206-1208` covers every variant except `valid` and
+      `missing`, which keep serving (`serveWorkspaceBatchFrames` `:1155-1210`); drive a multi-blob
+      commit (the fixture exists: `subjectDigestManyBlobs` `:588` with
+      `writeSubjectDigestManyBlobsFixture` `:810`) so the second request write lands on the gone
+      child. Assert that the refusal names the object, marks the stream desynced and still reaps the
+      child (the reap contract `:1373-1376` pins that for response failures), keeping the context
+      alive so `streamError` (`:808-813`) reports the pipe error instead of a cancellation.
+
+      **Covered and closed (2026-11-20; branch `fix/subject-stdin-refusal`):** test-only closure —
+      the write-refusal branch is correct as implemented, so `subject.go` keeps no diff against
+      `fdf332d` and no behavior change is claimed. The scripted batch child gains the
+      `close-frame-block` variant (`serveWorkspaceBatchCloseReadEndThenFrame`,
+      `daemon/internal/workspace/subject_test.go`): it reads its first request, closes its own stdin
+      read end, then writes the complete in-sync frame for that request from the first committed
+      entry's real bytes and blocks, so the close is ordered ahead of the response that gates the
+      digest's second request and the refusal provably lands on the write rather than the response
+      read (`:753`). Pinned by `TestSubjectBatchStreamWriteRefusalDesyncsAndReapsChild` (same file)
+      over a `writeSubjectDigestManyBlobsFixture` commit: the digest fails, `stream.desynced` is
+      true, the error names the second tree entry (`request object <oid> from Git batch stream:`),
+      joins the path's unresolved-process fence, is not a cancellation (context alive), and the
+      terminated blocked child is waited for and reaped with `!ProcessState.Success()`. Failure
+      control, re-broken on demand: dropping the object name from the refusal reddens the pin on the
+      message assertion; dropping `desync` from the branch reddens it on the desynced assertion
+      after the test's own `testHangGuard` deadline, because the in-sync `finish()` route cannot end
+      a blocked child; the restored branch is green. Run on Windows and WSL Ubuntu-24.04
+      (`go test ./internal/workspace/... -count=1`; plus `-race` on Linux). On the final test bytes
+      the loaded Windows host aborted that plain command twice at the default 10m test-binary
+      timeout (600.509s/600.388s, 0 test failures), and green came with `-timeout 45m`
+      (`ok 1119.686s`); CI's `daemon-windows` job runs the package under `-timeout 600s`.
