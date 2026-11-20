@@ -322,6 +322,51 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
       (16 tests) pass.
 
+- [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
+      `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
+      `process.communicate(timeout=PROCESS_TREE_REAP_SECONDS)`, which on Windows can keep waiting
+      on the gate's stdout/stderr pipes while a descendant the snapshot tree kill missed still
+      holds the inherited write ends - past the documented reap window and past any caller that
+      expects `check` to return once the kill finished (the timeout-tree fixture's survivor
+      witness was masked this way until the fixture spawned its descendant with `DEVNULL`).
+      Fix direction: close the read ends from a daemon thread, or leave the final handle close to
+      process exit, so a pipe-holding survivor can never extend the reap; add a regression case
+      with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
+
+      **Closed (2026-11-19, `fix/eval-runner-windows-reap`, PR #100):** the lingering reap never
+      waits on a blocked pipe. `run_owned_command` reaps a timed-out gate with the bounded
+      `communicate(timeout=PROCESS_TREE_REAP_SECONDS)` plus `kill` and a bounded `wait` on the
+      direct child, so a descendant that escaped the tree kill (or the platform process tree) can
+      hold the inherited write ends without extending the reap; the call returns `timed_out=True`
+      with the output the POSIX reap read before the kill, while a Windows capture comes back
+      empty when a survivor holds the pipes (`communicate` there publishes a reader's pipe data
+      only at EOF). In the lingering branch the reap then closes its read ends on POSIX, where
+      `communicate` reads on the calling thread so the close cannot queue behind the survivor and
+      the finalizer close at return would emit `ResourceWarning: unclosed file`; Windows keeps
+      them open, where a close queues behind the reader thread parked in the pipe, and that
+      thread closes the stream once the survivor releases the write ends, or process exit does.
+      The regression case
+      `EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes` spawns a
+      gate whose descendant inherits stdout/stderr and outlives the kill (the kill is narrowed to
+      the direct child, so the survivor is missed, standing in for a descendant that escapes
+      `taskkill /T`), asserts the reap consumes its window (measured duration at least `timeout +
+      PROCESS_TREE_REAP_SECONDS - 2s`) and returns within the code's documented worst case
+      (`timeout + 2 * PROCESS_TREE_REAP_SECONDS + 5s`, with the failure message reporting the
+      measured duration), that the lingering branch waits once on the direct child within its own
+      reap window (the wait call is recorded through the delegating process proxy, since `kill`
+      alone already sets `returncode`), reports the timeout, on POSIX returns exactly the output
+      captured before the kill with both read ends asserted closed, keeps the Windows stdout
+      asserted open behind the parked reader, and terminates the survivor: red on
+      the pre-fix runner (`py -3.12 scripts/ci/test-model-routing-evaluation.py
+      EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes -v` ->
+      "run_owned_command did not return within 27.0s while a survivor held the gate's pipes: ...
+      survivor running at the bound=True, reap finished 27.8s after the call started, reap
+      finished after release=True", FAILED (failures=1) in 29.787s), green after (OK in 15.343s);
+      the focused descendant test passes on Windows (OK in 17.824s) and both tests pass under WSL
+      Ubuntu `python3` (OK in 28.885s), with the full Windows suite passing (`py -3.12
+      scripts/ci/test-model-routing-evaluation.py -v` -> Ran 66 tests in 1167.657s, OK,
+      skipped=2: the POSIX-only executable-mode and non-UTF-8 path fixtures).
+
 ## Dead-code candidates
 
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
