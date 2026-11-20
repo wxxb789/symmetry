@@ -2233,3 +2233,43 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
       host's `mixwrap` toolchain because its `mise` cannot install the pinned Elixir); the
       connection-fixture harness is covered by the stub test only on this host, whose fixed fixture
       database port 55444 has no container here.
+
+## Retro review follow-ups
+
+- [ ] Owner decision: should the served `can_start` exclude goal-managed work items? `portal_json.ex`
+      serves `can_start` from five conjuncts with no `goal_managed?` term
+      (`control/lib/symmetry_control_web/portal_json.ex:257-260`, beside `goal_managed:` at `:255`),
+      while the legacy run endpoint refuses every goal-managed item: `POST
+      /portal/api/work-items/:work_item_id/run` (`control/lib/symmetry_control_web/router.ex:86`) →
+      `Workspaces.launch_work_item/2` (`control/lib/symmetry_control/workspaces.ex:308`, guard at `:317`)
+      → `ensure_legacy_work_item/1` (`:865-869`) → 403 `goal_authority_required`
+      (`control/lib/symmetry_control_web/protocol.ex:72-73`). A goal-managed item in the shape plan
+      admission creates — backlog, agent assignee, no orchestration task (`goals.ex:6699-6714`) — is
+      therefore served `can_start: true` once it is ready in an active project with available external
+      work, and the work surface renders "Start run" from
+      it (`frontend/src/features/work/control.tsx:306`), which the endpoint then refuses. The same
+      payload already fences one flag of the family (`can_retry` delegates to
+      `Orchestration.retryable_attempt?/1`, which matches `goal_id: nil` only,
+      `control/lib/symmetry_control/orchestration.ex:647-650`), while `can_cancel` is unfenced
+      (`portal_json.ex:399`) even though the legacy cancel path applies the same guard
+      (`workspaces.ex:345-349`). Decide once whether the served `can_*` flags gain the goal fence or
+      whether they deliberately describe the legacy path only and the client gates on `goal_managed`,
+      then pin the decision with a serving test.
+
+      **Decided and closed (2026-11-20, owner; branch `feat/can-start-goal-fence`):** option A — the
+      server fences the flag family; no backward compatibility (the first release is not shipped).
+      Served `can_start` and `can_cancel` are false for every Goal-managed work item, resolved from
+      the same `WorkItem.goal_managed?/1` predicate `Workspaces.ensure_legacy_work_item/1` refuses
+      with (`control/lib/symmetry_control_web/portal_json.ex`: `work_item/2` reuses the value it
+      already serves as `goal_managed`, and `legacy_capabilities/3` applies it to the execution
+      projection the command-response `execution/2` shares); the run/cancel refusals, the 403 code,
+      `can_retry` and the client (no Goal gating added) are unchanged. Pinned by
+      `control/test/symmetry_control_web/controllers/portal_workflow_test.exs`: "a Goal-managed item
+      serves no start or cancel control, agreeing with the endpoints' refusal" — the plan-admission
+      shape and a queued Goal attempt serve `false` beside the endpoints' 403
+      `goal_authority_required`, while the same-shaped legacy item keeps `can_start: true` and its
+      queued attempt keeps `can_cancel: true` — beside the existing case's `can_retry: false` pin.
+      The published descriptions now state the fence
+      (`contracts/v1/workspace-read.schema.json`, `contracts/v1/work-detail-read.schema.json`,
+      `contracts/v1/chat-read.schema.json`), with the generated bindings refreshed through the
+      repository generator.

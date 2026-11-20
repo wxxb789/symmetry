@@ -133,7 +133,10 @@
           "description": "True only when the all-or-nothing Goal membership (goal_id, admitted_revision, acceptance_contract) is set; served so a client can present no writable path for a Goal-managed item."
         },
         "version": {"type": "integer"},
-        "can_start": {"type": "boolean"},
+        "can_start": {
+          "type": "boolean",
+          "description": "True when the work item carries no Goal membership and the legacy launch conditions hold: no orchestration task, an agent assignee, `backlog`/`ready` status, an active project and an available external work item. A Goal-managed work item always answers false: the legacy run endpoint refuses it with `goal_authority_required`."
+        },
         "execution": {"oneOf": [{"$ref": "#/definitions/WorkItemExecution"}, {"type": "null"}]},
         "updated_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}
       }
@@ -220,7 +223,7 @@
         "can_guide": {"type": "boolean"},
         "can_pause": {"type": "boolean"},
         "can_resume": {"type": "boolean"},
-        "can_cancel": {"type": "boolean", "description": "True when the task state permits a cancel and, while a runtime holds the attempt (claimed and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued or assigned attempt is applied by the control plane itself. A runtime without the advertisement is unknown and answers false."},
+        "can_cancel": {"type": "boolean", "description": "True when the task state permits a cancel and, while a runtime holds the attempt (claimed and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued or assigned attempt is applied by the control plane itself. A runtime without the advertisement is unknown and answers false. A Goal-managed work item always answers false: the legacy cancel path refuses it."},
         "can_retry": {"type": "boolean", "description": "True when the task state permits a retry, the work item's agent-assignment, external-work and active-project conditions hold, and at least one runtime assignment could select for the goal-less task — same binding as the retry re-admission (the corrected work-item profile and workspace plus the attempt's supervisory requirement) and capability containment, ignoring transient online, heartbeat and capacity state — advertises the adapter `start` operation of the fresh retried attempt. No such runtime answers false. A superseded run's pinned historical entry always answers false."},
         "intent_locked": {"type": "boolean"}
       }
