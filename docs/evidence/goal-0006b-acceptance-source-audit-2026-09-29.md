@@ -33,7 +33,7 @@ This map is not acceptance evidence.
 
 CLI observations from this task:
 
-- Repository: `Q:/repos/symmetry`.
+- Repository: `path-sha256:fc7ccde8b8aa06a7ec0905cdf94444d9ce06ee972944a6111b172ba7a4aa7947`.
 - Branch: `codex/goal-0006b-crash-safe-process-containment`.
 - `HEAD`: `d14debbf6ae3ded09e5013ef90952d347c01474d`.
 - PR #9 is open to `main`; its remote branch currently ends at
@@ -352,7 +352,7 @@ favorable final report without its inventory, mutations, limits, and review.
    hashes changed; concurrent work has changed the subject.
 2. From outside the shared checkout, create an isolated worktree from exact
    `d14debb`, for example:
-   `git -C Q:/repos/symmetry worktree add -b <new-goal-branch> <new-path> d14debbf6ae3ded09e5013ef90952d347c01474d`.
+   `git -C path-sha256:fc7ccde8b8aa06a7ec0905cdf94444d9ce06ee972944a6111b172ba7a4aa7947 worktree add -b <new-goal-branch> <new-path> d14debbf6ae3ded09e5013ef90952d347c01474d`.
    This neither switches nor cleans the shared checkout.
 3. Generate a binary patch for authorized tracked paths, excluding
    `docs/design/README.md`. Generate add-file patches for each explicitly listed

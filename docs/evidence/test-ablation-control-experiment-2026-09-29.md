@@ -26,13 +26,13 @@ or existing PostgreSQL service was used.
 Local evidence is exactly Elixir 1.19.6 on Erlang/OTP 28 and PostgreSQL 17.11
 inside WSL `symmetry-race`; it is not the CI runtime matrix. Every Mix command
 used `ERL_FLAGS='+S 4:4'` and private build path
-`/tmp/symmetry-ablation-mix-st01a0ed7f`.
+`path-sha256:3b04468f47d56c6a3b28fdc3169b21ecd5a477cc156992f417e7fe8bcc902774`.
 
-The experiment created only cluster `/tmp/symmetry-ablation-pg-st01a0ed7f`,
+The experiment created only cluster `path-sha256:f4774a678d602bd9b748951a9a90c95e797a744f5d0b288b8288d2860e939d13`,
 listener `127.0.0.1:55439`, database `symmetry_ablation_st01a0ed7f`, and user
 `postgres` with an unrecorded local experiment-only password. The first server
 start exited 1 because `/run/postgresql` was absent. The same owned cluster then
-started with private socket directory `-k /tmp/symmetry-ablation-pg-st01a0ed7f`.
+started with private socket directory `-k path-sha256:f4774a678d602bd9b748951a9a90c95e797a744f5d0b288b8288d2860e939d13`.
 At the end, `pg_ctl ... stop -m fast` succeeded, both owned cluster and build
 directories were removed, and `pg_isready` confirmed port 55439 was closed.
 
@@ -42,7 +42,7 @@ Common test environment:
 POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55439 POSTGRES_USER=postgres \
 POSTGRES_PASSWORD=<local-experiment-only> \
 POSTGRES_DB=symmetry_ablation_st01a0ed7f ERL_FLAGS='+S 4:4' \
-MIX_BUILD_PATH=/tmp/symmetry-ablation-mix-st01a0ed7f
+MIX_BUILD_PATH=path-sha256:3b04468f47d56c6a3b28fdc3169b21ecd5a477cc156992f417e7fe8bcc902774
 ```
 
 ## Bound source snapshots
@@ -160,8 +160,8 @@ new fixture using these exact WSL commands from the repository root:
 
 ```sh
 set -eu
-cluster=/tmp/symmetry-ablation-pg-parent-control-final-20260929
-build=/tmp/symmetry-ablation-mix-parent-control-final-20260929
+cluster=path-sha256:89cd0ccd721287a4e70467e5ab7e256bde562947a9ecb4a555d347932ebe15e0
+build=path-sha256:6f9356c27fa384d23231e1a866f8aab7fd0b5ebab412c57688c50a893e032f01
 port=55439
 db=symmetry_ablation_control_final_20260929
 
@@ -185,7 +185,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-cd /mnt/q/repos/symmetry/control
+cd path-sha256:4d826ee3b43fc255680f3d3018a1a20912ae414e33e3d42d26da88087aa17a55
 export POSTGRES_HOST=127.0.0.1
 export POSTGRES_PORT="$port"
 export POSTGRES_USER=postgres
