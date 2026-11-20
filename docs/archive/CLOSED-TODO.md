@@ -40,6 +40,9 @@ The revalidated test-database recovery entry appended to `## Retro review follow
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
 
+The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
+2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -2625,7 +2628,9 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       No surface, label, encoder, storage-schema or contract change; the decision and the
       edge-case table are written out in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`,
       which also records the second pre-#111 shape (keys for recorded names that start with `:`,
-      for example `human::Ada`) as out of scope and tracked open in `docs/TODO.md`.
+      for example `human::Ada`) as out of scope and tracked open in `docs/TODO.md`. That entry
+      was closed on 2026-11-21 (branch `fix/colon-owner-keys`); its closure below in this
+      archive records the decision.
       Pinned by `frontend/src/features/projects/filters.test.ts`, case "re-points the legacy
       sentinel bookmarks to the keys the encoder mints now": the legacy URL key maps to the
       minted key, both reader call sites select the unnamed-agent and unnamed-human rows, the
@@ -2662,3 +2667,66 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       passed at both widths in every run. The gate's environment, its carrier deviations and the
       failure classification are in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`; CI
       remains the merge gate.
+
+- [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
+      current encoder escapes a recorded value that starts with `:` by prefixing one
+      (`frontend/src/features/work/presentation.ts:94-97`), so a recorded name `:Ada` mints
+      `human:::Ada` (`agent:::Ada` on the agent side), while the pre-#111 encoder spelled it
+      unescaped — `human::Ada`. The reader committed with the legacy-sentinel fix
+      (`ownerKeyFilter`, `:135-139`) maps only the two sentinel words, so a bookmark or hand-typed
+      link carrying the pre-#111 spelling normalises to itself and matches no row, and the
+      pre-#111 key for a recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to
+      the escape the current encoder mints for the recorded name `unrecorded`, so it silently
+      selects that other row and cannot be disambiguated (the collision repeats for deeper colon
+      prefixes: for a recorded name with `k >= 2` leading colons, the pre-#111 key equals the
+      current mint for the same name with `k-1` leading colons, for example legacy `human:::Ada`
+      (name `::Ada`) is the current mint for `:Ada`). Reproduced at `3c705d7` (production bytes
+      identical to `7f62afe`) with a throwaway vitest probe over the repository's own modules
+      (deleted after the run, no test file kept): rows named `:Ada`, `::Ada`, `:unrecorded` and
+      `unrecorded` mint `human:::Ada`, `human::::Ada`, `human:::unrecorded` and
+      `human::unrecorded`; the legacy key `human::Ada` kept its spelling and `filterWorkItems`
+      selected `[]`; the legacy key `human::unrecorded` selected the row named `unrecorded`; the
+      legacy key `human:::Ada` selected the row named `:Ada` instead (the deeper-prefix
+      collision); and `ownerKeyLabel("human::Ada")` prints `Ada`, dropping the colon.
+      Reachable: `assignee_name` and `agent_profile` are length-bounded only
+      (`control/lib/symmetry_control/workspaces/schemas.ex:472-473`), so a colon-leading name can
+      be served. The shape was recorded as an explicit residual of the legacy-sentinel increment
+      (`docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`, "Out of scope"). Fix direction:
+      decide the reading for the colon-leading pre-#111 keys (re-point them like the sentinel, or
+      accept the collision and document it), then pin both shapes in
+      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
+      work-surface/frontend.
+
+      **Accepted and documented (2026-11-21, branch `fix/colon-owner-keys`):** the repo
+      owner/conductor decided, under the human owner's standing "no backward compatibility"
+      directive, to accept the collision and document it; no legacy re-point is added for
+      colon-leading keys — a key is always read as a current mint. The colliding pre-#111
+      spellings are byte-identical to the current mints of other names (`human::unrecorded`
+      for the recorded name `unrecorded`, `human:::Ada` for `:Ada`, every deeper prefix
+      shifting by one), so those cannot be disambiguated. The remaining case
+      (`human::Ada`, once the name `:Ada`) equals no current mint, and a re-point of only that
+      unambiguous subset would add compatibility code the owner does not require. The semantics
+      table, the decision and the trade-offs are in
+      `docs/plans/2026-11-21-colon-owner-keys-plan.md`; the reading is stated in the
+      `ownerKeyFilter` comment (`frontend/src/features/work/presentation.ts`, comment-only
+      edit). Pinned by `frontend/src/features/projects/filters.test.ts`, case "reads the
+      pre-#111 colon-leading owner keys as the current mints, accepting the collision":
+      `human::Ada` keeps its spelling and selects no row through both reader call sites while
+      `ownerKeyLabel` still renders `Ada`; `human::unrecorded` selects the row named
+      `unrecorded` and not the row named `:unrecorded`; `human:::Ada` selects the row named
+      `:Ada` and not the row named `::Ada`. Mutation check: re-pointing `human::Ada` to
+      `human:::Ada` in `ownerKeyFilter` reddens the first pin (file `1 failed | 8 passed (9)`,
+      assertion `filters.test.ts:136`, `expected { owner: 'human:::Ada' } to deeply equal
+      { owner: 'human::Ada' }`); reverted byte-identically (`diff` clean), focused run back to
+      `9 passed`, re-run `9 passed` after the final comment revision. Recorded runs: focused
+      vitest `9 passed` exit 0; full vitest `497 passed` (20 files) exit 0 on three runs, the
+      last on the final bytes (48.9s / 52.0s / 38.9s) — a first full run exited 1 with its
+      failure lines not retained (the capture pipe kept only a slow-environment performance
+      hint and the pnpm `[ELIFECYCLE]` line; the reruns on identical bytes are the working
+      verdict and CI remains the merge gate). Gates: `pnpm install --frozen-lockfile` exit 0; frontend typecheck 0,
+      lint 0, build 0; `git diff --check` 0. The browser render gate was not run and the
+      contract does not require it: the only production-source edit is a comment, and the built
+      portal bytes are identical with the comment in and out (`index.html`
+      `sha256:d2f694ddf97d861a1e00cfa577ef7ed36f0b6e2213aa4e917cb55cf52371a8e0`,
+      `assets/index-Cy35eFtz.css` `sha256:0c216884aa5315566e05140b108408e7f878c0890f4c26ad6cb74794f1cafa09`,
+      `assets/index-xLlmZ95U.js` `sha256:7b7562c7296d733a4c45b270be8b99f07bbf7703b147da4171730e3d73e5b133`).
