@@ -4497,6 +4497,11 @@ func TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability(t *testing
 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	waitForNativeRunning(t, store, state.RunKey{RunID: "run-1", Generation: 1})
+	select {
+	case <-session.turnStarted:
+	case <-time.After(testHangGuard):
+		t.Fatalf("native Pi provider turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
+	}
 	request := session.request
 	if request.ProviderAccess == nil || request.ProviderAccess.Path != "/api/v1/provider-actions" || request.ProviderAccess.Token != controlClient.providerAccess.Token {
 		t.Fatalf("native provider access = %#v", request.ProviderAccess)
@@ -4587,6 +4592,11 @@ func TestGoalAdmissionLeavesProviderAccessNilForNativeHarness(t *testing.T) {
 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	waitForNativeRunning(t, store, state.RunKey{RunID: "run-1", Generation: 1})
+	select {
+	case <-session.turnStarted:
+	case <-time.After(testHangGuard):
+		t.Fatalf("native turn did not start: %s", nativeStartFailureDetail(store, state.RunKey{RunID: "run-1", Generation: 1}))
+	}
 	if session.request.ProviderAccess != nil {
 		t.Fatalf("native start provider access = %#v, want nil", session.request.ProviderAccess)
 	}
@@ -4729,11 +4739,11 @@ func nativeStartFailureDetail(store *state.Store, key state.RunKey) string {
 }
 
 // waitForNativeRunning waits for the daemon's own durable start publication
-// instead of the fixture's turn channel: markRunning queues the "running"
-// transition immediately before the daemon calls StartTurn, so the wait ends when
-// the product publishes its state and never when a host-speed budget elapses. A
-// recorded failure ends the wait with the product's own reason, and the package's
-// testHangGuard bounds only a genuinely hung start.
+// instead of the fixture's turn channel. On the native Goal admission path
+// markRunning queues the "running" transition immediately before the daemon
+// calls StartTurn, so success ends on the product's durable publication while
+// the package's testHangGuard still bounds a start that never publishes. A
+// recorded failure ends the wait with the product's own reason.
 func waitForNativeRunning(t *testing.T, store *state.Store, key state.RunKey) {
 	t.Helper()
 	deadline := time.Now().Add(testHangGuard)

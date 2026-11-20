@@ -665,14 +665,24 @@ func (group *processGroup) waitForInitialDescendantScan(deadline time.Time) erro
 	if initialResult.endsMonitor() && group.monitorDone != nil {
 		// An initial scan that ends the monitor (a clean leader-absent
 		// proof, a scan failure, an observed escape or a seal) must be
-		// observed to exit before this barrier returns: the monitor
-		// publishes its final scan state and closes monitorDone only
+		// joined before this barrier returns success: the monitor's
+		// deferred completion write and its close(monitorDone) happen
 		// after it signals the initial scan, so the scan result alone
-		// does not order those writes before the caller's reads.
+		// does not order those writes before the caller's reads. On
+		// deadline expiry the join returns the containment error
+		// instead.
 		select {
 		case <-group.monitorDone:
 		case <-timer.C:
-			return fmt.Errorf("%w: initial descendant monitor did not stop before deadline", ErrLinuxDescendantContainmentUnproven)
+			// The timer may have expired while the initial scan
+			// wait was completing; a monitor that has exited since
+			// must still be joined instead of being reported as a
+			// deadline failure.
+			select {
+			case <-group.monitorDone:
+			default:
+				return fmt.Errorf("%w: initial descendant monitor did not stop before deadline", ErrLinuxDescendantContainmentUnproven)
+			}
 		}
 	}
 	if initialResult.scanErr != nil {
