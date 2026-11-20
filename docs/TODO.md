@@ -121,12 +121,13 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       close-only unbuffered channel (`:610` created, `:809` the only close), so it stays ready once
       closed: a monitor that exits as the deadline expires leaves both arms ready, Go picks uniformly
       between them, and a monitor whose published reason is already in hand can be reported as a
-      deadline failure. PR #105 (`e64f8c0`) fixed this shape in the barrier join —
-      `waitForInitialDescendantScan` (`:665-687`, the recheck at `:682-686`, pinned by the join probe
-      `process_unix_linux_test.go:2078` and the expired-timer probe `:2136`, whose assertion at
-      `:2157-2158` reddens when the recheck is removed) — and recorded this site as out of scope as
-      work "to be recorded in `docs/TODO.md`"; the same shape also sits in the final-scan RPC's timer
-      arms (`:1042-1043` request, `:1055` result). Fail-closed, so the cost is manufactured
+      deadline failure. PR #105 (`e64f8c0`) fixed this shape in the barrier join `:665-688`
+      (function `waitForInitialDescendantScan` `:642-696`, the recheck at `:682-686`, pinned by
+      the join probe `process_unix_linux_test.go:2078` and the expired-timer probe
+      `:2136`, whose assertion at `:2157-2158` reddens when the recheck is removed) — and recorded
+      this site as out of scope as work "to be recorded in `docs/TODO.md`"; the same shape also sits
+      in the final-scan RPC's timer arms (`:1042-1043` request, `:1055` result). Fail-closed, so the
+      cost is manufactured
       unproven-containment results for every caller
       that joins the monitor's own reason (`:1121`, `:1277`, `:1351`, `:1542`,
       `containment_supervisor_linux.go:1836`, `prepareDescendantMonitorForOwnerLoss` `:771-794`).
@@ -218,12 +219,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       database name that the test alias creates and migrates when absent), and `mix test` runs
       `symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet` first
       (`control/mix.exs:79`). Create and migrate make a missing or
-      migration-behind database usable, but nothing drops or truncates one: a database whose recorded
-      migration history disagrees with the objects actually present stays in place, and the alias's own
-      migrate step then fails before any test runs. Observed 2026-11-20 while gating an unrelated Control
-      change: an unpartitioned `mix test` stopped with Postgrex `42P07` (`duplicate_table`) on a
-      migration whose table already existed — `schema_migrations` named a revision older than the object
-      set — while the same change ran green on a partition database. A maintainer reads that as a code
+      migration-behind database usable, but nothing drops or truncates one: a pending migration whose
+      table already exists fails the alias's migrate step before any test runs. Observed 2026-11-20
+      while gating an unrelated Control change: an unpartitioned `mix test` stopped with Postgrex
+      `42P07` (`duplicate_table`) on a migration whose table already existed — `schema_migrations`
+      named a revision older than the object set — while the same change ran green on a partition
+      database. A maintainer reads that as a code
       failure, and the repository documents no recovery: `ecto.reset` exists as an alias
       (`control/mix.exs:70`) but no doc names it for the default test database, and the only documented
       resets belong to harness-owned databases (`docs/runbooks/session-receipt-recovery-e2e.md`). Fix
