@@ -1,0 +1,541 @@
+#!/usr/bin/env python3
+"""Regression tests for the record sanitizer's JSON reading.
+
+These tests are the JSON half of the sanitizer's regression evidence: a record whose
+document parses as JSON is read through its string literals (decoded, matched, and
+re-spelled), and this module pins that reading's escapes, offsets, digests, token
+opacity and fail-closed property. The raw/prose reading lives in
+``test-model-routing-record-sanitize.py``, whose fixtures this module shares.
+"""
+
+import importlib.util
+import json
+import pathlib
+import subprocess
+import sys
+import unittest
+
+# The sibling raw-reading module's name carries dashes, so it is loaded by path: the
+# shared fixtures (the loaded tool, the disposable root and `digest_of`) live there,
+# and the two suites must agree on them.
+_SIBLING = pathlib.Path(__file__).with_name("test-model-routing-record-sanitize.py")
+_spec = importlib.util.spec_from_file_location("test_model_routing_record_sanitize", _SIBLING)
+sibling = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(sibling)
+MODULE, ROOT, SCRIPT, digest_of = sibling.MODULE, sibling.ROOT, sibling.SCRIPT, sibling.digest_of
+
+_BS = chr(92)
+
+# The escape spellings the `ok` + escape + host-path shape pins: every two-character
+# escape the grammar spells and the `\\uXXXX` spelling of a space, and the host-rooted
+# POSIX locations they precede, so one loop crosses every spelling with every root.
+ESCAPE_N, ESCAPE_T = _BS + "n", _BS + "t"
+ESCAPE_U0020 = _BS + "u0020"
+ESCAPE_SPELLINGS = (ESCAPE_N, ESCAPE_T, _BS + "r", _BS + "b", _BS + "f", ESCAPE_U0020)
+HOST_RUNNER_WORK, HOST_TMP_RUN = "/home/runner/work/x", "/tmp/symmetry-run"
+HOST_ROOT_LOCATIONS = (
+    HOST_RUNNER_WORK, "/Users/op/run", "/root/native", HOST_TMP_RUN,
+    "/var/folders/ab/T", "/mnt/q/repos/symmetry", "/private/var/tmp/symmetry",
+)
+# The JSON-escaped drive spelling the Windows half of the shape follows an escape
+# with: what a writer's `json.dumps` spells for `C:\Users\op\run`.
+ESCAPED_DRIVE_RUN = "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run"
+# The digest the TODO entry records for the path text alone; the entry's own input
+# must render exactly it (the pre-fix tools bound the path plus the escape plus
+# `FAILED` as `path-sha256:a3a19f2b…`).
+ENTRY_PATH_DIGEST = "path-sha256:26e7b5b42607730bbb3c0fdb4d10159a3c52a1c4004d4cb4fc281175bc3f9fb8"
+
+
+def run_cli(text, *arguments):
+    """Run the sanitizer CLI over ``text`` on standard input."""
+
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *arguments],
+        input=text, text=True, capture_output=True, check=False,
+    )
+
+
+class JsonReadingTests(unittest.TestCase):
+    def test_a_json_escape_after_a_posix_path_survives_the_render(self):
+        # STD-A07: the segment classes used to accept a bare backslash, so the render
+        # took the JSON `\n` escape and the evidence line behind it into the token
+        # (`FAIL: verifier refused` vanished) while the record stayed valid JSON. The
+        # decoded reading stops the tail at the escape's newline, so the token binds
+        # the location's recorded bytes alone, whichever spelling the writer used.
+        for escape in (ESCAPE_N, _BS + "u000a"):
+            text = '{"out":"working directory: /tmp/run' + escape + 'FAIL: verifier refused"}'
+            for root_only in (True, False):
+                with self.subTest(escape=escape, root_only=root_only):
+                    rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                    self.assertEqual(
+                        rendered,
+                        '{"out":"working directory: ' + digest_of("/tmp/run")
+                        + escape + 'FAIL: verifier refused"}',
+                    )
+                    self.assertEqual(
+                        json.loads(rendered),
+                        {"out": "working directory: " + digest_of("/tmp/run")
+                         + "\nFAIL: verifier refused"},
+                    )
+                    self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+
+    def test_a_json_escape_after_a_windows_path_survives_the_render(self):
+        # The entry's own reproduction: the location is recorded with the JSON-escaped
+        # doubled separators and the two-character `\n` escape follows its last segment,
+        # with an evidence line behind the escape. The pre-fix tail took the escape and
+        # `FAILED` into the token (the token bound path + escape + `FAILED`, the
+        # entry's `path-sha256:a3a19f2b…`); the decoded reading binds the location's
+        # recorded bytes (`path-sha256:26e7b5b4…`, the digest the entry records for the
+        # path alone) and leaves the escape and the line where they were.
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(
+                    '{"output":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}', [],
+                    root_only=root_only,
+                )
+                self.assertEqual(
+                    rendered, '{"output":"wrote ' + digest_of(ESCAPED_DRIVE_RUN) + _BS + 'nFAILED"}',
+                )
+                self.assertIn(ENTRY_PATH_DIGEST, rendered)
+                self.assertEqual(digest_of(ESCAPED_DRIVE_RUN), ENTRY_PATH_DIGEST)
+                self.assertEqual(
+                    json.loads(rendered)["output"], "wrote " + digest_of(ESCAPED_DRIVE_RUN) + "\nFAILED",
+                )
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+
+    def test_a_json_escape_after_every_windows_family_survives_the_render(self):
+        # The same shape on the families the entry lists: the location is spelled with
+        # its JSON-escaped separators and the escape follows the last segment. Every
+        # family stops at the decoded newline in both scopes, and the token binds
+        # exactly the location's recorded bytes - the UNC leader's escaped run
+        # included.
+        cases = (
+            _BS * 4 + "server" + _BS * 2 + "share" + _BS * 2 + "run",     # UNC, doubly escaped leader
+            _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run",         # root-relative spelling
+            "//server/share/run",                                         # slash-UNC authority
+            "file:///C:/Users/op/run",                                    # file: URL
+            "file:" + _BS * 2 + "server" + _BS * 2 + "share" + _BS * 2 + "run",
+        )
+        for path in cases:
+            for root_only in (True, False):
+                with self.subTest(path=path, root_only=root_only):
+                    text = '{"p":"' + path + _BS + 'nFAILED"}'
+                    rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                    self.assertEqual(rendered, '{"p":"' + digest_of(path) + _BS + 'nFAILED"}')
+                    self.assertEqual(json.loads(rendered)["p"], digest_of(path) + "\nFAILED")
+                    self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+        # A JSON-escaped backslash stays a path byte: the record's `\\\\` decodes to two
+        # literal backslashes, so the segment behind the pair is part of the location
+        # (`...\\n` is not an escape there) and the whole spelling is one token. The
+        # reading is the JSON grammar's, not a shape guess that would cut a location at
+        # its own last separator.
+        pair = "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run" + _BS * 4 + "n"
+        for root_only in (True, False):
+            with self.subTest(shape="escaped-backslash", root_only=root_only):
+                rendered = MODULE.sanitize_text('{"p":"' + pair + '"}', [], root_only=root_only)
+                self.assertEqual(rendered, '{"p":"' + digest_of(pair) + '"}')
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+        # The accepted boundary, pinned rather than silent: a literal that mixes an
+        # escaped separator with an escape-shaped one - a spelling only a producer bug
+        # writes, `C:\\a\repo` - is read as JSON, where that backslash is a carriage
+        # return and not a separator. The location renders up to the escape, and the
+        # escape's own spelling plus the text behind it stay outside the token: no path
+        # byte is left in front of the residue, the record is still valid JSON, and
+        # rendering stays idempotent. A later narrowing must change this case visibly.
+        mixed = "C:" + _BS * 2 + "a" + _BS + "repo"
+        for root_only in (True, False):
+            with self.subTest(shape="mixed-spelling", root_only=root_only):
+                rendered = MODULE.sanitize_text('{"p":"' + mixed + '"}', [], root_only=root_only)
+                self.assertEqual(
+                    rendered, '{"p":"' + digest_of("C:" + _BS * 2 + "a") + _BS + 'repo"}',
+                )
+                self.assertEqual(
+                    json.loads(rendered)["p"], digest_of("C:" + _BS * 2 + "a") + "\r" + "epo",
+                )
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+
+    def test_an_escaped_space_nbsp_and_apostrophe_stay_inside_the_location(self):
+        # The decoded reading's byte classes, pinned on the shapes a valid producer
+        # writes: a space, NBSP or U+3000 a JSON writer escaped is the path character
+        # it decodes to (Python's `json.dumps` default spells a non-ASCII space as a
+        # `\\uXXXX` escape), and an apostrophe spelled the same way is part of the
+        # segment name (`O'Brien`). A partial render here would republish the tail of
+        # the location, so each case asserts the exact one-token render.
+        cases = (
+            # An escaped plain space between two segments.
+            '{"p":"C:' + _BS * 2 + "Program" + _BS + "u0020Files" + _BS * 2 + "op" + _BS * 2 + "secret" + '"}',
+            # NBSP and U+3000 as Python's `json.dumps` default writes them.
+            '{"p": "C:' + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "my" + _BS + 'u00a0project"}',
+            '{"p": "C:' + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "my" + _BS + 'u3000project"}',
+            # The apostrophe-in-profile-name case.
+            '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "O" + _BS + "u0027Brien" + _BS * 2 + "secret" + '"}',
+            # A literal space and NBSP beside a segment that continues to the line end.
+            '{"p": "C:' + _BS * 2 + "Users" + _BS * 2 + "First Last" + _BS * 2 + "my" + _BS + 'u00a0project"}',
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                json.loads(text)  # the document parses: the decoded reading owns it
+                # The recorded spelling between the literal's quotes; the render
+                # replaces exactly it with the token its digest binds.
+                spelling = text.split('"', 3)[3][:-2]
+                for root_only in (True, False):
+                    with self.subTest(text=text, root_only=root_only):
+                        rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                        self.assertEqual(rendered, text.replace(spelling, digest_of(spelling)), text)
+                        self.assertEqual(
+                            MODULE.sanitize_text(rendered, [], root_only=root_only), rendered
+                        )
+
+    def test_an_escaped_quote_and_surrogate_pair_keep_the_mapping(self):
+        # A decoded quote ends the location and stays outside the token: the drive
+        # match stops at it, so the token binds the recorded bytes before the quote.
+        raw_path = "C:" + _BS * 2 + "dir" + _BS * 2 + "file"
+        text = '{"t": "see ' + _BS + '"' + raw_path + _BS + '", ok", "n": 1}'
+        rendered = MODULE.sanitize_text(text, [], root_only=True)
+        self.assertEqual(
+            json.loads(rendered), {"t": 'see "' + digest_of(raw_path) + '", ok', "n": 1},
+        )
+        # An even trailing run of recorded backslashes is the value's own backslashes
+        # before the string's closing quote, so the whole run stays inside the token.
+        tail_path = "C:" + _BS * 2 + "dir" + _BS * 2
+        tail_rendered = MODULE.sanitize_text('{"t": "' + tail_path + '"}', [], root_only=True)
+        self.assertEqual(json.loads(tail_rendered), {"t": digest_of(tail_path)})
+        # An odd run longer than one behaves the same way: the escape pair stays inside
+        # the token and the quote's own escape outside it, so the quoted string still
+        # decodes and no bare quote is left behind.
+        run3 = MODULE.sanitize_text(
+            '{"t": "see ' + _BS + '"' + tail_path + _BS + '", ok"}', [], root_only=True,
+        )
+        self.assertEqual(json.loads(run3), {"t": 'see "' + digest_of(tail_path) + '", ok'})
+        # The escaped-quote parity: a literal carrying an odd number of `\"` escapes
+        # before the path is still one literal (a scan that let an escaped quote end
+        # it would read the path raw and absorb the following escape and line).
+        odd = ('{"out":"see ' + _BS + '"' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}')
+        odd_rendered = MODULE.sanitize_text(odd, [], root_only=True)
+        self.assertEqual(
+            odd_rendered,
+            '{"out":"see ' + _BS + '"' + digest_of(ESCAPED_DRIVE_RUN) + _BS + 'nFAILED"}',
+        )
+        self.assertEqual(json.loads(odd_rendered)["out"],
+                         'see "' + digest_of(ESCAPED_DRIVE_RUN) + "\nFAILED")
+        # A surrogate pair is one decoded character covering its twelve recorded
+        # bytes, so a location that contains it still renders as one token binding the
+        # whole recorded spelling.
+        pair_path = "C:" + _BS * 2 + "Users" + _BS * 2 + "x" + _BS + "ud83d" + _BS + "ude00" \
+            + _BS * 2 + "run"
+        pair_rendered = MODULE.sanitize_text('{"p":"' + pair_path + '"}', [], root_only=True)
+        self.assertEqual(pair_rendered, '{"p":"' + digest_of(pair_path) + '"}')
+        for shape in (rendered, tail_rendered, run3, odd_rendered, pair_rendered):
+            self.assertEqual(MODULE.sanitize_text(shape, [], root_only=True), shape)
+
+    def test_the_root_matchers_escape_their_own_recorded_bytes(self):
+        # A `--root` whose bytes contain a regex metacharacter (`)`) must match its own
+        # recorded spelling and nothing else: `re.escape` keeps `store)` a literal
+        # `store` + `)`, and the decoded reading never lets a substituted byte satisfy
+        # a root.
+        root, text = "/srv/store)", '{"out":"/srv/store)/x' + _BS + 'n"}'
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [root], root_only=root_only)
+                self.assertEqual(rendered, '{"out":"<disposable-root>/x' + _BS + 'n"}')
+                self.assertEqual(MODULE.sanitize_text(rendered, [root], root_only=root_only), rendered)
+        # The same root on a record that does not spell the root: the record's `\n`
+        # escape is not a `)` for the root to match. `--root-only` leaves the record
+        # alone, and the default scope renders the bare `/srv/store` as the absolute
+        # path it is - never through the root.
+        masked = '{"out":"/srv/store' + _BS + 'n"}'
+        self.assertEqual(MODULE.sanitize_text(masked, [root], root_only=True), masked)
+        self.assertEqual(
+            MODULE.sanitize_text(masked, [root], root_only=False),
+            '{"out":"' + digest_of("/srv/store") + _BS + 'n"}',
+        )
+        # A drive root with the metacharacter in a middle segment.
+        drive_root = "C:/a))b/run"
+        drive_text = '{"p":"C:' + _BS * 2 + "a))b" + _BS * 2 + "run" + _BS + 'n"}'
+        self.assertEqual(
+            MODULE.sanitize_text(drive_text, [drive_root], root_only=True),
+            '{"p":"<disposable-root>' + _BS + 'n"}',
+        )
+        # Rendering rendered text stays a no-op even when the token is spelled right
+        # before the root's own bytes.
+        once = MODULE.sanitize_text('{"p":"/srv/store/srv/store"}', ["/srv/store"], root_only=True)
+        self.assertEqual(once, '{"p":"<disposable-root>/srv/store"}')
+        self.assertEqual(
+            MODULE.sanitize_text(once, ["/srv/store"], root_only=True), once,
+        )
+
+    def test_a_token_never_binds_another_tokens_text(self):
+        # A later matcher must not touch bytes an earlier replacement wrote: the pre-fix
+        # render took `//r` + the escape spelling up to the just-written token's own
+        # `path-sha256` text into a second digest and left the first token as an
+        # orphaned `:<hex>` fragment. Every digest here binds recorded bytes alone.
+        text = '{"out":"' + _BS + 'u0008//r' + _BS + 'bfile:C:/"}'
+        expected = '{"out":"' + _BS + 'u0008//r' + _BS + 'b' + digest_of("file:C:/") + '"}'
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                self.assertEqual(rendered, expected)
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+        # The prose shape of the same defect: the escape arm's added match (`/child`
+        # behind a recorded `\n`) used to be swallowed by the root-relative matcher's
+        # next pass, which hashed the first token's own text and left an orphan. The
+        # overlapping matches now merge into one span, so the whole location renders as
+        # one token - the base tool's own render.
+        prose = "worktree " + _BS + "Users" + _BS + "zzalpha" + _BS + "zzbeta" + _BS + "n/child"
+        whole = _BS + "Users" + _BS + "zzalpha" + _BS + "zzbeta" + _BS + "n/child"
+        for root_only in (True, False):
+            with self.subTest(shape="prose", root_only=root_only):
+                rendered = MODULE.sanitize_text(prose, [], root_only=root_only)
+                self.assertEqual(rendered, "worktree " + digest_of(whole))
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+        # A root spelling behind a rendered `<disposable-root>` is the token's own
+        # trailing structure, not a new location.
+        token_tail = "//r" + _BS + "u005c/srv/store"
+        self.assertEqual(
+            MODULE.sanitize_text('{"p":"' + token_tail + '"}', ["/srv/store"], root_only=True),
+            '{"p":"' + digest_of(token_tail) + '"}',
+        )
+
+    def test_the_reading_is_decided_at_the_document_level(self):
+        # A JSONL record decodes each line's literals: the escape stays outside the
+        # token on both lines and the whole file renders to bytes its own check
+        # accepts.
+        jsonl = (
+            '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run" + _BS + 'nFAILED"}\n'
+            '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run2" + _BS + 'nFAILED"}\n'
+        )
+        rendered = MODULE.sanitize_text(jsonl, [], root_only=True)
+        self.assertEqual(
+            rendered,
+            '{"p":"' + digest_of("C:" + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run")
+            + _BS + 'nFAILED"}\n'
+            + '{"p":"' + digest_of("C:" + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run2")
+            + _BS + 'nFAILED"}\n',
+        )
+        self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        # One prose line makes the whole document prose: a stray quote's mispairing
+        # cannot reach into the JSON line, and the raw reading owns the document - the
+        # same render the base tool produced (the escape and the line behind it are
+        # absorbed with the location).
+        mixed = "the 3\" bolt\n" + '{"output":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}'
+        absorbed = ESCAPED_DRIVE_RUN + _BS + "nFAILED"
+        rendered = MODULE.sanitize_text(mixed, [], root_only=True)
+        self.assertEqual(rendered, 'the 3" bolt\n{"output":"wrote ' + digest_of(absorbed) + '"}')
+        self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        # A Markdown record carrying a fenced JSON block stays prose in both scopes.
+        markdown = "## Run\n\n```json\n{\"p\":\"" + ESCAPED_DRIVE_RUN + "\"}\n```\n"
+        self.assertEqual(
+            MODULE.sanitize_text(markdown, [], root_only=True),
+            '## Run\n\n```json\n{"p":"' + digest_of(ESCAPED_DRIVE_RUN) + '"}\n```\n',
+        )
+
+    def test_a_raw_single_backslash_spelling_inside_json_is_read_as_decoded(self):
+        # The replaced design's D2b carve-out, pinned as the behavior it was replaced
+        # with: a valid JSON literal whose separators are spelled with one backslash
+        # decodes them into control characters (`C:\repo\tmp` is `C:`, a carriage
+        # return, `epo`, a tab, `mp`), so the decoded value carries no location and the
+        # record renders unchanged. The raw reading does not re-read a JSON document's
+        # literals, so this is a deliberate, visible boundary: the pre-fix tools
+        # rendered these bytes (they hashed the raw spelling), and a later design
+        # change must change this case visibly.
+        for text in (
+            '{"note":"see C:' + _BS + 'temp' + _BS + 'nFAILED"}',
+            '{"note":"see C:' + _BS + 'repo' + _BS + 'tmp"}',
+        ):
+            json.loads(text)  # the document parses: the decoded reading owns it
+            for root_only in (True, False):
+                with self.subTest(text=text, root_only=root_only):
+                    self.assertEqual(MODULE.sanitize_text(text, [], root_only=root_only), text)
+
+    def test_a_host_path_after_a_json_escape_is_caught(self):
+        # The #119 round-5 follow-up: the POSIX families' leading boundary read the
+        # escape's own letter as a name character glued in front of the location, so
+        # `{"out":"ok\n/home/…"}` passed `--check --root-only` and the render left the
+        # host path literal. The decoded escape is a boundary, and the locations behind
+        # it render with the escape outside the token - the host-rooted POSIX roots
+        # first, then the other families.
+        for escape in ESCAPE_SPELLINGS:
+            for path in HOST_ROOT_LOCATIONS:
+                with self.subTest(escape=escape, path=path):
+                    text = '{"out":"ok' + escape + path + ', failed"}'
+                    rendered = MODULE.sanitize_text(text, [], root_only=True)
+                    self.assertEqual(rendered, '{"out":"ok' + escape + digest_of(path) + ', failed"}')
+                    self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        for path in ("C:" + _BS * 2 + "Users" + _BS * 2 + "op", _BS * 4 + "server" + _BS * 2 + "share",
+                     "//server/share", "file:///C:/Users/op"):
+            with self.subTest(path=path):
+                text = '{"out":"ok' + _BS + 'n' + path + ', failed"}'
+                self.assertEqual(
+                    MODULE.sanitize_text(text, [], root_only=True),
+                    '{"out":"ok' + _BS + 'n' + digest_of(path) + ', failed"}',
+                )
+        # The general POSIX family behind the escape renders in the default scope, and
+        # `--root-only` still spares a route it does not recognise.
+        cmd = '{"cmd":"go test' + _BS + 'n/etc/hosts"}'
+        self.assertEqual(MODULE.sanitize_text(cmd, []),
+                         '{"cmd":"go test' + _BS + 'n' + digest_of("/etc/hosts") + '"}')
+        self.assertEqual(MODULE.sanitize_text(cmd, [], root_only=True), cmd)
+        # The boundary negatives stay: the escape allowance does not weaken the name
+        # rejection, so a literal name character glued in front is still not this
+        # location.
+        for text in ('{"out":"ok' + _BS + 'naa/home/op/run"}',
+                     '{"out":"ok' + _BS + 'n../home/op/run"}',
+                     '{"out":"ok' + _BS + 'nx_/home/op/run"}',
+                     '{"out":"oka/srv/store/x"}'):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    MODULE.sanitize_text(text, ["/srv/store"], root_only=True), text
+                )
+
+    def test_the_fail_closed_property_holds_for_every_repro_shape(self):
+        # The invariant, as a property over the shapes both reviews reproduced: after a
+        # render no decoded string carries a host-path segment from the input, the
+        # rendered bytes pass the same root-only check the input fails, and rendering
+        # is a fixpoint. The corpus: the four truncated-render shapes (an escaped
+        # space, NBSP, U+3000 and an escaped apostrophe), the space fail-open shapes,
+        # the token-prefix shape, the stray-quote document, the root-metacharacter
+        # shapes, the entry's own input, the round-5 POSIX path after an escape, a
+        # surrogate pair and a doubled escaped backslash.
+        cases = (
+            ("escaped-space", '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "my" + _BS + 'u0020project"}',
+             [], ("Users", "project"), True),
+            ("nbspan", json.dumps({"p": "C:" + _BS + "Users" + _BS + "op" + _BS + "my\u00a0project"}),
+             [], ("Users", "project"), True),
+            ("ideographic-space", json.dumps({"p": "C:" + _BS + "Users" + _BS + "op" + _BS + "my\u3000project"}),
+             [], ("Users", "project"), True),
+            ("escaped-apostrophe",
+             '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "O" + _BS + "u0027Brien" + _BS * 2 + "secret" + '"}',
+             [], ("Users", "Brien"), True),
+            ("space-continued",
+             '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "run name" + _BS + 'nFAILED"}',
+             [], ("Users", "run"), True),
+            ("root-space-continued", '{"out":"/srv/store name' + _BS + 'nFAILED"}',
+             ["/srv/store"], ("srv", "store"), True),
+            ("token-prefix", '{"out":"' + _BS + 'u0008//r' + _BS + 'bfile:C:/"}',
+             [], ("file:", "C:/"), True),
+            ("stray-quote",
+             "the 3\" bolt\n" + '{"output":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}',
+             [], ("Users", "FAILED2"), False),
+            ("root-metacharacter", '{"out":"/srv/store)/x' + _BS + 'n"}',
+             ["/srv/store)"], ("srv", "store"), True),
+            ("entry-windows", '{"output":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}',
+             [], ("Users", "run"), True),
+            ("entry-temp", '{"p":"C:' + _BS * 2 + 'temp' + _BS + 'nFAILED"}',
+             [], ("temp",), True),
+            ("round5-posix", '{"out":"ok' + _BS + 'n/home/runner/work/x failed"}',
+             [], ("runner", "work"), True),
+            ("round5-root", '{"out":"ok' + _BS + 'n/srv/store/x failed"}',
+             ["/srv/store"], ("srv", "store"), True),
+            ("surrogate-pair",
+             json.dumps({"p": "C:" + _BS + "Users" + _BS + "op" + _BS + "x\U0001F600" + _BS + "run"}),
+             [], ("Users", "run"), True),
+            ("doubled-backslash",
+             '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run" + _BS * 4 + 'n"}',
+             [], ("Users", "run"), True),
+        )
+        for name, text, roots, fragments, json_expected in cases:
+            with self.subTest(name=name):
+                arguments = []
+                for root in roots:
+                    arguments += ["--root", root]
+                self.assertEqual(run_cli(text, "--check", "--root-only", *arguments).returncode, 1, name)
+                rendered = MODULE.sanitize_text(text, roots, root_only=True)
+                self.assertNotEqual(rendered, text, name)
+                self.assertEqual(MODULE.sanitize_text(rendered, roots, root_only=True), rendered, name)
+                self.assertEqual(
+                    run_cli(rendered, "--check", "--root-only", *arguments).returncode, 0, name,
+                )
+                if json_expected:
+                    decoded = json.loads(rendered)
+                    body = json.dumps(decoded, ensure_ascii=False)
+                else:
+                    body = rendered
+                for fragment in fragments:
+                    self.assertNotIn(fragment, body, f"{name}: {rendered!r}")
+
+    def test_cli_root_only_check_refuses_a_root_after_a_json_escape(self):
+        # Opus P2 (round 4): inside a quoted record, a line's root follows an
+        # escape sequence (`\n`, `\t`, ...), and the leading name lookbehind read
+        # the escape's letter as a name character glued to the root, so the root
+        # bytes passed `--check --root-only`. The decoded escape is a boundary; the
+        # name-character rejection itself stays.
+        posix_root = "/srv/store"
+        cases = (
+            '{"out":"ok\\n' + posix_root + '/x failed"}\n',
+            '{"out":"a\\t' + posix_root + '/x"}\n',
+            '{"out":"ok' + _BS + 'u000a' + posix_root + '/x failed"}\n',
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                result = run_cli(text, "--check", "--root-only", "--root", posix_root)
+                self.assertEqual(result.returncode, 1, text)
+                self.assertEqual(result.stdout, "", text)
+                self.assertIn("refused", result.stderr)
+        # Boundary negative: a literal name character glued in front is still not
+        # this root.
+        passed = run_cli("aa" + posix_root + "/x\n", "--check", "--root-only", "--root", posix_root)
+        self.assertEqual(passed.returncode, 0, passed.stderr)
+        self.assertEqual(passed.stdout, "")
+
+    def test_cli_root_only_check_refuses_a_host_path_after_a_json_escape(self):
+        # The #119 round-5 follow-up reproduction: the host-path patterns read the
+        # escape's letter as a name character glued in front of the location, so the
+        # recorded bytes still naming a host path passed `--check --root-only`. The
+        # decoded escape is a boundary, and a location behind it refuses the input;
+        # the shape also renders to bytes the check accepts, so a re-rendered record
+        # is clean.
+        cases = (
+            '{"out":"ok' + ESCAPE_N + HOST_RUNNER_WORK + ' failed"}\n',
+            '{"out":"ok' + ESCAPE_T + HOST_RUNNER_WORK + '"}\n',
+            '{"out":"ok' + ESCAPE_U0020 + HOST_TMP_RUN + '"}\n',
+            '{"p":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}\n',
+            '{"p":"wrote //server/share/run' + _BS + 'nFAILED"}\n',
+            '{"p":"wrote file:///C:/Users/op/run' + _BS + 'nFAILED"}\n',
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                result = run_cli(text, "--check", "--root-only")
+                self.assertEqual(result.returncode, 1, text)
+                self.assertEqual(result.stdout, "", text)
+                self.assertIn("refused", result.stderr)
+        # The default scope refuses the same bytes, and every shape's render passes the
+        # root-only check it just refused, with the rendered bytes left alone by the
+        # render that produced them.
+        for text in cases:
+            with self.subTest(text=text, scope="default"):
+                self.assertEqual(run_cli(text, "--check").returncode, 1, text)
+            with self.subTest(text=text, scope="rerender"):
+                rendered = MODULE.sanitize_text(text, [], root_only=True)
+                recheck = run_cli(rendered, "--check", "--root-only")
+                self.assertEqual(recheck.returncode, 0, recheck.stderr)
+                again = run_cli(rendered, "--root-only")
+                self.assertEqual(again.stdout, rendered)
+        # Boundary negative: the escape allowance does not weaken the name rejection, so
+        # a literal name character glued in front still passes.
+        passed = run_cli("aa/home/runner/x\n", "--check", "--root-only")
+        self.assertEqual(passed.returncode, 0, passed.stderr)
+        self.assertEqual(passed.stdout, "")
+
+    def test_cli_renders_json_records_to_bytes_its_own_check_accepts(self):
+        # The publishing round trip: render a JSON record through the CLI, then run the
+        # root-only check over the rendered bytes. The check the input fails must pass
+        # the output, or a publisher that renders before writing would publish bytes
+        # its own gate refuses.
+        text = (
+            '{"out":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED",'
+            '"note":"C:' + _BS * 2 + "Users" + _BS * 2 + "O" + _BS + 'u0027Brien"}\n'
+        )
+        self.assertEqual(run_cli(text, "--check", "--root-only").returncode, 1)
+        rendered = run_cli(text, "--root-only")
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        self.assertEqual(run_cli(rendered.stdout, "--check", "--root-only").returncode, 0)
+        # The rendered record is still a JSON document carrying no host path.
+        self.assertEqual(
+            json.loads(rendered.stdout),
+            {"out": "wrote " + digest_of(ESCAPED_DRIVE_RUN) + "\nFAILED",
+             "note": digest_of("C:" + _BS * 2 + "Users" + _BS * 2 + "O" + _BS + "u0027Brien")},
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -36,24 +36,34 @@ including a POSIX path spelled after a key's colon and the JSON-escaped spelling
 of one (``\\/etc\\/hosts``) - which is its documented boundary for argv/output
 capture.
 
-The recorded text is read as JSON where it is JSON: inside a string literal an
-escape that decodes to whitespace, punctuation or a quote (``\\n``, ``\\t``,
-``\\"``, ``\\uXXXX`` spellings of either) is boundary text rather than a path
-byte, so a location behind the escape is still a location. The rule is exactly
-the byte classes' exclusion set: an escape whose decoded character the classes
-accept - ``\\\\`` and ``\\/`` (the separators themselves) or a control escape
-such as ``\\b`` - stays path text, so a path tail may cross it and take the
-escape together with the text behind it into the token. One further carve-out is
-disclosed rather than hidden: inside a valid JSON literal whose JSON reading
-rejects the location (a quoted raw drive spelling whose separator decodes into a
-tab), the fallback pass re-reads the raw text, so it may absorb a following
-escape and the text behind it into the token as well - the fail-closed trade
-that keeps a quoted raw location from losing its match. The JSON reading is
-applied through one shared rule - ``_escape_boundary_view`` plus the shared
-leading boundary every pattern carries - so all families agree, and a span that
-is not a JSON string literal keeps the raw reading (a raw Windows spelling
-separates its segments with the same ``\\\\`` an escape spells, so the reading has
-to come from the text's own JSON context, not from shape).
+The text is read in one of two ways, decided at the document level:
+
+* A record is **JSON-structured** when the whole file parses with
+  ``json.loads`` (a single JSON document) or every non-empty line does
+  (JSONL). Every string literal - a key or a value - is then decoded with the
+  JSON grammar's own escapes, and every path matcher runs on the decoded text.
+  A match maps back to the raw bytes it covers, every escape inside it
+  included, so the digest still binds the recorded spelling the token
+  replaces, and the rendered bytes stay valid JSON. A decoded space-like
+  character (the plain space, NBSP, U+3000) continues a location and a
+  decoded apostrophe is a path byte, because in a decoded value they are
+  characters a directory name may carry, not syntax; the control characters
+  an escape spells (a newline, a tab, ...) stay boundaries, so a match never
+  absorbs a following escape and the evidence line behind it. A later matcher
+  never touches bytes an earlier replacement wrote, so no token can bind
+  another token's text. Text outside string literals is never scanned in this
+  reading: in a JSON document it can only be numbers, literals and
+  punctuation.
+* Anything else is **prose**, and prose keeps the base tool's raw reading,
+  plus the shared leading boundary's escape arm: a matcher sees the recorded
+  bytes exactly as written, so a raw Windows spelling whose separators read
+  like escapes (``\\run`` starts with ``\\r``) still renders whole, and a
+  recorded escape in front of a location is a boundary rather than a name
+  character. Prose keeps the base tool's fail-closed over-approximation: a
+  space-continued chunk (`C:\\Users\\op\\my project`, `.../x today`) renders
+  whole, because a partial render would leave path bytes behind, and a quoted
+  raw spelling whose escapes decode into control characters keeps the raw
+  reading.
 
 Usage (record publishers apply this before writing a record)::
 
@@ -74,55 +84,64 @@ import json
 import pathlib
 import re
 import sys
-from typing import Callable
+from typing import NamedTuple
 
 DISPOSABLE_ROOT_TOKEN = "<disposable-root>"
 
-# The character ``_escape_boundary_view`` writes over a JSON escape's spelling: no path
-# byte class accepts it, so a tail stops there, and no lookbehind's negative set names
-# it, so a location that starts right behind it is still a location.
-ESCAPE_BOUNDARY_CHAR = ")"
-# What one path byte class refuses, as the one character class every family's byte
-# classes spell out (``[^\s\"'`,;:)]`` and its segment variants): an escape whose
-# decoded character is one of these is not a path byte, so the view masks it.
-NON_PATH_CHARACTER = re.compile(r"[\s\"'`,;:)]")
-# The characters a JSON escape spells besides ``\uXXXX``. Their decoded characters are
-# what decides masking: ``\\`` and ``\/`` decode to the separators themselves, and ``\b``
-# to a control byte the byte classes accept, so all three stay path text; ``"`` decodes
-# to a quote and ``n``/``r``/``t``/``f`` to whitespace - the exclusion set
-# ``NON_PATH_CHARACTER`` names. A ``\uXXXX`` escape masks iff its decoded character is
-# in that set too.
-ESCAPE_CHARACTERS = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",
-                     "n": "\n", "r": "\r", "t": "\t"}
-
 
 def leading_boundary(excluded: str) -> str:
-    """The leading lookbehind every path family carries: what may sit in front of one.
+    """The leading lookbehind every path family that takes one carries: what may sit in front.
 
     A JSON escape in front of a location is a boundary, not a name: the letter of a
     two-character escape (``\\n``, ``\\t``, ``\\r``, ``\\b``, ``\\f``) or the last hex
     digit of a ``\\uXXXX`` escape ends the escape sequence, so a path that starts the
-    next line of a quoted record - or follows an escape the raw spelling would read as
-    path text - still matches, exactly as the ``--root`` matchers treat it. Every other
-    character the family refuses is spelled by its own negative set: a name character
-    glued in front (``aa/srv/store/x``), a separator, a colon or an already-rendered
-    token's ``>`` keeps relative paths, URLs and token tails out.
+    next line of a recorded record - or follows an escape the raw spelling would read
+    as path text - still matches, exactly as the ``--root`` matchers treat it. Every
+    other character the family refuses is spelled by its own negative set: a name
+    character glued in front (``aa/srv/store/x``), a separator, a colon or an
+    already-rendered token's ``>`` keeps relative paths, URLs and token tails out.
+    ``_COLON_POSIX_PATH`` is the one family that does not take it: the character after
+    a key's colon decides between an absolute path and a URL authority, so that pattern
+    keeps its own bare ``(?<=:)``.
     """
 
     return r"(?:(?<=\\[nrtbf])|(?<=\\[u][0-9A-Fa-f]{4})|(?<![" + excluded + r"]))"
 
 
-# A drive path (``C:\x`` or ``C:/x``), a UNC path (``\\server\share\x``) or a
-# POSIX path (``/x``). The lookbehind keeps these from matching inside URLs
-# (``https://x``), inside relative paths (``../x``, ``a/b``), inside bare
-# ``/`` separators, inside ``sha256:`` digests, and it keeps the trailing
-# structure of an already-rendered ``<disposable-root>`` token from being
-# rendered a second time. The trailing character class stops at quotes,
-# whitespace and JSON/CLI punctuation so a quoted or comma-separated path
-# renders cleanly, and the final ``+`` requires a real path segment so a lone
-# separator never matches.
-# ``leading_boundary`` is the one lookbehind every family carries: it accepts the
-# `:` a key's colon spelling needs and the escape a JSON `\n` ends with.
+class _ByteClasses(NamedTuple):
+    """The syntax characters one reading's byte classes refuse.
+
+    ``tail`` is the body of every path tail's byte class, ``posix`` the body of a
+    POSIX segment byte's class, and ``escaped`` the body of the escaped-spelling
+    segment class. The raw reading spells the recorded syntax: whitespace and the
+    quote, backtick, comma, semicolon, colon and ``)`` that separate a location from
+    JSON, Markdown, shell or prose text. The decoded reading spells a decoded string
+    value's syntax instead: the control characters and the plain space (a decoded
+    newline, tab or space is a boundary), the quote, backtick, comma, semicolon,
+    colon and ``)`` - while an apostrophe and the non-control space-like characters
+    a JSON writer escapes (NBSP, U+3000) are path bytes, because a decoded value
+    carries them in directory names, not as syntax.
+    """
+
+    tail: str
+    posix: str
+    escaped: str
+
+
+_RAW_SYNTAX = "\\s\"'`,;:)"
+_DECODED_SYNTAX = "\\x00-\\x20\\x7f\"`,;:)"
+
+_RAW_BYTE_CLASSES = _ByteClasses(
+    tail=_RAW_SYNTAX,
+    posix="/" + _RAW_SYNTAX + "\\\\",
+    escaped="\\\\/" + _RAW_SYNTAX,
+)
+_DECODED_BYTE_CLASSES = _ByteClasses(
+    tail=_DECODED_SYNTAX,
+    posix="/" + _DECODED_SYNTAX + "\\\\",
+    escaped="\\\\/" + _DECODED_SYNTAX,
+)
+
 # The boundary that keeps a space-continued path chunk inside one location: the
 # chunk must reach another separator (`\`, any slash spelling or `\/`), close on a
 # quote, or end the line. A chunk bounded only by end-of-line (or a quote) is the
@@ -132,19 +151,15 @@ def leading_boundary(excluded: str) -> str:
 # record. A word followed by another word is not a continuation, so
 # `C:\Users\x and the run continues` still ends at `x`.
 _SPACE_END = r"(?=[\\/]|[\"'`]|\r|\n|\Z)"
-# One space-continued chunk: a single space whose following non-space run reaches
-# a separator (`First Last\repo` continues) or is a terminal word (`my project` at
-# the end of a line or before a closing quote).
-_SPACE_CHUNK = r" [^\s\"'`,;:)]+" + _SPACE_END
-# One forward slash, or its JSON-escaped spelling (`\/`): a record quoted into a JSON
-# string carries both forms, and the checker must not miss a host path because the
-# writer escaped it.
-_HOST_SEP = r"(?:/|\\/)"
 # One separator of a location whose separators may be mixed: a Windows UNC accepts
-# both slash directions, and a JSON writer doubles each backslash run at every
-# nesting level, so a backslash separator is any positive run and a forward slash
-# may be escaped as `\/`.
+# both slash directions, and a recorded JSON escape doubles each backslash run at
+# every nesting level, so a backslash separator is any positive run and a forward
+# slash may be escaped as `\/`.
 _SEPARATOR = r"(?:\\|(?:\\{2})+|/|\\/)"
+# A forward slash, or its JSON-escaped spelling (`\/`): a record quoted into a JSON
+# string carries both forms in the raw reading, and the checker must not miss a host
+# path because the writer escaped it.
+_HOST_SEP = r"(?:/|\\/)"
 # One separator run of a disposable root as recorded text spells it: any nonempty
 # mix of backslashes (raw, or the JSON-escaped run at any nesting depth) and
 # forward slashes or their `\/` escape - the units concatenate, so every recorded
@@ -166,90 +181,12 @@ _FILE_SCHEME = r"(?i:file):"
 # The prefixes a Windows location may carry: a `file:` URL scheme (with any run of
 # separators after it, since concatenated escapes are still the scheme's own
 # separators) and a device namespace (`\\?\` or the `\\.\` device form, whose
-# backslashes a JSON writer doubles). The lookbehinds accept a preceding `:` so a
-# location spelled after a key (`root:C:\x`, `root:/home/x`) is still a location,
-# while a preceding letter, digit, underscore, separator or rendered token keeps
-# relative paths and URLs out.
+# backslashes a recorded JSON escape doubles). The lookbehinds accept a preceding
+# `:` so a location spelled after a key (`root:C:\x`, `root:/home/x`) is still a
+# location, while a preceding letter, digit, underscore, separator or rendered
+# token keeps relative paths and URLs out.
 _FILE_PREFIX = r"(?:" + _FILE_SCHEME + r"[\\/]*)?"
 _DEVICE_PREFIX = r"(?:\\{1,4}[?.]\\{1,4})?"
-# A Windows path tail: path bytes, or a space-continued chunk. The byte class
-# stops at quotes, whitespace and JSON/CLI punctuation, so a quoted or
-# comma-separated path renders cleanly, and a single backslash stays a path byte:
-# in raw recorded text it IS the separator, and the JSON-escaped spelling doubles
-# it, so excluding it would stop every raw Windows location at its first inner
-# separator. An escape a quoted record spells is not a path byte: `sanitize_text`
-# matches against `_escape_boundary_view`, which replaces the escape's spelling
-# with bytes no class accepts, so the tail stops there while the raw spelling of
-# the same bytes keeps rendering whole.
-_WINDOWS_TAIL = r"(?:[^\s\"'`,;:)]|" + _SPACE_CHUNK + r")*"
-# The same tail where the shape requires a real byte after the separator (a UNC
-# location whose second segment is empty, `\\server\`, is not a path: an empty tail
-# would read the two-character prefix of an escaped source literal like `\\n\` as
-# one, the false positive the corpus sweep caught in an embedded code sample).
-_WINDOWS_TAIL_PLUS = r"(?:[^\s\"'`,;:)]|" + _SPACE_CHUNK + r")+"
-# One byte of a POSIX path segment: any byte except a separator, whitespace, a
-# quote and JSON/CLI punctuation - or a JSON-escaped forward slash, which is the
-# escaped spelling of the segment separator. A bare backslash is deliberately NOT
-# a segment byte: a POSIX location never contains one. A raw spelling that puts one
-# there ends the location, and `_escape_boundary_view` keeps the same shape inside a
-# quoted record from reaching any tail, including a Windows one.
-_POSIX_BYTE = r"(?:[^/\s\"'`,;:)\\]|\\/)"
-_POSIX_RUN = r"(?:" + _POSIX_BYTE + r")+"
-# The POSIX spelling of the same space continuation: the chunk after the space
-# must reach a separator or end the line (`/home/first last/repo` and
-# `/home/op/my project` are one location each).
-_POSIX_SPACE_CHUNK = r" " + _POSIX_RUN + _SPACE_END
-# A POSIX path segment: a run of bytes plus any space-continued chunks.
-_POSIX_SEGMENT = r"(?:" + _POSIX_RUN + r"(?:" + _POSIX_SPACE_CHUNK + r")*)"
-# A segment of the escaped POSIX spelling (`\/etc\/hosts`), whose escaped
-# separator pairs sit outside the segment bytes.
-_ESCAPED_SEGMENT = r"(?:[^\\/\s\"'`,;:)]+(?: [^\\/\s\"'`,;:)]+" + _SPACE_END + r")*)"
-_DRIVE_PATH = re.compile(
-    leading_boundary(r"A-Za-z0-9_/\\>") + _FILE_PREFIX + _DEVICE_PREFIX
-    + r"[A-Za-z]:[\\/]" + _WINDOWS_TAIL
-)
-# A UNC path whose separators are backslashes, each written once or escaped by JSON
-# quoting at any nesting level (an even run of two or more): `\\server\share` and
-# `{"p":"\\\\server\\share"}` are the same location, and so is the doubly escaped
-# spelling of either separator. The inner separators (and the tail after them) may
-# also be forward slashes or their escapes, because Windows reads the mixed
-# spellings as the same location.
-_UNC_PATH = re.compile(
-    leading_boundary(r"A-Za-z0-9_/\\>") + _FILE_PREFIX + _DEVICE_PREFIX + r"(?:\\{2})+"
-    r"[^\s\\\"'`,;:)]+" + _SEPARATOR + _WINDOWS_TAIL_PLUS
-)
-# The lookbehind keeps URLs (`https://`) and relative paths out, and `:` too: a
-# location spelled after a colon would otherwise swallow a URL authority
-# (`https://x` must never start a match), and the colon-adjacent spelling has its
-# own pattern below.
-_POSIX_PATH = re.compile(
-    leading_boundary(r"A-Za-z0-9_:/\\>.") + r"/(?:" + _POSIX_SEGMENT + r"/)*" + _POSIX_SEGMENT
-)
-# A POSIX path spelled directly after a colon (`PATH=/usr/bin:/usr/local/bin`): the
-# colon allowance the pattern above must not take, because the very next character
-# decides between an absolute path and a URL authority - a URL's colon is followed
-# by two separators, and this pattern requires exactly one.
-_COLON_POSIX_PATH = re.compile(r"(?<=:)/(?!/)(?:" + _POSIX_SEGMENT + r"/)*" + _POSIX_SEGMENT)
-# A POSIX path a JSON writer escaped (`\/etc\/hosts`): the escaped spelling of an
-# absolute location, rendered in the default argv/output scope. The lookbehind
-# keeps URL authorities (`https:\/\/tmp` - the pair after the colon, and the pair
-# after a separator) and relative paths out, and every separator must be the
-# escaped pairing, so an unescaped `/` cannot drift this pattern into a URL.
-# A rendered root token is one more boundary: the root pass leaves an escaped
-# descendant separator behind it (`C:\Work\run\/child` renders as
-# `<disposable-root>\/child`), and that separator is the token's trailing
-# structure, not the start of a new escaped location.
-_ESCAPED_POSIX_PATH = re.compile(
-    r"(?<!" + re.escape(DISPOSABLE_ROOT_TOKEN) + r")" + leading_boundary(r"A-Za-z0-9_:\\/")
-    + r"(?:\\/)(?:" + _ESCAPED_SEGMENT + r"\\/)*" + _ESCAPED_SEGMENT
-)
-# A forward-slash authority path (`//server/share`), with each separator optionally
-# escaped or a backslash (the mixed spellings are the same UNC location). The
-# lookbehind keeps URLs (`https://`) out: their `//` follows a colon.
-_SLASH_UNC_PATH = re.compile(
-    leading_boundary(r"A-Za-z0-9_:\\/") + r"(?:/|\\/)(?:/|\\/)[^\s\\/\"'`,;:)]+"
-    + _SEPARATOR + _WINDOWS_TAIL_PLUS
-)
 # The filesystem roots a host absolute path actually starts with. `/portal/runtimes`
 # and any other product route stay literal in `--root-only` mode because their first
 # segment is not one of these roots, and a bare root token with no following separator
@@ -258,55 +195,177 @@ _SLASH_UNC_PATH = re.compile(
 # measured-value redaction imports it, so both tools agree on what a host path is.
 HOST_ROOT_SEGMENTS = ("home", "Users", "root", "tmp", "var", "mnt", "private")
 _HOST_ROOT = "(?:" + "|".join(HOST_ROOT_SEGMENTS) + ")"
-# The segment class allows an empty segment, so a naive concatenation (`/tmp//run`)
-# is still a host path; a preceding `:` is accepted for the same reason as above,
-# while a preceding separator is not: that spelling is an authority path or a URL,
-# handled by their own patterns, and it keeps `https://tmp/vendor/doc` literal.
-_HOST_POSIX_PATH = re.compile(
-    leading_boundary(r"A-Za-z0-9_>./\\") + r"(?:" + _HOST_SEP + r")" + _HOST_ROOT
-    + r"(?:(?:" + _HOST_SEP + r")(?:" + _POSIX_SEGMENT + r")?)+"
-)
-# A root-relative Windows spelling (`\Users\op\run`): classic Windows semantics
-# resolve a leading single backslash against the current drive root, so it names
-# the same profile location as `C:\Users\op\run`. The leader is an odd backslash run
-# (the raw and Markdown-prose spelling); the even runs are the JSON-escaped
-# spellings the UNC patterns already cover.
-_ROOT_RELATIVE_PATH = re.compile(
-    leading_boundary(r"A-Za-z0-9_>./\\") + r"(?:\\{2})*\\" + _HOST_ROOT
-    + r"(?:\\[^\\\s\"'`,;:)]*|" + _SPACE_CHUNK + r")+"
-)
-# A `file:` URL names an absolute location; without this, the drive or POSIX pattern's
-# lookbehind (the URL's own slashes) would hide a host path inside one. After `file:`
-# a Windows location may be spelled with backslashes (a single one before an
-# authority is a legitimate file-URL form), so this pattern accepts them where the
-# bare `_DRIVE_PATH`/`_UNC_PATH` leaders require two; the scheme is followed by any
-# run of separators (concatenated escapes included), and the host-root arm does not
-# require a segment after the root (`file:///tmp` names an absolute location too).
-# An authority followed by a drive location (`file://localhost/C:/x`) is one
-# location: the authority's own separator is not where the path ends.
-_FILE_URL_PATH = re.compile(
-    leading_boundary(r"A-Za-z0-9_") + _FILE_SCHEME + r"[\\/]*(?:"
-    + _DEVICE_PREFIX + r"[A-Za-z]:[\\/]" + _WINDOWS_TAIL
-    + r"|" + _DEVICE_PREFIX + r"\\{1,4}[^\s\\\"'`,;:)]+(?:\\|\\\\)[^\s\"'`,;:)]+"
-    + _WINDOWS_TAIL
-    + r"|" + _HOST_SEP + _HOST_ROOT + r"(?:(?:" + _HOST_SEP + r")(?:" + _POSIX_SEGMENT + r")?)*"
-    + r"|(?://|\\/\\/)[^\s\\/\"'`,;:)]+(?:[\\/]|\\/)(?:[A-Za-z]:[\\/])?" + _WINDOWS_TAIL
-    + r")"
-)
-# The root-only scope: every host shape above, and nothing that could be a product
-# route. The default scope adds every absolute path the POSIX pattern cannot see,
-# including a host-rooted one spelled after a colon, the JSON-escaped spelling of a
-# POSIX path, and a `file:` URL.
-HOST_PATH_PATTERNS = (
-    _DRIVE_PATH, _UNC_PATH, _SLASH_UNC_PATH, _HOST_POSIX_PATH, _ROOT_RELATIVE_PATH, _FILE_URL_PATH,
-)
-# The host-rooted POSIX pattern runs before the general POSIX one: it carries the
-# same space continuation, but a spelling only it recognises (a host root directly
-# after the separator) must not be consumed piecewise by the general pattern first.
-DEFAULT_PATH_PATTERNS = (
-    _DRIVE_PATH, _UNC_PATH, _SLASH_UNC_PATH, _HOST_POSIX_PATH, _POSIX_PATH, _FILE_URL_PATH,
-    _ROOT_RELATIVE_PATH, _ESCAPED_POSIX_PATH, _COLON_POSIX_PATH,
-)
+
+
+class _Patterns(NamedTuple):
+    """One reading's compiled matchers and the class strings it spells them with."""
+
+    drive: re.Pattern[str]
+    unc: re.Pattern[str]
+    slash_unc: re.Pattern[str]
+    posix: re.Pattern[str]
+    colon_posix: re.Pattern[str]
+    escaped_posix: re.Pattern[str]
+    host_posix: re.Pattern[str]
+    root_relative: re.Pattern[str]
+    file_url: re.Pattern[str]
+    space_chunk: str
+    # The negative lookbehind a `--root` matcher carries (the decoded reading keeps a
+    # rendered token's own text from re-claiming the root behind it).
+    root_guard: str
+    # The root-only scope: every host shape, and nothing that could be a product
+    # route. The default scope adds every absolute path the POSIX pattern cannot see,
+    # including a host-rooted one spelled after a colon, the JSON-escaped spelling of
+    # a POSIX path, and a `file:` URL.
+    host: tuple[re.Pattern[str], ...]
+    default: tuple[re.Pattern[str], ...]
+
+
+def _compile_patterns(classes: _ByteClasses, root_guard: str) -> _Patterns:
+    """Compile one reading's pattern set from its byte classes.
+
+    The pattern text is shared: only the characters the byte classes refuse differ
+    between the raw reading (the recorded text's own syntax) and the decoded reading
+    (a JSON string value's characters). Keeping one compiler means the two readings
+    can never drift into a family the other does not carry.
+    """
+
+    tail = classes.tail
+    no_backslash = tail + r"\\"
+    no_separator = tail + r"\\/"
+    # A Windows path tail: path bytes, or a space-continued chunk. The byte class
+    # stops at the reading's syntax characters, so a quoted or comma-separated path
+    # renders cleanly, and a single backslash stays a path byte: in raw recorded text
+    # it IS the separator, and the JSON-escaped spelling doubles it, so excluding it
+    # would stop every raw Windows location at its first inner separator.
+    space_chunk = r" [^" + tail + r"]+" + _SPACE_END
+    windows_tail_unit = r"(?:[^" + tail + r"]|" + space_chunk + r")"
+    windows_tail = windows_tail_unit + r"*"
+    # The same tail where the shape requires a real byte after the separator (a UNC
+    # location whose second segment is empty, `\\server\`, is not a path: an empty tail
+    # would read the two-character prefix of an escaped source literal like `\\n\` as
+    # one, the false positive the corpus sweep caught in an embedded code sample).
+    windows_tail_plus = windows_tail_unit + r"+"
+    # One byte of a POSIX path segment: any byte except a separator, the reading's
+    # syntax characters - or a JSON-escaped forward slash, which in the raw reading is
+    # the escaped spelling of the segment separator. A bare backslash is deliberately
+    # NOT a segment byte: a POSIX location never contains one. A raw spelling that puts
+    # one there ends the location, and a JSON record's decoded segment carries none.
+    posix_byte = r"(?:[^" + classes.posix + r"]|\\/)"
+    posix_run = r"(?:" + posix_byte + r")+"
+    # The POSIX spelling of the same space continuation: the chunk after the space
+    # must reach a separator or end the line (`/home/first last/repo` and
+    # `/home/op/my project` are one location each).
+    posix_segment = r"(?:" + posix_run + r"(?: " + posix_run + _SPACE_END + r")*)"
+    # A segment of the escaped raw spelling (`\/etc\/hosts`), whose escaped
+    # separator pairs sit outside the segment bytes.
+    escaped_segment = r"(?:[^" + classes.escaped + r"]+(?: [^" + classes.escaped + r"]+" + _SPACE_END + r")*)"
+    drive = re.compile(
+        leading_boundary(r"A-Za-z0-9_/\\>") + _FILE_PREFIX + _DEVICE_PREFIX
+        + r"[A-Za-z]:[\\/]" + windows_tail
+    )
+    # A UNC path whose separators are backslashes, each written once or escaped by JSON
+    # quoting at any nesting level (an even run of two or more): `\\server\share` and
+    # `{"p":"\\\\server\\share"}` are the same location in the raw reading, and so is
+    # the doubly escaped spelling of either separator. The inner separators (and the
+    # tail after them) may also be forward slashes or their escapes, because Windows
+    # reads the mixed spellings as the same location.
+    unc = re.compile(
+        leading_boundary(r"A-Za-z0-9_/\\>") + _FILE_PREFIX + _DEVICE_PREFIX + r"(?:\\{2})+"
+        + r"[^" + no_backslash + r"]+" + _SEPARATOR + windows_tail_plus
+    )
+    # The lookbehind keeps URLs (`https://`) and relative paths out, and `:` too: a
+    # location spelled after a colon would otherwise swallow a URL authority
+    # (`https://x` must never start a match), and the colon-adjacent spelling has its
+    # own pattern below.
+    posix = re.compile(
+        leading_boundary(r"A-Za-z0-9_:/\\>.") + r"/(?:" + posix_segment + r"/)*" + posix_segment
+    )
+    # A POSIX path spelled directly after a colon (`PATH=/usr/bin:/usr/local/bin`): the
+    # colon allowance the pattern above must not take, because the very next character
+    # decides between an absolute path and a URL authority - a URL's colon is followed
+    # by two separators, and this pattern requires exactly one.
+    colon_posix = re.compile(r"(?<=:)/(?!/)(?:" + posix_segment + r"/)*" + posix_segment)
+    # A POSIX path a JSON writer escaped (`\/etc\/hosts`): the escaped spelling of an
+    # absolute location in the raw reading. The lookbehind keeps URL authorities
+    # (`https:\/\/tmp` - the pair after the colon, and the pair after a separator) and
+    # relative paths out, and every separator must be the escaped pairing, so an
+    # unescaped `/` cannot drift this pattern into a URL. A rendered root token is one
+    # more boundary: the root pass leaves an escaped descendant separator behind it
+    # (`C:\Work\run\/child` renders as `<disposable-root>\/child`), and that separator
+    # is the token's trailing structure, not the start of a new escaped location.
+    escaped_posix = re.compile(
+        r"(?<!" + re.escape(DISPOSABLE_ROOT_TOKEN) + r")" + leading_boundary(r"A-Za-z0-9_:\\/")
+        + r"(?:\\/)(?:" + escaped_segment + r"\\/)*" + escaped_segment
+    )
+    # A forward-slash authority path (`//server/share`), with each separator optionally
+    # escaped or a backslash (the mixed spellings are the same UNC location). The
+    # lookbehind keeps URLs (`https://`) out: their `//` follows a colon.
+    slash_unc = re.compile(
+        leading_boundary(r"A-Za-z0-9_:\\/") + r"(?:/|\\/)(?:/|\\/)[^" + no_separator + r"]+"
+        + _SEPARATOR + windows_tail_plus
+    )
+    # The segment class allows an empty segment, so a naive concatenation (`/tmp//run`)
+    # is still a host path; a preceding `:` is accepted for the same reason as above,
+    # while a preceding separator is not: that spelling is an authority path or a URL,
+    # handled by their own patterns, and it keeps `https://tmp/vendor/doc` literal.
+    host_posix = re.compile(
+        leading_boundary(r"A-Za-z0-9_>./\\") + r"(?:" + _HOST_SEP + r")" + _HOST_ROOT
+        + r"(?:(?:" + _HOST_SEP + r")(?:" + posix_segment + r")?)+"
+    )
+    # A root-relative Windows spelling (`\Users\op\run`): classic Windows semantics
+    # resolve a leading single backslash against the current drive root, so it names
+    # the same profile location as `C:\Users\op\run`. The leader is an odd backslash run
+    # (the raw and Markdown-prose spelling); the even runs are the JSON-escaped
+    # spellings the UNC patterns already cover in the raw reading.
+    root_relative = re.compile(
+        leading_boundary(r"A-Za-z0-9_>./\\") + r"(?:\\{2})*\\" + _HOST_ROOT
+        + r"(?:\\[^" + no_backslash + r"]*|" + space_chunk + r")+"
+    )
+    # A `file:` URL names an absolute location; without this, the drive or POSIX
+    # pattern's lookbehind (the URL's own slashes) would hide a host path inside one.
+    # After `file:` a Windows location may be spelled with backslashes (a single one
+    # before an authority is a legitimate file-URL form), so this pattern accepts them
+    # where the bare drive/UNC leaders require two; the scheme is followed by any run
+    # of separators (concatenated escapes included), and the host-root arm does not
+    # require a segment after the root (`file:///tmp` names an absolute location too).
+    # An authority followed by a drive location (`file://localhost/C:/x`) is one
+    # location: the authority's own separator is not where the path ends.
+    file_url = re.compile(
+        leading_boundary(r"A-Za-z0-9_") + _FILE_SCHEME + r"[\\/]*(?:"
+        + _DEVICE_PREFIX + r"[A-Za-z]:[\\/]" + windows_tail
+        + r"|" + _DEVICE_PREFIX + r"\\{1,4}[^" + no_backslash + r"]+(?:\\|\\\\)[^" + tail + r"]+"
+        + windows_tail
+        + r"|" + _HOST_SEP + _HOST_ROOT + r"(?:(?:" + _HOST_SEP + r")(?:" + posix_segment + r")?)*"
+        + r"|(?://|\\/\\/)[^" + no_separator + r"]+(?:[\\/]|\\/)(?:[A-Za-z]:[\\/])?" + windows_tail
+        + r")"
+    )
+    # The host-rooted POSIX pattern runs before the general POSIX one: it carries the
+    # same space continuation, but a spelling only it recognises (a host root directly
+    # after the separator) must not be consumed piecewise by the general pattern first.
+    return _Patterns(
+        drive=drive, unc=unc, slash_unc=slash_unc, posix=posix, colon_posix=colon_posix,
+        escaped_posix=escaped_posix, host_posix=host_posix, root_relative=root_relative,
+        file_url=file_url, space_chunk=space_chunk, root_guard=root_guard,
+        host=(drive, unc, slash_unc, host_posix, root_relative, file_url),
+        default=(drive, unc, slash_unc, host_posix, posix, file_url, root_relative,
+                 escaped_posix, colon_posix),
+    )
+
+
+# The raw reading: the recorded text's own bytes, with the base tool's byte classes.
+# `HOST_PATH_PATTERNS` is exported for the evaluation runner's measured-value
+# redaction, which reads decoded values and keeps the base reading's classes.
+# A rendered token's own text is a boundary for the `--root` matchers in both
+# readings: a root spelling a render left behind a token is not re-claimed on the
+# next render, so rendering rendered text is a no-op.
+_ROOT_TOKEN_GUARD = r"(?<!" + re.escape(DISPOSABLE_ROOT_TOKEN) + r")"
+_RAW_READING = _compile_patterns(_RAW_BYTE_CLASSES, _ROOT_TOKEN_GUARD)
+# The decoded reading: one JSON string literal's decoded content, whose characters are
+# a value's characters rather than recorded syntax.
+_DECODED_READING = _compile_patterns(_DECODED_BYTE_CLASSES, _ROOT_TOKEN_GUARD)
+HOST_PATH_PATTERNS = _RAW_READING.host
+DEFAULT_PATH_PATTERNS = _RAW_READING.default
 
 
 def hashed_path_token(path: str) -> str:
@@ -315,10 +374,10 @@ def hashed_path_token(path: str) -> str:
     return "path-sha256:" + hashlib.sha256(path.encode("utf-8")).hexdigest()
 
 
-def _render_span(raw: str, start: int, end: int) -> str:
-    """Render one matched span of ``raw``, leaving a JSON ``\\"`` escape outside it.
+def _render_record_span(raw: str, start: int, end: int) -> str:
+    """Render one matched span of the recorded text, leaving a JSON ``\\"`` escape outside it.
 
-    In JSON-escaped text a matched path immediately before a recorded quote is
+    In JSON-escaped raw text a matched path immediately before a recorded quote is
     spelled ``...\\"``: its final backslash escapes the quote, not a path
     separator, so consuming it would leave a bare quote and corrupt the
     record's JSON syntax. An odd trailing run of backslashes ends in such an
@@ -331,9 +390,10 @@ def _render_span(raw: str, start: int, end: int) -> str:
     (a Markdown code span, say): the token binds the path minus the backslash
     the rule treats as the escape - the trailing separator, for a
     single-backslash run - and that backslash survives outside it, keeping the
-    render idempotent. Inside a JSON string literal an escape is boundary text
-    instead (``_escape_boundary_view``), so the span already stops in front of it
-    and the rule has nothing left to trim.
+    render idempotent. In the decoded reading the rule cannot fire: a match ends
+    at a decoded-character boundary, where the raw span of a JSON escape is
+    all-or-nothing, so a span never ends inside the ``\\"`` pair and its
+    trailing backslash run is always even.
     """
 
     matched = raw[start:end]
@@ -344,165 +404,7 @@ def _render_span(raw: str, start: int, end: int) -> str:
     return hashed_path_token(matched)
 
 
-def _root_token(_raw: str, _start: int, _end: int) -> str:
-    """Render one matched disposable root as its token."""
-
-    return DISPOSABLE_ROOT_TOKEN
-
-
-def _string_literal_end(text: str, start: int) -> int:
-    """The offset after the ``"`` that closes the literal opening at ``start``, or -1.
-
-    The closing quote is the first one no backslash run escapes - the odd/even
-    pairing the JSON grammar itself uses - so a ``\\"`` inside the literal does not
-    end it, and an unterminated literal reports -1 instead of swallowing the rest of
-    the text.
-    """
-
-    index = start + 1
-    while index < len(text):
-        if text[index] == "\\":
-            index += 2
-            continue
-        if text[index] == '"':
-            return index + 1
-        index += 1
-    return -1
-
-
-def _literal_escapes(literal: str) -> list[tuple[int, int, str]]:
-    """The ``(offset, length, decoded)`` triple of every escape a JSON string literal spells.
-
-    The length is the recorded spelling's own width - two characters for a
-    single-letter escape, six for ``\\uXXXX`` - because masking covers the whole
-    spelling: a tail must not cross it, and neither must the character in front of a
-    location behind it be the escape's own letter or hex digit.
-    """
-
-    escapes = []
-    index = 0
-    while index < len(literal):
-        if literal[index] != "\\":
-            index += 1
-            continue
-        letter = literal[index + 1]
-        if letter == "u":
-            escapes.append((index, 6, chr(int(literal[index + 2:index + 6], 16))))
-            index += 6
-        else:
-            escapes.append((index, 2, ESCAPE_CHARACTERS[letter]))
-            index += 2
-    return escapes
-
-
-def _escape_boundary_view(text: str) -> str:
-    """Return ``text`` read as JSON where it is JSON, one character per character.
-
-    A record's text is JSON in the places that matter: inside a JSON string literal
-    the recorded bytes spell an escape (``\\n``, ``\\t``, ``\\"``, ``\\uXXXX``, ...)
-    rather than the path byte a raw Windows spelling puts in that position, so a tail
-    that consumed it would swallow the escape together with the text behind it - the
-    defect `_POSIX_BYTE` fixed on the POSIX side, and the one the Windows families had
-    no rule for.
-
-    The view keeps every offset of ``text``: a match on it maps to exactly the span of
-    the recorded text it came from, so a digest still binds the bytes the token
-    replaces. It writes ``ESCAPE_BOUNDARY_CHAR`` over every character of every escape
-    whose decoded character cannot be a path byte (`NON_PATH_CHARACTER`, the one
-    exclusion set every byte class spells out) - a character no byte class accepts and
-    no lookbehind's negative set names - so a location behind the escape stands on a
-    boundary and no tail crosses the escape. The whole spelling is masked, not just
-    its backslash: the escape's own letter or hex digit is a name character that would
-    otherwise be read as text glued to the location in front of which it stands.
-    ``\\\\`` and ``\\/`` decode to the separators themselves and stay path bytes, so
-    the doubled and escaped spellings keep rendering.
-
-    A span counts as a literal only when ``json.loads`` accepts it: the escapes of
-    text that is not JSON (`"C:\\Users\\op\\run"`, whose `\\U` is not an escape) are
-    not the JSON grammar's, and reading them from shape instead would cut a raw
-    Windows location in half at its own `\\r`. Such a span keeps the raw reading,
-    which the caller still renders.
-    """
-
-    view: list[str] | None = None
-    index = 0
-    while index < len(text):
-        if text[index] != '"':
-            index += 1
-            continue
-        end = _string_literal_end(text, index)
-        if end < 0:
-            break
-        literal = text[index:end]
-        try:
-            json.loads(literal)
-        except ValueError:
-            index = end
-            continue
-        for offset, length, decoded in _literal_escapes(literal):
-            if NON_PATH_CHARACTER.fullmatch(decoded):
-                if view is None:
-                    view = list(text)
-                for position in range(index + offset, index + offset + length):
-                    view[position] = ESCAPE_BOUNDARY_CHAR
-        index = end
-    return text if view is None else "".join(view)
-
-
-def _substitute(
-    pattern: re.Pattern[str], raw: str, view: str, render: Callable[[str, int, int], str],
-) -> tuple[str, str]:
-    """Apply one pattern to ``view``, writing each replacement into ``raw`` as well.
-
-    ``view`` is ``raw`` read through `_escape_boundary_view` (or ``raw`` itself for the
-    fallback pass), so the two are character-for-character aligned and a match's span
-    selects the recorded bytes the rendering replaces. The replacement is written into
-    both, which keeps the alignment for the next pattern and lets a later lookbehind
-    see the token an earlier pass rendered.
-    """
-
-    spans = [(match.start(), match.end()) for match in pattern.finditer(view)]
-    if not spans:
-        return raw, view
-    raw_pieces: list[str] = []
-    view_pieces: list[str] = []
-    position = 0
-    for start, end in spans:
-        replacement = render(raw, start, end)
-        raw_pieces.append(raw[position:start])
-        raw_pieces.append(replacement)
-        view_pieces.append(view[position:start])
-        view_pieces.append(replacement)
-        position = end
-    raw_pieces.append(raw[position:])
-    view_pieces.append(view[position:])
-    return "".join(raw_pieces), "".join(view_pieces)
-
-
-def _render_passes(
-    raw: str, view: str, roots: list[str], root_only: bool,
-) -> str:
-    """Run the root and path passes against ``view``, writing into ``raw`` too."""
-
-    for root in roots:
-        matchers = _root_patterns(root)
-        if matchers is None:
-            continue
-        bounded, chunked = matchers
-        # A root followed by a space-continued chunk continues a longer sibling
-        # name, so the bounded matcher declines it there; the chunked matcher
-        # renders the whole span as a hashed token first: the span is not this
-        # root, and leaving it literal would publish the root bytes on a POSIX
-        # root the host-path patterns do not cover.
-        raw, view = _substitute(chunked, raw, view, _render_span)
-        raw, view = _substitute(bounded, raw, view, _root_token)
-    patterns = HOST_PATH_PATTERNS if root_only else DEFAULT_PATH_PATTERNS
-    for pattern in patterns:
-        raw, view = _substitute(pattern, raw, view, _render_span)
-    return raw
-
-
-def _root_patterns(root: str) -> tuple[re.Pattern[str], re.Pattern[str]] | None:
+def _root_patterns(root: str, reading: _Patterns) -> tuple[re.Pattern[str], re.Pattern[str]] | None:
     """Compile the bounded and chunked matchers for one disposable root.
 
     The bounded matcher consumes the root only when it is spelled with a recorded
@@ -547,12 +449,300 @@ def _root_patterns(root: str) -> tuple[re.Pattern[str], re.Pattern[str]] | None:
     # is a boundary, not a name: a root that starts the next recorded line inside a
     # quoted record (`{"out":"ok\n/srv/store/x"}`) still matches, while a literal
     # name character glued in front (`aa/srv/store/x`) still rejects the match.
-    lookbehind = leading_boundary(r"A-Za-z0-9_.\-\\/")
-    after = r"(?!" + _ROOT_NAME_CHAR + r"|\." + _ROOT_NAME_CHAR + r"|" + _SPACE_CHUNK + r")"
+    lookbehind = reading.root_guard + leading_boundary(r"A-Za-z0-9_.\-\\/")
+    after = r"(?!" + _ROOT_NAME_CHAR + r"|\." + _ROOT_NAME_CHAR + r"|" + reading.space_chunk + r")"
     return (
         re.compile(lookbehind + body + after),
-        re.compile(lookbehind + body + r"(?:" + _SPACE_CHUNK + r")+"),
+        re.compile(lookbehind + body + r"(?:" + reading.space_chunk + r")+"),
     )
+
+
+def _string_literal_end(text: str, start: int) -> int:
+    """The offset after the ``"`` that closes the literal opening at ``start``, or -1.
+
+    The closing quote is the first one no backslash run escapes - the odd/even
+    pairing the JSON grammar itself uses - so a ``\\"`` inside the literal does not
+    end it, and an unterminated literal reports -1 instead of swallowing the rest of
+    the text.
+    """
+
+    index = start + 1
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] == '"':
+            return index + 1
+        index += 1
+    return -1
+
+
+def _decode_literal(content: str) -> tuple[str, list[tuple[int, int]]]:
+    """Decode one JSON string literal's content and map every decoded character.
+
+    ``content`` is the literal's raw spelling between its quotes, which the
+    document-level ``json.loads`` gate has already accepted, so every escape is the
+    JSON grammar's own. The returned spans are ``(start, end)`` offsets into
+    ``content``: one character for a plain byte, two for a single-letter escape, six
+    for ``\\uXXXX``, and twelve for a surrogate pair, which decodes to the one
+    character both units spell - the same pairing ``json.loads`` performs.
+    """
+
+    characters: list[str] = []
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(content):
+        character = content[index]
+        if character != "\\":
+            characters.append(character)
+            spans.append((index, index + 1))
+            index += 1
+            continue
+        letter = content[index + 1]
+        if letter != "u":
+            characters.append(_LITERAL_ESCAPES[letter])
+            spans.append((index, index + 2))
+            index += 2
+            continue
+        code = int(content[index + 2:index + 6], 16)
+        width = 6
+        if 0xD800 <= code < 0xDC00 and content[index + 6:index + 8] == "\\u":
+            low = int(content[index + 8:index + 12], 16)
+            if 0xDC00 <= low < 0xE000:
+                code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
+                width = 12
+        characters.append(chr(code))
+        spans.append((index, index + width))
+        index += width
+    return "".join(characters), spans
+
+
+# The single-letter escapes the JSON grammar spells, and the character each decodes
+# to. ``\\`` and ``\/`` decode to the separators themselves and ``\b`` to the control
+# byte U+0008; the rest decode to the control characters the decoded reading's classes
+# refuse, so a match ends in front of them instead of taking the escape and the text
+# behind it into the token.
+_LITERAL_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",
+                    "n": "\n", "r": "\r", "t": "\t"}
+
+
+def _render_passes(
+    record: str, cells: list[tuple[int, int]] | None,
+    passes: list[tuple[re.Pattern[str], bool]], raw: str,
+) -> list[tuple[int, int, str]]:
+    """Run one reading's pass sequence over ``record``, mapping every match to raw bytes.
+
+    ``record`` is the text the matchers run on - the recorded text itself for the raw
+    reading, a literal's decoded content for the decoded reading - and the mapping back
+    to raw offsets is exact, so a match's span selects exactly the recorded bytes its
+    token replaces and a digest still binds the recorded spelling, escapes included.
+    ``cells`` spells the mapping per character for the decoded reading (a decoded
+    character's raw width depends on the escape that spelled it); the raw reading
+    passes ``None``, because there every character is its own byte until a
+    replacement claims one, and the claimed spans below then carry the whole mapping.
+
+    A match that overlaps a span an earlier replacement wrote merges with it into one
+    span before rendering: the merged span renders once, from its own raw bytes, so a
+    later matcher can never bind an earlier token's text and no render leaves an
+    orphaned ``:<hex>`` fragment of one token inside or behind another. The passes run
+    in the order the caller gives - the root matchers first, then the host or default
+    path family, the base tool's one pass sequence.
+    """
+
+    current = record
+    mapped = list(cells) if cells is not None else None
+    # Each claim is ``(current start, current end, raw start, raw end)``: the current
+    # span a replacement wrote and the raw span it bound.
+    claimed: list[tuple[int, int, int, int]] = []
+    replacements: list[tuple[int, int, str]] = []
+
+    def raw_start_of(index: int) -> int:
+        if mapped is not None:
+            return mapped[index][0]
+        for start, end, raw_start, _raw_end in claimed:
+            if start <= index < end:
+                return raw_start
+        return index - sum(end - (raw_end - raw_start) - start
+                           for start, end, raw_start, raw_end in claimed if end <= index)
+
+    def raw_end_of(index: int) -> int:
+        if mapped is not None:
+            return mapped[index][1]
+        for start, end, _raw_start, raw_end in claimed:
+            if start <= index < end:
+                return raw_end
+        return index - sum(end - (raw_end - raw_start) - start
+                           for start, end, raw_start, raw_end in claimed if end <= index) + 1
+
+    def grow(start: int, end: int) -> tuple[int, int, bool]:
+        grown = False
+        while True:
+            touched = [claim for claim in claimed if claim[0] < end and start < claim[1]]
+            if not touched:
+                return start, end, grown
+            width = start, end
+            start = min([start] + [claim[0] for claim in touched])
+            end = max([end] + [claim[1] for claim in touched])
+            grown = True
+            if (start, end) == width:
+                # Every touched claim already lies inside the span.
+                return start, end, grown
+
+    for pattern, is_root in passes:
+        matched = [match.span() for match in pattern.finditer(current)]
+        if not matched:
+            continue
+        plans: list[list[int | bool]] = []
+        for start, end in matched:
+            merged: list[int | bool] = list(grow(start, end))
+            changed = True
+            while changed:
+                changed = False
+                rest: list[list[int | bool]] = []
+                for plan in plans:
+                    if plan[0] < merged[1] and merged[0] < plan[1]:
+                        merged[0] = min(merged[0], plan[0])
+                        merged[1] = max(merged[1], plan[1])
+                        merged[2] = merged[2] or plan[2]
+                        changed = True
+                    else:
+                        rest.append(plan)
+                plans = rest
+            plans.append(merged)
+        for start, end, grown in sorted(plans, key=lambda plan: plan[0], reverse=True):
+            raw_start = raw_start_of(start)
+            raw_end = raw_end_of(end - 1)
+            replacement = (DISPOSABLE_ROOT_TOKEN if is_root and not grown
+                           else _render_record_span(raw, raw_start, raw_end))
+            current = current[:start] + replacement + current[end:]
+            if mapped is not None:
+                mapped = mapped[:start] + [(raw_start, raw_end)] * len(replacement) + mapped[end:]
+            # Every claim to the right of the replaced span moves with the text.
+            shift = len(replacement) - (end - start)
+            claimed = [(claim[0] + shift, claim[1] + shift, claim[2], claim[3])
+                       if claim[0] >= end else claim
+                       for claim in claimed if not (start <= claim[0] and claim[1] <= end)]
+            claimed.append((start, start + len(replacement), raw_start, raw_end))
+            # A merged span absorbs the replacements it covered, raw bytes included:
+            # their spans lie inside the merged span's own raw range.
+            replacements = [item for item in replacements
+                            if not (raw_start <= item[0] and item[1] <= raw_end)]
+            replacements.append((raw_start, raw_end, replacement))
+    return replacements
+
+
+def _apply_replacements(raw: str, replacements: list[tuple[int, int, str]]) -> str:
+    """Write each replacement into ``raw`` at the span it bound, in raw-offset order."""
+
+    if not replacements:
+        return raw
+    pieces: list[str] = []
+    position = 0
+    for start, end, replacement in sorted(replacements):
+        pieces.append(raw[position:start])
+        pieces.append(replacement)
+        position = end
+    pieces.append(raw[position:])
+    return "".join(pieces)
+
+
+def _render_literal(content: str, roots: list[str], root_only: bool) -> str:
+    """Render host locations in one JSON string literal, as decoded text and raw bytes.
+
+    Every matcher runs on the decoded content, so a space-like character or an
+    apostrophe an escape spelled is the path character it decodes to and never
+    truncates the match, while a control character an escape spells is a boundary; a
+    match maps back to the raw span it covers, escapes included, so the token replaces
+    exactly the recorded bytes it bound and the digest binds the recorded spelling.
+    The passes run in the same order as the raw reading (the root matchers first, then
+    the host or default path family).
+    """
+
+    decoded, cells = _decode_literal(content)
+    if not cells:
+        return content
+    passes: list[tuple[re.Pattern[str], bool]] = []
+    for root in roots:
+        matchers = _root_patterns(root, _DECODED_READING)
+        if matchers is None:
+            continue
+        bounded, chunked = matchers
+        passes.append((chunked, False))
+        passes.append((bounded, True))
+    for pattern in (_DECODED_READING.host if root_only else _DECODED_READING.default):
+        passes.append((pattern, False))
+    return _apply_replacements(content, _render_passes(decoded, cells, passes, content))
+
+
+def _is_json_structured(text: str) -> bool:
+    """Whether the whole text is a JSON document, or every non-empty line is.
+
+    The reading is decided once per document, not per quoted span: a JSON document's
+    strings are decoded, and everything else is prose that keeps the raw reading. A
+    JSONL file's lines are each a document, so a line's strings decode the same way.
+    """
+
+    try:
+        json.loads(text)
+        return True
+    except ValueError:
+        pass
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    for line in lines:
+        try:
+            json.loads(line)
+        except ValueError:
+            return False
+    return True
+
+
+def _render_json_record(text: str, roots: list[str], root_only: bool) -> str:
+    """Render a JSON-structured record: decode every string literal, render, re-spell.
+
+    Only string literals carry text in a JSON document; keys are literals too and are
+    read the same way. A literal's quotes never move, and every replacement is spelled
+    from the token alphabet, so the rendered record stays valid JSON.
+    """
+
+    pieces: list[str] = []
+    position = 0
+    index = 0
+    while index < len(text):
+        if text[index] != '"':
+            index += 1
+            continue
+        end = _string_literal_end(text, index)
+        if end < 0:
+            break
+        pieces.append(text[position:index + 1])
+        pieces.append(_render_literal(text[index + 1:end - 1], roots, root_only))
+        position = end - 1
+        index = end
+    pieces.append(text[position:])
+    return "".join(pieces)
+
+
+def _render_prose(text: str, roots: list[str], root_only: bool) -> str:
+    """Render prose with the base tool's raw reading and the shared escape boundary."""
+
+    passes: list[tuple[re.Pattern[str], bool]] = []
+    for root in roots:
+        matchers = _root_patterns(root, _RAW_READING)
+        if matchers is None:
+            continue
+        bounded, chunked = matchers
+        # A root followed by a space-continued chunk continues a longer sibling
+        # name, so the bounded matcher declines it there; the chunked matcher
+        # renders the whole span as a hashed token first: the span is not this
+        # root, and leaving it literal would publish the root bytes on a POSIX
+        # root the host-path patterns do not cover.
+        passes.append((chunked, False))
+        passes.append((bounded, True))
+    for pattern in (_RAW_READING.host if root_only else _RAW_READING.default):
+        passes.append((pattern, False))
+    return _apply_replacements(text, _render_passes(text, None, passes, text))
 
 
 def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
@@ -570,23 +760,21 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     such as ``/portal/runtimes`` stays literal. The function is idempotent:
     rendering rendered text changes nothing.
 
-    The passes run against `_escape_boundary_view`, so a JSON escape a quoted record
-    spells is boundary text rather than a path byte and no tail swallows the escape
-    or the line behind it. What that reading does not see, the raw reading still
-    renders: a second pass over the result keeps a span whose JSON reading rejects
-    the location (`"C:\\temp"`, whose `\\t` decodes the separator into a tab) from
-    losing its match, so the renderer never fails open on a spelling it stopped
-    reading - and that same raw re-read can absorb a following escape and the text
-    behind it into the token, the fail-closed trade the module docstring discloses
-    and `test_a_valid_literal_the_json_reading_rejects_still_absorbs_what_follows`
-    pins.
+    A JSON-structured record is read as its own JSON: every string literal is
+    decoded and the matchers run on the decoded text, so an escape a writer spelled
+    (``\\u0020``, ``\\u00a0``, ``\\u0027``) is the path character it decodes to and
+    a location never splits at one, while the escape a quoted line ends with
+    (``\\n``) stays a boundary and the line behind it stays outside the token. A
+    match replaces the raw bytes it covered, so the digest still binds the recorded
+    spelling. Prose keeps the base tool's raw reading, with one addition: the
+    shared leading boundary reads the character an escape ends with as a boundary,
+    so a location behind a recorded escape still renders. The module docstring
+    names both readings and the boundary each one keeps.
     """
 
-    view = _escape_boundary_view(text)
-    rendered = _render_passes(text, view, roots, root_only)
-    if view != text:
-        rendered = _render_passes(rendered, rendered, roots, root_only)
-    return rendered
+    if _is_json_structured(text):
+        return _render_json_record(text, roots, root_only)
+    return _render_prose(text, roots, root_only)
 
 
 def _parse_arguments(argv: list[str]) -> argparse.Namespace:
