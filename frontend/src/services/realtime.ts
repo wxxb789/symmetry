@@ -207,8 +207,17 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
     };
     // The pass's reads end either way — a refused read ended too — so both arms
     // record the completion and no rejection is left unhandled.
+    //
+    // A change-driven pass keeps the query client's default and cancels a read
+    // that is already in flight, because the change it answers need not be in
+    // that read. The fallback tick is a timer, not a change, and says so with
+    // `cancelRefetch: false`: cancelling a read slower than the poll interval
+    // would restart it on every tick and it would never settle.
     void queryClient
-      .invalidateQueries({ predicate: (query) => query.queryKey[0] !== "session" })
+      .invalidateQueries(
+        { predicate: (query) => query.queryKey[0] !== "session" },
+        { cancelRefetch: source !== "fallback" },
+      )
       .then(settled, settled);
   };
 
@@ -270,9 +279,12 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
    * A tab that becomes visible again is a reconnect from the browser's point of
    * view: the reads refresh from the server whatever the socket status, so a
    * window that was backgrounded never shows stale work and no surface needs a
-   * poll of its own. The listener is registered for the whole handle lifetime,
-   * because a browser whose bootstrap token has not arrived yet still returns to
-   * a stale document.
+   * poll of its own. The listener belongs to a connection attempt — registered by
+   * `connect()` and removed by `close()` — because `close()` takes it away: a
+   * registration made once at construction would leave a handle that is closed
+   * and later reconnected without it for the rest of the document's life, and the
+   * StrictMode setup/cleanup/setup a mounted shell runs is exactly that
+   * close-then-reconnect.
    */
   const onVisibilityChange = () => {
     if (!visible()) return;
@@ -280,17 +292,31 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
     invalidateReads("visibility");
   };
 
-  if (typeof document !== "undefined") {
+  // Adding the same listener twice is a DOM no-op, so `connect()` can attach
+  // unconditionally on every attempt without tracking whether it already did.
+  const attachVisibilityListener = () => {
+    if (typeof document === "undefined") return;
     document.addEventListener("visibilitychange", onVisibilityChange);
-  }
+  };
+
+  const detachVisibilityListener = () => {
+    if (typeof document === "undefined") return;
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+  };
 
   const connect = () => {
     closed = false;
+    // A handle that was closed before its token arrived (or by a StrictMode
+    // cleanup) is revived here, so the listener goes back with the connection.
+    attachVisibilityListener();
     if (socket !== null) return;
     if (options.token() === "") {
-      // No bootstrap token yet: opening a socket would only produce a refused
-      // connect. The caller connects again once the bootstrap read resolved, and
-      // the polling fallback covers the wait.
+      // No bootstrap token: opening a socket would only produce a refused
+      // connect. The shell connects as soon as the bootstrap read resolved — with
+      // a token when the session serves one — so this branch is the client's
+      // fallback state: it reports `disconnected` and the polling fallback covers
+      // the reads, while a later token-bearing session read calls `connect()`
+      // again and opens the socket then.
       setStatus("disconnected");
       syncPolling();
       return;
@@ -371,9 +397,7 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
 
   const close = () => {
     closed = true;
-    if (typeof document !== "undefined") {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    }
+    detachVisibilityListener();
     stopPolling();
     if (batchTimer !== null) {
       clearTimeout(batchTimer);

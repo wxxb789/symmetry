@@ -38,7 +38,6 @@ export interface ChatRunSignals {
   readonly canGuide: boolean;
   readonly canPause: boolean;
   readonly canResume: boolean;
-  readonly hasDecision: boolean;
   /** True when the resolved runtime row advertises no safe-boundary pause. */
   readonly pauseUnsupported: boolean;
 }
@@ -47,9 +46,10 @@ export interface ChatRunSignals {
  * The intents this scope may propose: the server's vocabulary filtered by the
  * scope and the served state, never invented. A run offers guidance, pause and
  * resume only while its own served flags allow them (and no pause is offered
- * when the runtime's adapter says it cannot pause); a decision is offered only
- * while the served waiting transition carries a decision packet; cancel and
- * retry stay on the work detail, which owns them.
+ * when the runtime's adapter says it cannot pause). A waiting decision is
+ * never offered here: its packet's own buttons are the only path that carries
+ * the waiting transition identity the server requires. Cancel and retry stay
+ * on the work detail, which owns them.
  */
 export function applicableChatIntents(options: {
   readonly scope: ChatScope;
@@ -65,7 +65,6 @@ export function applicableChatIntents(options: {
       ...(run !== null && run.canGuide ? (["guidance"] as const) : []),
       ...(run !== null && run.canPause && !run.pauseUnsupported ? (["pause"] as const) : []),
       ...(run !== null && run.canResume ? (["resume"] as const) : []),
-      ...(run !== null && run.hasDecision ? (["decision"] as const) : []),
     ];
   }
   return options.hasProjects ? ["discuss", "status", "start_work"] : ["discuss", "status"];
@@ -176,9 +175,12 @@ export interface ChatReceiptView {
 
 /**
  * The receipt one message renders, or null when the message carries no command.
- * `applied` requires the served acknowledgement outcome; a command only an
- * older retained page carries is never refreshed against the current page, so
- * it says exactly that instead of claiming an outcome.
+ * `applied` requires the served acknowledgement outcome; a command the control
+ * plane applied or rejected itself renders the plane's own outcome, and a
+ * supervisory command the plane recorded applied from the runtime's transition
+ * report renders applied-unacknowledged until the runtime acknowledges it; a
+ * command only an older retained page carries is never refreshed against the
+ * current page, so it says exactly that instead of claiming an outcome.
  */
 export function chatReceiptView(command: ReceiptCommand | null, carriedByCurrentPage: boolean): ChatReceiptView | null {
   if (command === null) return null;
@@ -196,9 +198,13 @@ export function chatSendStatusText(status: ChatSendStatus): string {
     case "idle": return "Messages are saved to this context.";
     case "sending": return "Sending…";
     case "saved-question": return "Saved to this context.";
-    case "saved-command": return "Saved · awaiting agent acknowledgement";
+    case "saved-command": return "Message saved; the transcript receipt tracks the acknowledgement.";
     case "refused": return `Refused: ${status.message}`;
-    case "unconfirmed": return "Send not confirmed. The draft is kept; retry reuses the same action identity.";
+    // A decision attempt keeps no composer draft: its retry is the option
+    // button, which reuses the frozen identity exactly for the same option.
+    case "unconfirmed": return status.source === "decision"
+      ? "Decision not confirmed. Choosing the same option again reuses the same action identity."
+      : "Send not confirmed. The draft is kept; retry reuses the same action identity.";
     case "notice": return status.message;
   }
 }
@@ -362,8 +368,10 @@ export function chatEvidenceRows(run: ChatConversationRun | null): readonly Chat
     } else {
       const kind = item.data.kind;
       const outcome = receiptOutcome({
+        kind,
         state: item.data.state,
         acknowledgement_outcome: item.data.acknowledgement_outcome,
+        acknowledgement_id: asText(item.data.acknowledgement_id),
         applied_at: item.data.applied_at,
       });
       rows.push({ key: `command:${item.data.command_id}:${index}`, source: "command", kind, summary: receiptLabel(outcome) });

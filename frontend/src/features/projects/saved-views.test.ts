@@ -26,6 +26,15 @@ describe("saved view preferences", () => {
     expect(deploymentScope({})).toBe("unknown-deployment");
   });
 
+  it("keeps another project's views when one project is rewritten", () => {
+    const storage = memoryStorage();
+    const otherProjectId = "22222222-2222-4222-8222-222222222222";
+    writeSavedViews(storage, scope, projectId, [{ name: "Mine", search: { q: "a" } }]);
+    writeSavedViews(storage, scope, otherProjectId, [{ name: "Theirs", search: { view: "board" } }]);
+    expect(readSavedViews(storage, scope, projectId)).toEqual([{ name: "Mine", search: { q: "a" } }]);
+    expect(readSavedViews(storage, scope, otherProjectId)).toEqual([{ name: "Theirs", search: { view: "board" } }]);
+  });
+
   it("keeps preferences free of credentials and authoritative records", () => {
     const storage = memoryStorage();
     writeSavedViews(storage, scope, projectId, [{ name: "Mine", search: { q: "read surface" } }]);

@@ -84,7 +84,9 @@
         "work-item-projection",
         "execution",
         "delivery",
-        "external"
+        "external",
+        "goal-id",
+        "runtimes"
       ]
     },
     {

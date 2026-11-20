@@ -95,6 +95,13 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       chain and the disjunct together — or missing its caller, in which case the disjunct needs a
       producer; revalidate the surviving provider-action tests either way.
 
+- [ ] Drop the unused `conn` parameter in
+      `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:689)
+      passes `conn` to `portal_command!/4` (:692), which never reads it (it builds its own `portal_conn()`),
+      so every run reports `warning: variable "conn" is unused` at :692. Pre-existing (present in both the
+      before and after `MIX_TEST_PARTITION=66` runs of the retro-b5 apply stage) and test-only; drop the
+      parameter and the callers' pass-through in separate maintenance.
+
 ## Retro review follow-ups
 
 - [ ] Investigate the intermittent Control failure class behind the provider-action cases at

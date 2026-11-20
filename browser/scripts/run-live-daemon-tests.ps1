@@ -112,10 +112,11 @@ $raceConfig = New-FixtureConfig -Name "race" -Profile "goal2-race-$fixtureSuffix
 # fixtures above. Every pinned executable is probed on this host; when none of
 # the resolved binaries matches its repository pin the daemon still registers an
 # honest all-unsupported record, which is the same comparison.
-$harnessProvider = @(
-  @{ Name = "pi"; Command = (Get-Command pi -ErrorAction SilentlyContinue).Source; Kind = "pi"; VersionCommand = "pi"; AdapterVersion = "pi-rpc-v1"; ProtocolVersion = 1 },
-  @{ Name = "omo"; Command = (Get-Command omo -ErrorAction SilentlyContinue).Source; Kind = "omo"; VersionCommand = "omo"; AdapterVersion = "omo-rpc-v1"; ProtocolVersion = 1 }
-) | Where-Object { $_.Command } | Select-Object -First 1
+$harnessCandidates = @(
+  @{ Command = (Get-Command pi -ErrorAction SilentlyContinue).Source; Kind = "pi"; AdapterVersion = "pi-rpc-v1"; ProtocolVersion = 1 },
+  @{ Command = (Get-Command omo -ErrorAction SilentlyContinue).Source; Kind = "omo"; AdapterVersion = "omo-rpc-v1"; ProtocolVersion = 1 }
+)
+$harnessProvider = $harnessCandidates | Where-Object { $_.Command } | Select-Object -First 1
 
 # The probed native version line, read from the same executable the daemon will
 # resolve. It must equal the daemon's own probe result; a mismatch makes the
@@ -123,11 +124,17 @@ $harnessProvider = @(
 # than passing with an invented version.
 $harnessVersion = $null
 if ($harnessProvider) {
-  $versionOutput = & $harnessProvider.VersionCommand --version 2>$null | Select-Object -First 1
+  $versionOutput = & $harnessProvider.Kind --version 2>$null | Select-Object -First 1
   if ($LASTEXITCODE -eq 0 -and $versionOutput) { $harnessVersion = ($versionOutput -split "`n")[0].Trim() }
+  # A resolved provider must produce a version: without one the daemon would
+  # have to invent it, and the runtime capability comparison - this runner's
+  # only runtime-row check - would silently never run while the run still
+  # reported a pass. Refuse instead.
+  if (-not $harnessVersion) {
+    throw "harness provider $($harnessProvider.Kind) ($($harnessProvider.Command)) produced no usable --version output (exit code $LASTEXITCODE): the runtime capability comparison cannot be reported as executed"
+  }
 }
 
-$harnessConfig = $null
 $harnessRuntimeKey = $null
 $harnessRepositoryFile = Join-Path $runRoot "harness-repository.json"
 $processes = @()
@@ -288,6 +295,10 @@ try {
   }
 }
 
+if (-not $harnessProvider) {
+  $probedExecutables = ($harnessCandidates | ForEach-Object { $_.Kind }) -join ", "
+  Write-Host "harness phase skipped: probed $probedExecutables; resolved 0 of $($harnessCandidates.Count); the runtime capability comparison and the repository provisioning it needs did not run"
+}
 Write-Host "Live daemon browser tests passed."
 Write-Host "Logs:             $runRoot"
 Write-Host "Screenshots/JSON: $env:SYMMETRY_PLAYWRIGHT_OUTPUT"

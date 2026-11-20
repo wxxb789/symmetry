@@ -1,9 +1,8 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createRealtime,
   invalidationKeys,
-  REALTIME_TOPIC,
   type RealtimePush,
   type RealtimeSocket,
 } from "./realtime";
@@ -19,6 +18,7 @@ function fakeSocket() {
   const joins: string[] = [];
   const replies = { ok: [] as Array<() => void>, error: [] as Array<() => void> };
   let joined = false;
+  let disconnects = 0;
   // One push object across rejoins: Phoenix hands the same `joinPush` back from
   // `Channel.join` and resends it on every rejoin (`channel.js` `rejoin` ->
   // `joinPush.resend`, whose `reset` keeps the receive hooks), so a later reply
@@ -32,7 +32,7 @@ function fakeSocket() {
   };
   const socket: RealtimeSocket = {
     connect: () => undefined,
-    disconnect: () => undefined,
+    disconnect: () => { disconnects += 1; },
     onOpen: (callback) => {
       handlers.open.push(callback);
     },
@@ -59,6 +59,7 @@ function fakeSocket() {
   return {
     socket,
     joins,
+    disconnects: () => disconnects,
     isJoined: () => joined,
     open: () => handlers.open.forEach((callback) => callback()),
     close: () => handlers.close.forEach((callback) => callback()),
@@ -157,7 +158,9 @@ describe("operator invalidation client", () => {
     expect(realtime.status()).toBe("disconnected");
     realtime.connect();
     expect(realtime.status()).toBe("connecting");
-    expect(fake.joins).toEqual([REALTIME_TOPIC]);
+    // The literal topic, not the module's own constant: a drift in either would
+    // otherwise be compared against itself and never noticed.
+    expect(fake.joins).toEqual(["portal:invalidations"]);
     expect(fake.isJoined()).toBe(true);
     fake.open();
     expect(realtime.status()).toBe("connected");
@@ -400,6 +403,33 @@ describe("operator invalidation client", () => {
     expect(invalidate.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("leaves an in-flight read alone on a fallback tick", () => {
+    // The fallback is a timer, not a change: TanStack Query's default
+    // (`cancelRefetch: true`) cancels the in-flight fetch of a query that already
+    // has data and starts it again, so a read slower than the poll interval would
+    // be cancelled and restarted on every tick and never settle while the socket is
+    // down. The tick must let the read it interrupted converge instead.
+    const { queryClient, invalidate, realtime } = harness({ pollIntervalMs: 50 });
+    queryClient.setQueryData(["held"], "loaded");
+    const held = Promise.withResolvers<string>();
+    const queryFn = vi.fn(() => held.promise);
+    const observer = new QueryObserver(queryClient, { queryKey: ["held"], queryFn });
+    const unsubscribe = observer.subscribe(() => {});
+    // One read in flight over data the surface already shows: exactly the state the
+    // default cancels and restarts.
+    expect(queryFn).toHaveBeenCalledTimes(1);
+
+    realtime.connect();
+    invalidate.mockClear();
+    vi.advanceTimersByTime(50);
+
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(queryFn).toHaveBeenCalledTimes(1);
+
+    held.resolve("settled");
+    unsubscribe();
+  });
+
   it("does not refresh a hidden document and refreshes once it returns", () => {
     let visible = false;
     const { invalidate, realtime } = harness({ pollIntervalMs: 50, visibility: () => visible });
@@ -436,6 +466,22 @@ describe("operator invalidation client", () => {
     expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the tab-return refresh after a closed handle connects again", () => {
+    // `close()` removes the document listener, so the attempt that revives the
+    // handle must register it again — the StrictMode setup/cleanup/setup a mounted
+    // shell runs is exactly a close followed by another connect. Without the
+    // re-registration every later tab return is a refresh that never happens.
+    const { invalidate, realtime } = harness({ pollIntervalMs: 50 });
+    realtime.connect();
+    realtime.close();
+    realtime.connect();
+    invalidate.mockClear();
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(realtime.lastRefresh()).toMatchObject({ source: "visibility" });
+  });
+
   it("refreshes the short-lived token after a lost or refused connection", () => {
     const { fake, refreshToken, realtime } = harness();
     realtime.connect();
@@ -457,7 +503,15 @@ describe("operator invalidation client", () => {
 
     realtime.close();
     expect(realtime.status()).toBe("disconnected");
+    // The socket is released, not just relabelled: the Phoenix client's own
+    // reconnect timer must be gone with it.
+    expect(fake.disconnects()).toBe(1);
     vi.advanceTimersByTime(200);
+    expect(invalidate).not.toHaveBeenCalled();
+
+    // And the document listener went with the connection: a tab returning after
+    // the handle closed refreshes nothing.
+    document.dispatchEvent(new Event("visibilitychange"));
     expect(invalidate).not.toHaveBeenCalled();
   });
 

@@ -196,6 +196,14 @@ function assertInstanceBuildPath(run, { script, port, inheritedBuildPath }) {
   const buildPaths = new Set();
   const databases = new Set();
   for (const call of calls) {
+    // The pinned toolchain every invocation runs under: this contract is about
+    // which mix runs where, so a pin edit must not silently change every
+    // invocation it records.
+    assert.match(
+      call.argv,
+      /^exec elixir@1\.20\.4-otp-29 erlang@29\.1\.2 -- mix /,
+      `${script} ran '${call.argv}' outside the pinned elixir@1.20.4-otp-29 / erlang@29.1.2 toolchain:\n${output}`
+    );
     assert.equal(
       normalize(call.cwd),
       normalize(controlRoot),

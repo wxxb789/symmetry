@@ -1,6 +1,7 @@
 defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
   use ExUnit.Case, async: false
 
+  alias SymmetryControl.ContractSchema
   alias SymmetryControl.Goals.ContractValidation
 
   @manifest_path Path.expand("../../../../contracts/fixtures/manifest.json", __DIR__)
@@ -55,7 +56,7 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
         schema =
           bundle
           |> Map.fetch!(name <> ".schema.json")
-          |> rewrite_pcre2_pattern_escapes()
+          |> ContractSchema.rewrite_pcre2_pattern_escapes()
           |> ExJsonSchema.Schema.resolve()
 
         {name, schema}
@@ -93,23 +94,6 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     validator = Map.fetch!(@validators, schema)
     validator.(data, schema_root: @schema_root)
   end
-
-  # Match ContractValidation's ECMA-262-to-PCRE2 adaptation without changing
-  # either the canonical bundle or the production validator's supported reads.
-  defp rewrite_pcre2_pattern_escapes(value) when is_map(value) do
-    Map.new(value, fn
-      {"pattern", pattern} when is_binary(pattern) ->
-        {"pattern", String.replace(pattern, "\\u0000", "\\x{0}")}
-
-      {key, child} ->
-        {key, rewrite_pcre2_pattern_escapes(child)}
-    end)
-  end
-
-  defp rewrite_pcre2_pattern_escapes(value) when is_list(value),
-    do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
-
-  defp rewrite_pcre2_pattern_escapes(value), do: value
 
   defp assert_expected_semantic_error(%{"semantic_error" => expected}, result)
        when is_binary(expected),

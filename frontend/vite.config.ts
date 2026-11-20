@@ -30,7 +30,6 @@ export default defineConfig({
       // The operator invalidation socket, proxied to Phoenix with the WebSocket
       // upgrade; the SPA and Phoenix share the dev origin, so cookies apply.
       "/portal/socket": { target, changeOrigin: false, ws: true },
-      "/socket": { target, changeOrigin: false, ws: true },
     },
   },
 });

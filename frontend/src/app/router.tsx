@@ -8,6 +8,7 @@ import { workItemSearch, workSearch } from "../features/projects/filters";
 import { ProjectPage, ProjectsPage } from "../features/projects/projects";
 import { RuntimesPage } from "../features/runtimes/runtimes";
 import { WorkDetailPage } from "../features/work/detail";
+import type { ChatScope } from "../services/api";
 import type { Application } from "./application";
 import { WorkspaceRoot } from "./shell";
 
@@ -27,16 +28,15 @@ const attentionRoute = createRoute({
   component: AttentionPage,
 });
 /** The scope members the conversation URL carries; a value the server's scope vocabulary does not name is dropped. */
-type ChatScopeSearch = "workspace" | "project" | "run";
-const chatScopeSearchValues: readonly string[] = ["workspace", "project", "run"];
-const isChatScopeSearch = (value: unknown): value is ChatScopeSearch => typeof value === "string" && chatScopeSearchValues.includes(value);
+const chatScopeSearchValues: readonly ChatScope[] = ["workspace", "project", "run"];
+const isChatScopeSearch = (value: unknown): value is ChatScope => typeof value === "string" && chatScopeSearchValues.some((scope) => scope === value);
 const chatRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/chat",
   // The URL keeps the asked-for scope so a session expiry returns to the same
   // conversation; the read's own answer still owns the interpretation, and an
   // empty or unknown member is dropped rather than sent.
-  validateSearch: (search: Record<string, unknown>): { scope?: ChatScopeSearch; projectId?: string; runId?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { scope?: ChatScope; projectId?: string; runId?: string } => ({
     ...(isChatScopeSearch(search["scope"]) ? { scope: search["scope"] } : {}),
     ...(typeof search["projectId"] === "string" && search["projectId"] ? { projectId: search["projectId"] } : {}),
     ...(typeof search["runId"] === "string" && search["runId"] ? { runId: search["runId"] } : {}),

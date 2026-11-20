@@ -174,6 +174,7 @@ export interface ChatCommandView {
   readonly kind: string;
   readonly state: string;
   readonly acknowledgement_outcome: string | null;
+  readonly acknowledgement_id: string | null;
   readonly applied_at?: string | null;
 }
 
@@ -241,6 +242,11 @@ export interface WorkItemDraft {
   repository_resource_id?: string | null;
   ci_resource_id?: string | null;
   branch?: string;
+  // The delivery controls both changesets cast; a deliberate clear travels as
+  // null (Ecto skips a nil change, and the column CHECKs pass NULL).
+  pull_request_url?: string | null;
+  ci_status?: string | null;
+  review_status?: string | null;
   blocked?: boolean;
   blocker?: string;
 }
@@ -276,9 +282,11 @@ export interface WorkItemReceipt extends WriteReceipt {
 const Session = Schema.Struct({
   csrf_token: Schema.NonEmptyString,
   // Additive: this release's server always serves it (pinned by the control
-  // session test and by the real socket connect in the browser gate), and an
-  // older partial bootstrap would leave the invalidation socket unconnectable
-  // while the visible client keeps polling.
+  // session test and by the real socket connect in the browser gate). A partial
+  // bootstrap that serves none is still tolerated: the shell connects the
+  // invalidation client regardless, and its empty-token branch reports
+  // `disconnected` and starts the polling fallback, so a visible client keeps
+  // converging without a socket.
   socket_token: Schema.optionalWith(Schema.String, { default: () => "" }),
 });
 export type Session = typeof Session.Type;
@@ -376,8 +384,6 @@ const ControlExecution = Schema.Struct({
   run_id: Schema.NullOr(Schema.String),
   generation: Schema.Number,
   state: Schema.String,
-  waiting: Schema.optional(Schema.NullOr(Schema.Unknown)),
-  latest_command: Schema.optional(Schema.NullOr(Schema.Unknown)),
 });
 const ControlCommand = Schema.Struct({
   command_id: Schema.String,
@@ -430,6 +436,7 @@ const ChatPostedCommand = Schema.Struct({
   kind: Schema.NonEmptyString,
   state: Schema.NonEmptyString,
   acknowledgement_outcome: Schema.NullOr(Schema.String),
+  acknowledgement_id: Schema.optional(Schema.NullOr(Schema.String)),
   applied_at: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const ChatMessageResponse = Schema.Struct({
@@ -439,10 +446,9 @@ const ChatMessageResponse = Schema.Struct({
   command: Schema.NullOr(ChatPostedCommand),
 });
 
-type ControlExecutionValue = typeof ControlExecution.Type;
 type ControlCommandValue = typeof ControlCommand.Type;
 
-export type ControlExecution = Omit<ControlExecutionValue, "waiting" | "latest_command">;
+export type ControlExecution = typeof ControlExecution.Type;
 export type ControlReceipt = ControlCommandValue;
 
 export interface StartOutcome {
@@ -690,6 +696,7 @@ const chatMessageResponse = (body: Uint8Array, status: number) =>
         kind: value.command.kind,
         state: value.command.state,
         acknowledgement_outcome: value.command.acknowledgement_outcome,
+        acknowledgement_id: value.command.acknowledgement_id ?? null,
         applied_at: value.command.applied_at ?? null,
       },
     })),
