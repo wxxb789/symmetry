@@ -245,6 +245,13 @@ function assertInstanceBuildPath(run, { script, port, inheritedBuildPath }) {
         normalize(inheritedBuildPath),
         `${script} let the inherited MIX_BUILD_PATH ${inheritedBuildPath} decide where its instance compiles:\n${output}`
       );
+      // Overriding is only half the contract: the operator sees the override in the
+      // run output, with the value that was ignored (STD-A13 - the report line could
+      // be deleted while every recorded-argv assertion stayed green).
+      assert.ok(
+        output.includes(`ignoring inherited MIX_BUILD_PATH '${inheritedBuildPath}'`),
+        `${script} did not report the overridden MIX_BUILD_PATH ${inheritedBuildPath} in its output:\n${output}`
+      );
     }
     buildPaths.add(buildPath);
   }
@@ -380,6 +387,69 @@ for (const script of Object.keys(harnesses)) {
         fs.rmSync(harness.recorder.root, { recursive: true, force: true });
       }
       fs.rmSync(holderRoot, { recursive: true, force: true });
+    }
+  });
+
+  test(`${script} holds its port lock while it awaits readiness`, { skip: skipOnNonWindows }, async () => {
+    // A lock the harness releases at its first mix call is no lock at all: the fake
+    // holder above proves the challenger *tries* the lock, not that a live instance
+    // holds it while it runs. Here the holder is the real harness itself, driven by
+    // the recording stub and kept alive inside its readiness wait (the stub never
+    // answers healthz), and the challenger must refuse while it lives. Moving either
+    // harness's ReleaseMutex before its readiness wait fails this case (STD-A11).
+    const port = await freePort();
+    const holder = spawnHarness({ script, port });
+    let challenger = null;
+    try {
+      await waitFor(
+        () => holder.closed || recordedCalls(holder.recorder.logFile).some((call) => harnesses[script].serverInvocation.test(call.argv)),
+        180_000
+      );
+      assert.ok(
+        !holder.closed,
+        `${script} ended before it could hold port ${port} through its readiness wait:\n${holder.output}`
+      );
+      challenger = spawnHarness({ script, port });
+      await waitFor(() => challenger.closed, 60_000);
+      const calls = recordedCalls(challenger.recorder.logFile);
+      assert.ok(
+        challenger.closed,
+        `${script} did not exit within 60s while a live instance held port ${port} (recorded mix calls: ${calls.length}):\n${challenger.output}`
+      );
+      assert.notEqual(
+        challenger.exitCode,
+        0,
+        `${script} exited 0 although a live instance held port ${port}:\n${challenger.output}`
+      );
+      assert.match(
+        challenger.output,
+        /already owned by another harness instance/,
+        `${script} went ahead on port ${port} held by a live instance (recorded mix calls: ${calls.length}):\n${challenger.output}`
+      );
+      assert.equal(
+        calls.length,
+        0,
+        `${script} ran mix invocations before refusing port ${port}:\n${calls.map((call) => call.argv).join("\n")}`
+      );
+      assert.ok(
+        !holder.closed,
+        `${script} released its port lock while its readiness wait was still pending:\n${holder.output}`
+      );
+    } finally {
+      for (const harness of [challenger, holder]) {
+        if (!harness) continue;
+        spawnSync("taskkill", ["/PID", String(harness.child.pid), "/T", "/F"], { stdio: "ignore" });
+      }
+      for (const harness of [challenger, holder]) {
+        if (!harness) continue;
+        if (!harness.closed) {
+          await Promise.race([
+            harness.closedPromise,
+            rejectAfter(10_000, `${script} PID ${harness.child.pid} did not close after taskkill /T /F:\n${harness.output}`)
+          ]);
+        }
+        fs.rmSync(harness.recorder.root, { recursive: true, force: true });
+      }
     }
   });
 }

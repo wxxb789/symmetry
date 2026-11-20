@@ -8,7 +8,9 @@ re-implements the renderer's patterns - it executes the tool, so what the gate
 constrains is exactly what the sanitize tool's own check parses. Product routes such
 as ``/portal/runtimes`` stay literal in that mode; a Windows drive or UNC path, a
 POSIX ``/home``, ``/Users``, ``/root``, ``/tmp``, ``/var``, ``/mnt`` or ``/private``
-path, or a ``--root`` disposable root still refuses.
+path still refuses. A disposable root is rendered only when a ``--root`` argument
+names it, and this gate passes none, so a store outside those shapes (a ``/srv/...``
+root, say) stays literal here - by the tool's own boundary, not by omission.
 
 Changed-file selection is computed against an explicit comparison base, never from
 the checkout's last commit: CI passes the pull-request base commit, or the pushed
@@ -37,9 +39,10 @@ Usage::
     python scripts/ci/check-record-cleanliness.py --base <commit> [--head <commit>]
 
 Exit codes: 0 when every selected record passes (also when the range changes no
-record), 1 when a selected record still carries a host absolute path or its bytes are
-not text the sanitize tool can check, 2 when the revision range or the sanitize tool
-cannot be used.
+record), 1 when a selected record still carries a host absolute path, its bytes are
+not text the sanitize tool can check, or its head entry is not a regular file blob
+(a symlink stores its target text and a gitlink a subproject commit, so neither is
+the record), 2 when the revision range or the sanitize tool cannot be used.
 """
 
 from __future__ import annotations
@@ -170,6 +173,13 @@ def head_blob(repository: pathlib.Path, head: str, relative: str) -> tuple[str, 
     if len(header) != 3:
         raise DiffRefused(f"unexpected ls-tree entry for {relative} at {head}")
     mode, _kind, object_id = (field.decode("ascii") for field in header)
+    if mode not in REGULAR_BLOB_MODES:
+        # The mode decides before the blob is read: a gitlink's object id is the
+        # subproject commit, so `cat-file blob` on it fails with "bad file" and the
+        # gate would exit 2 (an unusable range) instead of the documented
+        # non-regular refusal (exit 1). The caller refuses every non-regular mode
+        # and never reads the payload.
+        return mode, b""
     blob = run_git(repository, "cat-file", "blob", object_id)
     if blob.returncode != 0:
         raise DiffRefused(

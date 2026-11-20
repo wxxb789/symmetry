@@ -81,10 +81,12 @@ class RecordCleanlinessTests(unittest.TestCase):
 
     def test_a_changed_sanitize_tool_alone_changes_no_record(self) -> None:
         # The fixture bytes are inert - the gate resolves the sanitize tool from its
-        # own directory (--repo only names the git repository) - so this case pins the
-        # ci.yml classifier trigger (a change to the tool path runs the job) against a
-        # selection with nothing to check, not a swapped tool. The tool's own
-        # behaviour is covered by its own suite.
+        # own directory (--repo only names the git repository) - so a change to that
+        # path alone selects no record and the gate reports "nothing to check": the
+        # selector side of the tool-path case, with the tool's own behaviour covered
+        # by its own suite. The ci.yml classifier arm that turns this path into a job
+        # trigger is not executed here (this suite runs no workflow conditions); the
+        # classifier fixture is tracked as its own TODO entry in docs/TODO.md.
         self.write("scripts/ci/model-routing-record-sanitize.py", "print('not the real tool')\n")
         head = self.commit("touch the sanitize tool")
         result = self.run_gate("--base", self.base, "--head", head)
@@ -253,6 +255,25 @@ class RecordCleanlinessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("clean.json", result.stderr)
         self.assertIn("not regular file blobs", result.stderr)
+
+    def test_a_record_committed_as_a_gitlink_takes_the_nonregular_arm(self) -> None:
+        # STD-A08: a real gitlink's object id is the subproject commit, so
+        # `cat-file blob <that id>` fails with "bad file" and the gate exited 2
+        # (an unusable range) instead of the documented non-regular refusal
+        # (exit 1). The head entry's mode decides before the blob is read.
+        relative = "docs/evaluations/model-routing/gitlink-record"
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{self.base},{relative}")
+        tree = self.git_text("write-tree")
+        head = self.git_text("commit-tree", tree, "-p", self.base, "-m", "commit a record as a gitlink")
+        self.git("update-ref", "HEAD", head)
+        status = self.git_text("diff", "--name-status", self.base, head, "--", relative)
+        self.assertTrue(status.startswith("A"), status)
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gitlink-record", result.stderr)
+        self.assertIn("stores it as mode 160000", result.stderr)
+        self.assertIn("not regular file blobs", result.stderr)
+        self.assertNotIn("cannot read the blob", result.stderr)
 
     def test_an_all_zero_base_falls_back_to_the_merge_base(self) -> None:
         self.git("update-ref", "refs/remotes/origin/main", self.base)

@@ -75,6 +75,10 @@ jobs:
   # `before` commit; an empty or all-zero base (a manual `workflow_dispatch` run
   # has no `before` field and arrives empty; a new branch or tag is all-zero)
   # falls back inside the script.
+  # The head is the checkout's own `HEAD`, not the event's `$GITHUB_SHA`: both name
+  # the same revision in every event here, but only `HEAD` is guaranteed to be the
+  # revision this checkout holds, so a `refs/pull/N/merge` rebuilt between the event
+  # and the clone cannot compare `HEAD^1` with a commit the clone never fetched.
   record-cleanliness:
     needs: changes
     if: needs.changes.outputs.run-records == 'true'
@@ -87,7 +91,7 @@ jobs:
       - name: Refuse host paths in records this change adds or modifies
         env:
           RECORD_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
-        run: python3 scripts/ci/check-record-cleanliness.py --base "$RECORD_BASE" --head "$GITHUB_SHA"
+        run: python3 scripts/ci/check-record-cleanliness.py --base "$RECORD_BASE" --head HEAD
 
   contracts:
     needs: changes

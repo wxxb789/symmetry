@@ -2137,9 +2137,11 @@ class EvaluationTests(unittest.TestCase):
         run = self.root / "run-measured"
         self.accepted_run(run=run, environment_json=environment_path)
         self.assertEqual(self.run_record(run)["environment"]["measured"], measured)
+        # The record also carries the binding of the bytes that rendered `measured`
+        # (`measured_sanitizer_sha256`), and nothing else.
         self.assertEqual(
             sorted(self.run_record(run)["environment"]),
-            ["git_version", "machine", "measured", "platform", "python_version"],
+            ["git_version", "machine", "measured", "measured_sanitizer_sha256", "platform", "python_version"],
         )
         self.assertEqual(self.stored_receipt(run)["environment"]["measured"], measured)
         self.assert_ok(self.accept(run=run))
@@ -2281,10 +2283,21 @@ class EvaluationTests(unittest.TestCase):
         self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
         # vitest/vite run state is redirected outside a sealed checkout, so a cache
         # file that still appears inside one is ordinary source the manifest binds.
-        self.edit("app/node_modules/.vite/vitest/results.json", '{"failed":[]}\n', run=run)
-        self.edit("app/node_modules/.vitest-cache/ab/entry.json", "{}\n", run=run)
-        self.edit("app/node_modules/.vite-temp/stale.tmp", "x\n", run=run)
-        self.assert_refused(self.seal(run=run), "outside allowed_paths")
+        # Each spelling refuses on its own (STD-A12): one combined seal only proved
+        # that at least one of the three was still bound, so restoring an exemption
+        # for a single path kept the case green; the allowed source edit in the same
+        # run is the positive control that the seal itself still works.
+        for relative, content in (
+            ("app/node_modules/.vite/vitest/results.json", '{"failed":[]}\n'),
+            ("app/node_modules/.vitest-cache/ab/entry.json", "{}\n"),
+            ("app/node_modules/.vite-temp/stale.tmp", "x\n"),
+        ):
+            with self.subTest(relative=relative):
+                path = self.checkout(run) / relative
+                self.write(path, content)
+                self.assert_refused(self.seal(run=run), "outside allowed_paths")
+                path.unlink()
+                self.assert_ok(self.seal(run=run))
 
     def test_package_files_under_node_modules_stay_bound(self) -> None:
         run = self.root / "run-node-modules-package"
@@ -3060,6 +3073,11 @@ class EvaluationTests(unittest.TestCase):
             # A non-vitest entry file stays a non-vitest invocation, flags or not.
             ({"language": "go", "gates": [
                 {"id": "gate", "argv": ["node", "--no-warnings", "run.mjs", "run"]}]}, False),
+            # A value-taking launcher flag hides its value, not the entry behind it
+            # (STD-A04: this was the review's exact spelling).
+            ({"language": "go", "gates": [
+                {"id": "gate", "argv": ["node", "--require", "./setup.cjs",
+                                        "../../../node_modules/vitest/vitest.mjs", "run"]}]}, True),
             ({"language": "go", "gates": [{"id": "gate", "argv": ["go", "test", "./..."]}]}, False),
             ({"language": "go"}, False),
         )
@@ -3077,6 +3095,20 @@ class EvaluationTests(unittest.TestCase):
             (["node", "--no-warnings", "x/vitest.mjs", "run"], True),
             (["node", "--max-old-space-size=4096", "vitest.mjs", "run"], True),
             (["node", "--", "vitest.mjs", "run"], True),
+            # A value-taking launcher flag consumes the argument after it, so the
+            # entry past that value is still the entry (STD-A04).
+            (["node", "-r", "./setup.cjs", "../../../node_modules/vitest/vitest.mjs", "run"], True),
+            (["node", "--require", "./setup.cjs", "x/vitest.mjs", "run"], True),
+            (["node", "--import", "./loader.mjs", "vitest.mjs", "run"], True),
+            (["node", "--loader", "./loader.mjs", "vitest.mjs"], True),
+            (["node", "--experimental-loader", "./loader.mjs", "vitest.mjs"], True),
+            # An `=`-joined value is one flag argument, so the entry stays visible.
+            (["node", "--require=./setup.cjs", "vitest.mjs", "run"], True),
+            # The first non-flag that is not a flag's value is still the run file.
+            (["node", "--require", "./setup.cjs", "run.mjs", "vitest.mjs"], False),
+            (["node", "-r", "setup.cjs", "run.mjs"], False),
+            (["node", "-r"], False),
+            (["node", "--require"], False),
             # The entry is the first non-flag argument: a file given before the vitest
             # entry is the file the launcher runs, so this is not a vitest invocation.
             (["node", "--no-warnings", "run.mjs", "vitest.mjs"], False),
@@ -3096,6 +3128,14 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(derived[:4], ["node", "--no-warnings", "x/vitest.mjs", "run"])
         self.assertIn("--reporter=json", derived)
         self.assertEqual(derived[-1], "src/x.test.tsx")
+        # The derived report command reuses the launcher, the value-taking flag and
+        # its value up to the entry, so it reruns the declared spelling.
+        flagged = runner.validate_gate({
+            "id": "gate", "cwd": ".", "argv": ["node", "--require", "./setup.cjs", "x/vitest.mjs", "run"],
+            "vitest_files": ["src/x.test.tsx"], "vitest_tests": ["one"],
+        }, 0)
+        derived = runner.vitest_report_argv(flagged, pathlib.Path("gate-dir"))
+        self.assertEqual(derived[:5], ["node", "--require", "./setup.cjs", "x/vitest.mjs", "run"])
 
     def test_check_refuses_a_dependency_tree_that_changed_during_the_attempt(self) -> None:
         run = self.root / "run-tree-drift"
@@ -3183,6 +3223,128 @@ class EvaluationTests(unittest.TestCase):
             receipt["evidence"]["check_attempt"]["dependency_provisioning"]["tree_digest"],
             bound["tree_digest"],
         )
+
+    def test_check_re_resolves_the_dependency_tree_before_the_gates_run(self) -> None:
+        # STD-A01: the F01 resolution check ran only on the bind path, so a junction
+        # retarget at the run-store placeholder after the bind made the gates execute
+        # an unbound install (the probe's gate read `GATE-READ B`) while `check`
+        # passed and the receipt attested the bound tree. `check` re-resolves before
+        # any gate runs, and receipt derivation re-resolves too.
+        run = self.root / "run-tree-retarget"
+        task = self.task(language="typescript", gates=[self.gate_plain()])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.bind_tree(run)
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        other = self.root / "node_modules-other"
+        self.write(other / "react" / "index.js", "module.exports = {}\n")
+        placeholder = run / "node_modules"
+        shutil.rmtree(placeholder)
+        if os.name == "nt":
+            created = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(placeholder), str(other)],
+                capture_output=True, text=True, check=False,
+            )
+            if created.returncode != 0:
+                self.skipTest(f"junction creation is unavailable: {created.stdout}{created.stderr}")
+        else:
+            try:
+                os.symlink(other, placeholder, target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"symlink creation is unavailable: {error}")
+        refused = self.check(run=run)
+        self.assert_refused(refused, "the gates execute from")
+        # The refusal precedes gate execution: no attempt record exists to read.
+        self.assertFalse((run / "checks").exists(), refused.stdout + refused.stderr)
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "the gates execute from")
+        # The documented recovery: the placeholder is restored, and the binding is
+        # the tree the gates resolve again.
+        if os.name == "nt":
+            os.rmdir(placeholder)
+        else:
+            os.unlink(placeholder)
+        placeholder.mkdir()
+        self.assert_ok(self.check(run=run))
+
+    def test_the_run_store_placeholder_does_not_answer_for_a_tree(self) -> None:
+        # STD-A03: Vite's config loader writes its temp files into the nearest existing
+        # `node_modules` - the placeholder prepare creates - and "has any entry" then
+        # resolved the placeholder as the tree the gates execute from, refusing the
+        # true hoisted binding (and, after the STD-A01 fix, refusing every later
+        # check). A dot-only placeholder answers for no package; a real package entry
+        # inside it still shadows the binding.
+        run = self.root / "run-placeholder"
+        task = self.task(language="typescript", gates=[self.gate_plain()])
+        self.assert_ok(self.prepare(task=task, run=run))
+        self.write(
+            run / "node_modules" / ".vite-temp" / "vite.config.ts.timestamp-1.mjs",
+            "export default {}\n",
+        )
+        self.write(run / "node_modules" / ".vite" / "deps.json", "{}\n")
+        self.bind_tree(run)
+        self.edit("app/main.go", "package app\n\nfunc Main() int { return 2 }\n", run=run)
+        self.assert_ok(self.seal(run=run))
+        self.assert_ok(self.check(run=run))
+        self.write(run / "node_modules" / "react" / "index.js", "module.exports = {};\n")
+        self.assert_refused(self.check(run=run), "the gates execute from")
+        shutil.rmtree(run / "node_modules" / "react")
+        self.assert_ok(self.check(run=run))
+
+    def test_redacted_values_bind_the_sanitize_tool_that_rendered_them(self) -> None:
+        # STD-A02: the receipt binds the sanitize tool in `evidence.tooling_sources`,
+        # but the values it rendered were produced at prepare (measured) and bind
+        # (install_log_source). The review probe mutated the tool between prepare and
+        # `receipt` and still derived `accepted: true`, naming the mutated bytes as
+        # the producer of values the old bytes rendered. Each redaction now records
+        # the bytes it ran under, and a derivation under other bytes refuses.
+        tool = SCRIPT.with_name("model-routing-record-sanitize.py")
+        digest = "sha256:" + hashlib.sha256(tool.read_bytes()).hexdigest()
+        measured = self.write_json(
+            self.root / "inputs" / "environment-redaction-binding.json",
+            {"deps_root": r"C:\work\symmetry-deps (outside the checkout)"},
+        )
+        measured_run = self.root / "run-redaction-measured"
+        self.accepted_run(run=measured_run, environment_json=measured)
+        self.assertEqual(
+            self.run_record(measured_run)["environment"]["measured_sanitizer_sha256"], digest
+        )
+        bound_run = self.root / "run-redaction-bound"
+        self.accepted_run(run=bound_run, task=self.task(language="typescript"))
+        provisioning = self.run_record(bound_run)["environment"]["provisioning"]
+        self.assertEqual(provisioning["install_log_source_sanitizer_sha256"], digest)
+        # The pristine copies reproduce both accepted receipts, so the mutation below
+        # is what makes the derivation refuse.
+        tools = self.root / "changed-redaction-tools"
+        tools.mkdir()
+        for name in (SCRIPT.name, "assert-go-test-json.py", "linux-v2-source-subject.py",
+                     "model-routing-record-sanitize.py"):
+            shutil.copyfile(SCRIPT.with_name(name), tools / name)
+
+        def run_copy(*arguments: str) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                [sys.executable, str(tools / SCRIPT.name), *arguments],
+                text=True, capture_output=True, check=False,
+            )
+
+        for run in (measured_run, bound_run):
+            pristine = run_copy("accept", "--run-dir", str(run))
+            self.assertTrue(json.loads(pristine.stdout)["accepted"], pristine.stdout + pristine.stderr)
+        changed = tools / "model-routing-record-sanitize.py"
+        original = changed.read_bytes()
+        changed.write_bytes(original + b"\n# Tooling revision control.\n")
+        usage = self.write_json(self.root / "inputs" / "redaction-usage.json", self.usage_rows())
+        try:
+            for run in (measured_run, bound_run):
+                with self.subTest(run=run.name):
+                    derived = run_copy(
+                        "receipt", "--run-dir", str(run), "--usage", str(usage)
+                    )
+                    self.assert_refused(derived, "does not match")
+                    self.assertIn("recorded redaction", derived.stderr)
+                    accepted = run_copy("accept", "--run-dir", str(run))
+                    self.assert_refused(accepted, "does not match")
+        finally:
+            changed.write_bytes(original)
 
     def test_fixture_probe_failure_fails_instead_of_skipping(self) -> None:
         interpreter = sys.executable

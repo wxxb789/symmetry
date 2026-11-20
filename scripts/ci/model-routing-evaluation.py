@@ -1293,6 +1293,43 @@ def redact_host_paths(value: str) -> str:
     return value
 
 
+def sanitize_source_digest() -> str:
+    """The digest of the sanitize tool's current bytes, as `tooling_sources` binds them."""
+    return sha256_hex(read_bytes(SANITIZE_SCRIPT, MAX_RECORD_BYTES, "evaluation tooling source"))
+
+
+def require_recorded_redaction(run: dict[str, Any]) -> None:
+    """Refuse a derivation whose redacted values were rendered by other tool bytes.
+
+    A receipt binds the current ``model-routing-record-sanitize.py`` in
+    ``evidence.tooling_sources``, so it must not be derived for values those bytes
+    did not render: the digest each redaction recorded at its own moment (prepare's
+    ``measured``, bind's ``install_log_source``) is compared with the current bytes
+    here, before the attestation exists (STD-A02 - the review probe mutated the tool
+    between prepare and receipt and the derivation still accepted the old values as
+    the new tool's product). A run whose record predates the binding records no
+    digest and keeps its previous behavior.
+    """
+    environment = run["environment"]
+    provisioning = environment.get("provisioning") or {}
+    recorded = [
+        environment.get("measured_sanitizer_sha256"),
+        provisioning.get("install_log_source_sanitizer_sha256"),
+    ]
+    current = None
+    for digest in recorded:
+        if digest is None:
+            continue
+        if current is None:
+            current = sanitize_source_digest()
+        if digest != current:
+            raise Refused(
+                "the run's recorded redaction does not match the current "
+                "model-routing-record-sanitize.py bytes: the value was rendered by "
+                f"{digest} but the receipt would bind {current}"
+            )
+
+
 def validate_measured_mapping(value: Any, source: str, redact: bool = False) -> dict[str, str]:
     """Validate one measured execution-surface mapping (run record or environment JSON).
 
@@ -1324,7 +1361,9 @@ def validate_measured_mapping(value: Any, source: str, redact: bool = False) -> 
 
 def validate_provisioning(value: Any, source: str) -> dict[str, Any]:
     """Validate the recorded provisioning step of the resolved dependency tree."""
-    block = require_object(value, source, PROVISIONING_KEYS, PROVISIONING_KEYS)
+    block = require_object(
+        value, source, PROVISIONING_KEYS | {"install_log_source_sanitizer_sha256"}, PROVISIONING_KEYS
+    )
     provisioning: dict[str, Any] = {
         "tree": require_text(block["tree"], source + " tree", max_length=300),
         "tree_digest": require_digest(block["tree_digest"], source + " tree_digest"),
@@ -1336,6 +1375,12 @@ def validate_provisioning(value: Any, source: str) -> dict[str, Any]:
         "install_log_sha256": require_digest(block["install_log_sha256"], source + " install_log_sha256"),
         "install_log_bytes": require_integer(block["install_log_bytes"], source + " install_log_bytes", 1),
     }
+    if "install_log_source_sanitizer_sha256" in block:
+        # The bytes that rendered `install_log_source` at the bind moment, additive:
+        # a provisioned block recorded before this binding carries none.
+        provisioning["install_log_source_sanitizer_sha256"] = require_digest(
+            block["install_log_source_sanitizer_sha256"], source + " install_log_source_sanitizer_sha256"
+        )
     if provisioning["install_log"] != PROVISIONING_LOG_PATH:
         raise Refused(f"{source} install_log must be {PROVISIONING_LOG_PATH!r}")
     route = provisioning["tree"]
@@ -1406,17 +1451,42 @@ def requires_dependency_provisioning(task: dict[str, Any]) -> bool:
     )
 
 
-def require_dependency_provisioning(run: dict[str, Any], task: dict[str, Any]) -> None:
-    if requires_dependency_provisioning(task) and "provisioning" not in run["environment"]:
+def require_dependency_provisioning(
+    run_dir: pathlib.Path, run: dict[str, Any], task: dict[str, Any]
+) -> None:
+    """Require the recorded dependency provisioning to still be the executed tree.
+
+    The module's gates resolve their dependencies from the checkout at execution
+    time, so the recorded binding is re-verified here, on both callers: `check`,
+    before any gate runs, and receipt derivation, before the attestation is written.
+    A `node_modules` planted or retargeted after the bind (the F01 review probe's
+    check-side arm: a junction retarget at the run-store placeholder made the gates
+    execute a tree the receipt never attests) is refused instead of executed.
+    """
+    if not requires_dependency_provisioning(task):
+        return
+    provisioning = run["environment"].get("provisioning")
+    if provisioning is None:
         raise Refused(
             "this task executes Node tooling from a dependency tree; record it with "
             "bind-dependencies before check or receipt"
         )
+    bound = run_dir / provisioning["tree"]
+    if not bound.is_dir():
+        raise Refused(f"the recorded dependency tree {provisioning['tree']!r} is missing")
+    try:
+        bound_resolved = bound.resolve()
+    except (OSError, RuntimeError) as error:
+        raise Refused(f"the recorded dependency tree {provisioning['tree']!r} does not resolve: {error}")
+    require_resolved_dependency_tree(run_dir, run, task, bound_resolved)
 
 
 def validate_environment(value: Any) -> dict[str, Any]:
     block = require_object(
-        value, "run record environment", ENVIRONMENT_KEYS | {"measured", "provisioning"}, ENVIRONMENT_KEYS
+        value,
+        "run record environment",
+        ENVIRONMENT_KEYS | {"measured", "provisioning", "measured_sanitizer_sha256"},
+        ENVIRONMENT_KEYS,
     )
     environment: dict[str, Any] = {
         key: require_text(block[key], f"run record environment {key}", max_length=300)
@@ -1425,6 +1495,12 @@ def validate_environment(value: Any) -> dict[str, Any]:
     if "measured" in block:
         environment["measured"] = validate_measured_mapping(
             block["measured"], "run record environment measured"
+        )
+    if "measured_sanitizer_sha256" in block:
+        # The bytes that rendered `measured` at the prepare moment, additive: a run
+        # recorded before this binding carries none.
+        environment["measured_sanitizer_sha256"] = require_digest(
+            block["measured_sanitizer_sha256"], "run record environment measured_sanitizer_sha256"
         )
     if "provisioning" in block:
         environment["provisioning"] = validate_provisioning(
@@ -1677,21 +1753,29 @@ def exunit_trace_argv(gate: dict[str, Any]) -> list[str] | None:
     return [gate["argv"][0], "test", "--trace", "--seed", "0", *gate["exunit_files"]]
 
 
+# The launcher flags that consume the argument after them: a vitest entry spelled
+# past one of them (`node --require ./setup.cjs vitest.mjs run`) is still the entry
+# the interpreter runs, so the value must not hide it - the same spelling the
+# F09 `vitest_entry_index` fix must see through (STD-A04). A flag written with its
+# value joined (`--require=./setup.cjs`) is a single flag argument, so the plain
+# flag skip below already covers it.
+NODE_VALUE_FLAGS = ("-r", "--require", "--import", "--loader", "--experimental-loader")
+
+
 def vitest_entry_index(argv: list[str]) -> int | None:
     """The argv index of the vitest entry point it runs, or None.
 
     The launcher's own flags stand between the interpreter and the entry
-    (`node --no-warnings x/vitest.mjs run`), so the entry is the first argument
-    that is not a flag: a spelling whose entry hides behind a flag would otherwise
-    skip the dependency-provisioning requirement the entry point implies and the
-    derived report command would run the wrong file. A launcher flag that takes a
-    separate value (`node -r ./setup.js vitest.mjs`) hides the entry behind that
-    value and is not recognized; a gate that declares `vitest_tests` cannot use
-    such a spelling, because gate validation requires this same entry shape.
+    (`node --no-warnings x/vitest.mjs run`), so the entry is the first argument that
+    is not a flag and not a value-taking flag's value: a spelling whose entry hides
+    behind either would otherwise skip the dependency-provisioning requirement the
+    entry point implies and the derived report command would run the wrong file.
     """
-    for index in range(1, len(argv)):
+    index = 1
+    while index < len(argv):
         argument = argv[index]
         if argument.startswith("-"):
+            index += 2 if argument in NODE_VALUE_FLAGS else 1
             continue
         name = pathlib.PurePath(argument).name.lower()
         return index if name.startswith("vitest") and name.endswith((".mjs", ".cjs", ".js")) else None
@@ -3025,7 +3109,8 @@ def derive_receipt(run_dir: pathlib.Path, candidate_usage: bytes | None = None) 
     """
     run = load_run(run_dir)
     task = load_frozen_task(run_dir, run)
-    require_dependency_provisioning(run, task)
+    require_dependency_provisioning(run_dir, run, task)
+    require_recorded_redaction(run)
     routes = load_frozen_routes(run_dir, run)
     sealed = load_sealed(run_dir, task)
     require_current_subject(run_dir, task, sealed)
@@ -3341,7 +3426,11 @@ def finish_prepare(
     (run_dir / "node_modules").mkdir(exist_ok=True)
     environment = environment_record()
     if measured is not None:
+        # The measured values were rendered by the sanitize tool's bytes at this
+        # moment; binding the digest here is what lets a later derivation refuse a
+        # receipt that would name other bytes as the producer.
         environment["measured"] = measured
+        environment["measured_sanitizer_sha256"] = sanitize_source_digest()
     run = {
         "schema": SCHEMA,
         "task_id": task["task_id"],
@@ -3378,29 +3467,49 @@ def _dependency_tree(value: str) -> pathlib.Path:
     return resolved
 
 
+def holds_a_package_entry(node_modules: pathlib.Path) -> bool:
+    """True when a `node_modules` holds an entry Node could resolve a package from.
+
+    Node walks past a `node_modules` that lacks the package it needs, so "has any
+    entry" is not "the tree the gates execute from". Vite's config loader writes its
+    temp files into the nearest existing `node_modules` - the placeholder `prepare`
+    creates - so a dot-only directory such as `.vite-temp` must not turn that
+    placeholder into the resolved tree and refuse the true hoisted binding
+    (STD-A03). A package entry is a non-dot directory, the scoped `@name` directory
+    a package installs under included; dot entries (`.bin`, `.vite-temp`, `.vite`,
+    `.modules.yaml`, ...) and plain files answer for no package.
+    """
+    try:
+        with os.scandir(node_modules) as entries:
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                if entry.is_dir():
+                    return True
+    except OSError as error:
+        raise Refused(f"cannot list the dependency-tree candidate {node_modules}: {error}")
+    return False
+
+
 def resolved_dependency_tree(checkout: pathlib.Path, gate_cwd: str) -> pathlib.Path | None:
     """The `node_modules` tree Node reaches first from one gate's cwd, if any.
 
     Node resolves a module by walking the requiring directory's ancestors and trying
-    each `node_modules` directory it passes; a directory with no entries answers for
-    no package, so the first non-empty one on the chain is the tree the gates execute
-    from (the runbook's hoisted install sits one level above the run directory, past
-    the empty placeholder `prepare` creates). `None` means nothing on the chain holds
-    any entry, so no tree can be bound as the executed one.
+    each `node_modules` directory it passes; a directory holding no package entry
+    answers for no package, so the first such directory on the chain is the tree the
+    gates execute from (the runbook's hoisted install sits one level above the run
+    directory, past the placeholder `prepare` creates - which Vite later fills with
+    dot-only temp state). `None` means nothing on the chain holds a package entry,
+    so no tree can be bound as the executed one.
     """
     directory = pathlib.Path(checkout, *gate_cwd.split("/"))
     while True:
         candidate = directory / "node_modules"
-        if candidate.is_dir():
+        if candidate.is_dir() and holds_a_package_entry(candidate):
             try:
-                populated = any(candidate.iterdir())
-            except OSError as error:
-                raise Refused(f"cannot list the dependency-tree candidate {candidate}: {error}")
-            if populated:
-                try:
-                    return candidate.resolve()
-                except (OSError, RuntimeError) as error:
-                    raise Refused(f"the dependency tree at {candidate} does not resolve: {error}")
+                return candidate.resolve()
+            except (OSError, RuntimeError) as error:
+                raise Refused(f"the dependency tree at {candidate} does not resolve: {error}")
         parent = directory.parent
         if parent == directory:
             return None
@@ -3490,6 +3599,10 @@ def command_bind_dependencies(arguments: argparse.Namespace) -> int:
         "tree_entries": tree_entries,
         "install_log": PROVISIONING_LOG_PATH,
         "install_log_source": redact_host_paths(str(log_path)),
+        # The sanitize tool's bytes rendered `install_log_source` at this moment;
+        # binding the digest here is what lets a later derivation refuse a receipt
+        # that would name other bytes as the producer (STD-A02).
+        "install_log_source_sanitizer_sha256": sanitize_source_digest(),
         "install_log_sha256": sha256_hex(log_raw),
         "install_log_bytes": len(log_raw),
     }, "provisioning step")
@@ -3548,7 +3661,7 @@ def command_check(arguments: argparse.Namespace) -> int:
     run_dir = pathlib.Path(arguments.run_dir).resolve()
     run = load_run(run_dir)
     task = load_frozen_task(run_dir, run)
-    require_dependency_provisioning(run, task)
+    require_dependency_provisioning(run_dir, run, task)
     sealed = load_sealed(run_dir, task)
     require_current_subject(run_dir, task, sealed)
     unknown = [gate_id for gate_id in (arguments.gate or []) if gate_id not in {gate["id"] for gate in task["gates"]}]
