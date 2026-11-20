@@ -11,19 +11,6 @@ Manual tasks and deferred maintenance discovered during scoped changes.
 A bullet that carries no `- [ ]`/`- [x]` marker is a decision note, not a tracked item: it stays
 where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted with it.
 
-## Model-routing evaluation records
-
-- [ ] Decide how the Control row in
-      `docs/evidence/test-ablation-final-review-2026-09-29.md:148` is bound: its digest
-      `e2672276b4f4171391a6df202dc01e9e66ccc705d72e4ee095db7471e7a1c6f9` matches no reachable
-      revision of any `test-ablation*` file (every distinct blob revision of the fourteen such
-      paths across all refs, under LF/CRLF, BOM and no-final-newline variants: 0 hits), and the
-      row has read that way since `72bcf8e`. Observed during the record render pass (PR #101),
-      which rebound the app-startup and Go-probe rows in the same table and left this one as
-      recorded; pre-existing, not introduced by that pass. Do not edit the record before the
-      decision, in a separate maintenance change: rebind the row to the reviewed artifact's
-      committed bytes, or annotate it as the as-reviewed artifact rather than the committed bytes.
-
 ## SEO / repository metadata
 
 - [ ] Upload `docs/assets/symmetry-social-preview.png` as the GitHub social
@@ -100,31 +87,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `:2035`), so treat it as a class. Revalidate against a recovered failure before changing anything
       (rerun the two cases, then check whether the failing read is the timer or the intent state), and
       keep both assertions.
-
-- [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
-      (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
-      error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
-      gone), and no test pins that branch: the scripted batch child
-      (`daemon/internal/workspace/subject_test.go:1114-1147`) serves `frame <variant> <content>`
-      (valid, missing, wrong-oid, wrong-type, malformed-size, negative-size, oversized,
-      malformed-header, truncated-header, partial-content, bad-trailer, missing-trailer) and
-      `blocked-header`, and every case of `TestSubjectBatchStreamRejectsMalformedResponses`
-      (`:1315-1379`) writes exactly one request while the child is still alive, so the failure
-      surfaces on the response read (`:753`) rather than on the write. The missing case needs a new
-      child variant that answers its first request with a complete in-sync frame and then closes its
-      read end, with the close ordered so it is observable before the second request (closing before
-      the response is written, or an equivalent deterministic wait for the child's exit, works
-      because the digest writes its second request only after consuming the first response); a
-      variant that only exits after answering can still take the write into the pipe buffer, so the
-      refusal can otherwise surface on the response read instead. Every existing
-      exit-after-one-response variant answers a refusal that desyncs and aborts the digest on the
-      first blob, and the one-response exit at `:1206-1208` covers every variant except `valid` and
-      `missing`, which keep serving (`serveWorkspaceBatchFrames` `:1155-1210`); drive a multi-blob
-      commit (the fixture exists: `subjectDigestManyBlobs` `:588` with
-      `writeSubjectDigestManyBlobsFixture` `:810`) so the second request write lands on the gone
-      child. Assert that the refusal names the object, marks the stream desynced and still reaps the
-      child (the reap contract `:1373-1376` pins that for response failures), keeping the context
-      alive so `streamError` (`:808-813`) reports the pipe error instead of a cancellation.
 
 - [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
       submit-time served one. `approvePlan` builds its envelope from `query.data`
