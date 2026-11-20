@@ -48,24 +48,26 @@ row's referent. That path has exactly two committed revisions — `72bcf8e` → 
 
 ## Blob walk (contract clause 1)
 
-All-refs walk over every reachable object, then the spelling variants the maintenance entry named:
+Walk over the objects reachable from `fdf332d`, then the spelling variants the maintenance entry
+named:
 
-- `git rev-list --all --objects` → 5,776 objects (3,326 blobs, 2,450 trees/commits);
+- `git rev-list --objects fdf332d` → 5,613 objects (3,269 blobs, 2,344 trees/commits);
 - every reachable blob hashed as-is and under the eight LF/CRLF × BOM × no-final-newline
-  spellings → 26,542 hashes, **0 hits** for `e2672276…`;
-- the fourteen `test-ablation*` paths the entry named → 19 distinct blob revisions, 152 spellings,
+  spellings → 26,088 hashes, **0 hits** for `e2672276…`;
+- the fourteen paths whose names carry `test-ablation` → 19 distinct blob revisions, 152 spellings,
   **0 hits** — reproducing the entry's own counts.
 
-So the digest matches no committed blob anywhere in this repository at `fdf332d`, which is the
-strongest form of the result the contract asks the annotation to record. The walk is re-run at the
+So the digest matches no committed blob reachable from `fdf332d`, which is the strongest form of
+the result the contract asks the annotation to record. The walk is re-run at the
 end from a saved script, and its command and output are recorded in `answer.md`.
 
 ## Exact semantics the annotation states
 
 1. The row binds the Control experiment report as reviewed (the report text delivered to this
    review), not the committed bytes of its path.
-2. The digest resolves against no committed revision: 0 hits over the all-refs blob walk at
-   `fdf332d`, and 0 hits over the fourteen paths whose names carry `test-ablation` (19 blob revisions).
+2. The digest resolves against no committed revision reachable from `fdf332d`: 0 hits over the
+   `git rev-list --objects fdf332d` blob walk, and 0 hits over the fourteen paths whose names carry
+   `test-ablation` (19 blob revisions).
 3. The other five rows in that table do bind the committed bytes of their reports (verified above),
    so a reader must not generalize the exception to the table.
 4. The row and every digest and number in the record stay as recorded (option A); the maintenance
@@ -77,8 +79,9 @@ Edge-case semantics the contract forces:
   would read as a rebinding, and the row's neighbours were rebound in #101 exactly because their
   digest was meant to name committed bytes. The annotation therefore carries counts and the walk's
   revision, not a replacement digest.
-- **Revision-bounded claim.** The 0-hit result is a statement about `fdf332d`; a later commit that
-  ever produced the digest would not falsify the annotation as written.
+- **Revision-bounded claim.** The 0-hit result is a statement about the objects reachable from
+  `fdf332d` (`git rev-list --objects fdf332d`); a later commit that ever produced the digest would
+  not falsify the annotation as written.
 - **No host path, no rendered token.** The record is under `docs/evidence/`, so CI's
   record-cleanliness job runs the sanitize tool's root-only check over it; the added prose is
   host-path free by construction and is checked.
@@ -88,7 +91,7 @@ Edge-case semantics the contract forces:
 ## Evidence plan (commands recorded in `answer.md`)
 
 1. Blob walk: the saved script (`--root-only`-clean, no repository file added), command and output,
-   including the per-path case and the whole-repository case.
+   including the per-path case and the whole reachable-object case.
 2. `git diff --check` → exit code and output.
 3. `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` → the prescribed
    command; locally vacuous because `HEAD == origin/main`, recorded as such.
@@ -135,6 +138,7 @@ checker for record digest bindings (a separate open item tracks that idea in
 
 - The "as-reviewed artifact" text itself is not recoverable from this repository (by the walk's own
   result); the annotation can only state that the recorded digest names it and resolve nothing.
-- The walk's counts are point-in-time at `fdf332d`.
+- The walk's counts are bounded to the objects reachable from `fdf332d`; later commits and refs do
+  not change them.
 - The record's own committed digest is referenced by no other file (`91ffbc6c…` before this change,
   grepped across the tree), so this edit breaks no digest binding.

@@ -379,10 +379,11 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       text as delivered to this review, not the committed bytes of
       `docs/evidence/test-ablation-control-experiment-2026-09-29.md` …" (recorded 2026-11-20, the
       paragraph after that table in the record; `:148` still holds the Control row, so this entry's
-      citation stays exact). Revalidated before annotating, as the entry asked: an all-refs blob
-      walk at `fdf332d` (`git rev-list --all --objects`, then `git cat-file blob` over every
-      reachable blob) found the digest on no committed blob - 0 hits over 5,776 objects (3,326
-      blobs, 2,450 trees and commits) and 26,542 LF/CRLF, BOM and no-final-newline spellings - and
+      citation stays exact). Revalidated before annotating, as the entry asked: a blob walk bounded
+      to `fdf332d` (`git rev-list --objects fdf332d`, then `git cat-file blob` over every reachable
+      blob) found the digest on no committed blob reachable from that revision - 0 hits over 5,613
+      objects (3,269 blobs, 2,344 trees and commits) and 26,088 raw-byte, LF/CRLF, BOM and
+      no-final-newline spellings - and
       the fourteen paths whose names carry `test-ablation` (19 distinct blob revisions, 152
       spellings) also gave 0 hits, which reproduces the counts above. The five neighbouring rows of
       that table do bind the committed bytes of their reports (checked against their HEAD blobs),
