@@ -660,7 +660,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `lease-arm-before-resume.json` stops at stage
       `daemon_crashed_after_lease_arm_with_durable_mirror_seal_before_resume` while the manifest
       reports `"complete": true` and `"incomplete_evidence_files": []`, i.e. the stall left no
-      daemon-side trace in that evidence at all. **Suspect path** for the restart pass:
+      daemon-side trace in that evidence at all. **Recurrence (2026-11-21):** CI run `44803673577`
+      attempt 1 (PR #126 head `17d838b`, the merge of `origin/main` into
+      `fix/provider-action-chain-removal`) failed the same subtest in its `integration` job
+      (`136524113298`) after **110.29 s**, with the identical
+      `production_linux_containment_witness_test.go:509` 45 s barrier line and the same cleanup
+      shape (journal `b2090059-1137-4b6b-a975-58f1e202834c/1` retained containment after 45s;
+      helper 15580 remained live), while main's last six CI runs (through `44804764621` @
+      `ea65742`) were all green. **Suspect path** for the restart pass:
       `daemon/internal/app/app.go:2148-2159` (record the durable receipt →
       `verifyDurableContainmentStopReceipt` → `observeContainmentStop`) →
       `waitForLinuxStopReceiptBarrier` (`:2227`), which publishes the reached marker at `:2258` only

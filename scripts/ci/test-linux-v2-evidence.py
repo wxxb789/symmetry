@@ -562,6 +562,10 @@ class ExporterTest(unittest.TestCase):
         ]
         raw = self.write_log(source / case / "second-daemon.stdout.log", lines)
         self.assertGreater(len(raw), 64 << 10)
+        unterminated = source / "daemon-after-resume" / "second-daemon.stdout.log"
+        unterminated.write_bytes(b"x" * (70 << 10))
+        os.chmod(unterminated, 0o600)
+        self.assertNotIn(b"\n", unterminated.read_bytes())
         result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
@@ -572,6 +576,57 @@ class ExporterTest(unittest.TestCase):
         self.assertEqual(document["dropped_lines"], 0)
         self.assertLess(len(document["messages"]), len(lines))
         self.assertEqual(document["messages"][-1]["msg"], f"record_{len(lines) - 1:04d}")
+        # No newline anywhere in the tail window: the window is discarded whole
+        # rather than kept as one unprojectable partial line (dropped_lines 0).
+        cut_window = json.loads((output / "daemon-after-resume-second-daemon-stdout.json").read_text())
+        self.assertEqual((cut_window["messages"], cut_window["dropped_lines"], cut_window["truncated"]), ([], 0, True))
+
+    def test_legacy_daemon_log_tail_accepts_empty_restarted_log(self) -> None:
+        # The witness O_TRUNCs second-daemon.stdout/stderr.log before starting
+        # the daemon, so a zero-byte log (usually stderr) is a legitimate
+        # failed-run export input; the tail reader must not fail closed on it.
+        source = self.private_dir("empty-log-source")
+        output = self.private_dir("empty-log-output")
+        self.populate_legacy(source)
+        case = "lease-arm-before-resume"
+        path = source / case / "second-daemon.stderr.log"
+        path.write_bytes(b"")
+        os.chmod(path, 0o600)
+        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads((output / f"{case}-second-daemon-stderr.json").read_text())
+        self.assertEqual((document["daemon"], document["stream"], document["truncated"], document["messages"],
+                          document["dropped_lines"]), ("second", "stderr", False, [], 0))
+        manifest = json.loads((output / "manifest.json").read_text())
+        entries = {entry["file"]: entry for entry in manifest["files"]}
+        published = (output / f"{case}-second-daemon-stderr.json").read_bytes()
+        self.assertEqual(
+            entries[f"{case}-second-daemon-stderr.json"],
+            {"file": f"{case}-second-daemon-stderr.json", "bytes": len(published),
+             "sha256": hashlib.sha256(published).hexdigest(), "kind": "daemon_log_tail", "daemon": "second",
+             "stream": "stderr", "truncated": False, "records": 0, "dropped_lines": 0},
+        )
+
+    def test_legacy_daemon_log_tail_source_size_is_not_capped(self) -> None:
+        # The 2 MiB allowlisted-evidence bound must not apply to daemon logs: a
+        # long-lived daemon's log is read from its tail, not rejected whole.
+        source = self.private_dir("large-log-source")
+        output = self.private_dir("large-log-output")
+        self.populate_legacy(source)
+        case = "lease-arm-before-resume"
+        lines = [
+            json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": f"record_{index:05d}"}).encode()
+            for index in range(34000)
+        ]
+        raw = self.write_log(source / case / "second-daemon.stdout.log", lines)
+        self.assertGreater(len(raw), 2 << 20)
+        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
+        self.assertTrue(document["truncated"])
+        self.assertEqual(document["dropped_lines"], 0)
+        self.assertLess(len(document["messages"]), len(lines))
+        self.assertEqual(document["messages"][-1]["msg"], f"record_{len(lines) - 1:05d}")
 
     def test_legacy_daemon_log_tail_rejects_nonprivate_or_linked_log(self) -> None:
         for index, kind in enumerate(("permissions", "symlink", "directory")):
