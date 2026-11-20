@@ -109,7 +109,7 @@ export function safeReturnTo(href: string): string {
   try {
     const url = new URL(href);
     // The emitted target must be one the server accepts verbatim, and the
-    // server refuses a non-empty fragment. A location bearing one therefore
+    // server refuses any fragment. A location bearing one therefore
     // falls back by design — a deliberate change from main, which dropped the
     // fragment and kept the path — while a bare trailing `#` reports
     // `hash === ""`, so it is accepted and emitted without the marker.
