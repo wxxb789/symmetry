@@ -195,11 +195,11 @@ new proof). [0006c][continuity] records the retained-session path-replacement
 window: point-in-time path validation is not atomic exclusion of a same-principal
 writer. This review establishes no fix or new exploit evidence for those items.
 
-**Annotation (recorded 2026-11-20):** the tracking pointer above no longer holds for either
-named candidate: the Control test unused-variable warnings item closed to
-`docs/archive/CLOSED-TODO.md` on 2026-11-19, and the OMP descendant-monitor stop gap is
-recorded only in the [0006j receipt][omp] — it has no `docs/TODO.md` entry. The sentence above
-is kept as recorded; the underlying limits are unchanged.
+**Annotation (recorded 2026-11-20):** the tracking pointer above no longer holds for the
+Control test unused-variable warnings item, which closed to `docs/archive/CLOSED-TODO.md` on
+2026-11-19; it never held for the OMP descendant-monitor stop gap, which is recorded in the
+[0006j receipt][omp] (also listed as a limit in the 0006i receipt) and has no `docs/TODO.md`
+entry. The sentence above is kept as recorded; the recorded Subject-time limits are unchanged.
 
 ## Review method, commands and scope
 

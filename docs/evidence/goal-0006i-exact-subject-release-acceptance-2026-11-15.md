@@ -175,6 +175,10 @@ later satisfied 2026-11-15 on the local acceptance stack (see "Achieve record" a
 - Native credentialed acceptance for OMP remains unavailable under the zero-spend
   blocker; no capability is promoted for OMP.
 
+**Annotation (recorded 2026-11-20):** the warnings item above closed to
+`docs/archive/CLOSED-TODO.md` on 2026-11-19; the OMP in-flight cancellation containment gap
+has no `docs/TODO.md` entry. The original sentences above are kept as recorded.
+
 ## Local commands executed for this receipt (2026-11-15, this worktree)
 
 | Command | Outcome |
