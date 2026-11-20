@@ -1,6 +1,6 @@
 # 0006e implementation plan — Claude Code native capability
 
-Contract: [docs/goals/0006e-claude-native-capability.md](../goals/0006e-claude-native-capability.md).
+Contract: [docs/goals/archive/0006e-claude-native-capability.md](../goals/archive/0006e-claude-native-capability.md).
 Shape reference: the merged Codex increment (`a2217b8`, `f7f392a` implementation;
 `9cb1e82` archive) and `daemon/internal/harness/testdata/codex/0.168.0/`.
 
