@@ -65,7 +65,7 @@ end from a saved script, and its command and output are recorded in `answer.md`.
 1. The row binds the Control experiment report as reviewed (the report text delivered to this
    review), not the committed bytes of its path.
 2. The digest resolves against no committed revision: 0 hits over the all-refs blob walk at
-   `fdf332d`, and 0 hits over the fourteen `test-ablation*` report paths' 19 blob revisions.
+   `fdf332d`, and 0 hits over the fourteen paths whose names carry `test-ablation` (19 blob revisions).
 3. The other five rows in that table do bind the committed bytes of their reports (verified above),
    so a reader must not generalize the exception to the table.
 4. The row and every digest and number in the record stay as recorded (option A); the maintenance

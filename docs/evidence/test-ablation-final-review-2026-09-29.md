@@ -157,11 +157,11 @@ this review, not the committed bytes of
 `docs/evidence/test-ablation-control-experiment-2026-09-29.md`. An all-refs blob walk at `fdf332d`
 (`git rev-list --all --objects`, then `git cat-file blob` over every reachable blob) found the
 digest `e2672276…` on no committed blob: 0 hits over the 3,326 reachable blobs and their 26,542
-LF/CRLF, BOM and no-final-newline spellings, and 0 hits over the 14 `test-ablation*` report paths'
-19 distinct blob revisions (152 spellings). The digest therefore resolves against no committed
-revision and must not be read as binding one; the other five rows of this table do bind the
-committed bytes of their reports. The row and every other digest and number here are kept as
-recorded; the maintenance entry that recorded this mismatch closed to
+LF/CRLF, BOM and no-final-newline spellings, and 0 hits over the 14 paths whose names carry
+`test-ablation` (19 distinct blob revisions, 152 spellings). The digest therefore resolves against
+no committed revision and must not be read as binding one; the other five rows of this table do
+bind the committed bytes of their reports. The row and every other digest and number here are kept
+as recorded; the maintenance entry that recorded this mismatch closed to
 `docs/archive/CLOSED-TODO.md` on branch `fix/ablation-control-row-annotate`.
 
 ## Evidence and coverage limits

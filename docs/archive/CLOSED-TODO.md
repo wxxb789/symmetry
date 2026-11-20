@@ -383,9 +383,10 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       walk at `fdf332d` (`git rev-list --all --objects`, then `git cat-file blob` over every
       reachable blob) found the digest on no committed blob - 0 hits over 5,776 objects (3,326
       blobs, 2,450 trees and commits) and 26,542 LF/CRLF, BOM and no-final-newline spellings - and
-      the fourteen `test-ablation*` paths' 19 distinct blob revisions (152 spellings) also gave 0
-      hits, which reproduces the counts above. The five neighbouring rows of that table do bind the
-      committed bytes of their reports (checked against their HEAD blobs), so the annotation keeps
+      the fourteen paths whose names carry `test-ablation` (19 distinct blob revisions, 152
+      spellings) also gave 0 hits, which reproduces the counts above. The five neighbouring rows of
+      that table do bind the committed bytes of their reports (checked against their HEAD blobs),
+      so the annotation keeps
       the exception to this row. Docs-only: no behavior changed, so no test was added, modified or
       weakened (the only automatable assertion here would be over prose text, which pins wording
       rather than behavior); the pin this closure names is the deciding check - the
