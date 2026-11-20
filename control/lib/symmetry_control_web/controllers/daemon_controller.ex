@@ -1,14 +1,14 @@
 defmodule SymmetryControlWeb.DaemonController do
   use SymmetryControlWeb, :controller
 
-  alias SymmetryControl.Integrations.ProviderAccess
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.ContractValidation
+  alias SymmetryControl.Integrations.ProviderAccess
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Scheduler
   alias SymmetryControl.Repo
-  alias SymmetryControlWeb.Protocol
   alias SymmetryControlWeb.Plugs.StrictEvidenceJSON
+  alias SymmetryControlWeb.Protocol
 
   def enroll(conn, _params) do
     with {:ok, idempotency_key} <- idempotency_key(conn),
@@ -22,7 +22,7 @@ defmodule SymmetryControlWeb.DaemonController do
            ) do
         {:ok, %{machine: enrolled, token: token}, disposition} ->
           conn
-          |> put_status(if(disposition == :created, do: :created, else: :ok))
+          |> put_status(disposition_status(disposition))
           |> json(%{machine_id: enrolled.id, machine_token: token})
 
         {:error, reason} ->
@@ -137,25 +137,26 @@ defmodule SymmetryControlWeb.DaemonController do
 
   defp claim_with_provider_access(run_id, request) do
     with {:ok, owner} <- Orchestration.claim_owner(run_id) do
-      Repo.transaction(fn ->
-        # Scope locking precedes a new claim to preserve the established
-        # Goal -> resource lock order. A replay ignores a now-stale scope result.
-        provider_scope = ProviderAccess.lock_claim_scope(run_id)
-
-        with {:ok, run, disposition} <-
-               claim_with_owner(owner, run_id, request,
-                 lease_duration_ms: config(:lease_duration_ms)
-               ),
-             {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
-             {:ok, provider_access} <-
-               provider_access_for_claim(provider_scope, disposition, run, task) do
-          {run, task, provider_access, disposition}
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-      |> claim_provider_access_result()
+      owner |> claim_in_transaction(run_id, request) |> claim_provider_access_result()
     end
+  end
+
+  defp claim_in_transaction(owner, run_id, request) do
+    Repo.transaction(fn ->
+      # Scope locking precedes a new claim to preserve the established
+      # Goal -> resource lock order. A replay ignores a now-stale scope result.
+      provider_scope = ProviderAccess.lock_claim_scope(run_id)
+
+      with {:ok, run, disposition} <-
+             claim_with_owner(owner, run_id, request, lease_duration_ms: lease_duration_ms()),
+           {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
+           {:ok, provider_access} <-
+             provider_access_for_claim(provider_scope, disposition, run, task) do
+        {run, task, provider_access, disposition}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   defp claim_with_owner(:goal, run_id, request, opts),
@@ -196,7 +197,7 @@ defmodule SymmetryControlWeb.DaemonController do
 
     with :ok <- owns_run(conn, run_id),
          {:ok, run} <-
-           Orchestration.renew_lease(run_id, fence, lease_duration_ms: config(:lease_duration_ms)),
+           Orchestration.renew_lease(run_id, fence, lease_duration_ms: lease_duration_ms()),
          {:ok, snapshot} <-
            Orchestration.work_snapshot(run.runtime_id, Map.fetch!(fence, "runtime_epoch")) do
       json(conn, Protocol.lease_heartbeat(run, snapshot.commands, snapshot.server_time))
@@ -351,17 +352,10 @@ defmodule SymmetryControlWeb.DaemonController do
           receipt(conn, response, disposition)
 
         {:error, {:idempotency_conflict, fields} = reason} ->
-          if batch_evidence?(evidence) and valid_batch_conflict_details?(fields) do
-            Protocol.error(conn, reason)
-          else
-            error = if(batch_evidence?(evidence), do: :invalid_request, else: reason)
-            Protocol.error(conn, error)
-          end
+          append_evidence_conflict(conn, evidence, fields, reason)
 
         {:error, :idempotency_conflict} ->
-          if batch_evidence?(evidence),
-            do: Protocol.error(conn, :invalid_request),
-            else: Protocol.error(conn, :idempotency_conflict)
+          Protocol.error(conn, idempotency_conflict_error(evidence))
 
         {:error, reason} ->
           Protocol.error(conn, reason)
@@ -385,6 +379,18 @@ defmodule SymmetryControlWeb.DaemonController do
   end
 
   defp valid_batch_conflict_details?(_details), do: false
+
+  defp append_evidence_conflict(conn, evidence, fields, reason) do
+    if batch_evidence?(evidence) and valid_batch_conflict_details?(fields) do
+      Protocol.error(conn, reason)
+    else
+      error = if(batch_evidence?(evidence), do: :invalid_request, else: reason)
+      Protocol.error(conn, error)
+    end
+  end
+
+  defp idempotency_conflict_error(evidence),
+    do: if(batch_evidence?(evidence), do: :invalid_request, else: :idempotency_conflict)
 
   defp batch_evidence?(%{"schema_version" => "symmetry.evidence_batch.v1"}), do: true
   defp batch_evidence?(_evidence), do: false
@@ -570,6 +576,9 @@ defmodule SymmetryControlWeb.DaemonController do
   defp receipt(conn, response, :created), do: conn |> put_status(:created) |> json(response)
   defp receipt(conn, response, :replayed), do: json(conn, response)
 
+  defp disposition_status(:created), do: :created
+  defp disposition_status(_disposition), do: :ok
+
   defp mutation_params(conn, path_keys) when is_struct(conn, Plug.Conn),
     do: conn |> body_params() |> Map.drop(path_keys)
 
@@ -607,6 +616,8 @@ defmodule SymmetryControlWeb.DaemonController do
 
   defp config(key),
     do: Application.fetch_env!(:symmetry_control, :orchestration) |> Keyword.fetch!(key)
+
+  defp lease_duration_ms, do: config(:lease_duration_ms)
 
   defp contract_schema_root do
     :symmetry_control
