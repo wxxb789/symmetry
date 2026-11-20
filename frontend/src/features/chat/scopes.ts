@@ -92,8 +92,8 @@ export function chatScopeKey(scope: ChatScope, projectId: string | null, runId: 
  * name one and by token bytes while either does not. A served cursor is
  * re-signed per response, so the boundary message's id — not the token's
  * bytes — is what proves two reads paginate from the same position; at an
- * unchanged boundary the served token is adopted while no continuation was
- * ever established, and otherwise renews the reader's own cursor.
+ * unchanged boundary the served token renews the reader's own cursor while
+ * the reader's chain still designates that boundary.
  */
 export function retainServedPage(
   state: ChatScopeState,
@@ -114,17 +114,16 @@ export function retainServedPage(
   const moved = servedBoundaryId !== null && currentBoundaryId !== null
     ? servedBoundaryId !== currentBoundaryId
     : served.nextBefore !== state.nextCursor;
-  // A response at the same boundary offers its own token to the chain: it is
-  // adopted while no continuation was ever established — a chain the reader
-  // already paged to the end keeps its recorded boundary and stays ended — and
-  // otherwise replaces the aging token exactly while the reader's cursor still
+  // A response at the same boundary offers its own token to the chain: it
+  // replaces the aging token exactly while the reader's cursor still
   // designates that boundary. A cursor the reader's loads moved past names an
   // older message the served page cannot re-sign, so it stays where the loads
-  // reached it.
-  const adopt = !moved && state.nextCursor === null && state.nextBoundaryId === null && served.nextBefore !== null;
+  // reached it, and a chain that already ended keeps its recorded boundary and
+  // stays ended — a token the same boundary offers after a drain is dropped,
+  // which `docs/TODO.md` records as open work.
   const renew = !moved && servedBoundaryId !== null && state.nextBoundaryId === servedBoundaryId;
-  const nextCursor = moved || adopt || renew ? served.nextBefore : state.nextCursor;
-  const nextBoundaryId = moved || adopt ? servedBoundaryId : state.nextBoundaryId;
+  const nextCursor = moved || renew ? served.nextBefore : state.nextCursor;
+  const nextBoundaryId = moved ? servedBoundaryId : state.nextBoundaryId;
   return { ...state, pages: [page, ...state.pages.slice(1)], nextCursor, nextBoundaryId, servedSource: source };
 }
 
@@ -148,6 +147,18 @@ export function retainOlderPage(
     nextCursor: continues ? page.nextBefore : state.nextCursor,
     nextBoundaryId: continues ? page.messages[0]?.id ?? null : state.nextBoundaryId,
   };
+}
+
+/**
+ * True while a refused press still owns the chain pointer: the boundary its
+ * cursor was minted at — compared by the boundary message's id whenever the
+ * press recorded one, by the cursor's bytes otherwise — is still the boundary
+ * the surface's next load chains from. A press a later load advanced past, or
+ * a renewed cursor superseded, no longer owns it, so its refusal proves
+ * nothing about the cursor the surface holds now.
+ */
+export function refusedPressStillOwnsChain(state: ChatScopeState, cursor: string, boundaryId: string | null): boolean {
+  return boundaryId !== null ? state.nextBoundaryId === boundaryId : state.nextCursor === cursor;
 }
 
 export interface ChatScopeStore {
