@@ -72,6 +72,175 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       shows the importer's wait event, whether it waited on the delivery transaction, and
       whether the delivery backend held `work_items`.
 
+- [ ] Revalidate and remove the callerless projected provider-action chain in
+      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
+      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
+      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
+      document names it — and the chain behind it is its own:
+      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
+      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
+      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
+      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
+      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
+      were live. Inside that chain one disjunct can never match on any path the code gives it: the
+      clause `{:error, reason} when reason in [:stale, :state_conflict,
+      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
+      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
+      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
+      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
+      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
+      declares no such error key. `:capability_not_granted` is produced by
+      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
+      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
+      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
+      producer; revalidate the surviving provider-action tests either way.
+
+## Retro review follow-ups
+
+- [ ] Investigate the intermittent Control failure class behind the provider-action cases at
+      `control/test/symmetry_control_web/controllers/provider_action_controller_test.exs:1906-1933`
+      ("a broker restart automatically recovers accepted work after lease expiry", with its timer
+      assertion `:1929`) and `:1935-1962` ("the broker worker completes after the request process
+      exits", carrying the same assertion at `:1961`). Observed intermittently in
+      local runs — the observation is the 2026-11-20 retro review's — and no occurrence is recorded in
+      the repository for either case. Most probable mechanism (inference, not observed): both cases
+      release the worker with `send(provider_pid, :continue)` and then read the broker's
+      own timer — `assert_timer_cancelled(readiness.timeout_ref)`
+      (`:2764-2766`, `Process.read_timer(timeout_ref) == false`) — without broker synchronization
+      (`:1906` reads it directly after the worker's `:DOWN`; `:1935` joins the worker and asserts two
+      persisted fields first), while that timer is cancelled only inside the broker's own message
+      handling — when it handles the worker's completion
+      (`control/lib/symmetry_control/integrations/provider_access.ex:95` → `pop_job/2` `:232` →
+      `cancel_timer/1` `:238`), when a worker `:EXIT` pops its job (`:113`/`:116` → the same
+      `pop_job/2` → `cancel_timer/1`), and in `terminate/2`'s bulk cancel (`:135`) — so a test that
+      observes the worker's `:DOWN` first
+      can still read a live timer. Secondary candidates: the 5 s `assert_receive` bound under load, and
+      the unbounded `receive`s that turn a missed message into a hang. The assertion appears in eleven
+      call sites across ten cases of this file (`:1826`, `:1929`, `:1961`, `:1990`, `:2028`, `:2060`,
+      `:2094`, `:2201`, `:2345`, `:2375`, `:2649`; the two in the broker-restart case declared at
+      `:2035`), so treat it as a class. Revalidate against a recovered failure before changing anything
+      (rerun the two cases, then check whether the failing read is the timer or the intent state), and
+      keep both assertions.
+
+- [ ] Give `stopDescendantMonitor` the post-timer recheck its sibling join already has.
+      `daemon/internal/platform/process_unix.go:752-769` waits on the monitor against a timer
+      (`:763-768`) and returns `ErrLinuxDescendantContainmentUnproven` ("descendant monitor did not stop
+      before deadline") whenever the timer arm wins, without rechecking `monitorDone`. `monitorDone` is a
+      close-only unbuffered channel (`:610` created, `:809` the only close), so it stays ready once
+      closed: a monitor that exits as the deadline expires leaves both arms ready, Go picks uniformly
+      between them, and a monitor whose published reason is already in hand can be reported as a
+      deadline failure. PR #105 (`e64f8c0`) fixed this shape in the barrier join `:665-688`
+      (function `waitForInitialDescendantScan` `:642-696`, the recheck at `:682-686`, pinned by
+      the join probe `process_unix_linux_test.go:2078` and the expired-timer probe
+      `:2136`, whose assertion at `:2157-2158` reddens when the recheck is removed) — and recorded
+      this site as out of scope as work "to be recorded in `docs/TODO.md`"; the same shape also sits
+      in the final-scan RPC's timer arms (`:1042-1043` request, `:1055` result). Fail-closed, so the
+      cost is manufactured
+      unproven-containment results for every caller
+      that joins the monitor's own reason (`:1121`, `:1277`, `:1351`, `:1542`,
+      `containment_supervisor_linux.go:1836`, `prepareDescendantMonitorForOwnerLoss` `:771-794`).
+      Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
+      that never exits still fails) in a separate maintenance change.
+
+- [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
+      (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
+      error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
+      gone), and no test pins that branch: the scripted batch child
+      (`daemon/internal/workspace/subject_test.go:1114-1147`) serves `frame <variant> <content>`
+      (valid, missing, wrong-oid, wrong-type, malformed-size, negative-size, oversized,
+      malformed-header, truncated-header, partial-content, bad-trailer, missing-trailer) and
+      `blocked-header`, and every case of `TestSubjectBatchStreamRejectsMalformedResponses`
+      (`:1315-1379`) writes exactly one request while the child is still alive, so the failure
+      surfaces on the response read (`:753`) rather than on the write. The missing case needs a new
+      child variant that answers its first request with a complete in-sync frame and then closes its
+      read end, with the close ordered so it is observable before the second request (closing before
+      the response is written, or an equivalent deterministic wait for the child's exit, works
+      because the digest writes its second request only after consuming the first response); a
+      variant that only exits after answering can still take the write into the pipe buffer, so the
+      refusal can otherwise surface on the response read instead. Every existing
+      exit-after-one-response variant answers a refusal that desyncs and aborts the digest on the
+      first blob, and the one-response exit at `:1206-1208` covers every variant except `valid` and
+      `missing`, which keep serving (`serveWorkspaceBatchFrames` `:1155-1210`); drive a multi-blob
+      commit (the fixture exists: `subjectDigestManyBlobs` `:588` with
+      `writeSubjectDigestManyBlobsFixture` `:810`) so the second request write lands on the gone
+      child. Assert that the refusal names the object, marks the stream desynced and still reaps the
+      child (the reap contract `:1373-1376` pins that for response failures), keeping the context
+      alive so `streamError` (`:808-813`) reports the pipe error instead of a cancellation.
+
+- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
+      submit-time served one. `approvePlan` builds its envelope from `query.data`
+      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
+      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
+      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
+      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
+      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
+      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
+      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
+      the original note: every accepted command appends an event through `append_event!/7`
+      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
+      and reconcile writers go through `Goal.transition_changeset`
+      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
+      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
+      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
+      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
+      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
+      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
+      direction: build the press's envelope from a submit-time read the way the plan admission does,
+      re-deriving the presented decision's own version from that same read, or keep the page version and
+      record the refusal plus reload as the intended recovery.
+
+- [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
+      rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always
+      answers false", repeated in `work-detail-read.schema.json:142` and
+      `workspace-read.schema.json:281`), and the read model serves it
+      (`control/lib/symmetry_control/chat/read_model.ex:51-59` forces it for a historical projection),
+      but the case that exercises exactly that shape — "historical run chat remains pinned after retry
+      and cannot control a newer attempt" (`control/test/symmetry_control/chat_test.exs:644-789`) —
+      asserts `historical` (`:734`) and `refute …can_cancel` (`:735`) and never `can_retry`; the file
+      contains no `can_retry` occurrence at all, and no other case targets a pinned historical chat
+      entry. Add the assertion in a separate maintenance change and keep the case's other assertions:
+      the rule is behavioural, so the pin must fail if the historical branch stops forcing the flag.
+
+- [ ] Owner decision: should the served `can_start` exclude goal-managed work items? `portal_json.ex`
+      serves `can_start` from five conjuncts with no `goal_managed?` term
+      (`control/lib/symmetry_control_web/portal_json.ex:257-260`, beside `goal_managed:` at `:255`),
+      while the legacy run endpoint refuses every goal-managed item: `POST
+      /portal/api/work-items/:work_item_id/run` (`control/lib/symmetry_control_web/router.ex:86`) →
+      `Workspaces.launch_work_item/2` (`control/lib/symmetry_control/workspaces.ex:308`, guard at `:317`)
+      → `ensure_legacy_work_item/1` (`:865-869`) → 403 `goal_authority_required`
+      (`control/lib/symmetry_control_web/protocol.ex:72-73`). A goal-managed item in the shape plan
+      admission creates — backlog, agent assignee, no orchestration task (`goals.ex:6699-6714`) — is
+      therefore served `can_start: true` once it is ready in an active project with available external
+      work, and the work surface renders "Start run" from
+      it (`frontend/src/features/work/control.tsx:306`), which the endpoint then refuses. The same
+      payload already fences one flag of the family (`can_retry` delegates to
+      `Orchestration.retryable_attempt?/1`, which matches `goal_id: nil` only,
+      `control/lib/symmetry_control/orchestration.ex:647-650`), while `can_cancel` is unfenced
+      (`portal_json.ex:399`) even though the legacy cancel path applies the same guard
+      (`workspaces.ex:345-349`). Decide once whether the served `can_*` flags gain the goal fence or
+      whether they deliberately describe the legacy path only and the client gates on `goal_managed`,
+      then pin the decision with a serving test.
+
+- [ ] Document how to recover the repository-default test database, or reset it from the test alias.
+      The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where
+      `MIX_TEST_PARTITION` is appended as a literal suffix, so a partition run selects a different
+      database name that the test alias creates and migrates when absent), and `mix test` runs
+      `symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet` first
+      (`control/mix.exs:79`). Create and migrate make a missing or
+      migration-behind database usable, but nothing drops or truncates one: a pending migration whose
+      table already exists fails the alias's migrate step before any test runs. Observed 2026-11-20
+      while gating an unrelated Control change: an unpartitioned `mix test` stopped with Postgrex
+      `42P07` (`duplicate_table`) on a migration whose table already existed — `schema_migrations`
+      named a revision older than the object set — while the same change ran green on a partition
+      database. A maintainer reads that as a code
+      failure, and the repository documents no recovery: `ecto.reset` exists as an alias
+      (`control/mix.exs:70`) but no doc names it for the default test database, and the only documented
+      resets belong to harness-owned databases (`docs/runbooks/session-receipt-recovery-e2e.md`). Fix
+      direction: document the drop-and-recreate path for the default test database where the suite's
+      commands are documented, or add a recreate/reset step to the `test` alias so a stale default
+      database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
+      the recovery recipe.
+
 ## Deferred review findings (0007h)
 
 - [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate
