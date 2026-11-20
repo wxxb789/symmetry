@@ -232,6 +232,109 @@ LEGACY_REPLAY_KEYS = LEGACY_COMMON_KEYS | {
     "scan_release", "duplicate_stop_marker", "duplicate_stop_seen",
 }
 
+# The restarted daemon's stdout/stderr logs, written into each case root beside
+# witness-evidence.json by every restarted-daemon start at
+# daemon/e2e/production_linux_containment_witness_test.go:1723-1754
+# (startLinuxResumeBarrierDaemonWitness),
+# daemon/e2e/production_daemon_crash_witness_test.go:386-394
+# (startProductionDaemonWitness) and
+# daemon/e2e/production_linux_containment_replay_witness_test.go:754-762
+# (startLinuxReplayDaemonWitness); the case exports a tail exactly when such a
+# log exists, so a case that never restarted the daemon publishes nothing. Only
+# the tail of a failed run is exported, as a sanitized projection of the
+# daemon's own slog JSON records; the sources are never copied.
+LEGACY_DAEMON_LOG_TAIL_BYTES = 64 << 10
+LEGACY_DAEMON_LOG_LABEL = "second"
+LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
+# The daemon's own slog.NewJSONHandler writer (daemon/internal/app/app.go:460)
+# emits its JSON on stdout (daemon/cmd/symmetry-daemon/main.go:89). The
+# projection publishes a text value only when it is one of the exact literals
+# the daemon code can write into that field, so a credential-shaped value in
+# one of these generic keys is dropped before publication, not masked:
+#   msg   -- every daemon.log.<Level>("...") message literal under
+#           daemon/internal/app (app.go, cleanup.go, recovery.go, supervisory.go).
+#   state -- the terminal transition states (daemon/internal/state/state.go
+#           isTerminalTransitionState) logged as stateName by
+#           queueTerminalTransitionWithRetry / queueTerminalTransitionAndAcknowledgement
+#           (app.go:7385, 7465); nativeTerminalPayload (app.go:8978) returns the
+#           same three.
+#   stage -- the queueFailure stage literals (app.go:3651-3877) and the
+#           process-exit retry (app.go:7586).
+#   reason -- the literals reaching stopRecoveredJournal (app.go:2857, 2891,
+#           3604, 10375): lease/ownership reasons (app.go:9922-10073, 10918,
+#           11468, 11752) and the protocol.ReconcileDecisionKind decisions
+#           (daemon/internal/protocol/protocol.go:560-564).
+#   outcome -- the acknowledgement outcomes (app.go:7918-7982, 8940-8975, 9524).
+#   kind -- the newIDWithRetry kinds (app.go:7349, 7410, 7414; supervisory.go:85).
+# Maintenance rule: a change that adds a producer or literal for one of these
+# fields must extend the set in the same change; test-linux-v2-evidence.py
+# scans the log call sites and the known producer call sites and fails when a
+# literal is missing from its set. Values reaching these fields through a
+# variable (for example a stateName passed down a helper, or the outcome values
+# assigned from a literal at app.go:7936-7972, 8939-8969, 9549 and
+# supervisory.go:140) are covered by this rule, not by that scan.
+DAEMON_LOG_TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$")
+DAEMON_LOG_LEVELS = ("DEBUG", "INFO", "WARN", "ERROR")
+DAEMON_LOG_MESSAGES = frozenset({
+    "advance_lease_expiry_failed", "claim_failed", "cleanup_recovered_workspace_failed",
+    "cleanup_terminal_workspace_failed", "clear_native_usage_recovery_failed",
+    "complete_provide_input_failed", "control_clock_skew_cleared", "control_clock_skew_detected",
+    "delete_enrollment_intent_failed", "delete_stale_enrollment_intent_failed",
+    "delete_terminal_journal_failed", "discard_unready_goal_session_attach_failed",
+    "generate_cancelled_receipt_id_failed", "generate_claim_id_failed",
+    "generate_command_acknowledgement_id_failed", "input_write_timeout",
+    "linux_v2_native_assignment_blocked_by_owner_recovery", "list_cleanup_journals_failed",
+    "list_journals_failed", "load_claim_intent_failed", "load_recovered_goal_session_failed",
+    "load_unready_pi_resume_barrier_failed", "machine_enrolled", "mark_lease_expired_stale_failed",
+    "mark_native_start_lease_expired_stale_failed", "mark_recovered_journal_stale_failed",
+    "mark_workspace_recovery_required_failed", "native_goal_usage_retry_exhausted",
+    "notification_client_stopped", "output_dropped_pending_budget",
+    "persist_native_goal_usage_recovery_failed", "persist_native_terminal_stale_failed",
+    "persist_prepared_startup_stale_failed", "persist_stale_process_exit_failed",
+    "persist_startup_stale_failed", "queue_cancelled_transition_failed",
+    "queue_command_acknowledgement_failed", "queue_completed_transition_failed",
+    "queue_failed_transition_failed", "queue_native_goal_usage_before_cancel_failed",
+    "queue_native_goal_usage_before_terminal_cancel_failed", "queue_native_goal_usage_failed",
+    "queue_native_terminal_transition_failed", "queue_recovered_cancel_transition_failed",
+    "queue_running_failed", "queue_terminal_transition_and_acknowledgement_failed",
+    "queue_terminal_transition_failed", "record_recovered_cancel_process_stop_failed",
+    "record_recovered_process_stop_failed", "record_workspace_failed",
+    "recover_goal_session_attachment_failed", "recover_input_command_intents_failed",
+    "recover_unclosed_goal_sessions_failed", "recover_unclosed_goal_sessions_pending",
+    "recovered_cancel_process_stop_blocked_by_terminal", "recovered_input_process_stop_pending",
+    "recovered_journal_stopped", "recovered_process_stop_blocked_by_terminal",
+    "resolve_recovered_goal_session_stop_failed", "retain_recovered_cancel_workspace_failed",
+    "retain_supervised_workspace_failed", "retain_unknown_goal_workspace_failed",
+    "retry_native_goal_session_close_failed", "retry_native_goal_usage_failed",
+    "runtime_heartbeat_failed", "runtime_poll_failed", "runtime_reconcile_failed",
+    "runtime_registered", "save_claim_grant_failed", "save_claim_intent_failed",
+    "schedule_process_exit_cleanup_failed", "stop_recovered_cancel_goal_session_unproven",
+    "stop_recovered_cancel_process_failed", "stop_recovered_cancel_process_unavailable",
+    "stop_recovered_goal_session_unproven", "stop_recovered_process_failed",
+    "stop_recovered_process_unavailable",
+})
+DAEMON_LOG_TEXT_VALUES = {
+    "state": frozenset({"cancelled", "completed", "failed"}),
+    "stage": frozenset({
+        "build_environment", "encode_input", "goal_admission", "goal_admission_required",
+        "harness_capability", "initial_lease_deadline", "invalid_admission", "linux_v2_required",
+        "mark_workspace_recovery_required", "prepare_workspace", "process_exit", "queue_running",
+        "read_process_identity", "record_process", "start_agent",
+    }),
+    "reason": frozenset({
+        "ack ownership lost", "cancel", "claim ownership lost", "continue", "event ownership lost",
+        "lease expired", "lease expired during renewal", "lease fence is incomplete",
+        "lease renewal failed", "local lease watchdog renewal failed", "not eligible for reconcile",
+        "relative lease deadline elapsed", "relative lease deadline elapsed during renewal",
+        "renewed lease has no safe local deadline", "renewed lease is already unsafe",
+        "stale_stop", "terminal", "transition ownership lost", "unknown_stop",
+    }),
+    "outcome": frozenset({"applied", "failed", "rejected"}),
+    "kind": frozenset({"acknowledgement", "control_failure_event", "terminal transition", "transition"}),
+}
+DAEMON_LOG_INT_KEYS = ("attempt", "bytes", "generation", "lease_safety_margin_ms", "runtime_epoch", "skew_ms")
+DAEMON_LOG_INT_LIMIT = 1 << 31
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"redacted evidence export failed: {message}")
@@ -622,6 +725,69 @@ def project_pid_reuse(value) -> dict:
     return result
 
 
+def project_daemon_log_record(value) -> dict | None:
+    """Project one daemon slog line to its allowlisted, private-free shape.
+
+    The record keeps its time and level whenever both match the shapes the
+    daemon's own JSON log handler emits, so the daemon's activity timeline
+    survives even when its message text cannot be published. Every other field
+    is dropped: identities, paths, error text and any unknown attribute. `msg`
+    and the five text fields survive only as literals the daemon code writes.
+    """
+    if not isinstance(value, dict):
+        return None
+    time_value = value.get("time")
+    level = value.get("level")
+    if not (isinstance(level, str) and level in DAEMON_LOG_LEVELS and
+            isinstance(time_value, str) and DAEMON_LOG_TIME.fullmatch(time_value)):
+        return None
+    record = {"time": time_value, "level": level}
+    message = value.get("msg")
+    if isinstance(message, str) and message in DAEMON_LOG_MESSAGES:
+        record["msg"] = message
+    for key, allowed in DAEMON_LOG_TEXT_VALUES.items():
+        child = value.get(key)
+        if isinstance(child, str) and child in allowed:
+            record[key] = child
+    for key in DAEMON_LOG_INT_KEYS:
+        child = value.get(key)
+        if isinstance(child, int) and not isinstance(child, bool) and -DAEMON_LOG_INT_LIMIT < child < DAEMON_LOG_INT_LIMIT:
+            record[key] = child
+    return record
+
+
+def sanitize_daemon_log_tail(raw: bytes) -> tuple[list[dict], int]:
+    messages = []
+    dropped = 0
+    for line in raw.split(b"\n"):
+        if not line:
+            continue
+        try:
+            value = json.loads(line.decode("utf-8", errors="strict"), object_pairs_hook=reject_duplicate_keys)
+        except (UnicodeError, ValueError, json.JSONDecodeError):
+            value = None
+        record = None if value is None else project_daemon_log_record(value)
+        if record is None:
+            dropped += 1
+            continue
+        messages.append(record)
+    return messages, dropped
+
+
+def build_daemon_log_document(case: str, stream: str, raw: bytes, truncated: bool) -> bytes:
+    messages, dropped = sanitize_daemon_log_tail(raw)
+    document = {
+        "version": 1,
+        "case": case,
+        "daemon": LEGACY_DAEMON_LOG_LABEL,
+        "stream": stream,
+        "truncated": truncated,
+        "dropped_lines": dropped,
+        "messages": messages,
+    }
+    return json.dumps(document, separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
+
+
 def project_legacy_document(document: dict) -> dict:
     if "raw_journal_snapshots" in document:
         family = "replay"
@@ -741,6 +907,44 @@ def read_regular(path: pathlib.Path, secret_values: tuple[bytes, ...], validate:
     if len(raw) != info.st_size:
         fail("allowlisted source changed while being read")
     return raw, validate_document(raw, secret_values) if validate else None
+
+
+def read_daemon_log_tail(path: pathlib.Path, maximum: int) -> tuple[bytes, bool]:
+    """Read at most the last `maximum` bytes of one private daemon log.
+
+    Unlike read_regular this file may be empty and its total size is not
+    capped: only the tail is published, and the daemon that wrote it may still
+    be appending. The identity re-check keeps the same symlink/short-write
+    boundary every other allowlisted source passes; when the read starts
+    mid-line, the partial first line is discarded before sanitization.
+    """
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+        fail("allowlisted daemon log must be a private regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_ino != info.st_ino or opened.st_dev != info.st_dev:
+                fail("allowlisted daemon log changed during open")
+            truncated = opened.st_size > maximum
+            os.lseek(fd, max(opened.st_size - maximum, 0), os.SEEK_SET)
+            data = bytearray()
+            while len(data) < maximum:
+                chunk = os.read(fd, maximum - len(data))
+                if not chunk:
+                    break
+                data.extend(chunk)
+        finally:
+            os.close(fd)
+    except OSError:
+        fail("allowlisted daemon log could not be read")
+    raw = bytes(data)
+    if truncated:
+        boundary = raw.find(b"\n")
+        raw = raw[boundary + 1:] if boundary >= 0 else b""
+    return raw, truncated
 
 
 def atomic_write(directory: pathlib.Path, name: str, contents: bytes, uid: int, gid: int) -> None:
@@ -884,6 +1088,35 @@ def main() -> int:
                 fail("evidence destination already exists")
             atomic_write(output, target, data, runner_uid, runner_gid)
         copied.append({"file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+
+    # A failed witness run is the one case whose daemon-side stall the uploaded
+    # evidence must explain, so the restarted daemon's log tails are published
+    # as sanitized projections. Per-case verdicts are not visible here (the
+    # exporter reads files, not the go-test event stream), so the CI's run
+    # verdict is the trigger and every case that wrote a restarted-daemon log
+    # gets its tail exported.
+    if arguments.mode == "legacy" and arguments.run_status == "failed":
+        for name in LEGACY_WITNESSES:
+            for stream in LEGACY_DAEMON_LOG_STREAMS:
+                try:
+                    source = witness_root / name / f"{LEGACY_DAEMON_LOG_LABEL}-daemon.{stream}.log"
+                    raw, truncated = read_daemon_log_tail(source, LEGACY_DAEMON_LOG_TAIL_BYTES)
+                except FileNotFoundError:
+                    continue
+                target = f"{name}-{LEGACY_DAEMON_LOG_LABEL}-daemon-{stream}.json"
+                data = build_daemon_log_document(name, stream, raw, truncated)
+                document = validate_document(data, secret_values)
+                destination = output / target
+                if destination.exists() or destination.is_symlink():
+                    fail("evidence destination already exists")
+                atomic_write(output, target, data, runner_uid, runner_gid)
+                copied.append({
+                    "file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                    "kind": "daemon_log_tail", "daemon": document["daemon"], "stream": document["stream"],
+                    "truncated": document["truncated"], "records": len(document["messages"]),
+                    "dropped_lines": document["dropped_lines"],
+                })
+                expected_destinations.add(target)
 
     for child in output.iterdir():
         if child.name not in expected_destinations and child.name != "manifest.json":

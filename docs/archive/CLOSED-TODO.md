@@ -26,6 +26,9 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The citation existence check and the changed-path classifier fixture appended to `## Record and
+documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
+
 The resolved-decision press item appended to the `## Retro review follow-ups` section below was
 moved on 2026-11-20 from branch `fix/resolve-decision-submit-read`.
 
@@ -877,8 +880,8 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
       9 skipped) with two Control compiles running on the same host; the same test passed
       twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
-      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
-      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
+      (`git show ca29a8e:control/priv/portal_assets/portal.js`) and the resource routes are
+      unmodified by 0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
       Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the case no longer
       exists to revalidate. On main, the file revision introduced by `7a92ca4` (#31, 0007b)
       still carried it when `5c2e0ad` (#35, 0007c) replaced it in the same file with
@@ -941,13 +944,13 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       against the base revision. Revalidate the classic toast branch that reports an update when
       the edit dialog was opened from the detail drawer; keep the assertion.
       Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the same retirement as
-      the desktop entry above — main's `browser/tests/portal.spec.mjs` lost `project, resource,
-      work-item, filtering, ordering, and persistence` at `5c2e0ad` (#35, 0007c), and the 0007i
-      cutover deleted the file (`ca1bdad`). The classic toast branch this item asked to
-      revalidate (the detail drawer's work-item update receipt) went with the classic renderer:
-      the SPA renders its own `role="status"` notices from its own state, no `toast` element
-      exists in `frontend/src`, `control/lib` or `control/priv`, and the live detail-surface
-      successor cases assert `statusNotice(detail, "Work item updated.")` in
+      the desktop entry above — main's `git show 5c2e0ad^:browser/tests/portal.spec.mjs` lost
+      `project, resource, work-item, filtering, ordering, and persistence` at `5c2e0ad` (#35,
+      0007c), and the 0007i cutover deleted the file (`ca1bdad`). The classic toast branch this
+      item asked to revalidate (the detail drawer's work-item update receipt) went with the
+      classic renderer: the SPA renders its own `role="status"` notices from its own state, no
+      `toast` element exists in `frontend/src`, `control/lib` or `control/priv`, and the live
+      detail-surface successor cases assert `statusNotice(detail, "Work item updated.")` in
       `browser/tests/portal-work-planning.spec.mjs`. The mobile-chromium project's successors for
       these flows run in `browser/tests/portal-connections.spec.mjs` and
       `browser/tests/portal-work-views.spec.mjs` per `browser/README.md`; no assertion of this
@@ -2083,7 +2086,7 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       (2026-11-19)".
 
 - [ ] Revalidate the stale 0008-series prerequisite text:
-      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
+      `docs/goals/archive/0008d-typescript-model-routing.md:13` says "the accepted 0008b
       and 0008c results" while the 0008b candidate policy is produced and awaiting
       the owner's verdict. Pre-existing and not introduced by the 0008b evidence
       change; correct the wording once the 0008b verdict lands. (The `0006h`
@@ -2232,6 +2235,188 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       receipts stay verifiable against the revision tagged `0008b-produced-tooling` and fail closed
       on submission under the current runner by design; a submission that requires current bytes
       re-executes the runs.
+
+- [ ] Add a path-and-symbol existence check for the backticked repo paths and
+      identifiers cited in `docs/runbooks/**`, `docs/design/quality.md` and the
+      CLOSED-TODO closures. Location: a new `scripts/ci/` check plus its fixture
+      test, run for pull requests the way the record-cleanliness pair is
+      (`scripts/ci/check-record-cleanliness.py` with
+      `scripts/ci/test-check-record-cleanliness.py`,
+      `.github/workflows/ci.yml:78,1218`): scoped to the changed files it audits
+      but not hidden behind the documentation-only fast path, so a runbook-only
+      pull request still runs it. Why: a cited `file:line` or symbol rots
+      silently when its owner moves — the 2026-11-19 revalidation found the
+      closed item's own `read_model.ex:471` health-signal citation stale
+      (`portal.md` cites `health/4` with no line number), and PR #99's "Review
+      fixes (round 2)" replaced an untracked
+      `control/deps/ecto/...` citation (`control/.gitignore:8` ignores `deps/`)
+      that no index contains. Check that a backticked repo-relative path exists
+      and that the cited identifier occurs in the cited file; do not validate
+      raw `file:line` values (any edit above them would redden the gate).
+      Verification: the check fails on a citation whose path or symbol is absent
+      and passes on the current tree; fixtures pin both outcomes.
+
+      **Closed (2026-11-20, `fix/ci-classifier-gates`):** the gate exists as
+      `scripts/ci/check-citation-existence.py`. For a revision range it selects the audited
+      documents the range adds or modifies (statuses A/M/T, `--no-renames`, text read from the
+      head revision's own blob, never the working tree) under its one corpus constant
+      `AUDITED_PATHS`, and checks each backticked path citation against the head revision's
+      tree, plus each symbol citation the prose binds to a file-shaped citation against that
+      file's head blob. The revision-range machinery - the base fallback to the `origin/main`
+      merge base and then `HEAD^`, its narrowing, the changed-path selection and the head-blob
+      read - is shared with the record gate through the new `scripts/ci/revision_scope.py`
+      instead of being copied; `scripts/ci/test-check-record-cleanliness.py` (nineteen tests,
+      observed `Ran 19 tests ... OK` on Windows and on WSL Ubuntu-24.04) is that extraction's
+      regression evidence. The module also drops the inherited `GIT_DIR`-family variables from
+      every git call, so an exported `GIT_DIR` cannot silently redirect a gate to another
+      repository and turn its range into a vacuous pass.
+      `.github/workflows/ci.yml` reports a third classifier output, `run-citations`, for a change
+      to `docs/runbooks/**`, `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md`, and the
+      `citation-existence` job runs whenever it is true - independently of the
+      documentation-only fast path, so a runbook-only pull request runs the gate - with
+      `CITATION_BASE` folded from the event exactly like `RECORD_BASE`.
+      `scripts/ci/test-check-citation-existence.py` (forty-eight tests at the round-2 fix's final
+      tree, observed `Ran 48 tests ... OK` on Windows and on WSL Ubuntu-24.04) pins the grammar
+      (line-suffixed, `:line:col`, and
+      file-shaped citations, the directory form, wildcard families including `...`/`…`, the
+      fence blanking at any indentation, in a blockquote or in a nested list item, with a closing
+      fence that carries the same character, at least the opener's count and no info string, the
+      connective list without `and`/`or`, and the path-first and whole-word symbol branches), the
+      resolution boundary (the head tree, or the head revision's own ignore rules for generated
+      output, with a per-citation notice naming the rule, the notice read from case-exact
+      committed bytes and the ignore arm deciding before a removal is reported) and the range
+      side (an unchanged, deleted or non-corpus document selects nothing; the head blob decides
+      and not the working tree; a rollback range is compared with its requested base; an
+      inherited `GIT_DIR` cannot redirect the audit).
+      The boundaries are deliberate and pinned, not omissions: a raw `file:line` value is never
+      read (the suffix is stripped before the path is resolved), a bare file name
+      (`read_model.ex`) names no repo-relative path, an extensionless multi-segment token is
+      indistinguishable from the branch names this file writes in backticks
+      (`docs/close-linux-platform-flakes`), a command or URL is not a citation, and a citation
+      the head revision's own ignore rules cover as generated output stays legal - that is what
+      keeps `docs/runbooks/portal.md`'s staged-bundle path and its `index.html` readable as
+      written. The fix round of PR #122 (2026-11-21) applied the conductor decisions recorded in
+      `docs/plans/2026-11-20-ci-classifier-gates-plan.md`: a bound symbol on an ignore-covered or
+      absent path no longer aborts the run (the symbol check skips a path the head tree does not
+      hold; the missing non-ignored path is reported by the path arm, named, at exit 1, with no
+      "does not hold exactly one entry" abort); ignore rules are read from the head revision's
+      own `.gitignore` blobs in a scratch checkout, never from the working tree, and a notice is
+      accepted only when `check-ignore -v` names a case-exact committed rule source (a
+      case-insensitive filesystem otherwise resolves a differently-cased directory to a
+      materialized ignore file and exempts what a Linux checkout refuses); and a multi-segment
+      citation whose first segment the head lacks but a commit reachable from the head held
+      (`git rev-list -1 <head> -- <segment>`, cached per segment) is refused, so a removed or
+      renamed top-level tree no longer hides the citations under it - the removal need not lie
+      inside the comparison range, because the repair lands on the next pull request that touches
+      the citing document. The head revision's own ignore rules decide first: a removed tree their
+      bytes cover is reported as a per-citation notice and the run passes, a recorded precedence
+      with a fixture of its own. A single-segment token is never resolved that way, and a first
+      segment neither the head nor its history holds at the top level (a subdirectory-relative
+      `config/test.exs`, an upstream `src/backend/...`) stays unaudited, pinned in both
+      directions; on a shallow clone the history arm sees only the fetched history and degrades
+      to the previous behaviour.
+      The gate's own first tree-wide run found five citations the corpus no longer held, all in
+      this file, and they were repaired here with the revision-pinned form this file already
+      uses: the two pre-cutover revisions of the deleted browser spec, whose three sites went with
+      the classic renderer in `ca1bdad`, as `git show 5c2e0ad^:browser/tests/portal.spec.mjs` for
+      the case `5c2e0ad` replaced and `git show ca29a8e:browser/tests/portal.spec.mjs`; the classic
+      bundle as `git show ca29a8e:control/priv/portal_assets/portal.js`; and
+      `docs/goals/archive/0008d-typescript-model-routing.md:13` for the moved goal document.
+      Observed end to end:
+      `python3 scripts/ci/check-citation-existence.py --base $(git rev-list --max-parents=0 HEAD)
+      --head HEAD` exited 1 with those five refusals before the repairs and 0 with
+      `10 changed document(s) pass the path and symbol check (365 path citation(s))` after them
+      (the after run bound the uncommitted repairs and this increment's own new files with a
+      dangling `git commit-tree` snapshot built from a temporary `GIT_INDEX_FILE`); at the
+      round-1 revision of the fix round the same command exits 0 with
+      `10 changed document(s) pass the path and symbol check (374 path citation(s))` (the delta
+      from the pre-merge 365 is this range's own `main` merge and the fix round's record edits;
+      the merge had already moved the count to 368), and the round-2 fix's final tree exits 0
+      with `10 changed document(s) pass the path and symbol check (381 path citation(s))`: the
+      round-2 delta of +7 is this file's own new record prose - it adds nine citations (two bare
+      `docs/` directory citations, one `docs/**` glob, one `docs/runbooks/` directory citation,
+      and the five appended by this very closing sentence, all resolving at the head) - less the
+      two `.github/workflows/ci.yml` line-number pointers removed from `docs/design/quality.md`
+      (15 citations there became 13), whose line numbers the fix round's second pass replaced
+      with job/step names. The round-3 fix (2026-11-21) repairs the fence boundary the round-2
+      grammar missed - a backtick fence's info string may not contain a backtick, so a line that
+      begins with an inline triple-backtick span is prose, not an opener that blanks the rest of
+      the document - and pins it with a fixture that brings the suite to forty-nine tests
+      (observed `Ran 49 tests ... OK` on Windows and on WSL Ubuntu-24.04); the tree carrying it
+      exits 0 with `10 changed document(s) pass the path and symbol check (410 path citation(s))`
+      over the whole corpus and `2 changed document(s) pass the path and symbol check (365 path
+      citation(s))` over 7a55b46..HEAD on both platforms - three more than the merge's 407 and
+      362, one from the TS row in `docs/design/quality.md` naming the `control` job's `Render
+      authenticated release shell on desktop and mobile` step and two from this sentence's own
+      backticked paths.
+
+- [ ] Commit a fixture test for the `changes` job's changed-path classifier
+      (`.github/workflows/ci.yml:26-65`), whose proof today is only the removed
+      throwaway harness plus hosted runs. Pattern:
+      `scripts/ci/test-no-legacy-routes-audit.py` (fixture-driven, runs ungated
+      in the `legacy-route-audit` job; `.github/workflows/ci.yml:1355`). Pin:
+      `docs/**`/`*.md`-only diffs report `run-heavy=false`; `docs/evaluations/**`,
+      `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
+      `scripts/ci/check-record-cleanliness.py` changes report `run-records=true`;
+      `legacy-route-audit` runs unconditionally; non-`pull_request` events
+      report both `true`. Companion increment: its `ci.yml` wiring would move
+      line numbers this branch just pinned. Verification: the fixture test
+      fails when any of those routings changes.
+
+      **Closed (2026-11-20, `fix/ci-classifier-gates`):**
+      `scripts/ci/test-ci-changed-path-classifier.py` (eighteen tests, observed `Ran 18 tests ...
+      OK` on Windows and on WSL Ubuntu-24.04, exit 0 on both) extracts the classifier program out
+      of the `changes` job's `id: paths` step in `.github/workflows/ci.yml` and runs the
+      workflow's own text - never a copy - in sixteen scratch two-commit repositories whose diffs
+      are the fixtures, so every expectation below is a measured classifier run. Pinned: a
+      `docs/**`-only and a `*.md`-only diff report `run-heavy=false`, and the round-2 fix adds
+      the discriminating pair - a `docs/**` file that is not Markdown (the suite's `example.json`
+      fixture) reports all three outputs `false`, so the `.md` exemption is what excuses a
+      documentation path, not the `docs/` prefix; `docs/evaluations/**`,
+      `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
+      `scripts/ci/check-record-cleanliness.py` report `run-records=true`; the citation gate's
+      `AUDITED_PATHS` entries report `run-citations=true` and nothing else (the corpus is
+      imported from the gate's own module, each entry required by its family-complete literal - a
+      directory entry by its trailing-slash prefix, so one file under it cannot stand in for the
+      family - and either a corpus entry the classifier forgets or a classifier literal no
+      corpus entry - or citation tool path - explains fails the suite); a
+      daemon change reports `run-heavy=true`; a rename across the documentation boundary reports
+      both sides under `--no-renames` (the fixture moves a non-Markdown file, because a `*.md`
+      path is exempt from the heavy predicate on both sides and would pin nothing); a deleted
+      runbook still reports `run-citations=true`.
+      The fix round of PR #122 (2026-11-21) added the self-triggering tool paths the first cut
+      missed: `scripts/ci/revision_scope.py` (the shared base fallback, narrowing, diff selection
+      and head-blob read) reports `run-records=true` and `run-citations=true`, and
+      `scripts/ci/check-citation-existence.py` with
+      `scripts/ci/test-check-citation-existence.py` report `run-citations=true` - so a change to
+      a gate program or to the module it reads runs that gate end to end on a real checkout's
+      event shape instead of only through fixtures. The three `*Modified` fixtures above pin each
+      tool path's triple through the real program, and an explicit `CITATION_TOOL_FIXTURES`
+      allowance beside the audited-corpus check keeps the explained-literal assertion tight (an
+      unexplained `run-citations` literal still fails).
+      The routing is modelled closed-world over the real job blocks: only `changes` and
+      `legacy-route-audit` may lack a classifier gate, `record-cleanliness` reads `run-records`,
+      `citation-existence` reads `run-citations` (the output and job the companion entry above
+      adds), every other job reads `run-heavy` and depends on `changes`, and the three `changes`
+      output folds are pinned to `github.event_name != 'pull_request' || steps.paths.outputs.<key>
+      == 'true'`, which the test folds to `true` for `push` and `workflow_dispatch` and evaluates
+      per fixture for `pull_request`; an unrecognized `if:` shape refuses instead of passing.
+      The round-2 fix also parses the heredoc step's own scalar keys: its `id: paths` and its
+      pull-request-only `if:` are pinned, because a step GitHub skips leaves every output unset
+      and skips every gated job even with the fold and the program text unchanged. Ten mutation
+      cases measure that the pins bite - dropping the `docs/evaluations/` clause,
+      making the heavy predicate ignore `docs/` and `*.md`, excusing only the `.md` arm of
+      `docs/` (the non-Markdown docs fixture must flip heavy), narrowing `docs/runbooks/` to one
+      file (the family-coverage check must fail), re-gating `citation-existence` on
+      `run-heavy`, conditioning `legacy-route-audit`, dropping an output fold, moving the
+      classify step's `if:` off `pull_request`, and dropping either `revision_scope.py` clause
+      (records or citations) each change the measured routing and fail the pinned comparison -
+      so "the fixture test fails when any of those routings changes" is pinned inside the suite,
+      not by editing `ci.yml` by hand. It runs
+      ungated in the `legacy-route-audit` job, after that job's own audit fixture test. Observed
+      before/after: with `HEAD`'s pre-change `ci.yml` in place the suite fails at collection -
+      `the classifier must emit exactly ['run-citations', 'run-heavy', 'run-records']; emitted
+      ['run-heavy', 'run-records']`, exit 5 - and passes on this branch's workflow, exit 0.
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
@@ -2657,8 +2842,9 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       `run_id`; the migrated `/portal/chat` is reachable from the shell's Chat entry (whose run
       picker lists the served runs) but the React work detail added by 0007f has no such link, so a
       waiting decision is only reachable by picking the run in Chat. Adding the link is work-detail
-      surface work (0007f's file) and was outside the 0007g diff; `browser/tests/portal.spec.mjs`
-      keeps the classic drawer's own buttons until the 0007i cutover.
+      surface work (0007f's file) and was outside the 0007g diff;
+      `git show ca29a8e:browser/tests/portal.spec.mjs` keeps the classic drawer's own buttons
+      until the 0007i cutover.
 
       **Closed (2026-11-19, `feat/work-detail-chat-link`):** the React work detail
       (`frontend/src/features/work/detail.tsx`) now renders "Open in Chat" beside the execution
@@ -2670,10 +2856,10 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       one is answered on the detail itself.
       Pure navigation: no server member was added or changed. Pinned by
       `frontend/src/features/work/detail.test.tsx` (exact href, both labels, and no link without a
-      run). The item's closing clause about `browser/tests/portal.spec.mjs` was already stale when
-      written: no file under `browser/tests/` referenced `Open Chat`, `Review decision`,
-      `open-chat-button` or `decision-chat-button` at `ca29a8e`, and the file was deleted by the
-      0007i cutover (`ca1bdad`), so nothing kept the classic buttons either way.
+      run). The item's closing clause about `git show ca29a8e:browser/tests/portal.spec.mjs` was
+      already stale when written: no file under `browser/tests/` referenced `Open Chat`,
+      `Review decision`, `open-chat-button` or `decision-chat-button` at `ca29a8e`, and the file
+      was deleted by the 0007i cutover (`ca1bdad`), so nothing kept the classic buttons either way.
 
 - [ ] Redirect the documented `#chat` hash location to `/portal/chat`. The frontend design fixes
       "old `/portal#chat` … redirect once to the new equivalent URL", and
