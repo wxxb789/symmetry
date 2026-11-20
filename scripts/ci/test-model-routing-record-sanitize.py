@@ -34,6 +34,7 @@ HOST_PATHS = (
     "C:/Users/operator/project",
     r"\\server\share\records",
     r"\\?\C:\Users\operator\run",
+    r"\\.\C:\Users\operator\secret",
     "/home/operator/state/run-7f3m2q",
     "/Users/operator/Library/Caches/tmp",
     "/root/omp-native-acceptance",
@@ -68,6 +69,12 @@ QUOTED_HOST_PATHS = (
     "store file:" + _BS + "tmp" + _BS + "x",
     "handle " + _BS * 2 + "?" + _BS + "C:" + _BS + "Users" + _BS + "operator" + _BS + "run",
     '{"handle":"file:' + _BS * 4 + "?" + _BS * 2 + "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + '"}',
+    # A `.` device namespace, JSON-escaped, and a UNC escaped one level deeper than the
+    # single JSON escape above (the raw doubly escaped spelling of `\\server\share`):
+    # the device prefix must take `.` as well as `?`, and the UNC leader/inner
+    # separator any even backslash run, not just two or four.
+    '{"handle":"' + _BS * 4 + "." + _BS * 2 + "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + '"}',
+    '{"p":"' + _BS * 8 + "server" + _BS * 4 + "share" + _BS * 4 + "run" + '"}',
     # A location spelled after a key's colon, and a naive separator doubling.
     "root:/home/operator/state/run",
     "root:C:" + _BS + "Users" + _BS + "operator" + _BS + "run",

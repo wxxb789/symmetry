@@ -8,9 +8,10 @@ import { defineConfig } from "vitest/config";
 // out of the sealed revision (the evaluator's runbook names it); with the variable
 // unset both defaults are unchanged.
 const toolCacheDir = process.env["SYMMETRY_TOOL_CACHE_DIR"];
-// A sealed-checkout harness also switches the cache channels off: the results cache
-// and the transformed-module cache execute code from an earlier run unvalidated, so a
-// gate run never reads either. Worker runs (no variable) keep the caches.
+// A sealed-checkout harness also switches the cache channels off: the
+// transformed-module cache would execute code from an earlier run unvalidated, and the
+// results cache would order and select this run's tests from an earlier run's results.
+// Worker runs (no variable) keep the caches.
 const disableToolCaches = process.env["SYMMETRY_DISABLE_TOOL_CACHES"] === "1";
 
 export default defineConfig({
@@ -24,8 +25,7 @@ export default defineConfig({
     clearMocks: true,
     // `cache` is a test-level option: at the config root it is an unknown Vite key
     // that leaves vitest's results cache on.
-    ...(disableToolCaches ? { cache: false } : {}),
+    ...(disableToolCaches ? { cache: false, fsModuleCache: false } : {}),
     ...(toolCacheDir ? { fsModuleCachePath: path.join(toolCacheDir, "vitest-fs") } : {}),
-    ...(disableToolCaches ? { fsModuleCache: false } : {}),
   },
 });

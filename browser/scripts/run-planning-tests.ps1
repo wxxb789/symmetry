@@ -54,19 +54,13 @@ try {
 # the login the spec performs with it.
 $operatorToken = [guid]::NewGuid().ToString("N")
 
-# Instance build isolation: two Control instances started from the same
-# worktree must not share control/_build, where a compile another instance runs
-# (or the dev code reloader that compile feeds) decides what this run's server
-# loads and reloads - the 2026-11-17 observation was a foreign session's
-# server answering this worktree's browser runs with `# unhandled` error pages.
-# This harness owns the instance it starts and pins its compiled output per
-# port, so instances from one worktree that both serve compile into different
-# build paths: the preflight above refuses a port that already answers, and a
-# concurrent start on one port fails closed at bind/readiness. Deps sources
-# stay shared under control/deps; only compiled output moves. An inherited
-# MIX_BUILD_PATH is overridden explicitly, never trusted: a stale one from the
-# surrounding shell would point this instance at another directory, which is
-# the isolation this harness must own itself.
+# Instance build isolation: this instance compiles into its own per-port path
+# under control/_build/instances (never the shared control/_build/dev), an
+# inherited MIX_BUILD_PATH is overridden and reported rather than trusted, and
+# deps sources stay shared under control/deps - only compiled output moves.
+# The rationale (the 2026-11-17 cross-instance observation included) and the
+# asserted contract are recorded in browser/README.md and
+# browser/scripts/control-instance-isolation.test.mjs.
 $instanceBuildPath = Join-Path $controlRoot ("_build/instances/planning-" + $Port)
 if ($env:MIX_BUILD_PATH) {
   Write-Host "ignoring inherited MIX_BUILD_PATH '$env:MIX_BUILD_PATH': this instance compiles into $instanceBuildPath"

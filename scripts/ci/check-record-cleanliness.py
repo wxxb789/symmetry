@@ -12,14 +12,18 @@ path, or a ``--root`` disposable root still refuses.
 
 Changed-file selection is computed against an explicit comparison base, never from
 the checkout's last commit: CI passes the pull-request base commit, or the pushed
-``before`` commit for a push. An empty or all-zero base - a new branch, a tag push, a
-manual run - names no earlier revision of this branch and falls back to the merge base
-with ``origin/main`` and then to ``HEAD^``; when that range is empty it reports
-``nothing to check`` and passes, because the revision was compared with itself by
-construction, not by omission. A base that was requested and is not present in this
-checkout (a force-push's ``before``) takes the same fallback with a hint, but a
-fallback that would compare the head with itself refuses: the rewritten history now
-sits on ``origin/main``, and a vacuous pass would hide the records such a push adds.
+``before`` commit for a push. The paths are selected from that range but their bytes
+are read from the working tree, so the checkout must be at ``--head`` (CI checks the
+pushed commit out): a ``--repo``/``--head`` pair whose working tree sits elsewhere
+checks one revision's selection against another revision's bytes. An empty or all-zero
+base - a new branch, a tag push, a manual run - names no earlier revision of this
+branch and falls back to the merge base with ``origin/main`` and then to ``HEAD^``;
+when that range is empty it reports ``nothing to check`` and passes, because the
+revision was compared with itself by construction, not by omission. A base that was
+requested and is not present in this checkout (a force-push's ``before``) takes the
+same fallback with a hint, but a fallback that would compare the head with itself
+refuses: the rewritten history now sits on ``origin/main``, and a vacuous pass would
+hide the records such a push adds.
 The range is then narrowed to ``git merge-base base head`` when one exists, so commits
 that belong to the base branch are not attributed to this change. Only a range that
 cannot be compared at all, or a requested base that cannot be, refuses. Unchanged
@@ -31,8 +35,9 @@ Usage::
     python scripts/ci/check-record-cleanliness.py --base <commit> [--head <commit>]
 
 Exit codes: 0 when every selected record passes (also when the range changes no
-record), 1 when a selected record still carries a host absolute path, 2 when the
-revision range or the sanitize tool cannot be used.
+record), 1 when a selected record still carries a host absolute path or its bytes are
+not text the sanitize tool can check, 2 when the revision range or the sanitize tool
+cannot be used.
 """
 
 from __future__ import annotations
@@ -71,14 +76,9 @@ def resolve_commit(repository: pathlib.Path, revision: str) -> str | None:
 def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> str | None:
     """The commit to compare ``head`` against, or None when none can be resolved.
 
-    An empty or all-zero base - a tag push, a manual dispatch, a new branch - names no
-    earlier revision of this branch, so it falls back to the ``origin/main`` merge base
-    and then to ``HEAD^``; an empty range after that fallback is a real "nothing to
-    check" pass. A base that was requested and is not present in this checkout - the
-    usual shape of a force-push, where the pushed ``before`` commit is unreachable -
-    takes the same fallback with a hint, but a fallback that would compare the head
-    with itself raises: the rewritten history now sits on ``origin/main``, and a
-    vacuous pass would hide the records such a push adds.
+    The fallback rules are the module docstring's; the shape only this function owns
+    is its refusal: a fallback that would compare the head with itself raises
+    ``ComparisonBaseRefused`` instead of returning a base.
     """
     requested_unreachable = False
     if requested and requested != ZERO_COMMIT:

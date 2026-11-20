@@ -15,18 +15,22 @@ recorded text as a stable token instead:
   path be correlated.
 
 Relative paths, URLs and ``sha256:`` digests pass through unchanged, and
-rendering is idempotent.
+rendering is idempotent - except that a ``file:`` URL or a doubled-slash
+authority spelling is an absolute location, not a URL to spare: both modes
+render it.
 
 With ``--root-only`` the renderer flags only host absolute paths: Windows drive
 and UNC roots and the POSIX roots a host path actually starts under (``/home/``,
 ``/Users/``, ``/root/``, ``/tmp/``, ``/var/``, ``/mnt/``, ``/private/`` - the
 shapes the evaluation runner's host-path redaction and the committed records
 name), plus every ``--root`` disposable root. A product route such as
-``/portal/runtimes`` is not a host path and stays literal in this mode, and so
-does a bare root token with no following separator or segment (``/tmp`` quoted
-in prose), which names no host-specific location; the default mode keeps
-rendering every absolute path, which is its documented boundary for argv/output
-capture.
+``/portal/runtimes`` is not a host path and stays literal in this mode - in its
+single-slash spelling only: spelled behind an authority (``//portal/...``) or
+as a ``file:`` URL it is an absolute location like any other, and this mode
+renders (and the gate refuses) it. A bare root token with no following
+separator or segment (``/tmp`` quoted in prose) stays literal too: it names no
+host-specific location. The default mode keeps rendering every absolute path,
+which is its documented boundary for argv/output capture.
 
 Usage (record publishers apply this before writing a record)::
 
@@ -63,21 +67,23 @@ DISPOSABLE_ROOT_TOKEN = "<disposable-root>"
 # writer escaped it.
 _HOST_SEP = r"(?:/|\\/)"
 # The prefixes a Windows location may carry: a `file:` URL scheme (with any number
-# of separators after it) and the `\\?\` device namespace (whose backslashes a JSON
-# writer doubles). The lookbehinds accept a preceding `:` so a location spelled
-# after a key (`root:C:\x`, `root:/home/x`) is still a location, while a preceding
-# letter, digit, underscore, separator or rendered token keeps relative paths and
-# URLs out.
+# of separators after it) and a device namespace (`\\?\` or the `\\.\` device form,
+# whose backslashes a JSON writer doubles). The lookbehinds accept a preceding `:`
+# so a location spelled after a key (`root:C:\x`, `root:/home/x`) is still a
+# location, while a preceding letter, digit, underscore, separator or rendered token
+# keeps relative paths and URLs out.
 _FILE_PREFIX = r"(?:file:[\\/]{0,4})?"
-_DEVICE_PREFIX = r"(?:\\{1,4}\?\\{1,4})?"
+_DEVICE_PREFIX = r"(?:\\{1,4}[?.]\\{1,4})?"
 _DRIVE_PATH = re.compile(
     r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"[A-Za-z]:[\\/][^\s\"'`,;:)]*"
 )
-# A UNC path whose separators are backslashes, each written once or doubled by JSON
-# escaping: `\\server\share` and `{"p":"\\\\server\\share"}` are the same location.
+# A UNC path whose separators are backslashes, each written once or escaped by JSON
+# quoting at any nesting level (an even run of two or more): `\\server\share` and
+# `{"p":"\\\\server\\share"}` are the same location, and so is the doubly escaped
+# spelling of either separator.
 _UNC_PATH = re.compile(
-    r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"\\{2}(?:\\{2})?"
-    r"[^\s\\\"'`,;:)]+(?:\\|\\\\)[^\s\"'`,;:)]+"
+    r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"(?:\\{2})+"
+    r"[^\s\\\"'`,;:)]+(?:\\|(?:\\{2})+)[^\s\"'`,;:)]+"
 )
 # The lookbehind keeps URLs (`https://`) and relative paths out; a host-rooted form
 # spelled after a colon (`root:/home/x`) is caught by `_HOST_POSIX_PATH` instead,

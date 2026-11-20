@@ -63,12 +63,14 @@ SYMMETRY_TOOL_CACHE_DIR - resolved by `frontend/vite.config.ts` as Vite's
 and `prepare` creates an empty `<run dir>/node_modules` so `.vite-temp` lands in
 the run store too (an empty directory changes no module resolution: Node walks
 past it to the hoisted dependency tree). Redirection alone is not the boundary:
-the results cache and the transformed-module cache execute code written by an
-earlier invocation, so a gate run also sets SYMMETRY_DISABLE_TOOL_CACHES, which
-`frontend/vitest.config.ts` reads as `cache: false` and `fsModuleCache: false`,
-and each attempt gets a fresh state directory that nothing from a previous
-attempt can be read from. A gate that still writes such state inside the
-checkout fails closed: the sealed Subject changes and the attempt is refused.
+the transformed-module cache executes code written by an earlier invocation, and
+the results cache carries an earlier run's results (test ordering and
+`--last-failed` selection), so a gate run also sets SYMMETRY_DISABLE_TOOL_CACHES,
+which `frontend/vitest.config.ts` reads as the test-level `cache: false` and
+`fsModuleCache: false`, and each attempt gets a fresh state directory that
+nothing from a previous attempt can be read from. A gate that still writes such
+state inside the checkout fails closed: the sealed Subject changes, the attempt
+fails and is preserved as failed evidence, and the receipt then refuses.
 The worker's own runs need the redirect variable exported by the coordinator
 (the runbook names it); they keep caches, and anything they leave in the
 checkout is bound by the seal.
@@ -130,18 +132,12 @@ GO_LIST_FAILURE_PREFIX = "the package test binary did not list the named Go test
 EXUNIT_FAILURE_PREFIX = "the traced ExUnit run did not execute every named test: "
 VITEST_FAILURE_PREFIX = "the traced vitest run did not report every named test as passed: "
 SOURCE_CHANGED_SUFFIX = "source changed while executing this gate"
-# Tool run state a gate's processes would otherwise write inside the checkout is
-# redirected through this variable; `frontend/vite.config.ts` and
-# `frontend/vitest.config.ts` resolve it as Vite's `cacheDir` and vitest's
-# `fsModuleCachePath`. The recorded value is run-relative so a receipt states the
-# redirect without publishing a coordinator store path.
-TOOL_CACHE_ENV = "SYMMETRY_TOOL_CACHE_DIR"
-# A gate's tool state is fresh per attempt (nothing a previous attempt cached can be
-# executed) and the cache channels that would execute previously transformed code are
-# switched off through this variable, which `frontend/vitest.config.ts` reads as the
-# test-level `cache: false` and `fsModuleCache: false` (a production build has no such
-# channel, so `frontend/vite.config.ts` reads only the redirect). Worker runs keep the
+# Tool run state: the module docstring's tool-run-state paragraph records the
+# redirect these two variables carry, which config resolves which, and why
+# redirection alone is not the boundary. A gate's tool state is fresh per attempt
+# (nothing a previous attempt cached can be executed), and worker runs keep the
 # redirect alone: the coordinator seals what the worker leaves behind.
+TOOL_CACHE_ENV = "SYMMETRY_TOOL_CACHE_DIR"
 TOOL_CACHE_DISABLE_ENV = "SYMMETRY_DISABLE_TOOL_CACHES"
 TOOL_CACHE_DISABLED = "1"
 TOOL_STATE_DIRNAME = "tool-state"
@@ -303,7 +299,7 @@ def host_path_patterns() -> tuple[re.Pattern[str], ...]:
         module = importlib.util.module_from_spec(spec)
         try:
             spec.loader.exec_module(module)
-        except OSError as error:
+        except (OSError, SyntaxError) as error:
             raise Refused(f"cannot load model-routing-record-sanitize.py for the shared host-path patterns: {error}")
         _HOST_PATH_PATTERNS = module.HOST_PATH_PATTERNS
     return _HOST_PATH_PATTERNS
@@ -1925,8 +1921,10 @@ def execute_gate(
     # Run state a vitest/vite gate would write into the checkout is redirected into
     # the coordinator-owned run store, outside the sealed Subject; the recorded value
     # stays run-relative so a receipt states the redirect without a store path. See the
-    # module docstring's tool-run-state paragraph.
-    tool_state_dir = run_dir / TOOL_STATE_DIRNAME / gate_dir.parent.name / gate["id"]
+    # module docstring's tool-run-state paragraph. The directory is composed once, by
+    # the same function that records it, so a caller cannot export a different path
+    # than the one the result binds.
+    tool_state_dir = run_dir / tool_state_relative(gate_dir)
     shutil.rmtree(tool_state_dir, ignore_errors=True)
     gate_env[TOOL_CACHE_ENV] = str(tool_state_dir)
     gate_env[TOOL_CACHE_DISABLE_ENV] = TOOL_CACHE_DISABLED
@@ -2906,9 +2904,15 @@ def build_receipt(
         "review": review_block,
         "checks": checks,
         "evidence": {
+            # SANITIZE_SCRIPT executes nothing here, but its `HOST_PATH_PATTERNS`
+            # render recorded measured values (`redact_host_paths`), so a receipt
+            # binds the pattern set that produced them too.
             "tooling_sources": {
                 path.name: sha256_hex(read_bytes(path, MAX_RECORD_BYTES, "evaluation tooling source"))
-                for path in (pathlib.Path(__file__).resolve(), VALIDATOR_SCRIPT, SOURCE_SUBJECT_SCRIPT)
+                for path in (
+                    pathlib.Path(__file__).resolve(), VALIDATOR_SCRIPT, SOURCE_SUBJECT_SCRIPT,
+                    SANITIZE_SCRIPT,
+                )
             },
             "frozen_task_sha256": run["task_sha256"],
             "frozen_routes_sha256": run["routes_sha256"],

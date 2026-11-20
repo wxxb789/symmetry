@@ -949,13 +949,29 @@ class EvaluationTests(unittest.TestCase):
         self.accepted_run()
         tools = self.root / "changed-tools"
         tools.mkdir()
-        for name in (SCRIPT.name, "assert-go-test-json.py", "linux-v2-source-subject.py"):
+        for name in (SCRIPT.name, "assert-go-test-json.py", "linux-v2-source-subject.py",
+                     "model-routing-record-sanitize.py"):
             shutil.copyfile(SCRIPT.with_name(name), tools / name)
         changed = tools / SCRIPT.name
         changed.write_bytes(changed.read_bytes() + b"\n# Tooling revision control.\n")
         result = subprocess.run([sys.executable, str(changed), "accept", "--run-dir", str(self.run_dir())],
                                 text=True, capture_output=True, check=False)
         self.assert_refused(result, "does not match")
+
+    def test_an_unparseable_sanitize_sibling_refuses_instead_of_raising(self) -> None:
+        # host_path_patterns() imports the sanitize tool for the shared host-path
+        # definition. A readable but unparseable sibling must take the same clean
+        # refusal as an unreadable one, never an uncaught SyntaxError: the refusal is
+        # what keeps a damaged definition from reaching a recorded value.
+        runner = load_runner_module()
+        broken = self.root / "broken-tooling" / "model-routing-record-sanitize.py"
+        broken.parent.mkdir()
+        broken.write_text("def broken(:\n", encoding="utf-8")
+        runner.SANITIZE_SCRIPT = broken
+        runner._HOST_PATH_PATTERNS = None
+        with self.assertRaises(runner.Refused) as refusal:
+            runner.host_path_patterns()
+        self.assertIn("cannot load model-routing-record-sanitize.py", str(refusal.exception))
 
     def test_unknown_usage_stays_null_not_zero(self) -> None:
         run = self.root / "run-unknown"
@@ -1127,6 +1143,14 @@ class EvaluationTests(unittest.TestCase):
             (run / "checks" / summary["attempt_id"] / "slow" / "result.json").read_text(encoding="utf-8")
         )
         self.assertTrue(result["timed_out"])
+        # `timed_out` alone only proves the gate was still alive when the timeout hit;
+        # the spawn marker is what makes the survivor comparison below witness something.
+        # An extremely loaded host that killed the gate before it spawned its descendant
+        # must fail loudly here instead of passing vacuously.
+        self.assertTrue(
+            (handshake / "gate-spawned-descendant.txt").is_file(),
+            "the timed-out gate never spawned its descendant, so this case witnessed nothing",
+        )
         release = handshake / "descendant-release.txt"
         release.write_text("release\n", encoding="utf-8")
         witness = self.checkout(run) / "late-descendant.txt"
@@ -2864,6 +2888,12 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(
             self.stored_receipt(run)["environment"]["provisioning"]["tree_digest"], bound["tree_digest"]
         )
+        # A tree pruned after the run refuses at load through the missing-tree arm, the
+        # refusal that guards the digest recomputation every later command depends on.
+        moved = self.root / "runs" / "node_modules-moved-aside"
+        tree.rename(moved)
+        self.assert_refused(self.receipt(self.usage_rows(), run=run), "is missing")
+        moved.rename(tree)
         # The stored log copy is re-verified on every load.
         (run / "provisioning" / "install.log").write_bytes(b"tampered\n")
         self.assert_refused(self.receipt(self.usage_rows(), run=run), "provisioning log changed")

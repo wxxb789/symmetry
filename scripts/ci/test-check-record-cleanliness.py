@@ -80,6 +80,11 @@ class RecordCleanlinessTests(unittest.TestCase):
         self.assertTrue((self.repo / "docs/evidence/old-dirty.md").is_file())
 
     def test_a_changed_sanitize_tool_alone_changes_no_record(self) -> None:
+        # The fixture bytes are inert - the gate resolves the sanitize tool from its
+        # own directory (--repo only names the git repository) - so this case pins the
+        # ci.yml classifier trigger (a change to the tool path runs the job) against a
+        # selection with nothing to check, not a swapped tool. The tool's own
+        # behaviour is covered by its own suite.
         self.write("scripts/ci/model-routing-record-sanitize.py", "print('not the real tool')\n")
         head = self.commit("touch the sanitize tool")
         result = self.run_gate("--base", self.base, "--head", head)
