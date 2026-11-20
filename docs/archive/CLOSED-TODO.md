@@ -53,6 +53,10 @@ The revalidated test-database recovery entry appended to `## Retro review follow
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
 
+The server-side follow-up appended to the closed `resolve_decision` page-version item in the
+`## Retro review follow-ups` section below was moved on 2026-11-21 from branch
+`fix/goal-command-stale-race`.
+
 The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
 moved on 2026-11-21 from branch `fix/served-read-closeout`.
 
@@ -2996,9 +3000,9 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       control unmounts (`planApprovalOption`'s `open?` gate) and the frozen attempt keeps no trigger;
       the resolved-but-unadmitted dead end that can leave behind is recorded as an open entry in
       `docs/TODO.md`. Pinned by `frontend/src/features/goals/goal-attention.test.tsx`:
-      "builds the decision resolution from a submit-time read so a worker-advanced goal is not sent
-      stale" (red on the pre-fix bytes — the resolution carried the page's settled 4/3 pair and the
-      fixture answered the 409 `stale`, so no admission followed; green after: 5/4, then 6),
+      "builds the decision resolution from a submit-time read so a concurrently advanced goal is not
+      sent stale" (red on the pre-fix bytes — the resolution carried the page's settled 4/3 pair and
+      the fixture answered the 409 `stale`, so no admission followed; green after: 5/4, then 6),
       "replays the plan approval's decision resolution byte for byte after a lost acknowledgement"
       (pre-fix the press failed earlier, at its first assertion `expect(first.expected_version).toBe(5)`
       — the resolution carried the page's settled pair; green — the re-press repeated the recorded
@@ -3017,6 +3021,28 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       `detail.tsx`, and 27 passed (27), exit 0, on the branch; fix stage (29 cases) 4 failed |
       25 passed (29), exit 1, on `7a55b46`'s `detail.tsx` (the three pins plus the release pin), and
       29 passed (29), exit 0, on the branch.
+
+      **Server-side follow-up (2026-11-21, branch `fix/goal-command-stale-race`):** the Goal row's
+      served `version` is no longer `lock_version`. The new `goals.operator_version` (migration
+      `20261121000000_add_goal_operator_version.exs`) advances by exactly one per accepted operator
+      command and never for the internal reconciliation, settlement, automatic-admission and
+      goal-control appends or transition writes this entry identifies, while `lock_version` stays
+      the row-level optimistic lock every Goal writer takes. The read model serves
+      `version: map_value(goal, :operator_version)`
+      (`control/lib/symmetry_control/goals/read_model.ex:192`) and `ensure_preconditions!/2`
+      compares it, so the asynchronous advance this entry names no longer answers 409 `stale` for
+      an action the operator would simply repeat. Pinned red-then-green by "an internal reconcile
+      advance does not refuse an operator command, while another operator's advance still does"
+      (`control/test/symmetry_control/goals_test.exs:177`) and by "internal append events never
+      advance the operator version the operator read" (same file), which drives the automatic
+      admission-blocker, reconciliation-deferral, automatic-admission and task-settlement appends
+      and pins that the advance authority is not readable from a caller's options. The changed
+      precondition contract is documented in `docs/design/protocol.md` and `docs/design/data.md`.
+      #125's option A remains the press's behavior (`decisionEnvelope` reads at submit time); this
+      branch's frontend delta is comment and test-name wording only — the `servedEnvelope`,
+      `settleGoalRead` and `onSuccess` comments in `detail.tsx`
+      (`frontend/src/features/goals/detail.tsx:80-95`) and three renamed cases in
+      `goal-attention.test.tsx` — with no behavior, envelope, contract or assertion change.
 
 - [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
       rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always

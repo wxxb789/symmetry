@@ -19,6 +19,7 @@ defmodule SymmetryControl.Goals.Goal do
     field(:event_sequence, :integer, default: 0)
     field(:next_wake_at, :utc_datetime_usec)
     field(:lock_version, :integer, default: 1)
+    field(:operator_version, :integer, default: 1)
 
     has_many(:revisions, GoalRevision)
     has_many(:work_items, WorkItem)
@@ -52,6 +53,7 @@ defmodule SymmetryControl.Goals.Goal do
     |> check_constraint(:state, name: :goals_state_check)
     |> check_constraint(:current_revision, name: :goals_current_revision_positive)
     |> check_constraint(:event_sequence, name: :goals_event_sequence_nonnegative)
+    |> check_constraint(:operator_version, name: :goals_operator_version_positive)
   end
 
   def transition_changeset(goal, attrs) do

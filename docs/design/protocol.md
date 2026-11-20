@@ -255,9 +255,13 @@ Goal/revision/Subject (including when the payload supplies `decision_id: null`).
 The deterministic final-authority branch stays a no-op and gains no decision
 ceremony or rejection from this amendment; `decision_id` stays a required
 nullable UUID.
-Each payload has a separate discriminated schema, fixed in [typed structures](contracts.md). Expected version and revision
-are mandatory after creation. Permission checks occur on every replay. Same
-mutation_id/content returns the prior receipt before evaluating changed versions.
+Each payload has a separate discriminated schema, fixed in [typed structures](contracts.md). Expected version and
+revision are mandatory after creation. The served `version` is the Goal's
+operator-authority version: it advances by exactly one per accepted operator command (creation
+included) and is never advanced by internal reconciliation, settlement or automatic admission, so
+an asynchronous Goal advance cannot refuse an operator command whose own predicates still hold.
+`expected_revision` binds the served `current_revision`. Permission checks occur on every replay.
+Same mutation_id/content returns the prior receipt before evaluating changed versions.
 
 Responses: 201 creation; 200 accepted/replayed command receipt; 401 unauthenticated;
 403 unauthorized; 404 unavailable resource; 409 stale version/idempotency conflict;
