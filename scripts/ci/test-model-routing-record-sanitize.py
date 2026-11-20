@@ -113,6 +113,39 @@ class SanitizeTextTests(unittest.TestCase):
         text = ROOT.replace("\\", "/") + "/controls/baseline-protocol"
         self.assertEqual(MODULE.sanitize_text(text, [ROOT]), "<disposable-root>/controls/baseline-protocol")
 
+    def test_disposable_root_matches_escaped_spellings_and_keeps_structure(self):
+        # A root inside a quoted record is spelled with doubled separators (the JSON
+        # escape of each backslash run); the token binds the root alone, so the
+        # separators and segments behind it stay in place.
+        root = r"C:\Work\run"
+        escaped = _BS * 2
+        text = '{"store":"C:' + escaped + "Work" + escaped + "run" + escaped + "x" + escaped + 'y"}'
+        rendered = MODULE.sanitize_text(text, [root])
+        self.assertEqual(
+            rendered, '{"store":"<disposable-root>' + escaped + "x" + escaped + 'y"}',
+        )
+        self.assertEqual(MODULE.sanitize_text(rendered, [root]), rendered)
+        # A separator may also be spelled as the `\/` escape, and the spellings mix:
+        # the root still matches, and the run after it stays outside the token.
+        mixed = "C:" + _BS + "/Work" + escaped + "run/x"
+        self.assertEqual(MODULE.sanitize_text(mixed, [root]), "<disposable-root>/x")
+
+    def test_disposable_root_does_not_absorb_a_sibling_path(self):
+        # A sibling directory whose name merely starts with the root's last segment
+        # is a different location: tokenising `C:/Work/run-user` as
+        # `<disposable-root>-user` would republish path bytes under a token.
+        sibling = "C:/Work/run-user/private"
+        self.assertEqual(
+            MODULE.sanitize_text("worktree " + sibling, [r"C:\Work\run"]),
+            "worktree " + digest_of(sibling),
+        )
+        # The same spelling in `--root-only` scope: a drive path hashes whole, and
+        # the root's own replacement does not claim its first segments.
+        self.assertEqual(
+            MODULE.sanitize_text("worktree " + sibling, [r"C:\Work\run"], root_only=True),
+            "worktree " + digest_of(sibling),
+        )
+
     def test_other_windows_path_renders_to_hashed_token(self):
         path = r"C:\Users\operator\AppData\Local\Temp\symmetry-0008b-probe"
         self.assertEqual(MODULE.sanitize_text("worktree " + path, []), "worktree " + digest_of(path))
@@ -503,6 +536,22 @@ class SanitizeCliTests(unittest.TestCase):
         result = self.run_cli("docs/evaluations/model-routing/README.md", "--check")
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
+
+    def test_cli_check_mode_names_the_scope_it_refused(self):
+        # The default scope renders every absolute location, so a product route
+        # refuses too: the message must name the scope that refused instead of
+        # claiming a host path in a run that only saw a route.
+        route = "see /portal/runtimes, twice\n"
+        result = self.run_cli(route, "--check")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("an absolute location would be rendered", result.stderr)
+        self.assertNotIn("a host absolute path", result.stderr)
+        # A host path still refuses in the default scope, and the route still passes
+        # the scope that only renders host paths.
+        self.assertEqual(self.run_cli(r"see C:\Users\operator\x" + "\n", "--check").returncode, 1)
+        passed = self.run_cli(route, "--check", "--root-only")
+        self.assertEqual(passed.returncode, 0)
+        self.assertEqual(passed.stdout, "")
 
     def test_cli_preserves_recorded_crlf_line_endings(self):
         with tempfile.TemporaryDirectory() as tmp:

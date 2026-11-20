@@ -108,6 +108,11 @@ def safe_label(value):
     return isinstance(value, str) and SAFE_LABEL_RE.match(value) is not None
 
 
+def path_like(value):
+    """Whether one safe-token value spells a filesystem path rather than a name."""
+    return "\\" in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value) is not None
+
+
 def export_session_identifier(value, message, code, note):
     """Validate one session-derived identifier and hash path-like values.
 
@@ -120,7 +125,7 @@ def export_session_identifier(value, message, code, note):
     slash counts as path-like.
     """
     refuse(safe_token(value), message)
-    if "\\" in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value) is not None:
+    if path_like(value):
         note(code)
         digest = "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
         return digest, True
@@ -134,6 +139,22 @@ def observed_number(value):
         refuse(math.isfinite(value), "session record has a non-finite usage value")
     refuse(value >= 0, "session record has a negative usage value")
     return value
+
+
+def summed_number(left, right):
+    """Add two observed numbers, refusing a total that leaves the finite range.
+
+    Every addend passed observed_number on its own, but two finite floats can sum to
+    infinity and an int beyond float range meeting a float total raises OverflowError;
+    the extractor never publishes a non-JSON constant, so both refuse.
+    """
+    try:
+        total = left + right
+    except OverflowError:
+        raise UsageRefusal("session usage totals exceed the finite number range")
+    if isinstance(total, float) and not math.isfinite(total):
+        raise UsageRefusal("session usage totals exceed the finite number range")
+    return total
 
 
 def content_digest(value):
@@ -214,8 +235,10 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
     def identity_item(record, message):
         """One `{record, model, provider, api, resolved_model}` identity item.
 
-        `record` first, then each observed identity field in source order, hashed
-        through export_session_identifier exactly as the raw branches did.
+        `record` first, then the identity fields present on the record in the
+        fixed schema order `model`, `provider`, `api`, `resolvedModel`; each value
+        passes through export_session_identifier, so an unsafe value refuses with
+        the caller's message and a path-like value is hashed and noted.
         """
         item = {"record": records - 1}
         for source, target in (("model", "model"), ("provider", "provider"),
@@ -275,10 +298,16 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
             refuse(isinstance(record, dict), "session record is not a JSON object")
             record_type = record.get("type")
             refuse(safe_token(record_type), "session record has a missing or unsafe type")
-            if SECRET_KEY_PATTERN.search(record_type):
+            secret_like_type = SECRET_KEY_PATTERN.search(record_type) is not None
+            path_like_type = path_like(record_type)
+            if secret_like_type or path_like_type:
                 # A session-controlled type name the runner's secret-key scan would
-                # refuse must never be exported raw; count a digest instead.
-                note("secret_like_entry_type_redacted")
+                # refuse, or one that spells a private filesystem location, must never
+                # be exported raw; count a digest instead and record each reason.
+                if secret_like_type:
+                    note("secret_like_entry_type_redacted")
+                if path_like_type:
+                    note("path_like_entry_type_redacted")
                 entry_type = "sha256:" + hashlib.sha256(
                     record_type.encode("utf-8", "surrogatepass")).hexdigest()
             else:
@@ -392,7 +421,8 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                         if "cacheRead" in observed and "cacheWrite" in observed:
                             # cached = cacheRead + cacheWrite for the same records; it is
                             # counted separately from input and is not a subset of input.
-                            observed["cached"] = observed["cacheRead"] + observed["cacheWrite"]
+                            observed["cached"] = summed_number(observed["cacheRead"],
+                                                               observed["cacheWrite"])
                         cost = usage.get("cost")
                         refuse(cost is None or isinstance(cost, dict),
                                "session assistant cost is not a JSON object")
@@ -413,7 +443,7 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                         if field not in observed:
                             complete[field] = False
                     for field, value in observed.items():
-                        sums[field] = sums.get(field, 0) + value
+                        sums[field] = summed_number(sums.get(field, 0), value)
                         counts[field] = counts.get(field, 0) + 1
                 elif role == "user":
                     user_messages += 1
@@ -617,7 +647,14 @@ def main(argv=None):
     except (OSError, UnicodeError):
         print("refused: could not read the session file", file=sys.stderr)
         return 1
-    print(json.dumps(row, separators=(",", ":")))
+    try:
+        line = json.dumps(row, separators=(",", ":"), allow_nan=False)
+    except ValueError:
+        # The single emit point is the last line of defense: an Infinity or NaN
+        # anywhere in the row must refuse here rather than leave the tool.
+        print("refused: usage row carries a non-finite number", file=sys.stderr)
+        return 1
+    print(line)
     return 0
 
 

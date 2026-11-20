@@ -17,7 +17,7 @@ declared scope over a working tree and prints the digest:
   keeps package files bound inside a checkout whose dependency tree it must police: the
   subject binds delivered source, the manifest binds a measured checkout;
 * entry - `<mode>\\0sha256:<hex of the file bytes>\\0<path-utf8>\\0`, with mode `100755`
-  when the owner-execute bit is set and `100644` otherwise;
+  when an execute bit (owner, group or other) is set and `100644` otherwise;
 * digest - sha256 over the sorted entries, ordered by the UTF-8 bytes of the path.
   Directories are never entries and a symlinked file is skipped, so the binding is over
   bytes the tree itself carries.
@@ -28,9 +28,10 @@ and is descended - so a tree carrying an in-scope junction binds bytes that live
 it. The delivered tree carries no in-scope reparse point, and the tool's scope is
 otherwise the coordinator tool's own, which is what keeps the recorded values comparable.
 
-The mode is the measured tree's own owner-execute bit, so a checkout that carries no
-executable bit (a Windows worktree) hashes those entries `100644` while a POSIX checkout
-of the same commit hashes the index's `100755` files `100755`. The printed
+The mode follows the measured tree's own execute bits: any of the owner, group or other bits
+sets `100755`, so a checkout that carries no executable bit (a Windows worktree) hashes those
+entries `100644` while a POSIX checkout of the same commit hashes the index's `100755` files
+`100755`. The printed
 `executable_paths` line names every path whose bit is set in the tree being measured, so
 a reader on another platform sees exactly which entries - and only those - explain a
 digest that differs from a recorded one.
@@ -99,7 +100,7 @@ def source_subject(root: pathlib.Path) -> tuple[int, str]:
 
 
 def executable_paths(root: pathlib.Path) -> list[str]:
-    """Return the declared source paths whose owner-execute bit is set in this tree."""
+    """Return the declared source paths whose execute bit (any of owner, group or other) is set."""
     return [relative for relative in source_paths(root) if (root / relative).stat().st_mode & 0o111]
 
 

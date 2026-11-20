@@ -483,6 +483,54 @@ class OmpUsageExtractionTest(unittest.TestCase):
                          "refused: session assistant record has an unsafe model identity\n")
         self.assertNotIn(CANARY, completed.stderr)
 
+    def test_nonfinite_or_overflowing_usage_totals_are_refused(self):
+        """A total that leaves the finite range refuses instead of emitting Infinity."""
+        cases = {
+            "cached sum overflows to infinity": [
+                self.session_record(), self.init_record(),
+                self.assistant_record(usage=self.usage(cacheRead=1e308, cacheWrite=1e308)),
+            ],
+            "cost sum overflows to infinity": [
+                self.session_record(), self.init_record(),
+                self.assistant_record(timestamp="2026-11-15T10:00:02Z",
+                                      usage=self.usage(cost={"total": 1e308})),
+                self.assistant_record(timestamp="2026-11-15T10:00:03Z",
+                                      usage=self.usage(cost={"total": 1e308})),
+            ],
+            "int beyond float range meets a float total": [
+                self.session_record(), self.init_record(),
+                self.assistant_record(timestamp="2026-11-15T10:00:02Z",
+                                      usage=self.usage(cost={"total": 10 ** 400})),
+                self.assistant_record(timestamp="2026-11-15T10:00:03Z",
+                                      usage=self.usage(cost={"total": 0.5})),
+            ],
+        }
+        for label, records in cases.items():
+            with self.subTest(case=label):
+                completed = self.run_cli(records)
+                self.assertEqual(completed.returncode, 1, completed.stdout)
+                self.assertEqual(completed.stdout, "")
+                self.assertTrue(completed.stderr.startswith("refused: "), completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+
+    def test_identity_refusals_name_their_record_kind(self):
+        """Each identity caller keeps its own refusal message, not a shared one."""
+        cases = [
+            ("model_change", "session model change has an unsafe value"),
+            ("model_fallback", "session fallback record has an unsafe identity"),
+        ]
+        for record_type, message in cases:
+            with self.subTest(record_type=record_type):
+                completed = self.run_cli([
+                    self.session_record(),
+                    self.init_record(),
+                    {"type": record_type, "timestamp": "2026-11-15T10:00:02Z",
+                     "model": "two words"},
+                ])
+                self.assertEqual(completed.returncode, 1, completed.stdout)
+                self.assertEqual(completed.stdout, "")
+                self.assertEqual(completed.stderr, f"refused: {message}\n")
+
     def test_cli_usage_errors_are_rejected(self):
         cases = {
             "unknown stage": ["--session", "unused.jsonl", "--stage", "polishing",
@@ -717,6 +765,42 @@ class OmpUsageExtractionTest(unittest.TestCase):
                          {surrogatepass_digest(CANARY): 1, surrogatepass_digest("token_usage"): 1,
                           "message": 2, "session": 1, "session_init": 1})
         self.assertIn("secret_like_entry_type_redacted", row["limitations"])
+
+        # The runner refuses secret-like keys anywhere in a usage row; the exported
+        # row must still pass its own validator unchanged.
+        usage = {"repair_count": 0, "wall_time": 12.0, "phases": [
+            self.non_model_phase("exploration"),
+            row,
+            self.non_model_phase("verification"),
+            self.non_model_phase("review"),
+            self.non_model_phase("repair"),
+            self.non_model_phase("failed_attempt"),
+        ]}
+        module = load_runner_module()
+        rows, repair_count, task_wall_time = module.validate_usage(
+            json.dumps(usage).encode("utf-8"))
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(repair_count, 0)
+        self.assertEqual(task_wall_time, 12.0)
+
+    def test_path_like_entry_type_names_are_redacted_and_still_valid(self):
+        path_type = "C:/Users/example/private"
+        records = [
+            self.session_record(),
+            self.init_record(),
+            self.user_record("request with a path-like record type"),
+            self.assistant_record(),
+            {"type": path_type, "timestamp": "2026-11-15T10:00:06Z"},
+        ]
+        completed = self.run_cli(records)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn(path_type, completed.stdout)
+        self.assertNotIn(path_type, completed.stderr)
+        row = json.loads(completed.stdout)
+
+        self.assertEqual(row["metadata"]["entry_types"][surrogatepass_digest(path_type)], 1)
+        self.assertIn("path_like_entry_type_redacted", row["limitations"])
+        self.assertNotIn("secret_like_entry_type_redacted", row["limitations"])
 
         # The runner refuses secret-like keys anywhere in a usage row; the exported
         # row must still pass its own validator unchanged.

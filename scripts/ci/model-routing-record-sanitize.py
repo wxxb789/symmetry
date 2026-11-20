@@ -88,6 +88,12 @@ _HOST_SEP = r"(?:/|\\/)"
 # nesting level, so a backslash separator is any positive run and a forward slash
 # may be escaped as `\/`.
 _SEPARATOR = r"(?:\\|(?:\\{2})+|/|\\/)"
+# One separator of a disposable root as recorded text spells it: a run of
+# backslashes (raw, or the JSON-escaped spelling at any nesting depth), a forward
+# slash, or its `\/` escape - and concatenations of these, because a root's
+# separators may be spelled differently from each other. `_root_pattern` joins the
+# root's segments with it, so one compiled matcher accepts every recorded spelling.
+_ROOT_SEPARATOR = r"(?:\\+|/|\\/)+"
 # The scheme a `file:` URL carries is case-insensitive - `FILE:`, `File:` and
 # `file:` are the same scheme - so a record spelling it any other way must not
 # pass the checker unchanged.
@@ -259,32 +265,47 @@ def _render_match(match: re.Match[str]) -> str:
     return hashed_path_token(matched)
 
 
-def _root_variants(root: str) -> list[str]:
-    """Return the separator variants a root may appear with in recorded text."""
+def _root_pattern(root: str) -> re.Pattern[str] | None:
+    """Compile the bounded matcher for one disposable root.
 
-    variants = {root}
-    if "\\" in root:
-        variants.add(root.replace("\\", "/"))
-    if "/" in root:
-        variants.add(root.replace("/", "\\"))
-    return sorted(variants, key=len, reverse=True)
+    The match consumes the root only when it is spelled with a recorded separator
+    mixture (`_ROOT_SEPARATOR`), and only at a path boundary: the leading
+    lookbehind mirrors the host-path patterns, so a root inside a longer token
+    stays unmatched, and the trailing lookahead requires a separator or a
+    terminator, so a longer sibling name such as ``...-user`` is never absorbed
+    into the token. A root that leads with a separator keeps that run in the
+    match. ``None`` means the root names no segment (a bare ``/``).
+    """
+
+    stripped = root.rstrip("\\/")
+    segments = [segment for segment in re.split(r"[\\/]+", stripped) if segment]
+    if not segments:
+        return None
+    body = _ROOT_SEPARATOR.join(re.escape(segment) for segment in segments)
+    if re.match(r"[\\/]", stripped):
+        body = _ROOT_SEPARATOR + body
+    return re.compile(r"(?<![A-Za-z0-9_/\\>])" + body + r"(?=$|[\\/]|[\s\"'`,;:)\]}>])")
 
 
 def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     """Render host-specific absolute paths in ``text`` as tokens.
 
     ``roots`` are disposable coordinator roots (absolute paths) to render as
-    ``<disposable-root>``. With ``root_only`` false every other absolute path is
-    rendered as a hashed token; with ``root_only`` true only host absolute paths
-    (drive, UNC and the POSIX home/root/temp/mount roots) are rendered, so a
-    product route such as ``/portal/runtimes`` stays literal. The function is
-    idempotent: rendering rendered text changes nothing.
+    ``<disposable-root>``. A root matches any recorded separator mixture,
+    including the JSON-escaped runs of a quoted record, but only at a path
+    boundary: a longer sibling name such as ``...-user`` is never absorbed into
+    the token. With ``root_only`` false every other absolute path is rendered as
+    a hashed token; with ``root_only`` true only host absolute paths (drive, UNC
+    and the POSIX home/root/temp/mount roots) are rendered, so a product route
+    such as ``/portal/runtimes`` stays literal. The function is idempotent:
+    rendering rendered text changes nothing.
     """
 
     rendered = text
     for root in roots:
-        for variant in _root_variants(root):
-            rendered = rendered.replace(variant, DISPOSABLE_ROOT_TOKEN)
+        pattern = _root_pattern(root)
+        if pattern is not None:
+            rendered = pattern.sub(DISPOSABLE_ROOT_TOKEN, rendered)
     patterns = HOST_PATH_PATTERNS if root_only else DEFAULT_PATH_PATTERNS
     for pattern in patterns:
         rendered = pattern.sub(_render_match, rendered)
@@ -352,7 +373,12 @@ def main(argv: list[str]) -> int:
     rendered = sanitize_text(text, arguments.root, root_only=arguments.root_only)
     if arguments.check:
         if rendered != text:
-            print("model-routing-record-sanitize refused: a host absolute path is present", file=sys.stderr)
+            # The refusal names the scope it refused: the default scope renders every
+            # absolute location (a product route refuses too), while `--root-only`
+            # refuses nothing but a host absolute path.
+            refusal = ("a host absolute path is present" if arguments.root_only
+                       else "an absolute location would be rendered")
+            print(f"model-routing-record-sanitize refused: {refusal}", file=sys.stderr)
             return 1
         return 0
     sys.stdout.buffer.write(rendered.encode("utf-8"))

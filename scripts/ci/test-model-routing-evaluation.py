@@ -606,18 +606,20 @@ class EvaluationTests(unittest.TestCase):
         missing.pop("cost")
         self.assert_refused(self.accept(receipt_path=self.write_json(self.root / "missing.json", missing)))
 
-    def test_accept_requires_matching_number_spellings(self) -> None:
+    def test_accept_requires_the_canonical_serialization(self) -> None:
         runner = load_runner_module()
-        # JSON number classes are part of the compared document: `accept` prints the
-        # submitted bytes' digest, so an int and a float spelling of one value are
-        # different documents even though Python's `==` treats 60 and 60.0 as equal,
-        # and a boolean is never a number.
+        # `accept` re-derives the receipt and requires the submitted bytes to be its
+        # canonical serialization; `first_difference` only explains where a structural
+        # mismatch is. An int and a float spelling of one value, `-0.0` and `0.0`, and
+        # a boolean against a number are therefore all different documents even though
+        # Python's `==` disagrees.
         self.assertIsNone(runner.first_difference({"wall_time": 60}, {"wall_time": 60}))
         self.assertIsNone(runner.first_difference({"wall_time": 60.0}, {"wall_time": 60.0}))
         self.assertNotEqual(runner.first_difference({"wall_time": 60}, {"wall_time": 60.0}), None)
         self.assertNotEqual(runner.first_difference({"wall_time": 60.0}, {"wall_time": 60}), None)
         self.assertNotEqual(runner.first_difference({"succeeded": True}, {"succeeded": 1}), None)
         self.assertNotEqual(runner.first_difference({"succeeded": 1}, {"succeeded": True}), None)
+        self.assertIsNone(runner.first_difference(-0.0, 0.0))
 
         run = self.root / "run-number-spellings"
         self.accepted_run(run=run)
@@ -630,7 +632,31 @@ class EvaluationTests(unittest.TestCase):
             .encode("utf-8")
         )
         self.assert_refused(self.accept(run=run, receipt_path=respelled), "does not match the derived evidence")
+        # `1.2e1` parses to the same float as `12.0`, so the structural comparison
+        # finds no difference and only the byte comparison can refuse the respelling.
+        float_respelled = self.root / "inputs" / "float-respelled-receipt.json"
+        float_respelled.write_bytes(
+            (json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+            .replace('"wall_time": 12.0', '"wall_time": 1.2e1', 1)
+            .encode("utf-8")
+        )
+        self.assert_refused(self.accept(run=run, receipt_path=float_respelled), "canonical serialization")
         self.assert_ok(self.accept(run=run))
+
+        # A receipt whose float cost is `0.0` is respelled `-0.0`: the parsed values
+        # compare equal, so only the bytes distinguish the submitted document.
+        zero_run = self.root / "run-negative-zero"
+        self.accepted_run(run=zero_run, usage=self.usage_rows(estimated_cost=0.0))
+        zero_receipt = self.stored_receipt(zero_run)
+        self.assertIsInstance(zero_receipt["cost"]["estimated_cost"], float)
+        negative_zero = self.root / "inputs" / "negative-zero-receipt.json"
+        negative_zero.write_bytes(
+            (json.dumps(zero_receipt, indent=2, sort_keys=True) + "\n")
+            .replace('"estimated_cost": 0.0', '"estimated_cost": -0.0', 1)
+            .encode("utf-8")
+        )
+        self.assert_refused(self.accept(run=zero_run, receipt_path=negative_zero), "canonical serialization")
+        self.assert_ok(self.accept(run=zero_run))
 
     def test_source_edit_after_checks_or_review_is_refused_and_preserved(self) -> None:
         run = self.root / "run-late"
@@ -1943,6 +1969,36 @@ class EvaluationTests(unittest.TestCase):
         self.assert_refused(refused, "finite number")
         self.assertNotIn("Traceback", refused.stderr + refused.stdout)
 
+        # An int token total beyond float range passes require_integer on its own; it
+        # must refuse as a value when the derived subtotal meets a float partial from
+        # another phase, not escape addition as an uncaught OverflowError traceback.
+        mixed = self.usage_rows()
+        mixed["phases"][0]["tokens"]["input"] = 10 ** 400
+        # The phase's stale complete subtotal (10) would refuse as a disagreement
+        # before the derivation adds anything, so drop it and let the huge int meet
+        # the float partial in the known subtotal.
+        mixed["phases"][0]["known_subtotals"].pop("input")
+        mixed["phases"][1]["tokens"]["input"] = None
+        mixed["phases"][1]["known_subtotals"]["input"] = {"sum": 0.5, "messages": 1}
+        mixed_usage = self.root / "inputs" / "mixed-overflow-usage.json"
+        mixed_usage.write_bytes((json.dumps(mixed, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(mixed_usage))
+        self.assert_refused(refused, "finite number range")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # Two int partial cost subtotals within float range add to an int beyond it;
+        # the third addend is a float, so the int total converts to float in the sum
+        # and must refuse the same way.
+        partials = self.usage_rows()
+        for index, value in ((0, 10 ** 308), (1, 10 ** 308), (3, 0.5)):
+            partials["phases"][index]["estimated_cost"] = None
+            partials["phases"][index]["known_subtotals"]["cost"] = {"total": {"sum": value, "messages": 1}}
+        partials_usage = self.root / "inputs" / "partial-overflow-usage.json"
+        partials_usage.write_bytes((json.dumps(partials, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(partials_usage))
+        self.assert_refused(refused, "finite number range")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
         refused = self.check("--timeout", "-1", run=run)
         self.assert_refused(refused, "--timeout")
 
@@ -1958,6 +2014,17 @@ class EvaluationTests(unittest.TestCase):
         usage["phases"][0]["metadata"] = {"note": "\ud800"}
         refused = self.receipt(usage, run=run)
         self.assert_refused(refused, "not valid UTF-8")
+        self.assertNotIn("Traceback", refused.stderr + refused.stdout)
+
+        # A float total that reaches infinity derives fine but cannot be serialized:
+        # canonical_json refuses the receipt instead of publishing the non-JSON
+        # `Infinity` literal.
+        nonfinite = self.usage_rows()
+        for index in (0, 1, 3):
+            nonfinite["phases"][index]["estimated_cost"] = 1e308
+            nonfinite["phases"][index]["known_subtotals"]["cost"] = {"total": {"sum": 1e308, "messages": 1}}
+        refused = self.receipt(nonfinite, run=run)
+        self.assert_refused(refused, "non-finite number")
         self.assertNotIn("Traceback", refused.stderr + refused.stdout)
 
         # The candidate rows validated and the receipt derived, but the receipt could
@@ -2043,18 +2110,18 @@ class EvaluationTests(unittest.TestCase):
                 f"missing {second}",
             ),
             ("exited-non-zero", observations + summary, 1, "the traced run exited with 1"),
-            ("reported-failures", (observations[0], observations[1], "", "Result: 1/2 passed", "Failed: 1 test"), 0, "the traced run reported 1 failures"),
+            ("reported-failures", (observations[0], observations[1], "", "Result: 1/4 passed", "Failed: 3 tests"), 0, "the traced run reported 3 failures"),
             (
                 "reported-failures-tail",
-                (observations[0], observations[1], "", "Result: 2 passed, 1 failed"),
+                (observations[0], observations[1], "", "Result: 2 passed, 3 failed"),
                 0,
-                "the traced run reported 1 failures",
+                "the traced run reported 3 failures",
             ),
             (
                 "reported-failures-line",
-                (observations[0], observations[1], "", "Result: 2 passed", "Failed: 1 test"),
+                (observations[0], observations[1], "", "Result: 2 passed", "Failed: 3 tests"),
                 0,
-                "the traced run reported 1 failures",
+                "the traced run reported 3 failures",
             ),
             ("no-summary", observations, 0, "the traced run reported no ExUnit summary"),
         )
@@ -2109,6 +2176,15 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(check["exunit_exit_code"], 0)
         self.assertIsNone(check["exunit_error"])
 
+    def test_exunit_frozen_names_must_stay_unique_after_rendering(self) -> None:
+        # Two frozen names that render identically as trace descriptions would both be
+        # satisfied by one executed test, so the pair must be refused at prepare time.
+        mix = self.install_fake_mix()
+        run = self.root / "run-exunit-aliased"
+        task = self.task(gates=[self.exunit_gate(mix, tests=("receipts\nrecover", "receipts recover"))])
+        self.assert_refused(self.prepare(task=task, run=run), "unique after newlines render as spaces")
+        self.assertFalse(run.exists(), "a refused prepare must not leave a run directory")
+
     def test_prepare_validates_exunit_gate_and_environment_fields(self) -> None:
         runner = load_runner_module()
         plain = {"id": "gate", "cwd": ".", "argv": ["mix", "test"]}
@@ -2140,6 +2216,11 @@ class EvaluationTests(unittest.TestCase):
                 "nul-test-name",
                 {**plain, "exunit_files": ["test/x_test.exs"], "exunit_tests": ["test one\0two"]},
                 "must not contain NUL",
+            ),
+            (
+                "aliasing-tests",
+                {**plain, "exunit_files": ["test/x_test.exs"], "exunit_tests": ["receipts\nrecover", "receipts recover"]},
+                "unique after newlines render as spaces",
             ),
             (
                 "empty-files",
