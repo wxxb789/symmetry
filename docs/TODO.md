@@ -330,8 +330,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   `shellcheck --shell=bash` over each changed workflow `run:` block in full (read from the
   workflow file; the diff only selects which blocks), with every `${{ … }}` GitHub expression
   replaced by a placeholder word first, which is what actionlint does, because a raw expression is
-  ShellCheck SC2296 — the form the 2026-11-15 trim record used
-  (`docs/evidence/ci-process-trim-2026-11-15.md:231`).
+  ShellCheck SC2296. The 2026-11-15 trim record used the same direct `shellcheck --shell=bash`
+  over whole scripts (`docs/evidence/ci-process-trim-2026-11-15.md:231`); the placeholder step is
+  added here for blocks that carry expressions.
   A shellcheck-enabled `actionlint` run is used only on a workflow where it has been observed to
   finish; for `.github/workflows/ci.yml` on this host it is not available. Observed
   2026-11-20 at `978abba` with the `mise`-installed upstream actionlint 1.7.12 invoked as
