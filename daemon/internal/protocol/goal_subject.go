@@ -197,11 +197,12 @@ func marshalJSONString(value string) ([]byte, error) {
 // raw UTF-8 (encoding/json escapes them even with HTML escaping disabled), and
 // a C0 control's 00-prefixed escape uses uppercase hex digits, as the control
 // plane's Jason encoder spells them. Only 00-prefixed tokens are rewritten, the
-// scope the normalization rule names; every other four-digit token keeps its
-// bytes (encoding/json emits none today — invalid UTF-8 becomes the raw U+FFFD
-// bytes, not an escape — so a Go release that escapes the replacement rune
-// cannot leak a spelling no other implementation produces). Scan complete
-// escape tokens so literal escape-looking value text is left unchanged.
+// escape form the normalization rule names; any other four-digit token keeps
+// its bytes. No other token reaches this scanner from CanonicalizeJSON: it
+// rejects invalid UTF-8 before encoding, and with HTML escaping off
+// encoding/json escapes nothing else but U+2028/U+2029 (handled above). Scan
+// complete escape tokens so literal escape-looking value text is left
+// unchanged.
 func normalizeJSONStringEscapes(encoded []byte) []byte {
 	output := make([]byte, 0, len(encoded))
 	for index := 0; index < len(encoded); {

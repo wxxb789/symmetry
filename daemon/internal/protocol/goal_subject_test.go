@@ -220,13 +220,10 @@ func TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest(t *testing
 	}
 }
 
-// The rewrite is scoped to the C0 tokens the normalization rule names: only a
-// 00-prefixed escape token is uppercased, so any other four-digit token keeps
-// its bytes. encoding/json emits no non-C0 escape token today (invalid UTF-8
-// becomes the raw U+FFFD bytes, and after the line-separator rule the C0
-// controls are the only escapes left), so this pins the scanner's rule
-// directly: a wide rewrite would produce an uppercase spelling neither Jason
-// nor the contracts encoder emits.
+// The rewrite is scoped to 00-prefixed escape tokens; any other four-digit
+// token keeps its bytes. CanonicalizeJSON never hands the scanner such a token
+// (it rejects invalid UTF-8 first), so this pins the scanner's token scope
+// directly.
 func TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged(t *testing.T) {
 	input := []byte(`"\ufffd"`)
 	if got := normalizeJSONStringEscapes(input); !bytes.Equal(got, input) {
