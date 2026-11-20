@@ -330,13 +330,53 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       digest and controls digest, plus `test-ablation-final-review-2026-09-29.md`'s app-startup
       and Go-probe rows (the cross-record quote this entry named). Evidence: the whole-corpus
       `--check --root-only` sweep reports 0 dirty of 111 files (superseded 2026-11-20: the
-      widened UNC leader pattern flags the two `0008b-go-bounded-regression-strong` specimens
-      named in the records README's accepted false positives; the records were deliberately
-      not re-rendered),
+      widened UNC leader pattern flagged the two `0008b-go-bounded-regression-strong` specimens;
+      both were rendered and every bound digest rebound by the records rebind of the same day,
+      see the entry below),
       `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` exits 0,
       re-running the renderer over all 30 touched files is byte-stable, and
       `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
       (16 tests) pass.
+
+- [ ] Render the two records the widened sanitize flags: `0008b-go-bounded-regression-strong.json`
+      and its `.review.json` still carried the doubly escaped backslash-run UNC specimen a reviewer
+      quoted while describing forbidden-backslash test cases, so the record-cleanliness gate refused
+      them; narrowing the pattern was rejected because a narrower UNC pattern misses a real path and
+      the README records the shape as an accepted false positive. Evidence plan: render both files
+      in the `--root-only` scope (the scope #101 rendered these two files in and the scope the CI
+      gate runs), keep the record JSON valid across the render, and rebind every digest that binds
+      a rendered file.
+
+      **Closed (2026-11-20, branch `chore/model-routing-records-rebind`):** both records were
+      rendered with `scripts/ci/model-routing-record-sanitize.py --root-only` - one substitution
+      per file, the specimen to `path-sha256:0b5e775deeadc067545d33b048502608ec874e7002aaab39e6adf32f4d370ae6`,
+      the odd trailing backslash that escapes the quote closing the quoted specimen kept outside the token -
+      and every digest binding a rendered file was recomputed and rebound:
+
+      | File | `sha256` before | `sha256` after | Bindings rebound |
+      | --- | --- | --- | --- |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.review.json` | `cf1c41b9b6fa8bd3512d6a9c6a4fdc69e6712b0c918728c8ab88a1a3b435bef7` | `d442ed8fc259e354d002e922a6817c334b618d47b0a57e671a7b8086e270e23c` | the rendered receipt's `evidence.frozen_review_sha256` and `review.evidence_sha256`; `0008b-policy.json`'s strong-arm `frozen_input_digests.review_sha256` |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` | `8ad6c2d277dfac86af23fe6e858d7c8eedb9ab9e5961c10ddb8c6934e824332c` | `cf31f14da8a532110b58770e26adbd614d15117b98d4a4d9798440743e3cc94a` | `0008b-policy.json`'s strong-arm `receipt_sha256`; `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s strong receipt row |
+      | `docs/evaluations/model-routing/0008b-policy.json` | `82852890944b405b99da0c95b2404547be6fea994301c631b65b5145bf3f767d` | `02632c1e56d83f734cb5e0309c11a3819398a9f58fa4902439514264e7b89a31` | `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s candidate-policy digest |
+
+      The receipt's after-digest is over its final bytes (the render plus its own internal review
+      rebind). A whole-tree scan finds no other full-length or truncated referrer of the three
+      pre-rebind digests. Evidence: `resolve-digests.py` (retained in the GDD task's `evidence/`)
+      resolves the eleven policy/receipt bindings of the 0008b class and re-runs the corpus sweep -
+      111 records, 0 dirty, 131 checks, 0 failures; the renderer is byte-stable on both rendered
+      files and each parses to the same document otherwise (the token binds the exact replaced
+      bytes); `check-record-cleanliness.py` passes with a `git stash create` commit of the frozen
+      tree as `--head` - 7 changed records against the current `origin/main` and 5 against the
+      branch base, exit 0 each; and the five short `scripts/ci` Python suites pass
+      (`test-model-routing-record-sanitize.py` 54 tests, `test-check-record-cleanliness.py` 19,
+      `test-model-routing-omp-usage.py` 40, `test-model-routing-source-subject.py` 6 with one
+      skip, `test-linux-v2-source-subject.py` 4). The long runner suite
+      `test-model-routing-evaluation.py` (82 tests, real Go fixtures; no `scripts/ci` tool is
+      touched by this change) was not run to completion on this host - 27 of 82 test outcomes with
+      zero failures before the stop, partial output in the GDD evidence. The records README
+      documents the pass and the receipt/tooling rule it sits beside ("Receipt verification and
+      the bound tooling revision (2026-11-20)"), including the fourteen published-receipt `accept`
+      outcomes under the current tooling.
 
 - [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
       `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
