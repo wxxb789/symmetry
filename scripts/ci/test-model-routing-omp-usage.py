@@ -37,6 +37,10 @@ def prompt_hash(text):
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def surrogatepass_digest(value):
+    return "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def load_runner_module():
     """Import the acceptance runner so exported rows can be validated in-process."""
     path = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
@@ -44,6 +48,20 @@ def load_runner_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_usage_module():
+    """Import the extractor so its exported constants can be compared in-process."""
+    spec = importlib.util.spec_from_file_location("model_routing_omp_usage", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The runner's STAGES and this literal must describe the same six accountable
+# phases; the extractor accepts exactly these stage names.
+ACCOUNTABLE_STAGES = ("exploration", "implementation", "verification", "review", "repair",
+                      "failed_attempt")
 
 
 class OmpUsageExtractionTest(unittest.TestCase):
@@ -192,12 +210,25 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertAlmostEqual(row["known_subtotals"]["cost"]["total"]["sum"], 0.0032)
 
     def test_all_six_stages_are_accepted(self):
-        stages = ("exploration", "implementation", "verification", "review", "repair",
-                  "failed_attempt")
-        for stage in stages:
+        for stage in ACCOUNTABLE_STAGES:
             with self.subTest(stage=stage):
                 row = self.row([self.session_record(), self.init_record()], stage=stage)
                 self.assertEqual(row["stage"], stage)
+
+    def test_shared_constants_match_the_runner(self):
+        """The extractor's `STAGES` and `SECRET_KEY_PATTERN` copies must not drift.
+
+        The runner keeps its own `STAGES` (which usage rows must cover) and
+        `SECRET_KEY_PATTERN` (which decides whether an exported entry-type name
+        passes its secret-key scan), and the extractor duplicates both; this test
+        pins the pair per constant against this suite's stage literal too.
+        """
+        runner = load_runner_module()
+        usage = load_usage_module()
+        self.assertEqual(usage.STAGES, ACCOUNTABLE_STAGES)
+        self.assertEqual(runner.STAGES, ACCOUNTABLE_STAGES)
+        self.assertEqual(usage.SECRET_KEY_PATTERN.pattern, runner.SECRET_KEY_PATTERN.pattern)
+        self.assertEqual(usage.SECRET_KEY_PATTERN.flags, runner.SECRET_KEY_PATTERN.flags)
 
     def test_usage_sums_include_failed_and_aborted_attempts(self):
         records = [
@@ -682,11 +713,8 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertNotIn(CANARY, completed.stderr)
         row = json.loads(completed.stdout)
 
-        def digest(name):
-            return "sha256:" + hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()
-
         self.assertEqual(row["metadata"]["entry_types"],
-                         {digest(CANARY): 1, digest("token_usage"): 1,
+                         {surrogatepass_digest(CANARY): 1, surrogatepass_digest("token_usage"): 1,
                           "message": 2, "session": 1, "session_init": 1})
         self.assertIn("secret_like_entry_type_redacted", row["limitations"])
 
@@ -722,9 +750,6 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertTrue(complete["metadata"]["usage_includes_all_assistant_attempts"])
 
     def test_path_like_session_identifiers_are_hashed(self):
-        def digest(value):
-            return "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
-
         agent = "C:/Users/alice/private-project/notes"
         resolved = "D:/models/weights-v3"
         records = [
@@ -741,10 +766,10 @@ class OmpUsageExtractionTest(unittest.TestCase):
             self.assertNotIn(value, completed.stderr)
         row = json.loads(completed.stdout)
         self.assertEqual(row["metadata"]["session_init"],
-                         {"agent": digest(agent), "model_role": "lightweight",
-                          "resolved_model": digest(resolved), "read_only": True})
+                         {"agent": surrogatepass_digest(agent), "model_role": "lightweight",
+                          "resolved_model": surrogatepass_digest(resolved), "read_only": True})
         self.assertEqual(row["metadata"]["model_changes"],
-                         [{"record": 3, "model": digest("C:/models/x")}])
+                         [{"record": 3, "model": surrogatepass_digest("C:/models/x")}])
         self.assertIsNone(row["metadata"]["resolved_model_identity"])
         self.assertIsNone(row["metadata"]["served_model_differs_from_resolved_model"])
         self.assertIn("session_init_identifier_redacted", row["limitations"])
@@ -771,7 +796,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertNotIn(served_path, completed.stdout)
         row = json.loads(completed.stdout)
         self.assertEqual(row["model_ids"], [{
-            "model": digest(served_path), "provider": "safe-provider",
+            "model": surrogatepass_digest(served_path), "provider": "safe-provider",
             "api": "safe-api", "assistant_messages": 1}])
         self.assertIn("model_identity_redacted", row["limitations"])
 

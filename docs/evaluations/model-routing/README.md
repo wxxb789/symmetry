@@ -267,7 +267,7 @@ go test ./...
 ```
 
 The focused Go task also requires exact named-test execution through the frozen task gate.
-CI's existing daemon job runs the Python regression suites (evaluation runner, OMP usage extraction, record path sanitisation, Linux v2 contracts) sequentially before the ordinary Go suite; these deterministic parser/runner controls need no model credentials and do not replace the live evaluation records.
+CI's existing daemon job runs the Python regression suites (evaluation runner, OMP usage extraction, record path sanitisation, record cleanliness, delivered source subject) sequentially before the ordinary Go suite; these deterministic parser/runner controls need no model credentials and do not replace the live evaluation records.
 A separate `record-cleanliness` CI job runs `scripts/ci/check-record-cleanliness.py` whenever a change adds, modifies or retypes a file under `docs/evaluations/**` or `docs/evidence/**`, or changes the sanitize tool itself: the script selects that change's records against the pull-request base commit (or the pushed `before` commit; an all-zero base falls back to the `origin/main` merge base) and runs `model-routing-record-sanitize.py --check --root-only` on each one, so the guard executes the tool's own check instead of re-implementing its patterns. The job is independent of the documentation-only fast path - a records-only pull request is exactly the change it must see - and unchanged committed records are deliberately out of scope while their own TODO entries remain open.
 Linux native/race, Control, wire and browser gates are neither removed nor reinterpreted by this tooling.
 Record unavailable or inapplicable gates rather than claiming they passed.

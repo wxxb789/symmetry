@@ -44,8 +44,9 @@ SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/@~-]{0,127}$")
 
 # Secret-like key detector copied verbatim from scripts/ci/model-routing-evaluation.py
-# (SECRET_KEY_PATTERN) and must stay in sync with it: a session-controlled record
-# type name the runner's secret-key scan would refuse must never be exported raw.
+# (SECRET_KEY_PATTERN); test-model-routing-omp-usage.py pins the two copies (pattern
+# and flags) equal, because a session-controlled record type name the runner's
+# secret-key scan would refuse must never be exported raw.
 SECRET_KEY_PATTERN = re.compile(
     r"(^|[^a-z0-9])(api[_-]?key|apikey|secret|password|passwd|token|bearer"
     r"|private[_-]?key|access[_-]?key)([^a-z0-9]|$)",
@@ -183,15 +184,6 @@ def resolved_model_identity(resolved_model):
     return {"provider": provider, "model": model}
 
 
-def recognized_record_type(record_type):
-    """Whether extract_usage consumes this type, exactly as its branches do."""
-    if record_type in ("session", "session_init", "model_change", "message", "custom_message"):
-        return True
-    if "thinking" in record_type and ("level" in record_type or "change" in record_type):
-        return True
-    return "fallback" in record_type
-
-
 def session_init_metadata(record, note):
     values = {}
     resolved_model_redacted = False
@@ -218,6 +210,21 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
     def note(code):
         if code not in limitations:
             limitations.append(code)
+
+    def identity_item(record, message):
+        """One `{record, model, provider, api, resolved_model}` identity item.
+
+        `record` first, then each observed identity field in source order, hashed
+        through export_session_identifier exactly as the raw branches did.
+        """
+        item = {"record": records - 1}
+        for source, target in (("model", "model"), ("provider", "provider"),
+                               ("api", "api"), ("resolvedModel", "resolved_model")):
+            value = record.get(source)
+            if value is None:
+                continue
+            item[target], _ = export_session_identifier(value, message, "model_identity_redacted", note)
+        return item
 
     session_id = None
     session_ids = set()
@@ -268,9 +275,6 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
             refuse(isinstance(record, dict), "session record is not a JSON object")
             record_type = record.get("type")
             refuse(safe_token(record_type), "session record has a missing or unsafe type")
-            if not recognized_record_type(record_type):
-                unrecognized_record_types = True
-                note("unrecognized_record_types")
             if SECRET_KEY_PATTERN.search(record_type):
                 # A session-controlled type name the runner's secret-key scan would
                 # refuse must never be exported raw; count a digest instead.
@@ -322,15 +326,7 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                             prompt_hashes.append({"kind": kind, "sha256": digest})
                 session_inits.append(init_metadata)
             elif record_type == "model_change":
-                item = {"record": records - 1}
-                for source, target in (("model", "model"), ("provider", "provider"),
-                                       ("api", "api"), ("resolvedModel", "resolved_model")):
-                    value = record.get(source)
-                    if value is None:
-                        continue
-                    item[target], _ = export_session_identifier(
-                        value, "session model change has an unsafe value",
-                        "model_identity_redacted", note)
+                item = identity_item(record, "session model change has an unsafe value")
                 if len(item) > 1:
                     model_changes.append(item)
                 else:
@@ -353,15 +349,7 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                 else:
                     thinking_level_changes.append({"record": records - 1, "level": level})
             elif "fallback" in record_type:
-                item = {"record": records - 1}
-                for source, target in (("model", "model"), ("provider", "provider"),
-                                       ("api", "api"), ("resolvedModel", "resolved_model")):
-                    value = record.get(source)
-                    if value is None:
-                        continue
-                    item[target], _ = export_session_identifier(
-                        value, "session fallback record has an unsafe identity",
-                        "model_identity_redacted", note)
+                item = identity_item(record, "session fallback record has an unsafe identity")
                 if len(item) > 1:
                     fallback_records.append(item)
                 else:
@@ -446,6 +434,9 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                 else:
                     prompt_hashes.append({"kind": "custom_message",
                                           "index": custom_messages - 1, "sha256": digest})
+            else:
+                unrecognized_record_types = True
+                note("unrecognized_record_types")
 
     if assistant_messages == 0:
         note("no_assistant_messages")
