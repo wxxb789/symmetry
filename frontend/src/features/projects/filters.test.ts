@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkItem } from "../../services/api";
+import { ownerKeyLabel } from "../work/presentation";
 import { boardColumns, filterWorkItems, filtersOf, ownerOptions, sameWorkSearch, stateOptions, summarizeWork, workItemSearch, workSearch, workSummaryText, type WorkSearch } from "./filters";
 
 const firstProjectWork: WorkItem = { id: "11111111-1111-4111-8111-111111111111", key: "ONE-1", title: "Ship the read surface", status: "ready", blocked: false, blocker: null, assignee: { type: "agent", name: null, agent_profile: "default" }, updated_at: null };
@@ -10,6 +11,17 @@ const unnamedHumanWork: WorkItem = { id: "55555555-5555-4555-8555-555555555555",
 const recordedSentinelNameWork: WorkItem = { id: "66666666-6666-4666-8666-666666666666", key: "ONE-6", title: "A row named unrecorded", status: "ready", blocked: false, blocker: null, assignee: { type: "agent", name: "unrecorded", agent_profile: null }, updated_at: null };
 const work = [firstProjectWork, secondProjectWork, unknownStateWork];
 const sentinelWork = [unnamedAgentWork, unnamedHumanWork, recordedSentinelNameWork];
+// Human rows whose names start with a colon (or equal the legacy word) travel
+// escaped by one colon, so their minted keys are `human:::Ada`, `human::::Ada`,
+// `human::unrecorded` and `human:::unrecorded`; the pre-#111 encoder spelled
+// each of them unescaped.
+const colonLeadingWork: WorkItem[] = [
+  { id: "77777777-7777-4777-8777-777777777777", key: "ONE-7", title: "A row named Ada", status: "ready", blocked: false, blocker: null, assignee: { type: "human", name: "Ada", agent_profile: null }, updated_at: null },
+  { id: "88888888-8888-4888-8888-888888888888", key: "ONE-8", title: "A row named :Ada", status: "ready", blocked: false, blocker: null, assignee: { type: "human", name: ":Ada", agent_profile: null }, updated_at: null },
+  { id: "99999999-9999-4999-8999-999999999999", key: "ONE-9", title: "A row named unrecorded", status: "ready", blocked: false, blocker: null, assignee: { type: "human", name: "unrecorded", agent_profile: null }, updated_at: null },
+  { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", key: "ONE-10", title: "A row named :unrecorded", status: "ready", blocked: false, blocker: null, assignee: { type: "human", name: ":unrecorded", agent_profile: null }, updated_at: null },
+  { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", key: "ONE-11", title: "A row named ::Ada", status: "ready", blocked: false, blocker: null, assignee: { type: "human", name: "::Ada", agent_profile: null }, updated_at: null },
+];
 
 describe("work URL state", () => {
   it("normalises the values the router hands back after JSON parsing", () => {
@@ -112,5 +124,31 @@ describe("work filtering and projections", () => {
     expect(filtersOf({ owner: "agent:unrecorded-bot" }).owner).toBe("agent:unrecorded-bot");
     // Every other key travels as written through both readers.
     expect(workSearch({ owner: "agent:builder" })).toEqual({ owner: "agent:builder" });
+  });
+
+  it("reads the pre-#111 colon-leading owner keys as the current mints, accepting the collision", () => {
+    // Decided 2026-11-21 (repo owner, no backward compatibility): the pre-#111
+    // spellings for recorded names that start with `:` are not re-pointed — a
+    // key is always read as a current mint. `human::Ada`, once the recorded
+    // name `:Ada`, is the mint of no row: it selects neither that row (now
+    // `human:::Ada`) nor the row named `Ada`, while its label still renders the
+    // name the escape marker hides.
+    expect(workSearch({ owner: "human::Ada" })).toEqual({ owner: "human::Ada" });
+    expect(filterWorkItems(colonLeadingWork, filtersOf(workSearch({ owner: "human::Ada" }))).map((item) => item.key)).toEqual([]);
+    expect(filterWorkItems(colonLeadingWork, filtersOf({ owner: "human::Ada" })).map((item) => item.key)).toEqual([]);
+    expect(ownerKeyLabel("human::Ada")).toBe("Ada");
+    // The same decision for the keys whose pre-#111 spelling collides with a
+    // current mint and cannot be disambiguated: `human::unrecorded`, once the
+    // name `:unrecorded`, is the current mint of the row named `unrecorded`
+    // and selects it, not the row named `:unrecorded`.
+    expect(workSearch({ owner: "human::unrecorded" })).toEqual({ owner: "human::unrecorded" });
+    expect(filterWorkItems(colonLeadingWork, filtersOf(workSearch({ owner: "human::unrecorded" }))).map((item) => item.key)).toEqual(["ONE-9"]);
+    expect(filterWorkItems(colonLeadingWork, filtersOf({ owner: "human::unrecorded" })).map((item) => item.key)).toEqual(["ONE-9"]);
+    // The same accepted reading for the deeper prefix, where the collision
+    // repeats: `human:::Ada`, once the name `::Ada`, is the current mint of the
+    // row named `:Ada` and selects it, not the row named `::Ada`.
+    expect(workSearch({ owner: "human:::Ada" })).toEqual({ owner: "human:::Ada" });
+    expect(filterWorkItems(colonLeadingWork, filtersOf(workSearch({ owner: "human:::Ada" }))).map((item) => item.key)).toEqual(["ONE-8"]);
+    expect(filterWorkItems(colonLeadingWork, filtersOf({ owner: "human:::Ada" })).map((item) => item.key)).toEqual(["ONE-8"]);
   });
 });
