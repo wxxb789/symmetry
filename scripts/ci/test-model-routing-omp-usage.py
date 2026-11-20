@@ -6,8 +6,10 @@ parsing, refusal and redaction behavior only: they are parser regression
 evidence, not live acceptance evidence for any real session or route.
 """
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import pathlib
 import subprocess
@@ -37,6 +39,10 @@ def prompt_hash(text):
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def surrogatepass_digest(value):
+    return "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def load_runner_module():
     """Import the acceptance runner so exported rows can be validated in-process."""
     path = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
@@ -44,6 +50,20 @@ def load_runner_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_usage_module():
+    """Import the extractor so its exported constants can be compared in-process."""
+    spec = importlib.util.spec_from_file_location("model_routing_omp_usage", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The runner's STAGES and this literal must describe the same six accountable
+# phases; the extractor accepts exactly these stage names.
+ACCOUNTABLE_STAGES = ("exploration", "implementation", "verification", "review", "repair",
+                      "failed_attempt")
 
 
 class OmpUsageExtractionTest(unittest.TestCase):
@@ -192,12 +212,25 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertAlmostEqual(row["known_subtotals"]["cost"]["total"]["sum"], 0.0032)
 
     def test_all_six_stages_are_accepted(self):
-        stages = ("exploration", "implementation", "verification", "review", "repair",
-                  "failed_attempt")
-        for stage in stages:
+        for stage in ACCOUNTABLE_STAGES:
             with self.subTest(stage=stage):
                 row = self.row([self.session_record(), self.init_record()], stage=stage)
                 self.assertEqual(row["stage"], stage)
+
+    def test_shared_constants_match_the_runner(self):
+        """The extractor's `STAGES` and `SECRET_KEY_PATTERN` copies must not drift.
+
+        The runner keeps its own `STAGES` (which usage rows must cover) and
+        `SECRET_KEY_PATTERN` (which decides whether an exported entry-type name
+        passes its secret-key scan), and the extractor duplicates both; this test
+        pins the pair per constant against this suite's stage literal too.
+        """
+        runner = load_runner_module()
+        usage = load_usage_module()
+        self.assertEqual(usage.STAGES, ACCOUNTABLE_STAGES)
+        self.assertEqual(runner.STAGES, ACCOUNTABLE_STAGES)
+        self.assertEqual(usage.SECRET_KEY_PATTERN.pattern, runner.SECRET_KEY_PATTERN.pattern)
+        self.assertEqual(usage.SECRET_KEY_PATTERN.flags, runner.SECRET_KEY_PATTERN.flags)
 
     def test_usage_sums_include_failed_and_aborted_attempts(self):
         records = [
@@ -369,6 +402,40 @@ class OmpUsageExtractionTest(unittest.TestCase):
                          [{"record": 3, "model": "fallback-model",
                            "provider": "fallback-provider"}])
 
+    def test_thinking_level_values_are_allowlisted(self):
+        # STD-B04: `level` is session-controlled, so a path-shaped spelling must
+        # never export verbatim. Only the known level tokens (or a numeric level)
+        # export; anything else is noted as unrecognized and left out.
+        def level_row(level):
+            records = [
+                self.session_record(),
+                self.init_record(),
+                {"type": "thinking_level_change", "timestamp": "2026-11-15T10:00:02Z",
+                 "level": level},
+                self.assistant_record(),
+            ]
+            completed = self.run_cli(records)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return completed, json.loads(completed.stdout)
+
+        for level in ("none", "off", "minimal", "low", "medium", "high", "xhigh", "max"):
+            with self.subTest(level=level):
+                completed, row = level_row(level)
+                self.assertEqual(row["metadata"]["thinking_level_changes"],
+                                 [{"record": 2, "level": level}])
+                self.assertNotIn("thinking_level_change_unrecognized", row["limitations"])
+        with self.subTest(level="numeric"):
+            completed, row = level_row(2)
+            self.assertEqual(row["metadata"]["thinking_level_changes"],
+                             [{"record": 2, "level": 2}])
+        for level in ("C:/Users/example/private", "notes/private", "verbose"):
+            with self.subTest(level=level):
+                completed, row = level_row(level)
+                self.assertNotIn(level, completed.stdout)
+                self.assertNotIn(level, completed.stderr)
+                self.assertEqual(row["metadata"]["thinking_level_changes"], [])
+                self.assertIn("thinking_level_change_unrecognized", row["limitations"])
+
     def test_merged_exports_and_repeated_entry_ids_are_refused(self):
         def export(session):
             records = [
@@ -451,6 +518,126 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertEqual(completed.stderr,
                          "refused: session assistant record has an unsafe model identity\n")
         self.assertNotIn(CANARY, completed.stderr)
+
+    def test_nonfinite_or_overflowing_usage_totals_are_refused(self):
+        """A total that leaves the finite range refuses instead of emitting Infinity."""
+        cases = {
+            "cached sum overflows to infinity": [
+                self.session_record(), self.init_record(),
+                self.assistant_record(usage=self.usage(cacheRead=1e308, cacheWrite=1e308)),
+            ],
+            "cost sum overflows to infinity": [
+                self.session_record(), self.init_record(),
+                self.assistant_record(timestamp="2026-11-15T10:00:02Z",
+                                      usage=self.usage(cost={"total": 1e308})),
+                self.assistant_record(timestamp="2026-11-15T10:00:03Z",
+                                      usage=self.usage(cost={"total": 1e308})),
+            ],
+            "int beyond float range meets a float total": [
+                self.session_record(), self.init_record(),
+                self.assistant_record(timestamp="2026-11-15T10:00:02Z",
+                                      usage=self.usage(cost={"total": 10 ** 400})),
+                self.assistant_record(timestamp="2026-11-15T10:00:03Z",
+                                      usage=self.usage(cost={"total": 0.5})),
+            ],
+        }
+        for label, records in cases.items():
+            with self.subTest(case=label):
+                completed = self.run_cli(records)
+                self.assertEqual(completed.returncode, 1, completed.stdout)
+                self.assertEqual(completed.stdout, "")
+                self.assertTrue(completed.stderr.startswith("refused: "), completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+
+    def test_int_only_totals_beyond_float_range_refuse_at_the_extractor(self):
+        """STD-B12: an int-only total beyond float range used to leave the extractor
+        and be refused downstream by the runner's finite-number check; the extractor
+        must refuse it at the source in both the one-record and the summed shape."""
+        for label, records in (
+            ("one record", [
+                self.session_record(), self.init_record(),
+                self.assistant_record(usage=self.usage(cost={"total": 10 ** 400})),
+            ]),
+            ("two records", [
+                self.session_record(), self.init_record(),
+                self.assistant_record(timestamp="2026-11-15T10:00:02Z",
+                                      usage=self.usage(cost={"total": 10 ** 400})),
+                self.assistant_record(timestamp="2026-11-15T10:00:03Z",
+                                      usage=self.usage(cost={"total": 10 ** 400})),
+            ]),
+        ):
+            with self.subTest(shape=label):
+                completed = self.run_cli(records)
+                self.assertEqual(completed.returncode, 1, completed.stdout)
+                self.assertEqual(completed.stdout, "")
+                self.assertEqual(
+                    completed.stderr,
+                    "refused: session usage totals exceed the finite number range\n",
+                )
+
+    def test_oversized_integer_literals_are_refused_structurally(self):
+        # Opus P3: `json.loads` refuses an integer literal past Python's
+        # conversion-digit limit with a plain ValueError; a session line carrying one
+        # must surface as a structured refusal, not a traceback.
+        limit = sys.get_int_max_str_digits()
+        if limit == 0:
+            self.skipTest("this interpreter has no integer conversion-digit limit")
+        digits = "9" * (limit + 1)
+        completed = self.run_cli(raw_lines=['{"type":"session","id":"a","big":' + digits + '}'])
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertEqual(
+            completed.stderr,
+            "refused: session record carries an integer outside the supported range\n",
+        )
+        self.assertEqual(completed.stdout, "")
+
+    def test_emit_guard_classifies_values_it_cannot_serialize(self):
+        # Opus P3: the single emit point is the last line of defense, and its message
+        # must name the actual cause - a nan or infinity float is a non-finite number,
+        # while a finite integer past Python's conversion-digit limit is not.
+        module = load_usage_module()
+        row = {"stage": "implementation", "session_ref": "synthetic-session", "non_model_reason": None,
+               "model_ids": [], "prompt_hashes": [], "tokens": {"input": None, "output": None, "cached": None},
+               "reported_cost": None, "estimated_cost": None, "cost_provenance": None,
+               "price_version": None, "wall_time": None, "metadata": {}, "limitations": [],
+               "known_subtotals": {}}
+        original = module.extract_usage
+        try:
+            module.extract_usage = lambda *arguments, **keywords: row
+            cases = [(float("inf"), "refused: usage row carries a non-finite number\n")]
+            limit = sys.get_int_max_str_digits()
+            if limit:
+                cases.append((10 ** (limit + 1),
+                              "refused: usage row carries a number outside the serializable range\n"))
+            for value, message in cases:
+                with self.subTest(message=message):
+                    row["estimated_cost"] = value
+                    errors = io.StringIO()
+                    with contextlib.redirect_stderr(errors):
+                        code = module.main(["--session", "unused", "--stage", "implementation",
+                                            "--credential-route", "safe-label", "--provenance", "safe-token"])
+                    self.assertEqual(code, 1)
+                    self.assertEqual(errors.getvalue(), message)
+        finally:
+            module.extract_usage = original
+
+    def test_identity_refusals_name_their_record_kind(self):
+        """Each identity caller keeps its own refusal message, not a shared one."""
+        cases = [
+            ("model_change", "session model change has an unsafe value"),
+            ("model_fallback", "session fallback record has an unsafe identity"),
+        ]
+        for record_type, message in cases:
+            with self.subTest(record_type=record_type):
+                completed = self.run_cli([
+                    self.session_record(),
+                    self.init_record(),
+                    {"type": record_type, "timestamp": "2026-11-15T10:00:02Z",
+                     "model": "two words"},
+                ])
+                self.assertEqual(completed.returncode, 1, completed.stdout)
+                self.assertEqual(completed.stdout, "")
+                self.assertEqual(completed.stderr, f"refused: {message}\n")
 
     def test_cli_usage_errors_are_rejected(self):
         cases = {
@@ -682,11 +869,8 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertNotIn(CANARY, completed.stderr)
         row = json.loads(completed.stdout)
 
-        def digest(name):
-            return "sha256:" + hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()
-
         self.assertEqual(row["metadata"]["entry_types"],
-                         {digest(CANARY): 1, digest("token_usage"): 1,
+                         {surrogatepass_digest(CANARY): 1, surrogatepass_digest("token_usage"): 1,
                           "message": 2, "session": 1, "session_init": 1})
         self.assertIn("secret_like_entry_type_redacted", row["limitations"])
 
@@ -707,6 +891,78 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertEqual(repair_count, 0)
         self.assertEqual(task_wall_time, 12.0)
 
+    def test_path_like_entry_type_names_are_redacted_and_still_valid(self):
+        path_type = "C:/Users/example/private"
+        records = [
+            self.session_record(),
+            self.init_record(),
+            self.user_record("request with a path-like record type"),
+            self.assistant_record(),
+            {"type": path_type, "timestamp": "2026-11-15T10:00:06Z"},
+        ]
+        completed = self.run_cli(records)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn(path_type, completed.stdout)
+        self.assertNotIn(path_type, completed.stderr)
+        row = json.loads(completed.stdout)
+
+        self.assertEqual(row["metadata"]["entry_types"][surrogatepass_digest(path_type)], 1)
+        self.assertIn("path_like_entry_type_redacted", row["limitations"])
+        self.assertNotIn("secret_like_entry_type_redacted", row["limitations"])
+
+        # The runner refuses secret-like keys anywhere in a usage row; the exported
+        # row must still pass its own validator unchanged.
+        usage = {"repair_count": 0, "wall_time": 12.0, "phases": [
+            self.non_model_phase("exploration"),
+            row,
+            self.non_model_phase("verification"),
+            self.non_model_phase("review"),
+            self.non_model_phase("repair"),
+            self.non_model_phase("failed_attempt"),
+        ]}
+        module = load_runner_module()
+        rows, repair_count, task_wall_time = module.validate_usage(
+            json.dumps(usage).encode("utf-8"))
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(repair_count, 0)
+        self.assertEqual(task_wall_time, 12.0)
+
+    def test_file_url_record_type_names_are_redacted_and_still_valid(self):
+        # STD-B03: a `file:` URL is a filesystem location like any other spelling,
+        # so a record type shaped as one must not reach the output verbatim.
+        for path_type in ("file:///C:/Users/example/private", "FILE:///tmp/private-run"):
+            with self.subTest(path_type=path_type):
+                records = [
+                    self.session_record(),
+                    self.init_record(),
+                    self.user_record("request with a file-URL record type"),
+                    self.assistant_record(),
+                    {"type": path_type, "timestamp": "2026-11-15T10:00:06Z"},
+                ]
+                completed = self.run_cli(records)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertNotIn(path_type, completed.stdout)
+                self.assertNotIn(path_type, completed.stderr)
+                row = json.loads(completed.stdout)
+                self.assertEqual(row["metadata"]["entry_types"][surrogatepass_digest(path_type)], 1)
+                self.assertIn("path_like_entry_type_redacted", row["limitations"])
+                self.assertNotIn("secret_like_entry_type_redacted", row["limitations"])
+                # The exported row must still pass the runner's own validator.
+                usage = {"repair_count": 0, "wall_time": 12.0, "phases": [
+                    self.non_model_phase("exploration"),
+                    row,
+                    self.non_model_phase("verification"),
+                    self.non_model_phase("review"),
+                    self.non_model_phase("repair"),
+                    self.non_model_phase("failed_attempt"),
+                ]}
+                module = load_runner_module()
+                rows, repair_count, task_wall_time = module.validate_usage(
+                    json.dumps(usage).encode("utf-8"))
+                self.assertEqual(len(rows), 6)
+                self.assertEqual(repair_count, 0)
+                self.assertEqual(task_wall_time, 12.0)
+
     def test_unrecognized_record_types_make_the_all_attempts_claim_false(self):
         records = [
             self.session_record(),
@@ -722,9 +978,6 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertTrue(complete["metadata"]["usage_includes_all_assistant_attempts"])
 
     def test_path_like_session_identifiers_are_hashed(self):
-        def digest(value):
-            return "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
-
         agent = "C:/Users/alice/private-project/notes"
         resolved = "D:/models/weights-v3"
         records = [
@@ -741,10 +994,10 @@ class OmpUsageExtractionTest(unittest.TestCase):
             self.assertNotIn(value, completed.stderr)
         row = json.loads(completed.stdout)
         self.assertEqual(row["metadata"]["session_init"],
-                         {"agent": digest(agent), "model_role": "lightweight",
-                          "resolved_model": digest(resolved), "read_only": True})
+                         {"agent": surrogatepass_digest(agent), "model_role": "lightweight",
+                          "resolved_model": surrogatepass_digest(resolved), "read_only": True})
         self.assertEqual(row["metadata"]["model_changes"],
-                         [{"record": 3, "model": digest("C:/models/x")}])
+                         [{"record": 3, "model": surrogatepass_digest("C:/models/x")}])
         self.assertIsNone(row["metadata"]["resolved_model_identity"])
         self.assertIsNone(row["metadata"]["served_model_differs_from_resolved_model"])
         self.assertIn("session_init_identifier_redacted", row["limitations"])
@@ -771,7 +1024,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertNotIn(served_path, completed.stdout)
         row = json.loads(completed.stdout)
         self.assertEqual(row["model_ids"], [{
-            "model": digest(served_path), "provider": "safe-provider",
+            "model": surrogatepass_digest(served_path), "provider": "safe-provider",
             "api": "safe-api", "assistant_messages": 1}])
         self.assertIn("model_identity_redacted", row["limitations"])
 

@@ -88,6 +88,20 @@ _HOST_SEP = r"(?:/|\\/)"
 # nesting level, so a backslash separator is any positive run and a forward slash
 # may be escaped as `\/`.
 _SEPARATOR = r"(?:\\|(?:\\{2})+|/|\\/)"
+# One separator run of a disposable root as recorded text spells it: any nonempty
+# mix of backslashes (raw, or the JSON-escaped run at any nesting depth) and
+# forward slashes or their `\/` escape - the units concatenate, so every recorded
+# spelling is this one character class. `_root_patterns` joins the root's segments
+# with it, so both compiled matchers accept every recorded spelling, and a single
+# class also keeps a long non-matching separator run linear: an overlapping
+# alternation written as a repetition (`(?:\\+|/|\\/)+`) parses one run of N
+# backslashes 2**(N-1) ways and turns a failed match exponential.
+_ROOT_SEPARATOR = r"[\\/]+"
+# The name characters a recorded path token continues with. A root boundary is a
+# name boundary: a root glued to a name on either side (`.../run-user`,
+# `.../run.bak`) names a different location, while punctuation (`.../run.`,
+# `.../run!`) leaves the root the whole name.
+_ROOT_NAME_CHAR = r"[A-Za-z0-9_-]"
 # The scheme a `file:` URL carries is case-insensitive - `FILE:`, `File:` and
 # `file:` are the same scheme - so a record spelling it any other way must not
 # pass the checker unchanged.
@@ -158,8 +172,13 @@ _COLON_POSIX_PATH = re.compile(r"(?<=:)/(?!/)(?:" + _POSIX_SEGMENT + r"/)*" + _P
 # keeps URL authorities (`https:\/\/tmp` - the pair after the colon, and the pair
 # after a separator) and relative paths out, and every separator must be the
 # escaped pairing, so an unescaped `/` cannot drift this pattern into a URL.
+# A rendered root token is one more boundary: the root pass leaves an escaped
+# descendant separator behind it (`C:\Work\run\/child` renders as
+# `<disposable-root>\/child`), and that separator is the token's trailing
+# structure, not the start of a new escaped location.
 _ESCAPED_POSIX_PATH = re.compile(
-    r"(?<![A-Za-z0-9_:\\/])(?:\\/)(?:" + _ESCAPED_SEGMENT + r"\\/)*" + _ESCAPED_SEGMENT
+    r"(?<!" + re.escape(DISPOSABLE_ROOT_TOKEN) + r")(?<![A-Za-z0-9_:\\/])"
+    + r"(?:\\/)(?:" + _ESCAPED_SEGMENT + r"\\/)*" + _ESCAPED_SEGMENT
 )
 # A forward-slash authority path (`//server/share`), with each separator optionally
 # escaped or a backslash (the mixed spellings are the same UNC location). The
@@ -259,32 +278,90 @@ def _render_match(match: re.Match[str]) -> str:
     return hashed_path_token(matched)
 
 
-def _root_variants(root: str) -> list[str]:
-    """Return the separator variants a root may appear with in recorded text."""
+def _root_patterns(root: str) -> tuple[re.Pattern[str], re.Pattern[str]] | None:
+    """Compile the bounded and chunked matchers for one disposable root.
 
-    variants = {root}
-    if "\\" in root:
-        variants.add(root.replace("\\", "/"))
-    if "/" in root:
-        variants.add(root.replace("/", "\\"))
-    return sorted(variants, key=len, reverse=True)
+    The bounded matcher consumes the root only when it is spelled with a recorded
+    separator mixture (`_ROOT_SEPARATOR`) and only at a whole-name boundary: the
+    leading lookbehind refuses a name character glued in front - except after a
+    JSON escape sequence, whose final character (the letter of ``\\n``, ``\\t``,
+    ``\\r``, ``\\b`` or ``\\f``, or the last hex digit of a ``\\uXXXX`` escape)
+    ends the escape and is a boundary - and the trailing lookahead refuses a name
+    continuation behind it - a further name character, a ``.``-continued name,
+    or a space-continued path chunk (`...-user`,
+    ``.../run.bak``, ``.../run user/private``, the same continuation the path
+    tails absorb). The chunked matcher is its fail-closed sibling: the same root
+    followed by one or more space-continued chunks is a longer sibling location,
+    which the bounded matcher declines and the chunked one renders whole as a
+    hashed token, because leaving the exact root bytes literal on a POSIX root
+    outside the host list would fail open under ``--root-only``. A root that
+    leads with a separator keeps that run in the match, spelled only with the
+    separator kind the root itself carries, so a UNC root never claims the POSIX
+    spelling of its segments and the reverse; a root without a leading separator
+    matches only after a non-separator boundary. ``None`` means the root names no
+    segment (a bare ``/``).
+    """
+
+    stripped = root.rstrip("\\/")
+    segments = [segment for segment in re.split(r"[\\/]+", stripped) if segment]
+    if not segments:
+        return None
+    body = _ROOT_SEPARATOR.join(re.escape(segment) for segment in segments)
+    if re.match(r"[\\/]", stripped):
+        # The root's own leading separator kind gates the match: a backslash-led
+        # root (a UNC or device spelling) matches only a backslash run, and a
+        # slash-led root only the forward-slash spellings, so the two never claim
+        # each other's locations.
+        body = (r"\\+" if stripped.startswith("\\") else r"(?:/|\\/)+") + body
+    # A separator in front of the root is not a boundary. For a separator-less
+    # root (a drive path) that spelling continues a longer location (a device
+    # namespace's `\\?\C:`, say), not this root; for a separator-led root the
+    # match must start at the first separator of its run - a start inside the
+    # run would re-try the body at every position of a long run with no match
+    # behind it (quadratic over `"/" * 100000`). A JSON escape in front of the
+    # root is a boundary, not a name: the letter of a two-character escape
+    # (`\n`, `\t`, `\r`, `\b`, `\f`) or the last hex digit of a `\uXXXX` escape
+    # ends the escape sequence, so a root that starts the next recorded line
+    # inside a quoted record (`{"out":"ok\n/srv/store/x"}`) still matches, while
+    # a literal name character glued in front (`aa/srv/store/x`) still rejects
+    # the match.
+    lookbehind = r"(?:(?<=\\[nrtbf])|(?<=\\[u][0-9A-Fa-f]{4})|(?<![A-Za-z0-9_.\-\\/]))"
+    after = r"(?!" + _ROOT_NAME_CHAR + r"|\." + _ROOT_NAME_CHAR + r"|" + _SPACE_CHUNK + r")"
+    return (
+        re.compile(lookbehind + body + after),
+        re.compile(lookbehind + body + r"(?:" + _SPACE_CHUNK + r")+"),
+    )
 
 
 def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     """Render host-specific absolute paths in ``text`` as tokens.
 
     ``roots`` are disposable coordinator roots (absolute paths) to render as
-    ``<disposable-root>``. With ``root_only`` false every other absolute path is
-    rendered as a hashed token; with ``root_only`` true only host absolute paths
-    (drive, UNC and the POSIX home/root/temp/mount roots) are rendered, so a
-    product route such as ``/portal/runtimes`` stays literal. The function is
-    idempotent: rendering rendered text changes nothing.
+    ``<disposable-root>``. A root matches any recorded separator mixture,
+    including the JSON-escaped runs of a quoted record, but only at a path
+    boundary: a longer sibling name such as ``...-user`` is never absorbed into
+    the token, and a root followed by a space-continued chunk (`.../run
+    user/private`) is that same longer sibling, rendered whole as a hashed
+    token. With ``root_only`` false every other absolute path is rendered as
+    a hashed token; with ``root_only`` true only host absolute paths (drive, UNC
+    and the POSIX home/root/temp/mount roots) are rendered, so a product route
+    such as ``/portal/runtimes`` stays literal. The function is idempotent:
+    rendering rendered text changes nothing.
     """
 
     rendered = text
     for root in roots:
-        for variant in _root_variants(root):
-            rendered = rendered.replace(variant, DISPOSABLE_ROOT_TOKEN)
+        matchers = _root_patterns(root)
+        if matchers is None:
+            continue
+        bounded, chunked = matchers
+        # A root followed by a space-continued chunk continues a longer sibling
+        # name, so the bounded matcher declines it there; the chunked matcher
+        # renders the whole span as a hashed token first: the span is not this
+        # root, and leaving it literal would publish the root bytes on a POSIX
+        # root the host-path patterns do not cover.
+        rendered = chunked.sub(_render_match, rendered)
+        rendered = bounded.sub(DISPOSABLE_ROOT_TOKEN, rendered)
     patterns = HOST_PATH_PATTERNS if root_only else DEFAULT_PATH_PATTERNS
     for pattern in patterns:
         rendered = pattern.sub(_render_match, rendered)
@@ -352,7 +429,12 @@ def main(argv: list[str]) -> int:
     rendered = sanitize_text(text, arguments.root, root_only=arguments.root_only)
     if arguments.check:
         if rendered != text:
-            print("model-routing-record-sanitize refused: a host absolute path is present", file=sys.stderr)
+            # The refusal names the scope it refused: the default scope renders every
+            # absolute location (a product route refuses too), while `--root-only`
+            # refuses nothing but a host absolute path.
+            refusal = ("a host absolute path is present" if arguments.root_only
+                       else "an absolute location would be rendered")
+            print(f"model-routing-record-sanitize refused: {refusal}", file=sys.stderr)
             return 1
         return 0
     sys.stdout.buffer.write(rendered.encode("utf-8"))
