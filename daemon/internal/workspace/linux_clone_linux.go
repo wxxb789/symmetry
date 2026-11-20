@@ -1891,9 +1891,11 @@ func linuxCloneTreeDigest(ctx context.Context, repository, commit string) (strin
 }
 
 // linuxCloneOpenBatch starts the single persistent object batch stream for the
-// Linux clone quarantine path. The complete digest receives one command
-// budget, and the child keeps this path's clean environment, process group,
-// wait-delay and cancellation policy.
+// Linux clone quarantine path. The batch stream shares one command budget
+// across all blobs; the digest's tree listing keeps its own budget, and the
+// sort and manifest hashing after the stream are unbudgeted. The child keeps
+// this path's clean environment, process group, wait-delay and cancellation
+// policy.
 func linuxCloneOpenBatch(ctx context.Context, repository string) (*subjectGitBatchStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

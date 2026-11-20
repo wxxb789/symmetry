@@ -705,14 +705,26 @@ func startSubjectGitBatch(ctx context.Context, command *exec.Cmd, budget context
 			budget()
 		}
 		_ = stdin.Close()
+		// Start never runs on this path, so Start's own descriptor cleanup
+		// cannot release the child's read end that StdinPipe installed on the
+		// command; without this close the descriptor survives until the
+		// os.File finalizer runs.
+		if closer, ok := command.Stdin.(io.Closer); ok {
+			_ = closer.Close()
+		}
 		return nil, err
 	}
 	if err := command.Start(); err != nil {
+		// Snapshot the context before releasing the path's budget: the budget's
+		// cancel function cancels this very context on the Linux clone path, so
+		// reading it afterwards would report a live launch failure as a caller
+		// cancellation and drop the real error.
+		ctxErr := ctx.Err()
 		if budget != nil {
 			budget()
 		}
 		_ = stdin.Close()
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr != nil {
 			return nil, ctxErr
 		}
 		return nil, err
@@ -826,15 +838,19 @@ func (stream *subjectGitBatchStream) close(failure error) error {
 	return errors.Join(stream.sentinel, failure, terminateErr, waitErr)
 }
 
-// finish asks an in-sync batch child to exit and proves that it was reaped.
+// finish asks an in-sync batch child to exit and proves that it was reaped. A
+// cancellation that reaches this path still joins the path's unresolved-process
+// fence: the child was stopped by that cancellation policy, never by an exit it
+// recorded itself, so an unproven stop stays observable to the caller.
 func (stream *subjectGitBatchStream) finish() error {
 	closeErr := stream.stdin.Close()
 	waitErr := stream.command.Wait()
+	ctxErr := stream.ctx.Err()
+	if ctxErr != nil {
+		return errors.Join(stream.sentinel, ctxErr, closeErr, waitErr)
+	}
 	if waitErr == nil && closeErr == nil {
 		return nil
-	}
-	if ctxErr := stream.ctx.Err(); ctxErr != nil {
-		return errors.Join(ctxErr, closeErr, waitErr)
 	}
 	return fmt.Errorf("finish Git batch stream: %w", errors.Join(closeErr, waitErr))
 }
