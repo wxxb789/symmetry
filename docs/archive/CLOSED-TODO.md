@@ -3033,7 +3033,7 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       compares it, so the asynchronous advance this entry names no longer answers 409 `stale` for
       an action the operator would simply repeat. Pinned red-then-green by "an internal reconcile
       advance does not refuse an operator command, while another operator's advance still does"
-      (`control/test/symmetry_control/goals_test.exs:175`) and by "internal append events never
+      (`control/test/symmetry_control/goals_test.exs:177`) and by "internal append events never
       advance the operator version the operator read" (same file), which drives the automatic
       admission-blocker, reconciliation-deferral, automatic-admission and task-settlement appends
       and pins that the advance authority is not readable from a caller's options. The changed
