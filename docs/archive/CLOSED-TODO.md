@@ -26,12 +26,18 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The resolved-decision press item appended to the `## Retro review follow-ups` section below was
+moved on 2026-11-20 from branch `fix/resolve-decision-submit-read`.
+
 The closed unused-parameter attention-test warning appended to the second `## Dead-code candidates`
 section below and the closed pinned-`can_retry` entry appended to `## Retro review follow-ups` below
 were moved on 2026-11-20 from branch `fix/control-test-pins`.
 
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
+
+The closed callerless projected provider-action chain appended to the same second `## Dead-code
+candidates` section below was moved on 2026-11-20 from branch `fix/provider-action-chain-removal`.
 
 The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
@@ -1354,6 +1360,56 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       23 failed `control` job logs grepped across all their attempts) finds exactly one occurrence
       of the failure: run `43891279765` attempt 1, job `133383740181`.
 
+- [ ] Revalidate and remove the callerless projected provider-action chain in
+      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
+      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
+      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
+      document names it — and the chain behind it is its own:
+      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
+      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
+      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
+      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
+      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
+      were live. Inside that chain one disjunct can never match on any path the code gives it: the
+      clause `{:error, reason} when reason in [:stale, :state_conflict,
+      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
+      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
+      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
+      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
+      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
+      declares no such error key. `:capability_not_granted` is produced by
+      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
+      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
+      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
+      producer; revalidate the surviving provider-action tests either way.
+
+      **Closed (2026-11-20, branch `fix/provider-action-chain-removal`): dead surface; the chain and
+      its unreachable disjunct were deleted.** The revalidation the entry asked for was run at
+      `fdf332d` over all tracked files with the entry's own citation excluded
+      (`git grep -n "execute_provider_action" -- . ':!docs/TODO.md'`): only the two definition
+      clauses match; `execute_authenticated_provider_action/7` has the single call the entry names
+      (`:296`) and `persist_provider_delivery/5` the single call `:574`, both inside the deleted
+      chain, and no `apply`/capture/`function_exported?`/string spelling names any of them
+      anywhere in the repository. With zero callers and no shipped release, the entry's fork is
+      settled as dead surface: `execute_provider_action/5`, its catch-all clause and the two private
+      helpers behind it are gone, together with the `:capability_not_granted` member of the
+      `[:stale, :state_conflict, :capability_not_granted]` clause that died with its only containing
+      function (on that path the value has no producer: `require_capabilities/2` runs in the outer
+      `with`, before the case). The `:provider_action_intents` disjunct of `normalize_stale_result`
+      is unchanged and stays: it is live through `delete_connection/2`, which pipes
+      `Connection.delete_changeset/1` through it, and that changeset's
+      `no_assoc_constraint(:provider_action_intents)` (`integrations/schemas.ex:87`) is the error key
+      the disjunct maps to `:state_conflict`. The live unprojected path
+      (`execute_unprojected_provider_action/5` and `/6`) and every helper the chain shared with it
+      are kept, and the surviving provider-action tests pass unchanged. Its consequence was removed in
+      the same branch (`9be4364`): with every non-default caller gone,
+      `record_provider_action_failure/3`'s `outcome` input became dead, so it is now `/2` and
+      `provider_action_failure_result/2` is deleted; the two surviving 2-arg call sites
+      (`integrations.ex:572`, `:575`) return the same values as before. Pinned by
+      `control/test/symmetry_control/integrations_test.exs`, "the callerless projected
+      provider-action variant stays out of the module surface" (recorded failing at `fdf332d` and
+      passing after the deletion, in the increment's answer).
+
 - [ ] Drop the unused `conn` parameter in
       `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:650-651)
       passes `conn` to `portal_command!/4` (:653), which never reads it (it builds its own `api_conn()`),
@@ -2473,6 +2529,71 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       (`contracts/v1/workspace-read.schema.json`, `contracts/v1/work-detail-read.schema.json`,
       `contracts/v1/chat-read.schema.json`), with the generated bindings refreshed through the
       repository generator.
+
+- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
+      submit-time served one. `approvePlan` builds its envelope from `query.data`
+      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
+      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
+      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
+      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
+      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
+      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
+      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
+      the original note: every accepted command appends an event through `append_event!/7`
+      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
+      and reconcile writers go through `Goal.transition_changeset`
+      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
+      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
+      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
+      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
+      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
+      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
+      direction: build the press's envelope from a submit-time read the way the plan admission does,
+      re-deriving the presented decision's own version from that same read, or keep the page version and
+      record the refusal plus reload as the intended recovery.
+
+      **Decided and closed (2026-11-20, owner; branch `fix/resolve-decision-submit-read`):** option A —
+      the press presents the submit-time served read, and the retry-freeze rule stays (the owner's
+      Q4=A); no backward compatibility (the first release is not shipped). `detail.tsx`'s
+      `decisionEnvelope` builds the `resolve_decision` envelope from a fresh `application.api.goal`
+      read taken inside the press: `expected_version`/`expected_revision` come from that read, and
+      `expected_decision_version` is re-derived from the same read's served decision found by the
+      decision id the card holds; a read that no longer serves that decision sends nothing (the read
+      preloads every decision row of the goal, so this narrows the lookup, not a served state). The
+      press's two envelopes — resolution, then admission — are frozen per logical intent (decision id,
+      option id, proposal hash) until the server answers, so a re-press after a lost acknowledgement
+      resends the recorded bytes: `replay_event` replays only a body whose hash equals the recorded
+      `request_hash`, and a body rebuilt from a fresh read would carry the post-application pair for a
+      command that already applied. The attempt is released on success and on any answer that settles
+      it, and kept on a transport failure or an uninterpretable answer — the settle rule the generic
+      command already applies. This recovery is usable only until the goal read refetches: the
+      committed resolution publishes its goal invalidation before its response is sent
+      (`portal_invalidations.ex:28-32`), so a client that refetches first (the resolution's own
+      publication, a reconnect, refocus or the fallback read) sees the decision resolved, the approval
+      control unmounts (`planApprovalOption`'s `open?` gate) and the frozen attempt keeps no trigger;
+      the resolved-but-unadmitted dead end that can leave behind is recorded as an open entry in
+      `docs/TODO.md`. Pinned by `frontend/src/features/goals/goal-attention.test.tsx`:
+      "builds the decision resolution from a submit-time read so a worker-advanced goal is not sent
+      stale" (red on the pre-fix bytes — the resolution carried the page's settled 4/3 pair and the
+      fixture answered the 409 `stale`, so no admission followed; green after: 5/4, then 6),
+      "replays the plan approval's decision resolution byte for byte after a lost acknowledgement"
+      (pre-fix the press failed earlier, at its first assertion `expect(first.expected_version).toBe(5)`
+      — the resolution carried the page's settled pair; green — the re-press repeated the recorded
+      bytes under the recorded identity and both commands were acknowledged) and "replays the plan
+      approval's admission byte for byte when its acknowledgement is lost" (the only pin of the frozen
+      admission half; red when the `attempt.admit ??` reuse is removed — 1 failed | 26 skipped (27) —
+      green on the branch). The fix round added two pins of the freeze's release rule: "releases the
+      plan approval attempt when the server answers its resolution" — red on `7a55b46`'s `detail.tsx`
+      and red when only the answered-error release is deleted (1 failed | 28 passed (29), the case
+      alone) — and "does not replay a frozen approval for a different proposal" — red when only the
+      freeze-key check is deleted (1 failed | 28 passed (29), the case alone); the latter stays green
+      on `7a55b46`'s `detail.tsx` by construction, because the pre-fix press keeps no attempt whose
+      bytes could leak into a changed intent. Recorded runs: implement stage (26 cases) 2 failed |
+      24 passed (26), exit 1, on `7a55b46`'s `detail.tsx`, and 26 passed (26), exit 0, on the
+      implement commit; apply stage (27 cases) 3 failed | 24 passed (27), exit 1, on `7a55b46`'s
+      `detail.tsx`, and 27 passed (27), exit 0, on the branch; fix stage (29 cases) 4 failed |
+      25 passed (29), exit 1, on `7a55b46`'s `detail.tsx` (the three pins plus the release pin), and
+      29 passed (29), exit 0, on the branch.
 
 - [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
       rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always

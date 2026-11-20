@@ -21,28 +21,28 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Dead-code candidates
 
-- [ ] Revalidate and remove the callerless projected provider-action chain in
-      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
-      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
-      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
-      document names it — and the chain behind it is its own:
-      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
-      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
-      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
-      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
-      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
-      were live. Inside that chain one disjunct can never match on any path the code gives it: the
-      clause `{:error, reason} when reason in [:stale, :state_conflict,
-      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
-      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
-      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
-      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
-      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
-      declares no such error key. `:capability_not_granted` is produced by
-      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
-      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
-      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
-      producer; revalidate the surviving provider-action tests either way.
+- [ ] Revalidate and remove two pre-existing dead surfaces found while applying the
+      provider-action-chain-removal simplify findings (2026-11-21).
+      (a) `Integrations.execute_accepted_resource_sync/2` and its catch-all
+      (`control/lib/symmetry_control/integrations.ex:554`, `:579`) have zero callers tree-wide:
+      `git grep -nw "execute_accepted_resource_sync" -- control/` matches only those two definition
+      clauses (the unanchored form also matches the `_unprojected` sibling's name), while the live
+      sibling `execute_accepted_resource_sync_unprojected/2` is called at
+      `control/lib/symmetry_control/integrations/provider_access.ex:1569`, `:1808`.
+      `record_provider_action_failure/2` (`integrations.ex:1111`) is reachable only from its two call
+      sites `:572`, `:575` inside this function and is dead with it; removing (a) must remove it too
+      (`compile --warnings-as-errors` will otherwise fail).
+      (b) The `{:provider_action_failure, code, outcome}` 3-tuple clause of `provider_failure/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:2311`) has no producer: its only
+      literal builder was the non-nil-outcome clause of `provider_action_failure_result/2`
+      (`integrations.ex:1134-1135` before the apply stage removed it), fed by the then-existing
+      `outcome` argument of `record_provider_action_failure/3`; it was unreachable once the
+      callerless projected chain was deleted. The surviving builders emit only the 4-tuple form:
+      the sole literal builder is `unprojected_provider_action_failure/1` (`integrations.ex:369`,
+      pass-through at `:364-365`), while `:514` is the clause head of
+      `project_provider_action_failure/2` matching the 4-tuple and `provider_access.ex:2315` the
+      4-tuple clause head of `provider_failure/1`.
+      Do not delete either surface here; revalidate and remove in a separate maintenance change.
 
 ## Retro review follow-ups
 
@@ -91,27 +91,31 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
       that never exits still fails) in a separate maintenance change.
 
-- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
-      submit-time served one. `approvePlan` builds its envelope from `query.data`
-      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
-      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
-      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
-      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
-      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
-      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
-      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
-      the original note: every accepted command appends an event through `append_event!/7`
-      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
-      and reconcile writers go through `Goal.transition_changeset`
-      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
-      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
-      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
-      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
-      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
-      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
-      direction: build the press's envelope from a submit-time read the way the plan admission does,
-      re-deriving the presented decision's own version from that same read, or keep the page version and
-      record the refusal plus reload as the intended recovery.
+- [ ] The Goal surface offers no admission path for a resolved plan decision whose admission was
+      never accepted.
+      `PlanApproval` renders only for an open plan decision: `planApprovalOption`
+      (`frontend/src/features/goals/detail.tsx:408`) returns null unless `decision["open?"] === true`,
+      the render (`:381-382`) mounts no other admission affordance, and the resolved card shows
+      "Resolved: …" only. `NextAction` has no `accept_plan` payload path: its `accept_plan` branch
+      renders a note only ("Approve the open plan decision above first …", `:533`), `actionPayload`
+      returns null for every kind it does not build (`:626-627`), and the send button returns without
+      sending anything. The dead end is reachable through the press's own two commands by two paths.
+      (a) An answered admission refusal releases the whole attempt (`:218`), so a re-press re-resolves
+      a decision the server serves `resolved` and is refused `invalid_decision` (`apply_command!`
+      requires `decision.state == "open"`, `control/lib/symmetry_control/goals.ex:6491-6495`), while
+      the server would accept a fresh `accept_plan` built from a current read (`goals.ex:6395-6414`).
+      (b) A lost resolution acknowledgement keeps the attempt, but the goal invalidation the committed
+      resolution published before its response
+      (`control/lib/symmetry_control_web/plugs/portal_invalidations.ex:28-32`) refetches the card and
+      the `open?` gate (`:408`) unmounts the control; the server would replay the frozen resolution
+      bytes, and the admission would still need a fresh read. Pre-existing (the pre-fix press also
+      applied the resolution and could not admit) and outside `fix/resolve-decision-submit-read`'s
+      contract scope; that branch records the frozen attempt's release rule and the precondition of
+      the lost-acknowledgement replay, not this dead end. Fix direction: keep a retry control while
+      `sentApproval` holds a frozen attempt for that decision id (its frozen resolution replays
+      through `replay_event` and the admission is built from a fresh read), which covers only (b), or
+      serve `accept_plan` as an allowed action for a resolved plan decision that is not yet admitted,
+      so `NextAction` can present it through a payload path, which covers both paths.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
