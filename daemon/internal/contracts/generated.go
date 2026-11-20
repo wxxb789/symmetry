@@ -423,7 +423,8 @@ type PurpleWorkItemExecution struct {
 	// the goal-less task — same binding as the retry re-admission (the corrected work-item
 	// profile and workspace plus the attempt's supervisory requirement) and capability
 	// containment, ignoring transient online, heartbeat and capacity state — advertises the
-	// adapter `start` operation of the fresh retried attempt. No such runtime answers false.
+	// adapter `start` operation of the fresh retried attempt. No such runtime answers false. A
+	// superseded run's pinned historical entry always answers false.
 	CanRetry           bool                          `json:"can_retry"`
 	Failure            map[string]interface{}        `json:"failure"`
 	Generation         int64                         `json:"generation"`
@@ -792,24 +793,14 @@ type SymmetryEvidenceV1 struct {
 }
 
 type SymmetryGoalCommandV1 struct {
-	ExpectedRevision int64                     `json:"expected_revision"`
-	ExpectedVersion  int64                     `json:"expected_version"`
-	Kind             SymmetryGoalCommandV1Kind `json:"kind"`
-	MutationID       string                    `json:"mutation_id"`
-	// Operator achieve. An authenticated operator-issued achieve is itself the final operator
-	// acceptance for the goal-level operator-acceptance predicate and raises no completion
-	// decision for itself. The optional integration_work_item_id carries a server-enforced
-	// conditional obligation stated on that property; no caller-controlled required count
-	// exists.
-	Payload       Payload                            `json:"payload"`
-	SchemaVersion SymmetryGoalCommandV1SchemaVersion `json:"schema_version"`
+	ExpectedRevision int64                              `json:"expected_revision"`
+	ExpectedVersion  int64                              `json:"expected_version"`
+	Kind             SymmetryGoalCommandV1Kind          `json:"kind"`
+	MutationID       string                             `json:"mutation_id"`
+	Payload          Payload                            `json:"payload"`
+	SchemaVersion    SymmetryGoalCommandV1SchemaVersion `json:"schema_version"`
 }
 
-// Operator achieve. An authenticated operator-issued achieve is itself the final operator
-// acceptance for the goal-level operator-acceptance predicate and raises no completion
-// decision for itself. The optional integration_work_item_id carries a server-enforced
-// conditional obligation stated on that property; no caller-controlled required count
-// exists.
 type Payload struct {
 	ApprovedRevision        *int64                `json:"approved_revision,omitempty"`
 	ModelProfile            *string               `json:"model_profile,omitempty"`
@@ -1683,7 +1674,8 @@ type FluffyWorkItemExecution struct {
 	// the goal-less task — same binding as the retry re-admission (the corrected work-item
 	// profile and workspace plus the attempt's supervisory requirement) and capability
 	// containment, ignoring transient online, heartbeat and capacity state — advertises the
-	// adapter `start` operation of the fresh retried attempt. No such runtime answers false.
+	// adapter `start` operation of the fresh retried attempt. No such runtime answers false. A
+	// superseded run's pinned historical entry always answers false.
 	CanRetry           bool                          `json:"can_retry"`
 	Failure            map[string]interface{}        `json:"failure"`
 	Generation         int64                         `json:"generation"`
@@ -1891,7 +1883,8 @@ type TentacledWorkItemExecution struct {
 	// the goal-less task — same binding as the retry re-admission (the corrected work-item
 	// profile and workspace plus the attempt's supervisory requirement) and capability
 	// containment, ignoring transient online, heartbeat and capacity state — advertises the
-	// adapter `start` operation of the fresh retried attempt. No such runtime answers false.
+	// adapter `start` operation of the fresh retried attempt. No such runtime answers false. A
+	// superseded run's pinned historical entry always answers false.
 	CanRetry           bool                             `json:"can_retry"`
 	Failure            map[string]interface{}           `json:"failure"`
 	Generation         int64                            `json:"generation"`

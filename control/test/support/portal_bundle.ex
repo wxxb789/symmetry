@@ -22,7 +22,11 @@ defmodule SymmetryControlWeb.PortalBundle do
   alias SymmetryControlWeb.PortalAssets
 
   @build_command "mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build"
-  @asset_ref ~r/(?:src|href)="(\/portal\/assets\/[^"?]+\.(?:js|css))"/
+
+  # `src`/`href` need an attribute boundary so `data-src="…"` does not match,
+  # and a query suffix (Vite's `?vsn=…`) is consumed but not captured: the
+  # reference is the bare asset path the staged directory holds.
+  @asset_ref ~r/(?<![-\w])(?:src|href)="(\/portal\/assets\/[^"?]+\.(?:js|css))(?:\?[^"]*)?"/
 
   @doc """
   Checks the staged bundle when `tags` marks the case as bundle-dependent.
@@ -37,6 +41,10 @@ defmodule SymmetryControlWeb.PortalBundle do
 
   @doc """
   The hashed `/portal/assets/...` references of a staged entry document.
+
+  A reference with a query suffix (for example `/portal/assets/b.css?vsn=1`)
+  yields the bare asset path; `data-src`-style attributes are not references
+  and are ignored.
   """
   def referenced_assets(index) do
     @asset_ref

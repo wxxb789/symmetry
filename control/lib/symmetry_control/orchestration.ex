@@ -623,8 +623,8 @@ defmodule SymmetryControl.Orchestration do
   """
   @type retry_binding :: %{
           task_id: Ecto.UUID.t(),
-          agent_profile: String.t(),
-          workspace: String.t(),
+          agent_profile: String.t() | nil,
+          workspace: String.t() | nil,
           required_capabilities: map()
         }
 
@@ -634,6 +634,20 @@ defmodule SymmetryControl.Orchestration do
     workspace: :string,
     required_capabilities: :map
   }
+
+  @doc """
+  Whether `task` is the attempt a retry can replace: a terminal attempt that is
+  not Goal-owned.
+
+  The served retry gate resolves its eligibility from exactly this set, in the
+  workspace read and in the command responses, so a live or Goal-owned attempt
+  never claims a retry.
+  """
+  @spec retryable_attempt?(Task.t()) :: boolean()
+  def retryable_attempt?(%Task{goal_id: nil, state: state}) when state in ["failed", "cancelled"],
+    do: true
+
+  def retryable_attempt?(%Task{}), do: false
 
   @doc """
   The ids of `bindings` with at least one runtime assignment could select that
@@ -670,12 +684,7 @@ defmodule SymmetryControl.Orchestration do
   """
   @spec retry_runtime_eligible?(retry_binding()) :: boolean()
   def retry_runtime_eligible?(binding) when is_map(binding) do
-    Repo.exists?(
-      from binding in values([retry_binding_row(binding)], @retry_binding_types),
-        cross_join: runtime in Runtime,
-        where: ^runtime_matches_binding(),
-        where: fragment("? @> ?", runtime.capabilities, type(^retry_adapter_requirement(), :map))
-    )
+    not Enum.empty?(retry_runtime_eligible_task_ids([binding]))
   end
 
   @doc """
@@ -696,7 +705,7 @@ defmodule SymmetryControl.Orchestration do
   end
 
   defp retry_binding_row(binding) do
-    Map.take(binding, [:task_id, :agent_profile, :workspace, :required_capabilities])
+    Map.take(binding, Map.keys(@retry_binding_types))
   end
 
   # A retried attempt starts a fresh run, so its runtime must advertise `start`.

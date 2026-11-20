@@ -140,7 +140,7 @@ export function retainOlderPage(
   fetchedBeforeId: string | null,
   page: { readonly messages: readonly ChatConversationMessage[]; readonly nextBefore: string | null },
 ): ChatScopeState {
-  const continues = fetchedBeforeId !== null ? fetchedBeforeId === state.nextBoundaryId : state.nextCursor === fetchedBefore;
+  const continues = ownsChainPointer(state, fetchedBefore, fetchedBeforeId);
   return {
     ...state,
     pages: [...state.pages, { messages: page.messages, fetchBefore: fetchedBefore, nextBefore: page.nextBefore, fetchBeforeId: fetchedBeforeId }],
@@ -150,14 +150,18 @@ export function retainOlderPage(
 }
 
 /**
- * True while a refused press still owns the chain pointer: the boundary its
- * cursor was minted at — compared by the boundary message's id whenever the
- * press recorded one, by the cursor's bytes otherwise — is still the boundary
- * the surface's next load chains from. A press a later load advanced past, or
- * a renewed cursor superseded, no longer owns it, so its refusal proves
- * nothing about the cursor the surface holds now.
+ * The one chain-pointer ownership rule both callers rest on: true while the
+ * boundary a load or press was minted at — compared by the boundary message's
+ * id whenever one was recorded, by the cursor's bytes otherwise — is still the
+ * boundary the surface's next load chains from. `retainOlderPage` binds an
+ * older page to the chain under it. A refused press's refusal proves nothing
+ * about the cursor the surface holds now; the predicate only authorizes
+ * recovery of a chain boundary the press still owns. A boundary a later load
+ * advanced past no longer owns the pointer, and a re-signed cursor at the same
+ * recorded boundary keeps it, because the id comparison does not change on
+ * renewal.
  */
-export function refusedPressStillOwnsChain(state: ChatScopeState, cursor: string, boundaryId: string | null): boolean {
+export function ownsChainPointer(state: ChatScopeState, cursor: string, boundaryId: string | null): boolean {
   return boundaryId !== null ? state.nextBoundaryId === boundaryId : state.nextCursor === cursor;
 }
 

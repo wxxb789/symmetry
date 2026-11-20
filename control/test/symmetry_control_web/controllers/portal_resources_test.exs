@@ -549,56 +549,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     # The served retry control reads assignment eligibility, so a runtime the
     # task could be assigned to must advertise the adapter `start` operation
     # for the external-work gate below to be the only refusal left.
-    machine_key = Ecto.UUID.generate()
-
-    assert {:ok, enrolled, :created} =
-             Orchestration.enroll_machine(
-               %{name: "resource-retry-machine", machine_token: "token-#{machine_key}"},
-               machine_key,
-               enrollment_token: "enrollment-secret",
-               expected_enrollment_token: "enrollment-secret"
-             )
-
-    assert {:ok, [_runtime]} =
-             Orchestration.register_runtimes(
-               enrolled.machine.id,
-               Ecto.UUID.generate(),
-               [
-                 %{
-                   runtime_key: "resource-retry-runtime",
-                   name: "Resource retry runtime",
-                   capacity: 1,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   harness_kind: "generic",
-                   harness_version: "generic-v1",
-                   adapter_version: "generic-v1",
-                   adapter_protocol_version: 1,
-                   capabilities: %{
-                     "structured_input" => true,
-                     "provider_access" => true,
-                     "adapter" => %{
-                       "kind" => "generic",
-                       "native_version" => "generic-v1",
-                       "implementation_version" => "generic-v1",
-                       "protocol_version" => 1,
-                       "operations" => %{
-                         "start" => true,
-                         "events" => true,
-                         "cancel" => false,
-                         "resume" => false,
-                         "handoff" => false,
-                         "guidance" => "unsupported",
-                         "pause" => "unsupported",
-                         "approval_response" => false,
-                         "usage" => "unknown",
-                         "hard_cost_limit" => false
-                       }
-                     }
-                   }
-                 }
-               ]
-             )
+    enroll_adapter_runtime("resource-retry", "Resource retry runtime")
 
     assert %{"execution" => %{"generation" => 1, "state" => "queued"}} =
              api_conn()
@@ -1116,6 +1067,62 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   defp work_item_snapshot(work_item_id) do
     Repo.one(from item in WorkItem, where: item.id == ^work_item_id)
+  end
+
+  # An enrolled machine with one adapter-backed runtime for the project's
+  # default binding: provider-capable because the retried item's binding
+  # requires `provider_access`, and advertising the adapter `start` operation.
+  defp enroll_adapter_runtime(key, name) do
+    enrollment_key = Ecto.UUID.generate()
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(
+               %{name: "#{key}-machine", machine_token: "token-#{enrollment_key}"},
+               enrollment_key,
+               enrollment_token: "enrollment-secret",
+               expected_enrollment_token: "enrollment-secret"
+             )
+
+    assert {:ok, [_runtime]} =
+             Orchestration.register_runtimes(
+               enrolled.machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "#{key}-runtime",
+                   name: name,
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   harness_kind: "generic",
+                   harness_version: "generic-v1",
+                   adapter_version: "generic-v1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "structured_input" => true,
+                     "provider_access" => true,
+                     "adapter" => %{
+                       "kind" => "generic",
+                       "native_version" => "generic-v1",
+                       "implementation_version" => "generic-v1",
+                       "protocol_version" => 1,
+                       "operations" => %{
+                         "start" => true,
+                         "events" => true,
+                         "cancel" => false,
+                         "resume" => false,
+                         "handoff" => false,
+                         "guidance" => "unsupported",
+                         "pause" => "unsupported",
+                         "approval_response" => false,
+                         "usage" => "unknown",
+                         "hard_cost_limit" => false
+                       }
+                     }
+                   }
+                 }
+               ]
+             )
   end
 
   defp provider_item(external_id, external_url) do

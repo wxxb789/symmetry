@@ -19,6 +19,7 @@ defmodule SymmetryControl.GoalsTest do
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
+  alias SymmetryControl.TelemetryReads
 
   @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
@@ -4785,7 +4786,7 @@ defmodule SymmetryControl.GoalsTest do
       handler_id,
       [:symmetry_control, :repo, :query],
       fn _event, _measurements, metadata, %{reader: reader, forms: forms} ->
-        if goal_read?(metadata.params, forms),
+        if TelemetryReads.read?(metadata.params, forms),
           do: send(reader, {:goal_read_query, self(), to_string(metadata.query)})
       end,
       %{reader: reader, forms: goal_forms}
@@ -4795,14 +4796,15 @@ defmodule SymmetryControl.GoalsTest do
 
     assert {:ok, _projection} = Goals.fetch_goal(goal.id)
 
-    reads = goal_read_queries([])
+    reads = TelemetryReads.drain(:goal_read_query)
     queries = Enum.map(reads, fn {_pid, query} -> query end)
     processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
 
-    # Two preloads must have rows for this test to have power: Ecto only
-    # preloads in parallel from two preloads with fetch work, and every parallel
-    # preload would queue for the sandbox connection the test process owns
-    # (the recorded intermittent checkout-timeout failure).
+    # Two preloads must issue fetch queries for this test to have power: Ecto
+    # only preloads in parallel from two preloads with fetch work (an unloaded
+    # has_many issues its query even with zero rows), and every parallel preload
+    # would queue for the sandbox connection the test process owns (the recorded
+    # intermittent checkout-timeout failure).
     assert Enum.any?(queries, &String.contains?(&1, "\"goal_revisions\""))
     assert Enum.any?(queries, &String.contains?(&1, "\"work_items\""))
 
@@ -9116,24 +9118,6 @@ defmodule SymmetryControl.GoalsTest do
       "operator:test",
       Keyword.merge([now: @now], opts)
     )
-  end
-
-  defp goal_read_queries(reads) do
-    receive do
-      {:goal_read_query, pid, query} -> goal_read_queries([{pid, query} | reads])
-    after
-      0 -> reads
-    end
-  end
-
-  defp goal_read?(params, forms) do
-    params
-    |> List.wrap()
-    |> Enum.any?(fn
-      value when is_binary(value) -> value in forms
-      values when is_list(values) -> Enum.any?(values, &(&1 in forms))
-      _value -> false
-    end)
   end
 
   defp fetch_goal!(goal_id) do
