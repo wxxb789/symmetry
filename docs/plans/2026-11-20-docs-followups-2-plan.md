@@ -35,17 +35,21 @@ and this plan file.
   in Go). The recorded defect is the cross-language pair: `RequestHash.canonical/1`
   (`control/lib/symmetry_control/request_hash.ex:5`, `Jason.encode!/1`) vs
   `CanonicalizeJSON` (`daemon/internal/protocol/goal_subject.go:102`) over the same logical
-  envelope. Reachability is stated with evidence: the daemon's text validation accepts any valid
-  UTF-8 (`goal_validation.go:66-76`), and the escaping test that exists pins only `\u0000`, whose
-  escape carries no hex letter (`goal_subject_test.go:64-73`). Fix direction: pick one canonical
-  case and pin both languages against one shared fixture; the entry does not pick the winner
-  because the choice is a contract decision.
+  envelope. Reachability is stated with evidence: Control's free-text `objective`/`title`/
+  `description` (`goals.ex:2151,2156-2157`) feed the snapshot whose `content_hash` Jason computes
+  (`context_content_hash` `:2602-2606`) and the daemon recomputes and refuses on mismatch
+  (`daemon/internal/control/validation.go:1744-1772`), with the LongText boundary stated at
+  `contracts/scripts/boundary.test.mjs:59-71`; the end-to-end refusal is marked source-traced.
+  The escaping test that exists pins `\u0000` and the shorthand escapes but no hex-letter `\u00xx`
+  escape (`goal_subject_test.go:64-73`). Fix direction: pick one canonical case and pin both
+  languages against one shared fixture; the entry does not pick the winner because the choice is
+  a contract decision.
 - **(b)** The swallowed span is identified by digest, not by prose: the emitted token hashes the
   matched text (path bytes, then the escape, then the word behind it), so the entry quotes both the
-  emitted digest and the digest the path-only render would carry. The exact byte spellings of the
-  two scratch inputs live outside the repository, in this run's scratch files (`%TEMP%/gdd-docs2/`)
-  and recorded write calls, not in `answer.md`, because a faithful Windows or POSIX path literal in
-  a repository file is itself a specimen for the record sanitizer the entry is about. The entry
+  emitted digest and the digest the path-only render would carry. The exact byte spellings are
+  stated as construction expressions in the TODO entry (built from `BS = chr(0x5C)`, so the
+  repository file carries no raw Windows or POSIX path literal), because a faithful path literal
+  in a repository file is itself a specimen for the record sanitizer the entry is about. The entry
   also records why the POSIX exclusion is not directly portable: a raw Windows spelling uses a bare
   backslash as its separator, so "backslash never a path byte" is only safe once the fix decides
   how to read an escape-shaped run; the two readings are named, not silently chosen.
@@ -59,13 +63,16 @@ and this plan file.
   the tool version, the substitute recipe and the fact that no CI job invokes `actionlint`
   (verified: a repository grep for `actionlint` matches `docs/` only), so a later reader does not
   infer a CI gate that does not exist.
-- **Quality rule** (contract clause 2, verbatim scope): a change touching `frontend/` or
-  `browser/` runs the local browser render gate before its pull request; a change touching
-  `daemon/`, platform-specific code, or `scripts/ci/` runs the affected suites on Linux (WSL or a
-  Linux host) before its pull request; CI remains the floor, not the first execution of
-  browser-rendered or Linux-only behavior. Named artifacts stay generic (no host paths, no
-  machine names); the existing "Run affected focused checks during development" sentence is left
-  as is, and the amendment states the path trigger it lacked.
+- **Quality rule** (contract clause 2): a change touching `frontend/` or `browser/` runs the local
+  browser render gate before its pull request; a change touching `daemon/`, Linux-specific or
+  platform-shared code, or `scripts/ci/` runs the affected suites on Linux (WSL or a Linux host)
+  before its pull request, while Windows-specific code runs on Windows; a path-triggered run that
+  cannot be executed stays pending, never passed. CI remains the floor, not the first execution of
+  browser-rendered or Linux-only behavior. The Windows clause narrows the contract's
+  "platform-specific code" wording so Windows-only code is not sent to a Linux run, and is flagged
+  for the owner. Named artifacts stay generic (no host paths, no machine names); the existing
+  "Run affected focused checks during development" sentence is left as is, and the amendment
+  states the path trigger it lacked.
 
 ## Evidence plan (all commands run at `978abba`)
 
@@ -74,9 +81,9 @@ and this plan file.
    -count=1`.
 2. Elixir probe executed in WSL against the Jason 1.4.5 beams of an existing checkout
    (`_build/test/lib/jason/ebin`), version confirmed from the dependency's `mix.exs`.
-3. Sanitizer reproduction: two scratch inputs outside the repository, the tool invoked exactly as
-   `scripts/ci/model-routing-record-sanitize.py <file>`; digests recomputed independently with
-   `python -c` over the candidate spans.
+3. Sanitizer reproduction: two inputs, whose construction expressions the TODO entry states, the
+   tool invoked exactly as `scripts/ci/model-routing-record-sanitize.py <file>`; digests
+   recomputed independently with `python -c` over the candidate spans.
 4. Frontend reproduction: scratch Node ESM probe plus a scratch resolve hook in the temp
    directory (no `node_modules` install, no repository file added); it imports the repository's
    `filters.ts`/`presentation.ts` bytes through Node's type stripping.
@@ -101,13 +108,14 @@ into a repo record about an out-of-repo file).
 2. **No faithful Windows or POSIX path literal in the repository entries.** The sanitizer that
    entry (b) is about flags any drive-rooted or host-rooted literal (verified: the first draft
    tripped `--check --root-only` on `docs/TODO.md` and on this plan), and the increment's own
-   clause asks for no host paths in added lines. The entries therefore carry the shape plus the
-   digests (exact, comparable), while the exact input bytes stay in the run's scratch files and
-   recorded write calls, outside the repository. Trade-off: a reader cannot paste the input from
-   the entry alone; the digests and the cited rule lines still decide whether the claim holds.
+   clause asks for no host paths in added lines. The entries therefore carry the shape, the
+   construction expressions of the two inputs and the digests (exact, comparable), so the bytes
+   are rebuildable from the entry itself. Trade-off: a reader must evaluate a small Python
+   expression to paste the exact input; the digests and the cited rule lines still decide whether
+   the claim holds.
 3. **The quality rule as an amendment paragraph, not a new table row.** The table lists per-surface
    commands; the contract's rule is a path-to-verification trigger that spans surfaces and names no
-   command, so it fits the paragraph amendments the file already carries (2026-11-17, 2026-11-20).
+   command, so it fits the paragraph amendments the file already carries (2026-11-17).
 4. **Item (d) is dropped, not recorded.** Only an out-of-repo contract carries the wrong mapping;
    the repo's four `#79 (21cf326)` references are correct. Writing a repo record about an
    out-of-repo file would add a citation the repository cannot verify.

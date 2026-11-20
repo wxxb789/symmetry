@@ -124,10 +124,14 @@ pending with the missing environment; do not remove them to claim completion.
 Amendment (2026-11-20, owner Q10C). Verification is selected by the paths a change
 touches, not by the platform CI happens to use: a change touching `frontend/` or
 `browser/` runs the browser render gate locally before its pull request opens (the
-render step's own spec list against locally started shell and control fixtures, per
-the Browser row above), and a change touching `daemon/`, platform-specific code or
-`scripts/ci/` runs the affected suites on Linux (WSL or a Linux host) before it
-opens. CI remains the floor, not the first execution of browser-rendered or
+focused release-shell gate in the [browser README](../../browser/README.md), run
+with `SYMMETRY_RENDER_GATE_REQUIRED=1` so a missing environment aborts instead of
+skipping), and a change touching `daemon/`, Linux-specific or platform-shared code,
+or `scripts/ci/` runs the affected suites on Linux (WSL or a Linux host) before it
+opens, while Windows-specific code runs on Windows. A path-triggered run that cannot
+be executed is recorded as pending with its missing environment, per the paragraph
+above, never as passed; documentation-only changes under these paths are exempt, per
+`AGENTS.md`. CI remains the floor, not the first execution of browser-rendered or
 Linux-only behavior: the local run decides the change before review, and the hosted
 gates still decide the merge.
 
