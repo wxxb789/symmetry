@@ -1580,6 +1580,43 @@ describe("run scope", () => {
     });
   });
 
+  it("reuses the frozen action identity for a retried decision option and mints a new one for another option", async () => {
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    renderChat(`/portal/chat?scope=run&runId=${runId}&projectId=${projectId}`, {
+      conversation: () => new Response(JSON.stringify(conversationBody({ scope: "run", projectId, runId, runs: [runDetail({ waiting: true })] }))),
+      workspace: () => workspaceBody({ execution: { run_id: runId, generation: 3, state: "waiting_for_input", runtime_id: runtimeId, can_guide: false, can_pause: false }, runtimes: [] }),
+      message: (body) => {
+        bodies.push(body);
+        throw new TypeError("offline");
+      },
+    });
+    await openChat();
+    await screen.findByRole("heading", { name: "Which strategy should be used?" });
+    const staged = document.querySelector("[data-chat-decision=\"staged\"]") as HTMLElement;
+    const defer = document.querySelector("[data-chat-decision=\"defer\"]") as HTMLElement;
+
+    await user.click(staged);
+    // The decision attempt keeps no composer draft, so its unconfirmed copy
+    // never promises one.
+    await screen.findByText("Decision not confirmed. Choosing the same option again reuses the same action identity.");
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.["option_id"]).toBe("staged");
+
+    // Re-choosing the same option rebuilds the byte-equal body and reuses the
+    // frozen attempt's identity, exactly as the composer retry does.
+    await user.click(staged);
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(JSON.stringify(bodies[1])).toBe(JSON.stringify(bodies[0]));
+
+    // Another option is a different operation and mints a new identity.
+    await user.click(defer);
+    await waitFor(() => expect(bodies).toHaveLength(3));
+    expect(bodies[2]?.["option_id"]).toBe("defer");
+    expect(bodies[2]?.["action_id"]).not.toBe(bodies[0]?.["action_id"]);
+  });
+
   it("renders the served decision packet only under the run scope that owns it", async () => {
     const user = userEvent.setup();
     renderChat(`/portal/chat?scope=run&runId=${runId}&projectId=${projectId}`, {

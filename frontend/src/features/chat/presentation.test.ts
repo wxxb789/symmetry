@@ -207,7 +207,8 @@ describe("send status text", () => {
     expect(chatSendStatusText({ kind: "saved-question" })).toBe("Saved to this context.");
     expect(chatSendStatusText({ kind: "saved-command" })).toBe("Message saved; the transcript receipt tracks the acknowledgement.");
     expect(chatSendStatusText({ kind: "refused", message: "The action id was already used." })).toBe("Refused: The action id was already used.");
-    expect(chatSendStatusText({ kind: "unconfirmed" })).toBe("Send not confirmed. The draft is kept; retry reuses the same action identity.");
+    expect(chatSendStatusText({ kind: "unconfirmed", source: "composer" })).toBe("Send not confirmed. The draft is kept; retry reuses the same action identity.");
+    expect(chatSendStatusText({ kind: "unconfirmed", source: "decision" })).toBe("Decision not confirmed. Choosing the same option again reuses the same action identity.");
     expect(chatSendStatusText({ kind: "notice", message: "Guidance must be 32,768 UTF-8 bytes or fewer." })).toBe("Guidance must be 32,768 UTF-8 bytes or fewer.");
   });
 });

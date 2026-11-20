@@ -197,7 +197,11 @@ export function chatSendStatusText(status: ChatSendStatus): string {
     case "saved-question": return "Saved to this context.";
     case "saved-command": return "Message saved; the transcript receipt tracks the acknowledgement.";
     case "refused": return `Refused: ${status.message}`;
-    case "unconfirmed": return "Send not confirmed. The draft is kept; retry reuses the same action identity.";
+    // A decision attempt keeps no composer draft: its retry is the option
+    // button, which reuses the frozen identity exactly for the same option.
+    case "unconfirmed": return status.source === "decision"
+      ? "Decision not confirmed. Choosing the same option again reuses the same action identity."
+      : "Send not confirmed. The draft is kept; retry reuses the same action identity.";
     case "notice": return status.message;
   }
 }

@@ -13,6 +13,12 @@ import { useCallback, useRef, useState } from "react";
 /** The intents the server's chat vocabulary accepts. */
 export type ChatIntent = "discuss" | "status" | "start_work" | "guidance" | "decision" | "pause" | "resume" | "cancel";
 
+/**
+ * Which affordance owns an unconfirmed attempt's retry: the composer, whose
+ * draft is kept, or the decision packet's option, re-chosen from its button.
+ */
+export type ChatAttemptSource = "composer" | "decision";
+
 /** The scope's send state; every rendered text is one of these exact observables. */
 export type ChatSendStatus =
   | { readonly kind: "idle" }
@@ -20,7 +26,7 @@ export type ChatSendStatus =
   | { readonly kind: "saved-question" }
   | { readonly kind: "saved-command" }
   | { readonly kind: "refused"; readonly message: string }
-  | { readonly kind: "unconfirmed" }
+  | { readonly kind: "unconfirmed"; readonly source: ChatAttemptSource }
   | { readonly kind: "notice"; readonly message: string };
 
 /** One retained conversation page: the served messages and the cursor it came from. */

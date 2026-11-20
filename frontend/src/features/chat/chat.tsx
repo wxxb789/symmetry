@@ -310,7 +310,9 @@ export function ChatPage() {
         const refused = definitiveRefusal(error);
         updateWith(sendKey, (current) => ({
           ...current,
-          status: refused ? { kind: "refused", message: errorMessage(error) } : { kind: "unconfirmed" },
+          status: refused
+            ? { kind: "refused", message: errorMessage(error) }
+            : { kind: "unconfirmed", source: request.intent === "decision" ? "decision" : "composer" },
           frozen: refused ? null : current.frozen,
         }));
       },
@@ -384,7 +386,7 @@ export function ChatPage() {
   const sendDecision = (option: ChatDecisionOption) => {
     if (state.status.kind === "sending") return;
     if (servedRunItem === null || servedRunExecution === null || waiting === null || urlRunId === null) return;
-    send({
+    const request: ChatMessageRequest = {
       scope: urlScope,
       run_id: urlRunId,
       intent: "decision",
@@ -396,7 +398,12 @@ export function ChatPage() {
       // buttons, so a stale packet is the server's refusal to give.
       waiting_transition_id: waiting.transition_id,
       option_id: option.id,
-    });
+    };
+    // The same rule as the composer retry: a re-chosen option that rebuilds
+    // the frozen body byte for byte reuses its identity; a different option,
+    // or a moved packet, is a new operation and mints a new id.
+    const frozen = state.frozen;
+    send(frozen !== null && sameRequestBody(frozen, request) ? { ...request, action_id: frozen.action_id } : request);
   };
 
   // The offset this scope leaves with is the pane's own position at the moment
