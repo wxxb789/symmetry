@@ -21,16 +21,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Dead-code candidates
 
-- `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
-
-- `frontend/src/features/connections/resources.tsx` `refusalGuidance.provider_owned`: no
-  call site of `refusalNotice` on that page can receive the code. Its only producer is
-  `Workspaces.provider_owned_fields_editable` answered by `update_work_item`
-  (`control/lib/symmetry_control/workspaces.ex`), i.e. the assignment surface, which
-  carries its own `assignmentGuidance`. Recorded by the retro-b4-goals-connections review
-  (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
-  (fix round 1); revalidate and remove in a separate maintenance change.
-
 - [ ] Revalidate and remove the callerless projected provider-action chain in
       `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
       `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
@@ -53,13 +43,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Decide in a separate maintenance change whether the projected variant is dead surface — delete the
       chain and the disjunct together — or missing its caller, in which case the disjunct needs a
       producer; revalidate the surviving provider-action tests either way.
-
-- [ ] Drop the unused `conn` parameter in
-      `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:650-651)
-      passes `conn` to `portal_command!/4` (:653), which never reads it (it builds its own `api_conn()`),
-      so every run reports `warning: variable "conn" is unused` at :653. Pre-existing (present in both the
-      before and after `MIX_TEST_PARTITION=66` runs of the retro-b5 apply stage) and test-only; drop the
-      parameter and the callers' pass-through in separate maintenance.
 
 ## Retro review follow-ups
 
@@ -129,38 +112,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       direction: build the press's envelope from a submit-time read the way the plan admission does,
       re-deriving the presented decision's own version from that same read, or keep the page version and
       record the refusal plus reload as the intended recovery.
-
-- [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
-      rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always
-      answers false", repeated in `work-detail-read.schema.json:142` and
-      `workspace-read.schema.json:281`), and the read model serves it
-      (`control/lib/symmetry_control/chat/read_model.ex:51-59` forces it for a historical projection),
-      but the case that exercises exactly that shape — "historical run chat remains pinned after retry
-      and cannot control a newer attempt" (`control/test/symmetry_control/chat_test.exs:644-789`) —
-      asserts `historical` (`:734`) and `refute …can_cancel` (`:735`) and never `can_retry`; the file
-      contains no `can_retry` occurrence at all, and no other case targets a pinned historical chat
-      entry. Add the assertion in a separate maintenance change and keep the case's other assertions:
-      the rule is behavioural, so the pin must fail if the historical branch stops forcing the flag.
-
-- [ ] Document how to recover the repository-default test database, or reset it from the test alias.
-      The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where
-      `MIX_TEST_PARTITION` is appended as a literal suffix, so a partition run selects a different
-      database name that the test alias creates and migrates when absent), and `mix test` runs
-      `symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet` first
-      (`control/mix.exs:79`). Create and migrate make a missing or
-      migration-behind database usable, but nothing drops or truncates one: a pending migration whose
-      table already exists fails the alias's migrate step before any test runs. Observed 2026-11-20
-      while gating an unrelated Control change: an unpartitioned `mix test` stopped with Postgrex
-      `42P07` (`duplicate_table`) on a migration whose table already existed — `schema_migrations`
-      named a revision older than the object set — while the same change ran green on a partition
-      database. A maintainer reads that as a code
-      failure, and the repository documents no recovery: `ecto.reset` exists as an alias
-      (`control/mix.exs:70`) but no doc names it for the default test database, and the only documented
-      resets belong to harness-owned databases (`docs/runbooks/session-receipt-recovery-e2e.md`). Fix
-      direction: document the drop-and-recreate path for the default test database where the suite's
-      commands are documented, or add a recreate/reset step to the `test` alias so a stale default
-      database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
-      the recovery recipe.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
@@ -339,7 +290,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
     **Operator instruction (dispatch branch, exact).** The trigger is dispatch-only by design: the
     workflow's only event is `workflow_dispatch` (`.github/workflows/linux-native-v2-acceptance.yml:3-6`),
-    its job is guarded `if: github.event_name == 'workflow_dispatch'` (`:14`), and
+    its job carries no event `if:` guard (the `on:` block at `:3-6` is the only trigger), and
     `scripts/ci/linux-v2-native-acceptance.sh:46` refuses every other event — `credentialed Linux
     acceptance requires explicit workflow_dispatch` — so nothing else can run it: the file declares no
     push, pull_request, schedule or `workflow_call` trigger, and `ci.yml` references it nowhere and holds
