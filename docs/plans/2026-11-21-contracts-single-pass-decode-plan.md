@@ -37,7 +37,9 @@ decoded; the second instance is dropped unread (`contracts/schema.go:78` discard
      the CommitPath switch, unchanged messages and order);
    - `DecodeSchema` decodes once (`decodeRawJSON`) and calls `validateInstance` on that instance;
    - `ValidateSchema` keeps its published raw-bytes semantics: `decodeSchemaJSON` (unchanged) +
-     `validateInstance`. Public signatures, error strings and error precedence are unchanged.
+     `validateInstance`. Public signatures, error strings and error precedence are unchanged;
+   - `decodeSchemaJSON` increments a package-internal `decodeSchemaJSONCalls` counter (atomic) so a
+     test can pin the single-pass property structurally (the traversal-count test below).
 2. `daemon/internal/contracts/schema_test.go`:
    - the fixture reader splits into a non-`testing.T` loader (`readContractFixtureBytes`) so a
      benchmark can use it; `readContractFixture(t, …)` keeps its signature and its `t.Fatal`;
@@ -50,6 +52,10 @@ decoded; the second instance is dropped unread (`contracts/schema.go:78` discard
      traversal stays measurable against the delivered path inside the tree, in one run, instead of
      only across the stage's before/after logs. On the baseline revision the two sub-benchmarks
      measure the same body, which is itself the harness's fairness check;
+   - `TestSchemaEntryPointsDecodePayloadOnce` (traversal-count test) asserts that one `DecodeSchema`
+     call and one `ValidateSchema` call each perform exactly one payload decode, so a revert to the
+     pre-refactor composition fails the suite instead of only moving the benchmark's allocation
+     column;
    - no test deleted, renamed or weakened; no assertion changes.
 3. `docs/plans/2026-11-21-contracts-single-pass-decode-plan.md` (this file; `docs/plans/` is the stage
    template's designated plan location, where the sibling slices' plans live — #127, #132).
@@ -62,9 +68,11 @@ in-repo document is made stale; nothing outside the two owned files changes.
 ## Public/API shape and exact edge-case semantics
 
 `DecodeSchema(envelope, data, target) error` and `ValidateSchema(envelope, data) error` keep their
-signatures, so all 25 `DecodeSchema` call sites and 2 `ValidateSchema` call sites
-(`daemon/internal/protocol/protocol.go:193`, `daemon/internal/protocol/goal_contract_fixture_test.go:135`)
-compile untouched. Verdicts and messages, by input class:
+signatures, so every caller compiles untouched — 13 `DecodeSchema` call sites outside
+`daemon/internal/contracts` (24 in-tree call sites at the baseline: 25 `git grep` lines minus the
+definition) and the 2 out-of-package `ValidateSchema` call sites
+(`daemon/internal/protocol/protocol.go:193`, `daemon/internal/protocol/goal_contract_fixture_test.go:135`).
+Verdicts and messages, by input class:
 
 | Input | Baseline | Delivered |
 | --- | --- | --- |
@@ -96,14 +104,20 @@ deterministic allocation column, and the pre-change fairness check. Commands, in
    `cd daemon && go test -run '^$' -bench 'BenchmarkDecodeSchema' -benchmem -benchtime=300ms -count=6 -timeout 900s ./internal/contracts/`
    → `bench-before.txt`. On that revision the entry-point benchmark and the composition benchmark
    run the same three-pass body, so this file is the harness's fairness check: the two identical
-   bodies must allocate identically (they do, within ≤9 allocations) and their ns/op should agree.
+   bodies must allocate the same (they do: index-paired runs agree to ≤9 allocations/op, any run
+   pair to ≤14) and their ns/op should agree.
 2. Post-change: the identical command on the delivered tree → `bench-after.txt`.
 3. Paired runs, 8 each per fixture, because cross-run drift on this host is larger than the effect:
    both bodies in one process (`-bench '^BenchmarkDecodeSchema(BaselineComposition)?$/<fixture>$'`)
    plus a second campaign with one body per process (order bias removed) — `bench-pairs.txt`,
    `bench-separate.txt`, `-benchmem -benchtime=400ms -count=8`.
-4. Deterministic witness: allocations/op and B/op, identical across every run of a given body — the
-   removed second decode is exactly the delta between the two columns.
+4. Deterministic witness: allocations/op and B/op, stable across the runs of a given body within a
+   campaign but not bit-identical — largest observed spreads across the three six-run campaigns
+   (the two saved ones and the apply-stage re-run): 19 allocations/op and 8.8 kB/op, both on
+   `goal-read` composition. Settled samples only: a process's first calibration sample prints
+   `b.N=1` and absorbs the one-time `ensureSchemas` compile (≈840 k allocations on `goal-read`).
+   The removed second decode is the delta between the two columns (≈2 980 allocations/op on
+   `goal-read`, ≈150× the largest observed spread).
 5. Contract gates, serially after the benchmark runs:
    - `cd daemon && gofmt -l internal/contracts` → empty, exit 0
    - `cd daemon && go vet ./...` → exit 0
@@ -139,12 +153,13 @@ deterministic allocation column, and the pre-change fairness check. Commands, in
 4. **The typed `json.Unmarshal` stays.** The contract's change sentence keeps it ("unmarshal the
    typed DTO from the same bytes"); deriving the DTO from the `any` instance needs a marshal
    round-trip, i.e. more work and a second wire encoding. Rejected.
-5. **LOC**: the program plan estimated −30…−60 LOC for this slice; the measured delta is
-   `schema.go` +17/−6 (net +11, `git diff --numstat`) and `schema_test.go` +90/−6 (net +84, the
-   benchmark harness). The estimate assumed the duplicate path was deletable code; it was *shared*
-   code (`decodeSchemaJSON`, still the raw-bytes entry point `ValidateSchema` needs), so the change
-   buys a pass per envelope instead of a deletion, and the new benchmark is the receipt. Recorded as
-   a deviation from the plan's estimate, not as a contract miss: clause 1 measures the traversal.
+5. **LOC**: the program plan estimated −30…−60 LOC for this slice; the measured delta against the
+   baseline is `schema.go` +24/−6 (net +18, `git diff --numstat`) and `schema_test.go` +116/−6
+   (net +110: the benchmark harness and the traversal-count test). The estimate assumed the
+   duplicate path was deletable code; it was *shared* code (`decodeSchemaJSON`, still the
+   raw-bytes entry point `ValidateSchema` needs), so the change buys a pass per envelope instead of
+   a deletion, and the new benchmark is the receipt. Recorded as a deviation from the plan's
+   estimate, not as a contract miss: clause 1 measures the traversal.
 6. **The benchmark measures the real entry point, not a synthetic harness.** Its setup charging is
    identical on both trees (fixture read outside the loop, DTO allocated inside), so the delta
    isolates the removed traversal. It stays in `schema_test.go` as this slice's oracle artifact.
@@ -166,8 +181,10 @@ deterministic allocation column, and the pre-change fairness check. Commands, in
 ## Residual risks
 
 - **This host cannot resolve the effect as a per-fixture time claim.** The pre-change fairness check
-  (two byte-identical bodies, one process, 6 runs each) diverged by 0.18×–2.7× in ns/op while
-  matching to ≤9 allocations/op. Of the three timing campaigns, the same-process pair favored the
+  (two byte-identical bodies, one process, 6 runs each) still diverged in ns/op: per-fixture
+  minimum ratios 0.42×–1.45× and 0.14×–6.58× across every cross-body run pair (recomputed from the
+  saved `bench-before.txt`), while index-paired allocations matched to ≤9 allocations/op. Of the
+  three timing campaigns, the same-process pair favored the
   delivered path 6/6 (0.685×–0.885× of the composition minima), the repeat favored it 5/6
   (`goal-command` 1.196×) and the one-body-per-process campaign 4/6 (`goal-read` 1.136×,
   `workspace-read` 1.004×), with aggregate minima 0.727×, 0.715× and 0.873×. Individual fixtures
@@ -177,5 +194,6 @@ deterministic allocation column, and the pre-change fairness check. Commands, in
   allocs, 717178→536074 B/op). A CI runner with a quieter timer should re-measure before any timing
   statement is published.
 - The removed pass was the *second* decode; a future change that re-adds validation over raw bytes
-  will reintroduce the cost silently, since no test pins pass counts. The in-tree benchmark is the
-  witness: it is the only artifact that makes the regression measurable.
+  now fails `TestSchemaEntryPointsDecodePayloadOnce` (exactly one payload decode per entry-point
+  call, counted by `decodeSchemaJSONCalls`), and the in-tree benchmark keeps the cost measurable in
+  the allocation column.

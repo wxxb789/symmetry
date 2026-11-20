@@ -432,6 +432,32 @@ func TestTaskResultSchemaReturnsAnIndependentCanonicalDocument(t *testing.T) {
 	}
 }
 
+// TestSchemaEntryPointsDecodePayloadOnce pins the removed traversal: both entry
+// points must decode the payload exactly once, so reverting DecodeSchema to the
+// pre-refactor decodeRawJSON+ValidateSchema composition (two payload decodes)
+// fails here instead of only moving the benchmark's allocation column.
+func TestSchemaEntryPointsDecodePayloadOnce(t *testing.T) {
+	data := readContractFixture(t, "valid/goal-read.accepted-and-external.json")
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"DecodeSchema", func() error { return DecodeSchema(EnvelopeGoalRead, data, new(SymmetryGoalReadV1)) }},
+		{"ValidateSchema", func() error { return ValidateSchema(EnvelopeGoalRead, data) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := decodeSchemaJSONCalls.Load()
+			if err := test.call(); err != nil {
+				t.Fatal(err)
+			}
+			if decoded := decodeSchemaJSONCalls.Load() - before; decoded != 1 {
+				t.Fatalf("%s decoded the payload %d times, want 1", test.name, decoded)
+			}
+		})
+	}
+}
+
 // contractBenchmarkCase binds one valid fixture to the envelope and generated
 // DTO the strict boundary must decode it with.
 type contractBenchmarkCase struct {

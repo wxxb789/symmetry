@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -282,7 +283,13 @@ func decodeRawJSON(data []byte, presentationRead bool) (any, error) {
 	return decodeSchemaJSON(data, presentationRead)
 }
 
+// decodeSchemaJSONCalls counts payload decodes so tests can pin the
+// single-pass property: every entry-point call must decode an envelope's
+// bytes exactly once.
+var decodeSchemaJSONCalls atomic.Int64
+
 func decodeSchemaJSON(data []byte, presentationRead bool) (any, error) {
+	decodeSchemaJSONCalls.Add(1)
 	if err := validateJSONNumberLexemes(data, presentationRead); err != nil {
 		return nil, err
 	}
