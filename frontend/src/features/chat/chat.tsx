@@ -55,7 +55,7 @@ import {
   type ChatReceiptView,
   type ChatRunSignals,
 } from "./presentation";
-import { chatScopeKey, ownsChainPointer, retainOlderPage, retainServedPage, useChatScopeStore, type ChatIntent } from "./scopes";
+import { chatScopeKey, ownsChainPointer, pendingOlderLoadFor, retainOlderPage, retainServedPage, useChatScopeStore, type ChatIntent, type ChatOlderLoad } from "./scopes";
 
 const route = getRouteApi("/chat");
 
@@ -176,17 +176,21 @@ export function ChatPage() {
 
   // `Load older` reads one page through the served cursor and retains it. The
   // read runs through the cache rather than a mounted query: a re-serve that
-  // re-keys the surface's cursor while the page is in flight must neither
+  // re-signs the surface's cursor while the page is in flight must neither
   // cancel the reader's press nor land the page under a boundary that arrived
   // afterwards — the page belongs to the chain its own cursor was minted
-  // relative to, so the cursor and that boundary are captured together at
-  // press time and the press that is already loading its cursor never repeats.
-  const [loadingCursor, setLoadingCursor] = useState<string | null>(null);
+  // relative to, so the cursor, that boundary and the scope that pressed are
+  // captured together at press time. One press per boundary: a token the
+  // server re-signs at the same boundary is the same region, so the page
+  // already in flight keeps it, while a press for a boundary this one never
+  // captured — a moved served page — is its own load.
+  const [olderLoads, setOlderLoads] = useState<readonly ChatOlderLoad[]>([]);
   const loadOlder = () => {
     const cursor = history.loadCursor;
     const boundaryId = state.nextBoundaryId;
-    if (cursor === null || loadingCursor === cursor) return;
-    setLoadingCursor(cursor);
+    if (cursor === null || pendingOlderLoadFor(olderLoads, key, cursor, boundaryId) !== null) return;
+    const press: ChatOlderLoad = { scopeKey: key, cursor, boundaryId };
+    setOlderLoads((current) => [...current, press]);
     void application.queryClient
       .fetchQuery(chatOlderPageOptions(application.api, identity, cursor))
       .then(
@@ -202,21 +206,23 @@ export function ChatPage() {
           // ready. The failure handler is the rejection callback, not a
           // `catch`: a write that throws must not be reported as a read
           // failure.
-          if (definitiveReadRefusal(error)) {
-            // A refused cursor is dead while the press still owns the chain
-            // pointer: the chain pointer falls back to the served page's own
-            // token — retained pages stay, deduped at render — and re-reading
-            // that scope's own query renews the token, so the next press walks
-            // the served boundary instead of retrying the dead cursor. A press
-            // a later load advanced past, or a renewed cursor superseded, no
-            // longer owns the pointer: its refusal must neither rewind the
-            // chain nor re-read the scope, so only the notice below stays.
-            updateWith(key, (previous) => (ownsChainPointer(previous, cursor, boundaryId)
-              ? { ...previous, nextCursor: previous.pages[0]?.nextBefore ?? null, nextBoundaryId: previous.pages[0]?.messages[0]?.id ?? null }
-              : previous));
+          //
+          // A refusal's two effects are one committed write below, judged by
+          // the one ownership rule: a refused cursor is dead while the press
+          // still owns the chain pointer, so the pointer falls back to the
+          // served page's own token — retained pages stay, deduped at render —
+          // and the captured scope is re-read so the next press walks the
+          // served boundary instead of retrying the dead cursor. A press a
+          // later load advanced past, or a serve moved the boundary away
+          // from, is superseded: the newer chain already reaches the region it
+          // wanted, so neither the reset nor the refusal's notice applies. A
+          // non-refusal failure keeps its notice whatever the pointer says:
+          // its outcome is unproven and the reader's press may still matter.
+          const refused = definitiveReadRefusal(error);
+          if (refused) {
             // The read goes to the captured scope's own query — never the
             // observer's current one — and the query client's live fetching
-            // state is the only current one there is. The reset above decides
+            // state is the only current one there is. The update below decides
             // against the store's queued record while this gate reads the last
             // committed one, so inside that window it may still re-read a
             // scope the refusal no longer owns — one benign read, never a
@@ -226,10 +232,16 @@ export function ChatPage() {
               void queryClient.refetchQueries({ queryKey });
             }
           }
-          update(key, { status: { kind: "notice", message: errorMessage(error) } });
+          updateWith(key, (previous) => {
+            const notice: { status: { kind: "notice"; message: string } } = { status: { kind: "notice", message: errorMessage(error) } };
+            if (!ownsChainPointer(previous, cursor, boundaryId)) return refused ? previous : { ...previous, ...notice };
+            return refused
+              ? { ...previous, nextCursor: previous.pages[0]?.nextBefore ?? null, nextBoundaryId: previous.pages[0]?.messages[0]?.id ?? null, ...notice }
+              : { ...previous, ...notice };
+          });
         },
       )
-      .finally(() => setLoadingCursor((current) => (current === cursor ? null : current)));
+      .finally(() => setOlderLoads((current) => current.filter((load) => load !== press)));
   };
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -579,7 +591,7 @@ export function ChatPage() {
         id="chat-load-older"
         className="button"
         type="button"
-        aria-disabled={loadingCursor === history.loadCursor}
+        aria-disabled={pendingOlderLoadFor(olderLoads, key, history.loadCursor, state.nextBoundaryId) !== null}
         onClick={loadOlder}
       >Load older</button>}
     </div>
