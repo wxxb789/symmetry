@@ -1001,7 +1001,7 @@ defmodule SymmetryControl.IntegrationsTest do
              })
 
     # No provider call happens: `require_capabilities/2` refuses between the
-    # projected guards and `provider.authenticate/1`, so the outcome must be
+    # shared dispatch guards and `provider.authenticate/1`, so the outcome must
     # definite (stored `failed` and replayed) like every other pre-dispatch
     # refusal.
     assert {:error,
@@ -1766,6 +1766,22 @@ defmodule SymmetryControl.IntegrationsTest do
       assert Repo.get!(SymmetryControl.Workspaces.ProjectResource, repository.id).status_message ==
                message
     end
+  end
+
+  test "the callerless projected provider-action variant stays out of the module surface" do
+    # The projected variant (`execute_provider_action/5` and the private
+    # `execute_authenticated_provider_action/7` -> `persist_provider_delivery/5`
+    # chain behind it) had no referent anywhere in the repository and was deleted
+    # on branch `fix/provider-action-chain-removal`; the live path is the sibling
+    # `execute_unprojected_provider_action/6` the broker calls; `/5` is its delegate. A public `def`
+    # hides a missing referent from the compiler, so the surface is pinned here:
+    # reviving a second variant must be a deliberate act, not an unnoticed re-add.
+    # `function_exported?/3` reads the loaded module: load it first so the run
+    # does not depend on another test having touched Integrations already.
+    Code.ensure_loaded!(Integrations)
+    refute function_exported?(Integrations, :execute_provider_action, 5)
+    assert function_exported?(Integrations, :execute_unprojected_provider_action, 5)
+    assert function_exported?(Integrations, :execute_unprojected_provider_action, 6)
   end
 
   defp sync_lock_order_task(resource, provider_items, owner, ref) do
