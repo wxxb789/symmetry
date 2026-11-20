@@ -98,9 +98,10 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (`control/lib/symmetry_control/integrations/provider_access.ex:95` → `pop_job/2` `:232` →
       `cancel_timer/1` `:238`), so a test that observes the worker's `:DOWN` first
       can still read a live timer. Secondary candidates: the 5 s `assert_receive` bound under load, and
-      the unbounded `receive`s that turn a missed message into a hang. The assertion appears in nine
-      cases of this file (`:1826`, `:1929`, `:1961`, `:1990`, `:2028`, `:2201`, `:2345`, `:2375`,
-      `:2649`), so treat it as a class. Revalidate against a recovered failure before changing anything
+      the unbounded `receive`s that turn a missed message into a hang. The assertion appears in eleven
+      call sites across ten cases of this file (`:1826`, `:1929`, `:1961`, `:1990`, `:2028`, `:2060`,
+      `:2094`, `:2201`, `:2345`, `:2375`, `:2649`; the two in the broker-restart case declared at
+      `:2035`), so treat it as a class. Revalidate against a recovered failure before changing anything
       (rerun the two cases, then check whether the failing read is the timer or the intent state), and
       keep both assertions.
 
@@ -150,13 +151,13 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
       and reconcile writers go through `Goal.transition_changeset`
       (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
-      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only `inc` sites
-      update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`), so no writer bypasses
-      the optimistic lock. An asynchronous reconcile advance alone can produce the refusal, which is what
-      makes the page-held version worth revisiting; fix direction: build the press's envelope from a
-      submit-time read the way the plan admission does, re-deriving the presented decision's own version
-      from that same read, or keep the page version and record the refusal plus reload as the intended
-      recovery.
+      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only
+      `update_all`/`inc` sites update `Command` rows at `:5309` and `GoalDecision` rows at
+      `:6327-6333`), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
+      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
+      direction: build the press's envelope from a submit-time read the way the plan admission does,
+      re-deriving the presented decision's own version from that same read, or keep the page version and
+      record the refusal plus reload as the intended recovery.
 
 - [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
       rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always
@@ -172,7 +173,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 - [ ] Owner decision: should the served `can_start` exclude goal-managed work items? `portal_json.ex`
       serves `can_start` from five conjuncts with no `goal_managed?` term
-      (`control/lib/symmetry_control_web/portal_json.ex:257-259`, beside `goal_managed:` at `:255`),
+      (`control/lib/symmetry_control_web/portal_json.ex:257-260`, beside `goal_managed:` at `:255`),
       while the legacy run endpoint refuses every goal-managed item: `POST
       /portal/api/work-items/:work_item_id/run` (`control/lib/symmetry_control_web/router.ex:86`) →
       `Workspaces.launch_work_item/2` (`control/lib/symmetry_control/workspaces.ex:308`, guard at `:317`)
