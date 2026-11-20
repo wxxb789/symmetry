@@ -44,13 +44,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       chain and the disjunct together — or missing its caller, in which case the disjunct needs a
       producer; revalidate the surviving provider-action tests either way.
 
-- [ ] Drop the unused `conn` parameter in
-      `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:650-651)
-      passes `conn` to `portal_command!/4` (:653), which never reads it (it builds its own `api_conn()`),
-      so every run reports `warning: variable "conn" is unused` at :653. Pre-existing (present in both the
-      before and after `MIX_TEST_PARTITION=66` runs of the retro-b5 apply stage) and test-only; drop the
-      parameter and the callers' pass-through in separate maintenance.
-
 ## Retro review follow-ups
 
 - [ ] Investigate the intermittent Control failure class behind the provider-action cases at
@@ -119,18 +112,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       direction: build the press's envelope from a submit-time read the way the plan admission does,
       re-deriving the presented decision's own version from that same read, or keep the page version and
       record the refusal plus reload as the intended recovery.
-
-- [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
-      rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always
-      answers false", repeated in `work-detail-read.schema.json:142` and
-      `workspace-read.schema.json:281`), and the read model serves it
-      (`control/lib/symmetry_control/chat/read_model.ex:51-59` forces it for a historical projection),
-      but the case that exercises exactly that shape — "historical run chat remains pinned after retry
-      and cannot control a newer attempt" (`control/test/symmetry_control/chat_test.exs:644-789`) —
-      asserts `historical` (`:734`) and `refute …can_cancel` (`:735`) and never `can_retry`; the file
-      contains no `can_retry` occurrence at all, and no other case targets a pinned historical chat
-      entry. Add the assertion in a separate maintenance change and keep the case's other assertions:
-      the rule is behavioural, so the pin must fail if the historical branch stops forcing the flag.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 

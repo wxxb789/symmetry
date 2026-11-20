@@ -835,6 +835,7 @@ defmodule SymmetryControl.ChatTest do
     assert detail.work_item.execution.state == "failed"
     assert detail.work_item.execution.historical
     refute detail.work_item.execution.can_cancel
+    refute detail.work_item.execution.can_retry
     assert detail.outcome.failure["message"] == "Original failure"
     assert detail.outcome.summary == "Original attempt summary"
     assert Enum.map(detail.outcome.findings, & &1.message) == ["Original finding"]
