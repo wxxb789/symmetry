@@ -200,6 +200,151 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
       the recovery recipe.
 
+## Retro review follow-ups (second pass, 2026-11-20)
+
+- [ ] Align the control-character escape case in the canonical JSON bytes both languages hash.
+      `protocol.CanonicalizeJSON` (`daemon/internal/protocol/goal_subject.go:102`) re-encodes every
+      string through `encoding/json` (`writeCanonicalJSON` `:122`, its string arm `:132-137`;
+      `marshalJSONString` `:186` with HTML escaping off), and Go spells every control character
+      below U+0020 that has no shorthand escape as `\u00xx` with lowercase hex digits, while the
+      Elixir side hashes `SymmetryControl.RequestHash.canonical/1`
+      (`control/lib/symmetry_control/request_hash.ex:5`, `Jason.encode!/1`; Jason 1.4.5 per
+      `control/mix.lock:10`) and Jason spells the same character `\u001F` with uppercase hex.
+      Each language is self-consistent — in Go both
+      `{"value":"\u001F"}` and `{"value":"\u001f"}` canonicalize to `{"value":"\u001f"}` — so the
+      defect is the pair: one logical value carries two canonical digests, one per language.
+      Reproduced at `978abba` with throwaway probes (not committed): a Go test over
+      `CanonicalizeJSON` printed `{"value":"\u001f"}` with
+      `sha256:b43e9944b5d28b7f3e6bad4b289642d1786aa5ba80658cf2ed8bf87ecd642e51`, and
+      `Jason.encode!(%{"value" => <<0x1F>>})` printed `{"value":"\u001F"}` with
+      `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`. The Elixir reading is
+      not a lone choice: the contracts layer already mirrors it deliberately — `encodeJsonString`
+      (`contracts/ts/semantics.ts:69-80`) emits the shorthand escapes plus an uppercase `\u00XX`
+      for every other C0 control, documented as "exactly as Elixir `Jason` encodes it", and the pin
+      is the boundary test "canonical JSON escapes control characters exactly as the control
+      plane's Jason does" (`contracts/scripts/boundary.test.mjs:59-71`, U+000B and U+001B inside a
+      schema-valid LongText description), which names `RequestHash.canonical/1` as the hashed text;
+      `contracts:check` verifies the canonical sorted JSON Subject hash through that same TypeScript
+      encoder (`contracts/README.md:62-66`). So the Go canonicalizer is the side that disagrees
+      with the other two, and it is unpinned: its escaping test pins `\u0000` and the shorthand
+      escapes but no `\u00xx` escape carrying a hex letter
+      (`daemon/internal/protocol/goal_subject_test.go:64-73`),
+      and a case-sensitive search for an uppercase-hex control escape
+      (`grep -rn 'u00[0-9]*[A-F]' daemon/ --include='*.go'`) returns 0 lines. The normalization the
+      hash must follow is written at `docs/design/protocol.md:311-316` and does not name the C0
+      escape case, so deciding it stays the open choice.
+      Reachable through the context snapshot: Control builds it from free text — `approved_goal`
+      `"objective"` (`control/lib/symmetry_control/goals.ex:2151`) and `work_contract`
+      `"title"`/`"description"` (`:2156-2157`) — and stamps the snapshot's `content_hash` with
+      Jason (`context_content_hash` `:2602-2606`, via `RequestHash.canonical`), which the daemon
+      recomputes with Go and refuses on mismatch
+      (`daemon/internal/control/validation.go:1744-1772`, "context.content_hash does not match
+      canonical snapshot"; the same rule at `daemon/internal/protocol/goal_schema.go:48-70`).
+      The contracts boundary test states U+000B/U+001B are schema-valid inside a LongText
+      description (`contracts/scripts/boundary.test.mjs:59-71`), so a work item whose description
+      carries U+001F yields a snapshot the daemon rejects — a source-traced consequence, not
+      executed end to end in this record. The `Subject` the daemon binds cannot carry C0
+      characters (its fields are a UUID, a git object id and a sha256, `Subject.Validate`
+      `goal_subject.go:39-47`; `Subject.Hash` `:81-88`), and `goals.ex:2636` hashes that same
+      restricted value, so neither is the reachable seam. Fix direction: decide the canonical
+      case once — the spelling the other two implementations already share (uppercase, i.e. Jason's
+      bytes) or a shortest-escape normalization written into the rule itself — then add the missing
+      Go pin (and a shared fixture if the choice tightens the rule), and treat any recorded digest
+      over a control-bearing value as invalidated by the change. Suggested owner area: daemon
+      protocol plus the Control hash owners, with the contracts owner for the normalization text.
+
+- [ ] Stop the Windows-family path tail from absorbing a JSON escape that follows the path.
+      `_WINDOWS_TAIL` (`scripts/ci/model-routing-record-sanitize.py:110`) admits a bare backslash
+      as a path byte — deliberate, per its comment at `:104-107`, because in raw recorded text the
+      backslash is the separator — and the four Windows-family patterns listed here end in it (or
+      in its require-a-byte variant `_WINDOWS_TAIL_PLUS` `:115`): `_DRIVE_PATH` `:133-135`,
+      `_UNC_PATH` `:142-145` (`_PLUS`), `_SLASH_UNC_PATH` `:167-169` (`_PLUS`),
+      `_FILE_URL_PATH` `:204-212`
+      (the root-relative `_ROOT_RELATIVE_PATH` `:191-194` and the file-URL host-root arm `:209` do
+      not), so a recorded `\n` escape that follows a Windows path is consumed into the rendered
+      token together with the text behind it. The POSIX family already fixed exactly this
+      shape (`_POSIX_BYTE` `:122`, whose comment at `:116-121` names the failure — "consuming it would
+      swallow a JSON escape sequence together with the text behind it" — and
+      `scripts/ci/test-model-routing-record-sanitize.py:282-295`,
+      `test_a_json_escape_after_a_path_survives_the_render`, STD-A07); the Windows family has no
+      such case. Reproduced at `978abba` with the tool on two scratch inputs of one shape (a JSON
+      string recording a path, then the two-character `\n` escape, then the word `FAILED`; the
+      Windows input's path is drive-rooted and carries the JSON-escaped doubled separators). The
+      inputs, one JSONL line each, are built in Python with `BS = chr(0x5C)`: Windows
+      `'{"output":"wrote C:' + BS*2 + 'Users' + BS*2 + 'op' + BS*2 + 'run' + BS + 'nFAILED"}'`,
+      POSIX `'{"output":"wrote /' + 'tmp/run' + BS + 'nFAILED"}'`. The Windows input renders to a
+      single token whose digest is
+      `path-sha256:a3a19f2b70d9c277fa8b2ef0f62c217841c3f41ed7e6a78b689045338e4ad1e5`, and that
+      digest is the recomputed sha256 of the raw span the token bound — the path text *plus* the
+      escape *plus* `FAILED` — where a path-only render of the same input would carry
+      `26e7b5b4…` (the sha256 of the path text alone); the POSIX input of the same shape keeps the
+      escape and the word outside its token (`…path-sha256:91525b09…` followed by the escape and
+      `FAILED`). Consequence in a record: an evidence line behind the escape disappears from the
+      rendered bytes while the record stays valid JSON — the loss STD-A07 fixed on the POSIX side.
+      Fix direction: the POSIX rule is not directly portable (a raw Windows spelling uses one
+      backslash per separator, so a separator run can be shaped exactly like a JSON escape —
+      `\run` starts with `\r`), so the reading must be decided — either a JSON-aware pass that
+      respects string escapes (the tool's input is recorded JSON text), or a tail that stops
+      before an escape-shaped backslash run once at least one separator has been consumed — and
+      both the escaped-escape case and the raw single-backslash spelling must be pinned in the
+      tester. Suggested owner area: `scripts/ci` record tooling.
+
+- [ ] Re-point legacy work-surface owner bookmarks that carry the pre-#111 sentinel. The `owner`
+      param is read at `frontend/src/features/projects/filters.ts:50` and normalised at `:80-87`,
+      and the row comparison sits at `:94` (`ownerKey(item.assignee) === filters.owner`); #111
+      (`db31838`) changed the encoder (`frontend/src/features/work/presentation.ts:99-106`): an
+      agent row with no recorded name used to mint `agent:unrecorded` and now mints `agent:`
+      (`ownerKeyValue` `:94-97` escapes a recorded name that equals the legacy word or starts with
+      `:`, so a row genuinely named `unrecorded` mints `agent::unrecorded`), and `human:` keys
+      moved the same way; `human:unrecorded` likewise matches no row. A bookmark or hand-typed
+      link carrying `?owner=agent:unrecorded` matches no row, while `ownerKeyLabel` (`:110-126`)
+      still reads that key as the row's own absence label: the Work owner select
+      (`frontend/src/features/projects/work-surface.tsx:141,170`) shows "Agent (not in this
+      project)" above an empty list, even when the project has an unnamed-agent row; the label
+      side is already pinned, and
+      its own case documents the intent the filter does not keep — "labels the legacy sentinel keys
+      old bookmarks carry as the absence they named" (`frontend/src/features/work/presentation.test.ts:81-89`,
+      whose comment reads "a URL that still carries it reads as the absence it named rather than as
+      a recorded name") — while the filter case covers only `unassigned`
+      (`frontend/src/features/projects/filters.test.ts:52-59`, the owner case at `:56`), never the
+      legacy value.
+      Reproduced at `978abba` against the repository's own modules (a throwaway Node ESM probe
+      that imports `filters.ts` and `presentation.ts` through a type-stripping resolve hook; no
+      test file added and no dependency install): `ownerKey` printed `"agent:"`,
+      `"agent::unrecorded"` and `"agent:builder"` for those three assignees (rows built as
+      `{key, title, status: "ready", blocked: false, assignee}` with assignees
+      `{type: "agent", name: null, agent_profile: null}`,
+      `{type: "agent", name: "unrecorded", agent_profile: null}`,
+      `{type: "agent", name: "builder", agent_profile: "builder"}`),
+      `filterWorkItems(rows, filtersOf({owner: "agent:unrecorded"})).length` was `0` of `3`,
+      `ownerKeyLabel("agent:unrecorded")` printed `"Agent"`, and the currently minted key `agent:`
+      matched `1` of `3`. Fix direction: read a filter key through one normalising reader so the
+      legacy sentinel word maps to the empty-value sentinel the encoder now mints (or redirect the
+      legacy value at the surface), and pin the compatibility case in
+      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
+      work-surface/frontend.
+
+- Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
+  workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
+  shellcheck-disabled repo-wide `actionlint -shellcheck= -pyflakes=` run plus a direct
+  `shellcheck --shell=bash` over each changed workflow `run:` block in full (read from the
+  workflow file; the diff only selects which blocks), with every `${{ … }}` GitHub expression
+  replaced by a placeholder word first, which is what actionlint does, because a raw expression is
+  ShellCheck SC2296. The 2026-11-15 trim record used the same direct `shellcheck --shell=bash`
+  over whole scripts (`docs/evidence/ci-process-trim-2026-11-15.md:231`); the placeholder step is
+  added here for blocks that carry expressions.
+  A shellcheck-enabled `actionlint` run is used only on a workflow where it has been observed to
+  finish; for `.github/workflows/ci.yml` on this host it is not available. Observed
+  2026-11-20 at `978abba` with the `mise`-installed upstream actionlint 1.7.12 invoked as
+  `timeout -k 10 620 actionlint -color -shellcheck=shellcheck .github/workflows/ci.yml`: the bound
+  killed it after 10 m 20 s wall time (`EXIT=124`, no output, no findings printed) — no completed
+  run of that shape is recorded on this host — while the same binary over the same file with
+  `-color -shellcheck= -pyflakes=` finished in 0.6 s at exit 0 with no findings, and the
+  2026-11-15 trim record already carries a 120 s sample of the same shape
+  (`docs/evidence/ci-process-trim-2026-11-15.md:228-234`). No CI job invokes `actionlint` (a
+  repository search for the name matches `docs/` only), so this is a local-lint gap only: nothing
+  in a hosted run is skipped by it. Owner area: CI tooling.
+
 ## Deferred review findings (0007h)
 
 - [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate
