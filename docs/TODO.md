@@ -144,19 +144,19 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 - [ ] Give the final-scan RPC's timer arms the post-timer recheck the barrier join and
       `stopDescendantMonitor` now carry. `requestDescendantMonitorScan`
-      (`daemon/internal/platform/process_unix.go:1021-1058`) waits on a timer twice and returns a
+      (`daemon/internal/platform/process_unix.go:1029-1066`) waits on a timer twice and returns a
       timeout whenever the timer arm wins, without rechecking the channel whose result is already in
-      hand. First select `:1038-1044`: the request arm's timer `:1042-1043` returns "descendant monitor
+      hand. First select `:1046-1052`: the request arm's timer `:1050-1051` returns "descendant monitor
       final scan request timed out" without rechecking `monitorDone` (close-only, created `:610`,
-      closed `:809`, so it stays ready once closed). Second select `:1045-1057`: the `monitorDone` arm
-      `:1048-1054` does recheck the buffered `resultChannel` (created `:1037`, written by the monitor
-      at `:994` before it can return), but the timer arm `:1055-1056` returns "descendant monitor final
+      closed `:817`, so it stays ready once closed). Second select `:1053-1065`: the `monitorDone` arm
+      `:1056-1062` does recheck the buffered `resultChannel` (created `:1045`, written by the monitor
+      at `:1002` before it can return), but the timer arm `:1063-1064` returns "descendant monitor final
       scan timed out" without rechecking either channel. A monitor that exits as the deadline expires,
       or a result already published there, therefore leaves both arms ready; Go picks uniformly
       between them, and the timeout is reported for a result that is in hand. Fail-closed, so the cost
-      is manufactured unproven-containment results: both errors reach `closeUntil` (`:1188` on the
-      leader-absent path, `:1229` on the post-readback final scan), where they become sticky
-      `descendantScanLost` (`:1240-1244`) or an unproven containment return (`:1197-1199`). Same shape
+      is manufactured unproven-containment results: both errors reach `closeUntil` (`:1196` on the
+      leader-absent path, `:1237` on the post-readback final scan), where they become sticky
+      `descendantScanLost` (`:1248-1252`) or an unproven containment return (`:1205-1207`). Same shape
       as the barrier join `:665-688` (fixed, with pins, by PR #105 `e64f8c0`) and
       `stopDescendantMonitor` (fixed, with pins, on branch `fix/stop-descendant-recheck`). Apply the
       same recheck here and pin both directions (an arm that becomes ready at the deadline is honored;

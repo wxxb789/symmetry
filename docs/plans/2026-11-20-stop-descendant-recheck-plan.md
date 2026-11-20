@@ -22,9 +22,10 @@ re-verified at `fdf332d`).
 ## Public/API shape and exact edge-case semantics
 
 `stopDescendantMonitor(deadline)` is package-internal; the observable surface is its error, consumed
-by `closeUntil` (`:1121`, `:1277`, `:1351`), `closePreparedAbort` (`:1542`),
-`containment_supervisor_linux.go:1836` and `prepareDescendantMonitorForOwnerLoss` (`:771-794`), where
-any error becomes unproven containment (`descendantScanLost`). Semantics after the change:
+by `closePreparedAbort` (`:1121`), `closeUntil` (`:1277`), `finishUnprovenClose` (`:1351`),
+`releaseProcessGroupOwner` (`:1542`), `containment_supervisor_linux.go:1836` and
+`prepareDescendantMonitorForOwnerLoss` (`:771-794`), where any error becomes unproven containment
+(`descendantScanLost`). Semantics after the change:
 
 | State when the deadline expires | Before | After |
 | --- | --- | --- |
@@ -54,7 +55,8 @@ GREEN — the same probes on the fixed tree: focused run, then the touched packa
 and `-race`, in WSL:
 `go test -count=1 -timeout 600s ./internal/platform/` and `go test -race -count=1 -timeout 600s ./internal/platform/`
 (plus `-race -count=5 -run TestProcessGroupStopDescendantMonitor` for repeat stability, and one full
-`-race ./...` at the end if the memory rule above allows it after the focused runs finish).
+`-race ./...` at the end after the focused runs finish, never concurrently with another measurement
+or the full suite (host memory rule)).
 
 Windows (native, from `daemon/`, mirroring the `daemon-windows` CI job):
 `gofmt -l <changed files>`, `go vet ./...`, `go test -count=1 -timeout 600s ./...`.
@@ -93,8 +95,12 @@ RPC sentence was fixed, so the archive's closure statement says the arms are unc
 1. **No production test hook for a deterministic timer pin.** The defect is a both-ready select; the
    only deterministic fabrication would be a hook that lets a test decide when the timer has fired.
    PR #105's expired-timer probe solved this with a busy-wait plus a tolerant assertion and a measured
-   detection claim; this plan reuses that shape and records the same kind of measurement, including
-   the known `-race -cpu 1` weakness (documented in the test comment, not normalized away).
+   detection claim; the stop wait has no preceding handshake to busy-wait against, so the delivered
+   probe instead closes `monitorDone` first and walks a deadline ladder, tolerating only the entry
+   guard's own error. Detection of a removed recheck is recorded per build in its comment (plain
+   `go test` red 4/4 at the 100 ns bucket; `-race` red 4/4 and `-race -cpu 1` red 3/3 at the 2 µs
+   bucket), not normalized away; the barrier probe's own `-race -cpu 1` blind spot stays disclosed in
+   its comment.
 2. **Entry guard unchanged.** `remaining <= 0` keeps returning its own error without a recheck, exactly
    as the barrier join does; the stage contract's tolerance for "deadline elapsed" depends on it, and
    a monitor is not answered by rechecking when there is no wait left to perform.
@@ -109,8 +115,8 @@ RPC sentence was fixed, so the archive's closure statement says the arms are unc
 - The final-scan RPC's timer arms (Option B above; recorded, not fixed).
 - Other `docs/TODO.md` entries, including the Control provider-action timer class and the subject
   batch stream's stdin refusal.
-- `probeLinuxProcessGroupExit`'s poll timer (`:1637-1645`): a sleep arm with no second ready channel,
-  so the shape does not apply.
+- `waitForProcessGroupExit`'s poll loop (`:1637-1644`): a sleep arm with no second ready channel, so
+  the shape does not apply.
 - Refactors of the monitor's terminal-reason bookkeeping, the barrier join, or the containment
   surface; no test renames or deletions.
 - `docs/design/**`: no design text describes the join's timer semantics (checked: no `monitorDone`
@@ -119,8 +125,9 @@ RPC sentence was fixed, so the archive's closure statement says the arms are unc
 
 ## Residual risks and limits
 
-- The deadline probe's detection is probabilistic by construction; the measured mutant rate and the
-  `-cpu 1` caveat are recorded in its comment, and the deterministic probe plus the untouched
-  fail-closed arm keep the direction pinned where detection is not required.
+- The deadline probe's detection is probabilistic per bucket by construction, and the detecting bucket
+  moves with the build (plain, `-race` and `-race -cpu 1` mutant rates are recorded in its comment);
+  the deterministic probe plus the untouched fail-closed arm keep the direction pinned where
+  detection is not required.
 - The WSL host keeps the known TCP-loopback family limitation recorded for PR #105's run; if it
   reproduces, the affected cases are re-run at the baseline to separate environment from change.

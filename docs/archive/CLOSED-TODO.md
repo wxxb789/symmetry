@@ -28,6 +28,7 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
 The closed `stopDescendantMonitor` post-timer recheck appended to the `## Retro review follow-ups`
 section below was moved on 2026-11-21 from branch `fix/stop-descendant-recheck`.
+
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
 
@@ -2342,12 +2343,12 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       `monitorDone` with a non-blocking select — the same shape as the barrier join's `:682-686` — so
       a monitor that exits as the deadline expires is joined instead of being reported as a deadline
       failure, while an open monitor keeps the unchanged deadline error after the full wait and
-      success is still reported only when the monitor exited (its only production close is `:809`).
+      success is still reported only when the monitor exited (its only production close is `:817`).
       The entry guard (`remaining <= 0`) is unchanged, as in the barrier join, and the recheck can
       never wait, so no caller's deadline is extended. Decision: the final-scan RPC timer arms named
       above are deliberately not changed by this closure — the item's fix sentence pins the stop
-      path's two directions only — and are re-recorded with those anchors as their own open entry in
-      `docs/TODO.md` (`## Retro review follow-ups`). Pins, both in
+      path's two directions only — and are re-recorded as their own open entry in `docs/TODO.md`
+      (`## Retro review follow-ups`), with anchors rebound to the fixed tree. Pins, both in
       `daemon/internal/platform/process_unix_linux_test.go`: the expired-timer probe
       `TestProcessGroupStopDescendantMonitorReportsJoinedMonitorAfterDeadline` reddens when the
       recheck is removed (mutant: red 4/4 plain with first failures at iterations 37/29/29/36 of the
@@ -2376,6 +2377,7 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       and the named test `-count=3` `ok … 14.3 s`); neither can come from this change — the changed
       file is `//go:build linux` and absent from the Windows build file set (`go list` lists 14 files
       for `./internal/platform` on Windows, none of them it).
+
 - [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
       (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
       error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
