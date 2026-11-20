@@ -11,7 +11,6 @@ permissions:
 jobs:
   linux-native-v2-acceptance:
     needs: contracts
-    if: github.event_name == 'workflow_dispatch'
     # SECURITY PRECONDITION: The public repo currently has one writer. Before
     # dispatch, verify the Environment requires @wxxb789's separate approval,
     # permits self-review, and admits only the reviewed 0006b branch.
@@ -124,8 +123,6 @@ jobs:
             SYMMETRY_LINUX_V2_NATIVE_CASE_SET="$case_set" \
             SYMMETRY_LINUX_V2_NATIVE_EVIDENCE_DIR="$evidence_root/$case_set" \
               bash scripts/ci/linux-v2-native-acceptance.sh
-          done
-          for case_set in "${case_sets[@]}"; do
             test -s "$evidence_root/$case_set/manifest.json" || {
               printf 'Missing sanitized evidence manifest for required case set: %s\n' "$case_set" >&2
               exit 1

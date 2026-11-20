@@ -21,16 +21,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Dead-code candidates
 
-- `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
-
-- `frontend/src/features/connections/resources.tsx` `refusalGuidance.provider_owned`: no
-  call site of `refusalNotice` on that page can receive the code. Its only producer is
-  `Workspaces.provider_owned_fields_editable` answered by `update_work_item`
-  (`control/lib/symmetry_control/workspaces.ex`), i.e. the assignment surface, which
-  carries its own `assignmentGuidance`. Recorded by the retro-b4-goals-connections review
-  (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
-  (fix round 1); revalidate and remove in a separate maintenance change.
-
 - [ ] Revalidate and remove the callerless projected provider-action chain in
       `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
       `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
@@ -123,26 +113,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       re-deriving the presented decision's own version from that same read, or keep the page version and
       record the refusal plus reload as the intended recovery.
 
-- [ ] Document how to recover the repository-default test database, or reset it from the test alias.
-      The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where
-      `MIX_TEST_PARTITION` is appended as a literal suffix, so a partition run selects a different
-      database name that the test alias creates and migrates when absent), and `mix test` runs
-      `symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet` first
-      (`control/mix.exs:79`). Create and migrate make a missing or
-      migration-behind database usable, but nothing drops or truncates one: a pending migration whose
-      table already exists fails the alias's migrate step before any test runs. Observed 2026-11-20
-      while gating an unrelated Control change: an unpartitioned `mix test` stopped with Postgrex
-      `42P07` (`duplicate_table`) on a migration whose table already existed — `schema_migrations`
-      named a revision older than the object set — while the same change ran green on a partition
-      database. A maintainer reads that as a code
-      failure, and the repository documents no recovery: `ecto.reset` exists as an alias
-      (`control/mix.exs:70`) but no doc names it for the default test database, and the only documented
-      resets belong to harness-owned databases (`docs/runbooks/session-receipt-recovery-e2e.md`). Fix
-      direction: document the drop-and-recreate path for the default test database where the suite's
-      commands are documented, or add a recreate/reset step to the `test` alias so a stale default
-      database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
-      the recovery recipe.
-
 ## Retro review follow-ups (second pass, 2026-11-20)
 
 - [ ] Align the control-character escape case in the canonical JSON bytes both languages hash.
@@ -232,35 +202,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       both the escaped-escape case and the raw single-backslash spelling must be pinned in the
       tester. Suggested owner area: `scripts/ci` record tooling.
 
-- [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
-      current encoder escapes a recorded value that starts with `:` by prefixing one
-      (`frontend/src/features/work/presentation.ts:94-97`), so a recorded name `:Ada` mints
-      `human:::Ada` (`agent:::Ada` on the agent side), while the pre-#111 encoder spelled it
-      unescaped — `human::Ada`. The reader committed with the legacy-sentinel fix
-      (`ownerKeyFilter`, `:135-139`) maps only the two sentinel words, so a bookmark or hand-typed
-      link carrying the pre-#111 spelling normalises to itself and matches no row, and the
-      pre-#111 key for a recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to
-      the escape the current encoder mints for the recorded name `unrecorded`, so it silently
-      selects that other row and cannot be disambiguated (the collision repeats for deeper colon
-      prefixes: for a recorded name with `k >= 2` leading colons, the pre-#111 key equals the
-      current mint for the same name with `k-1` leading colons, for example legacy `human:::Ada`
-      (name `::Ada`) is the current mint for `:Ada`). Reproduced at `3c705d7` (production bytes
-      identical to `7f62afe`) with a throwaway vitest probe over the repository's own modules
-      (deleted after the run, no test file kept): rows named `:Ada`, `::Ada`, `:unrecorded` and
-      `unrecorded` mint `human:::Ada`, `human::::Ada`, `human:::unrecorded` and
-      `human::unrecorded`; the legacy key `human::Ada` kept its spelling and `filterWorkItems`
-      selected `[]`; the legacy key `human::unrecorded` selected the row named `unrecorded`; the
-      legacy key `human:::Ada` selected the row named `:Ada` instead (the deeper-prefix
-      collision); and `ownerKeyLabel("human::Ada")` prints `Ada`, dropping the colon.
-      Reachable: `assignee_name` and `agent_profile` are length-bounded only
-      (`control/lib/symmetry_control/workspaces/schemas.ex:472-473`), so a colon-leading name can
-      be served. The shape was recorded as an explicit residual of the legacy-sentinel increment
-      (`docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`, "Out of scope"). Fix direction:
-      decide the reading for the colon-leading pre-#111 keys (re-point them like the sentinel, or
-      accept the collision and document it), then pin both shapes in
-      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
-      work-surface/frontend.
-
 - Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
   workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
   shellcheck-disabled repo-wide `actionlint -shellcheck= -pyflakes=` run plus a direct
@@ -320,7 +261,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
     **Operator instruction (dispatch branch, exact).** The trigger is dispatch-only by design: the
     workflow's only event is `workflow_dispatch` (`.github/workflows/linux-native-v2-acceptance.yml:3-6`),
-    its job is guarded `if: github.event_name == 'workflow_dispatch'` (`:14`), and
+    its job carries no event `if:` guard (the `on:` block at `:3-6` is the only trigger), and
     `scripts/ci/linux-v2-native-acceptance.sh:46` refuses every other event — `credentialed Linux
     acceptance requires explicit workflow_dispatch` — so nothing else can run it: the file declares no
     push, pull_request, schedule or `workflow_call` trigger, and `ci.yml` references it nowhere and holds
