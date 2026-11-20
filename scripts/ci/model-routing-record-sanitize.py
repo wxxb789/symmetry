@@ -20,7 +20,9 @@ authority spelling is an absolute location, not a URL to spare: both modes
 render it.
 
 With ``--root-only`` the renderer flags only host absolute paths: Windows drive
-and UNC roots and the POSIX roots a host path actually starts under (``/home/``,
+and UNC roots, a root-relative Windows spelling (``\\Users\\op\\run``, which
+classic Windows semantics resolve against the current drive root - a profile
+location) and the POSIX roots a host path actually starts under (``/home/``,
 ``/Users/``, ``/root/``, ``/tmp/``, ``/var/``, ``/mnt/``, ``/private/`` - the
 shapes the evaluation runner's host-path redaction and the committed records
 name), plus every ``--root`` disposable root. A product route such as
@@ -29,8 +31,10 @@ single-slash spelling only: spelled behind an authority (``//portal/...``) or
 as a ``file:`` URL it is an absolute location like any other, and this mode
 renders (and the gate refuses) it. A bare root token with no following
 separator or segment (``/tmp`` quoted in prose) stays literal too: it names no
-host-specific location. The default mode keeps rendering every absolute path,
-which is its documented boundary for argv/output capture.
+host-specific location. The default mode keeps rendering every absolute path -
+including a POSIX path spelled after a key's colon and the JSON-escaped spelling
+of one (``\\/etc\\/hosts``) - which is its documented boundary for argv/output
+capture.
 
 Usage (record publishers apply this before writing a record)::
 
@@ -66,33 +70,60 @@ DISPOSABLE_ROOT_TOKEN = "<disposable-root>"
 # string carries both forms, and the checker must not miss a host path because the
 # writer escaped it.
 _HOST_SEP = r"(?:/|\\/)"
-# The prefixes a Windows location may carry: a `file:` URL scheme (with any number
-# of separators after it) and a device namespace (`\\?\` or the `\\.\` device form,
-# whose backslashes a JSON writer doubles). The lookbehinds accept a preceding `:`
-# so a location spelled after a key (`root:C:\x`, `root:/home/x`) is still a
-# location, while a preceding letter, digit, underscore, separator or rendered token
-# keeps relative paths and URLs out.
-_FILE_PREFIX = r"(?:file:[\\/]{0,4})?"
+# One separator of a location whose separators may be mixed: a Windows UNC accepts
+# both slash directions, and a JSON writer doubles each backslash run at every
+# nesting level, so a backslash separator is any positive run and a forward slash
+# may be escaped as `\/`.
+_SEPARATOR = r"(?:\\|(?:\\{2})+|/|\\/)"
+# The prefixes a Windows location may carry: a `file:` URL scheme (with any run of
+# separators after it, since concatenated escapes are still the scheme's own
+# separators) and a device namespace (`\\?\` or the `\\.\` device form, whose
+# backslashes a JSON writer doubles). The lookbehinds accept a preceding `:` so a
+# location spelled after a key (`root:C:\x`, `root:/home/x`) is still a location,
+# while a preceding letter, digit, underscore, separator or rendered token keeps
+# relative paths and URLs out.
+_FILE_PREFIX = r"(?:file:[\\/]*)?"
 _DEVICE_PREFIX = r"(?:\\{1,4}[?.]\\{1,4})?"
+# A path tail: path characters, or a single space when the chunk after it reaches
+# another separator (`C:\Users\First Last\repo` is one location, while
+# `C:\Users\x and prose` ends at the space because no separator follows the word).
+_PATH_TAIL = r"(?:[^\s\"'`,;:)]| [^\s\"'`,;:)]+(?=[\\/]))*"
 _DRIVE_PATH = re.compile(
-    r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"[A-Za-z]:[\\/][^\s\"'`,;:)]*"
+    r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"[A-Za-z]:[\\/]" + _PATH_TAIL
 )
 # A UNC path whose separators are backslashes, each written once or escaped by JSON
 # quoting at any nesting level (an even run of two or more): `\\server\share` and
 # `{"p":"\\\\server\\share"}` are the same location, and so is the doubly escaped
-# spelling of either separator.
+# spelling of either separator. The inner separators (and the tail after them) may
+# also be forward slashes or their escapes, because Windows reads the mixed
+# spellings as the same location.
 _UNC_PATH = re.compile(
     r"(?<![A-Za-z0-9_/\\>])" + _FILE_PREFIX + _DEVICE_PREFIX + r"(?:\\{2})+"
-    r"[^\s\\\"'`,;:)]+(?:\\|(?:\\{2})+)[^\s\"'`,;:)]+"
+    r"[^\s\\\"'`,;:)]+" + _SEPARATOR + r"[^\s\"'`,;:)]+"
 )
-# The lookbehind keeps URLs (`https://`) and relative paths out; a host-rooted form
-# spelled after a colon (`root:/home/x`) is caught by `_HOST_POSIX_PATH` instead,
-# which cannot collide with a URL authority.
+# The lookbehind keeps URLs (`https://`) and relative paths out, and `:` too: a
+# location spelled after a colon would otherwise swallow a URL authority (the
+# final class accepts `/`, so `https://x` must never start a match), and the
+# colon-adjacent spelling has its own pattern below.
 _POSIX_PATH = re.compile(r"(?<![A-Za-z0-9_:/\\>.])/(?:[^/\s\"'`,;:)]+/)*[^\s\"'`,;:)]+")
+# A POSIX path spelled directly after a colon (`PATH=/usr/bin:/usr/local/bin`): the
+# colon allowance the pattern above must not take, because the very next character
+# decides between an absolute path and a URL authority - a URL's colon is followed
+# by two separators, and this pattern requires exactly one.
+_COLON_POSIX_PATH = re.compile(r"(?<=:)/(?!/)(?:[^/\s\"'`,;:)]+/)*[^\s\"'`,;:)]+")
+# A POSIX path a JSON writer escaped (`\/etc\/hosts`): the escaped spelling of an
+# absolute location, rendered in the default argv/output scope. The lookbehind
+# keeps URL authorities (`https:\/\/tmp` - the pair after the colon, and the pair
+# after a separator) and relative paths out, and every separator must be the
+# escaped pairing, so an unescaped `/` cannot drift this pattern into a URL.
+_ESCAPED_POSIX_PATH = re.compile(
+    r"(?<![A-Za-z0-9_:\\/])(?:\\/)(?:[^\\/\s\"'`,;:)]+\\/)*[^\\/\s\"'`,;:)]+"
+)
 # A forward-slash authority path (`//server/share`), with each separator optionally
-# escaped. The lookbehind keeps URLs (`https://`) out: their `//` follows a colon.
+# escaped or a backslash (the mixed spellings are the same UNC location). The
+# lookbehind keeps URLs (`https://`) out: their `//` follows a colon.
 _SLASH_UNC_PATH = re.compile(
-    r"(?<![A-Za-z0-9_:\\/])(?:/|\\/)(?:/|\\/)[^\s\\/\"'`,;:)]+(?:/|\\/)[^\s\"'`,;:)]+"
+    r"(?<![A-Za-z0-9_:\\/])(?:/|\\/)(?:/|\\/)[^\s\\/\"'`,;:)]+" + _SEPARATOR + r"[^\s\"'`,;:)]+"
 )
 # The filesystem roots a host absolute path actually starts with. `/portal/runtimes`
 # and any other product route stay literal in `--root-only` mode because their first
@@ -103,29 +134,47 @@ _SLASH_UNC_PATH = re.compile(
 HOST_ROOT_SEGMENTS = ("home", "Users", "root", "tmp", "var", "mnt", "private")
 _HOST_ROOT = "(?:" + "|".join(HOST_ROOT_SEGMENTS) + ")"
 # The segment class allows an empty segment, so a naive concatenation (`/tmp//run`)
-# is still a host path; a preceding `:` is accepted for the same reason as above.
+# is still a host path; a preceding `:` is accepted for the same reason as above,
+# while a preceding separator is not: that spelling is an authority path or a URL,
+# handled by their own patterns, and it keeps `https://tmp/vendor/doc` literal.
 _HOST_POSIX_PATH = re.compile(
-    r"(?<![A-Za-z0-9_>.])(?:" + _HOST_SEP + r")" + _HOST_ROOT
-    + r"(?:(?:" + _HOST_SEP + r")[^/\s\"'`,;:)]*)+"
+    r"(?<![A-Za-z0-9_>./\\])(?:" + _HOST_SEP + r")" + _HOST_ROOT
+    + r"(?:(?:" + _HOST_SEP + r")[^/\s\"'`,;:)]*| [^\s\"'`,;:)]+(?=[\\/]))+"
+)
+# A root-relative Windows spelling (`\Users\op\run`): classic Windows semantics
+# resolve a leading single backslash against the current drive root, so it names
+# the same profile location as `C:\Users\op\run`. The leader is an odd backslash run
+# (the raw and Markdown-prose spelling); the even runs are the JSON-escaped
+# spellings the UNC patterns already cover.
+_ROOT_RELATIVE_PATH = re.compile(
+    r"(?<![A-Za-z0-9_>./\\])(?:\\{2})*\\" + _HOST_ROOT + r"(?:\\[^\\\s\"'`,;:)]*)+"
 )
 # A `file:` URL names an absolute location; without this, the drive or POSIX pattern's
 # lookbehind (the URL's own slashes) would hide a host path inside one. After `file:`
 # a Windows location may be spelled with backslashes (a single one before an
 # authority is a legitimate file-URL form), so this pattern accepts them where the
-# bare `_DRIVE_PATH`/`_UNC_PATH` leaders require two.
+# bare `_DRIVE_PATH`/`_UNC_PATH` leaders require two; the scheme is followed by any
+# run of separators (concatenated escapes included), and the host-root arm does not
+# require a segment after the root (`file:///tmp` names an absolute location too).
 _FILE_URL_PATH = re.compile(
-    r"(?<![A-Za-z0-9_])file:[\\/]{0,4}(?:"
+    r"(?<![A-Za-z0-9_])file:[\\/]*(?:"
     + _DEVICE_PREFIX + r"[A-Za-z]:[\\/]"
     r"|" + _DEVICE_PREFIX + r"\\{1,4}[^\s\\\"'`,;:)]+(?:\\|\\\\)[^\s\"'`,;:)]+"
-    r"|(?:" + _HOST_SEP + r")" + _HOST_ROOT + r"(?:" + _HOST_SEP + r")"
-    r"|(?://|\\/\\/)[^\s\\/\"'`,;:)]+(?:[\\/]|\\/))"
+    r"|(?:" + _HOST_SEP + r")" + _HOST_ROOT
+    + r"|(?://|\\/\\/)[^\s\\/\"'`,;:)]+(?:[\\/]|\\/))"
     r"[^\s\"'`,;:)]*"
 )
 # The root-only scope: every host shape above, and nothing that could be a product
 # route. The default scope adds every absolute path the POSIX pattern cannot see,
-# including a host-rooted one spelled after a colon and a `file:` URL.
-HOST_PATH_PATTERNS = (_DRIVE_PATH, _UNC_PATH, _SLASH_UNC_PATH, _HOST_POSIX_PATH, _FILE_URL_PATH)
-DEFAULT_PATH_PATTERNS = (_DRIVE_PATH, _UNC_PATH, _POSIX_PATH, _FILE_URL_PATH, _HOST_POSIX_PATH)
+# including a host-rooted one spelled after a colon, the JSON-escaped spelling of a
+# POSIX path, and a `file:` URL.
+HOST_PATH_PATTERNS = (
+    _DRIVE_PATH, _UNC_PATH, _SLASH_UNC_PATH, _HOST_POSIX_PATH, _ROOT_RELATIVE_PATH, _FILE_URL_PATH,
+)
+DEFAULT_PATH_PATTERNS = (
+    _DRIVE_PATH, _UNC_PATH, _POSIX_PATH, _FILE_URL_PATH, _HOST_POSIX_PATH, _ROOT_RELATIVE_PATH,
+    _ESCAPED_POSIX_PATH, _COLON_POSIX_PATH,
+)
 
 
 def hashed_path_token(path: str) -> str:
@@ -221,7 +270,15 @@ def main(argv: list[str]) -> int:
         if not path.is_file():
             print(f"model-routing-record-sanitize refused: {path} is not a readable file", file=sys.stderr)
             return 2
-        raw = path.read_bytes()
+        try:
+            # A file that exists but cannot be read is not text the checker got to
+            # inspect: report it as unusable (exit 2) instead of crashing, because an
+            # uncaught traceback exits 1 and a `--check --root-only` run reads that as
+            # "still carries a host absolute path" - a verdict about bytes never seen.
+            raw = path.read_bytes()
+        except OSError as error:
+            print(f"model-routing-record-sanitize refused: cannot read {path}: {error}", file=sys.stderr)
+            return 2
         source = str(path)
     try:
         # newline="" keeps the recorded line endings byte-faithful: a record's

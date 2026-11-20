@@ -12,6 +12,13 @@ const TOOL_CACHE_DIR = "SYMMETRY_TOOL_CACHE_DIR";
 const DISABLE_TOOL_CACHES = "SYMMETRY_DISABLE_TOOL_CACHES";
 const SEALED_CACHE = "/sealed/tool-cache";
 
+// A filtered run can start at the 'unset' case alone, and the ambient environment
+// can export the harness variables (the evaluation runner itself does), so capture
+// the ambient values at module load; afterEach restores them and each case sets or
+// deletes what it needs from a known state.
+const AMBIENT_TOOL_CACHE_DIR = process.env[TOOL_CACHE_DIR];
+const AMBIENT_DISABLE_TOOL_CACHES = process.env[DISABLE_TOOL_CACHES];
+
 async function loadConfigs() {
   vi.resetModules();
   const vite = (await import("../vite.config")).default;
@@ -20,8 +27,16 @@ async function loadConfigs() {
 }
 
 afterEach(() => {
-  delete process.env[TOOL_CACHE_DIR];
-  delete process.env[DISABLE_TOOL_CACHES];
+  if (AMBIENT_TOOL_CACHE_DIR === undefined) {
+    delete process.env[TOOL_CACHE_DIR];
+  } else {
+    process.env[TOOL_CACHE_DIR] = AMBIENT_TOOL_CACHE_DIR;
+  }
+  if (AMBIENT_DISABLE_TOOL_CACHES === undefined) {
+    delete process.env[DISABLE_TOOL_CACHES];
+  } else {
+    process.env[DISABLE_TOOL_CACHES] = AMBIENT_DISABLE_TOOL_CACHES;
+  }
   vi.resetModules();
 });
 
@@ -38,6 +53,10 @@ describe("frontend tool-cache environment", () => {
   });
 
   it("leaves every cache default unchanged when the harness variables are unset", async () => {
+    delete process.env[TOOL_CACHE_DIR];
+    delete process.env[DISABLE_TOOL_CACHES];
+    expect(process.env[TOOL_CACHE_DIR]).toBeUndefined();
+    expect(process.env[DISABLE_TOOL_CACHES]).toBeUndefined();
     const { vite, vitest } = await loadConfigs();
     expect(vite.cacheDir).toBeUndefined();
     expect(vitest.cacheDir).toBeUndefined();

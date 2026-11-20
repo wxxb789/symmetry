@@ -38,6 +38,20 @@ if ($target.Scheme -ne "http" -or $target.Host -notin @("127.0.0.1", "localhost"
 if ($target.Port -ne $Port) {
   throw "PortalUrl port ($($target.Port)) disagrees with the fixture port ($Port): refusing to target a process this harness does not own"
 }
+# The port preflight below is check-then-use: two same-port starts both pass it
+# and then share one _build/instances/connections-<port> path and the
+# acceptance database until one fails at bind, which is the 2026-11-17
+# compile-interference window. The named mutex is taken before the preflight
+# and every mix invocation and held through cleanup, so a second same-port
+# harness fails closed here before any mix call. An abandoned mutex means the
+# previous owner died without releasing it, so acquiring it is safe.
+$portLockName = "Local\symmetry-browser-harness-port-$Port"
+$portLock = New-Object System.Threading.Mutex($false, $portLockName)
+$portLockHeld = $false
+try { $portLockHeld = $portLock.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $portLockHeld = $true }
+if (-not $portLockHeld) {
+  throw "port $Port is already owned by another harness instance (lock $portLockName is held): refusing to share its database and instance build path"
+}
 if (@(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue).Count -gt 0) {
   throw "port $Port is already in use: the fixture cannot be the process answering PortalUrl"
 }
@@ -243,5 +257,6 @@ try {
   }
 }
 
+$portLock.ReleaseMutex()
 if ($stopFailed) { exit 1 }
 exit $specStatus

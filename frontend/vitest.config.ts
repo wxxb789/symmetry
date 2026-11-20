@@ -9,8 +9,9 @@ import { defineConfig } from "vitest/config";
 // unset both defaults are unchanged.
 const toolCacheDir = process.env["SYMMETRY_TOOL_CACHE_DIR"];
 // A sealed-checkout harness also switches the cache channels off: the
-// transformed-module cache would execute code from an earlier run unvalidated, and the
-// results cache would order and select this run's tests from an earlier run's results.
+// transformed-module cache would reuse a previous invocation's transformed output for
+// identical source bytes, keyed by a partly-hashed environment, and the results cache
+// would carry an earlier run's results (test ordering and `--last-failed` selection).
 // Worker runs (no variable) keep the caches.
 const disableToolCaches = process.env["SYMMETRY_DISABLE_TOOL_CACHES"] === "1";
 

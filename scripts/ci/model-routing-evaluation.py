@@ -11,9 +11,14 @@ Operations:
            instead of the raw path
   bind-dependencies
            record the resolved dependency tree the TypeScript gates execute from (a
-           hoisted pnpm install outside every sealed checkout): copy the install log
-           into the run store, bind its digest and a deterministic digest over every
-           file and link of the tree in the environment block every receipt states
+           hoisted pnpm install outside every sealed checkout): verify that the
+           checkout resolves each gate's cwd to exactly that tree (the ancestor
+           `node_modules` walk Node performs past the empty placeholder prepare
+           creates), refuse a tree no gate resolves from, copy the install log into
+           the run store, bind its digest and a deterministic digest over every file
+           and link of the tree (an in-tree link binds the tree-relative route it
+           resolves to, so a junction hop cannot be retargeted unseen) in the
+           environment block every receipt states
   seal     refuse a checkout whose Git index carries assume-unchanged,
            skip-worktree or other nonstandard entries, whose Git view carries
            checkout-local attribute/filter machinery, or whose object store
@@ -30,6 +35,10 @@ Operations:
            derived `go test -list` run that proves the named package really lists
            them, and named ExUnit tests through a derived `mix test --trace` run
            that proves every named test finished exactly once without failures
+           (and, for a named-vitest-test gate, a derived vitest JSON report run);
+           the attempt records the dependency-provisioning step it executed under,
+           so a tree bound after the attempt ran refuses at review, receipt and
+           accept instead of being attested by an attempt that never saw it
   review   import the coordinator's independent review record for the sealed
            Subject and the latest sealed-subject check attempt; that attempt must
            be complete and passing, and a later failing or incomplete attempt
@@ -63,9 +72,11 @@ SYMMETRY_TOOL_CACHE_DIR - resolved by `frontend/vite.config.ts` as Vite's
 and `prepare` creates an empty `<run dir>/node_modules` so `.vite-temp` lands in
 the run store too (an empty directory changes no module resolution: Node walks
 past it to the hoisted dependency tree). Redirection alone is not the boundary:
-the transformed-module cache executes code written by an earlier invocation, and
-the results cache carries an earlier run's results (test ordering and
-`--last-failed` selection), so a gate run also sets SYMMETRY_DISABLE_TOOL_CACHES,
+the transformed-module cache would reuse a previous invocation's transformed
+output for identical source bytes, keyed by a partly-hashed environment the seal
+does not bind, and the results cache carries an earlier run's results (test
+ordering and `--last-failed` selection), so a gate run also sets
+SYMMETRY_DISABLE_TOOL_CACHES,
 which `frontend/vitest.config.ts` reads as the test-level `cache: false` and
 `fsModuleCache: false`, and each attempt gets a fresh state directory that
 nothing from a previous attempt can be read from. A gate that still writes such
@@ -246,8 +257,11 @@ PROMPT_HASH_REQUIRED_KEYS = {"kind", "sha256"}
 SHA256_FIELD_PATTERN = re.compile(r"^(sha256:)?[0-9a-f]{64}$")
 ATTEMPT_KEYS = {
     "schema", "attempt_id", "task_id", "task_sha256", "routes_sha256",
-    "subject_hash", "complete", "passed", "gates",
+    "subject_hash", "complete", "passed", "gates", "dependency_provisioning",
 }
+# The provisioning view is optional on read so an attempt written before this member
+# existed still parses (its `None` then refuses any run that binds a later tree).
+REQUIRED_ATTEMPT_KEYS = ATTEMPT_KEYS - {"dependency_provisioning"}
 ATTEMPT_ENTRY_KEYS = {
     "id", "passed", "result_sha256", "stdout_sha256", "stderr_sha256",
     "validator_exit_code", "validator_stdout_sha256", "validator_stderr_sha256",
@@ -290,7 +304,14 @@ _HOST_PATH_PATTERNS: tuple[re.Pattern[str], ...] | None = None
 
 
 def host_path_patterns() -> tuple[re.Pattern[str], ...]:
-    """The shared host-path matchers, read from the sanitize tool on first use."""
+    """The shared host-path matchers, read from the sanitize tool on first use.
+
+    A sibling that cannot be read, parsed or executed refuses cleanly - an
+    unreadable file, a syntax error, a regex literal that fails to compile
+    (`re.error`) and a module body that raises (`AttributeError` included) are all
+    the structured refusal, never an uncaught traceback - and so does a sibling
+    that parses without defining `HOST_PATH_PATTERNS`.
+    """
     global _HOST_PATH_PATTERNS
     if _HOST_PATH_PATTERNS is None:
         spec = importlib.util.spec_from_file_location("model_routing_record_sanitize", SANITIZE_SCRIPT)
@@ -299,9 +320,15 @@ def host_path_patterns() -> tuple[re.Pattern[str], ...]:
         module = importlib.util.module_from_spec(spec)
         try:
             spec.loader.exec_module(module)
-        except (OSError, SyntaxError) as error:
+        except (OSError, SyntaxError, re.error, AttributeError) as error:
             raise Refused(f"cannot load model-routing-record-sanitize.py for the shared host-path patterns: {error}")
-        _HOST_PATH_PATTERNS = module.HOST_PATH_PATTERNS
+        patterns = getattr(module, "HOST_PATH_PATTERNS", None)
+        if patterns is None:
+            raise Refused(
+                "cannot load model-routing-record-sanitize.py for the shared host-path patterns: "
+                "it defines no HOST_PATH_PATTERNS"
+            )
+        _HOST_PATH_PATTERNS = patterns
     return _HOST_PATH_PATTERNS
 
 
@@ -1323,6 +1350,28 @@ def validate_provisioning(value: Any, source: str) -> dict[str, Any]:
     return provisioning
 
 
+def provisioning_view(provisioning: dict[str, Any]) -> dict[str, Any]:
+    """The identity of one recorded provisioning step, as an attempt records it."""
+    return {
+        "tree": provisioning["tree"],
+        "tree_digest": provisioning["tree_digest"],
+        "tree_entries": provisioning["tree_entries"],
+    }
+
+
+def validate_attempt_provisioning(value: Any, source: str) -> dict[str, Any] | None:
+    """One check attempt's view of the bound dependency-provisioning step, if any."""
+    if value is None:
+        return None
+    keys = {"tree", "tree_digest", "tree_entries"}
+    block = require_object(value, source, keys, keys)
+    return {
+        "tree": require_text(block["tree"], source + " tree", max_length=300),
+        "tree_digest": require_digest(block["tree_digest"], source + " tree_digest"),
+        "tree_entries": require_integer(block["tree_entries"], source + " tree_entries", 1),
+    }
+
+
 def verify_dependency_tree(run_dir: pathlib.Path, provisioning: dict[str, Any]) -> None:
     """Recompute the recorded dependency-tree digest and refuse a missing or changed tree.
 
@@ -1628,24 +1677,51 @@ def exunit_trace_argv(gate: dict[str, Any]) -> list[str] | None:
     return [gate["argv"][0], "test", "--trace", "--seed", "0", *gate["exunit_files"]]
 
 
+def vitest_entry_index(argv: list[str]) -> int | None:
+    """The argv index of the vitest entry point it runs, or None.
+
+    The launcher's own flags stand between the interpreter and the entry
+    (`node --no-warnings x/vitest.mjs run`), so the entry is the first argument
+    that is not a flag: a spelling whose entry hides behind a flag would otherwise
+    skip the dependency-provisioning requirement the entry point implies and the
+    derived report command would run the wrong file. A launcher flag that takes a
+    separate value (`node -r ./setup.js vitest.mjs`) hides the entry behind that
+    value and is not recognized; a gate that declares `vitest_tests` cannot use
+    such a spelling, because gate validation requires this same entry shape.
+    """
+    for index in range(1, len(argv)):
+        argument = argv[index]
+        if argument.startswith("-"):
+            continue
+        name = pathlib.PurePath(argument).name.lower()
+        return index if name.startswith("vitest") and name.endswith((".mjs", ".cjs", ".js")) else None
+    return None
+
+
 def is_vitest_entry(argv: list[str]) -> bool:
-    """True when argv runs a vitest entry point as `<interpreter> <vitest entry>`."""
-    if len(argv) < 2:
-        return False
-    name = pathlib.PurePath(argv[1]).name.lower()
-    return name.startswith("vitest") and name.endswith((".mjs", ".cjs", ".js"))
+    """True when argv runs a vitest entry point as `<interpreter> [flags] <vitest entry>`."""
+    return vitest_entry_index(argv) is not None
 
 
 def vitest_report_argv(gate: dict[str, Any], gate_dir: pathlib.Path) -> list[str] | None:
     """Derive the structured vitest cross-check argv for a named-vitest-test gate, if any.
 
     The derived run writes vitest's own JSON report next to the gate evidence, so
-    the check parses a structured document instead of matching printed text.
+    the check parses a structured document instead of matching printed text. The
+    command reuses the gate's own launcher and flags up to its vitest entry (the
+    same shape gate validation required), so a flagged spelling reruns vitest
+    instead of handing the flags to a different file.
     """
     if not gate["vitest_tests"]:
         return None
+    entry_index = vitest_entry_index(gate["argv"])
+    if entry_index is None:
+        raise Refused(
+            f"gate {gate['id']} declares vitest tests but its argv names no recognizable "
+            "vitest entry point, so the derived report command cannot be built"
+        )
     return [
-        *gate["argv"][:2],
+        *gate["argv"][:entry_index + 1],
         "run",
         "--reporter=json",
         "--outputFile",
@@ -2384,7 +2460,7 @@ def attempt_names(run_dir: pathlib.Path) -> list[str]:
 def read_attempt(run_dir: pathlib.Path, name: str) -> tuple[bytes, dict[str, Any]]:
     raw = read_bytes(run_dir / "checks" / name / "attempt.json", MAX_RECORD_BYTES, "check attempt record")
     value = strict_json(raw, "check attempt record", MAX_RECORD_BYTES)
-    require_object(value, "check attempt record", ATTEMPT_KEYS, ATTEMPT_KEYS)
+    require_object(value, "check attempt record", ATTEMPT_KEYS, REQUIRED_ATTEMPT_KEYS)
     if value["schema"] != SCHEMA:
         raise Refused("check attempt record schema mismatch")
     if value["attempt_id"] != name:
@@ -2420,6 +2496,9 @@ def read_attempt(run_dir: pathlib.Path, name: str) -> tuple[bytes, dict[str, Any
         "subject_hash": require_digest(value["subject_hash"], "check attempt record subject_hash"),
         "complete": require_bool(value["complete"], "check attempt record complete"),
         "passed": require_bool(value["passed"], "check attempt record passed"),
+        "dependency_provisioning": validate_attempt_provisioning(
+            value.get("dependency_provisioning"), "check attempt record dependency_provisioning"
+        ),
         "gates": entries,
     }
 
@@ -2430,6 +2509,17 @@ def verify_attempt_artifacts(
 ) -> dict[str, Any]:
     if attempt["task_sha256"] != run["task_sha256"] or attempt["routes_sha256"] != run["routes_sha256"]:
         raise Refused("the check attempt is not bound to the frozen task and routes of this run")
+    # The attempt attests only what it executed under: the run's bound provisioning
+    # step must be exactly the one the attempt saw, so a tree bound after the attempt
+    # ran (a late `bind-dependencies`) can never be attested by it and instead
+    # requires a new check.
+    provisioning = run["environment"].get("provisioning")
+    bound_view = None if provisioning is None else provisioning_view(provisioning)
+    if attempt["dependency_provisioning"] != bound_view:
+        raise Refused(
+            f"the check attempt {name} does not match the dependency provisioning this run binds: "
+            "a tree bound after the attempt ran requires a new check"
+        )
     attempt_dir = run_dir / "checks" / name
     gate_lookup = {gate["id"]: gate for gate in task["gates"]}
     known_order = [gate["id"] for gate in task["gates"]]
@@ -2465,6 +2555,7 @@ def verify_attempt_artifacts(
         "sha256": sha256_hex(raw),
         "task_sha256": attempt["task_sha256"],
         "routes_sha256": attempt["routes_sha256"],
+        "dependency_provisioning": attempt["dependency_provisioning"],
         "complete": complete,
         "passed": passed,
         "gates": verified,
@@ -2830,6 +2921,7 @@ def build_receipt(
             "task_sha256": attempt["task_sha256"],
             "routes_sha256": attempt["routes_sha256"],
             "subject_hash": sealed["subject_hash"],
+            "dependency_provisioning": attempt["dependency_provisioning"],
             "complete": attempt["complete"],
             "passed": attempt["passed"],
             "gates": [
@@ -3062,13 +3154,16 @@ def _walk_error(error: OSError) -> None:
 
 
 def _link_payload(link: pathlib.Path, root: pathlib.Path, seen: frozenset) -> bytes:
-    """The digest payload of one link: its text, plus its target's content outside the tree.
+    """The digest payload of one link: its text, where it resolves, and any outside content.
 
-    A link inside the tree is bound by the walked entries the target names. A link whose
-    resolved target leaves the tree is what pnpm's workspace links look like
-    (`@symmetry/contracts -> ../../contracts`): the target's own content is executed by
-    the gates, so it is digested here instead of being left unbound; a link cycle
-    refuses rather than recursing forever.
+    A link inside the tree is bound by the walked entries the target names, and by the
+    tree-relative route its chain resolves to: a link that leaves the tree and comes
+    back (a junction or symlink hop) can be retargeted to another in-tree directory
+    without changing either link's text, and the gates would then execute different
+    bytes under the same recorded digest. A link whose resolved target leaves the tree
+    is what pnpm's workspace links look like (`@symmetry/contracts -> ../../contracts`):
+    the target's own content is executed by the gates, so it is digested here instead
+    of being left unbound; a link cycle refuses rather than recursing forever.
     """
     try:
         target_text = os.readlink(link).encode("utf-8", "surrogateescape")
@@ -3081,7 +3176,8 @@ def _link_payload(link: pathlib.Path, root: pathlib.Path, seen: frozenset) -> by
         # resolves, so the tree cannot be bound and the run is refused, not crashed.
         raise Refused(f"the dependency tree link {link} does not resolve: {error}")
     if _within(root, resolved):
-        return b"in-tree\0" + target_text
+        relative = resolved.relative_to(root).as_posix()
+        return b"in-tree\0" + target_text + b"\0" + relative.encode("utf-8")
     if resolved in seen:
         raise Refused(f"the dependency tree link {link} resolves into a cycle at {resolved}")
     return b"out-of-tree\0" + target_text + b"\0" + _target_content_digest(resolved, seen | {resolved})
@@ -3142,11 +3238,12 @@ def dependency_tree_digest(tree: pathlib.Path) -> tuple[str, int]:
 
     Each entry contributes its relative path (UTF-8 bytes), its kind and its payload in
     one sorted stream, so two trees with the same entries digest identically regardless
-    of traversal order: a file contributes its content digest, a link its target text -
-    plus, when the target resolves outside the tree, that target's own content digest,
-    because the gates execute it (pnpm's workspace links point at source outside the
-    hoisted tree). Directory links are pruned instead of followed (a cycle refuses);
-    empty directories are not entries.
+    of traversal order: a file contributes its content digest, a link its target text
+    plus the tree-relative route it resolves to (an in-tree junction hop cannot be
+    retargeted unseen) - and, when the target resolves outside the tree, that target's
+    own content digest, because the gates execute it (pnpm's workspace links point at
+    source outside the hoisted tree). Directory links are pruned instead of followed (a
+    cycle refuses); empty directories are not entries.
     """
     try:
         resolved_tree = tree.resolve()
@@ -3281,20 +3378,80 @@ def _dependency_tree(value: str) -> pathlib.Path:
     return resolved
 
 
+def resolved_dependency_tree(checkout: pathlib.Path, gate_cwd: str) -> pathlib.Path | None:
+    """The `node_modules` tree Node reaches first from one gate's cwd, if any.
+
+    Node resolves a module by walking the requiring directory's ancestors and trying
+    each `node_modules` directory it passes; a directory with no entries answers for
+    no package, so the first non-empty one on the chain is the tree the gates execute
+    from (the runbook's hoisted install sits one level above the run directory, past
+    the empty placeholder `prepare` creates). `None` means nothing on the chain holds
+    any entry, so no tree can be bound as the executed one.
+    """
+    directory = pathlib.Path(checkout, *gate_cwd.split("/"))
+    while True:
+        candidate = directory / "node_modules"
+        if candidate.is_dir():
+            try:
+                populated = any(candidate.iterdir())
+            except OSError as error:
+                raise Refused(f"cannot list the dependency-tree candidate {candidate}: {error}")
+            if populated:
+                try:
+                    return candidate.resolve()
+                except (OSError, RuntimeError) as error:
+                    raise Refused(f"the dependency tree at {candidate} does not resolve: {error}")
+        parent = directory.parent
+        if parent == directory:
+            return None
+        directory = parent
+
+
+def require_resolved_dependency_tree(
+    run_dir: pathlib.Path, run: dict[str, Any], task: dict[str, Any], tree: pathlib.Path
+) -> None:
+    """Refuse a bound tree the checkout's gates do not resolve their modules from.
+
+    The recorded binding attests the tree the gates executed from, so the tree must
+    be the one each gate's cwd resolves first: a receipt that bound a decoy tree
+    would attest a tree no gate ever executed (the F01 review probe). This runs on
+    the bind path (where the binding is created) and on `--check` (where a stale
+    binding would otherwise keep verifying a tree the gates no longer use).
+    """
+    checkout = run_dir / "checkout"
+    if not checkout.is_dir():
+        raise Refused("the run has no checkout to resolve the dependency tree from; run prepare first")
+    for gate in task["gates"]:
+        resolved = resolved_dependency_tree(checkout, gate["cwd"])
+        if resolved is None:
+            raise Refused(
+                f"the checkout resolves no dependency tree from gate {gate['id']}'s cwd, so "
+                f"--tree {tree} is not the tree the gates execute from"
+            )
+        if resolved != tree:
+            raise Refused(
+                f"--tree {tree} is not the dependency tree the gates execute from: gate "
+                f"{gate['id']} (cwd {gate['cwd']!r}) resolves {resolved} first"
+            )
+
+
 def command_bind_dependencies(arguments: argparse.Namespace) -> int:
     run_dir = pathlib.Path(arguments.run_dir)
     run = load_run(run_dir)
+    task = load_frozen_task(run_dir, run)
     recorded = run["environment"].get("provisioning")
     if arguments.check:
         if recorded is None:
             raise Refused("the run records no provisioning step to check")
-        digest, entries = dependency_tree_digest(_dependency_tree(arguments.tree))
+        tree = _dependency_tree(arguments.tree)
+        digest, entries = dependency_tree_digest(tree)
         if (digest, entries) != (recorded["tree_digest"], recorded["tree_entries"]):
             raise Refused(
                 "the dependency tree no longer matches the recorded provisioning step: "
                 f"{digest} over {entries} entries != {recorded['tree_digest']} over "
                 f"{recorded['tree_entries']} entries"
             )
+        require_resolved_dependency_tree(run_dir, run, task, tree)
         print(json.dumps({
             "verified": True,
             "tree": recorded["tree"],
@@ -3310,6 +3467,7 @@ def command_bind_dependencies(arguments: argparse.Namespace) -> int:
     checkout = run_dir / "checkout"
     if checkout.exists() and (tree == checkout.resolve() or checkout.resolve() in tree.parents):
         raise Refused("the bound dependency tree must live outside the sealed checkout")
+    require_resolved_dependency_tree(run_dir, run, task, tree)
     tree_digest, tree_entries = dependency_tree_digest(tree)
     log_path = pathlib.Path(arguments.log)
     log_raw = read_bytes(log_path, MAX_PROVISIONING_LOG_BYTES, "dependency provisioning log")
@@ -3433,6 +3591,16 @@ def command_check(arguments: argparse.Namespace) -> int:
         if stopped_early:
             break
     complete = len(verified) == len(task["gates"]) and not stopped_early
+    provisioning = run["environment"].get("provisioning")
+    dependency_provisioning = None
+    if provisioning is not None:
+        # A gate that wrote into the shared dependency tree would change what later
+        # gates execute; the post-attempt digest refuses that instead of binding it, and
+        # it runs before the attempt record exists so a refused attempt is not evidence.
+        verify_dependency_tree(run_dir, provisioning)
+        # The attempt records the provisioning step it executed under, so a receipt can
+        # refuse a binding made after the attempt ran (a late bind requires a re-check).
+        dependency_provisioning = provisioning_view(provisioning)
     attempt = {
         "schema": SCHEMA,
         "attempt_id": attempt_name,
@@ -3442,14 +3610,9 @@ def command_check(arguments: argparse.Namespace) -> int:
         "subject_hash": sealed["subject_hash"],
         "complete": complete,
         "passed": attempt_passed and not stopped_early and complete,
+        "dependency_provisioning": dependency_provisioning,
         "gates": verified,
     }
-    provisioning = run["environment"].get("provisioning")
-    if provisioning is not None:
-        # A gate that wrote into the shared dependency tree would change what later
-        # gates execute; the post-attempt digest refuses that instead of binding it, and
-        # it runs before the attempt record exists so a refused attempt is not evidence.
-        verify_dependency_tree(run_dir, provisioning)
     attempt_raw = write_json(attempt_dir / "attempt.json", attempt)
     print(json.dumps({
         "attempt_id": attempt_name,

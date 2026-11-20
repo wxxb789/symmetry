@@ -12,23 +12,25 @@ path, or a ``--root`` disposable root still refuses.
 
 Changed-file selection is computed against an explicit comparison base, never from
 the checkout's last commit: CI passes the pull-request base commit, or the pushed
-``before`` commit for a push. The paths are selected from that range but their bytes
-are read from the working tree, so the checkout must be at ``--head`` (CI checks the
-pushed commit out): a ``--repo``/``--head`` pair whose working tree sits elsewhere
-checks one revision's selection against another revision's bytes. An empty or all-zero
-base - a new branch, a tag push, a manual run - names no earlier revision of this
-branch and falls back to the merge base with ``origin/main`` and then to ``HEAD^``;
-when that range is empty it reports ``nothing to check`` and passes, because the
-revision was compared with itself by construction, not by omission. A base that was
-requested and is not present in this checkout (a force-push's ``before``) takes the
-same fallback with a hint, but a fallback that would compare the head with itself
-refuses: the rewritten history now sits on ``origin/main``, and a vacuous pass would
-hide the records such a push adds.
-The range is then narrowed to ``git merge-base base head`` when one exists, so commits
-that belong to the base branch are not attributed to this change. Only a range that
-cannot be compared at all, or a requested base that cannot be, refuses. Unchanged
-records are deliberately not checked (the pre-existing 0008-series records are tracked
-by their own TODO entries), and deleted records have nothing to check.
+``before`` commit for a push. The selected paths' bytes are read from the ``--head``
+revision's Git blob - never from the working tree - so the checkout need not be at
+``--head`` and a worktree file cannot substitute bytes for the revision under test;
+a record whose head entry is not a regular file blob (a symlink storing its target
+text, or a gitlink) is refused. An empty or all-zero base - a new branch, a tag push,
+a manual run - names no earlier revision of this branch and falls back to the merge
+base with ``origin/main`` and then to ``HEAD^``; when that range is empty it reports
+``nothing to check`` and passes, because the revision was compared with itself by
+construction, not by omission. A base that was requested and is not present in this
+checkout (a force-push's ``before``) takes the same fallback with a hint, but a
+fallback that would compare the head with itself refuses: the rewritten history now
+sits on ``origin/main``, and a vacuous pass would hide the records such a push adds.
+A requested base that resolves is compared directly (``git diff base head``), so a
+non-fast-forward push that reintroduces an earlier record is still checked instead of
+being narrowed to an empty range; only the fallback base - already a merge base with
+``origin/main``, or ``HEAD^`` - is narrowed to its merge base with the head. Only a
+range that cannot be compared at all, or a requested base that cannot be, refuses.
+Unchanged records are deliberately not checked (the pre-existing 0008-series records
+are tracked by their own TODO entries), and deleted records have nothing to check.
 
 Usage::
 
@@ -51,6 +53,9 @@ SCRIPT_DIRECTORY = pathlib.Path(__file__).resolve().parent
 SANITIZE_TOOL = SCRIPT_DIRECTORY / "model-routing-record-sanitize.py"
 RECORD_PATHS = ("docs/evaluations", "docs/evidence")
 ZERO_COMMIT = "0" * 40
+# A record's head entry must be a regular file blob: a symlink's stored bytes are its
+# target text and a gitlink's are a subproject commit, neither of which is the record.
+REGULAR_BLOB_MODES = {"100644", "100755"}
 # A record is selected when the diff reports it as added, modified or type-changed:
 # each case leaves a file at the head revision whose text this gate must parse.
 SELECTED_STATUSES = {"A", "M", "T"}
@@ -58,6 +63,10 @@ SELECTED_STATUSES = {"A", "M", "T"}
 
 class ComparisonBaseRefused(Exception):
     """A requested comparison base that cannot yield a comparable range."""
+
+
+class DiffRefused(Exception):
+    """A revision range git cannot diff, or whose output shape is unexpected."""
 
 
 def run_git(repository: pathlib.Path, *arguments: str) -> subprocess.CompletedProcess:
@@ -73,18 +82,22 @@ def resolve_commit(repository: pathlib.Path, revision: str) -> str | None:
     return completed.stdout.decode("ascii", "replace").strip()
 
 
-def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> str | None:
-    """The commit to compare ``head`` against, or None when none can be resolved.
+def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> tuple[str | None, bool]:
+    """The commit to compare ``head`` against, plus whether it came from the fallback.
 
     The fallback rules are the module docstring's; the shape only this function owns
     is its refusal: a fallback that would compare the head with itself raises
-    ``ComparisonBaseRefused`` instead of returning a base.
+    ``ComparisonBaseRefused`` instead of returning a base. A requested base that
+    resolves is returned as ``(commit, False)`` and is compared directly; only a
+    fallback base is returned as ``(commit, True)`` for the caller to narrow, because
+    narrowing a requested base would collapse a non-fast-forward push to an empty
+    range and hide the records it reintroduces.
     """
     requested_unreachable = False
     if requested and requested != ZERO_COMMIT:
         resolved = resolve_commit(repository, requested)
         if resolved is not None:
-            return resolved
+            return resolved, False
         requested_unreachable = True
         print(
             f"check-record-cleanliness: base {requested} is not present in this checkout "
@@ -101,13 +114,19 @@ def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> 
                 "force-push rewrites history, so name the revision this change is to be "
                 "compared against"
             )
-        return resolved
+        return resolved, True
     first_parent = resolve_commit(repository, f"{head}^")
-    return first_parent
+    return first_parent, True
 
 
 def narrow_to_merge_base(repository: pathlib.Path, base: str, head: str) -> str:
-    """The merge base of base and head when one exists, so base-branch commits stay out."""
+    """The merge base of base and head when one exists, so base-branch commits stay out.
+
+    Only the fallback base is narrowed. A requested base that resolves is compared
+    directly, because a rollback or rewritten push makes the head an ancestor of that
+    base: ``merge-base`` would then collapse the range to the head itself and report
+    ``nothing to check`` while the push reintroduces records the base had cleaned.
+    """
     merge_base = run_git(repository, "merge-base", base, head)
     if merge_base.returncode != 0:
         return base
@@ -120,18 +139,47 @@ def changed_records(repository: pathlib.Path, base: str, head: str) -> list[str]
         repository, "diff", "--name-status", "--no-renames", "-z", base, head, "--", *RECORD_PATHS,
     )
     if completed.returncode != 0:
-        raise SystemExit(
-            "check-record-cleanliness refused: cannot diff "
+        raise DiffRefused(
+            "cannot diff "
             f"{base}..{head}: {completed.stderr.decode('utf-8', 'replace').strip()}"
         )
     fields = [field.decode("utf-8", "surrogateescape") for field in completed.stdout.split(b"\0") if field]
     if len(fields) % 2 != 0:
-        raise SystemExit("check-record-cleanliness refused: unexpected git diff output shape")
+        raise DiffRefused("unexpected git diff output shape")
     selected = [fields[index + 1] for index in range(0, len(fields), 2) if fields[index] in SELECTED_STATUSES]
     return sorted(selected)
 
 
-def check_record(repository: pathlib.Path, relative: str) -> tuple[str, str]:
+def head_blob(repository: pathlib.Path, head: str, relative: str) -> tuple[str, bytes]:
+    """The Git mode and blob bytes of one selected record at the head revision.
+
+    Reading the head commit's own blob is what binds the revision under test: a
+    working tree left at another revision, or a worktree file that is a symlink to
+    elsewhere, cannot substitute bytes for it. The mode is returned so the caller can
+    refuse a record the head does not store as a regular file.
+    """
+    listed = run_git(repository, "ls-tree", "-z", head, "--", relative)
+    if listed.returncode != 0:
+        raise DiffRefused(
+            f"cannot read {relative} at {head}: {listed.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    entries = [entry for entry in listed.stdout.split(b"\0") if entry]
+    if len(entries) != 1:
+        raise DiffRefused(f"the head revision {head} does not hold exactly one entry for {relative}")
+    header = entries[0].split(b"\t", 1)[0].split(b" ")
+    if len(header) != 3:
+        raise DiffRefused(f"unexpected ls-tree entry for {relative} at {head}")
+    mode, _kind, object_id = (field.decode("ascii") for field in header)
+    blob = run_git(repository, "cat-file", "blob", object_id)
+    if blob.returncode != 0:
+        raise DiffRefused(
+            f"cannot read the blob of {relative} at {head}: "
+            f"{blob.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    return mode, blob.stdout
+
+
+def check_record(payload: bytes) -> tuple[str, str]:
     """Run the sanitize tool's own root-only check over one record.
 
     Returns ``(status, detail)``: ``pass`` when the tool exits 0, ``dirty`` when it
@@ -139,8 +187,8 @@ def check_record(repository: pathlib.Path, relative: str) -> tuple[str, str]:
     bytes are not text the tool can check).
     """
     completed = subprocess.run(
-        [sys.executable, str(SANITIZE_TOOL), "--check", "--root-only", relative],
-        capture_output=True, cwd=str(repository), check=False,
+        [sys.executable, str(SANITIZE_TOOL), "--check", "--root-only", "-"],
+        input=payload, capture_output=True, check=False,
     )
     detail = (completed.stderr + completed.stdout).decode("utf-8", "replace").strip()
     if completed.returncode == 0:
@@ -173,7 +221,7 @@ def main(argv: list[str]) -> int:
         print(f"check-record-cleanliness refused: cannot resolve the head {arguments.head!r}", file=sys.stderr)
         return 2
     try:
-        base = resolve_base(repository, arguments.base, head)
+        base, fallback = resolve_base(repository, arguments.base, head)
     except ComparisonBaseRefused as refusal:
         print(f"check-record-cleanliness refused: {refusal}", file=sys.stderr)
         return 2
@@ -185,21 +233,35 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
-    base = narrow_to_merge_base(repository, base, head)
-    records = changed_records(repository, base, head)
+    if fallback:
+        base = narrow_to_merge_base(repository, base, head)
+    try:
+        records = changed_records(repository, base, head)
+    except DiffRefused as refusal:
+        print(f"check-record-cleanliness refused: {refusal}", file=sys.stderr)
+        return 2
     if not records:
         print(f"check-record-cleanliness: no record added or modified between {base[:12]} and {head[:12]}; nothing to check")
         return 0
     dirty: list[tuple[str, str]] = []
     unreadable: list[tuple[str, str]] = []
+    nonregular: list[tuple[str, str]] = []
     for relative in records:
-        status, detail = check_record(repository, relative)
+        try:
+            mode, payload = head_blob(repository, head, relative)
+        except DiffRefused as refusal:
+            print(f"check-record-cleanliness refused: {refusal}", file=sys.stderr)
+            return 2
+        if mode not in REGULAR_BLOB_MODES:
+            nonregular.append((relative, f"the head revision stores it as mode {mode}"))
+            continue
+        status, detail = check_record(payload)
         if status == "dirty":
             dirty.append((relative, detail))
         elif status == "unreadable":
             unreadable.append((relative, detail))
-    if dirty or unreadable:
-        for relative, detail in dirty + unreadable:
+    if dirty or unreadable or nonregular:
+        for relative, detail in dirty + unreadable + nonregular:
             print(f"check-record-cleanliness refused: {relative}: {detail}", file=sys.stderr)
         if dirty:
             print(
@@ -215,6 +277,13 @@ def main(argv: list[str]) -> int:
                 "records could not be checked at all: the sanitize tool refused their bytes "
                 "(exit 2, not recorded text), so this gate cannot say whether they name a host "
                 "path",
+                file=sys.stderr,
+            )
+        if nonregular:
+            print(
+                f"check-record-cleanliness refused: {len(nonregular)} of {len(records)} changed "
+                "records are not regular file blobs at the head revision (a symlink stores its "
+                "target text, a gitlink a subproject commit), so this gate cannot check them",
                 file=sys.stderr,
             )
         return 1

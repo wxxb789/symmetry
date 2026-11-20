@@ -20,9 +20,10 @@ jobs:
   #
   # The same diff also reports `run-records`: a change that adds or modifies an
   # evaluation record under `docs/evaluations/**` or `docs/evidence/**`, or that
-  # changes the record sanitize tool itself, gates the record-cleanliness job
-  # below. That gate must run for a records-only (documentation-only) pull
-  # request, so it is a separate output rather than part of run-heavy.
+  # changes `model-routing-record-sanitize.py` or `check-record-cleanliness.py`,
+  # gates the record-cleanliness job below. That gate must run for a records-only
+  # (documentation-only) pull request, so it is a separate output rather than
+  # part of run-heavy.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -71,8 +72,9 @@ jobs:
   # `fetch-depth: 0` gives the job the comparison base the gate needs. On a
   # pull request that is the checked-out event head's first parent (`HEAD^1`,
   # exactly the range the classifier above used); on a push it is the pushed
-  # `before` commit; an all-zero base (a new branch, a tag, a manual run) falls
-  # back inside the script.
+  # `before` commit; an empty or all-zero base (a manual `workflow_dispatch` run
+  # has no `before` field and arrives empty; a new branch or tag is all-zero)
+  # falls back inside the script.
   record-cleanliness:
     needs: changes
     if: needs.changes.outputs.run-records == 'true'
