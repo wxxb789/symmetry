@@ -1153,11 +1153,12 @@ class EvaluationTests(unittest.TestCase):
         # Windows closing a read end queues behind the reader blocked in it, so a close
         # on the reaping thread would wait for the survivor instead of the documented
         # reap window. The kill is narrowed to the direct child so the survivor is
-        # always missed, exactly as a detached spawn escapes `taskkill /T`. The case
-        # proves the fixture really held the pipes (the gate spawned the survivor
+        # always missed, standing in for a descendant that escapes `taskkill /T`. The
+        # case proves the fixture really held the pipes (the gate spawned the survivor
         # before the kill and the survivor still runs), measures the reap against its
-        # window and its documented worst case, checks the direct child was waited
-        # on, and on POSIX keeps exactly the output already captured before the kill.
+        # window and its documented worst case, checks the lingering branch waited on
+        # the direct child within its own timeout, and on POSIX closes both read ends
+        # and keeps exactly the output already captured before the kill.
         runner = load_runner_module()
         handshake = self.root / "lingering-handshake"
         handshake.mkdir()
@@ -1231,7 +1232,25 @@ class EvaluationTests(unittest.TestCase):
         bound = timeout + 2.0 * runner.PROCESS_TREE_REAP_SECONDS + 5.0
         outcome: dict = {}
         recorded: list = []
+        waits: list = []
         real_subprocess = runner.subprocess
+
+        class RecordingProcess:
+            """Delegate to the real Popen, recording every wait the runner asks for.
+
+            `kill()` already sets `returncode`, so the recorded wait call is what shows
+            the direct child was waited on rather than merely killed.
+            """
+
+            def __init__(self, process):
+                self._process = process
+
+            def __getattr__(self, name):
+                return getattr(self._process, name)
+
+            def wait(self, timeout=None):
+                waits.append(timeout)
+                return self._process.wait(timeout=timeout)
 
         class RecordingSubprocess:
             """Delegate to the real module, recording every Popen the runner builds."""
@@ -1240,7 +1259,7 @@ class EvaluationTests(unittest.TestCase):
                 return getattr(real_subprocess, name)
 
             def Popen(self, *args, **kwargs):
-                process = real_subprocess.Popen(*args, **kwargs)
+                process = RecordingProcess(real_subprocess.Popen(*args, **kwargs))
                 recorded.append(process)
                 return process
 
@@ -1303,22 +1322,44 @@ class EvaluationTests(unittest.TestCase):
             f"the reap returned in {elapsed:.1f}s without consuming a reap window: the survivor "
             "never held the gate's pipes, so the case proved nothing",
         )
-        # The other half of the reap contract: the direct child is waited on, not
-        # merely killed, so its exit status is known before the reap returns.
+        # The other half of the reap contract: the lingering branch waits on the direct
+        # child with its own bounded timeout, not merely kills it, so its exit status is
+        # known before the reap returns. `kill()` already sets `returncode` on both
+        # platforms, so the wait call itself is recorded and asserted.
         self.assertEqual(len(recorded), 1, "the reap constructed an unexpected number of processes")
+        self.assertEqual(
+            waits,
+            [runner.PROCESS_TREE_REAP_SECONDS],
+            "the lingering reap must wait once on the direct child within its own reap window",
+        )
         self.assertIsNotNone(
             recorded[0].returncode,
-            "the reap returned without waiting on the direct child (returncode unset)",
+            "the reap returned before the direct child's exit status was collected",
         )
         if os.name != "nt":
+            # The POSIX lingering branch closes its read ends before returning: its
+            # `communicate` reads on this thread, so the close cannot queue behind the
+            # survivor, and nothing else closes them while the recorded Popen stays alive.
+            self.assertTrue(
+                recorded[0].stdout.closed and recorded[0].stderr.closed,
+                "the POSIX lingering reap must close both read ends before returning",
+            )
             # The POSIX reap reads chunks while it waits, so output captured before the
             # kill must come back with the timeout result. Windows `communicate`
             # cannot read a partial buffer out of a pipe that never reaches EOF, so
-            # nothing is asserted there.
+            # the capture is not asserted there.
             self.assertEqual(
                 stdout,
                 b"gate-output-before-kill\n",
                 "the POSIX reap must return exactly the output captured before the kill",
+            )
+        else:
+            # Windows keeps the read ends open behind the reader thread parked in the
+            # pipe: a close there queues behind the survivor, and the parked reader owns
+            # the final close once the write ends are released, or process exit does.
+            self.assertFalse(
+                recorded[0].stdout.closed,
+                "the Windows lingering reap must leave its read ends open behind the parked reader",
             )
 
     def test_symlink_targets_are_bound(self) -> None:

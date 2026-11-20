@@ -283,15 +283,18 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `taskkill /T`), asserts the reap consumes its window (measured duration at least `timeout +
       PROCESS_TREE_REAP_SECONDS - 2s`) and returns within the code's documented worst case
       (`timeout + 2 * PROCESS_TREE_REAP_SECONDS + 5s`, with the failure message reporting the
-      measured duration), that the direct child was waited on, reports the timeout, and on POSIX
-      returns exactly the output captured before the kill, and terminates the survivor: red on
+      measured duration), that the lingering branch waits once on the direct child within its own
+      reap window (the wait call is recorded through the delegating process proxy, since `kill`
+      alone already sets `returncode`), reports the timeout, on POSIX returns exactly the output
+      captured before the kill with both read ends asserted closed, keeps the Windows stdout
+      asserted open behind the parked reader, and terminates the survivor: red on
       the pre-fix runner (`py -3.12 scripts/ci/test-model-routing-evaluation.py
       EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes -v` ->
       "run_owned_command did not return within 27.0s while a survivor held the gate's pipes: ...
       survivor running at the bound=True, reap finished 27.8s after the call started, reap
-      finished after release=True", FAILED (failures=1) in 29.787s), green after (OK in 14.440s);
-      the focused descendant test passes on Windows (OK in 17.520s) and both tests pass under WSL
-      Ubuntu `python3` (OK in 24.206s), with the full Windows suite passing (`py -3.12
+      finished after release=True", FAILED (failures=1) in 29.787s), green after (OK in 15.343s);
+      the focused descendant test passes on Windows (OK in 17.824s) and both tests pass under WSL
+      Ubuntu `python3` (OK in 28.885s), with the full Windows suite passing (`py -3.12
       scripts/ci/test-model-routing-evaluation.py -v` -> Ran 66 tests in 1167.657s, OK,
       skipped=2: the POSIX-only executable-mode and non-UTF-8 path fixtures).
 
