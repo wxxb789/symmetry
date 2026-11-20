@@ -232,6 +232,23 @@ const main = async () => {
     }
   }
 
+  // Every fixture gate reads the manifest, so a file no row names would be
+  // never validated; hold the served fixture directories to exactly one row.
+  const manifestPathCounts = new Map();
+  for (const fixture of manifest.fixtures) {
+    manifestPathCounts.set(fixture.path, (manifestPathCounts.get(fixture.path) ?? 0) + 1);
+  }
+  for (const directory of ["valid", "invalid"]) {
+    const directoryPath = path.join(ROOT_DIR, "contracts", "fixtures", directory);
+    for (const file of await fs.readdir(directoryPath)) {
+      const rows = manifestPathCounts.get(`${directory}/${file}`) ?? 0;
+      if (rows !== 1)
+        throw new Error(
+          `fixture file ${relativePath(path.join(directoryPath, file))} must have exactly one manifest row, found ${rows}`,
+        );
+    }
+  }
+
   const requiredTags = [
     "missing-control-field",
     "extra-control-field",

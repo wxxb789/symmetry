@@ -94,9 +94,10 @@ Increment:
   unsupported` with `next_check_at` required absent (`control/lib/symmetry_control/goals/
   schemas.ex:1435,1595-1601`); the served document therefore carries
   `state: "unsupported"`, `reason: "unsupported_external_check"`, `check_seq: 0`,
-  `next_check_at: null`. The DB check constraint also admits `waiting|checking|unknown`, but no
-  code path creates them, so the gate fixture uses the writer's shape and does not invent a
-  state the server cannot serve.
+  `next_check_at: null`. The DB check constraint admits the same four states
+  (`20260909100000_add_goal_external_wait_unsupported_state` replaced the create-table
+  `waiting|checking|unknown` set), so the gate fixture uses the writer's shape and does not
+  invent a state the server cannot serve.
 - **An accepted outcome's `candidate_subject` is the canonical Subject object** (`resource_id`,
   `commit`, `tree_digest`) and `subject_hash` is served as `sha256:<hex>`
   (`read_model.ex:2828`); the fixture carries both, so the rename probe pins the exact spelling

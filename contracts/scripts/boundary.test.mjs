@@ -226,6 +226,29 @@ function renameMember(target, member) {
   delete target[member];
 }
 
+/** Decode a served document, failing the probe when it does not decode cleanly. */
+const decodeOrFlunk = async (decodeJson, document, label) => {
+  const result = await Effect.runPromise(Effect.either(decodeJson(JSON.stringify(document))));
+  assert.ok(
+    Either.isRight(result),
+    `${label} must decode before any rename: ${String(result.left)}`,
+  );
+};
+
+/**
+ * Rename each consumed member on a clone of the served document; every rename
+ * must be refused as a ParseError.
+ */
+const assertRenamesRefused = async (decodeJson, base, renames) => {
+  for (const [label, rename] of renames) {
+    const renamed = structuredClone(base);
+    rename(renamed);
+    const result = await Effect.runPromise(Effect.either(decodeJson(JSON.stringify(renamed))));
+    assert.ok(Either.isLeft(result), `${label}: a renamed consumed member must be refused`);
+    assert.equal(result.left._tag, "ParseError", `${label}: the refusal is a parse failure`);
+  }
+};
+
 /**
  * The served reads mark every consumed member the projection always serves as
  * required. Renaming one on the serving side must fail this boundary instead of
@@ -234,16 +257,9 @@ function renameMember(target, member) {
  */
 test("Goal reads refuse a renamed consumed member and keep unconsumed members additive", async () => {
   const served = await fixture("goal-read.active");
+  await decodeOrFlunk(GoalRead.decodeJson, served, "the served document");
 
-  const decoded = await Effect.runPromise(
-    Effect.either(GoalRead.decodeJson(JSON.stringify(served))),
-  );
-  assert.ok(
-    Either.isRight(decoded),
-    `the served document must decode before any rename: ${String(decoded.left)}`,
-  );
-
-  const goalRenames = [
+  await assertRenamesRefused(GoalRead.decodeJson, served, [
     ["the root project label", (value) => renameMember(value, "project_key")],
     ["the approved revision", (value) => renameMember(value.revision, "context_manifest")],
     ["a work item", (value) => renameMember(value.work_items[0], "accepted_outcome")],
@@ -251,16 +267,7 @@ test("Goal reads refuse a renamed consumed member and keep unconsumed members ad
     ["a graph edge", (value) => renameMember(value.graph.edges[0], "blocker")],
     ["a decision", (value) => renameMember(value.decisions[0], "resolution")],
     ["the accounting", (value) => renameMember(value.accounting, "known_usage_cost_microusd")],
-  ];
-  for (const [label, rename] of goalRenames) {
-    const renamed = structuredClone(served);
-    rename(renamed);
-    const result = await Effect.runPromise(
-      Effect.either(GoalRead.decodeJson(JSON.stringify(renamed))),
-    );
-    assert.ok(Either.isLeft(result), `${label}: a renamed consumed member must be refused`);
-    assert.equal(result.left._tag, "ParseError", `${label}: the refusal is a parse failure`);
-  }
+  ]);
 
   // Control: the same document with an unconsumed member renamed still decodes.
   const additive = structuredClone(served);
@@ -278,13 +285,7 @@ test("Goal reads refuse a renamed consumed member and keep unconsumed members ad
   // bytes, so the fixture a server's next capture replaces is the fixture the
   // rename is probed on, not a document this test writes.
   const settled = await fixture("goal-read.accepted-and-external");
-  const settledDecoded = await Effect.runPromise(
-    Effect.either(GoalRead.decodeJson(JSON.stringify(settled))),
-  );
-  assert.ok(
-    Either.isRight(settledDecoded),
-    `the served capture must decode before any rename: ${String(settledDecoded.left)}`,
-  );
+  await decodeOrFlunk(GoalRead.decodeJson, settled, "the served capture");
 
   // The capture's digest binds its own preimage: a recapture that replaces the
   // subject's identifiers has to recompute `subject_hash` over the replaced
@@ -295,7 +296,7 @@ test("Goal reads refuse a renamed consumed member and keep unconsumed members ad
     "the accepted outcome's digest must bind its own candidate subject",
   );
 
-  for (const [label, rename] of [
+  await assertRenamesRefused(GoalRead.decodeJson, settled, [
     ["an accepted outcome", (value) => renameMember(value.accepted_outcomes[0], "candidate_subject")],
     ["an accepted outcome digest", (value) => renameMember(value.accepted_outcomes[0], "subject_hash")],
     ["a settlement proposal", (value) => renameMember(value.settlement_attention[0], "proposed_next_action")],
@@ -306,37 +307,15 @@ test("Goal reads refuse a renamed consumed member and keep unconsumed members ad
     ["an external wait reference", (value) => renameMember(value.external_waits[0], "external_ref")],
     ["an external wait schedule", (value) => renameMember(value.external_waits[0], "next_check_at")],
     ["an external wait sequence", (value) => renameMember(value.external_waits[0], "check_seq")],
-  ]) {
-    const renamed = structuredClone(settled);
-    rename(renamed);
-    const result = await Effect.runPromise(
-      Effect.either(GoalRead.decodeJson(JSON.stringify(renamed))),
-    );
-    assert.ok(Either.isLeft(result), `${label}: a renamed consumed member must be refused`);
-    assert.equal(result.left._tag, "ParseError", `${label}: the refusal is a parse failure`);
-  }
+  ]);
 
-  const attention = structuredClone(await fixture("attention-read.basic"));
-  const attentionDecoded = await Effect.runPromise(
-    Effect.either(AttentionRead.decodeJson(JSON.stringify(attention))),
-  );
-  assert.ok(
-    Either.isRight(attentionDecoded),
-    `the served attention read must decode before any rename: ${String(attentionDecoded.left)}`,
-  );
-  for (const [label, rename] of [
+  const attention = await fixture("attention-read.basic");
+  await decodeOrFlunk(AttentionRead.decodeJson, attention, "the served attention read");
+  await assertRenamesRefused(AttentionRead.decodeJson, attention, [
     ["the feed cursor", (value) => renameMember(value.goal_attention, "next_cursor")],
     ["an attention entry", (value) => renameMember(value.goal_attention.entries[0], "nonterminal_tasks")],
     ["a blocked project row", (value) => renameMember(value.project_blocked.entries[0], "project_status")],
-  ]) {
-    const renamed = structuredClone(attention);
-    rename(renamed);
-    const result = await Effect.runPromise(
-      Effect.either(AttentionRead.decodeJson(JSON.stringify(renamed))),
-    );
-    assert.ok(Either.isLeft(result), `${label}: a renamed consumed member must be refused`);
-    assert.equal(result.left._tag, "ParseError", `${label}: the refusal is a parse failure`);
-  }
+  ]);
 });
 
 test("raw decoding classifies malformed JSON before schema validation", async () => {

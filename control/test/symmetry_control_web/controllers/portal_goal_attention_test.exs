@@ -733,7 +733,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
         goal_revision: revision,
         work_item_id: work_item_id,
         schema_version: 1,
-        content_hash: :crypto.hash(:sha256, "served-document-gate-context-#{work_item_id}"),
+        content_hash: :crypto.hash(:sha256, "served-document-gate-context"),
         payload: %{"sources" => []}
       })
       |> Repo.insert!()
@@ -742,7 +742,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       %Task{}
       |> Task.changeset(%{
         idempotency_key: "served-gate-task-#{System.unique_integer([:positive])}",
-        request_hash: :crypto.hash(:sha256, "served-document-gate-#{work_item_id}"),
+        request_hash: :crypto.hash(:sha256, "served-document-gate"),
         goal_id: goal_id,
         goal_revision: revision,
         work_item_id: work_item_id,
@@ -788,9 +788,11 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   end
 
   # One `task_settled` goal event with the next sequence. The read model only
-  # turns an event into a settlement entry when its payload and response agree
-  # on the task/run/generation identity, so both carry the response's identity.
-  defp insert_goal_event!(goal_id, revision, response, hash_marker) do
+  # turns an event into a settlement entry when its payload and response agree on
+  # the goal revision and task/run/generation identity and the payload's `state`
+  # equals the run's, so the payload carries that state while the response is
+  # persisted verbatim (the production response itself has no `state` member).
+  defp insert_goal_event!(goal_id, revision, state, response) do
     sequence =
       Repo.aggregate(from(event in GoalEvent, where: event.goal_id == ^goal_id), :max, :sequence)
 
@@ -801,16 +803,16 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       sequence: (sequence || 0) + 1,
       kind: "task_settled",
       actor_ref: "system:settlement",
-      request_hash: :crypto.hash(:sha256, "served-document-gate-#{hash_marker}"),
+      request_hash: :crypto.hash(:sha256, "served-document-gate-#{response["task_id"]}"),
       revision: revision,
       payload: %{
         "task_id" => response["task_id"],
         "run_id" => response["run_id"],
         "generation" => response["generation"],
-        "state" => response["state"],
+        "state" => state,
         "goal_revision" => revision
       },
-      response: Map.delete(response, "state")
+      response: response
     })
     |> Repo.insert!()
   end
@@ -839,8 +841,8 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     insert_goal_event!(
       goal_id,
       revision,
+      run.state,
       %{
-        "state" => run.state,
         "goal_id" => goal_id,
         "goal_revision" => revision,
         "task_id" => task.id,
@@ -851,8 +853,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
         "proposed_next_action" => "Run the bound repair",
         "proposed_next_action_status" => "proposal_only",
         "evidence_refs" => []
-      },
-      "settlement"
+      }
     )
   end
 
@@ -945,8 +946,8 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       insert_goal_event!(
         goal_id,
         revision,
+        run.state,
         %{
-          "state" => run.state,
           "goal_id" => goal_id,
           "goal_revision" => revision,
           "task_id" => task.id,
@@ -962,8 +963,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
           "proposed_next_action_status" => nil,
           "subject_hash" => blocked_result["subject_hash"],
           "evidence_refs" => []
-        },
-        "external-wait"
+        }
       )
 
     %GoalExternalWait{id: Ecto.UUID.generate()}
