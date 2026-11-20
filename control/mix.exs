@@ -72,6 +72,7 @@ defmodule SymmetryControl.MixProject do
       # test environment before any Ecto storage task runs; see its moduledoc.
       "ecto.create": ["symmetry.check_test_db", "ecto.create"],
       "ecto.migrate": ["symmetry.check_test_db", "ecto.migrate"],
+      "ecto.migrations": ["symmetry.check_test_db", "ecto.migrations"],
       "ecto.drop": ["symmetry.check_test_db", "ecto.drop"],
       "ecto.rollback": ["symmetry.check_test_db", "ecto.rollback"],
       "ecto.load": ["symmetry.check_test_db", "ecto.load"],

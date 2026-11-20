@@ -4,6 +4,26 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
   alias Mix.Tasks.Symmetry.CheckTestDb
 
   @acceptance_database_prefixes ~w(symmetry_0007c_ symmetry_0007d_ symmetry_0007e_)
+  @acceptance_databases ~w(symmetry_dev)
+
+  # Every script that configures a database, and the value it must keep
+  # configuring: a renamed, moved or rewritten script fails here instead of
+  # silently dropping out of the cross-check below.
+  @database_owning_scripts %{
+    "run-compose-daemon-tests.ps1" => "symmetry_dev",
+    "run-connection-fixture-tests.ps1" => "symmetry_0007e_test",
+    "run-planning-tests.ps1" => "symmetry_0007c_test"
+  }
+
+  # The database values a harness script assigns: a literal
+  # `POSTGRES_DB = "…"`, the literal default of a `-DbName` parameter, and the
+  # `-d` argument of the psql invocation the compose harness fingerprints rows
+  # with. A bare mention (for example a log-file name) is not an assignment.
+  @assigned_database_patterns [
+    ~r/POSTGRES_DB\s*=\s*"([^"]+)"/,
+    ~r/\$DbName\s*=\s*"([^"]+)"/,
+    ~r/-d\s+(symmetry\w+)/
+  ]
 
   describe "check/2" do
     test "refuses every browser acceptance database family in the test environment" do
@@ -18,21 +38,31 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
       end
     end
 
-    test "refuses every database the browser harness scripts configure" do
-      scripts = Path.wildcard(Path.expand("../../../../browser/scripts/*.ps1", __DIR__))
-
-      configured =
-        scripts
-        |> Enum.flat_map(&Regex.scan(~r/symmetry_0007\w*/, File.read!(&1)))
-        |> Enum.map(fn [name | _] -> name end)
-        |> Enum.uniq()
-
-      # A renamed, moved or emptied script must fail loudly instead of checking nothing.
-      assert configured != []
-
-      for database <- configured do
+    test "refuses the compose acceptance database in the test environment" do
+      for database <- @acceptance_databases do
         assert {:error, message} = CheckTestDb.check(:test, database)
-        assert message =~ database
+        assert message =~ ~s("#{database}")
+      end
+    end
+
+    test "refuses every database value the browser harness scripts assign" do
+      scripts = read_scripts()
+
+      for {script, expected} <- @database_owning_scripts do
+        assigned = scripts |> Map.get(script, "") |> assigned_databases()
+
+        assert expected in assigned,
+               "#{script} no longer assigns #{expected}; update the guard list and this pin together"
+      end
+
+      for {script, contents} <- scripts, database <- assigned_databases(contents) do
+        case CheckTestDb.check(:test, database) do
+          {:error, message} ->
+            assert message =~ database
+
+          :ok ->
+            flunk("#{script} assigns #{inspect(database)} but the guard does not refuse it")
+        end
       end
     end
 
@@ -54,9 +84,12 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
     end
 
     test "does not restrict the harnesses' own development environment" do
-      for prefix <- @acceptance_database_prefixes do
-        assert :ok = CheckTestDb.check(:dev, prefix <> "test")
-        assert :ok = CheckTestDb.check(:prod, prefix <> "test")
+      databases =
+        Enum.map(@acceptance_database_prefixes, &(&1 <> "test")) ++ @acceptance_databases
+
+      for database <- databases do
+        assert :ok = CheckTestDb.check(:dev, database)
+        assert :ok = CheckTestDb.check(:prod, database)
       end
     end
 
@@ -86,9 +119,23 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
 
     assert hd(aliases[:test]) == "symmetry.check_test_db"
 
-    for task <- ~w(ecto.create ecto.migrate ecto.drop ecto.rollback ecto.load) do
+    for task <- ~w(ecto.create ecto.migrate ecto.migrations ecto.drop ecto.rollback ecto.load) do
       assert hd(aliases[String.to_atom(task)]) == "symmetry.check_test_db"
       assert task in aliases[String.to_atom(task)]
     end
+  end
+
+  defp read_scripts do
+    "../../../../browser/scripts/*.ps1"
+    |> Path.expand(__DIR__)
+    |> Path.wildcard()
+    |> Map.new(&{Path.basename(&1), File.read!(&1)})
+  end
+
+  defp assigned_databases(contents) do
+    @assigned_database_patterns
+    |> Enum.flat_map(&Regex.scan(&1, contents, capture: :all_but_first))
+    |> Enum.concat()
+    |> Enum.uniq()
   end
 end

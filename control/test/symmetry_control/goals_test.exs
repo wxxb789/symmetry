@@ -4799,10 +4799,11 @@ defmodule SymmetryControl.GoalsTest do
     queries = Enum.map(reads, fn {_pid, query} -> query end)
     processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
 
-    # Two preloads must have rows for this test to have power: Ecto only
-    # preloads in parallel from two preloads with fetch work, and every parallel
-    # preload would queue for the sandbox connection the test process owns
-    # (the recorded intermittent checkout-timeout failure).
+    # Two preloads must issue fetch queries for this test to have power: Ecto
+    # only preloads in parallel from two preloads with fetch work (an unloaded
+    # has_many issues its query even with zero rows), and every parallel preload
+    # would queue for the sandbox connection the test process owns (the recorded
+    # intermittent checkout-timeout failure).
     assert Enum.any?(queries, &String.contains?(&1, "\"goal_revisions\""))
     assert Enum.any?(queries, &String.contains?(&1, "\"work_items\""))
 

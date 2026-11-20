@@ -1174,6 +1174,13 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `mix ecto.rollback`/`mix ecto.load` refuse the same way, naming the effective
       `symmetry_0007c_shell16`; with `MIX_ENV=test` the guard file reports `Result: 9 passed`,
       and `mix format --check-formatted` and `mix compile --warnings-as-errors` exit 0.
+      **Amendment (2026-11-20, guard review round):** the guard also refuses the compose
+      acceptance database `symmetry_dev` (`MIX_ENV=test POSTGRES_DB=symmetry_dev mix
+      ecto.migrations` exits 1 with the refusal before any connection) and is the first step of a
+      sixth Ecto alias, `ecto.migrations`; its cross-check pins every assigned database value of
+      the harness scripts (`run-compose-daemon-tests.ps1` → `symmetry_dev`,
+      `run-connection-fixture-tests.ps1` → `symmetry_0007e_test`, `run-planning-tests.ps1` →
+      `symmetry_0007c_test`), and with `MIX_ENV=test` the guard file reports `Result: 10 passed`.
 
 - [ ] Investigate the load-sensitive timeout fixture
       `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in

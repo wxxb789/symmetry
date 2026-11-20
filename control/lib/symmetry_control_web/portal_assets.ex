@@ -9,7 +9,8 @@ defmodule SymmetryControlWeb.PortalAssets do
 
   @doc """
   Absolute path of the staged SPA entry document that `PortalController.index/2`
-  reads and that `PortalControllerTest` rewrites to exercise the unavailable path.
+  reads and that `PortalControllerTest` temporarily renames to exercise the
+  unavailable path.
   """
   def index_path, do: Path.join(directory(), "index.html")
 
