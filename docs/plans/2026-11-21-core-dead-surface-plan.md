@@ -117,7 +117,7 @@ Kept, with the surviving reference that keeps each helper alive (all at `a3039f0
 - `delivery_resource/2` (*:661*, `:666`) — called at `:483`, `:649`.
 - `persist_sync/4` (*:774*) — called at `:500`, `:651`.
 - `accepted_sync_result/3` (*:1052*) — called at `:501-502`, `:508`.
-- `provider_action_error/1` (*:1096-1109*) — still called at `:543` inside
+- `provider_action_error/1` (*:1098-1109*) — still called at `:543` inside
   `mutation_failure_outcome/1`; only its `:1112` caller (inside the deleted `defp`) disappears.
 - `record_resource_failure/2,3` (*:1557*, `:1562`) — called at `:517`, `:525`, `:656-657`.
 - `mutation_failure_outcome/1` (*:540-551*) — still called at `:369`.
@@ -148,7 +148,7 @@ The deletion is exactly the four surfaces the TODO entry and the contract name, 
 ## Gate substitution: `mix xref unreachable` is a no-op at the pinned toolchain
 
 - The contract names `mix xref unreachable` with "was 26 lines". At the repo's pinned Elixir
-  (`1.20.4`, the version CI installs at `.github/workflows/ci.yml:232`), the task is deprecated and
+  (`1.20.4`, the version CI installs at `.github/workflows/ci.yml:228`), the task is deprecated and
   inert: `elixir-1.20.4/lib/mix/lib/mix/tasks/xref.ex:479-483` prints
   `The unreachable check has been moved to the compiler and has no effect now` and exits 0.
   Executed at `a3039f0`: 1 line, exit 0 (`rf-w1-14-xref-before-test.log`). The "26 lines" figure is
@@ -199,8 +199,8 @@ The deletion is exactly the four surfaces the TODO entry and the contract name, 
 
 - Other `xref`/meter entries not named by F11 (framework callbacks, default-argument wrappers).
 - W2-07 mutation-id helpers; any provider behaviour change.
-- Anything else in `docs/TODO.md` (the two marker-less notes in the same section, the `conn`
-  parameter entry, the provider-action flake entry, the retro follow-ups).
+- Anything else in `docs/TODO.md` (the two marker-less notes at `:320`/`:326` under `## CI consolidation owner decisions (2026-11-17)`, the `conn`
+  parameter entry, archived at `docs/archive/CLOSED-TODO.md:1473`, the provider-action flake entry, the retro follow-ups).
 - The frozen 0008c model-routing records that cite `Integrations.execute_accepted_resource_sync/2`
   as part of an evaluated subject (`docs/evaluations/model-routing/0008c-*.json`, e.g.
   `0008c-b-strong-review.json:16`): they are historical records of a frozen revision and are
