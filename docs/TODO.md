@@ -21,28 +21,28 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Dead-code candidates
 
-- [ ] Revalidate and remove the callerless projected provider-action chain in
-      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
-      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
-      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
-      document names it — and the chain behind it is its own:
-      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
-      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
-      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
-      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
-      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
-      were live. Inside that chain one disjunct can never match on any path the code gives it: the
-      clause `{:error, reason} when reason in [:stale, :state_conflict,
-      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
-      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
-      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
-      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
-      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
-      declares no such error key. `:capability_not_granted` is produced by
-      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
-      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
-      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
-      producer; revalidate the surviving provider-action tests either way.
+- [ ] Revalidate and remove two pre-existing dead surfaces found while applying the
+      provider-action-chain-removal simplify findings (2026-11-21).
+      (a) `Integrations.execute_accepted_resource_sync/2` and its catch-all
+      (`control/lib/symmetry_control/integrations.ex:554`, `:579`) have zero callers tree-wide:
+      `git grep -nw "execute_accepted_resource_sync" -- control/` matches only those two definition
+      clauses (the unanchored form also matches the `_unprojected` sibling's name), while the live
+      sibling `execute_accepted_resource_sync_unprojected/2` is called at
+      `control/lib/symmetry_control/integrations/provider_access.ex:1569`, `:1808`.
+      `record_provider_action_failure/2` (`integrations.ex:1111`) is reachable only from its two call
+      sites `:572`, `:575` inside this function and is dead with it; removing (a) must remove it too
+      (`compile --warnings-as-errors` will otherwise fail).
+      (b) The `{:provider_action_failure, code, outcome}` 3-tuple clause of `provider_failure/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:2311`) has no producer: its only
+      literal builder was the non-nil-outcome clause of `provider_action_failure_result/2`
+      (`integrations.ex:1134-1135` before the apply stage removed it), fed by the then-existing
+      `outcome` argument of `record_provider_action_failure/3`; it was unreachable once the
+      callerless projected chain was deleted. The surviving builders emit only the 4-tuple form:
+      the sole literal builder is `unprojected_provider_action_failure/1` (`integrations.ex:369`,
+      pass-through at `:364-365`), while `:514` is the clause head of
+      `project_provider_action_failure/2` matching the 4-tuple and `provider_access.ex:2315` the
+      4-tuple clause head of `provider_failure/1`.
+      Do not delete either surface here; revalidate and remove in a separate maintenance change.
 
 ## Retro review follow-ups
 
