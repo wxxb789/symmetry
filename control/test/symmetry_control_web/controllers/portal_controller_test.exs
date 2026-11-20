@@ -7,9 +7,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
 
   @operator_token "test-operator-token"
 
-  # `:portal_assets` marks the cases that need the staged frontend build;
-  # `SymmetryControlWeb.PortalBundle` (called from `ConnCase`) fails them with that
-  # prerequisite when the bundle is missing or incomplete.
+  # `:portal_assets` marks the cases that need the staged frontend build; see `PortalBundle`.
   @tag :portal_assets
   test "the portal requires an operator session and supports login and logout", %{conn: conn} do
     assert conn

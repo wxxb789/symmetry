@@ -9,7 +9,7 @@
  * execution data is never a source here: evidence rows read the read's semantic
  * timeline only.
  */
-import { asRecord, asRecords, asText, executionStateLabel, safeUrl } from "../work/presentation";
+import { asRecord, asRecords, asText, decisionRecord, executionStateLabel, safeUrl } from "../work/presentation";
 import { receiptLabel, receiptOutcome, type ReceiptCommand, type ReceiptOutcome } from "../work/receipts";
 import type { ChatConversationMessage, ChatConversationRun, ChatScope, Runtime } from "../../services/api";
 import type { ChatHistoryPage, ChatIntent, ChatSendStatus } from "./scopes";
@@ -288,9 +288,15 @@ function historyGap(newest: ChatHistoryPage, older: readonly ChatHistoryPage[]):
   // The chain the served page's boundary reaches, followed the way a load
   // continues: it starts at the current page and gains every retained page that
   // overlaps a message it carries or was fetched from one — such a page holds
-  // the messages just below that boundary, so no region can hide between them.
-  // The comparison is by message id: a served cursor is re-signed per response,
-  // so the token itself never matches across two reads.
+  // the messages just below that boundary. Reachability assumes a serve lists
+  // history in commit order: a message committed after a page was fetched can
+  // carry an earlier inserted_at than a visible message and then hide between
+  // two chained pages without a note (the server orders by inserted_at while
+  // its per-action lock does not serialize the scope — see the open
+  // late-visible-rows item in docs/TODO.md, "An ended chat chain never accepts
+  // a later served token"). The comparison is by message id: a served cursor is
+  // re-signed per response, so token bytes are not a stable identity across
+  // reads (two signs in the same millisecond can even coincide).
   //
   // Every retained page has to be reached. A chain a moved boundary left behind
   // must not be excused by a later page that does reach the served boundary —
@@ -398,7 +404,7 @@ export interface ChatDecisionPacket {
  */
 export function chatDecisionPacket(waiting: ChatWaitingProjection | null): ChatDecisionPacket | null {
   if (waiting === null) return null;
-  const packet = asRecord(waiting.decision) ?? asRecord(asRecord(waiting.payload)?.["decision"]);
+  const packet = decisionRecord(waiting);
   if (packet === null) return null;
   const recommended = asText(packet["recommended_option_id"]);
   const options = asRecords(packet["options"]).flatMap((option): ChatDecisionOption[] => {

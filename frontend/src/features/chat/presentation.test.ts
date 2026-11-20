@@ -343,6 +343,8 @@ describe("history view", () => {
   const third = message("11111111-0003-4003-8003-000000000003", { insertedAt: "2026-11-16T09:02:00.000000Z" });
   const fourth = message("11111111-0004-4004-8004-000000000004", { insertedAt: "2026-11-16T09:03:00.000000Z" });
 
+  const seeded = (index: number) => message(`11111111-00${String(index).padStart(2, "0")}-4001-8001-0000000000${String(index).padStart(2, "0")}`, { insertedAt: `2026-11-16T09:${String(index).padStart(2, "0")}:00.000000Z` });
+
   it("renders the current page alone when no older page is retained", () => {
     const view = chatHistoryView([page([third, fourth], { nextBefore: "cursor-1" })], "cursor-1");
     expect(view.messages.map((item) => item.id)).toEqual([third.id, fourth.id]);
@@ -392,8 +394,33 @@ describe("history view", () => {
     expect(overlapping.gap).toBeNull();
   });
 
+  it("reports no gap when a retained older page is present but the served page itself is empty", () => {
+    // The empty served page proves nothing about the retained region and its
+    // chain has no oldest message to reduce: the guard keeps the reduction
+    // total instead of throwing. The state is defensive — current pagination
+    // cannot serve an empty page beside a cursor.
+    const view = chatHistoryView([
+      page([], { nextBefore: "cursor-1" }),
+      page([first, second], { fetchBefore: "cursor-1", fetchBeforeId: null, nextBefore: null }),
+    ], "cursor-1");
+    expect(view.gap).toBeNull();
+    expect(view.messages.map((item) => item.id)).toEqual([first.id, second.id]);
+  });
+
+  it("reports no gap when the served page ends history, even beside a retained page off its boundary", () => {
+    // `nextBefore: null` says the serve reached the oldest history: no cursor
+    // continues the chain, so a retained page from a dropped boundary cannot
+    // be named as a gap the reader could load. The state is defensive —
+    // current pagination cannot drain the serve while a load is retained.
+    const view = chatHistoryView([
+      page([third, fourth], { nextBefore: null }),
+      page([first, second], { fetchBefore: "cursor-dropped", fetchBeforeId: null, nextBefore: null }),
+    ], null);
+    expect(view.gap).toBeNull();
+    expect(view.messages.map((item) => item.id)).toEqual([first.id, second.id, third.id, fourth.id]);
+  });
+
   it("keeps the gap when a later page chains from the moved boundary but the retained chain it left behind is not reached", () => {
-    const seeded = (index: number) => message(`11111111-000${index}-4001-8001-0000000000${String(index).padStart(2, "0")}`, { insertedAt: `2026-11-16T09:0${index}:00.000000Z` });
     const one = seeded(1);
     const two = seeded(2);
     const three = seeded(3);
@@ -424,7 +451,6 @@ describe("history view", () => {
   });
 
   it("keeps naming the next region when the chain reaches only one of several retained pages", () => {
-    const seeded = (index: number) => message(`11111111-00${String(index).padStart(2, "0")}-4001-8001-0000000000${String(index).padStart(2, "0")}`, { insertedAt: `2026-11-16T09:${String(index).padStart(2, "0")}:00.000000Z` });
     const one = seeded(1);
     const two = seeded(2);
     const three = seeded(3);
@@ -456,5 +482,28 @@ describe("history view", () => {
     ], "cursor-5");
     expect(afterReach.gap).toEqual({ current: four.id, retained: two.id });
     expect(afterReach.messages.map((item) => item.id)).toEqual([one.id, two.id, four.id, five.id, six.id, seven.id, eight.id, nine.id, ten.id]);
+  });
+
+  it("names the nearest unloaded region when the farther retained page was retained first", () => {
+    const one = seeded(1);
+    const two = seeded(2);
+    const three = seeded(3);
+    const four = seeded(4);
+    const five = seeded(5);
+    const six = seeded(6);
+    const seven = seeded(7);
+    const eight = seeded(8);
+    // Retention order is farthest-first: the page fetched from message three
+    // sits before the page fetched from message six. The note must still name
+    // the nearest unloaded region — between the chain's oldest message and the
+    // newest point the history did not reach (five) — not the newest message
+    // of whichever page happens to sit first in the retained list.
+    const view = chatHistoryView([
+      page([seven, eight], { nextBefore: "cursor-chain" }),
+      page([one, two], { fetchBefore: "cursor-dropped-a", fetchBeforeId: three.id, nextBefore: null }),
+      page([four, five], { fetchBefore: "cursor-dropped-b", fetchBeforeId: six.id, nextBefore: "cursor-4" }),
+    ], "cursor-chain");
+    expect(view.gap).toEqual({ current: seven.id, retained: five.id });
+    expect(view.messages.map((item) => item.id)).toEqual([one.id, two.id, four.id, five.id, seven.id, eight.id]);
   });
 });

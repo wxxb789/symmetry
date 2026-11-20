@@ -423,7 +423,8 @@ type PurpleWorkItemExecution struct {
 	// the goal-less task — same binding as the retry re-admission (the corrected work-item
 	// profile and workspace plus the attempt's supervisory requirement) and capability
 	// containment, ignoring transient online, heartbeat and capacity state — advertises the
-	// adapter `start` operation of the fresh retried attempt. No such runtime answers false.
+	// adapter `start` operation of the fresh retried attempt. No such runtime answers false. A
+	// superseded run's pinned historical entry always answers false.
 	CanRetry           bool                          `json:"can_retry"`
 	Failure            map[string]interface{}        `json:"failure"`
 	Generation         int64                         `json:"generation"`
@@ -1683,7 +1684,8 @@ type FluffyWorkItemExecution struct {
 	// the goal-less task — same binding as the retry re-admission (the corrected work-item
 	// profile and workspace plus the attempt's supervisory requirement) and capability
 	// containment, ignoring transient online, heartbeat and capacity state — advertises the
-	// adapter `start` operation of the fresh retried attempt. No such runtime answers false.
+	// adapter `start` operation of the fresh retried attempt. No such runtime answers false. A
+	// superseded run's pinned historical entry always answers false.
 	CanRetry           bool                          `json:"can_retry"`
 	Failure            map[string]interface{}        `json:"failure"`
 	Generation         int64                         `json:"generation"`
@@ -1891,7 +1893,8 @@ type TentacledWorkItemExecution struct {
 	// the goal-less task — same binding as the retry re-admission (the corrected work-item
 	// profile and workspace plus the attempt's supervisory requirement) and capability
 	// containment, ignoring transient online, heartbeat and capacity state — advertises the
-	// adapter `start` operation of the fresh retried attempt. No such runtime answers false.
+	// adapter `start` operation of the fresh retried attempt. No such runtime answers false. A
+	// superseded run's pinned historical entry always answers false.
 	CanRetry           bool                             `json:"can_retry"`
 	Failure            map[string]interface{}           `json:"failure"`
 	Generation         int64                            `json:"generation"`

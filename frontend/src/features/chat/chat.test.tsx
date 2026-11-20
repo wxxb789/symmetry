@@ -25,6 +25,7 @@ const ciId = "50000000-0000-4000-8000-000000000002";
 
 const uuid = (prefix: string, index: number) => `${prefix}-0000-4000-8000-${String(index).padStart(12, "0")}`;
 const messageId = (index: number) => uuid("90000000", index);
+const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
 
 interface ServedMessage {
   id: string;
@@ -749,7 +750,6 @@ describe("history", () => {
   it("keeps naming the region a moved boundary skipped until a load reaches the retained chain", async () => {
     const user = userEvent.setup();
     let read = 0;
-    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
     const older: Record<string, ServedMessage[]> = {
       "cursor-9": [message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })],
       "cursor-13": [message(11, { insertedAt: at(11) }), message(12, { insertedAt: at(12) })],
@@ -783,6 +783,8 @@ describe("history", () => {
     expect(moved).not.toBeNull();
     expect(moved).toHaveAttribute("data-boundary-current", messageId(13));
     expect(moved).toHaveAttribute("data-boundary-retained", messageId(8));
+    // The reader-visible sentence is part of the contract, not just the node.
+    expect(moved).toHaveTextContent("Entries between the loaded history and the retained older pages were not loaded; Load older history loads one page per press, so filling the gap may take more than one press.");
     expect(messageIds()).toEqual([7, 8, 13, 14].map(messageId));
 
     // A load that only reaches the refreshed boundary does not connect the
@@ -808,7 +810,6 @@ describe("history", () => {
     const user = userEvent.setup();
     let read = 0;
     const requested: string[] = [];
-    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
     const older: Record<string, ServedMessage[]> = {
       "cursor-5": [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
       "cursor-3": [message(1, { insertedAt: at(1) }), message(2, { insertedAt: at(2) })],
@@ -874,7 +875,6 @@ describe("history", () => {
     let read = 0;
     const requested: string[] = [];
     const held = Promise.withResolvers<void>();
-    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
     const older: Record<string, ServedMessage[]> = {
       "cursor-5-resigned": [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
       "cursor-5-resigned-2": [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
@@ -955,7 +955,6 @@ describe("history", () => {
     const user = userEvent.setup();
     let read = 0;
     const requested: string[] = [];
-    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
     const older: Record<string, ServedMessage[]> = {
       "cursor-9": [message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })],
       "cursor-9-resigned-2": [message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })],
@@ -1024,7 +1023,6 @@ describe("history", () => {
     const requested: string[] = [];
     let reads = 0;
     const held = Promise.withResolvers<void>();
-    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
     const older: Record<string, ServedMessage[]> = {
       "cursor-5-resigned": [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
       "cursor-3": [message(1, { insertedAt: at(1) }), message(2, { insertedAt: at(2) })],
@@ -1088,7 +1086,6 @@ describe("history", () => {
   it("keeps the page a re-serve overtook bound to the boundary its cursor was minted from", async () => {
     const user = userEvent.setup();
     let read = 0;
-    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
     const held = Promise.withResolvers<void>();
     const older: Record<string, ServedMessage[]> = {
       "cursor-13": [message(11, { insertedAt: at(11) }), message(12, { insertedAt: at(12) })],
@@ -1141,7 +1138,6 @@ describe("history", () => {
   it("keeps two in-flight loads each on the boundary its own cursor was minted from", async () => {
     const user = userEvent.setup();
     let read = 0;
-    const at = (index: number) => `2026-11-16T09:00:${String(index).padStart(2, "0")}.000000Z`;
     const held = Promise.withResolvers<void>();
     renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
       conversation: (url) => {

@@ -152,7 +152,6 @@ test.describe("Execution control", () => {
     await expect(page.getByRole("button", { name: ui.retry })).toHaveCount(0);
     await expect.poll(() => executionOf(page, item.id)).toMatchObject({ state: "cancelled" });
 
-    allowBrowserError(page, /409 \(Conflict\)/);
     const humanOwned = await api(page, "POST", `/portal/api/work-items/${item.id}/retry`, { action_id: crypto.randomUUID(), generation: 1 });
     expect(humanOwned.status, JSON.stringify(humanOwned.body)).toBe(409);
 
