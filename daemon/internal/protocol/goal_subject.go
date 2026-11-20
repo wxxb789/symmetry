@@ -190,12 +190,20 @@ func marshalJSONString(value string) ([]byte, error) {
 	if err := encoder.Encode(value); err != nil {
 		return nil, err
 	}
-	return normalizeJSONStringLineSeparators(bytes.TrimSuffix(output.Bytes(), []byte{'\n'})), nil
+	return normalizeJSONStringEscapes(bytes.TrimSuffix(output.Bytes(), []byte{'\n'})), nil
 }
 
-// encoding/json escapes U+2028 and U+2029 even with HTML escaping disabled.
-// Scan complete escape tokens so a literal \\u2028 or \\u2029 is left unchanged.
-func normalizeJSONStringLineSeparators(encoded []byte) []byte {
+// The canonical escape spelling is the control plane's: U+2028 and U+2029 stay
+// raw UTF-8 (encoding/json escapes them even with HTML escaping disabled), and
+// a C0 control's 00-prefixed escape uses uppercase hex digits, as the control
+// plane's Jason encoder spells them. Only 00-prefixed tokens are rewritten, the
+// escape form the normalization rule names; any other four-digit token keeps
+// its bytes. No other token reaches this scanner from CanonicalizeJSON: it
+// rejects invalid UTF-8 before encoding, and with HTML escaping off
+// encoding/json escapes nothing else but U+2028/U+2029 (handled above). Scan
+// complete escape tokens so literal escape-looking value text is left
+// unchanged.
+func normalizeJSONStringEscapes(encoded []byte) []byte {
 	output := make([]byte, 0, len(encoded))
 	for index := 0; index < len(encoded); {
 		if encoded[index] != '\\' {
@@ -226,7 +234,14 @@ func normalizeJSONStringLineSeparators(encoded []byte) []byte {
 			case encoded[index+2] == '2' && encoded[index+3] == '0' && encoded[index+4] == '2' && encoded[index+5] == '9':
 				output = append(output, 0xe2, 0x80, 0xa9)
 			default:
-				output = append(output, encoded[index:index+6]...)
+				uppercase := encoded[index+2] == '0' && encoded[index+3] == '0'
+				output = append(output, '\\', 'u')
+				for _, digit := range encoded[index+2 : index+6] {
+					if uppercase && digit >= 'a' && digit <= 'f' {
+						digit -= 'a' - 'A'
+					}
+					output = append(output, digit)
+				}
 			}
 			index += 6
 		default:
