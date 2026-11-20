@@ -146,28 +146,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       child (the reap contract `:1373-1376` pins that for response failures), keeping the context
       alive so `streamError` (`:808-813`) reports the pipe error instead of a cancellation.
 
-- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
-      submit-time served one. `approvePlan` builds its envelope from `query.data`
-      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
-      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
-      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
-      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
-      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
-      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
-      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
-      the original note: every accepted command appends an event through `append_event!/7`
-      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
-      and reconcile writers go through `Goal.transition_changeset`
-      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
-      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
-      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
-      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
-      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
-      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
-      direction: build the press's envelope from a submit-time read the way the plan admission does,
-      re-deriving the presented decision's own version from that same read, or keep the page version and
-      record the refusal plus reload as the intended recovery.
-
 - [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
       rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always
       answers false", repeated in `work-detail-read.schema.json:142` and
