@@ -171,7 +171,7 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		}
 	}
 
-	compiled := make(map[Envelope]*jsonschema.Schema, 20)
+	compiled := make(map[Envelope]*jsonschema.Schema)
 	for _, envelope := range []Envelope{
 		EnvelopeAdapterCapabilities,
 		EnvelopeAdmission,

@@ -54,5 +54,14 @@
     "elapsed_under_30000_ms_each": true,
     "commit_and_digest_equal_independent_each": true,
     "cross_platform_commit_and_digest_equal": true
-  }
+  },
+  "annotations": [
+    {
+      "date": "2026-11-20",
+      "finding": "RB-08 of the goal-0009 round-2 review",
+      "note": "TestSubjectMeasurementWitness now accepts SYMMETRY_SUBJECT_WITNESS_EXPECTED_DIGEST and fails when the measured tree_digest differs; the observations, exits and assertions above are unchanged measured values. Replayed on Windows 2026-11-20 with that variable set for the same carrier commit and resource below: tree_digest, blob count, cat_file_processes and git_processes all reproduced. elapsed_ms is machine timing and stays the original 2026-11-16 observation, so a witness rerun now falsifies digest drift instead of only logging the measured digest.",
+      "commit": "8ded77150ec0ae49d52355670fdad78a348bf1d5",
+      "expected_tree_digest": "sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c"
+    }
+  ]
 }

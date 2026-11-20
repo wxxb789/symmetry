@@ -1393,6 +1393,16 @@
       ]
     },
     {
+      "id": "goal-command.achieve-extra-payload-field",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.achieve-extra-payload-field.json",
+      "valid": false,
+      "tags": [
+        "goal-command",
+        "extra-control-field"
+      ]
+    },
+    {
       "id": "goal-command.extra-control-field",
       "schema": "goal-command",
       "path": "invalid/goal-command.extra-control-field.json",
