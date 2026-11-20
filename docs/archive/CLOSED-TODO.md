@@ -1130,6 +1130,12 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       keeps the documented quiet-host requirement (the model-routing runbook forbids running this
       workflow beside a full test suite on the same host).
 
+- `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
+      Closed (2026-11-18, #66 `c514bd9`): the index's 0006h table link now targets
+      `docs/goals/archive/0006h-credentialed-provider-accounting.md` and resolves (its prose
+      reference already did after the archive move); the item asked only for this revalidation
+      and fix, so it moves here with no residual. Retired from `docs/TODO.md` on 2026-11-20.
+
 ## Deferred review findings (0007f)
 
 - [ ] Revalidate the `/portal/connections?projectId=…` session return target.

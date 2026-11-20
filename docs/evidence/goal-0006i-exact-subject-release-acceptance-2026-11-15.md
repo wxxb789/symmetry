@@ -9,12 +9,16 @@ acceptance dispatch, operator acceptance, and `achieve` are recorded below as **
 they are not satisfied by this receipt. A model recorded this document; it cannot grant
 itself authority or declare the goal achieved.
 
+**Annotation (recorded 2026-11-20):** the `achieve` binding among the pending predicates above
+was later satisfied 2026-11-15 on the local acceptance stack — see the "Achieve record" section
+below; the original status text is kept as the recording-time state.
+
 ## Subject record
 
 | Field | Value | Command (exit 0 unless noted) |
 | --- | --- | --- |
 | Subject commit | `8ded77150ec0ae49d52355670fdad78a348bf1d5` | `git rev-parse HEAD` |
-| Tree digest | `3a1dec551b0e2c630f6720d8a542343648270793` | `git rev-parse HEAD^{tree}` |
+| Git tree OID | `3a1dec551b0e2c630f6720d8a542343648270793` | `git rev-parse HEAD^{tree}` |
 | Clean checkout | `git status --porcelain` → empty output | exit 0 |
 | Index tree == HEAD tree | `git write-tree` → `3a1dec551b0e2c630f6720d8a542343648270793` (equals `HEAD^{tree}`) | exit 0 |
 | Merge provenance | PR #22 squash-merged 2026-11-14T19:46:57Z; merge commit `8ded771`; parent `27dc3e4` | `gh pr view 22` |
@@ -39,6 +43,11 @@ receipt does not claim it. The operator issuing `achieve` must supply `subject =
 "tree_digest": "sha256:<64 hex>"}` and bind the integration work item and the evidence rows
 to the resulting subject hash.
 
+**Annotation (recorded 2026-11-20):** the `achieve` binding recorded as pending here was later
+satisfied 2026-11-15 on the local acceptance stack — the "Achieve record" section below supplies
+the local `resource_id` and the protocol `tree_digest` this paragraph leaves unknown; the original
+text is kept as the recording-time state.
+
 The protocol tree digest for this frozen Subject has since been computed with the repository's
 own binder and independently reproduced:
 
@@ -46,6 +55,11 @@ own binder and independently reproduced:
 $ python3 scripts/ci/linux-v2-source-subject.py . 8ded77150ec0ae49d52355670fdad78a348bf1d5
 {"commit":"8ded77150ec0ae49d52355670fdad78a348bf1d5","tree_digest":"sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c"}
 ```
+
+Precondition of this transcript: it was recorded, and only reproduces, on a clean checkout whose
+`HEAD` is the Subject commit — the binder refuses any other revision (`source checkout does not
+match the exact expected commit`) and any staged, unstaged, or untracked change, so copying the
+command verbatim at a later tip exits 1 by design.
 
 The remaining unknown is the approved repository `resource_id`, a control-plane value that the
 acceptance flow itself creates; the earlier review finding (a Git tree OID presented as the
@@ -135,7 +149,7 @@ adding a marker.
 | Release gate (deployable artifacts) | proved for the artifacts CI builds | Control: `MIX_ENV=prod mix release` success in the `control` job; daemon: linux/amd64 static build + Windows binaries built in CI; compose: both stacks smoke-tested end to end. | A tagged release does not exist by repo convention (pre-0.0.1); nothing to gate beyond the built artifacts. |
 | Protocol v1 and goal-less compatibility | proved | CI `legacy-route-audit` green on the Subject tree; goal-less/generic paths exercised by the Subject tree's own suites (fake-agent E2E in the `integration` job's live daemon scenarios: 8 named scenarios all PASS, incl. `TestCoreDaemonWorkflows`); rollout-scoped integration job with `SYMMETRY_GOALS_ROLLOUT_ENABLED=true`. | None for this tree. |
 | Hosted Linux/Windows native acceptance (`linux-native-v2-acceptance`) | **pending operator dispatch** | Job is `workflow_dispatch`-only with environment `linux-v2-native-acceptance` (`.github/workflows/ci.yml` lines 14-16); skipped in both completed runs on the Subject tree — a skipped qualification job is unavailable evidence, never a passed predicate. | Operator dispatch: workflow "CI" on ref `main` at `8ded77150ec0ae49d52355670fdad78a348bf1d5`, selecting the `linux-native-v2-acceptance` job, **after which the Subject tree must not change**. It runs 12 case sets (shared, synthetic_goal_cleanup, stage_replay_create_started, stage_replay_leaf_bound, stage_replay_launcher_bound, ack_loss_launcher_bound, stale_leaf, migration, stale_journal_run_key, stale_journal_run_key_legacy, stale_journal_fence, stale_journal_subject). |
-| Operator acceptance and `achieve` | **pending by construction** | `achieve` is an operator command path (`control/lib/symmetry_control/goals.ex`): it requires the goal in active/paused state, a final-acceptance authority decision, an integration WorkItem with an accepted outcome matching the exact Subject, accepted outcomes for every required item, no unresolved decisions, no nonterminal tasks, and evidence bound to the same subject hash. | The operator must: (1) dispatch and pass the hosted job above on the unchanged Subject tree; (2) review this receipt; (3) issue the authorized `achieve` with `subject` bound to `8ded77150ec0ae49d52355670fdad78a348bf1d5` / tree `3a1dec551b0e2c630f6720d8a542343648270793`, the integration work item, the evidence IDs of this receipt and the cited runs, and the final-acceptance decision. |
+| Operator acceptance and `achieve` | **pending by construction** — the `achieve` binding was later satisfied 2026-11-15 (see "Achieve record" above); recording-time status kept. | `achieve` is an operator command path (`control/lib/symmetry_control/goals.ex`): it requires the goal in active/paused state, a final-acceptance authority decision, an integration WorkItem with an accepted outcome matching the exact Subject, accepted outcomes for every required item, no unresolved decisions, no nonterminal tasks, and evidence bound to the same subject hash. | The operator must: (1) dispatch and pass the hosted job above on the unchanged Subject tree; (2) review this receipt; (3) issue the authorized `achieve` with `subject` bound to `8ded77150ec0ae49d52355670fdad78a348bf1d5` / tree `3a1dec551b0e2c630f6720d8a542343648270793`, the integration work item, the evidence IDs of this receipt and the cited runs, and the final-acceptance decision. |
 | Independent semantic review | proved for the implementation head | Codex review completed with zero findings and zero unresolved findings on `109f6037…` (tree-identical); recorded in the CI-runs section. | None for the implementation. A separate independent review of this receipt itself belongs to the 0006-final review goal. |
 
 ## Recorded defects and limits at the Subject (not fixed by this documentation-only goal)
@@ -185,7 +199,7 @@ concurrently with anything.
 | Migration, backup/restore, release gate, protocol v1/goal-less | Rows above; the hosted-DR gap is explicit. |
 | Independent semantic review | Codex zero-findings review on the tree-identical head. |
 | Successful hosted required checks | 11/12 jobs green on the tree-identical head and on the Subject itself; the 12th was dispatched on 2026-11-15 and both available Linux environments proved ineligible — recorded in "Hosted acceptance attempts" below, not claimed as a pass. |
-| Authenticated operator acceptance and `achieve` | **Pending**; exact remaining predicates listed in the matrix. No self-acceptance. |
+| Authenticated operator acceptance and `achieve` | **Pending**; exact remaining predicates listed in the matrix. No self-acceptance. The `achieve` binding was later satisfied 2026-11-15 (see "Achieve record" above); recording-time status kept. |
 
 ## Hosted acceptance attempts and the Linux host situation — 2026-11-15 (supersedes the "pending operator dispatch" status in the matrix above)
 
