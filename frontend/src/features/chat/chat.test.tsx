@@ -172,8 +172,8 @@ interface RecordedRequest {
 }
 
 interface HarnessOptions {
-  /** The conversation read; `readIndex` starts at 1. */
-  conversation?: (url: URL, readIndex: number) => Response | Promise<Response>;
+  /** The conversation read. */
+  conversation?: (url: URL) => Response | Promise<Response>;
   /** The message POST; `postIndex` starts at 1. */
   message?: (body: Record<string, unknown>, postIndex: number) => Response | Promise<Response>;
   workspace?: () => Record<string, unknown>;
@@ -187,7 +187,6 @@ afterEach(() => {
 
 function renderChat(path: string, options: HarnessOptions = {}) {
   const requests: RecordedRequest[] = [];
-  let chatReads = 0;
   let messagePosts = 0;
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
@@ -197,9 +196,8 @@ function renderChat(path: string, options: HarnessOptions = {}) {
     if (url.pathname === "/portal/api/session") return new Response(JSON.stringify({ csrf_token: "session-token" }));
     if (url.pathname === "/portal/api/workspace") return new Response(JSON.stringify((options.workspace ?? workspaceBody)()));
     if (url.pathname === "/portal/api/chat") {
-      chatReads += 1;
       const respond = options.conversation ?? (() => new Response(JSON.stringify(conversationBody({ scope: "workspace" }))));
-      return await respond(url, chatReads);
+      return await respond(url);
     }
     if (url.pathname === "/portal/api/chat/messages") {
       messagePosts += 1;
@@ -1020,7 +1018,6 @@ describe("history", () => {
     const held = Promise.withResolvers<void>();
     const older: Record<string, ServedMessage[]> = {
       "cursor-5-resigned": [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
-      "cursor-5-resigned-2": [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
       "cursor-3": [message(1, { insertedAt: at(1) }), message(2, { insertedAt: at(2) })],
     };
     renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
@@ -1029,7 +1026,7 @@ describe("history", () => {
         if (before !== null) {
           requested.push(before);
           if (before === "cursor-5-resigned") {
-            // The press is held in flight: the re-serve below renews the
+            // The press is held in flight: the re-serves below renew the
             // surface's cursor while this request still carries its own token.
             return held.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: older[before] ?? [], nextBefore: "cursor-3" }))));
           }
@@ -1066,32 +1063,38 @@ describe("history", () => {
     expect(requested).toEqual(["cursor-5-resigned"]);
 
     // Another re-serve at the same boundary renews the surface's cursor
-    // underneath the in-flight press — a press made now consumes the renewed
-    // token, so the renewal is live under the held one — while the held press
-    // stays neither cancelled nor rebound to the boundary that arrived
-    // afterwards.
+    // underneath the in-flight press. The renewal is not a new position: a
+    // press made now would load the region the held press already owns there,
+    // so it is not admitted — the button reports that boundary busy while its
+    // bytes have changed — and the held press stays neither cancelled nor
+    // rebound to the token that arrived afterwards.
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("message 10");
-    await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested.length).toBe(2));
-    expect(requested).toEqual(["cursor-5-resigned", "cursor-5-resigned-2"]);
-    await screen.findByText("message 3");
-    held.resolve();
+    const button = screen.getByRole("button", { name: "Load older" });
+    await user.click(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-disabled", "true"));
+    expect(requested).toEqual(["cursor-5-resigned"]);
+
     // The held press's page belongs to the boundary its own cursor was minted
     // from — the one it captured then — so it lands deduped and the chain
-    // keeps the continuation the renewed press loaded.
+    // continues below it.
+    held.resolve();
+    await screen.findByText("message 3");
+    expect(requested).toEqual(["cursor-5-resigned"]);
+
+    // The pressed page moved the chain below the served boundary, so a further
+    // re-serve cannot re-sign that older position and the chain keeps its own
+    // cursor.
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("message 11");
     expect(messageIds()).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11].map(messageId));
 
-    // The pressed page continues the chain below the served boundary: the
-    // reader has paged past the boundary now, so a further re-serve cannot
-    // re-sign that older position and the chain keeps its own cursor.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested.length).toBe(3));
-    expect(requested).toEqual(["cursor-5-resigned", "cursor-5-resigned-2", "cursor-3"]);
+    await waitFor(() => expect(requested.length).toBe(2));
+    expect(requested).toEqual(["cursor-5-resigned", "cursor-3"]);
     await screen.findByText("message 1");
     expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(messageId));
+    expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument();
   });
 
   it("restarts the chain from the served page when a cursor the reader has paged past is refused", async () => {
@@ -1167,6 +1170,148 @@ describe("history", () => {
     let reads = 0;
     const held = Promise.withResolvers<void>();
     const older: Record<string, ServedMessage[]> = {
+      "cursor-6": [message(2, { insertedAt: at(2) }), message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) }), message(5, { insertedAt: at(5) })],
+      "cursor-2": [message(1, { insertedAt: at(1) })],
+    };
+    const { application } = renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          requested.push(before);
+          if (before === "cursor-5") {
+            // The first press carries the pre-move boundary and is held in
+            // flight: the server refuses it only once the later press's page
+            // has already moved the chain past that boundary.
+            return held.promise.then(() => new Response(JSON.stringify({ error: { code: "invalid_request", message: "request payload is invalid" } }), { status: 400 }));
+          }
+          return new Response(JSON.stringify(conversationBody({
+            scope: "project",
+            projectId,
+            messages: older[before] ?? [],
+            nextBefore: before === "cursor-6" ? "cursor-2" : null,
+          })));
+        }
+        reads += 1;
+        const served = [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) }), message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })];
+        return new Response(JSON.stringify(reads === 1
+          ? conversationBody({ scope: "project", projectId, messages: served, nextBefore: "cursor-5" })
+          // A serve that moved the boundary: the newest page now ends at
+          // message 6, and the held press's captured position cannot be
+          // re-signed from it.
+          : conversationBody({ scope: "project", projectId, messages: [...served.slice(1), message(9, { insertedAt: at(9) })], nextBefore: "cursor-6" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 5");
+
+    // The aging token's press is held in flight; the re-serve moves the served
+    // boundary, and the reader presses again at the moved boundary — its own
+    // position, so it is admitted — and that page lands first, moving the chain
+    // below the boundary the refused press captured.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 9");
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 2");
+    expect(requested).toEqual(["cursor-5", "cursor-6"]);
+
+    // The refused press no longer owns the chain: its refusal neither rewinds
+    // the pointer, nor re-reads the scope, nor posts a notice contradicting the
+    // page that landed — the newer chain is the one the reader walks.
+    held.resolve();
+    // The refusal's settlement is observable in the read's own query: the held
+    // read lands there as an error before its handler judges the press, so the
+    // negative assertions below cannot pass while that judgment is unrun.
+    await waitFor(() => expect(application.queryClient.getQueryState(["chat-older", { scope: "project", projectId, runId: null, before: "cursor-5" }])?.status).toBe("error"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false"));
+    expect(statusRegion()).toHaveTextContent("Messages are saved to this context.");
+    expect(reads).toBe(2);
+
+    // The next press continues below the page that landed, not from the
+    // served boundary the refused press predated.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-5", "cursor-6", "cursor-2"]));
+    await screen.findByText("message 1");
+    expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map(messageId));
+  });
+
+  // The held press's unproven failure is retried by the read policy before it
+  // settles its notice, so this case budgets for the retry schedule instead of
+  // racing the default timeout.
+  it("keeps a non-refusal failure's notice when the press no longer owns the chain", async () => {
+    const user = userEvent.setup();
+    const requested: string[] = [];
+    let reads = 0;
+    const held = Promise.withResolvers<void>();
+    const older: Record<string, ServedMessage[]> = {
+      "cursor-6": [message(2, { insertedAt: at(2) }), message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) }), message(5, { insertedAt: at(5) })],
+      "cursor-2": [message(1, { insertedAt: at(1) })],
+    };
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          requested.push(before);
+          if (before === "cursor-5") {
+            // The first press carries the pre-move boundary and is held in
+            // flight; once the later press's page has moved the chain past
+            // that boundary it fails with the server's own fault — unproven
+            // and retryable, never a refusal.
+            return held.promise.then(() => new Response("{}", { status: 500 }));
+          }
+          return new Response(JSON.stringify(conversationBody({
+            scope: "project",
+            projectId,
+            messages: older[before] ?? [],
+            nextBefore: before === "cursor-6" ? "cursor-2" : null,
+          })));
+        }
+        reads += 1;
+        const served = [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) }), message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })];
+        return new Response(JSON.stringify(reads === 1
+          ? conversationBody({ scope: "project", projectId, messages: served, nextBefore: "cursor-5" })
+          // A serve that moved the boundary: the newest page now ends at
+          // message 6, and the held press's captured position cannot be
+          // re-signed from it.
+          : conversationBody({ scope: "project", projectId, messages: [...served.slice(1), message(9, { insertedAt: at(9) })], nextBefore: "cursor-6" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 5");
+
+    // The aging token's press is held in flight; the re-serve moves the served
+    // boundary, and the reader presses again at the moved boundary — its own
+    // position, so it is admitted — and that page lands first, moving the chain
+    // below the boundary the failing press captured.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 9");
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 2");
+    expect(requested).toEqual(["cursor-5", "cursor-6"]);
+
+    // The press no longer owns the chain, but its failure proves nothing about
+    // the cursor: the unproven outcome keeps its notice — the read policy
+    // retries it first — and neither the notice nor any reset disturbs the
+    // chain the landed page established.
+    held.resolve();
+    await waitFor(() => expect(statusRegion()).toHaveTextContent("The server is temporarily unavailable."), { timeout: 8_000 });
+    expect(reads).toBe(2);
+
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested.filter((cursor) => cursor !== "cursor-5")).toEqual(["cursor-6", "cursor-2"]));
+    await screen.findByText("message 1");
+    expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map(messageId));
+  }, 20_000);
+
+  it("does not admit a second Load older for the boundary already in flight when the cursor re-signs", async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const requested: string[] = [];
+    const held = Promise.withResolvers<void>();
+    const older: Record<string, ServedMessage[]> = {
       "cursor-5-resigned": [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
       "cursor-3": [message(1, { insertedAt: at(1) }), message(2, { insertedAt: at(2) })],
     };
@@ -1176,9 +1321,9 @@ describe("history", () => {
         if (before !== null) {
           requested.push(before);
           if (before === "cursor-5") {
-            // The first press carries the aging token and is held in flight:
-            // the server refuses it only once the later press's page has
-            // already moved the chain.
+            // The press carries the aging token and is held in flight: the
+            // re-serve below re-signs the boundary underneath it, so only the
+            // refusal can settle this press.
             return held.promise.then(() => new Response(JSON.stringify({ error: { code: "invalid_request", message: "request payload is invalid" } }), { status: 400 }));
           }
           return new Response(JSON.stringify(conversationBody({
@@ -1192,38 +1337,140 @@ describe("history", () => {
         const served = [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) }), message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })];
         return new Response(JSON.stringify(reads === 1
           ? conversationBody({ scope: "project", projectId, messages: served, nextBefore: "cursor-5" })
-          // The same boundary re-served with a token the server signed afresh,
-          // while the reader's first press is still in flight with the aging
-          // one.
+          // The same boundary re-served with a token the server signed afresh:
+          // the button re-renders under different bytes while the position is
+          // the one the held press already owns.
           : conversationBody({ scope: "project", projectId, messages: [...served, message(9, { insertedAt: at(9) })], nextBefore: "cursor-5-resigned" })));
       },
     });
     await openChat();
     await screen.findByText("message 5");
 
-    // The aging token's press is held in flight; the re-serve renews the
-    // surface's cursor, the reader presses again through the renewed token,
-    // and that page lands first, moving the chain below the served boundary.
+    // The press leaves through the aging token and is held in flight.
     await user.click(screen.getByRole("button", { name: "Load older" }));
     await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+
+    // The re-serve re-signs the same boundary position. A press made now would
+    // load the region the held press already owns there, so the surface keeps
+    // the one in flight: no second request, and the button reports its own
+    // boundary busy even though the bytes changed.
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("message 9");
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await screen.findByText("message 3");
-    expect(requested).toEqual(["cursor-5", "cursor-5-resigned"]);
+    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+    expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "true");
 
-    // The refused press no longer owns the chain: its refusal stays the
-    // notice — no rewind to the served boundary and no re-read of the scope.
+    // The held press's refusal is the reader's to see: the press still owns the
+    // boundary it captured, so the pointer resets to the served page's own
+    // token, that scope is re-read to renew it, and the button is ready again.
     held.resolve();
     await waitFor(() => expect(statusRegion()).toHaveTextContent("The server returned an unexpected response."));
-    expect(reads).toBe(2);
+    await waitFor(() => expect(reads).toBe(3));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false"));
 
-    // The next press continues below the page that landed, not from the
-    // served boundary the refused press predated.
+    // The next press walks the renewed token; its page lands and the chain
+    // continues below it until the drained end.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 3");
+    expect(requested).toEqual(["cursor-5", "cursor-5-resigned"]);
     await user.click(screen.getByRole("button", { name: "Load older" }));
     await waitFor(() => expect(requested).toEqual(["cursor-5", "cursor-5-resigned", "cursor-3"]));
     await screen.findByText("message 1");
     expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map(messageId));
+    expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument();
+  });
+
+  it("re-opens a drained chain when a later serve offers a token at the served boundary", async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const requested: string[] = [];
+    const older: Record<string, ServedMessage[]> = {
+      "cursor-5": [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
+      "cursor-5-late": [message(1, { insertedAt: at(1) }), message(2, { insertedAt: at(2) }), message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })],
+    };
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          requested.push(before);
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: older[before] ?? [], nextBefore: null })));
+        }
+        reads += 1;
+        const served = [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) })];
+        return new Response(JSON.stringify(reads === 1
+          ? conversationBody({ scope: "project", projectId, messages: served, nextBefore: "cursor-5" })
+          // A later serve at the same boundary position offers a token again;
+          // here rows older than the drained end became visible in between.
+          : conversationBody({ scope: "project", projectId, messages: served, nextBefore: "cursor-5-late" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 5");
+
+    // The press drains the chain at message 3's position: the surface reports
+    // the oldest history loaded and offers no continuation.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 3");
+    expect(messageIds()).toEqual([3, 4, 5, 6].map(messageId));
+    expect(document.querySelector("#chat-history-note")).toHaveTextContent("4 messages loaded · oldest history loaded");
+    expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument();
+
+    // The later serve offers a token at the served boundary, so the ended chain
+    // re-opens there instead of dropping it: the region below the served page
+    // is walkable again without a reload or a boundary move.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(document.querySelector("#chat-history-note")).toHaveTextContent("4 messages loaded · older history available"));
+
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 1");
+    await waitFor(() => expect(requested).toEqual(["cursor-5", "cursor-5-late"]));
+    // The re-walked page re-reads the drained region; the render keeps one copy
+    // of every message.
+    expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6].map(messageId));
+    expect(document.querySelector("#chat-history-gap")).toBeNull();
+    expect(document.querySelector("#chat-history-note")).toHaveTextContent("6 messages loaded · oldest history loaded");
+    expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument();
+  });
+
+  it("re-opens a chain that never continued when a later serve offers a token at the served boundary", async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const requested: string[] = [];
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          requested.push(before);
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(1, { insertedAt: at(1) }), message(2, { insertedAt: at(2) })], nextBefore: null })));
+        }
+        reads += 1;
+        const served = [message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) })];
+        return new Response(JSON.stringify(reads === 1
+          // The read served the whole history it could see: no continuation
+          // was ever established.
+          ? conversationBody({ scope: "project", projectId, messages: served, nextBefore: null })
+          // A later read at the same boundary position now carries one, because
+          // rows older than the served page became visible in between.
+          : conversationBody({ scope: "project", projectId, messages: served, nextBefore: "cursor-3" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 3");
+    expect(document.querySelector("#chat-history-note")).toHaveTextContent("2 messages loaded · oldest history loaded");
+    expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument();
+
+    // The never-continued chain takes the offered token the same way: the
+    // history below the served page is reachable without a reload.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(document.querySelector("#chat-history-note")).toHaveTextContent("2 messages loaded · older history available"));
+
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 1");
+    await waitFor(() => expect(requested).toEqual(["cursor-3"]));
+    expect(messageIds()).toEqual([1, 2, 3, 4].map(messageId));
+    expect(document.querySelector("#chat-history-gap")).toBeNull();
+    expect(document.querySelector("#chat-history-note")).toHaveTextContent("4 messages loaded · oldest history loaded");
+    expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument();
   });
 
   it("keeps the page a re-serve overtook bound to the boundary its cursor was minted from", async () => {
@@ -1392,6 +1639,115 @@ describe("history", () => {
     await user.selectOptions(scopeSelect(), "workspace");
     await screen.findByText("workspace history");
     expect(messageIds()).toEqual([messageId(1)]);
+  });
+
+  it("does not let one scope's press in flight block another scope's Load older at the same cursor bytes", async () => {
+    const user = userEvent.setup();
+    const requested: string[] = [];
+    const held = Promise.withResolvers<void>();
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          requested.push(before);
+          // The project press's page is held in flight for the whole test.
+          if (url.searchParams.get("scope") === "project") {
+            return held.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(7), message(8)] }))));
+          }
+          return new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [message(1, { content: "workspace history" })] })));
+        }
+        return url.searchParams.get("scope") === "project"
+          ? new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(9), message(10)], nextBefore: "cursor-9" })))
+          // The workspace position carries the same cursor bytes without a
+          // boundary message, so the cursor bytes are all the guard's fallback
+          // has to compare — and the scope key is all that separates the two
+          // presses.
+          : new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [], nextBefore: "cursor-9" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+
+    // The project press leaves through cursor-9 and is held in flight.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-9"]));
+
+    // The reader leaves for the workspace scope, whose own press at the same
+    // bytes must be admitted: the scope key fences the press in flight.
+    await user.selectOptions(scopeSelect(), "workspace");
+    await waitFor(() => expect(document.querySelector("#chat-history-note")).toHaveTextContent("No messages recorded in this context."));
+    expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false");
+
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-9", "cursor-9"]));
+    await screen.findByText("workspace history");
+    expect(messageIds()).toEqual([messageId(1)]);
+
+    // The workspace press's settlement cleared only its own record: the held
+    // project press still owns its boundary, so the project's button reports
+    // itself busy when the reader returns while that press is in flight.
+    await user.selectOptions(scopeSelect(), "project");
+    expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "true");
+
+    // The held project page still lands in the scope that pressed it.
+    held.resolve();
+    await screen.findByText("message 7");
+    expect(messageIds()).toEqual([7, 8, 9, 10].map(messageId));
+  });
+
+  it("does not admit a Load older at the same cursor bytes while either side cannot name a boundary id", async () => {
+    const user = userEvent.setup();
+    const requested: string[] = [];
+    let reads = 0;
+    const held = Promise.withResolvers<void>();
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before === "cursor-5") {
+          requested.push(before);
+          // The press carries the boundary message it was admitted at and is
+          // held in flight.
+          return held.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(1, { insertedAt: at(1) })], nextBefore: null }))));
+        }
+        if (before === "cursor-7") {
+          requested.push(before);
+          // The moved boundary's own page comes back empty but carries a token
+          // whose bytes are the held press's cursor, so the chain pointer then
+          // names no boundary message at all and only the bytes can decide.
+          return new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [], nextBefore: "cursor-5" })));
+        }
+        reads += 1;
+        return new Response(JSON.stringify(reads === 1
+          ? conversationBody({ scope: "project", projectId, messages: [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) })], nextBefore: "cursor-5" })
+          // A serve that moved the boundary, so a press there is its own load.
+          : conversationBody({ scope: "project", projectId, messages: [message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })], nextBefore: "cursor-7" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 5");
+
+    // The press leaves through cursor-5, minted at the boundary message 5, and
+    // is held in flight.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+
+    // The moved boundary admits its own press; that page's token leaves the
+    // chain pointer at the held press's own cursor bytes without a boundary id.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 7");
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-5", "cursor-7"]));
+
+    // The pending press is identified by its bytes while either side lacks a
+    // boundary id, so the button reports the region busy instead of admitting a
+    // second press at the position the held one already owns.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "true"));
+
+    // The held press's page settles without continuing the chain — the pointer
+    // no longer names its boundary — and its record clears only itself.
+    held.resolve();
+    await screen.findByText("message 1");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false"));
   });
 
   it("keeps the loaded conversation visible as stale when a read fails", async () => {

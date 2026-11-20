@@ -103,7 +103,12 @@ export function chatScopeKey(scope: ChatScope, projectId: string | null, runId: 
  * re-signed per response, so the boundary message's id — not the token's
  * bytes — is what proves two reads paginate from the same position; at an
  * unchanged boundary the served token renews the reader's own cursor while
- * the reader's chain still designates that boundary.
+ * the reader's chain still designates that boundary. A chain that is not
+ * ended keeps its own continuation when the served boundary did not move and
+ * the reader has paged past it — the served token does not designate the
+ * position the reader's loads reached — while a moved boundary re-points the
+ * chain to the served token and boundary, and an ended one is re-opened from
+ * the served boundary.
  */
 export function retainServedPage(
   state: ChatScopeState,
@@ -128,12 +133,19 @@ export function retainServedPage(
   // replaces the aging token exactly while the reader's cursor still
   // designates that boundary. A cursor the reader's loads moved past names an
   // older message the served page cannot re-sign, so it stays where the loads
-  // reached it, and a chain that already ended keeps its recorded boundary and
-  // stays ended — a token the same boundary offers after a drain is dropped,
-  // which `docs/TODO.md` records as open work.
+  // reached it.
   const renew = !moved && servedBoundaryId !== null && state.nextBoundaryId === servedBoundaryId;
-  const nextCursor = moved || renew ? served.nextBefore : state.nextCursor;
-  const nextBoundaryId = moved ? servedBoundaryId : state.nextBoundaryId;
+  // An ended chain has no usable continuation — the reader drained it through
+  // its own loads, recording an older boundary message, or the read served the
+  // whole history and no continuation was ever established. A serve offering a
+  // token then re-opens the chain at the served boundary: the token is signed
+  // from the served page's oldest message, so the next press walks the drained
+  // region again and the render dedupes it against the retained pages.
+  // Dropping that token instead would leave the rows below the served page
+  // unreachable until a reload or a boundary move.
+  const reopened = state.nextCursor === null && served.nextBefore !== null && servedBoundaryId !== null;
+  const nextCursor = moved || renew || reopened ? served.nextBefore : state.nextCursor;
+  const nextBoundaryId = moved || reopened ? servedBoundaryId : state.nextBoundaryId;
   return { ...state, pages: [page, ...state.pages.slice(1)], nextCursor, nextBoundaryId, servedSource: source };
 }
 
@@ -173,6 +185,33 @@ export function retainOlderPage(
  */
 export function ownsChainPointer(state: ChatScopeState, cursor: string, boundaryId: string | null): boolean {
   return boundaryId !== null ? state.nextBoundaryId === boundaryId : state.nextCursor === cursor;
+}
+
+/** One `Load older` press in flight: the scope it belongs to and its boundary. */
+export interface ChatOlderLoad {
+  readonly scopeKey: string;
+  /** The cursor the press was admitted with; the fallback identity while no boundary id was recorded. */
+  readonly cursor: string;
+  /** The boundary message the cursor was minted relative to, captured at press time. */
+  readonly boundaryId: string | null;
+}
+
+/**
+ * True while a pending press already holds the boundary a new press would
+ * load. The comparison is two-sided — the boundary message's id while both
+ * sides name one, cursor bytes while either does not — and is extended by the
+ * scope key, because a press belongs to the scope that made it and must
+ * neither block nor be blocked by another scope's. A cursor a re-serve signs
+ * anew at the same boundary is still the same position: the page already in
+ * flight owns that region.
+ */
+export function pendingOlderLoadFor(
+  loads: readonly ChatOlderLoad[],
+  candidate: ChatOlderLoad,
+): boolean {
+  return loads.some((load) => load.scopeKey === candidate.scopeKey && (load.boundaryId !== null && candidate.boundaryId !== null
+    ? load.boundaryId === candidate.boundaryId
+    : load.cursor === candidate.cursor));
 }
 
 export interface ChatScopeStore {
