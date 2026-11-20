@@ -45,6 +45,10 @@ candidates` section below was moved on 2026-11-20 from branch `fix/provider-acti
 The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
 
+The closed control-character canonical JSON item appended to the `## Retro review follow-ups
+(second pass, 2026-11-20)` section below was moved on 2026-11-20 from branch
+`fix/go-canonical-c0-case`.
+
 The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
@@ -54,6 +58,9 @@ moved on 2026-11-21 from branch `fix/served-read-closeout`.
 
 The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
+
+The closed `stopDescendantMonitor` post-timer recheck appended to the `## Retro review follow-ups`
+section below was moved on 2026-11-21 from branch `fix/stop-descendant-recheck`.
 
 The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
 that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
@@ -3160,6 +3167,69 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       timeout (600.509s/600.388s, 0 test failures), and green came with `-timeout 45m`
       (`ok 1119.686s`); CI's `daemon-windows` job runs the package under `-timeout 600s`.
 
+- [ ] Give `stopDescendantMonitor` the post-timer recheck its sibling join already has.
+      `daemon/internal/platform/process_unix.go:752-769` waits on the monitor against a timer
+      (`:763-768`) and returns `ErrLinuxDescendantContainmentUnproven` ("descendant monitor did not stop
+      before deadline") whenever the timer arm wins, without rechecking `monitorDone`. `monitorDone` is a
+      close-only unbuffered channel (`:610` created, `:809` the only close), so it stays ready once
+      closed: a monitor that exits as the deadline expires leaves both arms ready, Go picks uniformly
+      between them, and a monitor whose published reason is already in hand can be reported as a
+      deadline failure. PR #105 (`e64f8c0`) fixed this shape in the barrier join `:665-688`
+      (function `waitForInitialDescendantScan` `:642-696`, the recheck at `:682-686`, pinned by
+      the join probe `process_unix_linux_test.go:2078` and the expired-timer probe
+      `:2136`, whose assertion at `:2157-2158` reddens when the recheck is removed) — and recorded
+      this site as out of scope as work "to be recorded in `docs/TODO.md`"; the same shape also sits
+      in the final-scan RPC's timer arms (`:1042-1043` request, `:1055` result). Fail-closed, so the
+      cost is manufactured
+      unproven-containment results for every caller
+      that joins the monitor's own reason (`:1121`, `:1277`, `:1351`, `:1542`,
+      `containment_supervisor_linux.go:1836`, `prepareDescendantMonitorForOwnerLoss` `:771-794`).
+      Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
+      that never exits still fails) in a separate maintenance change.
+
+      **Closed (2026-11-21, branch `fix/stop-descendant-recheck`): the recheck is applied to
+      `stopDescendantMonitor` and both directions are pinned.** The timer arm now rechecks
+      `monitorDone` with a non-blocking select — the same shape as the barrier join's `:682-686` — so
+      a monitor that exits as the deadline expires is joined instead of being reported as a deadline
+      failure, while an open monitor keeps the unchanged deadline error after the full wait and
+      success is still reported only when the monitor exited (its only production close is `:817`).
+      The entry guard (`remaining <= 0`) is unchanged, as in the barrier join, and the recheck can
+      never wait, so no caller's deadline is extended. Decision: the final-scan RPC timer arms named
+      above are deliberately not changed by this closure — the item's fix sentence pins the stop
+      path's two directions only — and are re-recorded as their own open entry in `docs/TODO.md`
+      (`## Retro review follow-ups`), with anchors rebound to the fixed tree. Pins, both in
+      `daemon/internal/platform/process_unix_linux_test.go`: the expired-timer probe
+      `TestProcessGroupStopDescendantMonitorReportsJoinedMonitorAfterDeadline` reddens when the
+      recheck is removed (mutant: red 4/4 plain with first failures at iterations 37/29/29/36 of the
+      400-iteration 100 ns bucket; red 4/4 under `-race` and 3/3 under `-race -cpu 1` with first
+      failures at 12/3/0/1 and 11/6/6 of the 2 µs bucket — the detecting bucket moves with the build
+      and the 100 ns bucket alone left `-race` green 3/3, which is why the probe walks a deadline
+      ladder instead of one constant), and the deterministic probe
+      `TestProcessGroupStopDescendantMonitorJoinsEndingMonitor` pins that an exited monitor is
+      joined without waiting while an open monitor still consumes the whole deadline and fails.
+      Evidence on the branch, from `daemon/`: WSL Ubuntu-24.04 (go1.27.0) ran the focused probes and
+      the ordinary and `-race` suites of `./internal/platform/` green (focused `ok … 0.3 s`; ordinary
+      `ok … 21.0 s` with 204 top-level PASS and 0 FAIL; `-race ok … 45.1 s`), with the six TCP-peer
+      loopback-dialing tests named-skipped
+      (`-skip "^Test(VerifyLoopbackTCPPeerWithOwnedHelperProcess|VerifyLoopbackTCPPeerWaits|VerifyLoopbackTCPPeerDoesNotExtend|VerifyLoopbackTCPPeerV2|LinuxTCPPeerV2RejectsDifferentNetworkCookie)"`).
+      That exclusion records the guest's own loopback limitation, not this change: on this host no
+      127.0.0.1 connect completes at all (a five-line python listen/connect probe times out), the same
+      dials fail or hang identically against `fdf332d`'s own `process_unix.go` in a throwaway copy
+      carrying only the new probes, and this file already records that guest behaviour (the
+      `daemon/internal/app` intermittent `-race` package-timeout entry names it: the WSL guest hangs
+      `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` on a loopback dial that
+      never answers there).
+      Windows (go1.27.4): `gofmt -l .` empty, `go vet ./...` and `go build ./cmd/...` green; the
+      aggregate `go test -count=1 -timeout 600s ./...` exceeded its package budget in
+      `internal/workspace` on this loaded host (600 s panic in
+      `TestConcurrentPrepareUsesOneReservation` on a `git` child), and the same suite at
+      `-timeout 1200s` failed only `internal/harness/pi`
+      (`TestNativeRepositoryTaskSubjectUsesRepositoryBaseline`: "git rev-parse timed out"), both green
+      on isolated re-run (`./internal/workspace/` `ok … 456.6 s`; `./internal/harness/pi/` `ok … 5.8 s`
+      and the named test `-count=3` `ok … 14.3 s`); neither can come from this change — the changed
+      file is `//go:build linux` and absent from the Windows build file set (`go list` lists 14 files
+      for `./internal/platform` on Windows, none of them it).
+
 ## Retro review follow-ups (second pass, 2026-11-20)
 
 - [ ] Re-point legacy work-surface owner bookmarks that carry the pre-#111 sentinel. The `owner`
@@ -3254,6 +3324,96 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       passed at both widths in every run. The gate's environment, its carrier deviations and the
       failure classification are in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`; CI
       remains the merge gate.
+
+- [ ] Align the control-character escape case in the canonical JSON bytes both languages hash.
+      `protocol.CanonicalizeJSON` (`daemon/internal/protocol/goal_subject.go:102`) re-encodes every
+      string through `encoding/json` (`writeCanonicalJSON` `:122`, its string arm `:132-137`;
+      `marshalJSONString` `:186` with HTML escaping off), and Go spells every control character
+      below U+0020 that has no shorthand escape as `\u00xx` with lowercase hex digits, while the
+      Elixir side hashes `SymmetryControl.RequestHash.canonical/1`
+      (`control/lib/symmetry_control/request_hash.ex:5`, `Jason.encode!/1`; Jason 1.4.5 per
+      `control/mix.lock:10`) and Jason spells the same character `\u001F` with uppercase hex.
+      Each language is self-consistent — in Go both
+      `{"value":"\u001F"}` and `{"value":"\u001f"}` canonicalize to `{"value":"\u001f"}` — so the
+      defect is the pair: one logical value carries two canonical digests, one per language.
+      Reproduced at `978abba` with throwaway probes (not committed): a Go test over
+      `CanonicalizeJSON` printed `{"value":"\u001f"}` with
+      `sha256:b43e9944b5d28b7f3e6bad4b289642d1786aa5ba80658cf2ed8bf87ecd642e51`, and
+      `Jason.encode!(%{"value" => <<0x1F>>})` printed `{"value":"\u001F"}` with
+      `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`. The Elixir reading is
+      not a lone choice: the contracts layer already mirrors it deliberately — `encodeJsonString`
+      (`contracts/ts/semantics.ts:69-80`) emits the shorthand escapes plus an uppercase `\u00XX`
+      for every other C0 control, documented as "exactly as Elixir `Jason` encodes it", and the pin
+      is the boundary test "canonical JSON escapes control characters exactly as the control
+      plane's Jason does" (`contracts/scripts/boundary.test.mjs:59-71`, U+000B and U+001B inside a
+      schema-valid LongText description), which names `RequestHash.canonical/1` as the hashed text;
+      `contracts:check` verifies the canonical sorted JSON Subject hash through that same TypeScript
+      encoder (`contracts/README.md:62-66`). So the Go canonicalizer is the side that disagrees
+      with the other two, and it is unpinned: its escaping test pins `\u0000` and the shorthand
+      escapes but no `\u00xx` escape carrying a hex letter
+      (`daemon/internal/protocol/goal_subject_test.go:64-73`),
+      and a case-sensitive search for an uppercase-hex control escape
+      (`grep -rn 'u00[0-9]*[A-F]' daemon/ --include='*.go'`) returns 0 lines. The normalization the
+      hash must follow is written at `docs/design/protocol.md:311-316` and does not name the C0
+      escape case, so deciding it stays the open choice.
+      Reachable through the context snapshot: Control builds it from free text — `approved_goal`
+      `"objective"` (`control/lib/symmetry_control/goals.ex:2151`) and `work_contract`
+      `"title"`/`"description"` (`:2156-2157`) — and stamps the snapshot's `content_hash` with
+      Jason (`context_content_hash` `:2602-2606`, via `RequestHash.canonical`), which the daemon
+      recomputes with Go and refuses on mismatch
+      (`daemon/internal/control/validation.go:1744-1772`, "context.content_hash does not match
+      canonical snapshot"; the same rule at `daemon/internal/protocol/goal_schema.go:48-70`).
+      The contracts boundary test states U+000B/U+001B are schema-valid inside a LongText
+      description (`contracts/scripts/boundary.test.mjs:59-71`), so a work item whose description
+      carries U+001F yields a snapshot the daemon rejects — a source-traced consequence, not
+      executed end to end in this record. The `Subject` the daemon binds cannot carry C0
+      characters (its fields are a UUID, a git object id and a sha256, `Subject.Validate`
+      `goal_subject.go:39-47`; `Subject.Hash` `:81-88`), and `goals.ex:2636` hashes that same
+      restricted value, so neither is the reachable seam. Fix direction: decide the canonical
+      case once — the spelling the other two implementations already share (uppercase, i.e. Jason's
+      bytes) or a shortest-escape normalization written into the rule itself — then add the missing
+      Go pin (and a shared fixture if the choice tightens the rule), and treat any recorded digest
+      over a control-bearing value as invalidated by the change. Suggested owner area: daemon
+      protocol plus the Control hash owners, with the contracts owner for the normalization text.
+
+      **Decided and closed (2026-11-20, branch `fix/go-canonical-c0-case`):** option (a) — Go
+      adopts the spelling the other two implementations already share (uppercase `\u00XX`, i.e.
+      Jason's bytes); `RequestHash.canonical/1`, the contracts TypeScript encoder and their pins
+      stay the reference, and the normalization rule now names the case
+      (`docs/design/protocol.md:311-320`). `normalizeJSONStringEscapes`
+      (`daemon/internal/protocol/goal_subject.go`, formerly `normalizeJSONStringLineSeparators`)
+      uppercases the hex digits of every surviving C0 escape token (00-prefixed) in the same
+      scanner that keeps `U+2028`/`U+2029` raw and leaves a literal `\\u001f` text unchanged; the
+      shorthand escapes, key order and numeric handling are unchanged, so only the nine C0 controls
+      whose escape carries a hex letter (`U+000B`, `U+000E`, `U+000F`, `U+001A`-`U+001F`) change
+      bytes. Pinned by `TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane` and
+      `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest`, red before
+      the fix (lowercase hex where uppercase was wanted, both tests, exit 1) and green after: the
+      first pins the entry's value (`{"value":"\u001F"}`, the digest Jason 1.4.5 computes,
+      `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`), the nine
+      hex-letter escapes, the document the contracts boundary test pins
+      (`sha256:401bf74e8085ac0cce504b465cabbc82043e4fc8c6ec73625d60a43292656fd8`) and the literal
+      `\\u001f` text; the second pins the canonical plan-proposal text the daemon recomputes
+      before admission (`goal_contract_semantics.go` `canonicalPlanProposalSHA256`) against the
+      control plane's digest the frontend pin already records for a description carrying
+      U+000B/U+001B (`sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5`).
+      A third pin, `TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged`, holds
+      the 00-token scope of the rewrite itself (it reddens against a rewrite of every four-digit
+      token).
+      The reproduction no longer reproduces: the post-fix Go canonicalizer's bytes
+      equal Jason 1.4.5's byte for byte over the entry's value, the nine hex-letter controls, that
+      boundary document and the plan proposal above; the digit-only C0 escapes are unchanged
+      because the rewrite only maps the hex letters a-f, and U+0000 stays pinned by the existing
+      escaping test. No repository-asserted digest or fixture over affected bytes is invalidated:
+      no hex-letter C0 escape predates this change in any daemon source, test, fixture or testdata
+      file, and the uppercase pins named above stay valid. Two recorded digest classes are
+      superseded rather than reused: the pre-fix probe digest quoted above (its value now
+      canonicalizes to the uppercase bytes) and persisted daemon-side digests over affected bytes
+      such as `ProviderActionIntent.RequestDigest` (`daemon/internal/app/pi_provider_bridge.go`,
+      replayed at `daemon/internal/state/provider_action.go`), where a pre-fix journal fails
+      closed with `local_idempotency_conflict` and no duplicate external effect; backward
+      compatibility is waived because the first release is not shipped. The reachable end-to-end
+      refusal stays source-traced; the plan is `docs/plans/2026-11-20-go-canonical-c0-case-plan.md`.
 
 - [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
       current encoder escapes a recorded value that starts with `:` by prefixing one
