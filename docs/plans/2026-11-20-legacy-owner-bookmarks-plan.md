@@ -64,10 +64,10 @@ signatures.
   | `agent:` | `agent:` | unchanged (the minted key is a fixed point) |
   | `human:` | `human:` | unchanged (the minted key is a fixed point) |
   | `agent::unrecorded` | `agent::unrecorded` | the row whose recorded name is `unrecorded` (a real name, not absence) |
-  | `agent:::Ada`, `human:::Ada` | unchanged | the escaped recorded names the current encoder mints (a recorded name `:Ada`); not pinned |
+  | `agent:::Ada`, `human:::Ada` | unchanged | the escaped recorded names the current encoder mints (a recorded name `:Ada`); `human:::Ada` accepted and pinned (`docs/plans/2026-11-21-colon-owner-keys-plan.md`); `agent:::Ada` not pinned |
   | `agent:builder`, `unassigned`, `type:unrecorded`, `agent:unrecorded-bot` | unchanged | keys that must not be read as the sentinel |
-  | `human::Ada` (pre-#111 spelling for a recorded name `:Ada`) | `human::Ada` | no row — out of scope, tracked open in `docs/TODO.md`; not pinned |
-  | `human:Ada`, `""` | unchanged | further unchanged samples: `human:Ada` pinned by `filters.test.ts:18`; the empty key `""` skips the owner filter, pinned only through the no-owner cases |
+  | `human::Ada` (pre-#111 spelling for a recorded name `:Ada`) | `human::Ada` | no row — accepted and pinned (`docs/plans/2026-11-21-colon-owner-keys-plan.md`); entry closed in `docs/archive/CLOSED-TODO.md` |
+  | `human:Ada`, `""` | unchanged | further unchanged samples: `human:Ada` pinned by `filters.test.ts`, case "normalises the values the router hands back after JSON parsing"; the empty key `""` skips the owner filter, pinned only through the no-owner cases |
   | `type:robot` | `type:robot` | unchanged sample read from the implementation; not pinned |
 
 - **Idempotence.** The reader is a fixed point on every key it returns, so applying it twice — or
@@ -182,7 +182,10 @@ signatures.
   disambiguated (the collision repeats for deeper colon prefixes: for a recorded name with `k >= 2`
   leading colons, the pre-#111 key equals the current mint for the same name with `k-1` leading
   colons, for example legacy `human:::Ada` (name `::Ada`) is the current mint for `:Ada`). The
-  contract's sentinel wording excludes both shapes; they are tracked as an open entry in
-  `docs/TODO.md` (reproduction: the throwaway vitest probe recorded there).
+  contract's sentinel wording excludes both shapes; they were tracked as an open entry in
+  `docs/TODO.md` (reproduction: the throwaway vitest probe recorded there), and the follow-up
+  increment decided the reading: the collision is accepted and documented — a key is always read
+  as a current mint (`docs/plans/2026-11-21-colon-owner-keys-plan.md`) — which closes the entry
+  in `docs/archive/CLOSED-TODO.md`.
 - Contract/schema/fixture changes: the fix is client-side read compatibility for a first release
   that is not shipped; no backward-compatibility obligation was accepted.
