@@ -9,12 +9,16 @@ acceptance dispatch, operator acceptance, and `achieve` are recorded below as **
 they are not satisfied by this receipt. A model recorded this document; it cannot grant
 itself authority or declare the goal achieved.
 
+**Annotation (recorded 2026-11-20):** the `achieve` binding among the pending predicates above
+was later satisfied 2026-11-15 on the local acceptance stack — see the "Achieve record" section
+below; the original status text is kept as the recording-time state.
+
 ## Subject record
 
 | Field | Value | Command (exit 0 unless noted) |
 | --- | --- | --- |
 | Subject commit | `8ded77150ec0ae49d52355670fdad78a348bf1d5` | `git rev-parse HEAD` |
-| Tree digest | `3a1dec551b0e2c630f6720d8a542343648270793` | `git rev-parse HEAD^{tree}` |
+| Git tree OID | `3a1dec551b0e2c630f6720d8a542343648270793` | `git rev-parse HEAD^{tree}` |
 | Clean checkout | `git status --porcelain` → empty output | exit 0 |
 | Index tree == HEAD tree | `git write-tree` → `3a1dec551b0e2c630f6720d8a542343648270793` (equals `HEAD^{tree}`) | exit 0 |
 | Merge provenance | PR #22 squash-merged 2026-11-14T19:46:57Z; merge commit `8ded771`; parent `27dc3e4` | `gh pr view 22` |
@@ -39,6 +43,11 @@ receipt does not claim it. The operator issuing `achieve` must supply `subject =
 "tree_digest": "sha256:<64 hex>"}` and bind the integration work item and the evidence rows
 to the resulting subject hash.
 
+**Annotation (recorded 2026-11-20):** the `achieve` binding recorded as pending here was later
+satisfied 2026-11-15 on the local acceptance stack — the "Achieve record" section below supplies
+the local `resource_id` and the protocol `tree_digest` this paragraph leaves unknown; the original
+text is kept as the recording-time state.
+
 The protocol tree digest for this frozen Subject has since been computed with the repository's
 own binder and independently reproduced:
 
@@ -46,6 +55,11 @@ own binder and independently reproduced:
 $ python3 scripts/ci/linux-v2-source-subject.py . 8ded77150ec0ae49d52355670fdad78a348bf1d5
 {"commit":"8ded77150ec0ae49d52355670fdad78a348bf1d5","tree_digest":"sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c"}
 ```
+
+Precondition of this transcript: it was recorded, and only reproduces, on a clean checkout whose
+`HEAD` is the Subject commit — the binder refuses any other revision (`source checkout does not
+match the exact expected commit`) and any staged, unstaged, or untracked change, so copying the
+command verbatim at a later tip exits 1 by design.
 
 The remaining unknown is the approved repository `resource_id`, a control-plane value that the
 acceptance flow itself creates; the earlier review finding (a Git tree OID presented as the
@@ -138,6 +152,16 @@ adding a marker.
 | Operator acceptance and `achieve` | **pending by construction** | `achieve` is an operator command path (`control/lib/symmetry_control/goals.ex`): it requires the goal in active/paused state, a final-acceptance authority decision, an integration WorkItem with an accepted outcome matching the exact Subject, accepted outcomes for every required item, no unresolved decisions, no nonterminal tasks, and evidence bound to the same subject hash. | The operator must: (1) dispatch and pass the hosted job above on the unchanged Subject tree; (2) review this receipt; (3) issue the authorized `achieve` with `subject` bound to `8ded77150ec0ae49d52355670fdad78a348bf1d5` / tree `3a1dec551b0e2c630f6720d8a542343648270793`, the integration work item, the evidence IDs of this receipt and the cited runs, and the final-acceptance decision. |
 | Independent semantic review | proved for the implementation head | Codex review completed with zero findings and zero unresolved findings on `109f6037…` (tree-identical); recorded in the CI-runs section. | None for the implementation. A separate independent review of this receipt itself belongs to the 0006-final review goal. |
 
+**Annotation (recorded 2026-11-20):** the OmO `5.1.69` row's "0006k remains an active goal"
+clause held at recording time; 0006k was administratively archived 2026-11-17 (#55
+`e72290a`) and `docs/goals/archive/0006k-omo-native-capability.md` exists. "No closure
+receipt" stands — no 0006k goal receipt or credentialed execution was recorded — so the row's
+evidence scope is unchanged.
+
+**Annotation (recorded 2026-11-20):** the matrix row "Operator acceptance and `achieve`" keeps
+its recording-time pending status and text; the `achieve` binding it records as pending was
+later satisfied 2026-11-15 on the local acceptance stack (see "Achieve record" above).
+
 ## Recorded defects and limits at the Subject (not fixed by this documentation-only goal)
 
 - Two pre-existing Control test-compile warnings at the Subject tree:
@@ -150,6 +174,10 @@ adding a marker.
   goal; no capability depends on it here.
 - Native credentialed acceptance for OMP remains unavailable under the zero-spend
   blocker; no capability is promoted for OMP.
+
+**Annotation (recorded 2026-11-20):** the warnings item above closed to
+`docs/archive/CLOSED-TODO.md` on 2026-11-19; the OMP in-flight cancellation containment gap
+has no `docs/TODO.md` entry. The original sentences above are kept as recorded.
 
 ## Local commands executed for this receipt (2026-11-15, this worktree)
 
@@ -186,6 +214,15 @@ concurrently with anything.
 | Independent semantic review | Codex zero-findings review on the tree-identical head. |
 | Successful hosted required checks | 11/12 jobs green on the tree-identical head and on the Subject itself; the 12th was dispatched on 2026-11-15 and both available Linux environments proved ineligible — recorded in "Hosted acceptance attempts" below, not claimed as a pass. |
 | Authenticated operator acceptance and `achieve` | **Pending**; exact remaining predicates listed in the matrix. No self-acceptance. |
+
+**Annotation (recorded 2026-11-20):** the clause row "One exact, reviewable Subject" cites the
+Subject record's "tree digest"; that term means the Git tree OID
+`3a1dec551b0e2c630f6720d8a542343648270793` (`git rev-parse HEAD^{tree}`), not the protocol
+`tree_digest`. The row keeps its recording-time text.
+
+**Annotation (recorded 2026-11-20):** the clause row "Authenticated operator acceptance and
+`achieve`" keeps its recording-time **Pending** status and text; the `achieve` binding was
+later satisfied 2026-11-15 on the local acceptance stack (see "Achieve record" above).
 
 ## Hosted acceptance attempts and the Linux host situation — 2026-11-15 (supersedes the "pending operator dispatch" status in the matrix above)
 
