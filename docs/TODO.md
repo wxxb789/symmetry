@@ -129,22 +129,23 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       "Resolved: …" only. `NextAction` has no `accept_plan` payload path: its `accept_plan` branch
       renders a note only ("Approve the open plan decision above first …", `:533`), `actionPayload`
       returns null for every kind it does not build (`:626-627`), and the send button returns without
-      sending anything. The dead end is reachable through the press's own two commands: the resolution
-      is applied, the admission is refused with an answered error, and `approvePlan`'s `onError`
-      releases the whole attempt (`:218`), so a re-press builds a fresh resolution for the decision the
-      server now serves resolved (`apply_command!` requires `decision.state == "open"`,
-      `control/lib/symmetry_control/goals.ex:6491-6495`) and is refused; the goal invalidation the
-      committed resolution published before its response
-      (`control/lib/symmetry_control_web/plugs/portal_invalidations.ex:28-32`) refetches the card, which
-      then shows the resolved decision with no control at all. The plan stays unadmittable from this
-      surface although the server would accept a replay of the frozen admission bytes. Pre-existing
-      (the pre-fix press completed neither step either) and outside
-      `fix/resolve-decision-submit-read`'s contract scope; that branch records the frozen attempt's
-      release rule and the precondition of the lost-acknowledgement replay, not this dead end. Fix
-      direction: keep a retry control while `sentApproval` holds a frozen attempt for that decision id
-      (its admission bytes are exactly what `replay_event` replays), or serve `accept_plan` as an
-      allowed action for a resolved plan decision that is not yet admitted, so `NextAction` can
-      present it through a payload path.
+      sending anything. The dead end is reachable through the press's own two commands by two paths.
+      (a) An answered admission refusal releases the whole attempt (`:218`), so a re-press re-resolves
+      a decision the server serves `resolved` and is refused `invalid_decision` (`apply_command!`
+      requires `decision.state == "open"`, `control/lib/symmetry_control/goals.ex:6491-6495`), while
+      the server would accept a fresh `accept_plan` built from a current read (`goals.ex:6395-6414`).
+      (b) A lost resolution acknowledgement keeps the attempt, but the goal invalidation the committed
+      resolution published before its response
+      (`control/lib/symmetry_control_web/plugs/portal_invalidations.ex:28-32`) refetches the card and
+      the `open?` gate (`:408`) unmounts the control; the server would replay the frozen resolution
+      bytes, and the admission would still need a fresh read. Pre-existing (the pre-fix press also
+      applied the resolution and could not admit) and outside `fix/resolve-decision-submit-read`'s
+      contract scope; that branch records the frozen attempt's release rule and the precondition of
+      the lost-acknowledgement replay, not this dead end. Fix direction: keep a retry control while
+      `sentApproval` holds a frozen attempt for that decision id (its frozen resolution replays
+      through `replay_event` and the admission is built from a fresh read), which covers only (b), or
+      serve `accept_plan` as an allowed action for a resolved plan decision that is not yet admitted,
+      so `NextAction` can present it through a payload path, which covers both paths.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
