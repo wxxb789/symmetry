@@ -136,7 +136,10 @@ mix test
 
 `MIX_ENV=test` is load-bearing: a bare `mix ecto.drop` resolves the development
 database. `symmetry.check_test_db` is the first step of the `ecto.drop` alias
-too, so the recipe cannot drop a browser acceptance database; with
+too, so the recipe is refused for harness-owned databases only (`symmetry_dev`
+and the `symmetry_0007c_/d_/e_` families). `symmetry_control_dev` and every
+other resolved name are dropped as named: run the recipe only in a shell
+configured for the database the test environment resolves. With
 `MIX_TEST_PARTITION` set, both commands name that partition's own suffixed
 database, which stays the CI-parallel path rather than the recovery recipe.
 

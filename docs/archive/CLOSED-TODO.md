@@ -26,11 +26,12 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The closed Control-row annotation item appended to the `## Model-routing evaluation records`
+section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
+
 The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
-The closed Control-row annotation item appended to the `## Model-routing evaluation records`
-section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
 
 ## Model-routing evaluation records
 
@@ -2389,7 +2390,9 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       suite's commands: the database `config/test.exs` resolves (`POSTGRES_DB`, repository default
       `symmetry_control_test`, with `MIX_TEST_PARTITION` appended as a literal suffix), the failure
       signature, the two commands, why `MIX_ENV=test` is load-bearing, and that
-      `symmetry.check_test_db` refuses browser acceptance databases. The `test` alias is unchanged
+      `symmetry.check_test_db` refuses harness-owned databases only (`symmetry_dev` and the
+      `symmetry_0007c_/d_/e_` families), while `symmetry_control_dev` and every other
+      resolved name are dropped as named. The `test` alias is unchanged
       (the increment's contract prefers documentation over an alias change), and `MIX_TEST_PARTITION`
       stays the CI-parallel path, not the recovery recipe. Evidence: the recorded before/after runs in
       `answer.md` — create and migrate exit 0, the stale run exits 1 before any test (`42P07`,

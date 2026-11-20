@@ -134,6 +134,11 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
 
     assert hd(aliases[:test]) == "symmetry.check_test_db"
 
+    # The rest of the documented `test` alias body: quality.md's recovery recipe
+    # relies on the create/migrate steps that heal the database `mix test` resolves.
+    assert "ecto.create --quiet" in aliases[:test]
+    assert "ecto.migrate --quiet" in aliases[:test]
+
     for task <- ~w(ecto.create ecto.migrate ecto.migrations ecto.drop ecto.rollback ecto.load) do
       assert hd(aliases[String.to_atom(task)]) == "symmetry.check_test_db"
       assert task in aliases[String.to_atom(task)]
