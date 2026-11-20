@@ -322,6 +322,51 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
       (16 tests) pass.
 
+- [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
+      `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
+      `process.communicate(timeout=PROCESS_TREE_REAP_SECONDS)`, which on Windows can keep waiting
+      on the gate's stdout/stderr pipes while a descendant the snapshot tree kill missed still
+      holds the inherited write ends - past the documented reap window and past any caller that
+      expects `check` to return once the kill finished (the timeout-tree fixture's survivor
+      witness was masked this way until the fixture spawned its descendant with `DEVNULL`).
+      Fix direction: close the read ends from a daemon thread, or leave the final handle close to
+      process exit, so a pipe-holding survivor can never extend the reap; add a regression case
+      with a pipe-holding survivor. Not edited here because PR #79 rewrites this file.
+
+      **Closed (2026-11-19, `fix/eval-runner-windows-reap`, PR #100):** the lingering reap never
+      waits on a blocked pipe. `run_owned_command` reaps a timed-out gate with the bounded
+      `communicate(timeout=PROCESS_TREE_REAP_SECONDS)` plus `kill` and a bounded `wait` on the
+      direct child, so a descendant that escaped the tree kill (or the platform process tree) can
+      hold the inherited write ends without extending the reap; the call returns `timed_out=True`
+      with the output the POSIX reap read before the kill, while a Windows capture comes back
+      empty when a survivor holds the pipes (`communicate` there publishes a reader's pipe data
+      only at EOF). In the lingering branch the reap then closes its read ends on POSIX, where
+      `communicate` reads on the calling thread so the close cannot queue behind the survivor and
+      the finalizer close at return would emit `ResourceWarning: unclosed file`; Windows keeps
+      them open, where a close queues behind the reader thread parked in the pipe, and that
+      thread closes the stream once the survivor releases the write ends, or process exit does.
+      The regression case
+      `EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes` spawns a
+      gate whose descendant inherits stdout/stderr and outlives the kill (the kill is narrowed to
+      the direct child, so the survivor is missed, standing in for a descendant that escapes
+      `taskkill /T`), asserts the reap consumes its window (measured duration at least `timeout +
+      PROCESS_TREE_REAP_SECONDS - 2s`) and returns within the code's documented worst case
+      (`timeout + 2 * PROCESS_TREE_REAP_SECONDS + 5s`, with the failure message reporting the
+      measured duration), that the lingering branch waits once on the direct child within its own
+      reap window (the wait call is recorded through the delegating process proxy, since `kill`
+      alone already sets `returncode`), reports the timeout, on POSIX returns exactly the output
+      captured before the kill with both read ends asserted closed, keeps the Windows stdout
+      asserted open behind the parked reader, and terminates the survivor: red on
+      the pre-fix runner (`py -3.12 scripts/ci/test-model-routing-evaluation.py
+      EvaluationTests.test_lingering_reap_is_bounded_when_a_survivor_holds_the_pipes -v` ->
+      "run_owned_command did not return within 27.0s while a survivor held the gate's pipes: ...
+      survivor running at the bound=True, reap finished 27.8s after the call started, reap
+      finished after release=True", FAILED (failures=1) in 29.787s), green after (OK in 15.343s);
+      the focused descendant test passes on Windows (OK in 17.824s) and both tests pass under WSL
+      Ubuntu `python3` (OK in 28.885s), with the full Windows suite passing (`py -3.12
+      scripts/ci/test-model-routing-evaluation.py -v` -> Ran 66 tests in 1167.657s, OK,
+      skipped=2: the POSIX-only executable-mode and non-UTF-8 path fixtures).
+
 ## Dead-code candidates
 
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
@@ -437,7 +482,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       below keeps its original `docs/TODO.md` pointer for this item; the entry itself now lives
       in this archive.
 
-*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #76).*
+*Closed part of the item “Close the `daemon/internal/platform` flake class …” in `docs/TODO.md`; the open residual stayed there until it moved here on 2026-11-19 (PR #76).*
 
       **Linux terminal reason — fixed at the cause; verification is CI on the new revision, not a
       local green.** `TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven` failed
@@ -915,6 +960,54 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       browser specs branch on the literal `forbidden` for these paths (the daemon acts on the
       HTTP status and forwards the envelope code), so no other client changed.
 
+- [ ] Record the first hosted docs-only sample (run id, job count, wall-clock) in
+      `docs/evidence/ci-process-trim-2026-11-15.md`, whose measurements section currently
+      states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
+      classifier's skip list against the jobs that actually ran before treating the trim as
+      fully accepted.
+      Recorded (2026-11-19, branch `docs/runbook-quality-drift`): the first hosted docs-only
+      sample is PR #29's run `43726243703` — 12 job records (2 success, 10 skipped), 12 s
+      wall-clock (`14:47:12Z`–`14:47:24Z`) on the trim revision — and the first docs-only sample
+      recorded on this branch is PR #99's run `44540158144` — 10 job records (2 success, 8
+      skipped), 12 s wall-clock (`14:06:18Z`–`14:06:30Z`); the trim revision's after runs
+      (PR #28 run `43724904655` attempt 2 and merge push `f47b0c3` run `43726189932`, both
+      12/12) are beside them in the record's measurement table, with the status,
+      clause-coverage and limits sections updated (the audit-surface limit is annotated
+      as true at the trim revision and resolved by #43, `724d915`). Six later PR #99
+      samples on this branch carried the record itself (the count at revision
+      `83f6036`), so `run-records=true` and `record-cleanliness` executed: runs
+      `44540613218` (head `0d0e998`), `44540895110` (head `06502b5`), `44554983915`
+      (head `ad87f9b`), `44560447996` (head `b2a1340`), `44565580363` (head `4b12e59`)
+      and `44566899850` (head `83f6036`) — 10 job records each, 3 success (`changes`,
+      `legacy-route-audit`, `record-cleanliness`), 7 skipped, 19 s / 20 s / 26 s / 22 s /
+      15 s / 18 s wall-clock. Cross-check: the workflow's classifier
+      block over each pull request's first-parent diff (PR #29: its `docs/TODO.md`-only diff
+      against `f47b0c3`; PR #99's first sample: the merge ref's `HEAD^1..HEAD`, the same five `docs/**`
+      paths) reports `run-heavy=false` for both, and the current classifier reports
+      `run-records=false` for both diffs as well; the executed sets still match, because
+      the trim revision has no `record-cleanliness` job — PR #29's ten skips are all
+      `run-heavy`-gated trim jobs, while PR #99's eight are its seven `run-heavy`-gated
+      jobs plus `record-cleanliness` — and `changes` and the ungated `legacy-route-audit`
+      ran in both. Evidence:
+      `gh run view 43726243703 --json jobs,createdAt,updatedAt`; `gh run view
+      44540158144 --json jobs,createdAt,updatedAt`; `gh run view 43724904655
+      --attempt 1 --json jobs`; `gh run view 43724904655 --attempt 2 --json
+      jobs`; `gh run view 43726189932 --json jobs`;
+      `gh api repos/wxxb789/symmetry/actions/runs?created=2026-11-15T14:40:00Z..2026-11-15T15:10:00Z`
+      shows no pull_request run between the trim merge and PR #29's sample;
+      `gh api repos/wxxb789/symmetry/actions/runs/44540613218/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44540895110/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44554983915/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44560447996/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44565580363/jobs?per_page=100`;
+      `gh api repos/wxxb789/symmetry/actions/runs/44566899850/jobs?per_page=100`
+      (heads `0d0e998`, `06502b5`, `ad87f9b`, `b2a1340`, `4b12e59`, `83f6036`; 10 check
+      records each: 3 success, 7 skipped);
+      `python3
+      scripts/ci/model-routing-record-sanitize.py --check --root-only
+      docs/evidence/ci-process-trim-2026-11-15.md` exit 0; `bash
+      scripts/audit-no-legacy-routes.sh` exit 0 (1327 tracked files, 4 exclusions).
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover
@@ -1357,7 +1450,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
 
 ## Open findings from the 0008b model-routing review
 
-*Closed part of the item “Revalidate the open class B finding against `daemon/internal/platform/process_windows.go` …” in `docs/TODO.md`; the open residual stays there; the residual moved here on 2026-11-19 (PR #102).*
+*Closed part of the item “Revalidate the open class B finding against `daemon/internal/platform/process_windows.go` …” in `docs/TODO.md`; the open residual stayed there until it moved here on 2026-11-19 (PR #102).*
 
       **Fixed** (branch `fix/non-durable-close-proof`). `jobContainment.Close`
       now latches the failed physical stop proof into `job.closeErr` in the
@@ -1476,7 +1569,7 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       in `docs/TODO.md`, with the argv/output-only scope it asked for; each open item was moved
       separately, so this entry carries no residual.
 
-*Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stays there.*
+*Closed part of the item “Revalidate the runbook claims that are true on this tree but rot …” in `docs/TODO.md`; the open residual stayed there until it moved here on 2026-11-19 (PR #99).*
 
       Third pass (the `gpt-6.2-sol` findings, each re-verified against its
       artifact). Closed by restating them against their owners rather than
@@ -1591,6 +1684,101 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       decision note, untouched here; its index-row link was already repointed
       to the archived document by `c514bd9` (#66).
 
+- [ ] Revalidate the runbook claims that are true on this tree but rot without any
+      edit to `docs/runbooks/**` (found while independently resolving every
+      checkable runbook claim on `632b369`). A CI job split or rename invalidates
+      `daemon-process-stop.md`'s "the daemon job runs `go vet`, a scoped ordinary
+      Go pass and the full `-race` suite ... and the `daemon-windows` job runs the
+      full Windows suite"; a harness pin move invalidates
+      `daemon-opencode-peer-ownership.md`'s "OpenCode 2.3.0 is explicitly
+      unsupported" and `control-plane-and-daemon.md`'s "the script-local version
+      guard is `-ExpectedClaudeVersion 2.1.281`, which is not the daemon's
+      promoted Claude pin" (both follow `docs/design/harness.md`); a pnpm bump
+      invalidates every `mise exec pnpm@12.17.0 -- …` command (they follow
+      `package.json`'s `packageManager`); a change to the `development-*` fallbacks
+      invalidates the sign-in and live-check examples (`control/config/runtime.exs`
+      `:63-64`); a rename of the workspace read's health keys invalidates
+      `portal.md`'s four signal names (`health/4` in
+      `control/lib/symmetry_control/workspaces/read_model.ex:471`); and
+      `session-receipt-recovery-e2e.md`'s `mix ecto.drop --force` uses the Ecto
+      option meaning "do not ask for confirmation", not `--force-drop`, so an
+      Ecto-side change to that option would change what the cleanup line does. The
+      runbooks also cite *Commands and gates* in `docs/design/quality.md` as the
+      checks CI actually runs while that section still carries the stale frontend
+      rows tracked under *Deferred review findings (0007i)* below.
+
+      Closed in the second pass (the review findings of `gpt-6.1-sol` on `#70`,
+      each re-verified against its artifact): `connections.md` no longer asserts
+      the `vso.code`/`vso.work`/`vso.build` scope mapping it could not support —
+      the shipped code requests an Entra resource token
+      (`control/lib/symmetry_control/integrations/auth.ex:41-46`) and names no
+      scope — and instead states the read-versus-write requirement the code does
+      establish (`change.upsert`/`change.update` create or update pull requests in
+      `integrations/providers/{github,azure_devops}.ex`), with the scope and
+      permission names explicitly left to the provider. Still rot-prone after that
+      pass, with no artifact that can re-derive them: the runbooks index's
+      precedence rule (it now mirrors `AGENTS.md:24`'s record-the-conflict
+      requirement instead of "the code wins", so a change to that contract
+      bullet invalidates it), `portal.md`'s board-move sentence (the keyboard
+      bindings follow `frontend/src/features/projects/work-surface.tsx:115` and
+      the Goal-managed refusal follows `ensure_legacy_work_item/1`), `portal.md`'s
+      `playwright-report/` location (follows `browser/playwright.config.mjs` and
+      `browser/README.md`), `portal.md`'s CSRF sentence (follows Plug's
+      `@unprotected_methods ~w(HEAD GET OPTIONS)`), and
+      `chat-and-supervisory-control.md`'s supervisory/intent scoping (follows
+      `control_capabilities/4` in `control/lib/symmetry_control/orchestration.ex`
+      and the daemon's autonomy envelope in `daemon/internal/app/app.go`).
+
+      *(Partly superseded by the archived third-pass closure, which restated several of these
+      against their owners; see `docs/archive/CLOSED-TODO.md`. The revalidatable list below stays
+      open.)*
+      Closed part moved to `docs/archive/CLOSED-TODO.md`.
+
+      Still revalidatable, with no artifact that can pre-empt a future edit: the
+      generated-name regex and the `MIX_TEST_PARTITION` behaviour (Ecto/Ecto
+      test-config side), the 45-second skip bound in
+      `daemon/e2e/core_test.go`, the list of variables the production Compose
+      service forwards, the Pi/native provider-bridge gate's exact shape, the
+      installed-owner vocabulary for the Linux-v2 verifier, and the docs-index
+      convention paragraph itself (it restates the precedence the design and
+      protocol documents already carry).
+      Revalidated in full (2026-11-19, branch `docs/runbook-quality-drift`): every claim named
+      below was rechecked against its owner, and the claim | owner | verdict | change table with each
+      owner's current file:line is in the PR body — the CI inventory sentence against
+      `.github/workflows/ci.yml:1171-1345` (`daemon`: gofmt, `go vet`, the scoped ordinary
+      pass and the full `-race` pass) and `:1357-1473` (`daemon-windows`: `go test ./...`
+      plus its named witnesses); OpenCode 2.3.0 against `docs/design/harness.md:15`,
+      `daemon/internal/harness/registry.go:154,326-329` and the mechanical version guard
+      `daemon/internal/harness/opencode/adapter.go:283-284` (TestedVersion `:28`); the
+      Claude smoke guard against
+      `scripts/claude-code-local-transport-smoke.ps1:14` (default `2.1.281`) versus the
+      promoted `harness.md:11` blob; the pnpm commands against `package.json:5`; the
+      `development-*` examples against `control/config/runtime.exs:63-64`; `portal.md`'s four
+      health signals against `control/lib/symmetry_control/workspaces/read_model.ex:504-515`
+      (the item's `:471` was stale); `mix ecto.drop --force` against Ecto 3.14.3's
+      `mix ecto.drop` option docs (`control/mix.lock`; `--force` = "do not ask for
+      confirmation", distinct from `--force-drop`); the generated-name regex and
+      `MIX_TEST_PARTITION` against
+      `control/config/test.exs:14-15` and
+      `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs:1365`;
+      Compose forwarding against `compose.production.yaml:28-36` with the `legacy`/`false`
+      defaults in `control/config/runtime.exs:27,86`; the 45-second skip bound against
+      `daemon/e2e/core_test.go:196,242-245` and CI's `SYMMETRY_LEASE_DURATION_MS=30000` with
+      the named JSON assertion (`.github/workflows/ci.yml:1503,1578-1599`); the Pi
+      provider-bridge gate against `daemon/internal/harness/pi/provider_extension.go:459-467`
+      and `probe.go:242`; the installed-owner vocabulary against
+      `docs/design/quality.md:80-85` (OpenCode side: `registry.go:154`,
+      `harness.md:82,120`); and the docs-index
+      convention paragraph (`README.md:325-330`) against `AGENTS.md:30-31` and
+      `:64-67`. `portal.md`'s `playwright-report/` location and its CSRF
+      sentence were rechecked the same way and still match their owners
+      (`browser/playwright.config.mjs:6-7,20` for the result and report directories; Plug 1.20.3's
+      `@unprotected_methods ~w(HEAD GET OPTIONS)` for the read exemption, `control/mix.lock`).
+      Both edited runbooks now name their owner file or package
+      (`daemon/e2e/core_test.go` in `control-plane-and-daemon.md`; `daemon/internal/harness/pi`
+      in `connections.md`). Evidence: the owner reads above plus the docs-only hosted CI run on
+      this branch; no suite beyond that is required for a docs-only diff.
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Investigate the intermittent Control failure
@@ -1668,6 +1856,19 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       note: this host runs ~14 parallel workers, so local browser verdicts are indicative only; CI
       holds the verdict.
 
+- [ ] Revalidate the pre-existing doc drift in `docs/design/quality.md`: line 41 still says the frontend
+      commands "do not exist until goal 0007 builds `frontend/`" and line 116 lists them as a goal-0007
+      target, while `.github/workflows/ci.yml:67-70` has run them since 0007a. Observed while recording
+      the 0007i gate table; update the quality policy in a separate documentation change.
+      Fixed (2026-11-19, branch `docs/runbook-quality-drift`): the *Commands and gates* TS row no
+      longer frames the frontend commands as a goal-0007 target or asks for a browser-runner pnpm
+      migration; it now states the delivered reality — commands owned by `frontend.md`, run by CI in
+      the `contracts` job (`.github/workflows/ci.yml:107-110`; the item's `:67-70` was stale), with
+      the browser runner already pnpm
+      (`.github/workflows/ci.yml:618`). Line 41 was already corrected on main by `f2a759f`; this
+      change corrects :116, and `rg -n 'goal 0007 target|do not exist until goal 0007'
+      docs/design/quality.md` is empty on the committed bytes.
+
 ## Paginated reads must be bound to the cursor that served their pages
 
 - [ ] The work detail's execution history retained the older pages a reader had expanded without
@@ -1734,6 +1935,67 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       `portal-chat.spec.mjs`) for verification — as is the providers' outbound pagination
       (`control/lib/symmetry_control/integrations/providers/`), one-shot aggregation. The residual
       in `docs/TODO.md` is the owner's unification decision and the CI browser runs.
+      *(Historical pointer: the unification decision closed on 2026-11-19 — see the entry below —
+      leaving the CI browser runs as the residual.)*
+
+*Closed part of the item “Residuals of the completed class scan (2026-11-19)” in `docs/TODO.md`; the open residual stays there; moved 2026-11-19 from branch `fix/chat-history-boundary-id`.*
+
+      (a) the owner's decision on unifying the chat conversation's keep-and-state treatment with
+      the work history's and the attention feed's retirement — an expanded page the chat keeps
+      renders beside a stated unloaded region, while the other two retire it, and unifying changes
+      one surface's reader-visible behaviour. Pre-existing, left as-is: `retainServedPage` detects
+      a moved boundary by comparing cursor token bytes, so a re-serve that only re-signs the same
+      boundary position still restarts the chain pointer; deciding whether it should compare the
+      boundary message's id instead belongs to (a).
+      **Decided and fixed (2026-11-19, `fix/chat-history-boundary-id`):** the owner keeps the chat
+      conversation's keep-and-state treatment — it does not unify with the work history's and the
+      attention feed's retirement — and the pre-existing note is fixed: `retainServedPage`
+      (`frontend/src/features/chat/scopes.ts`) now judges the boundary by the served page's oldest
+      message, the message the served `next_before` is signed from — the chat read signs the cursor
+      afresh from the descending page's last (oldest) message, served reversed as `messages[0]`
+      (`last = List.last(page)` in `SymmetryControl.Chat.conversation/1`), and that message's id
+      reaches the client without a wire change as `ChatMessage.id` in the generated
+      `SymmetryChatReadV1` — so a read that only re-signs the same boundary position keeps the
+      chain pointer where the reader's loads reached it — the offered token renews the reader's own
+      cursor while it still designates that boundary — while a served page that ends at a different
+      message still restarts it from its own boundary; a refused cursor — the server's 24-hour
+      `max_age` — restarts the chain pointer from the served page and re-reads that scope's
+      captured query, so the next press renews that page's token and the re-walk dedupes against
+      the retained pages, and a refusal a later load or a renewed cursor superseded carries only
+      its notice: the press's captured boundary fences both the restart and the re-read (fix round
+      2, 2026-11-20). A kept limit of that recovery: the token a reset exposes can itself be past
+      the server's 24-hour `max_age`, and the button is re-advertised as soon as the refused press
+      settles, so a press inside the re-read window can cost one more refused notice — it
+      self-heals when the renewal lands, and recovery is not otherwise tracked. A token offered
+      while the chain is ended is dropped — the never-continued shape a since-removed `adopt`
+      branch had covered is dropped with it: the branch was inert against the page shape the
+      shipped read emits (a signed continuation means the served page is the newest 50, signed from
+      its oldest message), and the gap the drop leaves is recorded as open work in `docs/TODO.md`.
+      Both fallback predicates stated exactly: the served comparison decides by the boundary
+      message's id while both sides name one and by the cursor's bytes while either does not, while
+      a fetched page binds by its own captured boundary id and compares token bytes only while that
+      id is absent.
+      Evidence: `frontend/src/features/chat/chat.test.tsx`'s "keeps the chain a
+      refresh re-signs at the same boundary and restarts it at a moved one" was red on the previous
+      bytes (`expected [ 'cursor-5', 'cursor-5-resigned' ] to deeply equal [ 'cursor-5',
+      'cursor-3' ]`), and the cursor renewal is red-first pinned beside it: "renews the served
+      cursor at an unchanged boundary only while the reader has not paged past it" was red on the
+      fix's first bytes (`expected [ 'cursor-5' ] to deeply equal [ 'cursor-5-resigned' ]`) — its
+      extended bytes still red exactly there, with a second press consuming the renewed
+      `cursor-5-resigned-2` while the first is held. Both pass on the delivered bytes, and the
+      fix-round tests are red-first pinned against the pre-fix bytes in the same way: "restarts the
+      chain from the served page when a cursor the reader has paged past is refused" was red on the
+      pre-fix `chat.tsx` bytes (`Unable to find an element with the text: message 12`), and "leaves
+      the chain alone when the refused press no longer owns it" was red on the round-1 `chat.tsx`
+      bytes (`expected 3 to be 2` — the superseded refusal must not re-read the scope). The
+      delivered bytes also pin the moved-boundary restart, the renewal of an in-flight press's
+      chain and its consumption by a second press, the renewal stopping at a cursor the reader has
+      paged past, the refusal-triggered restart from the served page while the press still owns
+      the chain boundary it captured, the superseded refusal staying a notice, and the named
+      skipped region; the chat suite passes (66 tests, `--no-file-parallelism`), with `tsc --noEmit`
+      and `eslint src/features/chat --max-warnings 0` exit 0 (full frontend eslint rc 0 as well).
+      The open residuals stay in `docs/TODO.md`: the CI browser suites' live-daemon pagination
+      cases and the served token an ended chain drops.
 
 ## Deferred review findings (0007g)
 

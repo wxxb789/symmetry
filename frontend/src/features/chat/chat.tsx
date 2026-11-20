@@ -26,6 +26,7 @@ import {
   Conflict,
   Forbidden,
   ServerRefusal,
+  UnexpectedResponse,
   Unsupported,
   Validation,
   errorMessage,
@@ -54,7 +55,7 @@ import {
   type ChatReceiptView,
   type ChatRunSignals,
 } from "./presentation";
-import { chatScopeKey, retainOlderPage, retainServedPage, useChatScopeStore, type ChatIntent } from "./scopes";
+import { chatScopeKey, refusedPressStillOwnsChain, retainOlderPage, retainServedPage, useChatScopeStore, type ChatIntent } from "./scopes";
 
 const route = getRouteApi("/chat");
 
@@ -92,6 +93,12 @@ export function ChatPage() {
     scrollOffsetOf, recordScrollOffset, scrollRestoreOf, markScrollRestore, settleScrollRestore,
   } = useChatScopeStore();
   const state = stateOf(key);
+  // The store as last committed, read by the settle-time callbacks below: a
+  // fetch that settles must judge the chain the reader holds now, not the
+  // render its own closure was made in. `updateWith`'s functional form stays
+  // the authority for the mutations themselves.
+  const latestStateOf = useRef(stateOf);
+  useLayoutEffect(() => { latestStateOf.current = stateOf; });
 
   const conversation = useQuery({ ...chatConversationOptions(application.api, identity), enabled: scopeComplete });
   // The directory the shell already loads: the projects, their work items' run
@@ -183,6 +190,30 @@ export function ChatPage() {
           // ready. The failure handler is the rejection callback, not a
           // `catch`: a write that throws must not be reported as a read
           // failure.
+          if (definitiveReadRefusal(error)) {
+            // A refused cursor is dead while the press still owns the chain
+            // pointer: the chain pointer falls back to the served page's own
+            // token — retained pages stay, deduped at render — and re-reading
+            // that scope's own query renews the token, so the next press walks
+            // the served boundary instead of retrying the dead cursor. A press
+            // a later load advanced past, or a renewed cursor superseded, no
+            // longer owns the pointer: its refusal must neither rewind the
+            // chain nor re-read the scope, so only the notice below stays.
+            updateWith(key, (previous) => (refusedPressStillOwnsChain(previous, cursor, boundaryId)
+              ? { ...previous, nextCursor: previous.pages[0]?.nextBefore ?? null, nextBoundaryId: previous.pages[0]?.messages[0]?.id ?? null }
+              : previous));
+            // The read goes to the captured scope's own query — never the
+            // observer's current one — and the query client's live fetching
+            // state is the only current one there is. The reset above decides
+            // against the store's queued record while this gate reads the last
+            // committed one, so inside that window it may still re-read a
+            // scope the refusal no longer owns — one benign read, never a
+            // wrong cursor.
+            const queryKey = chatConversationOptions(application.api, identity).queryKey;
+            if (refusedPressStillOwnsChain(latestStateOf.current(key), cursor, boundaryId) && queryClient.isFetching({ queryKey }) === 0) {
+              void queryClient.refetchQueries({ queryKey });
+            }
+          }
           update(key, { status: { kind: "notice", message: errorMessage(error) } });
         },
       )
@@ -635,4 +666,18 @@ function ChatMessageRow({ message, receipt }: {
 function definitiveRefusal(error: unknown): boolean {
   return error instanceof Conflict || error instanceof Validation || error instanceof Forbidden || error instanceof Unsupported ||
     (error instanceof ServerRefusal && error.status >= 400 && error.status < 500);
+}
+
+/**
+ * A definitive refusal of a read's cursor: the server answered the read with
+ * one of the non-transient client-error statuses a refused read carries — 400
+ * for a cursor it cannot verify, and the request-level 409/422 — so the same
+ * read would fail identically and only a re-served page can renew the
+ * position. No other status proves anything about the cursor: a lost or
+ * unproven response, a revoked or unsupported route, and a server-side or
+ * timeout status all stay retries and leave the chain pointer alone.
+ */
+function definitiveReadRefusal(error: unknown): boolean {
+  return error instanceof Conflict || error instanceof Validation ||
+    (error instanceof UnexpectedResponse && error.status === 400);
 }
