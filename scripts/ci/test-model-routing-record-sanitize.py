@@ -235,6 +235,28 @@ class SanitizeTextTests(unittest.TestCase):
         # The root does not match (`Worker` is not the root's segment); the
         # drive-path renderer still owns the whole token.
         self.assertEqual(rendered, digest_of(text))
+        # A root that leads with a separator has no literal anchor before its
+        # separator run, so before the leading-separator lookbehind every position
+        # inside a long run re-consumed the run before failing: `"/" * 100000` +
+        # `srv/storx` took minutes and the UNC shape at N = 100000 took seconds.
+        # The lookbehind pins the match to the run's first separator, the only
+        # start the body can consume, and the failed match stays linear.
+        slash_root, slash_text = "/srv/store", _FS * 100000 + "srv/storx"
+        unc_root = _BS * 2 + "work" + _BS + "run"
+        unc_text = _BS * 100000 + "work" + _BS + "runx"
+        # Neither run carries the root: the slash spelling renders nothing (its
+        # `srv` never completes the root), and the backslash-run spelling is one
+        # location the UNC renderer hashes whole.
+        for case_root, case_text, expected in (
+            (slash_root, slash_text, slash_text),
+            (unc_root, unc_text, digest_of(unc_text)),
+        ):
+            with self.subTest(root=case_root):
+                started = time.monotonic()
+                rendered = MODULE.sanitize_text(case_text, [case_root], root_only=True)
+                elapsed = time.monotonic() - started
+                self.assertEqual(rendered, expected)
+                self.assertLess(elapsed, 1.0)
 
     def test_other_windows_path_renders_to_hashed_token(self):
         path = r"C:\Users\operator\AppData\Local\Temp\symmetry-0008b-probe"
@@ -704,6 +726,25 @@ class SanitizeCliTests(unittest.TestCase):
         for text, root in cases:
             with self.subTest(text=text):
                 result = self.run_cli(text, "--check", "--root-only", "--root", root)
+                self.assertEqual(result.returncode, 1, text)
+                self.assertEqual(result.stdout, "", text)
+                self.assertIn("refused", result.stderr)
+
+    def test_cli_root_only_check_refuses_a_root_before_a_space_chunk(self):
+        # Sol P2: a root followed by a space-continued word (`/srv/store today`,
+        # `... store ready`) is a longer sibling location, not the root alone. The
+        # bounded root matcher declined it, and `--root-only` has no other renderer
+        # for a POSIX root outside the host list, so the exact root bytes passed
+        # the check; the chunked matcher renders the whole span and the check
+        # refuses.
+        posix_root = "/srv/store"
+        cases = (
+            "stored at " + posix_root + " today\n",
+            '{"note":"workspace ' + posix_root + ' ready"}\n',
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                result = self.run_cli(text, "--check", "--root-only", "--root", posix_root)
                 self.assertEqual(result.returncode, 1, text)
                 self.assertEqual(result.stdout, "", text)
                 self.assertIn("refused", result.stderr)
