@@ -131,6 +131,18 @@ export function ownerKeyLabel(key: string): string {
  * `ownerKeyLabel` already reads back as the absence it named. Every other key
  * travels as written — in particular the escaped `agent::unrecorded` that a
  * recorded name equal to the legacy word mints.
+ *
+ * The pre-#111 spellings for recorded names that start with `:` are not
+ * re-pointed; the collision is accepted (repo owner, 2026-11-21). A key is
+ * always read as a current mint. Some of those spellings are byte-identical to
+ * mints of other names and cannot be disambiguated: `human::unrecorded` (once
+ * `:unrecorded`) is the mint of the recorded name `unrecorded`, and
+ * `human:::Ada` (once `::Ada`) is the mint of `:Ada`. The rest mint no row:
+ * `human::Ada` (once `:Ada`) selects none while it still labels as `Ada`.
+ * Re-pointing only that unambiguous subset was declined as compatibility code
+ * the owner does not require.
+ * Pinned by `filters.test.ts`, "reads the pre-#111 colon-leading owner keys as
+ * the current mints, accepting the collision".
  */
 export function ownerKeyFilter(key: string): string {
   if (key === `agent:${legacyAbsentValue}`) return "agent:";
