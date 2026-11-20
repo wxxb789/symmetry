@@ -23,8 +23,8 @@ producer) and CW-11 (telemetry scaffolding inert), re-derived here rather than t
    (`:12`), the module's only reference.
 5. `control/lib/symmetry_control_web/telemetry.ex`: deleted (module, poller child stub,
    `metrics/0`, empty `periodic_measurements/0`).
-6. This plan document. No test, CI, config or contract file is edited; no new file besides this one
-   (see *Out of scope* for the one deliberate non-edit).
+6. This plan document. No new file besides this one; no test, CI, config or contract file is edited
+   by the implementation stage; the conductor amendment (simplify RFW102S-3) adds one test case.
 
 Nothing else in the tree references the deleted module or either removed package, so the deletion
 set is closed: the compiler, not this prose, is the backstop (`compile --warnings-as-errors`).
@@ -40,14 +40,14 @@ Strategy 1 — literal spellings over every tracked file
 (`git grep -n -i "telemetry" -- .`), hits outside fixtures/records and the `:telemetry` base
 library: `application.ex:12` (`SymmetryControlWeb.Telemetry`, the child), the module's own
 `telemetry.ex:1,3,12-16,91`, `mix.exs:46-47` (the two deps), `mix.lock:21-22`. `metrics/0` and
-`periodic_measurements/0` have no referent anywhere:
-`git grep -n "periodic_measurements\|metrics()" -- .` returns only the module's own definition and
-its call from the module's own child spec (the deleted file). The superficially similar hits are a
-different dependency: `:telemetry.execute/3` (`goals.ex:8646`, `orchestration.ex:4711`),
-`Plug.Telemetry` (`endpoint.ex:68`) and the test `:telemetry.attach` sites are `:telemetry` (the
-base library, a transitive dependency of ecto/plug/bandit/oban/phoenix — not one of the two removed
-packages), and `control/test/support/telemetry_reads.ex` reads `[:symmetry_control, :repo, :query]`
-attachments.
+`periodic_measurements/0` have no referent: `git grep -n "periodic_measurements\|metrics()" -- .`
+returns three lines at `a3039f0`, all inside the deleted file — `:14` the child spec's
+`periodic_measurements()` call, `:16` a commented-out `ConsoleReporter` mention of `metrics()`,
+`:91` the definition. The superficially similar hits are a different dependency: `:telemetry.execute/3`
+(`goals.ex:8646`, `orchestration.ex:4711`), `Plug.Telemetry` (`endpoint.ex:68`) and the test
+`:telemetry.attach` sites are `:telemetry` (the base library, a transitive dependency of
+ecto/plug/bandit/oban/phoenix — not one of the two removed packages), and
+`control/test/support/telemetry_reads.ex` reads `[:symmetry_control, :repo, :query]` attachments.
 
 Strategy 2 — dynamic, configuration and consumer-shaped references:
 - reporters and metrics back-ends: no `prom_ex`, `prometheus`, `Telemetry.Metrics.*Reporter`,
@@ -119,9 +119,9 @@ clause (acceptance requires exit 0 from the same command).
   `Orchestration`/`Goals` stay (base library, pinned separately in `orchestration_telemetry_test.exs`).
 - **`mix deps.unlock --unused` is a mutation, not a check.** Per review amendment P3-8 the
   acceptance is re-worded: the check is that no remaining reference to `telemetry_metrics` or
-  `telemetry_poller` exists in `mix.lock`/`mix.exs`/the tree, and `mix deps.unlock --unused`
-  printing nothing (its locked set already pruned) is recorded as the auxiliary observation, not as
-  a green check by itself.
+  `telemetry_poller` exists in `control/mix.lock`/`control/mix.exs` — not "the tree", which the
+  0005 archive mention and this document's own prose match by design — and the re-run printing
+  nothing (its locked set already pruned) is the auxiliary observation, not a green check by itself.
 
 ## Evidence plan (all commands foreground, Elixir via the scratch recipe)
 
@@ -139,7 +139,7 @@ the harness-owned families).
    released (`mix deps.unlock plug` + `mix deps.get`); `mix deps.update plug` is not used because it
    also moved the transitive `telemetry` 1.4.2 to 1.4.3, which widens the diff past this slice's
    clause 4. Then `mix deps.unlock --unused` — pruned lock, no residual telemetry entries
-   (`git grep -n "telemetry_metrics\|telemetry_poller"` over the tree: zero hits).
+   (`git grep -n "telemetry_metrics\|telemetry_poller" -- control`: no output, exit 1).
 3. `mix hex.audit` — expected exit 0, no advisories.
 4. `mix format --check-formatted` — expected exit 0.
 5. `mix compile --warnings-as-errors` — expected exit 0 (the backstop for a missed module reference).
@@ -175,11 +175,11 @@ full suite is started while any other suite runs.
    the CI step; W1-02 supplies only the dependency the plan pins (`~> 1.7`, `runtime: false`). No
    second convention, and nothing in this slice can make a gate blocking.
 3. **Remove exactly one parser from the endpoint list.** The plug's own local option replica in
-   `strict_evidence_json_test.exs:10,169` still names `:multipart`; editing it is outside this
-   slice's strict owned-file set and the test does not exercise the parser (it names it in its own
-   `StrictEvidenceJSON.init` options only). Recorded here and in the report as residual drift for
-   the file's own owner, not silently "fixed" — and not used as a reason to touch an unowned test
-   that pins plug delegation.
+   `strict_evidence_json_test.exs:10,169` still names `:multipart`; the conductor amendment
+   (simplify RFW102S-3) extends the owned set to that file for one added regression case that pins
+   "the endpoint no longer parses multipart bodies" at the endpoint. The replica spelling stays
+   recorded drift for the file's owner (RFW102-1), not silently "fixed" — and not a reason to touch
+   the case that pins plug delegation.
 4. **No advisory suppression and no lock hand-editing.** The bump comes from `mix deps.get`
    resolving `plug ~> 1.20`; `hex.audit` exit 0 is the evidence, not a curated advisory list.
 5. **The plan document itself is the only new file.** The evidence runs are one-off commands; a
@@ -192,7 +192,7 @@ full suite is started while any other suite runs.
   transitive `telemetry` 1.4.2 entry, which stays as a transitive pin.
 - W1-03's Credo strict clean-up (`control/lib/symmetry_control_web/**` files it owns), W1-01's
   `ci.yml`/`.credo.exs`, and any new suppression in either.
-- `control/test/**` — in particular the plug test's local parser-list replica named above.
+- `control/test/**` — except the one added RFW102S-3 case; the replica stays as named above.
 - `docs/TODO.md` / `docs/archive/CLOSED-TODO.md`: no entry names this advisory, the telemetry
   scaffolding or the parser list (checked by grep for `advisory`, `120287`, `multipart`,
   `telemetry`, `credo`), so no entry is closed and no TODO edit is part of this increment.
@@ -202,11 +202,11 @@ full suite is started while any other suite runs.
 
 ## Residual risks
 
-- The plug test's local option replica keeps the stale `:multipart` spelling; a reader of that file
-  could believe the endpoint still accepts multipart. Reported, unowned here.
+- The plug test's local option replica keeps the stale `:multipart` spelling; the one added
+  regression case pins the endpoint's behaviour, so a reader no longer has only prose to trust.
 - Multipart semantics for a hypothetical future producer change from "parsed, then validated" to
-  "not parsed"; the probe records today's refusal class so a future producer's failure is diagnosed
-  from evidence rather than from this plan.
+  "not parsed"; the committed case records today's refusal class, so a future producer's failure is
+  diagnosed from a red pin rather than from this plan.
 - `plug` 1.20.4 is three days old on this host's clock; the lock pin and the advisory-free audit are
   the evidence, and a later fix would be a new bump, not a suppression.
 - The full control suite is not run in this stage by design; the conductor's gate-runner owns it, and
