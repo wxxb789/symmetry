@@ -26,6 +26,14 @@ describe("saved view preferences", () => {
     expect(deploymentScope({})).toBe("unknown-deployment");
   });
 
+  it("reads a stored legacy sentinel owner key back as the key the URL reader mints", () => {
+    const storage = memoryStorage();
+    // A view saved before #111 carries the old spelling; the read path repairs
+    // it through the same reader the URL parser uses.
+    writeSavedViews(storage, scope, projectId, [{ name: "Legacy agent", search: { owner: "agent:unrecorded" } }]);
+    expect(readSavedViews(storage, scope, projectId)).toEqual([{ name: "Legacy agent", search: { owner: "agent:" } }]);
+  });
+
   it("keeps another project's views when one project is rewritten", () => {
     const storage = memoryStorage();
     const otherProjectId = "22222222-2222-4222-8222-222222222222";
