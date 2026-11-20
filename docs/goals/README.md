@@ -141,6 +141,12 @@ PR #22, its review/fix round and CI evidence. Native support and recovery remain
 bounded as the receipt specifies. Archival closes the review record, not the
 missing requirements or the contract's lettered-goal prerequisites.
 
+**Annotation (recorded 2026-11-20):** the sentence above that 0006k "has no closure paragraph
+or archived goal file" is superseded for its administrative part: 0006k was administratively
+archived 2026-11-17 (#55 `e72290a`) and `docs/goals/archive/0006k-omo-native-capability.md`
+exists; the recording-closure note below carries its closure paragraph. The sentence above is
+kept as recorded.
+
 Goal [0006i](archive/0006i-exact-subject-release-acceptance.md) completed its
 recording closure on 2026-11-15 and is archived. The Goal-0006 release candidate
 is frozen as one exact Subject: commit `8ded771`, tree digest
@@ -161,6 +167,13 @@ run the environment-gated `linux-native-v2-acceptance` job on the unchanged
 Subject tree, and operator acceptance with the authorized `achieve` (bound to the
 same subject hash, integration outcome and evidence IDs) remains unissued. A model
 recorded the receipt; it did not grant authority or declare the goal achieved.
+
+**Annotation (recorded 2026-11-20):** "no tags" above held at recording time; since 2026-11-17
+two annotated tooling tags exist, `0008b-produced-tooling` and `0008c-produced-tooling`, which
+preserve the produced-tooling revisions the 0008b/0008c receipts bind through
+`evidence.tooling_sources`. They are not release or version markers, so "no release/version
+marker exists by repository convention" above still holds; the sentence above is kept as
+recorded.
 
 Goal [0006h](archive/0006h-credentialed-provider-accounting.md) completed its
 owner-scoped 2026-11-14 closure and is archived. Approved provider effects are

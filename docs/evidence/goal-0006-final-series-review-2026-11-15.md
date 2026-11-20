@@ -16,6 +16,11 @@ their responsible goals without repeating those implementations or changing any
 acceptance condition. A model cannot convert the local achieved Goal into
 acceptance of the entire series.
 
+**Annotation (recorded 2026-11-20):** "0006k has no closure record" above held at recording
+time; 0006k was administratively archived 2026-11-17 (#55 `e72290a`), so
+`docs/goals/archive/0006k-omo-native-capability.md` exists and the goal index carries its
+closure paragraph. The sentence above is kept as recorded.
+
 ## Subject record
 
 | Field | Re-derived value / provenance | Validity boundary |
@@ -181,7 +186,7 @@ friction points, retained as limits rather than silently repaired:
 | F5 — 0006d/0006e/0006f/0006g | **No all-six-kind, two-platform positive release-native matrix.** The native table lists exact promoted ranges. Windows Codex/Claude/Pi evidence cannot establish Linux support; OpenCode refusal is not successful native repository work. The unavailable environment remains incomplete, not fake-agent success. |
 | F6 — 0006c/0006k/0006i | **Not every native recovery boundary is proved.** Historical [0006c][continuity] is not exact-Subject acceptance. [OmO adapter receipts][omo] explicitly limit journals to flush/reopen, not power loss, Control admission/stop certificate or daemon crash. Committed `omo-control-native-evidence.py`/fixture scripts are instructions, not execution receipts. Active-turn native reattachment after daemon restart and cross-machine handoff remain unsupported ([harness][harness]). No repeat acceptance or effect replay is inferred. |
 | F7 — 0006i | **Production backup/restore is not proved.** [0006i][release] records migration, Control restart, daemon crash/reconnect and deployable artifacts, but explicitly no hosted `pg_dump`/`pg_restore` disaster-recovery evidence. Restart is not database restore. Local repository identity is not production identity. No release marker is invented; the existing recorded convention is pre-0.0.1. |
-| F8 — 0006-final documentation | **Recording closure does not satisfy the completion contract.** Missing/stale evidence above keeps full-series acceptance incomplete. Existing [0006i][release] pending matrix/header/README text conflicts with its later achieve/hosted-attempt addenda; this receipt uses the later, narrower facts without rewriting that historical record. The final contract is archived byte-for-byte, so its five relative Markdown targets retain their original `docs/goals/` base, not their new archive-directory base. Canonical targets are the [0006i contract][0006i-goal], [core][core], [data][data], [protocol][protocol] and [harness][harness]; no forwarding contract or acceptance rewrite is introduced. The pre-existing 0006h table link in [the index][goal-index] also still targets its former active path; it is not evidence that the archived contract is missing. |
+| F8 — 0006-final documentation | **Recording closure does not satisfy the completion contract.** Missing/stale evidence above keeps full-series acceptance incomplete. Existing [0006i][release] pending matrix/header/README text conflicts with its later achieve/hosted-attempt addenda; this receipt uses the later, narrower facts without rewriting that historical record. The final contract is archived byte-for-byte, so its five relative Markdown targets retain their original `docs/goals/` base, not their new archive-directory base. Canonical targets are the [0006i contract][0006i-goal], [core][core], [data][data], [protocol][protocol] and [harness][harness]; no forwarding contract or acceptance rewrite is introduced. The pre-existing 0006h table link in [the index][goal-index] also still targets its former active path; it is not evidence that the archived contract is missing. **Repaired (2026-11-18, #66 `c514bd9`):** the index's 0006h table link now targets `archive/0006h-credentialed-provider-accounting.md` and resolves; the sentence above is kept as the recording-time state. |
 
 Other recorded limits: [0006i][release] lists existing Control test unused-variable
 warnings and the unresolved OMP descendant-monitor stop gap; [docs/TODO.md][todo]
@@ -189,6 +194,12 @@ tracks the existing maintenance candidates (its historical line numbers are not
 new proof). [0006c][continuity] records the retained-session path-replacement
 window: point-in-time path validation is not atomic exclusion of a same-principal
 writer. This review establishes no fix or new exploit evidence for those items.
+
+**Annotation (recorded 2026-11-20):** the tracking pointer above no longer holds for the
+Control test unused-variable warnings item, which closed to `docs/archive/CLOSED-TODO.md` on
+2026-11-19; it never held for the OMP descendant-monitor stop gap, which is recorded in the
+[0006j receipt][omp] (also listed as a limit in the 0006i receipt) and has no `docs/TODO.md`
+entry. The sentence above is kept as recorded; the recorded Subject-time limits are unchanged.
 
 ## Review method, commands and scope
 
@@ -362,8 +373,8 @@ maintenance or formatter changes are included.
 [omp-probe]: ../../daemon/internal/harness/omp/probe.go
 [omp-spend]: ../../daemon/internal/harness/omp/native_acceptance_test.go
 [omo]: ../../daemon/internal/harness/testdata/omo/5.1.69/README.md
-[omo-goal]: ../goals/0006k-omo-native-capability.md
-[opencode-goal]: ../goals/0006g-opencode-support-decision.md
+[omo-goal]: ../goals/archive/0006k-omo-native-capability.md
+[opencode-goal]: ../goals/archive/0006g-opencode-support-decision.md
 [opencode]: ../../daemon/internal/harness/testdata/opencode/2.3.0/README.md
 [pr22]: https://github.com/wxxb789/symmetry/pull/22
 [ci-pr]: https://github.com/wxxb789/symmetry/actions/runs/43633014138
