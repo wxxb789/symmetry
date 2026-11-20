@@ -298,9 +298,8 @@ function historyGap(newest: ChatHistoryPage, older: readonly ChatHistoryPage[]):
   // history in commit order: a message committed after a page was fetched can
   // carry an earlier inserted_at than a visible message and then hide between
   // two chained pages without a note (the server orders by inserted_at while
-  // its per-action lock does not serialize the scope — see the open
-  // late-visible-rows item in docs/TODO.md, "An ended chat chain never accepts
-  // a later served token"). The comparison is by message id: a served cursor is
+  // its per-action lock does not serialize the scope). The comparison is by
+  // message id: a served cursor is
   // re-signed per response, so token bytes are not a stable identity across
   // reads (two signs in the same millisecond can even coincide).
   //
