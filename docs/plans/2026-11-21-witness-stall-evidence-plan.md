@@ -38,8 +38,8 @@ gains an open entry (`docs/TODO.md`), plus this plan. No Go, workflow, contract 
    trigger, the tail bound with its partial-line handling, and the source-file safety gates.
 3. **`docs/TODO.md`: one new open entry** recording the observed stall as required by contract clause 1:
    run `44794227912` job `136491073605`, the exact error lines, the classification evidence, the suspect
-   path (`daemon/internal/app/app.go:2148-2159` → `observeContainmentStop` → `waitForLinuxStopReceiptBarrier`
-   at `:2227`), the rule that the next occurrence must be diagnosed from the newly exported logs, and the
+   path (`daemon/internal/app/cleanup_glue.go:118-143` → `observeContainmentStop` → `waitForLinuxStopReceiptBarrier`
+   at `:203`), the rule that the next occurrence must be diagnosed from the newly exported logs, and the
    explicit instruction not to raise the 45 s bound. It stays open: the stall itself is out of scope.
 4. **Not in this increment**: any change to `daemon/e2e` (the witness already writes both log files),
    any workflow change, any timeout change, any contract/protocol schema, any fix of the stall.
@@ -73,7 +73,7 @@ gains an open entry (`docs/TODO.md`), plus this plan. No Go, workflow, contract 
   (`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$`,
   ASCII digits only)
   and whose `level` is one of `DEBUG|INFO|WARN|ERROR` — the shapes the daemon's own
-  `slog.NewJSONHandler` writer (`daemon/internal/app/app.go:460`) produces on stdout
+  `slog.NewJSONHandler` writer (`daemon/internal/app/app.go:311`) produces on stdout
   (`daemon/cmd/symmetry-daemon/main.go:89`). `msg` is kept only when it is one of the message
   literals of a `daemon.log.<Level>("...")` call site under `daemon/internal/app`; `state`,
   `stage`, `reason`, `outcome`, `kind` are kept only when the value is one of the literals their

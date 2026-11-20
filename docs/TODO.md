@@ -608,11 +608,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       shape (journal `b2090059-1137-4b6b-a975-58f1e202834c/1` retained containment after 45s;
       helper 15580 remained live), while main's last six CI runs (through `44804764621` @
       `ea65742`) were all green. **Suspect path** for the restart pass:
-      `daemon/internal/app/app.go:2148-2159` (record the durable receipt →
-      `verifyDurableContainmentStopReceipt` → `observeContainmentStop`) →
-      `waitForLinuxStopReceiptBarrier` (`:2227`), which publishes the reached marker at `:2258` only
-      after both marker paths pass `assertLinuxStopReceiptBarrierPathAbsent` (`:2242`/`:2245`), and
-      whose own release bound is `linuxStopReceiptBarrierTimeout = 30s` (`:71`); the marker never
+      `daemon/internal/app/cleanup_glue.go:118-143` (record the durable receipt →
+      `verifyDurableContainmentStopReceipt` at `:285` → `observeContainmentStop`) →
+      `waitForLinuxStopReceiptBarrier` (`:203`), which publishes the reached marker at `:234` only
+      after both marker paths pass `assertLinuxStopReceiptBarrierPathAbsent` (`:218`/`:221`), and
+      whose own release bound is `linuxStopReceiptBarrierTimeout = 30s` (`:21`); the marker never
       appeared, so either the restart pass never reached the callback or it stalled before
       publishing. **Diagnosis rule:** read the restarted daemon's log tail now exported by
       `scripts/ci/export-linux-v2-redacted-evidence.py` (2026-11-21, `witness-stall-evidence`): a

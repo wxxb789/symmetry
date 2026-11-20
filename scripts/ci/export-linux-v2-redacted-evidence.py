@@ -246,7 +246,7 @@ LEGACY_REPLAY_KEYS = LEGACY_COMMON_KEYS | {
 LEGACY_DAEMON_LOG_TAIL_BYTES = 64 << 10
 LEGACY_DAEMON_LOG_LABEL = "second"
 LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
-# The daemon's own slog.NewJSONHandler writer (daemon/internal/app/app.go:460)
+# The daemon's own slog.NewJSONHandler writer (daemon/internal/app/app.go:311)
 # emits its JSON on stdout (daemon/cmd/symmetry-daemon/main.go:89). The
 # projection publishes a text value only when it is one of the exact literals
 # the daemon code can write into that field, so a credential-shaped value in
@@ -256,10 +256,11 @@ LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
 #   state -- the terminal transition states (daemon/internal/state/state.go
 #           isTerminalTransitionState) logged as stateName by
 #           queueTerminalTransitionWithRetry / queueTerminalTransitionAndAcknowledgement
-#           (app.go:7385, 7465); nativeTerminalPayload (app.go:8978) returns the
+#           (outbox.go:124, 186); nativeTerminalPayload (goal_delivery.go:357) returns the
 #           same three.
-#   stage -- the queueFailure stage literals (app.go:3651-3877) and the
-#           process-exit retry (app.go:7586).
+#   stage -- the queueFailure stage literals and their call sites
+#           (events.go:530, app.go:1441-1667) and the process-exit retry
+#           (app.go:2012).
 #   reason -- the literals reaching stopRecoveredJournal (app.go:2857, 2891,
 #           3604, 10375): lease/ownership reasons (app.go:9922-10073, 10918,
 #           11468, 11752) and the protocol.ReconcileDecisionKind decisions
