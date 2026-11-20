@@ -2632,6 +2632,10 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       written against the revision it names and had drifted by `bba6d3a` (`append_event!/7` at
       `:8314`, its `optimistic_lock` at `:8365`, `ensure_preconditions!/2` at `:8577`); the changed
       precondition contract is documented in `docs/design/protocol.md` and `docs/design/data.md`.
+      The branch's only frontend edit landed after this entry was written: the comment-only rewording
+      of the `servedEnvelope` rationale (`frontend/src/features/goals/detail.tsx:73-77`), which now
+      names a concurrent operator command instead of the goal-control and wakeup writers as the
+      source of a stale refusal; no behavior, envelope, contract or test changed.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 

@@ -70,12 +70,14 @@ export function GoalDetailPage() {
 
   /**
    * Reads the served goal back at submit time and builds the envelope carrying
-   * the versions the server serves now. A worker (the goal-control and wakeup
-   * writers enqueue through Oban) can advance the goal after this page's last
-   * settled read; an envelope built from the settled read would be refused as
-   * stale. The plan admission performs the same read between its two commands.
-   * The mutation identity comes from the form's frozen logical intent; a
-   * command with no frozen intent (and both plan-approval commands) mints one.
+   * the versions the server serves now. A concurrent operator command can
+   * advance the goal after this page's last settled read, and an envelope
+   * built from the settled read would be refused as stale; internal writers
+   * (the goal-control and wakeup paths, reconciliation, settlement, automatic
+   * admission) never move the served version. The plan admission performs the
+   * same read between its two commands. The mutation identity comes from the
+   * form's frozen logical intent; a command with no frozen intent (and both
+   * plan-approval commands) mints one.
    */
   const servedEnvelope = async (kind: CommandKind, payload: ActionPayload, mutationId: string = newMutationId()) => {
     const current = await application.api.goal(goalId, new AbortController().signal);
