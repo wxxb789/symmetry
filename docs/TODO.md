@@ -36,6 +36,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
 
+- `frontend/src/features/connections/resources.tsx` `refusalGuidance.provider_owned`: no
+  call site of `refusalNotice` on that page can receive the code. Its only producer is
+  `Workspaces.provider_owned_fields_editable` answered by `update_work_item`
+  (`control/lib/symmetry_control/workspaces.ex`), i.e. the assignment surface, which
+  carries its own `assignmentGuidance`. Recorded by the retro-b4-goals-connections review
+  (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
+  (fix round 1); revalidate and remove in a separate maintenance change.
+
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
       `control/test/symmetry_control/integrations_test.exs:1161` (`assert

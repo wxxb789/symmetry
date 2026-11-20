@@ -172,6 +172,13 @@
       "tags": ["read-projection", "wrong-type"]
     },
     {
+      "id": "connections-read.missing-resource-status",
+      "schema": "connections-read",
+      "path": "invalid/connections-read.missing-resource-status.json",
+      "valid": false,
+      "tags": ["read-projection", "missing-field", "nested-member"]
+    },
+    {
       "id": "goal-revision.basic",
       "schema": "goal-revision",
       "path": "valid/goal-revision.basic.json",
@@ -2506,6 +2513,17 @@
       ]
     },
     {
+      "id": "attention-read.malformed-uuid-goal",
+      "schema": "attention-read",
+      "path": "invalid/attention-read.malformed-uuid-goal.json",
+      "valid": false,
+      "tags": [
+        "read-projection",
+        "wrong-identity",
+        "malformed-string"
+      ]
+    },
+    {
       "id": "goal-read.draft",
       "schema": "goal-read",
       "path": "valid/goal-read.draft.json",
@@ -2579,6 +2597,28 @@
       "tags": [
         "read-projection",
         "wrong-type"
+      ]
+    },
+    {
+      "id": "goal-read.missing-decision-version",
+      "schema": "goal-read",
+      "path": "invalid/goal-read.missing-decision-version.json",
+      "valid": false,
+      "tags": [
+        "read-projection",
+        "missing-field",
+        "nested-member"
+      ]
+    },
+    {
+      "id": "goal-read.missing-edge-blocker",
+      "schema": "goal-read",
+      "path": "invalid/goal-read.missing-edge-blocker.json",
+      "valid": false,
+      "tags": [
+        "read-projection",
+        "missing-field",
+        "nested-member"
       ]
     },
     {

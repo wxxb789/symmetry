@@ -5,6 +5,7 @@
 // response is substituted and no capability is faked; refusals and conflicts
 // are produced by the server.
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
+import { readGoalContextSnapshot } from "./goal-context-fixtures.mjs";
 import { capture } from "./readable-fixtures.mjs";
 
 const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
@@ -123,13 +124,8 @@ async function goalCommand(page, goalId, kind, payload) {
   return { read, response };
 }
 
-/**
- * Creates a draft Goal through the accepted creation command and authors one plan
- * decision with the accepted `request_decision` command, so the surface has a real
- * proposal to approve. The proposal is the operator's own plan document; the
- * surface hashes the same object with the server's canonical encoding.
- */
-async function createGoalWithPlan(page, project, repositoryId, title) {
+/** Creates a draft Goal through the accepted creation command. */
+async function createGoal(page, project, title) {
   const created = await api(page, "POST", `/portal/api/projects/${project.id}/goals`, {
     schema_version: "symmetry.goal_create.v1",
     mutation_id: crypto.randomUUID(),
@@ -145,7 +141,17 @@ async function createGoalWithPlan(page, project, repositoryId, title) {
     }
   });
   if (created.status !== 201) throw new Error(`goal creation failed: ${created.status} ${JSON.stringify(created.body)}`);
-  const goalId = created.body.goal.id;
+  return created.body.goal.id;
+}
+
+/**
+ * Creates a draft Goal through the accepted creation command and authors one plan
+ * decision with the accepted `request_decision` command, so the surface has a real
+ * proposal to approve. The proposal is the operator's own plan document; the
+ * surface hashes the same object with the server's canonical encoding.
+ */
+async function createGoalWithPlan(page, project, repositoryId, title) {
+  const goalId = await createGoal(page, project, title);
 
   const proposal = {
     schema_version: "symmetry.plan.v1",
@@ -362,7 +368,7 @@ test.describe("Goal attention workspace", () => {
     expect(conflict.body.error.code).toBe("idempotency_conflict");
   });
 
-  test("the dependency projection renders read-only; the receipts render the server's newest page", async ({ page }, testInfo) => {
+  test("the dependency projection renders read-only; the receipts render the served oldest page in sequence order", async ({ page }, testInfo) => {
     allowBrowserError(page, /status of 409/);
     await login(page);
     const project = await createProject(page, "E");
@@ -409,30 +415,68 @@ test.describe("Goal attention workspace", () => {
     // No editing affordance exists on the dependency projection.
     await expect(page.getByRole("button", { name: /Add dependency|Remove dependency|Edit dependency/i })).toHaveCount(0);
 
-    // The surface renders the receipts the server recorded, newest page included.
+    // The receipts pager walks forward in sequence order: the first served page
+    // (`after=0`) is the oldest slice, and a receipt count alone cannot tell it
+    // from the newest. The rendered keys are read back as the served sequence
+    // identities, so the list must head with exactly that page, in order.
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     const receipts = page.locator(".receipt-list");
     await expect(receipts).toBeVisible();
+    const served = events.body.entries;
+    const rendered = await receipts.locator("li .item-key").allTextContents();
+    expect(rendered.slice(0, served.length)).toEqual(served.map((entry) => `#${entry.sequence}`));
+    // A realtime continuation may append receipts recorded after this page; the
+    // served page must still be the head of the list.
     const loaded = await receipts.locator("li").count();
-    expect(loaded).toBeGreaterThanOrEqual(events.body.entries.length);
-    await capture(page, testInfo, "goal-receipts", `The receipts list rendered ${loaded} of ${events.body.entries.length} real audit events the server recorded`);
+    expect(loaded).toBeGreaterThanOrEqual(served.length);
+    await capture(page, testInfo, "goal-receipts", `The receipts list rendered the served oldest page of ${served.length} real audit events in sequence order (${loaded} receipts loaded)`);
   });
 
-  test("the Goal detail read refuses an unauthorized context snapshot", async ({ page }) => {
+  test("the Goal context read serves the owning goal's snapshot; a foreign goal's snapshot and a credential-less request are refused", async ({ page }) => {
     allowBrowserError(page, /status of 404|status of 401/);
     await login(page);
     const project = await createProject(page, "F");
     const repositoryId = await attachRepository(page, project.id);
-    const { goalId } = await createGoalWithPlan(page, project, repositoryId, "Refusal goal");
 
-    const refused = await api(page, "GET", `/portal/api/goals/${goalId}/contexts/${crypto.randomUUID()}`);
+    // A draft Goal admitted through the accepted `request_plan` command: the
+    // server writes the ContextSnapshot this case reads, so the id below names
+    // a real row the case can tie the served document to.
+    const owningGoalId = await createGoal(page, project, "Context owner goal");
+    const requested = await goalCommand(page, owningGoalId, "request_plan", {
+      model_profile: "codex",
+      repository_resource_id: repositoryId,
+      subject: { resource_id: repositoryId, commit: "a".repeat(40), tree_digest: `sha256:${"b".repeat(64)}` },
+      session_mode: "fresh",
+      requested_session_id: null
+    });
+    expect(requested.response.status, JSON.stringify(requested.response.body)).toBe(200);
+    const snapshotId = await readGoalContextSnapshot(owningGoalId);
+
+    // 200: `lock_context_snapshot/2` scopes the snapshot by goal, and this goal
+    // owns the row, so the served document is the snapshot's own identity.
+    const served = await api(page, "GET", `/portal/api/goals/${owningGoalId}/contexts/${snapshotId}`);
+    expect(served.status, JSON.stringify(served.body)).toBe(200);
+    expect(served.body.snapshot_id).toBe(snapshotId);
+
+    // 404: a second Goal in the same project owns the same repository, so this
+    // refusal discriminates the snapshot's goal scoping, not project or
+    // resource ownership.
+    const foreignGoalId = await createGoal(page, project, "Context foreign goal");
+    const foreign = await api(page, "GET", `/portal/api/goals/${foreignGoalId}/contexts/${snapshotId}`);
+    expect(foreign.status).toBe(404);
+    expect(foreign.body.error.code).toBe("not_found");
+
+    // 404: an id no snapshot carries is the same refusal under the owning goal.
+    const refused = await api(page, "GET", `/portal/api/goals/${owningGoalId}/contexts/${crypto.randomUUID()}`);
     expect(refused.status).toBe(404);
     expect(refused.body.error.code).toBe("not_found");
 
+    // 401: the portal auth plug refuses the credential-less context request
+    // itself, before any snapshot read.
     const unauthenticated = await page.evaluate(async (path) => {
       const response = await fetch(path, { credentials: "omit", headers: { Accept: "application/json" } });
       return { status: response.status, body: await response.json().catch(() => null) };
-    }, `/portal/api/goals/${goalId}`);
+    }, `/portal/api/goals/${owningGoalId}/contexts/${snapshotId}`);
     expect(unauthenticated.status).toBe(401);
     expect(unauthenticated.body.error.code).toBe("unauthenticated");
   });

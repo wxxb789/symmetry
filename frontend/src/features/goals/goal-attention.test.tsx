@@ -1,12 +1,14 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import omittedProposal from "../../../../contracts/fixtures/valid/plan-proposal.integration-omitted.json";
 import { jsonResponse, recordingFetcher, renderRoute } from "../../app/test-harness";
 import { readAttention, readGoalProjection } from "../../services/api.fixtures";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const secondProjectId = "22222222-2222-4222-8222-222222222222";
 const goalId = "33333333-3333-4333-8333-333333333333";
+const secondGoalId = "33333333-3333-4333-8333-333333333334";
 
 const projects = [
   { id: projectId, key: "ONE", name: "Project One", description: null, status: "active", work_items: [] },
@@ -39,7 +41,10 @@ describe("attention entry point", () => {
       if (url.pathname === "/portal/api/attention") {
         return jsonResponse(readAttention({
           selectedProjectId: projectId,
-          goals: [{ goalId, projectId, title: "Deliver the attention entry point", state: "active", blockerReasons: ["waiting_dependency"], attentionReasons: ["awaiting_validation"], activeTasks: 1, nonterminalTasks: 1, readyToAchieve: true }],
+          goals: [
+            { goalId, projectId, title: "Deliver the attention entry point", state: "active", blockerReasons: ["waiting_dependency"], attentionReasons: ["awaiting_validation"], activeTasks: 1, nonterminalTasks: 1, readyToAchieve: true },
+            { goalId: secondGoalId, projectId, title: "Not yet ready goal", readyToAchieve: false },
+          ],
           blocked: [{ projectId, projectName: "Project One", workItemId: "44444444-4444-4444-8444-444444444444", key: "ONE-7", title: "Operator review required", blocker: "Needs architecture decision" }],
         }));
       }
@@ -49,8 +54,10 @@ describe("attention entry point", () => {
     expect(await screen.findByRole("link", { name: "Deliver the attention entry point" })).toHaveAttribute("href", `/portal/goals/${goalId}`);
     expect(screen.getByText("waiting_dependency")).toBeVisible();
     expect(screen.getByText("Settlement attention: awaiting_validation")).toBeVisible();
-    // The readiness badge reads the server's own `ready_to_achieve?` member.
+    // The readiness badge reads the server's own `ready_to_achieve?` member in
+    // both polarities: the unready entry never renders it.
     expect(screen.getByText("Ready to achieve on the server")).toBeVisible();
+    expect(screen.getAllByText("Ready to achieve on the server")).toHaveLength(1);
     expect(await screen.findByText("Operator review required")).toBeVisible();
     expect(screen.getByText("Needs architecture decision")).toBeVisible();
     expect(screen.getByText("Showing Project One.")).toBeVisible();
@@ -201,6 +208,7 @@ describe("goal detail surface", () => {
           workItems: [
             { id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Merge the attention feed", status: "in_progress", "required?": true, integration: false, "accepted?": true, accepted_outcome: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject, inserted_at: "2026-11-16T09:50:00Z" }, execution: { state: "completed" }, blockers: [] },
             { id: "55555555-5555-4555-8555-555555555555", number: 2, title: "Render the Goal detail surface", status: "queued", "required?": true, integration: true, "accepted?": false, accepted_outcome: null, execution: null, blockers: ["waiting_dependency"] },
+            { id: "66666666-6666-4666-8666-666666666666", number: 3, title: "Optional polish", status: "queued", "required?": false, integration: false, "accepted?": false, accepted_outcome: null, execution: null, blockers: [] },
           ],
           acceptedOutcomes: [{ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject, inserted_at: "2026-11-16T09:50:00Z" }],
           blockers: [{ reason: "waiting_dependency", count: 1, ids: ["55555555-5555-4555-8555-555555555555"], details: [] }],
@@ -231,6 +239,12 @@ describe("goal detail surface", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Deliver the attention entry point" })).toBeVisible();
     expect(screen.getByText("Merge Goal attention with the project blocked items")).toBeVisible();
     expect(screen.getByText("1 of 2 required items accepted")).toBeVisible();
+    // Both served polarities of `required?` and the accepted row's own outcome
+    // text render from the served members.
+    expect(screen.getByText("optional")).toBeVisible();
+    expect(screen.getByText(/^Accepted outcome sha256:c{4}/)).toBeVisible();
+    expect(screen.getAllByText(/^Accepted outcome sha256:/)).toHaveLength(1);
+    expect(screen.getAllByText(/^No accepted outcome bound to this item/)).toHaveLength(2);
     expect(screen.getAllByText("waiting_dependency").length).toBeGreaterThan(0);
     // The recommendation is labelled as advisory and separated from the authority controls.
     expect(screen.getByText(/Recommendation \(advisory\): Run the bound validation profile/)).toBeVisible();
@@ -254,7 +268,9 @@ describe("goal detail surface", () => {
     // Receipts paginate over the served boundary.
     expect(await screen.findByText("goal_created")).toBeVisible();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Load older receipts" }));
+    // The served `after` page is ascending from sequence 0, so this button
+    // loads newer receipts, not older ones.
+    await user.click(screen.getByRole("button", { name: "Load newer receipts" }));
     expect(await screen.findByText("amend")).toBeVisible();
     expect(screen.getByText("goal_created")).toBeVisible();
   });
@@ -350,8 +366,9 @@ describe("goal detail surface", () => {
     expect(await screen.findByText("Amend accepted by the server.", {}, { timeout: 5_000 })).toBeVisible();
   }, 15_000);
 
-  it("carries a fresh mutation identity per logical action attempt and reports the server receipt", async () => {
+  it("freezes one mutation identity per logical intent until the server answers", async () => {
     const identities: string[] = [];
+    let attempted = 0;
     const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -361,30 +378,133 @@ describe("goal detail surface", () => {
         const rawBody = typeof init?.body === "string" ? init.body : "{}";
         const body = JSON.parse(rawBody) as { mutation_id: string };
         identities.push(body.mutation_id);
+        // The first attempt's acknowledgement is lost at the transport layer:
+        // the server may still have applied it, so the intent must replay.
+        if (attempted++ === 0) throw new TypeError("network down");
         return jsonResponse({ goal_id: goalId, mutation_id: body.mutation_id, event: { id: body.mutation_id, sequence: 2, kind: "pause", revision: 1 } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
+
+    const displayedIdentity = () => {
+      const text = screen.getByText(/mutation identity [0-9a-f]/).textContent ?? "";
+      return text.match(/mutation identity ([0-9a-f-]{36})/)?.[1] ?? "";
+    };
 
     const user = userEvent.setup();
     renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Replay goal" });
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Operator pause");
+    // The identity the form shows is the identity the command carries.
+    const shown = displayedIdentity();
+    expect(shown).toMatch(/^[0-9a-f-]{36}$/);
+    await user.click(screen.getByRole("button", { name: "Send Pause" }));
+    expect(await screen.findByText(/Cannot reach the server/)).toBeVisible();
+    expect(identities).toEqual([shown]);
+    // Re-sending the same payload after the lost acknowledgement reuses the
+    // frozen identity, so the server replays instead of applying twice.
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    expect(displayedIdentity()).toBe(shown);
     await user.click(screen.getByRole("button", { name: "Send Pause" }));
     // The surface states acceptance only after the served goal settles on the
     // applied state (bounded), so this wait allows for that bound.
     expect(await screen.findByText("Pause accepted by the server.", {}, { timeout: 5_000 })).toBeVisible();
+    await waitFor(() => expect(identities).toEqual([shown, shown]));
+    // The settled attempt releases its identity: the next intent mints a new one.
     await user.click(screen.getByRole("button", { name: "Pause" }));
-    await user.type(screen.getByLabelText("Reason"), "Operator pause again");
+    const renewed = displayedIdentity();
+    expect(renewed).not.toBe(shown);
     await user.click(screen.getByRole("button", { name: "Send Pause" }));
-    await waitFor(() => expect(identities.length).toBe(2));
-    // Each logical action attempt carries a fresh identity; the server owns replay.
-    expect(identities[0]).not.toBe(identities[1]);
+    await waitFor(() => expect(identities).toEqual([shown, shown, renewed]));
+    // The attempt must settle (and release its identity) before the next one;
+    // the acceptance notice waits for the served goal, so allow that bound.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled(), { timeout: 5_000 });
+    // A changed payload is a different logical intent and mints its own identity.
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    await user.clear(screen.getByLabelText("Reason"));
+    await user.type(screen.getByLabelText("Reason"), "Operator pause with a changed reason");
+    expect(displayedIdentity()).not.toBe(renewed);
+  }, 15_000);
+
+  it("expires the session when a command answers 401 instead of rendering it as a refusal", async () => {
+    const replace = vi.fn();
+    const { fetcher } = portalFetcher((path) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Expired session goal", state: "active", allowedActions: ["pause", "amend", "cancel"] }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        // A real expired portal session answers a command with its own JSON 401;
+        // the command transport classifies it exactly like every other read.
+        return jsonResponse({ error: { code: "unauthenticated", message: "the portal session is not authenticated" } }, 401);
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    const user = userEvent.setup();
+    const { application } = renderRoute(`/portal/goals/${goalId}`, fetcher, {
+      location: { href: `http://localhost/portal/goals/${goalId}`, replace },
+    });
+    await screen.findByRole("heading", { level: 1, name: "Expired session goal" });
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    await user.type(screen.getByLabelText("Reason"), "Operator pause");
+    await user.click(screen.getByRole("button", { name: "Send Pause" }));
+    // Session expiry owns this answer: the private cache is cleared and the
+    // operator returns to login instead of reading a refusal panel.
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith(`/portal/login?return_to=${encodeURIComponent(`/portal/goals/${goalId}`)}`));
+    expect(screen.queryByRole("heading", { name: "The server refused this action" })).not.toBeInTheDocument();
+    expect(application.auth.getSnapshot()).toBe(true);
+  });
+
+  it("never announces success from an undecodable receipt", async () => {
+    const { fetcher } = portalFetcher((path) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Empty receipt goal", state: "active", allowedActions: ["pause", "amend", "cancel"] }));
+      }
+      // A 200 without the receipt the accepted command answers with is a
+      // response the surface cannot read safely, never a success.
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) return jsonResponse({});
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    const user = userEvent.setup();
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Empty receipt goal" });
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    await user.type(screen.getByLabelText("Reason"), "Operator pause");
+    await user.click(screen.getByRole("button", { name: "Send Pause" }));
+    expect(await screen.findByText(/could not be read safely/)).toBeVisible();
+    expect(screen.queryByText(/accepted by the server/)).not.toBeInTheDocument();
+  });
+
+  it("renders a prototype-name served action as an unknown label instead of a function", async () => {
+    const { fetcher } = portalFetcher((path) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Prototype action goal", state: "active", allowedActions: ["constructor", "pause"] }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Prototype action goal" });
+    // The served action list is free-form strings: an own-key lookup renders
+    // `constructor` as an unknown label, never Object's own function.
+    expect(screen.getByRole("button", { name: "Unknown action: constructor" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
   });
 
   it("offers only the served actions and builds the achieve envelope from a server-shaped multi-item plan", async () => {
-    const acceptedSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "a".repeat(40), tree_digest: `sha256:${"b".repeat(64)}` };
+    // The two accepted outcomes carry distinct subjects and evidence: the
+    // server requires every evidence row to belong to the achieve subject
+    // (`ensure_evidence_subject!`), so the payload may only carry the
+    // integration subject's own evidence.
+    const implementationSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "a".repeat(40), tree_digest: `sha256:${"b".repeat(64)}` };
+    const integrationSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "c".repeat(40), tree_digest: `sha256:${"d".repeat(64)}` };
+    const implementationEvidence = "99999999-9999-4999-8999-999999999999";
+    const integrationEvidence = "99999999-9999-4999-8999-999999999998";
     let achievePayload: Record<string, unknown> | null = null;
     const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
@@ -400,10 +520,13 @@ describe("goal detail surface", () => {
           // integration work item id, so the envelope must carry the served
           // `integration` designation.
           workItems: [
-            { id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Implementation", status: "done", "required?": true, integration: false, "accepted?": false, accepted_outcome: null, execution: null, blockers: [] },
-            { id: "55555555-5555-4555-8555-555555555555", number: 2, title: "Integration", status: "done", "required?": true, integration: true, "accepted?": true, accepted_outcome: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "55555555-5555-4555-8555-555555555555", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject, inserted_at: "2026-11-16T09:50:00Z" }, execution: null, blockers: [] },
+            { id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Implementation", status: "done", "required?": true, integration: false, "accepted?": true, accepted_outcome: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", subject_hash: `sha256:${"e".repeat(64)}`, evidence_ids: [implementationEvidence], candidate_subject: implementationSubject, inserted_at: "2026-11-16T09:50:00Z" }, execution: null, blockers: [] },
+            { id: "55555555-5555-4555-8555-555555555555", number: 2, title: "Integration", status: "done", "required?": true, integration: true, "accepted?": true, accepted_outcome: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "55555555-5555-4555-8555-555555555555", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: [integrationEvidence], candidate_subject: integrationSubject, inserted_at: "2026-11-16T09:50:00Z" }, execution: null, blockers: [] },
           ],
-          acceptedOutcomes: [{ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: ["99999999-9999-4999-8999-999999999999"], candidate_subject: acceptedSubject, inserted_at: "2026-11-16T09:50:00Z" }],
+          acceptedOutcomes: [
+            { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", work_item_id: "44444444-4444-4444-8444-444444444444", disposition: "accepted", subject_hash: `sha256:${"e".repeat(64)}`, evidence_ids: [implementationEvidence], candidate_subject: implementationSubject, inserted_at: "2026-11-16T09:50:00Z" },
+            { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", work_item_id: "55555555-5555-4555-8555-555555555555", disposition: "accepted", subject_hash: `sha256:${"c".repeat(64)}`, evidence_ids: [integrationEvidence], candidate_subject: integrationSubject, inserted_at: "2026-11-16T09:51:00Z" },
+          ],
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
@@ -423,8 +546,8 @@ describe("goal detail surface", () => {
     await waitFor(() => expect(achievePayload).not.toBeNull());
     if (achievePayload === null) throw new Error("the achieve command was not sent");
     const payload = achievePayload;
-    expect(payload["subject"]).toEqual(acceptedSubject);
-    expect(payload["evidence_ids"]).toEqual(["99999999-9999-4999-8999-999999999999"]);
+    expect(payload["subject"]).toEqual(integrationSubject);
+    expect(payload["evidence_ids"]).toEqual([integrationEvidence]);
     expect(payload["integration_work_item_id"]).toBe("55555555-5555-4555-8555-555555555555");
     expect(payload["decision_id"]).toBeNull();
   });
@@ -552,6 +675,45 @@ describe("goal detail surface", () => {
     expect(admit.payload?.["proposal_hash"]).toBe("sha256:e9a1f1719763b645d05e4b1fcc241b7c7fb71c0594876ae16428757a7e222805");
   });
 
+  it("hashes the plan proposal the server validates, with the per-item defaults applied", async () => {
+    const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", kind: "plan", state: "open", "open?": true, version: 2, goal_revision: 1, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: null };
+    const commands: Array<Record<string, unknown>> = [];
+    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Omitted-default plan goal", state: "draft", allowedActions: ["amend", "cancel"], decisions: [decision] }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        commands.push(JSON.parse(rawBody) as Record<string, unknown>);
+        return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 2, kind: "resolve_decision", revision: 1 } });
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    const user = userEvent.setup();
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Omitted-default plan goal" });
+    // The repo's own valid plan-proposal fixture omits the per-item defaults
+    // (`integration`) the server injects before it hashes and validates.
+    // A JSON document contains braces that user-event's keyboard parser reads as
+    // key descriptors; set the controlled textarea value directly instead.
+    fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify(omittedProposal) } });
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    await waitFor(() => expect(commands.length).toBe(2));
+    const admit = commands[1] as { kind?: string; payload?: Record<string, unknown> } | undefined;
+    if (!admit) throw new Error("the plan admission was not sent");
+    expect(admit.kind).toBe("accept_plan");
+    // The emitted proposal is the defaulted document the digest covers, and the
+    // digest is the server's own for that document: computed in this worktree
+    // with the portable Elixir toolchain over the same per-item defaults
+    // (`Map.put_new(item, "integration", false)`), the omitted-default fixture
+    // hashes to sha256:aaae9efd… while its raw bytes hash to sha256:9b04f528….
+    const expectedProposal = { ...omittedProposal, items: omittedProposal.items.map((item) => ({ ...item, integration: false })) };
+    expect(admit.payload?.["proposal"]).toEqual(expectedProposal);
+    expect(admit.payload?.["proposal_hash"]).toBe("sha256:aaae9efde4b51964698a64eac92a5f485213e1b072801d139b0b1a2c597f2519");
+  });
+
   it("offers no plan approval when the served plan decision carries no acceptance option", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", goal_revision: 1, kind: "plan", state: "open", "open?": true, version: 3, question: "Accept the proposed plan?", options: [{ id: "reject", label: "Reject", consequence: "Keep the current approved state." }], resolution: null };
     const { fetcher } = portalFetcher((path: string) => {
@@ -584,6 +746,28 @@ describe("goal detail surface", () => {
     expect(screen.getByText(/Resolved: \{"option_id":"accept"\}/)).toBeVisible();
   });
 
+  it("offers no plan approval for a decision the server no longer serves as open", async () => {
+    // The server's `open?` is `state == "open" and goal_revision ==
+    // current_revision` (read_model.ex): a decision left open at revision 1
+    // while the goal moved to revision 2 still serves `state: "open"`, so a
+    // state-based gate would offer the approval control the server refuses.
+    const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", goal_revision: 1, kind: "plan", state: "open", "open?": false, version: 5, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: null };
+    const { fetcher } = portalFetcher((path: string) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Stale plan decision goal", state: "draft", currentRevision: 2, allowedActions: ["amend", "cancel"], decisions: [decision] }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Stale plan decision goal" });
+    expect(screen.queryByRole("button", { name: "Resolve the decision with accept" })).not.toBeInTheDocument();
+    // It is not resolved either: the served revision no longer carries it open.
+    expect(screen.getByText("This decision is no longer open at the served revision.")).toBeVisible();
+    expect(screen.queryByText(/^Resolved:/)).not.toBeInTheDocument();
+  });
+
   it("renders the explicit absence text for a served non-scalar member", async () => {
     const { fetcher } = portalFetcher((path) => {
       const url = new URL(path, "http://localhost");
@@ -597,8 +781,9 @@ describe("goal detail surface", () => {
           allowedActions: [],
           // The served read keeps open-JSON members as served: a non-scalar
           // `execution.state` must render the explicit absence text instead of
-          // stringifying the object.
-          workItems: [{ id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Open-member item", status: "in_progress", "required?": true, integration: false, "accepted?": false, accepted_outcome: null, execution: { state: ["running", "queued"] }, blockers: [] }],
+          // stringifying the object. A plain object (not an array) is what a
+          // `[object Object]` regression would render.
+          workItems: [{ id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Open-member item", status: "in_progress", "required?": true, integration: false, "accepted?": false, accepted_outcome: null, execution: { state: { phase: "running" } }, blockers: [] }],
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });

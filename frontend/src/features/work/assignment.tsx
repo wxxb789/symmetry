@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { workspaceOptions } from "../../app/application";
 import { useSessionToken } from "../../app/session";
 import { restoreFocus } from "../../components/focus";
@@ -81,7 +81,7 @@ function bindingOptions(resources: readonly AssignmentResource[], current: strin
 const assignmentGuidance: Record<string, string> = {
   provider_owned: "The provider keeps the title, description and priority; only the assignment fields here are editable.",
   stale: "The work item changed elsewhere; close the editor and reopen it from the re-read detail.",
-  state_conflict: "A run holds this item's intent; retry once the execution settles.",
+  state_conflict: "This item or its project is in a state that refuses the write; re-read both, then retry.",
   validation_failed: "Correct the highlighted fields and submit again.",
 };
 
@@ -114,6 +114,10 @@ function editorBlockedReason(readState: ProjectReadState, projectId: string | nu
 
 export function AssignmentSection({ api, item }: { api: Api; item: WorkItemDetail }) {
   const csrf = useSessionToken();
+  // The stable control a close falls back to when the invoking control is
+  // disabled by a pending write (a background re-read can flip `intent_locked`
+  // while the dialog is open): the section heading is always focusable.
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
   // Continuations outlive their editor: a save that settles after the operator
   // selected another item must not write into that item's surface, so every
   // write into this section is fenced on the live subject and the mount.
@@ -143,7 +147,7 @@ export function AssignmentSection({ api, item }: { api: Api; item: WorkItemDetai
     setNotice(`Assignment saved at version ${version}; the served facts above reload from the server.`);
   };
   return <section className="detail-section" aria-labelledby="assignment-section">
-    <h2 id="assignment-section">Assignment</h2>
+    <h2 id="assignment-section" ref={headingRef} tabIndex={-1}>Assignment</h2>
     <dl className="detail-facts">
       <div><dt>Owner</dt><dd>{ownerLabel(item.assignee)}</dd></div>
       <div><dt>Workspace</dt><dd>{asText(item.workspace) ?? "Project default"}</dd></div>
@@ -161,6 +165,7 @@ export function AssignmentSection({ api, item }: { api: Api; item: WorkItemDetai
       item={item}
       project={project}
       blockedReason={blockedReason}
+      fallbackFocus={headingRef}
       repositoryResources={resourcesOfKind(project, projectId, "repository")}
       ciResources={resourcesOfKind(project, projectId, "ci")}
       onSaved={saved}
@@ -178,12 +183,13 @@ interface AssignmentDraft {
   ci: string;
 }
 
-function AssignmentEditor({ api, csrf, item, project, blockedReason, repositoryResources, ciResources, onSaved, onClose }: {
+function AssignmentEditor({ api, csrf, item, project, blockedReason, fallbackFocus, repositoryResources, ciResources, onSaved, onClose }: {
   api: Api;
   csrf: string;
   item: WorkItemDetail;
   project: ProjectRead | null;
   blockedReason: string | null;
+  fallbackFocus: RefObject<HTMLElement | null>;
   repositoryResources: readonly AssignmentResource[];
   ciResources: readonly AssignmentResource[];
   onSaved: (workItemId: string, version: number) => void;
@@ -257,7 +263,11 @@ function AssignmentEditor({ api, csrf, item, project, blockedReason, repositoryR
     <Dialog.Portal>
       <Dialog.Overlay className="dialog-overlay" />
       <Dialog.Content className="command-dialog assignment-dialog" aria-describedby="assignment-dialog-description"
-        onCloseAutoFocus={(event) => { const origin = opener.current; opener.current = null; restoreFocus(event, origin, null); }}>
+        onCloseAutoFocus={(event) => {
+          const origin = opener.current;
+          opener.current = null;
+          restoreFocus(event, origin, fallbackFocus.current);
+        }}>
         <div className="dialog-heading">
           <Dialog.Title>Assignment</Dialog.Title>
           <Dialog.Close asChild><button className="icon-button" type="button" aria-label="Close assignment dialog"><X size={20} aria-hidden="true" /></button></Dialog.Close>

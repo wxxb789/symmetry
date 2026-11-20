@@ -267,7 +267,7 @@ describe("connection management", () => {
     });
   });
 
-  it("keeps a failed provider check actionable, redacted and truthful", async () => {
+  it("keeps a failed provider check actionable and renders the server's own reason", async () => {
     const harness = renderConnections(({ method, path }) => {
       if (method !== "POST" || !path.endsWith("/check")) return unexpectedRequest();
       harness.setConnections([connection({ version: 4, status: "degraded", status_message: "Provider authentication failed", last_checked_at: "2026-11-16T09:00:00.000000Z" })]);
@@ -283,7 +283,40 @@ describe("connection management", () => {
     const detail = screen.getByRole("complementary", { name: "Connection detail" });
     expect(within(detail).getByText("Provider authentication failed")).toBeVisible();
     expect(within(detail).getByText("Degraded")).toBeVisible();
+    // The served strings are already redacted by the server; this case proves
+    // the surface renders them without inventing a credential of its own.
     expect(screen.queryByText(/gho_|Bearer |token/i)).toBeNull();
+  });
+
+  it("renders prototype-name served values as unknown text, never as a known label or a function", async () => {
+    const hostile = connection({
+      provider: "constructor",
+      auth_type: "toString",
+      capabilities: ["constructor"],
+      status: "constructor",
+      resources: [{
+        ...connection().resources[0]!,
+        // `kind`, `status` and `sync_status` are open served strings too.
+        kind: "constructor",
+        status: "toString",
+        sync_status: "constructor",
+      }],
+    });
+    renderConnections(() => unexpectedRequest(), "/portal/connections", {
+      connections: [hostile],
+      projects: [projectFixture({ resources: [resourceFixture({ kind: "constructor", status: "toString", sync_status: "constructor" })] })],
+    });
+    const list = await screen.findByRole("list", { name: "Connections" });
+    // Own-key lookups only: a plain index would return Object's own members, so
+    // this would render "Constructor", a function or crash the row.
+    expect(within(list).getByText("Unknown provider: constructor")).toBeVisible();
+    expect(within(list).getByText(/Unknown authentication: toString/)).toBeVisible();
+    expect(within(list).getByText("Unknown capability: constructor")).toBeVisible();
+    expect(within(list).getByText("Unknown connection status: constructor")).toBeVisible();
+    const resources = await screen.findByRole("list", { name: "Project resources" });
+    expect(within(resources).getByText("Unknown kind: constructor")).toBeVisible();
+    expect(within(resources).getByText("Unknown resource status: toString")).toBeVisible();
+    expect(within(resources).getByText("Unknown sync status: constructor")).toBeVisible();
   });
 
   it("confirms a removal against the version the dialog opened with, even after a background refresh", async () => {

@@ -245,6 +245,34 @@ describe("work assignment", () => {
     expect(screen.queryByRole("dialog", { name: "Assignment" })).not.toBeInTheDocument();
   });
 
+  it("returns focus to the Assignment heading when a pending write disables the opener", async () => {
+    const user = userEvent.setup();
+    let locked = false;
+    const harness = renderWorkDetail({ detail: () => detailBody(subjectId, {}, { intent_locked: locked }) });
+    await screen.findByRole("heading", { level: 1, name: "Subject work item" });
+    // The opener is captured before the dialog opens: Radix hides the rest of
+    // the page from assistive queries while its modal content is mounted.
+    const opener = screen.getByRole("button", { name: "Edit assignment" });
+    await user.click(opener);
+    const dialog = await screen.findByRole("dialog", { name: "Assignment" });
+    expect(opener).toBeEnabled();
+    // A background detail re-read flips `intent_locked` while the dialog is
+    // open, which disables the invoking control underneath it.
+    locked = true;
+    const readsBefore = harness.detailReads(subjectId);
+    await act(async () => {
+      await harness.application.queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId: subjectId }] });
+    });
+    expect(harness.detailReads(subjectId)).toBeGreaterThan(readsBefore);
+    expect(await within(dialog).findByText(/holds this item's intent/)).toBeVisible();
+    expect(opener).toBeDisabled();
+    // Closing cannot hand focus back to the disabled opener: the stable
+    // Assignment heading takes it instead of dropping the keyboard to the body.
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Assignment" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Assignment" })).toHaveFocus();
+  });
+
   it("renders the server's refusal code and re-reads the detail", async () => {
     const user = userEvent.setup();
     const harness = renderWorkDetail({

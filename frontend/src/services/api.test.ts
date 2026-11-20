@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApi, Forbidden, Network, readRetry, ServerRefusal, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
+import { createApi, Forbidden, Network, postGoalCommand, postPortalCommand, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
 import { readWorkDetail } from "./api.fixtures";
 
 const workspace = {
@@ -181,6 +181,48 @@ describe("work-item receipts", () => {
     const api = createApi(fetcher);
     const receipt = await api.updateWorkItem(workItemId, { version: 2, title: "Edited" }, "csrf", new AbortController().signal);
     expect(receipt).toEqual({ id: workItemId, disposition: "" });
+  });
+});
+
+describe("goal command boundary", () => {
+  const goalId = "33333333-3333-4333-8333-333333333333";
+  const envelope = { schema_version: "symmetry.goal_command.v1", mutation_id: "11111111-1111-4111-8111-111111111111", expected_version: 1, expected_revision: 1, kind: "pause", payload: { reason: "hold" } };
+
+  it("classifies a JSON 401 on a write as a session expiry, not a refusal", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ error: { code: "unauthenticated", message: "the portal session is not authenticated" } }), { status: 401 }));
+    const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Unauthenticated);
+    // The Goal creation path shares the transport.
+    const created = await postPortalCommand(fetcher, "csrf", "/portal/api/projects/p1/goals", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
+    expect(created).toBeInstanceOf(Unauthenticated);
+  });
+
+  it("classifies a redirect on a write as a session expiry", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 302 }));
+    const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Unauthenticated);
+  });
+
+  it("refuses a 200 that does not carry the accepted write's receipt", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
+    const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).toMatchObject({ message: "The server response could not be read safely. Refresh or contact your operator." });
+  });
+
+  it("carries the accepted write's own receipt members", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ goal_id: goalId, mutation_id: envelope.mutation_id, goal: { id: goalId }, event: { id: envelope.mutation_id, sequence: 2, kind: "pause", revision: 1 } }), { status: 200 }));
+    const receipt = await postGoalCommand(fetcher, "csrf", goalId, envelope);
+    expect(receipt).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
+  });
+
+  it("adds a guidance step only for a code the map itself owns", () => {
+    const guidance = { stale: "Reload to see the server's current values." };
+    const owned = new ServerRefusal({ status: 409, code: "stale", message: "resource changed", fields: null });
+    expect(refusalNotice(owned, guidance)).toBe("resource changed (stale) — Reload to see the server's current values.");
+    // A served code may name a prototype member: it contributes no step.
+    const prototype = new ServerRefusal({ status: 409, code: "constructor", message: "resource changed", fields: null });
+    expect(refusalNotice(prototype, guidance)).toBe("resource changed (constructor)");
   });
 });
 

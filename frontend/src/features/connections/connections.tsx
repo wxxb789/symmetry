@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { connectionsOptions, workspaceOptions } from "../../app/application";
 import { useSessionToken } from "../../app/session";
 import {
+  ownValue,
   ServerRefusal,
   type Api,
   type Connection,
@@ -19,8 +20,10 @@ import { DialogFrame, FieldErrors, ProjectResources, StatusBadge, formatLabel, p
 
 const authTypes: Record<string, string> = { gh_cli: "GitHub CLI · HTTPS", entra_id: "Microsoft Entra ID" };
 const capabilityLabels: Record<string, string> = { repositories: "Repositories", work_items: "Work items", changes: "Changes", ci: "CI" };
-const authLabel = (value: string) => authTypes[value] ?? `Unknown authentication: ${value || "unspecified"}`;
-const capabilityLabel = (value: string) => capabilityLabels[value] ?? `Unknown capability: ${value}`;
+// Own keys only: a served auth type or capability may name a prototype member
+// (`constructor`), which a plain index would return as Object's own function.
+const authLabel = (value: string) => ownValue(authTypes, value) ?? `Unknown authentication: ${value || "unspecified"}`;
+const capabilityLabel = (value: string) => ownValue(capabilityLabels, value) ?? `Unknown capability: ${value}`;
 const noPendingRequests: { check: number; remove: number } = { check: 0, remove: 0 };
 
 function ResourceRows({ resources }: { resources: readonly ConnectionResource[] }) {
@@ -207,8 +210,10 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
   // connection id), and its requests belong to that connection, not to the
   // instance: the page holds the pending state by connection id so a remount
   // while the operator inspects another connection cannot forget a running
-  // check or removal, and it drops a continuation whose connection the
-  // operator is no longer showing instead of letting it act on newer state.
+  // check or removal. A continuation that settles for a connection the
+  // operator has left neither navigates nor reopens anything — only its own
+  // notice is stated (an empty selection still counts as the operator's own
+  // request, see `noticeFor`).
   const check = useMutation({
     mutationFn: () => api.checkConnection(connection.id, csrf, new AbortController().signal),
     onMutate: () => onRequest(connection.id, "check", true),

@@ -7,7 +7,7 @@ export type LongText = string;
 export type Microusd = string;
 
 /**
- * Consumed members of the Portal Goal detail read: the existing Goal projection with objective, accepted progress, blockers, the server's own allowed actions, settlement attention, budget reservation and consumption, waiting-external boundaries and the read-only dependency projection. Every member a surface consumes that the projection always serves is required (a served null stays nullable), so renaming one cannot pass every gate while the client silently reads undefined; unconsumed presentation members remain additive, and the client never derives a Goal policy member and never offers an action the served allowed_actions does not list.
+ * Members of the Portal Goal detail read: the existing Goal projection with objective, accepted progress, blockers, the server's own allowed actions, settlement attention, budget reservation and consumption, waiting-external boundaries and the read-only dependency projection. Requiredness here is a per-member pin, not a consumption claim: every member this read requires is one the serving projection always emits (a served null stays nullable), whether or not a surface reads it — the Goal id, blocker_reasons, the completion flags, the accepted-outcome disposition, the graph-edge id and the settlement `required?` member are pinned exactly that way — so omitting or renaming one fails this bundle, the Elixir served-document test and the Effect boundary instead of decoding into a silent fallback. Served members this read leaves optional stay additive, and the client never derives a Goal policy member and never offers an action the served allowed_actions does not list.
  */
 export interface SymmetryGoalReadV1 {
   id: UUID;
@@ -30,7 +30,7 @@ export interface SymmetryGoalReadV1 {
   attention_reasons?: string[];
   completion: GoalCompletion;
   /**
-   * The server's exact action list for the rendered version/revision. The surface offers this list and nothing else.
+   * The server's exact action list for the rendered version/revision. The surface offers this list and nothing else, with one documented authority exception: an open plan decision whose served options carry `accept` renders the plan-approval control although the read model never lists decision resolution here (a pending plan decision instead suppresses `request_plan`); that control is driven by the served decision itself and the server validates the decision version and the plan admission.
    */
   allowed_actions: string[];
   work_items: GoalReadWorkItem[];
@@ -182,6 +182,10 @@ export interface GoalReadDecision {
   kind: string;
   state: string;
   "open?": boolean;
+  /**
+   * The durable decision lock version, merged for every served decision from the GoalDecision row (`PortalJSON.goal_decision`); the plan-resolution command presents it as `expected_decision_version`, so a serving-side rename must not silently resolve as null.
+   */
+  version: number;
   question: string | null;
   options: {}[];
   resolution: {} | null;

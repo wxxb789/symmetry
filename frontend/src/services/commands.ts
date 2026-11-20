@@ -4,18 +4,21 @@
  * The control plane hashes a plan proposal with `RequestHash.canonical/1`: one
  * JSON document with lexicographically sorted object keys, array order
  * preserved, Elixir `Jason` scalar encoding. `canonicalJson`/`canonicalDigest`
- * reproduce exactly that encoding so the surface can present the server's own
- * proposal unchanged; the server still validates the hash and refuses a
- * mismatch, so nothing here grants authority.
+ * reproduce that encoding, and `planApprovalCommand` applies the same
+ * per-item defaults Control injects before it hashes (the contracts package's
+ * `canonicalPlanProposal`), so the surface presents the very document the
+ * server validates; the server still checks the hash and refuses a mismatch,
+ * so nothing here grants authority.
  */
+import { canonicalPlanProposal, type SymmetryPlanProposalV1 } from "@symmetry/contracts";
 
 export interface GoalCommandEnvelope {
-  schema_version: "symmetry.goal_command.v1";
-  mutation_id: string;
-  expected_version: number;
-  expected_revision: number;
-  kind: string;
-  payload: unknown;
+  readonly schema_version: "symmetry.goal_command.v1";
+  readonly mutation_id: string;
+  readonly expected_version: number;
+  readonly expected_revision: number;
+  readonly kind: string;
+  readonly payload: unknown;
 }
 
 export type CommandKind =
@@ -60,6 +63,23 @@ export async function canonicalDigest(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalJson(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * The plan-approval pair the server binds for `accept_plan`: the proposal with
+ * the per-item defaults Control itself applies before hashing (`integration:
+ * false`, `change_target: null`, the contract's own `canonicalPlanProposal`)
+ * and the digest of exactly that document.
+ *
+ * The caller emits both: Control re-checks `RequestHash.canonical(proposal)`
+ * against `proposal_hash` and binds the admission to the recorded decision
+ * action hash, so a raw document hashed as-is is refused once the decision is
+ * already resolved. A document the contract cannot normalize throws here and
+ * the caller refuses it before anything is sent.
+ */
+export async function planApprovalCommand(proposal: unknown): Promise<{ proposal: unknown; proposalHash: string }> {
+  const defaulted = canonicalPlanProposal(proposal as SymmetryPlanProposalV1);
+  return { proposal: defaulted, proposalHash: await canonicalDigest(defaulted) };
 }
 
 /**

@@ -87,7 +87,14 @@ type ProviderChangeTarget = Exclude<
   null
 >;
 
-const canonicalPlanProposal = (proposal: SymmetryPlanProposalV1): JsonObject => ({
+/**
+ * The proposal document Control hashes and validates for `request_decision`
+ * and `accept_plan`: Elixir `canonical_plan_proposal` injects `integration:
+ * false` and `change_target: null` per item before the request hash is
+ * computed, so a client that presents a digest must present this document
+ * (exported for the portal's plan approval, which computes the same digest).
+ */
+export const canonicalPlanProposal = (proposal: SymmetryPlanProposalV1): JsonObject => ({
   ...proposal,
   items: proposal.items.map((item) => ({
     ...item,

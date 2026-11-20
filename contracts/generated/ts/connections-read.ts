@@ -5,7 +5,7 @@ export type UtcTimestamp = string;
 export type Revision = number;
 
 /**
- * Consumed fields of the existing portal connection read and its mutation projections. Presentation values stay open strings so an unknown status, capability or auth type remains renderable; unconsumed presentation fields remain additive.
+ * Fields of the existing portal connection read and its mutation projections. Presentation values stay open strings so an unknown status, capability or auth type remains renderable; every member this read requires is one the projection always emits — the connection and bound-resource identity, version and provider metadata are pinned beside the fields the console renders — while the remaining served members stay additive.
  */
 export interface SymmetryConnectionsReadV1 {
   providers: ConnectionProvider[];

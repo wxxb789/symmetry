@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { restoreFocus } from "../../components/focus";
 import { EmptyState, ErrorState, LoadingState } from "../../components/workspace";
 import {
+  ownValue,
   refusalNotice as sharedRefusalNotice,
   ServerRefusal,
   type Api,
@@ -23,9 +24,9 @@ const knownStatuses: Record<string, true> = { healthy: true, degraded: true, off
 const knownSyncStatuses: Record<string, true> = { unknown: true, syncing: true, synced: true, stale: true, failed: true };
 const providerLabels: Record<string, string> = { github: "GitHub", azure_devops: "Azure DevOps" };
 const kindLabels: Record<string, string> = { repository: "Repository", work_tracking: "Work tracking", ci: "CI", agent: "Agent", runtime: "Runtime", connection: "Connection" };
-// Kinds this surface creates. `connection` is a served local kind the classic
-// dialog offers; it carries no provider state to synchronize and no registered
-// reference to select, so it renders correctly here but is not offered.
+// Kinds this surface creates. `connection` is a served local kind this surface
+// renders but does not offer: it carries no provider state to synchronize and
+// no registered reference to select.
 const bindableKinds: readonly string[] = ["repository", "work_tracking", "ci", "agent", "runtime"];
 // The kind -> connection capability rule the server enforces
 // (`ensure_connection_capability/2`): a connection is offered for a kind only
@@ -43,16 +44,18 @@ const refusalGuidance: Record<string, string> = {
   capability_not_granted: "Grant the connection the capability this resource kind needs, then try again.",
   provider_unauthorized: "Reauthenticate the provider session on this server, then test the connection again.",
   provider_failure: "Check provider availability, then test the connection again.",
-  validation_failed: "Correct the highlighted fields and submit again.",
+  validation_failed: "The server rejected this submission; re-read the current values and try again.",
 };
 
 export const formatLabel = (value: string) => value.replaceAll("_", " ");
-export const providerLabel = (value: string) => providerLabels[value] ?? `Unknown provider: ${value || "unspecified"}`;
-const kindLabel = (value: string) => kindLabels[value] ?? `Unknown kind: ${value}`;
-const isLocalKind = (kind: string) => localKinds[kind] === true;
+export const providerLabel = (value: string) => ownValue(providerLabels, value) ?? `Unknown provider: ${value || "unspecified"}`;
+const kindLabel = (value: string) => ownValue(kindLabels, value) ?? `Unknown kind: ${value}`;
+const isLocalKind = (kind: string) => ownValue(localKinds, kind) === true;
 
 export function StatusBadge({ status, scope }: { status: string; scope: "connection" | "resource" | "sync" }) {
-  const known = scope === "sync" ? knownSyncStatuses[status] : knownStatuses[status];
+  // Own keys only: a served status may be `constructor`, and a plain index
+  // would render Object's own member as a "known" label.
+  const known = scope === "sync" ? ownValue(knownSyncStatuses, status) : ownValue(knownStatuses, status);
   const tone = status === "healthy" || status === "synced" ? "status-complete" : status === "degraded" || status === "failed" || status === "offline" ? "status-attention" : "";
   return <span className={`status-badge ${tone}`} data-status={status}>{known ? formatLabel(status).replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()) : `Unknown ${scope} status: ${status || "unspecified"}`}</span>;
 }
@@ -140,7 +143,7 @@ function decodeRuntimes(workspace: Workspace | undefined): RegisteredRuntime[] {
 }
 
 const eligibleConnections = (kind: string, connections: readonly Connection[]): readonly Connection[] => {
-  const capability = kindCapabilities[kind];
+  const capability = ownValue(kindCapabilities, kind);
   return capability === undefined ? [] : connections.filter((connection) => connection.capabilities.includes(capability));
 };
 

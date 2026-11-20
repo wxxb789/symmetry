@@ -12,8 +12,12 @@ import { createAppRouter } from "./router";
  * answers a path the surface does not call fails the assertion instead of
  * silently passing.
  */
-export function renderRoute(path: string, fetcher: typeof fetch) {
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
+export function renderRoute(
+  path: string,
+  fetcher: typeof fetch,
+  options: { location?: { href: string; replace: (url: string) => void } } = {},
+) {
+  const application = createApplication({ fetcher, location: options.location ?? { href: `http://localhost${path}`, replace: vi.fn() } });
   const history = createMemoryHistory({ initialEntries: [path] });
   const router = createAppRouter(application, history);
   const { unmount } = render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
