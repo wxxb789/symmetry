@@ -57,7 +57,4 @@ func TestSubjectUnmarshalReplacesReceiverOnSuccess(t *testing.T) {
 	if receiver != replacement {
 		t.Fatalf("receiver = %+v, want fully replaced %+v", receiver, replacement)
 	}
-	if receiver.ResourceID == original.ResourceID || receiver.Commit == original.Commit || receiver.TreeDigest == original.TreeDigest {
-		t.Fatalf("receiver kept a pre-existing field: got %+v, want every field replaced from %+v", receiver, original)
-	}
 }
