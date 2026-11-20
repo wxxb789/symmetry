@@ -2362,11 +2362,11 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       `human:unrecorded` → `human:`) and returns every other key as written, so the escaped
       `agent::unrecorded` #111 added stays a recorded name and no legacy spelling collapses onto
       it; the reader is a fixed point on every key it returns. Both filter-key reads go through
-      it: `workSearch`'s `owner` param (`frontend/src/features/projects/filters.ts:50-55`), the
+      it: `workSearch`'s `owner` param (`frontend/src/features/projects/filters.ts:50-51`), the
       reader the router's `validateSearch`, every toolbar `setSearch`, `readSavedViews` and the
       work detail's `listState` share — so a bookmark that still carries the pre-#111 spelling
       reaches the surface, the toolbar's absent-owner check and `sameWorkSearch` as the minted
-      key — and `filtersOf`'s filter-state build (`:88-90`), so a search that never passed the
+      key — and `filtersOf`'s filter-state build (`:85-87`), so a search that never passed the
       URL parser re-points as well. The visible effect on the entry's second symptom: the select
       now matches the minted key against `ownerOptions`, renders the row's own "Agent" option,
       and labels the absent fallback from the minted key instead of duplicating the legacy one.

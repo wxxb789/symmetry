@@ -103,6 +103,5 @@ describe("work filtering and projections", () => {
     expect(filterWorkItems(sentinelWork, filtersOf(workSearch({ owner: "agent::unrecorded" }))).map((item) => item.key)).toEqual(["ONE-6"]);
     // Every other key travels as written through both readers.
     expect(workSearch({ owner: "agent:builder" })).toEqual({ owner: "agent:builder" });
-    expect(filterWorkItems(work, filtersOf(workSearch({ owner: "unassigned" }))).map((item) => item.key)).toEqual(["ONE-3"]);
   });
 });

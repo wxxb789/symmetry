@@ -47,9 +47,6 @@ export function workSearch(search: Record<string, unknown>): WorkSearch {
   const view = search["view"];
   const q = queryParam(search["q"]);
   const state = textParam(search["state"]);
-  // The owner filter key is read through the codec's reader, so a bookmark that
-  // still carries the pre-#111 sentinel spelling reaches the surface as the key
-  // the encoder mints now (and its label already names).
   const ownerParam = textParam(search["owner"]);
   const owner = ownerParam === undefined ? undefined : ownerKeyFilter(ownerParam);
   const blocked = blockedParam(search["blocked"]);
