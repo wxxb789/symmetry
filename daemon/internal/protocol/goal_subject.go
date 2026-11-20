@@ -190,12 +190,16 @@ func marshalJSONString(value string) ([]byte, error) {
 	if err := encoder.Encode(value); err != nil {
 		return nil, err
 	}
-	return normalizeJSONStringLineSeparators(bytes.TrimSuffix(output.Bytes(), []byte{'\n'})), nil
+	return normalizeJSONStringEscapes(bytes.TrimSuffix(output.Bytes(), []byte{'\n'})), nil
 }
 
-// encoding/json escapes U+2028 and U+2029 even with HTML escaping disabled.
-// Scan complete escape tokens so a literal \\u2028 or \\u2029 is left unchanged.
-func normalizeJSONStringLineSeparators(encoded []byte) []byte {
+// The canonical escape spelling is the control plane's: U+2028 and U+2029 stay
+// raw UTF-8 (encoding/json escapes them even with HTML escaping disabled), and
+// a \uXXXX escape uses uppercase hex digits, as the control plane's Jason
+// encoder spells them. After the line-separator rule the only escapes left are
+// the C0 controls that have no shorthand. Scan complete escape tokens so a
+// literal \\u001f is left unchanged.
+func normalizeJSONStringEscapes(encoded []byte) []byte {
 	output := make([]byte, 0, len(encoded))
 	for index := 0; index < len(encoded); {
 		if encoded[index] != '\\' {
@@ -226,7 +230,10 @@ func normalizeJSONStringLineSeparators(encoded []byte) []byte {
 			case encoded[index+2] == '2' && encoded[index+3] == '0' && encoded[index+4] == '2' && encoded[index+5] == '9':
 				output = append(output, 0xe2, 0x80, 0xa9)
 			default:
-				output = append(output, encoded[index:index+6]...)
+				output = append(output, '\\', 'u')
+				for _, digit := range encoded[index+2 : index+6] {
+					output = append(output, upperHexDigit(digit))
+				}
 			}
 			index += 6
 		default:
@@ -235,6 +242,15 @@ func normalizeJSONStringLineSeparators(encoded []byte) []byte {
 		}
 	}
 	return output
+}
+
+// upperHexDigit returns the uppercase spelling of a hexadecimal digit byte;
+// other bytes are returned unchanged.
+func upperHexDigit(digit byte) byte {
+	if digit >= 'a' && digit <= 'f' {
+		return digit - 'a' + 'A'
+	}
+	return digit
 }
 
 func ensureDecoderEOF(decoder *json.Decoder) error {

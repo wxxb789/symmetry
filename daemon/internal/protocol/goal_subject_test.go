@@ -110,3 +110,90 @@ func TestCanonicalizeJSONNormalizesNumericNegativeZeroOnly(t *testing.T) {
 		t.Fatalf("canonical string -0 = %q", stringNegativeZero)
 	}
 }
+
+// The control plane hashes its canonical JSON with Jason
+// (control/lib/symmetry_control/request_hash.ex, mirrored by
+// contracts/ts/semantics.ts and its boundary test), and Jason spells every C0
+// control without a shorthand escape as an uppercase \u00XX escape. The escape
+// spelling is part of the bytes a digest covers, so a Go lowercase spelling
+// would give one logical value two canonical digests.
+func TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane(t *testing.T) {
+	want := []byte(`{"value":"\u001F"}`)
+	for _, test := range []struct{ name, input string }{
+		{"uppercase input escape", `{"value":"\u001F"}`},
+		{"lowercase input escape", `{"value":"\u001f"}`},
+	} {
+		canonical, err := CanonicalizeJSON([]byte(test.input))
+		if err != nil {
+			t.Fatalf("%s: %v", test.name, err)
+		}
+		if !bytes.Equal(canonical, want) {
+			t.Fatalf("canonical %s = %q, want %q", test.name, canonical, want)
+		}
+	}
+	digest := sha256.Sum256(want)
+	const wantHash = "sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63"
+	if gotHash := "sha256:" + hex.EncodeToString(digest[:]); gotHash != wantHash {
+		t.Fatalf("canonical control-character hash = %s, want %s", gotHash, wantHash)
+	}
+
+	hexLetters, err := CanonicalizeJSON([]byte(`{"value":"\u000b\u000e\u000f\u001a\u001b\u001c\u001d\u001e\u001f"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHexLetters := []byte(`{"value":"\u000B\u000E\u000F\u001A\u001B\u001C\u001D\u001E\u001F"}`)
+	if !bytes.Equal(hexLetters, wantHexLetters) {
+		t.Fatalf("canonical hex-letter escapes = %q, want %q", hexLetters, wantHexLetters)
+	}
+
+	// The document the contracts boundary test pins (contracts/scripts/
+	// boundary.test.mjs: "canonical JSON escapes control characters exactly as
+	// the control plane's Jason does"); the digest below is Jason 1.4.5's over
+	// the same canonical text.
+	document, err := CanonicalizeJSON([]byte(`{"schema_version":"symmetry.plan.v1","items":[{"description":"before\u000Bafter\u001Bend"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDocument := []byte(`{"items":[{"description":"before\u000Bafter\u001Bend"}],"schema_version":"symmetry.plan.v1"}`)
+	if !bytes.Equal(document, wantDocument) {
+		t.Fatalf("canonical boundary document = %q, want %q", document, wantDocument)
+	}
+	documentDigest := sha256.Sum256(wantDocument)
+	const wantDocumentHash = "sha256:401bf74e8085ac0cce504b465cabbc82043e4fc8c6ec73625d60a43292656fd8"
+	if gotHash := "sha256:" + hex.EncodeToString(documentDigest[:]); gotHash != wantDocumentHash {
+		t.Fatalf("canonical boundary document hash = %s, want %s", gotHash, wantDocumentHash)
+	}
+
+	literalEscapeText, err := CanonicalizeJSON([]byte(`{"value":"\\u001f"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(literalEscapeText, []byte(`{"value":"\\u001f"}`)) {
+		t.Fatalf("canonical literal escape text = %q, want %q", literalEscapeText, `{"value":"\\u001f"}`)
+	}
+}
+
+// The reachable seam: the daemon recomputes this canonical text before it
+// accepts a plan proposal and refuses it when the digest differs from the one
+// the control plane stamped with Jason
+// (goal_contract_semantics.go canonicalPlanProposalSHA256, "proposal_hash does
+// not match canonical proposal"; the same rule for control-bearing free text
+// in a context snapshot at goal_schema.go validateContextSnapshotContentHash
+// and control/validation.go validateGoalContextContentHash). The expectation is
+// the control plane's digest already recorded by the frontend pin
+// (frontend/src/features/goals/goal-attention.test.tsx:751-790).
+func TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest(t *testing.T) {
+	canonical, err := CanonicalizeJSON([]byte(`{"schema_version":"symmetry.plan.v1","items":[{"description":"before\u000Bafter\u001Bend","integration":false,"change_target":null}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte(`{"items":[{"change_target":null,"description":"before\u000Bafter\u001Bend","integration":false}],"schema_version":"symmetry.plan.v1"}`)
+	if !bytes.Equal(canonical, want) {
+		t.Fatalf("canonical plan proposal = %q, want %q", canonical, want)
+	}
+	digest := sha256.Sum256(canonical)
+	const wantHash = "sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5"
+	if gotHash := "sha256:" + hex.EncodeToString(digest[:]); gotHash != wantHash {
+		t.Fatalf("canonical plan proposal hash = %s, want %s", gotHash, wantHash)
+	}
+}

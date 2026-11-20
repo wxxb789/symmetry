@@ -202,57 +202,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
-- [ ] Align the control-character escape case in the canonical JSON bytes both languages hash.
-      `protocol.CanonicalizeJSON` (`daemon/internal/protocol/goal_subject.go:102`) re-encodes every
-      string through `encoding/json` (`writeCanonicalJSON` `:122`, its string arm `:132-137`;
-      `marshalJSONString` `:186` with HTML escaping off), and Go spells every control character
-      below U+0020 that has no shorthand escape as `\u00xx` with lowercase hex digits, while the
-      Elixir side hashes `SymmetryControl.RequestHash.canonical/1`
-      (`control/lib/symmetry_control/request_hash.ex:5`, `Jason.encode!/1`; Jason 1.4.5 per
-      `control/mix.lock:10`) and Jason spells the same character `\u001F` with uppercase hex.
-      Each language is self-consistent — in Go both
-      `{"value":"\u001F"}` and `{"value":"\u001f"}` canonicalize to `{"value":"\u001f"}` — so the
-      defect is the pair: one logical value carries two canonical digests, one per language.
-      Reproduced at `978abba` with throwaway probes (not committed): a Go test over
-      `CanonicalizeJSON` printed `{"value":"\u001f"}` with
-      `sha256:b43e9944b5d28b7f3e6bad4b289642d1786aa5ba80658cf2ed8bf87ecd642e51`, and
-      `Jason.encode!(%{"value" => <<0x1F>>})` printed `{"value":"\u001F"}` with
-      `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`. The Elixir reading is
-      not a lone choice: the contracts layer already mirrors it deliberately — `encodeJsonString`
-      (`contracts/ts/semantics.ts:69-80`) emits the shorthand escapes plus an uppercase `\u00XX`
-      for every other C0 control, documented as "exactly as Elixir `Jason` encodes it", and the pin
-      is the boundary test "canonical JSON escapes control characters exactly as the control
-      plane's Jason does" (`contracts/scripts/boundary.test.mjs:59-71`, U+000B and U+001B inside a
-      schema-valid LongText description), which names `RequestHash.canonical/1` as the hashed text;
-      `contracts:check` verifies the canonical sorted JSON Subject hash through that same TypeScript
-      encoder (`contracts/README.md:62-66`). So the Go canonicalizer is the side that disagrees
-      with the other two, and it is unpinned: its escaping test pins `\u0000` and the shorthand
-      escapes but no `\u00xx` escape carrying a hex letter
-      (`daemon/internal/protocol/goal_subject_test.go:64-73`),
-      and a case-sensitive search for an uppercase-hex control escape
-      (`grep -rn 'u00[0-9]*[A-F]' daemon/ --include='*.go'`) returns 0 lines. The normalization the
-      hash must follow is written at `docs/design/protocol.md:311-316` and does not name the C0
-      escape case, so deciding it stays the open choice.
-      Reachable through the context snapshot: Control builds it from free text — `approved_goal`
-      `"objective"` (`control/lib/symmetry_control/goals.ex:2151`) and `work_contract`
-      `"title"`/`"description"` (`:2156-2157`) — and stamps the snapshot's `content_hash` with
-      Jason (`context_content_hash` `:2602-2606`, via `RequestHash.canonical`), which the daemon
-      recomputes with Go and refuses on mismatch
-      (`daemon/internal/control/validation.go:1744-1772`, "context.content_hash does not match
-      canonical snapshot"; the same rule at `daemon/internal/protocol/goal_schema.go:48-70`).
-      The contracts boundary test states U+000B/U+001B are schema-valid inside a LongText
-      description (`contracts/scripts/boundary.test.mjs:59-71`), so a work item whose description
-      carries U+001F yields a snapshot the daemon rejects — a source-traced consequence, not
-      executed end to end in this record. The `Subject` the daemon binds cannot carry C0
-      characters (its fields are a UUID, a git object id and a sha256, `Subject.Validate`
-      `goal_subject.go:39-47`; `Subject.Hash` `:81-88`), and `goals.ex:2636` hashes that same
-      restricted value, so neither is the reachable seam. Fix direction: decide the canonical
-      case once — the spelling the other two implementations already share (uppercase, i.e. Jason's
-      bytes) or a shortest-escape normalization written into the rule itself — then add the missing
-      Go pin (and a shared fixture if the choice tightens the rule), and treat any recorded digest
-      over a control-bearing value as invalidated by the change. Suggested owner area: daemon
-      protocol plus the Control hash owners, with the contracts owner for the normalization text.
-
 - [ ] Stop the Windows-family path tail from absorbing a JSON escape that follows the path.
       `_WINDOWS_TAIL` (`scripts/ci/model-routing-record-sanitize.py:110`) admits a bare backslash
       as a path byte — deliberate, per its comment at `:104-107`, because in raw recorded text the
