@@ -245,8 +245,11 @@ defmodule SymmetryControl.Chat do
   # `create_new_command!` requires a legacy supervisory runtime), so a native
   # runtime can never satisfy the legacy requirement. When every runtime
   # registered for the work item's execution binding runs a native harness —
-  # `Orchestration.native_harness_kind?/1`, the one vocabulary native Goal
-  # admission selects on, asked rather than restated here — admit the start
+  # the vocabulary the native Goal admission selection query and this
+  # derivation share through `Orchestration.native_harness_kind?/1` rather than
+  # restating; the Runtime and HarnessSession schemas and the database check
+  # constraints restate it and are held to it by
+  # `SymmetryControl.NativeHarnessKindBindingTest` — admit the start
   # through the operations a native admission needs: start one turn, stream the
   # events that carry its terminal result, and remain cancellable. Every other
   # binding (no registered runtime, or any runtime without harness metadata)

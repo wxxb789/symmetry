@@ -63,7 +63,9 @@ defmodule SymmetryControlWeb.Plugs.PortalInvalidations do
   defp classify(["api", "v1", "machines" | _rest]), do: %{kind: "runtime"}
   defp classify(["api", "v1", "commands" | _rest]), do: %{kind: "run"}
 
-  # Any other committed write (a new route, an enrollment) invalidates broadly
-  # rather than silently dropping the change.
+  # Any other committed write (a new route the classification does not name yet)
+  # invalidates broadly rather than silently dropping the change. An enrollment
+  # is not routed through this plug and invalidates nothing: a machine changes
+  # no served read until it registers a session, which does publish.
   defp classify(_path), do: %{kind: "workspace"}
 end

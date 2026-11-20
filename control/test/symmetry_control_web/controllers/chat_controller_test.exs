@@ -1,6 +1,7 @@
 defmodule SymmetryControlWeb.ChatControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  alias SymmetryControl.ContractSchema
   alias SymmetryControl.Workspaces
   alias SymmetryControlWeb.PortalSession
 
@@ -146,7 +147,7 @@ defmodule SymmetryControlWeb.ChatControllerTest do
     schema =
       bundle
       |> Map.fetch!("#{name}.schema.json")
-      |> rewrite_pcre2_pattern_escapes()
+      |> ContractSchema.rewrite_pcre2_pattern_escapes()
       |> ExJsonSchema.Schema.resolve()
 
     case ExJsonSchema.Validator.validate(schema, document) do
@@ -159,19 +160,4 @@ defmodule SymmetryControlWeb.ChatControllerTest do
         )
     end
   end
-
-  defp rewrite_pcre2_pattern_escapes(value) when is_map(value) do
-    Map.new(value, fn
-      {"pattern", pattern} when is_binary(pattern) ->
-        {"pattern", String.replace(pattern, "\\u0000", "\\x{0}")}
-
-      {key, child} ->
-        {key, rewrite_pcre2_pattern_escapes(child)}
-    end)
-  end
-
-  defp rewrite_pcre2_pattern_escapes(value) when is_list(value),
-    do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
-
-  defp rewrite_pcre2_pattern_escapes(value), do: value
 end

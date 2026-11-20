@@ -66,13 +66,22 @@ defmodule SymmetryControl.Orchestration do
   Whether `kind` names a native harness kind.
 
   One list, two readers: native Goal admission selects runtimes on
-  `@native_harness_kinds`, and `SymmetryControl.Chat` asks this predicate to
-  decide whether a Chat-launched (goal-less) start is admitted through the
-  adapter operations rather than the legacy supervisory flag. A call site that
-  restates the vocabulary instead of asking here is how two lists drift.
+  `@native_harness_kinds` in `next_assignable_legacy_task_and_runtime/1`, and
+  `SymmetryControl.Chat` asks this predicate to decide whether a Chat-launched
+  (goal-less) start is admitted through the adapter operations rather than the
+  legacy supervisory flag. The Runtime and HarnessSession schema inclusions and
+  the database check constraints restate that vocabulary instead of reading it;
+  `SymmetryControl.NativeHarnessKindBindingTest` holds those restatements to
+  `native_harness_kinds/0`.
   """
   @spec native_harness_kind?(term()) :: boolean()
-  def native_harness_kind?(kind), do: kind in @native_harness_kinds
+  def native_harness_kind?(kind), do: kind in native_harness_kinds()
+
+  @doc """
+  The native harness kinds `native_harness_kind?/1` admits.
+  """
+  @spec native_harness_kinds() :: [String.t()]
+  def native_harness_kinds, do: @native_harness_kinds
 
   @spec enroll_machine(map(), String.t(), keyword()) ::
           {:ok, %{machine: Machine.t(), token: String.t()}, :created | :replayed}

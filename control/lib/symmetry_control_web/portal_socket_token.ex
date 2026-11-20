@@ -36,8 +36,10 @@ defmodule SymmetryControlWeb.PortalSocketToken do
 
   def verify(_token), do: {:error, :unauthenticated}
 
-  # Phoenix serializes the token payload with the app's JSON library, so the
-  # audience member arrives as a string key and is read exactly once here.
+  # Phoenix serializes the token payload with the app's JSON library
+  # (`config :phoenix, :json_library, Jason`), so the audience member arrives as
+  # a string key; the atom read stays as a fallback for a serializer that would
+  # preserve atoms.
   defp audience_of(payload) do
     case Map.get(payload, "audience") || Map.get(payload, :audience) do
       @audience -> {:ok, @audience}
