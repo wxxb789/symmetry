@@ -347,12 +347,13 @@ export function ConnectionsPage() {
   const editorSequence = useRef(0);
   const [openEditorId, setOpenEditorId] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
-  // A refresh is the operator's own request: it starts a new read even when one
-  // is already in flight, because React Query's manual refetch cancels the
-  // request it supersedes. Do not gate a refresh on `isFetching`: that field is
-  // not read during render, so a handler can hold a stale in-flight snapshot
-  // and skip a read the operator asked for (the failed workspace re-read that
-  // docs/archive/CLOSED-TODO.md records).
+  // A refresh is the operator's own request: React Query's manual refetch
+  // cancels the read it supersedes and starts a new one whenever cached data
+  // exists for the key; a first read still holding no data is joined instead
+  // (query-core 5.107.1, query.js:353-360). Do not gate a refresh on
+  // `isFetching`: that field is not read during render, so a handler can hold
+  // a stale in-flight snapshot and skip a read the operator asked for (the
+  // failed workspace re-read that docs/archive/CLOSED-TODO.md records).
   const refresh = () => {
     void query.refetch();
     void workspace.refetch();

@@ -156,7 +156,8 @@ export function retainOlderPage(
  * boundary the surface's next load chains from. `retainOlderPage` binds an
  * older page to the chain under it, and a refused press proves its refusal of
  * the cursor the surface holds only under it; a boundary a later load advanced
- * past, or a renewed cursor superseded, no longer owns the pointer.
+ * past no longer owns the pointer, and a re-signed cursor at the same recorded
+ * boundary keeps it, because the id comparison does not change on renewal.
  */
 export function ownsChainPointer(state: ChatScopeState, cursor: string, boundaryId: string | null): boolean {
   return boundaryId !== null ? state.nextBoundaryId === boundaryId : state.nextCursor === cursor;

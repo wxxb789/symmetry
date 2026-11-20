@@ -95,9 +95,12 @@ const shellQuery = (pathname: string, search: string): boolean => {
 };
 
 /**
- * The session-expiry return target. It mirrors the server's
- * `SymmetryControlWeb.PortalSession` rules parameter for parameter, so a deep
- * link survives login exactly when the server would restore it; the shared
+ * The session-expiry return target. It applies the server's
+ * `SymmetryControlWeb.PortalSession` rules parameter for parameter to the
+ * URL-normalized location the browser reports, so every target it emits is one
+ * the server accepts verbatim and a deep link survives login; raw spellings the
+ * URL parser normalizes before the client sees them (the shared corpus comment
+ * lists those classes) are refused by the server's own raw-string check. The
  * corpus at `contracts/fixtures/shell-return-targets.json` pins the enumerated
  * accept/reject cases on both sides, so every path or query rule change must
  * add a corpus case.

@@ -256,78 +256,95 @@ defmodule SymmetryControlWeb.PortalSessionTest do
   end
 
   test "login accepts only explicit internal shell return paths", %{conn: conn} do
-    for path <- [
-          "https://example.com/portal",
-          "//example.com/portal",
-          "/\\example.com/portal",
-          "/portal/login",
-          "/portal/logout",
-          "/portal/api/session",
-          "/portal/assets/main.js",
-          "/portal/not-a-route",
-          "/portal/projects/../login",
-          "/portal/projects/%2e%2e",
-          "/portal/connections/extra",
-          "/portal/connections?connectionId=//example.com",
-          "/portal/connections?return_to=//example.com",
-          "/portal/connections?projectId=//example.com",
-          "/portal/connections?projectId=project-123%0d%0alocation%3ahttps://example.com",
-          "/portal/connections?unknown=1",
-          "/portal/connections?connectionId=20000000-0000-4000-8000-000000000001&user=admin",
-          "/portal/connections?",
-          "/portal/connections#not-a-view",
-          "/portal/connections#",
-          "/portal/projects/project-123?return_to=//example.com",
-          "/portal?return_to=//example.com",
-          "/portal?project_id=//example.com",
-          "/portal?project_id=project-123%0d%0alocation%3ahttps://example.com",
-          "/portal?chat_scope=admin",
-          "/portal?project_id=project-123#not-a-view",
-          "/portal/classic",
-          "/portal/classic?project_id=project-123",
-          "/portal/classic#board",
-          "/portal/chat?scope=admin",
-          "/portal/chat?runId=//example.com",
-          "/portal/chat?unknown=1",
-          "/portal/chat#not-a-view",
-          "/portal/classic/../login",
-          "/portal/projects/project-123?projectId=project-123",
-          "/portal/projects/project-123?q=//example.com",
-          "/portal/projects/project-123?q=a%0ab",
-          "/portal/projects/project-123?q=a%1fb",
-          "/portal/projects/project-123?q=a%00b",
-          "/portal/projects/project-123?view=board#not-a-view",
-          "/portal/work",
-          "/portal/work/work-123#not-a-view",
-          "/portal/work/work-123?view=evil",
-          "/portal/work/work-123?unknown=1",
-          "/portal/work/work-123?q=//example.com",
-          "/portal/work/work-123?q=project-123%0d%0alocation%3ahttps://example.com",
-          "/portal/work/work-123?q=a%0ab",
-          "/portal/work/work-123?q=a%1fb",
-          "/portal/work/work-123?q=a%00b",
-          "/portal/work/work-123?projectId=//example.com",
-          "/portal/work/../login",
-          "/portal/work/%2e%2e",
-          "/portal/runtimes?x=1",
-          "/portal/runtimes?projectId=//example.com",
-          "/portal/runtimes?projectId=project-123%0d%0alocation%3ahttps://example.com",
-          "/portal/runtimes?view=board",
-          "/portal/runtimes/extra",
-          "/portal/goals",
-          "/portal/goals/goal-123?unknown=1",
-          "/portal/goals/goal-123#not-a-view",
-          "/portal/goals/../login",
-          "/portal/goals/%2e%2e",
-          "/portal/goals/goal-123/extra",
-          "/portal/chat?scope=other",
-          "/portal/chat?next=https://example.com",
-          "/portal/chat?runId=//example.com",
-          "/portal/chat?scope=run%0d%0alocation%3ahttps://example.com",
-          "/portal#chat",
-          "/portal\r\nlocation:https://example.com",
-          "\"><script>alert(1)</script>"
-        ] do
+    # Every shell path's raw empty-query and bare-fragment spellings: the URL
+    # parser cannot carry them (the client's `search`/`hash` getters report "")
+    # while the server refuses the raw string, so each side pins its own class.
+    raw_form_paths =
+      for path <- [
+            "/portal",
+            "/portal/attention",
+            "/portal/chat",
+            "/portal/connections",
+            "/portal/goals/goal-123",
+            "/portal/projects",
+            "/portal/projects/project-123",
+            "/portal/runtimes",
+            "/portal/work/work-123"
+          ],
+          marker <- ["?", "#"],
+          do: path <> marker
+
+    for path <-
+          [
+            "https://example.com/portal",
+            "//example.com/portal",
+            "/\\example.com/portal",
+            "/portal/login",
+            "/portal/logout",
+            "/portal/api/session",
+            "/portal/assets/main.js",
+            "/portal/not-a-route",
+            "/portal/projects/../login",
+            "/portal/projects/%2e%2e",
+            "/portal/connections/extra",
+            "/portal/connections?connectionId=//example.com",
+            "/portal/connections?return_to=//example.com",
+            "/portal/connections?projectId=//example.com",
+            "/portal/connections?projectId=project-123%0d%0alocation%3ahttps://example.com",
+            "/portal/connections?unknown=1",
+            "/portal/connections?connectionId=20000000-0000-4000-8000-000000000001&user=admin",
+            "/portal/connections#not-a-view",
+            "/portal/projects/project-123?return_to=//example.com",
+            "/portal?return_to=//example.com",
+            "/portal?project_id=//example.com",
+            "/portal?project_id=project-123%0d%0alocation%3ahttps://example.com",
+            "/portal?chat_scope=admin",
+            "/portal?project_id=project-123#not-a-view",
+            "/portal/classic",
+            "/portal/classic?project_id=project-123",
+            "/portal/classic#board",
+            "/portal/chat?scope=admin",
+            "/portal/chat?runId=//example.com",
+            "/portal/chat?unknown=1",
+            "/portal/chat#not-a-view",
+            "/portal/classic/../login",
+            "/portal/projects/project-123?projectId=project-123",
+            "/portal/projects/project-123?q=//example.com",
+            "/portal/projects/project-123?q=a%0ab",
+            "/portal/projects/project-123?q=a%1fb",
+            "/portal/projects/project-123?q=a%00b",
+            "/portal/projects/project-123?view=board#not-a-view",
+            "/portal/work",
+            "/portal/work/work-123#not-a-view",
+            "/portal/work/work-123?view=evil",
+            "/portal/work/work-123?unknown=1",
+            "/portal/work/work-123?q=//example.com",
+            "/portal/work/work-123?q=project-123%0d%0alocation%3ahttps://example.com",
+            "/portal/work/work-123?q=a%0ab",
+            "/portal/work/work-123?q=a%1fb",
+            "/portal/work/work-123?q=a%00b",
+            "/portal/work/work-123?projectId=//example.com",
+            "/portal/work/../login",
+            "/portal/work/%2e%2e",
+            "/portal/runtimes?x=1",
+            "/portal/runtimes?projectId=//example.com",
+            "/portal/runtimes?projectId=project-123%0d%0alocation%3ahttps://example.com",
+            "/portal/runtimes?view=board",
+            "/portal/runtimes/extra",
+            "/portal/goals",
+            "/portal/goals/goal-123?unknown=1",
+            "/portal/goals/goal-123#not-a-view",
+            "/portal/goals/../login",
+            "/portal/goals/%2e%2e",
+            "/portal/goals/goal-123/extra",
+            "/portal/chat?scope=other",
+            "/portal/chat?next=https://example.com",
+            "/portal/chat?runId=//example.com",
+            "/portal/chat?scope=run%0d%0alocation%3ahttps://example.com",
+            "/portal#chat",
+            "/portal\r\nlocation:https://example.com",
+            "\"><script>alert(1)</script>"
+          ] ++ raw_form_paths do
       login_page = conn |> enforce_csrf() |> get("/portal/login", %{"return_to" => path})
       login_html = html_response(login_page, 200)
       [_, csrf_token] = Regex.run(~r/name="_csrf_token" value="([^"]+)"/, login_html)
@@ -359,9 +376,18 @@ defmodule SymmetryControlWeb.PortalSessionTest do
     %{"cases" => cases} = @shell_return_targets |> File.read!() |> Jason.decode!()
     assert cases != []
 
-    for %{"name" => name, "path" => path, "return_to" => expected} <- cases do
-      assert PortalSession.return_to(path) == (expected || "/portal"),
-             "shared return-target case #{inspect(name)}: #{path}"
+    for row <- cases do
+      # A malformed row is a corpus error, not a refusal case: fail loudly on a
+      # missing name/path and on a missing or non-string, non-null return_to.
+      label = "shared return-target row: #{inspect(row)}"
+      assert is_map(row), label
+      assert is_binary(row["name"]), label
+      assert is_binary(row["path"]), label
+      assert Map.has_key?(row, "return_to"), label
+      assert is_binary(row["return_to"]) or is_nil(row["return_to"]), label
+
+      assert PortalSession.return_to(row["path"]) == (row["return_to"] || "/portal"),
+             "shared return-target case #{inspect(row["name"])}: #{row["path"]}"
     end
   end
 

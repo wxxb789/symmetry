@@ -783,6 +783,8 @@ describe("history", () => {
     expect(moved).not.toBeNull();
     expect(moved).toHaveAttribute("data-boundary-current", messageId(13));
     expect(moved).toHaveAttribute("data-boundary-retained", messageId(8));
+    // The reader-visible sentence is part of the contract, not just the node.
+    expect(moved).toHaveTextContent("Entries between the loaded history and the retained older pages were not loaded; Load older history loads one page per press, so filling the gap may take more than one press.");
     expect(messageIds()).toEqual([7, 8, 13, 14].map(messageId));
 
     // A load that only reaches the refreshed boundary does not connect the
