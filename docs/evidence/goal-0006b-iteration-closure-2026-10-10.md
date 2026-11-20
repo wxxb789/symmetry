@@ -63,7 +63,7 @@ The archived goal is no longer an active iteration entry.
 ## Checks actually executed
 
 Windows commands ran from `daemon/` using the explicit executable
-`C:/Users/lhan/AppData/Local/mise/installs/go/1.27.2/bin/go.exe` (abbreviated
+`path-sha256:02af5a28aff06d700859ebaae221426bae2bef1ec8fd2dbd81e493f4163c57bf` (abbreviated
 `GO_WIN` below). This avoids the observed PATH/GOROOT mismatch without changing
 system configuration.
 
@@ -96,13 +96,13 @@ GO_WIN run ./cmd/symmetry-daemon -h
 
 The Linux cross-build and vet used the same explicit Windows Go executable with
 process-local `GOOS=linux`, `GOARCH=amd64`, `CGO_ENABLED=0`, and
-`-C Q:/repos/symmetry/daemon`. No global environment setting changed.
+`-C path-sha256:7fec143663b8d4819becb82fa3649a70a7dc9c05323aff2301186ab346513ca5`. No global environment setting changed.
 
 The actual Linux test command used the existing selected WSL2 guest and current
 live checkout, not an old frozen source root:
 
 ```text
-C:/Windows/System32/wsl.exe -d Symmetry-Goal0006b-Local-c06a7a09 --user symmetry --cd Q:/repos/symmetry/daemon --exec /opt/symmetry-goal0006b-bootstrap/c06a7a09/go/bin/go test -v -count=1 -p=1 -timeout=180s ./internal/platform ./internal/app -run "^(TestLinuxSupervisorLeaseState(ReplaysAndFencesGenerations|LatchesDeadlineBeforeTimerCallback|OwnerLossLinearizesWithResume)|TestRestartStopPersistsAuthenticatedHelperSealOnlyWithPriorMirrorSeal|TestLinuxOwnerAnchor.*(Stop|Kill|Cleanup))$"
+path-sha256:29c7adf681695a0028a464d36584e3797edc2ae9c69c1504edc89b753d77ace1 -d Symmetry-Goal0006b-Local-c06a7a09 --user symmetry --cd path-sha256:7fec143663b8d4819becb82fa3649a70a7dc9c05323aff2301186ab346513ca5 --exec /opt/symmetry-goal0006b-bootstrap/c06a7a09/go/bin/go test -v -count=1 -p=1 -timeout=180s ./internal/platform ./internal/app -run "^(TestLinuxSupervisorLeaseState(ReplaysAndFencesGenerations|LatchesDeadlineBeforeTimerCallback|OwnerLossLinearizesWithResume)|TestRestartStopPersistsAuthenticatedHelperSealOnlyWithPriorMirrorSeal|TestLinuxOwnerAnchor.*(Stop|Kill|Cleanup))$"
 ```
 
 Observed Linux tests were the three lease-state cases,

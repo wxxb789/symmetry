@@ -254,6 +254,74 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       on submission under the current runner by design; a submission that requires current bytes
       re-executes the runs.
 
+- [ ] Own the record-cleanliness ratchet baseline: 26 unchanged committed records under
+      `docs/evaluations/**` and `docs/evidence/**` still carry a host absolute path, so the
+      `record-cleanliness` CI job - which checks only the records a revision range adds or
+      modifies - fails the moment a later change touches one of them. Enumerated at `5d6c858`
+      with `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only` over
+      `git ls-files docs/evaluations docs/evidence`: the four
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-{mixed,strong}{,.review}.json`
+      receipts; `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md`,
+      `goal-0006-final-series-review-2026-11-15.md`,
+      `goal-0006i-exact-subject-release-acceptance-2026-11-15.md`,
+      `goal-0006j-omp-native-capability-2026-11-14.md`, `goal-0007b-readable-work-views-2026-11-15.md`,
+      `goal-0007i-portal-cutover-series-receipt-2026-11-17.md`,
+      `goal-0009-source-identity-2026-11-16.json`; the seven `goal-0006b-*` files
+      (`acceptance-environment-audit`, `acceptance-source-audit`, `convergence-receipt`,
+      `fixture-inventory`, `resumed-go-gates` and `surface-qa` of 2026-09-29, and
+      `iteration-closure-2026-10-10`); the two `pi-control-e2e-*-2026-09-13.md` files, the five
+      `test-ablation-*-2026-09-29.md` files and `windows-opencode-ci-gate-2026-09-14.md`. Each one
+      needs either an explicit decision to leave it as produced or the render-and-rebind pass
+      (re-render the text and keep every digest another record quotes consistent - of this list,
+      `test-ablation-go-probe-experiment-2026-09-29.md` is the one quoted by another record). Until
+      that decision, a change that merely touches one of these records fails the job by design, and
+      the remedy is that render pass, never an edit that breaks a binding.
+
+      **Closed (2026-11-19, `chore/render-dirty-records`):** rendered rather than kept as produced.
+      A fresh whole-corpus enumeration (`--check --root-only` over `git ls-files docs/evaluations
+      docs/evidence`) reproduced exactly the 26 records listed above, and each was rendered in
+      place through `scripts/ci/model-routing-record-sanitize.py` in the `--root-only` scope, with
+      no disposable root configured for these legacy records. That scope with the #83 run-store
+      roots configured renders #83's (`29462e9`) rendered bytes exactly for `0008a-audit.json` and
+      the four `0008c` receipts, provided each root is spelled as `29462e9^` spells it:
+      the `symmetry-0008a-…` temporary run root with JSON-doubled backslashes for the `0008a`
+      records (the plain spelling matches nothing and does not reproduce those bytes) and the
+      `symmetry-0008c-eval` temporary run root in either separator spelling for the `0008c`
+      receipts, because the root replacement is a literal string match (both roots are readable
+      in the `29462e9^` record bytes and are not repeated here). #83's committed bytes
+      additionally carry its own digest rebinds (in
+      `0008a-controls.json` the `stderr_sha256` rebind `c12881ae…` -> `8503bfa2…`, and the
+      receipt and audit digests quoted by `0008c-candidate-policy.md`,
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` and
+      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md`). This pass
+      rendered 83 host-path substitutions over the 26 files, so every host location, scratch roots
+      included, became a deterministic `path-sha256:` token while product routes stay literal.
+      Host-shaped specimen paths quoted inside reviewer prose were not spared: six of the 83
+      substitutions tokenized the `//etc/passwd` and `\\dir\\file.go` specimens in
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-mixed.json` (line 627) and its
+      `.review.json` (line 6), and the `C:\\dir\\file` specimen in
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` (line 487) and its
+      `.review.json` (line 6); their pre-render spellings remain recoverable from git history at
+      the base commit (`b33188b`). One tool fix was required and ships with a
+      regression test: the renderer consumed the backslash that escapes a quoted path's closing
+      quote, leaving a bare quote that made `0008b-go-bounded-regression-strong{,.review}.json`
+      invalid JSON; an odd trailing backslash now stays outside the token, old-versus-fixed
+      rendering differs on exactly those two files, and `--check` verdicts are unchanged on all
+      111 corpus files. Every digest that bound a rendered file was recomputed and rebound, each
+      new value equal to its file's recomputed `sha256` (old->new table in the branch's PR): the
+      review digests inside the two receipts; `0008b-policy.json`'s two `review_sha256` values,
+      two `receipt_sha256` values and `review_attempts_sha256`; `0008b-controls.json`'s embedded
+      accept output (with its `output_sha256` recomputed over the edited text) and
+      `source_accepted_receipt_sha256`; the mixed `review-attempts` record's `review_sha256`; and
+      `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s two receipt digests, policy
+      digest and controls digest, plus `test-ablation-final-review-2026-09-29.md`'s app-startup
+      and Go-probe rows (the cross-record quote this entry named). Evidence: the whole-corpus
+      `--check --root-only` sweep reports 0 dirty of 111 files,
+      `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` exits 0,
+      re-running the renderer over all 30 touched files is byte-stable, and
+      `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
+      (16 tests) pass.
+
 ## Dead-code candidates
 
 - [ ] Investigate the intermittent Windows failure `TestCloseStopsOwnedChildAfterLeaderExit`
