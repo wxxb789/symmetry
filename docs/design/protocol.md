@@ -315,9 +315,13 @@ budget, block with `context_budget_exceeded` instead of silently losing authorit
 Hash canonicalized schema-valid JSON with a documented normalization shared by
 fixtures: arrays preserve order, object keys sort recursively, strings are UTF-8
 without Unicode normalization, and `U+2028`/`U+2029` remain raw UTF-8 rather than
-serializer-specific escapes. Integers remain exact and numeric negative zero
-canonicalizes to zero. Preserve existing versioned RequestHash behavior for old
-commands; do not change it opportunistically to match snapshot hashing.
+serializer-specific escapes. Every C0 control below `U+0020` uses its
+shorthand escape where JSON defines one (`\b`, `\t`, `\n`, `\f`, `\r`) and a
+`\u00XX` escape with uppercase hexadecimal digits otherwise, the spelling the
+control plane's `Jason` encoder emits and the contracts TypeScript encoder
+mirrors. Integers remain exact and numeric negative zero canonicalizes to zero.
+Preserve existing versioned RequestHash behavior for old commands; do not change
+it opportunistically to match snapshot hashing.
 
 Cross-harness handoff creates a new native session from this snapshot and an
 authorized reachable Git commit. That reachable commit is a necessary safety

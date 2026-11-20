@@ -764,7 +764,15 @@ func (group *processGroup) stopDescendantMonitor(deadline time.Time) error {
 	case <-group.monitorDone:
 		return nil
 	case <-timer.C:
-		return fmt.Errorf("%w: descendant monitor did not stop before deadline", ErrLinuxDescendantContainmentUnproven)
+		// The timer may have expired while the monitor was exiting; a
+		// monitor that has exited since must still be joined instead of
+		// being reported as a deadline failure.
+		select {
+		case <-group.monitorDone:
+			return nil
+		default:
+			return fmt.Errorf("%w: descendant monitor did not stop before deadline", ErrLinuxDescendantContainmentUnproven)
+		}
 	}
 }
 
