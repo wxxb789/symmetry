@@ -2030,8 +2030,9 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       `citation-existence` job runs whenever it is true - independently of the
       documentation-only fast path, so a runbook-only pull request runs the gate - with
       `CITATION_BASE` folded from the event exactly like `RECORD_BASE`.
-      `scripts/ci/test-check-citation-existence.py` (forty-eight tests, observed `Ran 48 tests ...
-      OK` on Windows and on WSL Ubuntu-24.04) pins the grammar (line-suffixed, `:line:col`, and
+      `scripts/ci/test-check-citation-existence.py` (forty-eight tests at the round-2 fix's final
+      tree, observed `Ran 48 tests ... OK` on Windows and on WSL Ubuntu-24.04) pins the grammar
+      (line-suffixed, `:line:col`, and
       file-shaped citations, the directory form, wildcard families including `...`/`…`, the
       fence blanking at any indentation, in a blockquote or in a nested list item, with a closing
       fence that carries the same character, at least the opener's count and no info string, the
@@ -2092,7 +2093,17 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       and the five appended by this very closing sentence, all resolving at the head) - less the
       two `.github/workflows/ci.yml` line-number pointers removed from `docs/design/quality.md`
       (15 citations there became 13), whose line numbers the fix round's second pass replaced
-      with job/step names.
+      with job/step names. The round-3 fix (2026-11-21) repairs the fence boundary the round-2
+      grammar missed - a backtick fence's info string may not contain a backtick, so a line that
+      begins with an inline triple-backtick span is prose, not an opener that blanks the rest of
+      the document - and pins it with a fixture that brings the suite to forty-nine tests
+      (observed `Ran 49 tests ... OK` on Windows and on WSL Ubuntu-24.04); the tree carrying it
+      exits 0 with `10 changed document(s) pass the path and symbol check (410 path citation(s))`
+      over the whole corpus and `2 changed document(s) pass the path and symbol check (365 path
+      citation(s))` over 7a55b46..HEAD on both platforms - three more than the merge's 407 and
+      362, one from the TS row in `docs/design/quality.md` naming the `control` job's `Render
+      authenticated release shell on desktop and mobile` step and two from this sentence's own
+      backticked paths.
 
 - [ ] Commit a fixture test for the `changes` job's changed-path classifier
       (`.github/workflows/ci.yml:26-65`), whose proof today is only the removed

@@ -347,6 +347,19 @@ def paragraphs(text: str):
     yield start, text[start:]
 
 
+def opens_a_fence(marker: re.Match[str]) -> bool:
+    """Whether a fence-shaped line opens a block: CommonMark's other opener rule.
+
+    A backtick fence's info string may not contain a backtick, so a line that begins
+    with an inline triple-backtick code span is a paragraph line, not an opener:
+    reading it as one would blank the rest of the document - an unclosed fence runs
+    to its end - and silently skip every citation below it. Tilde fences may carry
+    backticks in their info string.
+    """
+    opener = marker.group(1)[0]
+    return opener == "~" or "`" not in marker.group(2)
+
+
 def without_fenced_blocks(text: str) -> str:
     """``text`` with every fenced code block blanked to spaces; line offsets survive.
 
@@ -361,8 +374,13 @@ def without_fenced_blocks(text: str) -> str:
     fence nested in a list item (content column four or deeper) or quoted in a
     blockquote is blanked too. A closing line carries the same fence character, at
     least as many of them, and nothing after them - an info string makes a line
-    content, so a ```js line inside a fence does not close it early. An unclosed fence
-    blanks to the end of the document, the way CommonMark reads it.
+    content, so a ```js line inside a fence does not close it early. An opener obeys
+    CommonMark's info-string rule as well: the info string of a backtick fence may not
+    contain a backtick, so a line that begins with an inline triple-backtick span is
+    content and opens nothing - reading it as an opener would blank the rest of the
+    document, since an unclosed fence runs to its end, and silently skip every
+    citation below it (a tilde fence may carry backticks in its info string). An
+    unclosed fence blanks to the end of the document, the way CommonMark reads it.
     """
     blanked: list[str] = []
     fence: tuple[str, int] | None = None
@@ -378,7 +396,7 @@ def without_fenced_blocks(text: str) -> str:
             ):
                 fence = None
             continue
-        if marker is None:
+        if marker is None or not opens_a_fence(marker):
             blanked.append(line)
             continue
         fence = (marker.group(1)[0], len(marker.group(1)))

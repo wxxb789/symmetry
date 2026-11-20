@@ -450,6 +450,39 @@ class CitationExistenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("0 path citation(s)", result.stdout)
 
+    def test_a_backtick_fence_info_string_may_not_contain_a_backtick(self) -> None:
+        # CommonMark: the info string of a backtick fence may not contain a backtick, so
+        # a line that begins with an inline triple-backtick span is prose, not an
+        # opener. An opener there would run unclosed to the end of the document and
+        # silently skip the absent citation below it - a false negative, never a red.
+        self.write(
+            "docs/runbooks/portal.md",
+            "# Portal runbook\n"
+            "\n"
+            "```code``` is how a span is written.\n"
+            "\n"
+            "See `docs/runbooks/moved.md`.\n",
+        )
+        head = self.commit("write a prose line that starts with a span")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("docs/runbooks/portal.md:5", result.stderr)
+        self.assertIn("moved.md", result.stderr)
+        # The rule is the backtick fence's own: a tilde fence may carry backticks in
+        # its info string, and the block's content stays blanked.
+        self.write(
+            "docs/runbooks/portal.md",
+            "# Portal runbook\n"
+            "\n"
+            "~~~ `docs/runbooks/moved.md`\n"
+            "example\n"
+            "~~~\n",
+        )
+        head = self.commit("quote a path in a tilde fence's info string")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0 path citation(s)", result.stdout)
+
     def test_a_coordinating_conjunction_does_not_bind_a_path_and_symbol(self) -> None:
         # `and` joins list items: it must not demand that a symbol belonging to some
         # other file occur in the file the list happens to mention first.

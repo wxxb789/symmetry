@@ -101,9 +101,11 @@ error, and that refuses the run (exit 2) instead of passing. Fenced code blocks 
 the backtick scan - a token inside a fence is example code (a JS template literal, a Go raw string,
 a shell example), not a citation - and the blanking keeps every line number the refusals report.
 The opener is recognized at any indentation and behind blockquote markers (a fence nested in a list
-item or quoted in a blockquote is still a fence), the closer must carry the same fence character,
-at least as many of them, and no info string (so a ```js line inside a fence is content, not a
-closer), and an unclosed fence blanks to the end of the document, the way CommonMark reads it.
+item or quoted in a blockquote is still a fence), and a backtick fence's info string may not contain
+a backtick, so a line that begins with an inline triple-backtick span is prose, not an opener; the
+closer must carry the same fence character, at least as many of them, and no info string (so a
+```js line inside a fence is content, not a closer), and an unclosed fence blanks to the end of the
+document, the way CommonMark reads it.
 
 A **symbol citation** is a backticked `name/arity`, `Module.name/arity`, `name()` or
 `Module.name()` token. It is bound to a path citation when the two are consecutive backticked tokens
@@ -214,9 +216,9 @@ ungated in the `legacy-route-audit` job, the job the entry names as the pattern 
   gate cannot see them; this increment's own `ci.yml` insertions had invalidated them (the same rot
   the gate repairs in the corpus), and the fix round's second pass replaced the coordinates with
   job/step-name pointers - the `contracts` job's `pnpm --filter @symmetry/frontend`
-  typecheck/lint/test/build steps and the browser acceptance run's
-  `pnpm --filter symmetry-browser-acceptance test` - because a line number inside the file a change
-  edits is stale the moment the change lands.
+  typecheck/lint/test/build steps and the `control` job's `Render authenticated release shell on
+  desktop and mobile` step - because a line number inside the file a change edits is stale the
+  moment the change lands.
 - No second audit mode, no per-file opt-out, no configuration surface: the gate's corpus and
   grammar are code and are pinned by fixtures.
 
@@ -250,9 +252,11 @@ increment has none):
 
 ## Decisions and their justification
 
-1. **A classifier output rather than an unconditional job.** Entry 1 points at `ci.yml:82-84` (the
-   `record-cleanliness` job's classifier gate) as the shape to copy; the cost is a duplicated
-   corpus predicate in the workflow, which decision-pinned fixture agreement covers. Rejected: an
+1. **A classifier output rather than an unconditional job.** Entry 1 cites
+   `.github/workflows/ci.yml:78,1218` (written against an older revision); at `fdf332d` the
+   `record-cleanliness` job's classifier gate is `ci.yml:82-84`, the shape to copy; the cost is a
+   duplicated corpus predicate in the workflow, which decision-pinned fixture agreement covers.
+   Rejected: an
    unconditional job (no duplication, but ~2 minutes of runner time on every push and pull request
    for a gate that only matters when an audited document changed), and auditing the whole corpus on
    every pull request (it would redden unrelated pull requests for pre-existing rot, which is the
