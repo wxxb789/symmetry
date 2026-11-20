@@ -36,7 +36,7 @@ Result: `ok github.com/wxxb789/symmetry/daemon/internal/app 1.923s`.
 WSL Linux (`symmetry-race`, Go at `/opt/go/bin/go`), exit `0`:
 
 ```text
-wsl.exe -d symmetry-race sh -lc "cd /mnt/q/repos/symmetry/daemon && GOMAXPROCS=2 /opt/go/bin/go test -p 2 ./internal/app -run '^(TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration|TestTerminalFlushFailureDoesNotPreventNewSessionRegistration)$' -count=1"
+wsl.exe -d symmetry-race sh -lc "cd path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153 && GOMAXPROCS=2 /opt/go/bin/go test -p 2 ./internal/app -run '^(TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration|TestTerminalFlushFailureDoesNotPreventNewSessionRegistration)$' -count=1"
 ```
 
 Result: `ok github.com/wxxb789/symmetry/daemon/internal/app 0.506s`.
@@ -75,7 +75,7 @@ Overlay production copy SHA-256: `33b4293376a52755a83892fdc5b0af18a250a994be828e
 Mutation: call `daemon.flushAll(ctx)` immediately before `RegisterSession`, making retained terminal work flush before registration.
 
 ```text
-wsl.exe -d symmetry-race sh -lc "cd /mnt/q/repos/symmetry/daemon && GOMAXPROCS=2 /opt/go/bin/go test -p 2 -overlay=/mnt/q/repos/symmetry/.omo/ablation/app-startup/overlay-order-linux.json ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
+wsl.exe -d symmetry-race sh -lc "cd path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153 && GOMAXPROCS=2 /opt/go/bin/go test -p 2 -overlay=path-sha256:6fb0eaaa1cf58cb3be8e856646113217407dc581fbc273ed14fe502dabb09e7f ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
 ```
 
 Exit `1`, expected-red detection:
@@ -91,7 +91,7 @@ Overlay production copy SHA-256: `104b5805bd1666d53116fe8b90a3e3fce0cc9a7075ed8c
 Mutation: invoke `RegisterSession` a second time after the first successful invocation in the real registration retry closure.
 
 ```text
-wsl.exe -d symmetry-race sh -lc "cd /mnt/q/repos/symmetry/daemon && GOMAXPROCS=2 /opt/go/bin/go test -p 2 -overlay=/mnt/q/repos/symmetry/.omo/ablation/app-startup/overlay-duplicate-linux.json ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
+wsl.exe -d symmetry-race sh -lc "cd path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153 && GOMAXPROCS=2 /opt/go/bin/go test -p 2 -overlay=path-sha256:38d47eb1359161e958f323b0feecbf0c42d87ad135dfd301237fbd7d8f6ce978 ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
 ```
 
 Exit `1`, expected-red detection:
@@ -110,7 +110,7 @@ Overlay production-copy SHA-256 values:
 Mutation: after `flushRun` returns an error, the app invokes an overlay-only State method that removes the journal while bypassing normal retention guards. This exercises the real outbox and Store path; no expected assertion was mutated.
 
 ```text
-wsl.exe -d symmetry-race sh -lc "cd /mnt/q/repos/symmetry/daemon && GOMAXPROCS=2 /opt/go/bin/go test -p 2 -overlay=/mnt/q/repos/symmetry/.omo/ablation/app-startup/overlay-delete-linux.json ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
+wsl.exe -d symmetry-race sh -lc "cd path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153 && GOMAXPROCS=2 /opt/go/bin/go test -p 2 -overlay=path-sha256:6f3d903949837c7e9911bfc6cab48174bdfa77832f361d29f18cf143cba1058c ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
 ```
 
 Exit `1`, expected-red detection:
@@ -128,7 +128,7 @@ Production hashes after overlays matched the pre-experiment hashes shown above.
 Linux normal, exit `0`:
 
 ```text
-wsl.exe -d symmetry-race sh -lc "cd /mnt/q/repos/symmetry/daemon && GOMAXPROCS=2 /opt/go/bin/go test -p 2 ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
+wsl.exe -d symmetry-race sh -lc "cd path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153 && GOMAXPROCS=2 /opt/go/bin/go test -p 2 ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
 ```
 
 Result: `ok github.com/wxxb789/symmetry/daemon/internal/app 0.460s`.
@@ -136,7 +136,7 @@ Result: `ok github.com/wxxb789/symmetry/daemon/internal/app 0.460s`.
 Linux race, exit `0`:
 
 ```text
-wsl.exe -d symmetry-race sh -lc "cd /mnt/q/repos/symmetry/daemon && GOMAXPROCS=2 /opt/go/bin/go test -race -p 2 ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
+wsl.exe -d symmetry-race sh -lc "cd path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153 && GOMAXPROCS=2 /opt/go/bin/go test -race -p 2 ./internal/app -run '^TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration$' -count=1"
 ```
 
 Result: `ok github.com/wxxb789/symmetry/daemon/internal/app 1.251s`.
