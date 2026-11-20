@@ -2126,6 +2126,13 @@ func TestProcessGroupInitialScanBarrierJoinsEndingMonitor(t *testing.T) {
 // whenever it starts the join, the timer is already spent; the barrier may
 // legitimately report that the initial scan did not complete before the
 // deadline, but it must never report a stopped monitor as unstopped.
+//
+// Schedule precondition: this reaches the join only when the barrier goroutine
+// starts before the deadline. That holds at default CPU, but not under
+// `-race -cpu 1`, where the barrier returns at entry with the deadline error
+// (400/400 iterations measured); the test tolerates that error, so this
+// configuration cannot detect a missing recheck. Measured detection of a
+// removed recheck: mutant red 3/3 at default CPU, 0/20 under `-race -cpu 1`.
 func TestProcessGroupBarrierReportsJoinedMonitorAfterDeadline(t *testing.T) {
 	const (
 		scanDeadline = 500 * time.Microsecond

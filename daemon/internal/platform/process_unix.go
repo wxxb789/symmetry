@@ -670,7 +670,8 @@ func (group *processGroup) waitForInitialDescendantScan(deadline time.Time) erro
 		// after it signals the initial scan, so the scan result alone
 		// does not order those writes before the caller's reads. On
 		// deadline expiry the join returns the containment error
-		// instead.
+		// instead, unless the monitor has already exited — the recheck
+		// below joins it.
 		select {
 		case <-group.monitorDone:
 		case <-timer.C:
