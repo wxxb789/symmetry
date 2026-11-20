@@ -2816,7 +2816,7 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       silent: in a JSON literal an escape whose spelling also reads as a Windows separator is an
       escape (`\repo` is a carriage return and `epo`), so a mixed spelling only a producer bug can
       write renders the path up to the escape and leaves the escape's own spelling behind.
-      Pins in `scripts/ci/test-model-routing-record-sanitize.py` (55 cases before, 61 after): "a
+      Pins in `scripts/ci/test-model-routing-record-sanitize.py` (55 cases before, 63 after): "a
       JSON escape after a Windows path survives the render" — the entry's own Windows input
       renders `path-sha256:26e7b5b4…` (the digest the entry records for the path text alone) with
       the `\n` and `FAILED` outside the token, in both scopes; "a JSON escape after every Windows
@@ -2832,28 +2832,41 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       `../home/op/run`, `x_/home/op/run`, `aa/srv/store/x`); and the CLI case "root-only check
       refuses a host path after a JSON escape" (the round-5 command shape exits 1, the default
       scope refuses the same bytes, every shape's render passes the check it refused, and
-      `aa/home/runner/x` still passes).
-      Mutation checks (scratch copies of the tester beside a mutated tool, deleted afterwards): on
-      the pre-fix tool bytes (`git show 2a85cb8:scripts/ci/model-routing-record-sanitize.py`) the
-      four fix cases fail — 65 failing subtests, and no pre-existing case fails there — so no fix
-      pin passes on pre-fix bytes; the two guard cases pass on pre-fix bytes by design, because
-      they pin behavior the fix has to preserve, and each is falsified by its own mutation: the
-      raw-spelling guards by the shape-only masking mutation, the quoted-raw guard by dropping the
-      fallback pass, and the trailing-run subtests by dropping the trim rule. Removing the escape
-      alternative from `leading_boundary` fails the seven `\b` subtests (backspace is the one
-      escape whose decoded character is a path byte, so only the boundary catches it); disabling
-      `_escape_boundary_view` fails 12 subtests of the two Windows-escape cases; masking only the
-      escape's backslash fails two (the drive and `file:` URL cases behind an escape: the view
-      loses its boundary, the UNC pattern claims the path's inner backslash run, and `C:` is left
-      literal); dropping the fallback pass fails "a quoted raw spelling the escape reading decodes
-      still renders"; dropping the `json.loads` validity gate - masking every escape the grammar
-      spells, without requiring the span to parse - fails the two quoted-raw subtests of "a raw
-      Windows spelling still renders whole"; masking by shape without JSON context fails 33
-      subtests (the two Windows-escape cases, the family case and the raw-spelling guards). A
-      further variant that removed the gate and left the escape walk without an advance for the
-      letters it no longer knew is not evidence: it loops, and it is reported only as the artifact
-      it is.
-      Evidence: `python scripts/ci/test-model-routing-record-sanitize.py` 61 tests OK on Windows
+      `aa/home/runner/x` still passes); the apply-stage pins "a host path after a raw escape
+      spelling is caught" (`ok\t/tmp/run` and `ok` + the `u0020` escape + `/tmp/symmetry-run`,
+      both scopes: the two `leading_boundary` escape arms no other pin exercises) and "a valid
+      literal the JSON reading rejects still absorbs what follows" (the disclosed fallback
+      carve-out - the raw re-read takes the composite shape whole, pinned so a later narrowing
+      is deliberate).
+      Mutation checks (scratch copies of the tester beside a mutated tool, deleted afterwards; the
+      apply-stage re-run counts every `FAILED (failures=N)` entry, subtest-keyed and method-level
+      alike): on the pre-fix tool bytes (`git show 2a85cb8:scripts/ci/model-routing-record-sanitize.py`)
+      the five fix cases fail — 71 failure entries, 70 subtest-keyed and one method-level assertion
+      (the `cmd` assertion of "a host path after a JSON escape is caught"), and no pre-existing
+      case fails there — so no fix pin passes on pre-fix bytes; the three guard cases pass on
+      pre-fix bytes by design, because they pin behavior the fix has to preserve, and each is
+      falsified by its own mutation: the raw-spelling guards by the shape-only masking mutation,
+      the quoted-raw guard and the apply-stage composite pin by dropping the fallback pass, and
+      the trailing-run subtests by dropping the trim rule. Removing the escape alternative from
+      `leading_boundary` fails eleven subtests — the seven `\b` subtests (backspace is the one
+      escape whose decoded character is a path byte, so only the boundary catches it) and the
+      four apply-stage raw-escape subtests; deleting the four-hex-digit `u` arm fails the two raw
+      `u0020` subtests and narrowing `[nrtbf]` to `[b]` fails the two raw `\t` subtests, and each
+      of those two mutations left every case green before the apply-stage pins existed; disabling
+      `_escape_boundary_view` fails 14 subtests of the two Windows-escape cases (2 drive + 12
+      family); masking only the escape's backslash fails two (the drive and `file:` URL cases
+      behind an escape: the view loses its boundary, the UNC pattern claims the path's inner
+      backslash run, and `C:` is left literal); dropping the fallback pass fails the quoted-raw
+      case and the two apply-stage composite subtests; dropping the `json.loads` validity gate -
+      masking every escape the grammar spells, without requiring the span to parse - fails the two
+      quoted-raw subtests of "a raw Windows spelling still renders whole"; masking escape-shaped
+      pairs whose decoded character cannot be a path byte, without JSON context, fails 20 subtests
+      (the raw-spelling guards, the mixed-spelling family subtests, the rendered-root suffix and
+      the space-continued tails); dropping the trim rule fails the odd trailing-run subtests (runs
+      of one and three backslashes). A further variant that removed the gate and left the escape
+      walk without an advance for the letters it no longer knew is not evidence: it loops, and it
+      is reported only as the artifact it is.
+      Evidence: `python scripts/ci/test-model-routing-record-sanitize.py` 63 tests OK on Windows
       and in WSL Ubuntu-24.04 as uid 1000; `--check` and `--check --root-only` over all 111
       committed records under `docs/evaluations/` and `docs/evidence/`, both in process and
       through the CLI (222 runs, every exit 0 or 1) and before and after the change: the flagged

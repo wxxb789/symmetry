@@ -57,9 +57,10 @@ escapes.** Concretely:
   and a raw Markdown spelling therefore keeps today's reading.
 - An escape is **masked** in the view when its decoded character cannot be a path byte, i.e. when
   it matches `[\s"'`,;:)]` — the exact exclusion set of every path byte class: `\n`, `\t`, `\r`,
-  `\b`, `\f`, `\"`, `\uXXXX` decoding to whitespace or punctuation. `\\` (a literal backslash, a
-  Windows separator) and `\/` (a literal slash) are *not* masked, and neither is `\u002F`, so the
-  doubled and escaped spellings the tool already renders keep rendering.
+  `\f`, `\"`, `\uXXXX` decoding to whitespace or punctuation. `\\` (a literal backslash, a
+  Windows separator), `\/` (a literal slash) and `\b` (U+0008, a control byte the exclusion set
+  does not name) are *not* masked, and neither is `\u002F`, so the doubled and escaped spellings
+  the tool already renders keep rendering.
 - `)` is the mask character: excluded by every byte class (`_WINDOWS_TAIL`, `_POSIX_BYTE`,
   `_ESCAPED_SEGMENT`, `_SPACE_CHUNK`, the separator and name classes) and by no lookbehind's
   negative set, so a masked escape ends a tail *and* is a boundary in front of the next location.

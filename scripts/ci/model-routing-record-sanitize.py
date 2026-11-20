@@ -36,14 +36,23 @@ including a POSIX path spelled after a key's colon and the JSON-escaped spelling
 of one (``\\/etc\\/hosts``) - which is its documented boundary for argv/output
 capture.
 
-The recorded text is read as JSON where it is JSON: inside a string literal a
-backslash that starts an escape sequence (``\\n``, ``\\t``, ``\\"``, ``\\uXXXX``,
-...) is not a path byte, so a location the escape follows is still a location and
-a path tail never consumes the escape together with the text behind it. The JSON
-reading is applied through one shared rule - ``_escape_boundary_view`` plus the
-shared leading boundary every pattern carries - so all families agree, and a span
-that is not a JSON string literal keeps the raw reading (a raw Windows spelling
-separates its segments with the same ``\\`` an escape spells, so the reading has
+The recorded text is read as JSON where it is JSON: inside a string literal an
+escape that decodes to whitespace, punctuation or a quote (``\\n``, ``\\t``,
+``\\"``, ``\\uXXXX`` spellings of either) is boundary text rather than a path
+byte, so a location behind the escape is still a location. The rule is exactly
+the byte classes' exclusion set: an escape whose decoded character the classes
+accept - ``\\\\`` and ``\\/`` (the separators themselves) or a control escape
+such as ``\\b`` - stays path text, so a path tail may cross it and take the
+escape together with the text behind it into the token. One further carve-out is
+disclosed rather than hidden: inside a valid JSON literal whose JSON reading
+rejects the location (a quoted raw drive spelling whose separator decodes into a
+tab), the fallback pass re-reads the raw text, so it may absorb a following
+escape and the text behind it into the token as well - the fail-closed trade
+that keeps a quoted raw location from losing its match. The JSON reading is
+applied through one shared rule - ``_escape_boundary_view`` plus the shared
+leading boundary every pattern carries - so all families agree, and a span that
+is not a JSON string literal keeps the raw reading (a raw Windows spelling
+separates its segments with the same ``\\\\`` an escape spells, so the reading has
 to come from the text's own JSON context, not from shape).
 
 Usage (record publishers apply this before writing a record)::
@@ -78,8 +87,11 @@ ESCAPE_BOUNDARY_CHAR = ")"
 # decoded character is one of these is not a path byte, so the view masks it.
 NON_PATH_CHARACTER = re.compile(r"[\s\"'`,;:)]")
 # The characters a JSON escape spells besides ``\uXXXX``. Their decoded characters are
-# what decides masking: ``\\`` and ``\/`` decode to the separators themselves and stay
-# path bytes, every other escape decodes to whitespace, punctuation or a quote.
+# what decides masking: ``\\`` and ``\/`` decode to the separators themselves, and ``\b``
+# to a control byte the byte classes accept, so all three stay path text; ``"`` decodes
+# to a quote and ``n``/``r``/``t``/``f`` to whitespace - the exclusion set
+# ``NON_PATH_CHARACTER`` names. A ``\uXXXX`` escape masks iff its decoded character is
+# in that set too.
 ESCAPE_CHARACTERS = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",
                      "n": "\n", "r": "\r", "t": "\t"}
 
@@ -469,7 +481,7 @@ def _substitute(
 
 def _render_passes(
     raw: str, view: str, roots: list[str], root_only: bool,
-) -> tuple[str, str]:
+) -> str:
     """Run the root and path passes against ``view``, writing into ``raw`` too."""
 
     for root in roots:
@@ -487,7 +499,7 @@ def _render_passes(
     patterns = HOST_PATH_PATTERNS if root_only else DEFAULT_PATH_PATTERNS
     for pattern in patterns:
         raw, view = _substitute(pattern, raw, view, _render_span)
-    return raw, view
+    return raw
 
 
 def _root_patterns(root: str) -> tuple[re.Pattern[str], re.Pattern[str]] | None:
@@ -561,15 +573,19 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     The passes run against `_escape_boundary_view`, so a JSON escape a quoted record
     spells is boundary text rather than a path byte and no tail swallows the escape
     or the line behind it. What that reading does not see, the raw reading still
-    renders: a second pass over the result keeps a span that is not a JSON string
-    literal (`"C:\\Users\\op\\run"`, whose `\\U` is not an escape) from losing its
-    match, so the renderer never fails open on a spelling it stopped reading.
+    renders: a second pass over the result keeps a span whose JSON reading rejects
+    the location (`"C:\\temp"`, whose `\\t` decodes the separator into a tab) from
+    losing its match, so the renderer never fails open on a spelling it stopped
+    reading - and that same raw re-read can absorb a following escape and the text
+    behind it into the token, the fail-closed trade the module docstring discloses
+    and `test_a_valid_literal_the_json_reading_rejects_still_absorbs_what_follows`
+    pins.
     """
 
     view = _escape_boundary_view(text)
-    rendered, _ = _render_passes(text, view, roots, root_only)
+    rendered = _render_passes(text, view, roots, root_only)
     if view != text:
-        rendered, _ = _render_passes(rendered, rendered, roots, root_only)
+        rendered = _render_passes(rendered, rendered, roots, root_only)
     return rendered
 
 

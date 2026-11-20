@@ -100,6 +100,21 @@ QUOTED_HOST_PATHS = (
 # "changed and contains a token" assertion, but it republishes part of the path.
 QUOTED_HOST_PATH_FRAGMENTS = ("C:", "Users", "operator", "home", "server", "share", "tmp")
 
+# The escape spellings and host locations the round-5 `ok` + escape + host-path shape
+# pins, shared by both test classes: the text class crosses every spelling with every
+# location, and the CLI refusal cases build their recorded lines from the same
+# spellings and locations, so the fixture is spelled once. `ESCAPED_DRIVE_RUN` is the
+# JSON-escaped drive spelling the Windows half of the shape follows an escape with.
+ESCAPE_N, ESCAPE_T = _BS + "n", _BS + "t"
+ESCAPE_U0020 = _BS + "u0020"
+ESCAPE_SPELLINGS = (ESCAPE_N, ESCAPE_T, _BS + "r", _BS + "b", _BS + "f", ESCAPE_U0020)
+HOST_RUNNER_WORK, HOST_TMP_RUN = "/home/runner/work/x", "/tmp/symmetry-run"
+HOST_ROOT_LOCATIONS = (
+    HOST_RUNNER_WORK, "/Users/op/run", "/root/native", HOST_TMP_RUN,
+    "/var/folders/ab/T", "/mnt/q/repos/symmetry", "/private/var/tmp/symmetry",
+)
+ESCAPED_DRIVE_RUN = "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run"
+
 
 def digest_of(path):
     return "path-sha256:" + hashlib.sha256(path.encode("utf-8")).hexdigest()
@@ -454,15 +469,16 @@ class SanitizeTextTests(unittest.TestCase):
         # escape: the token binds the location's own recorded bytes
         # (`path-sha256:26e7b5b4…`, the digest the entry records for the path alone)
         # and the escape and the line stay where they were.
-        drive = "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run"
         for root_only in (True, False):
             with self.subTest(root_only=root_only):
                 rendered = MODULE.sanitize_text(
-                    '{"output":"wrote ' + drive + _BS + 'nFAILED"}', [], root_only=root_only,
+                    '{"output":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}', [], root_only=root_only,
                 )
-                self.assertEqual(rendered, '{"output":"wrote ' + digest_of(drive) + _BS + 'nFAILED"}')
                 self.assertEqual(
-                    json.loads(rendered)["output"], "wrote " + digest_of(drive) + "\nFAILED",
+                    rendered, '{"output":"wrote ' + digest_of(ESCAPED_DRIVE_RUN) + _BS + 'nFAILED"}'
+                )
+                self.assertEqual(
+                    json.loads(rendered)["output"], "wrote " + digest_of(ESCAPED_DRIVE_RUN) + "\nFAILED",
                 )
                 self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
 
@@ -581,6 +597,26 @@ class SanitizeTextTests(unittest.TestCase):
                 self.assertEqual(rendered, '{"note":"see ' + digest_of(labelled) + '"}')
                 self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
 
+    def test_a_valid_literal_the_json_reading_rejects_still_absorbs_what_follows(self):
+        # D2b, disclosed and pinned rather than silent: inside a valid JSON literal
+        # whose location the JSON reading rejects (`"C:\temp"` decodes its separator
+        # into a tab, so the view sees no path), the fallback pass re-reads the raw
+        # text and its tail absorbs the escape that follows the location and the text
+        # behind it into the token - here the two-character `\n` escape and `FAILED`.
+        # The record stays valid JSON and the token binds exactly the absorbed bytes,
+        # on the pre-fix bytes and the fixed bytes alike; the fail-closed trade is that
+        # a quoted raw location never loses its match. A later narrowing must change
+        # this case visibly.
+        absorbed = "C:" + _BS + "temp" + _BS + "nFAILED"
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(
+                    '{"note":"see ' + absorbed + '"}', [], root_only=root_only,
+                )
+                self.assertEqual(rendered, '{"note":"see ' + digest_of(absorbed) + '"}')
+                self.assertEqual(json.loads(rendered)["note"], "see " + digest_of(absorbed))
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+
     def test_a_host_path_after_a_json_escape_is_caught(self):
         # The #119 round-5 follow-up: the POSIX families' leading boundary read the
         # escape's own letter as a name character glued in front of the location, so
@@ -588,10 +624,8 @@ class SanitizeTextTests(unittest.TestCase):
         # host path literal. Every family now takes the escape's final character as a
         # boundary, and the locations behind it render with the escape outside the
         # token - the host-rooted POSIX roots first, then the other families.
-        roots = ("/home/runner/work/x", "/Users/op/run", "/root/native", "/tmp/symmetry-run",
-                 "/var/folders/ab/T", "/mnt/q/repos/symmetry", "/private/var/tmp/symmetry")
-        for escape in (_BS + "n", _BS + "t", _BS + "r", _BS + "b", _BS + "f", _BS + "u0020"):
-            for path in roots:
+        for escape in ESCAPE_SPELLINGS:
+            for path in HOST_ROOT_LOCATIONS:
                 with self.subTest(escape=escape, path=path):
                     text = '{"out":"ok' + escape + path + ', failed"}'
                     rendered = MODULE.sanitize_text(text, [], root_only=True)
@@ -616,6 +650,23 @@ class SanitizeTextTests(unittest.TestCase):
         for text in ("aa/home/op/run", "../home/op/run", "x_/home/op/run", "aa/srv/store/x"):
             with self.subTest(text=text):
                 self.assertEqual(MODULE.sanitize_text(text, ["/srv/store"], root_only=True), text)
+
+    def test_a_host_path_after_a_raw_escape_spelling_is_caught(self):
+        # The two escape arms of `leading_boundary` that no other pin exercises, in
+        # raw recorded text: no JSON string literal covers the span, so nothing is
+        # masked and the escape's own letter or hex digit is a name character glued
+        # in front of the location. Only the shared atom reads the location behind
+        # it: narrowing `[nrtbf]` to `[b]` leaves `ok\t/tmp/run` literal, and
+        # deleting the four-hex-digit `u` arm leaves `ok` + the `u0020` escape +
+        # `/tmp/symmetry-run` literal (the fail-open the atom exists to stop), while
+        # every case above stays green. Both mutations are recorded in the closure.
+        for escape in (ESCAPE_T, ESCAPE_U0020):
+            for root_only in (True, False):
+                with self.subTest(escape=escape, root_only=root_only):
+                    text = "ok" + escape + HOST_TMP_RUN
+                    rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                    self.assertEqual(rendered, "ok" + escape + digest_of(HOST_TMP_RUN))
+                    self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
 
     def test_file_scheme_spellings_are_case_insensitive(self):
         # STD-A05: `FILE:` and `File:` are the same URL scheme as `file:`, and the
@@ -936,12 +987,11 @@ class SanitizeCliTests(unittest.TestCase):
         # family takes the escape's final character as a boundary now, and a location
         # behind it refuses the input; the shape also renders to bytes the check
         # accepts, so a re-rendered record is clean.
-        drive = "C:" + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run"
         cases = (
-            '{"out":"ok' + _BS + 'n/home/runner/work/x failed"}\n',
-            '{"out":"ok' + _BS + 't/home/runner/work/x"}\n',
-            '{"out":"ok' + _BS + 'u0020/tmp/symmetry-run"}\n',
-            '{"p":"wrote ' + drive + _BS + 'nFAILED"}\n',
+            '{"out":"ok' + ESCAPE_N + HOST_RUNNER_WORK + ' failed"}\n',
+            '{"out":"ok' + ESCAPE_T + HOST_RUNNER_WORK + '"}\n',
+            '{"out":"ok' + ESCAPE_U0020 + HOST_TMP_RUN + '"}\n',
+            '{"p":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}\n',
             '{"p":"wrote //server/share/run' + _BS + 'nFAILED"}\n',
             '{"p":"wrote file:///C:/Users/op/run' + _BS + 'nFAILED"}\n',
         )
