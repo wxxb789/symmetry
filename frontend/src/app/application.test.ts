@@ -46,15 +46,16 @@ describe("private query lifecycle", () => {
   });
 
   // The corpus carries one `path` string per case, so the raw empty-query and
-  // bare-fragment spellings stay out of it and are pinned per side instead for
-  // every shell path: the URL `search`/`hash` getters report an empty query or
-  // fragment as "", and `safeReturnTo` emits pathname + search (the parser
-  // keeps `?` and `#` in `href`), so the client keeps the location while the
-  // server refuses the raw spelling (see the reject list of the ExUnit test
-  // for explicit internal shell return paths).
+  // bare-fragment spellings stay out of it and are pinned instead per side: the
+  // server side pins every shell path (see the reject list of the ExUnit test
+  // for explicit internal shell return paths), and this file every shell path
+  // but `/portal/attention` (see below). The URL `search`/`hash` getters report
+  // an empty query or fragment as "", and `safeReturnTo` emits pathname +
+  // search (the parser keeps `?` and `#` in `href`), so the client keeps the
+  // location while the server refuses the raw spelling.
   const shellPaths = [
     "/portal",
-    "/portal/attention",
+    // `/portal/attention` is absent: its accepted target equals the refusal fallback, so the pin cannot discriminate.
     "/portal/chat",
     "/portal/connections",
     "/portal/goals/goal-123",

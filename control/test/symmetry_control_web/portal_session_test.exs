@@ -257,8 +257,9 @@ defmodule SymmetryControlWeb.PortalSessionTest do
 
   test "login accepts only explicit internal shell return paths", %{conn: conn} do
     # Every shell path's raw empty-query and bare-fragment spellings: the URL
-    # parser cannot carry them (the client's `search`/`hash` getters report "")
-    # while the server refuses the raw string, so each side pins its own class.
+    # `search`/`hash` getters hide an empty marker (the parser keeps it in
+    # `href`), while the server refuses the raw string, so each side pins its
+    # own class.
     raw_form_paths =
       for path <- [
             "/portal",

@@ -154,10 +154,12 @@ export function retainOlderPage(
  * boundary a load or press was minted at — compared by the boundary message's
  * id whenever one was recorded, by the cursor's bytes otherwise — is still the
  * boundary the surface's next load chains from. `retainOlderPage` binds an
- * older page to the chain under it, and a refused press proves its refusal of
- * the cursor the surface holds only under it; a boundary a later load advanced
- * past no longer owns the pointer, and a re-signed cursor at the same recorded
- * boundary keeps it, because the id comparison does not change on renewal.
+ * older page to the chain under it. A refused press's refusal proves nothing
+ * about the cursor the surface holds now; the predicate only authorizes
+ * recovery of a chain boundary the press still owns. A boundary a later load
+ * advanced past no longer owns the pointer, and a re-signed cursor at the same
+ * recorded boundary keeps it, because the id comparison does not change on
+ * renewal.
  */
 export function ownsChainPointer(state: ChatScopeState, cursor: string, boundaryId: string | null): boolean {
   return boundaryId !== null ? state.nextBoundaryId === boundaryId : state.nextCursor === cursor;
