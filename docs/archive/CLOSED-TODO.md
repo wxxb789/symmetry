@@ -2746,9 +2746,8 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       scanner that keeps `U+2028`/`U+2029` raw and leaves a literal `\\u001f` text unchanged; the
       shorthand escapes, key order and numeric handling are unchanged, so only the nine C0 controls
       whose escape carries a hex letter (`U+000B`, `U+000E`, `U+000F`, `U+001A`-`U+001F`) change
-      bytes. Pinned by `TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane`
-      (`daemon/internal/protocol/goal_subject_test.go:114-174`) and
-      `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` (`:176-221`), red before
+      bytes. Pinned by `TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane` and
+      `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest`, red before
       the fix (lowercase hex where uppercase was wanted, both tests, exit 1) and green after: the
       first pins the entry's value (`{"value":"\u001F"}`, the digest Jason 1.4.5 computes,
       `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`), the nine
@@ -2758,7 +2757,7 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       before admission (`goal_contract_semantics.go` `canonicalPlanProposalSHA256`) against the
       control plane's digest the frontend pin already records for a description carrying
       U+000B/U+001B (`sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5`).
-      A third pin, `TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged` (`:223-235`), holds
+      A third pin, `TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged`, holds
       the 00-token scope of the rewrite itself (it reddens against a rewrite of every four-digit
       token).
       The reproduction no longer reproduces: the post-fix Go canonicalizer's bytes
