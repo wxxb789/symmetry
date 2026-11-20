@@ -26,6 +26,9 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The citation existence check and the changed-path classifier fixture appended to `## Record and
+documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
+
 The resolved-decision press item appended to the `## Retro review follow-ups` section below was
 moved on 2026-11-20 from branch `fix/resolve-decision-submit-read`.
 
@@ -42,6 +45,10 @@ candidates` section below was moved on 2026-11-20 from branch `fix/provider-acti
 The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
 
+The closed control-character canonical JSON item appended to the `## Retro review follow-ups
+(second pass, 2026-11-20)` section below was moved on 2026-11-20 from branch
+`fix/go-canonical-c0-case`.
+
 The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
@@ -51,6 +58,9 @@ moved on 2026-11-21 from branch `fix/served-read-closeout`.
 
 The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
+
+The closed `stopDescendantMonitor` post-timer recheck appended to the `## Retro review follow-ups`
+section below was moved on 2026-11-21 from branch `fix/stop-descendant-recheck`.
 
 The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
 that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
@@ -866,8 +876,8 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       (`portal.spec.mjs` + `workspace-shell.spec.mjs`, 40 cases, 30 passed / 1 failed /
       9 skipped) with two Control compiles running on the same host; the same test passed
       twice alone on the same revision (18.2 s and 17.3 s, exit 0). The classic bundle
-      `control/priv/portal_assets/portal.js` and the resource routes are unmodified by
-      0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
+      (`git show ca29a8e:control/priv/portal_assets/portal.js`) and the resource routes are
+      unmodified by 0007d. Revalidate the classic toast/refresh ordering; keep the assertion.
       Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the case no longer
       exists to revalidate. On main, the file revision introduced by `7a92ca4` (#31, 0007b)
       still carried it when `5c2e0ad` (#35, 0007c) replaced it in the same file with
@@ -930,13 +940,13 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       against the base revision. Revalidate the classic toast branch that reports an update when
       the edit dialog was opened from the detail drawer; keep the assertion.
       Closed by branch `fix/flake-browser-classic-closures` (2026-11-19): the same retirement as
-      the desktop entry above — main's `browser/tests/portal.spec.mjs` lost `project, resource,
-      work-item, filtering, ordering, and persistence` at `5c2e0ad` (#35, 0007c), and the 0007i
-      cutover deleted the file (`ca1bdad`). The classic toast branch this item asked to
-      revalidate (the detail drawer's work-item update receipt) went with the classic renderer:
-      the SPA renders its own `role="status"` notices from its own state, no `toast` element
-      exists in `frontend/src`, `control/lib` or `control/priv`, and the live detail-surface
-      successor cases assert `statusNotice(detail, "Work item updated.")` in
+      the desktop entry above — main's `git show 5c2e0ad^:browser/tests/portal.spec.mjs` lost
+      `project, resource, work-item, filtering, ordering, and persistence` at `5c2e0ad` (#35,
+      0007c), and the 0007i cutover deleted the file (`ca1bdad`). The classic toast branch this
+      item asked to revalidate (the detail drawer's work-item update receipt) went with the
+      classic renderer: the SPA renders its own `role="status"` notices from its own state, no
+      `toast` element exists in `frontend/src`, `control/lib` or `control/priv`, and the live
+      detail-surface successor cases assert `statusNotice(detail, "Work item updated.")` in
       `browser/tests/portal-work-planning.spec.mjs`. The mobile-chromium project's successors for
       these flows run in `browser/tests/portal-connections.spec.mjs` and
       `browser/tests/portal-work-views.spec.mjs` per `browser/README.md`; no assertion of this
@@ -2072,7 +2082,7 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       (2026-11-19)".
 
 - [ ] Revalidate the stale 0008-series prerequisite text:
-      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
+      `docs/goals/archive/0008d-typescript-model-routing.md:13` says "the accepted 0008b
       and 0008c results" while the 0008b candidate policy is produced and awaiting
       the owner's verdict. Pre-existing and not introduced by the 0008b evidence
       change; correct the wording once the 0008b verdict lands. (The `0006h`
@@ -2221,6 +2231,188 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       receipts stay verifiable against the revision tagged `0008b-produced-tooling` and fail closed
       on submission under the current runner by design; a submission that requires current bytes
       re-executes the runs.
+
+- [ ] Add a path-and-symbol existence check for the backticked repo paths and
+      identifiers cited in `docs/runbooks/**`, `docs/design/quality.md` and the
+      CLOSED-TODO closures. Location: a new `scripts/ci/` check plus its fixture
+      test, run for pull requests the way the record-cleanliness pair is
+      (`scripts/ci/check-record-cleanliness.py` with
+      `scripts/ci/test-check-record-cleanliness.py`,
+      `.github/workflows/ci.yml:78,1218`): scoped to the changed files it audits
+      but not hidden behind the documentation-only fast path, so a runbook-only
+      pull request still runs it. Why: a cited `file:line` or symbol rots
+      silently when its owner moves — the 2026-11-19 revalidation found the
+      closed item's own `read_model.ex:471` health-signal citation stale
+      (`portal.md` cites `health/4` with no line number), and PR #99's "Review
+      fixes (round 2)" replaced an untracked
+      `control/deps/ecto/...` citation (`control/.gitignore:8` ignores `deps/`)
+      that no index contains. Check that a backticked repo-relative path exists
+      and that the cited identifier occurs in the cited file; do not validate
+      raw `file:line` values (any edit above them would redden the gate).
+      Verification: the check fails on a citation whose path or symbol is absent
+      and passes on the current tree; fixtures pin both outcomes.
+
+      **Closed (2026-11-20, `fix/ci-classifier-gates`):** the gate exists as
+      `scripts/ci/check-citation-existence.py`. For a revision range it selects the audited
+      documents the range adds or modifies (statuses A/M/T, `--no-renames`, text read from the
+      head revision's own blob, never the working tree) under its one corpus constant
+      `AUDITED_PATHS`, and checks each backticked path citation against the head revision's
+      tree, plus each symbol citation the prose binds to a file-shaped citation against that
+      file's head blob. The revision-range machinery - the base fallback to the `origin/main`
+      merge base and then `HEAD^`, its narrowing, the changed-path selection and the head-blob
+      read - is shared with the record gate through the new `scripts/ci/revision_scope.py`
+      instead of being copied; `scripts/ci/test-check-record-cleanliness.py` (nineteen tests,
+      observed `Ran 19 tests ... OK` on Windows and on WSL Ubuntu-24.04) is that extraction's
+      regression evidence. The module also drops the inherited `GIT_DIR`-family variables from
+      every git call, so an exported `GIT_DIR` cannot silently redirect a gate to another
+      repository and turn its range into a vacuous pass.
+      `.github/workflows/ci.yml` reports a third classifier output, `run-citations`, for a change
+      to `docs/runbooks/**`, `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md`, and the
+      `citation-existence` job runs whenever it is true - independently of the
+      documentation-only fast path, so a runbook-only pull request runs the gate - with
+      `CITATION_BASE` folded from the event exactly like `RECORD_BASE`.
+      `scripts/ci/test-check-citation-existence.py` (forty-eight tests at the round-2 fix's final
+      tree, observed `Ran 48 tests ... OK` on Windows and on WSL Ubuntu-24.04) pins the grammar
+      (line-suffixed, `:line:col`, and
+      file-shaped citations, the directory form, wildcard families including `...`/`…`, the
+      fence blanking at any indentation, in a blockquote or in a nested list item, with a closing
+      fence that carries the same character, at least the opener's count and no info string, the
+      connective list without `and`/`or`, and the path-first and whole-word symbol branches), the
+      resolution boundary (the head tree, or the head revision's own ignore rules for generated
+      output, with a per-citation notice naming the rule, the notice read from case-exact
+      committed bytes and the ignore arm deciding before a removal is reported) and the range
+      side (an unchanged, deleted or non-corpus document selects nothing; the head blob decides
+      and not the working tree; a rollback range is compared with its requested base; an
+      inherited `GIT_DIR` cannot redirect the audit).
+      The boundaries are deliberate and pinned, not omissions: a raw `file:line` value is never
+      read (the suffix is stripped before the path is resolved), a bare file name
+      (`read_model.ex`) names no repo-relative path, an extensionless multi-segment token is
+      indistinguishable from the branch names this file writes in backticks
+      (`docs/close-linux-platform-flakes`), a command or URL is not a citation, and a citation
+      the head revision's own ignore rules cover as generated output stays legal - that is what
+      keeps `docs/runbooks/portal.md`'s staged-bundle path and its `index.html` readable as
+      written. The fix round of PR #122 (2026-11-21) applied the conductor decisions recorded in
+      `docs/plans/2026-11-20-ci-classifier-gates-plan.md`: a bound symbol on an ignore-covered or
+      absent path no longer aborts the run (the symbol check skips a path the head tree does not
+      hold; the missing non-ignored path is reported by the path arm, named, at exit 1, with no
+      "does not hold exactly one entry" abort); ignore rules are read from the head revision's
+      own `.gitignore` blobs in a scratch checkout, never from the working tree, and a notice is
+      accepted only when `check-ignore -v` names a case-exact committed rule source (a
+      case-insensitive filesystem otherwise resolves a differently-cased directory to a
+      materialized ignore file and exempts what a Linux checkout refuses); and a multi-segment
+      citation whose first segment the head lacks but a commit reachable from the head held
+      (`git rev-list -1 <head> -- <segment>`, cached per segment) is refused, so a removed or
+      renamed top-level tree no longer hides the citations under it - the removal need not lie
+      inside the comparison range, because the repair lands on the next pull request that touches
+      the citing document. The head revision's own ignore rules decide first: a removed tree their
+      bytes cover is reported as a per-citation notice and the run passes, a recorded precedence
+      with a fixture of its own. A single-segment token is never resolved that way, and a first
+      segment neither the head nor its history holds at the top level (a subdirectory-relative
+      `config/test.exs`, an upstream `src/backend/...`) stays unaudited, pinned in both
+      directions; on a shallow clone the history arm sees only the fetched history and degrades
+      to the previous behaviour.
+      The gate's own first tree-wide run found five citations the corpus no longer held, all in
+      this file, and they were repaired here with the revision-pinned form this file already
+      uses: the two pre-cutover revisions of the deleted browser spec, whose three sites went with
+      the classic renderer in `ca1bdad`, as `git show 5c2e0ad^:browser/tests/portal.spec.mjs` for
+      the case `5c2e0ad` replaced and `git show ca29a8e:browser/tests/portal.spec.mjs`; the classic
+      bundle as `git show ca29a8e:control/priv/portal_assets/portal.js`; and
+      `docs/goals/archive/0008d-typescript-model-routing.md:13` for the moved goal document.
+      Observed end to end:
+      `python3 scripts/ci/check-citation-existence.py --base $(git rev-list --max-parents=0 HEAD)
+      --head HEAD` exited 1 with those five refusals before the repairs and 0 with
+      `10 changed document(s) pass the path and symbol check (365 path citation(s))` after them
+      (the after run bound the uncommitted repairs and this increment's own new files with a
+      dangling `git commit-tree` snapshot built from a temporary `GIT_INDEX_FILE`); at the
+      round-1 revision of the fix round the same command exits 0 with
+      `10 changed document(s) pass the path and symbol check (374 path citation(s))` (the delta
+      from the pre-merge 365 is this range's own `main` merge and the fix round's record edits;
+      the merge had already moved the count to 368), and the round-2 fix's final tree exits 0
+      with `10 changed document(s) pass the path and symbol check (381 path citation(s))`: the
+      round-2 delta of +7 is this file's own new record prose - it adds nine citations (two bare
+      `docs/` directory citations, one `docs/**` glob, one `docs/runbooks/` directory citation,
+      and the five appended by this very closing sentence, all resolving at the head) - less the
+      two `.github/workflows/ci.yml` line-number pointers removed from `docs/design/quality.md`
+      (15 citations there became 13), whose line numbers the fix round's second pass replaced
+      with job/step names. The round-3 fix (2026-11-21) repairs the fence boundary the round-2
+      grammar missed - a backtick fence's info string may not contain a backtick, so a line that
+      begins with an inline triple-backtick span is prose, not an opener that blanks the rest of
+      the document - and pins it with a fixture that brings the suite to forty-nine tests
+      (observed `Ran 49 tests ... OK` on Windows and on WSL Ubuntu-24.04); the tree carrying it
+      exits 0 with `10 changed document(s) pass the path and symbol check (410 path citation(s))`
+      over the whole corpus and `2 changed document(s) pass the path and symbol check (365 path
+      citation(s))` over 7a55b46..HEAD on both platforms - three more than the merge's 407 and
+      362, one from the TS row in `docs/design/quality.md` naming the `control` job's `Render
+      authenticated release shell on desktop and mobile` step and two from this sentence's own
+      backticked paths.
+
+- [ ] Commit a fixture test for the `changes` job's changed-path classifier
+      (`.github/workflows/ci.yml:26-65`), whose proof today is only the removed
+      throwaway harness plus hosted runs. Pattern:
+      `scripts/ci/test-no-legacy-routes-audit.py` (fixture-driven, runs ungated
+      in the `legacy-route-audit` job; `.github/workflows/ci.yml:1355`). Pin:
+      `docs/**`/`*.md`-only diffs report `run-heavy=false`; `docs/evaluations/**`,
+      `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
+      `scripts/ci/check-record-cleanliness.py` changes report `run-records=true`;
+      `legacy-route-audit` runs unconditionally; non-`pull_request` events
+      report both `true`. Companion increment: its `ci.yml` wiring would move
+      line numbers this branch just pinned. Verification: the fixture test
+      fails when any of those routings changes.
+
+      **Closed (2026-11-20, `fix/ci-classifier-gates`):**
+      `scripts/ci/test-ci-changed-path-classifier.py` (eighteen tests, observed `Ran 18 tests ...
+      OK` on Windows and on WSL Ubuntu-24.04, exit 0 on both) extracts the classifier program out
+      of the `changes` job's `id: paths` step in `.github/workflows/ci.yml` and runs the
+      workflow's own text - never a copy - in sixteen scratch two-commit repositories whose diffs
+      are the fixtures, so every expectation below is a measured classifier run. Pinned: a
+      `docs/**`-only and a `*.md`-only diff report `run-heavy=false`, and the round-2 fix adds
+      the discriminating pair - a `docs/**` file that is not Markdown (the suite's `example.json`
+      fixture) reports all three outputs `false`, so the `.md` exemption is what excuses a
+      documentation path, not the `docs/` prefix; `docs/evaluations/**`,
+      `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
+      `scripts/ci/check-record-cleanliness.py` report `run-records=true`; the citation gate's
+      `AUDITED_PATHS` entries report `run-citations=true` and nothing else (the corpus is
+      imported from the gate's own module, each entry required by its family-complete literal - a
+      directory entry by its trailing-slash prefix, so one file under it cannot stand in for the
+      family - and either a corpus entry the classifier forgets or a classifier literal no
+      corpus entry - or citation tool path - explains fails the suite); a
+      daemon change reports `run-heavy=true`; a rename across the documentation boundary reports
+      both sides under `--no-renames` (the fixture moves a non-Markdown file, because a `*.md`
+      path is exempt from the heavy predicate on both sides and would pin nothing); a deleted
+      runbook still reports `run-citations=true`.
+      The fix round of PR #122 (2026-11-21) added the self-triggering tool paths the first cut
+      missed: `scripts/ci/revision_scope.py` (the shared base fallback, narrowing, diff selection
+      and head-blob read) reports `run-records=true` and `run-citations=true`, and
+      `scripts/ci/check-citation-existence.py` with
+      `scripts/ci/test-check-citation-existence.py` report `run-citations=true` - so a change to
+      a gate program or to the module it reads runs that gate end to end on a real checkout's
+      event shape instead of only through fixtures. The three `*Modified` fixtures above pin each
+      tool path's triple through the real program, and an explicit `CITATION_TOOL_FIXTURES`
+      allowance beside the audited-corpus check keeps the explained-literal assertion tight (an
+      unexplained `run-citations` literal still fails).
+      The routing is modelled closed-world over the real job blocks: only `changes` and
+      `legacy-route-audit` may lack a classifier gate, `record-cleanliness` reads `run-records`,
+      `citation-existence` reads `run-citations` (the output and job the companion entry above
+      adds), every other job reads `run-heavy` and depends on `changes`, and the three `changes`
+      output folds are pinned to `github.event_name != 'pull_request' || steps.paths.outputs.<key>
+      == 'true'`, which the test folds to `true` for `push` and `workflow_dispatch` and evaluates
+      per fixture for `pull_request`; an unrecognized `if:` shape refuses instead of passing.
+      The round-2 fix also parses the heredoc step's own scalar keys: its `id: paths` and its
+      pull-request-only `if:` are pinned, because a step GitHub skips leaves every output unset
+      and skips every gated job even with the fold and the program text unchanged. Ten mutation
+      cases measure that the pins bite - dropping the `docs/evaluations/` clause,
+      making the heavy predicate ignore `docs/` and `*.md`, excusing only the `.md` arm of
+      `docs/` (the non-Markdown docs fixture must flip heavy), narrowing `docs/runbooks/` to one
+      file (the family-coverage check must fail), re-gating `citation-existence` on
+      `run-heavy`, conditioning `legacy-route-audit`, dropping an output fold, moving the
+      classify step's `if:` off `pull_request`, and dropping either `revision_scope.py` clause
+      (records or citations) each change the measured routing and fail the pinned comparison -
+      so "the fixture test fails when any of those routings changes" is pinned inside the suite,
+      not by editing `ci.yml` by hand. It runs
+      ungated in the `legacy-route-audit` job, after that job's own audit fixture test. Observed
+      before/after: with `HEAD`'s pre-change `ci.yml` in place the suite fails at collection -
+      `the classifier must emit exactly ['run-citations', 'run-heavy', 'run-records']; emitted
+      ['run-heavy', 'run-records']`, exit 5 - and passes on this branch's workflow, exit 0.
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
@@ -2646,8 +2838,9 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       `run_id`; the migrated `/portal/chat` is reachable from the shell's Chat entry (whose run
       picker lists the served runs) but the React work detail added by 0007f has no such link, so a
       waiting decision is only reachable by picking the run in Chat. Adding the link is work-detail
-      surface work (0007f's file) and was outside the 0007g diff; `browser/tests/portal.spec.mjs`
-      keeps the classic drawer's own buttons until the 0007i cutover.
+      surface work (0007f's file) and was outside the 0007g diff;
+      `git show ca29a8e:browser/tests/portal.spec.mjs` keeps the classic drawer's own buttons
+      until the 0007i cutover.
 
       **Closed (2026-11-19, `feat/work-detail-chat-link`):** the React work detail
       (`frontend/src/features/work/detail.tsx`) now renders "Open in Chat" beside the execution
@@ -2659,10 +2852,10 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       one is answered on the detail itself.
       Pure navigation: no server member was added or changed. Pinned by
       `frontend/src/features/work/detail.test.tsx` (exact href, both labels, and no link without a
-      run). The item's closing clause about `browser/tests/portal.spec.mjs` was already stale when
-      written: no file under `browser/tests/` referenced `Open Chat`, `Review decision`,
-      `open-chat-button` or `decision-chat-button` at `ca29a8e`, and the file was deleted by the
-      0007i cutover (`ca1bdad`), so nothing kept the classic buttons either way.
+      run). The item's closing clause about `git show ca29a8e:browser/tests/portal.spec.mjs` was
+      already stale when written: no file under `browser/tests/` referenced `Open Chat`,
+      `Review decision`, `open-chat-button` or `decision-chat-button` at `ca29a8e`, and the file
+      was deleted by the 0007i cutover (`ca1bdad`), so nothing kept the classic buttons either way.
 
 - [ ] Redirect the documented `#chat` hash location to `/portal/chat`. The frontend design fixes
       "old `/portal#chat` … redirect once to the new equivalent URL", and
@@ -2974,6 +3167,69 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       timeout (600.509s/600.388s, 0 test failures), and green came with `-timeout 45m`
       (`ok 1119.686s`); CI's `daemon-windows` job runs the package under `-timeout 600s`.
 
+- [ ] Give `stopDescendantMonitor` the post-timer recheck its sibling join already has.
+      `daemon/internal/platform/process_unix.go:752-769` waits on the monitor against a timer
+      (`:763-768`) and returns `ErrLinuxDescendantContainmentUnproven` ("descendant monitor did not stop
+      before deadline") whenever the timer arm wins, without rechecking `monitorDone`. `monitorDone` is a
+      close-only unbuffered channel (`:610` created, `:809` the only close), so it stays ready once
+      closed: a monitor that exits as the deadline expires leaves both arms ready, Go picks uniformly
+      between them, and a monitor whose published reason is already in hand can be reported as a
+      deadline failure. PR #105 (`e64f8c0`) fixed this shape in the barrier join `:665-688`
+      (function `waitForInitialDescendantScan` `:642-696`, the recheck at `:682-686`, pinned by
+      the join probe `process_unix_linux_test.go:2078` and the expired-timer probe
+      `:2136`, whose assertion at `:2157-2158` reddens when the recheck is removed) — and recorded
+      this site as out of scope as work "to be recorded in `docs/TODO.md`"; the same shape also sits
+      in the final-scan RPC's timer arms (`:1042-1043` request, `:1055` result). Fail-closed, so the
+      cost is manufactured
+      unproven-containment results for every caller
+      that joins the monitor's own reason (`:1121`, `:1277`, `:1351`, `:1542`,
+      `containment_supervisor_linux.go:1836`, `prepareDescendantMonitorForOwnerLoss` `:771-794`).
+      Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
+      that never exits still fails) in a separate maintenance change.
+
+      **Closed (2026-11-21, branch `fix/stop-descendant-recheck`): the recheck is applied to
+      `stopDescendantMonitor` and both directions are pinned.** The timer arm now rechecks
+      `monitorDone` with a non-blocking select — the same shape as the barrier join's `:682-686` — so
+      a monitor that exits as the deadline expires is joined instead of being reported as a deadline
+      failure, while an open monitor keeps the unchanged deadline error after the full wait and
+      success is still reported only when the monitor exited (its only production close is `:817`).
+      The entry guard (`remaining <= 0`) is unchanged, as in the barrier join, and the recheck can
+      never wait, so no caller's deadline is extended. Decision: the final-scan RPC timer arms named
+      above are deliberately not changed by this closure — the item's fix sentence pins the stop
+      path's two directions only — and are re-recorded as their own open entry in `docs/TODO.md`
+      (`## Retro review follow-ups`), with anchors rebound to the fixed tree. Pins, both in
+      `daemon/internal/platform/process_unix_linux_test.go`: the expired-timer probe
+      `TestProcessGroupStopDescendantMonitorReportsJoinedMonitorAfterDeadline` reddens when the
+      recheck is removed (mutant: red 4/4 plain with first failures at iterations 37/29/29/36 of the
+      400-iteration 100 ns bucket; red 4/4 under `-race` and 3/3 under `-race -cpu 1` with first
+      failures at 12/3/0/1 and 11/6/6 of the 2 µs bucket — the detecting bucket moves with the build
+      and the 100 ns bucket alone left `-race` green 3/3, which is why the probe walks a deadline
+      ladder instead of one constant), and the deterministic probe
+      `TestProcessGroupStopDescendantMonitorJoinsEndingMonitor` pins that an exited monitor is
+      joined without waiting while an open monitor still consumes the whole deadline and fails.
+      Evidence on the branch, from `daemon/`: WSL Ubuntu-24.04 (go1.27.0) ran the focused probes and
+      the ordinary and `-race` suites of `./internal/platform/` green (focused `ok … 0.3 s`; ordinary
+      `ok … 21.0 s` with 204 top-level PASS and 0 FAIL; `-race ok … 45.1 s`), with the six TCP-peer
+      loopback-dialing tests named-skipped
+      (`-skip "^Test(VerifyLoopbackTCPPeerWithOwnedHelperProcess|VerifyLoopbackTCPPeerWaits|VerifyLoopbackTCPPeerDoesNotExtend|VerifyLoopbackTCPPeerV2|LinuxTCPPeerV2RejectsDifferentNetworkCookie)"`).
+      That exclusion records the guest's own loopback limitation, not this change: on this host no
+      127.0.0.1 connect completes at all (a five-line python listen/connect probe times out), the same
+      dials fail or hang identically against `fdf332d`'s own `process_unix.go` in a throwaway copy
+      carrying only the new probes, and this file already records that guest behaviour (the
+      `daemon/internal/app` intermittent `-race` package-timeout entry names it: the WSL guest hangs
+      `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` on a loopback dial that
+      never answers there).
+      Windows (go1.27.4): `gofmt -l .` empty, `go vet ./...` and `go build ./cmd/...` green; the
+      aggregate `go test -count=1 -timeout 600s ./...` exceeded its package budget in
+      `internal/workspace` on this loaded host (600 s panic in
+      `TestConcurrentPrepareUsesOneReservation` on a `git` child), and the same suite at
+      `-timeout 1200s` failed only `internal/harness/pi`
+      (`TestNativeRepositoryTaskSubjectUsesRepositoryBaseline`: "git rev-parse timed out"), both green
+      on isolated re-run (`./internal/workspace/` `ok … 456.6 s`; `./internal/harness/pi/` `ok … 5.8 s`
+      and the named test `-count=3` `ok … 14.3 s`); neither can come from this change — the changed
+      file is `//go:build linux` and absent from the Windows build file set (`go list` lists 14 files
+      for `./internal/platform` on Windows, none of them it).
+
 ## Retro review follow-ups (second pass, 2026-11-20)
 
 - [ ] Re-point legacy work-surface owner bookmarks that carry the pre-#111 sentinel. The `owner`
@@ -3068,6 +3324,96 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       passed at both widths in every run. The gate's environment, its carrier deviations and the
       failure classification are in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`; CI
       remains the merge gate.
+
+- [ ] Align the control-character escape case in the canonical JSON bytes both languages hash.
+      `protocol.CanonicalizeJSON` (`daemon/internal/protocol/goal_subject.go:102`) re-encodes every
+      string through `encoding/json` (`writeCanonicalJSON` `:122`, its string arm `:132-137`;
+      `marshalJSONString` `:186` with HTML escaping off), and Go spells every control character
+      below U+0020 that has no shorthand escape as `\u00xx` with lowercase hex digits, while the
+      Elixir side hashes `SymmetryControl.RequestHash.canonical/1`
+      (`control/lib/symmetry_control/request_hash.ex:5`, `Jason.encode!/1`; Jason 1.4.5 per
+      `control/mix.lock:10`) and Jason spells the same character `\u001F` with uppercase hex.
+      Each language is self-consistent — in Go both
+      `{"value":"\u001F"}` and `{"value":"\u001f"}` canonicalize to `{"value":"\u001f"}` — so the
+      defect is the pair: one logical value carries two canonical digests, one per language.
+      Reproduced at `978abba` with throwaway probes (not committed): a Go test over
+      `CanonicalizeJSON` printed `{"value":"\u001f"}` with
+      `sha256:b43e9944b5d28b7f3e6bad4b289642d1786aa5ba80658cf2ed8bf87ecd642e51`, and
+      `Jason.encode!(%{"value" => <<0x1F>>})` printed `{"value":"\u001F"}` with
+      `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`. The Elixir reading is
+      not a lone choice: the contracts layer already mirrors it deliberately — `encodeJsonString`
+      (`contracts/ts/semantics.ts:69-80`) emits the shorthand escapes plus an uppercase `\u00XX`
+      for every other C0 control, documented as "exactly as Elixir `Jason` encodes it", and the pin
+      is the boundary test "canonical JSON escapes control characters exactly as the control
+      plane's Jason does" (`contracts/scripts/boundary.test.mjs:59-71`, U+000B and U+001B inside a
+      schema-valid LongText description), which names `RequestHash.canonical/1` as the hashed text;
+      `contracts:check` verifies the canonical sorted JSON Subject hash through that same TypeScript
+      encoder (`contracts/README.md:62-66`). So the Go canonicalizer is the side that disagrees
+      with the other two, and it is unpinned: its escaping test pins `\u0000` and the shorthand
+      escapes but no `\u00xx` escape carrying a hex letter
+      (`daemon/internal/protocol/goal_subject_test.go:64-73`),
+      and a case-sensitive search for an uppercase-hex control escape
+      (`grep -rn 'u00[0-9]*[A-F]' daemon/ --include='*.go'`) returns 0 lines. The normalization the
+      hash must follow is written at `docs/design/protocol.md:311-316` and does not name the C0
+      escape case, so deciding it stays the open choice.
+      Reachable through the context snapshot: Control builds it from free text — `approved_goal`
+      `"objective"` (`control/lib/symmetry_control/goals.ex:2151`) and `work_contract`
+      `"title"`/`"description"` (`:2156-2157`) — and stamps the snapshot's `content_hash` with
+      Jason (`context_content_hash` `:2602-2606`, via `RequestHash.canonical`), which the daemon
+      recomputes with Go and refuses on mismatch
+      (`daemon/internal/control/validation.go:1744-1772`, "context.content_hash does not match
+      canonical snapshot"; the same rule at `daemon/internal/protocol/goal_schema.go:48-70`).
+      The contracts boundary test states U+000B/U+001B are schema-valid inside a LongText
+      description (`contracts/scripts/boundary.test.mjs:59-71`), so a work item whose description
+      carries U+001F yields a snapshot the daemon rejects — a source-traced consequence, not
+      executed end to end in this record. The `Subject` the daemon binds cannot carry C0
+      characters (its fields are a UUID, a git object id and a sha256, `Subject.Validate`
+      `goal_subject.go:39-47`; `Subject.Hash` `:81-88`), and `goals.ex:2636` hashes that same
+      restricted value, so neither is the reachable seam. Fix direction: decide the canonical
+      case once — the spelling the other two implementations already share (uppercase, i.e. Jason's
+      bytes) or a shortest-escape normalization written into the rule itself — then add the missing
+      Go pin (and a shared fixture if the choice tightens the rule), and treat any recorded digest
+      over a control-bearing value as invalidated by the change. Suggested owner area: daemon
+      protocol plus the Control hash owners, with the contracts owner for the normalization text.
+
+      **Decided and closed (2026-11-20, branch `fix/go-canonical-c0-case`):** option (a) — Go
+      adopts the spelling the other two implementations already share (uppercase `\u00XX`, i.e.
+      Jason's bytes); `RequestHash.canonical/1`, the contracts TypeScript encoder and their pins
+      stay the reference, and the normalization rule now names the case
+      (`docs/design/protocol.md:311-320`). `normalizeJSONStringEscapes`
+      (`daemon/internal/protocol/goal_subject.go`, formerly `normalizeJSONStringLineSeparators`)
+      uppercases the hex digits of every surviving C0 escape token (00-prefixed) in the same
+      scanner that keeps `U+2028`/`U+2029` raw and leaves a literal `\\u001f` text unchanged; the
+      shorthand escapes, key order and numeric handling are unchanged, so only the nine C0 controls
+      whose escape carries a hex letter (`U+000B`, `U+000E`, `U+000F`, `U+001A`-`U+001F`) change
+      bytes. Pinned by `TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane` and
+      `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest`, red before
+      the fix (lowercase hex where uppercase was wanted, both tests, exit 1) and green after: the
+      first pins the entry's value (`{"value":"\u001F"}`, the digest Jason 1.4.5 computes,
+      `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`), the nine
+      hex-letter escapes, the document the contracts boundary test pins
+      (`sha256:401bf74e8085ac0cce504b465cabbc82043e4fc8c6ec73625d60a43292656fd8`) and the literal
+      `\\u001f` text; the second pins the canonical plan-proposal text the daemon recomputes
+      before admission (`goal_contract_semantics.go` `canonicalPlanProposalSHA256`) against the
+      control plane's digest the frontend pin already records for a description carrying
+      U+000B/U+001B (`sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5`).
+      A third pin, `TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged`, holds
+      the 00-token scope of the rewrite itself (it reddens against a rewrite of every four-digit
+      token).
+      The reproduction no longer reproduces: the post-fix Go canonicalizer's bytes
+      equal Jason 1.4.5's byte for byte over the entry's value, the nine hex-letter controls, that
+      boundary document and the plan proposal above; the digit-only C0 escapes are unchanged
+      because the rewrite only maps the hex letters a-f, and U+0000 stays pinned by the existing
+      escaping test. No repository-asserted digest or fixture over affected bytes is invalidated:
+      no hex-letter C0 escape predates this change in any daemon source, test, fixture or testdata
+      file, and the uppercase pins named above stay valid. Two recorded digest classes are
+      superseded rather than reused: the pre-fix probe digest quoted above (its value now
+      canonicalizes to the uppercase bytes) and persisted daemon-side digests over affected bytes
+      such as `ProviderActionIntent.RequestDigest` (`daemon/internal/app/pi_provider_bridge.go`,
+      replayed at `daemon/internal/state/provider_action.go`), where a pre-fix journal fails
+      closed with `local_idempotency_conflict` and no duplicate external effect; backward
+      compatibility is waived because the first release is not shipped. The reachable end-to-end
+      refusal stays source-traced; the plan is `docs/plans/2026-11-20-go-canonical-c0-case-plan.md`.
 
 - [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
       current encoder escapes a recorded value that starts with `:` by prefixing one
