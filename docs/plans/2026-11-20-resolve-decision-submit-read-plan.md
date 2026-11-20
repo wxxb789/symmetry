@@ -71,7 +71,9 @@ No Elixir, Go, contract-schema, generated-binding or browser-spec change: the wi
   asynchronous reconcile/goal-control advance alone makes the page-held pair stale (409 `stale`,
   `protocol.ex:33`). Every accepted command also bumps the goal's `lock_version` through
   `append_event!/7` (`goals.ex:8314`, `optimistic_lock` at `:8365`), so the page-held pair is stale
-  after any accepted sibling press too.
+  after any accepted sibling press too. Superseded by migration
+  `20261121000000_add_goal_operator_version.exs` and the `goal-command-stale-race` increment: the
+  comparison now binds the goal's `operator_version`, which internal writers never advance.
 - **Decision-version re-derivation.** `resolve_decision` requires `decision.lock_version ==
   expected_decision_version` (`goals.ex:6491-6495`), else 409 `invalid_decision`
   (`protocol.ex:45`). The presented version must therefore be the one the served read carries. The

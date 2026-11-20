@@ -330,17 +330,17 @@ describe("goal detail surface", () => {
   // The acceptance notice waits for the served goal to settle on the applied
   // state (bounded at 2.5 s), so this case allows that bound; pre-fix bytes
   // never reach the notice and fail on the assertion with the stale conflict.
-  it("re-reads the served versions at submit time so a worker-advanced goal is not sent stale", async () => {
-    // The page settles on version 8; a worker then advances the goal to 9 with
-    // the revision unchanged, exactly like the release's goal-control and
-    // wakeup writers. The command must carry the version the server serves at
-    // submit, not the settled one, or the server refuses it as stale.
+  it("re-reads the served versions at submit time so a concurrently advanced goal is not sent stale", async () => {
+    // The page settles on version 8; a concurrent operator command then advances
+    // the goal to 9 with the revision unchanged. The command must carry the
+    // version the server serves at submit, not the settled one, or the server
+    // refuses it as stale.
     let advanced = false;
     const commands: Array<{ expected_version: number; expected_revision: number }> = [];
     const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
-        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Worker-advanced goal", state: "active", currentRevision: 1, version: advanced ? 9 : 8, allowedActions: ["pause", "amend", "cancel"] }));
+        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Concurrently advanced goal", state: "active", currentRevision: 1, version: advanced ? 9 : 8, allowedActions: ["pause", "amend", "cancel"] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
         const rawBody = typeof init?.body === "string" ? init.body : "{}";
@@ -356,13 +356,13 @@ describe("goal detail surface", () => {
 
     const user = userEvent.setup();
     renderRoute(`/portal/goals/${goalId}`, fetcher);
-    await screen.findByRole("heading", { level: 1, name: "Worker-advanced goal" });
-    // The settled page still shows version 8: the worker's advance is not read yet.
+    await screen.findByRole("heading", { level: 1, name: "Concurrently advanced goal" });
+    // The settled page still shows version 8: the concurrent advance is not read yet.
     expect(screen.getByText(/· revision 1 · version 8$/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Amend" }));
-    await user.type(screen.getByRole("textbox", { name: "Objective" }), "Amended while a worker advanced the goal");
+    await user.type(screen.getByRole("textbox", { name: "Objective" }), "Amended while a concurrent operator command advanced the goal");
     await user.type(screen.getByLabelText("Reason"), "Operator amendment");
-    // The worker advances the goal's version with the revision unchanged.
+    // The concurrent operator command advances the goal's version with the revision unchanged.
     advanced = true;
     await user.click(screen.getByRole("button", { name: "Send Amend" }));
     // The command carries the version the server serves now; pre-fix it carries
@@ -391,8 +391,7 @@ describe("goal detail surface", () => {
         // The first attempt's acknowledgement is lost at the transport layer:
         // the server may still have applied it, so the intent must replay.
         if (attempted++ === 0) {
-          // The applied command advanced the goal (as any writer does) before
-          // the operator re-sends.
+          // The applied command advanced the goal before the operator re-sends.
           servedVersion = 4;
           throw new TypeError("network down");
         }
@@ -709,7 +708,7 @@ describe("goal detail surface", () => {
     expect(admit.payload?.["proposal_hash"]).toBe("sha256:e9a1f1719763b645d05e4b1fcc241b7c7fb71c0594876ae16428757a7e222805");
   });
 
-  it("builds the decision resolution from a submit-time read so a worker-advanced goal is not sent stale", async () => {
+  it("builds the decision resolution from a submit-time read so a concurrently advanced goal is not sent stale", async () => {
     const decision = {
       id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
       kind: "plan",
@@ -724,13 +723,13 @@ describe("goal detail surface", () => {
       ],
       resolution: null,
     };
-    // The page settles on goal version 4 and decision version 3; a worker then
-    // advances the goal to 5 with the revision unchanged (the reachable advance
-    // the entry identifies). The decision's own drift to 4 is a fixture premise
-    // for the re-derivation, not a worker effect: the only writer that bumps an
-    // open decision without resolving it is the amend supersede, which also
-    // advances the revision. The resolution the press applies moves the goal to
-    // 6 and the decision to 5.
+    // The page settles on goal version 4 and decision version 3; a concurrent
+    // operator command then advances the goal to 5 with the revision unchanged.
+    // The decision's own drift to 4 is a fixture premise for the re-derivation,
+    // not a concurrent effect: the only writer that bumps an open decision
+    // without resolving it is the amend supersede, which also advances the
+    // revision. The resolution the press applies moves the goal to 6 and the
+    // decision to 5.
     let advanced = false;
     let applied = false;
     const servedPair = () => (applied ? { goal: 6, decision: 5 } : advanced ? { goal: 5, decision: 4 } : { goal: 4, decision: 3 });
@@ -784,7 +783,7 @@ describe("goal detail surface", () => {
     // A JSON document contains braces that user-event's keyboard parser reads as
     // key descriptors; set the controlled textarea value directly instead.
     fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify({ schema_version: "symmetry.plan.v1", items: [] }) } });
-    // The worker advances the goal and the decision before the press.
+    // The concurrent operator command advances the goal and the decision before the press.
     advanced = true;
     await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
     await waitFor(() => expect(commands.map((command) => command.kind)).toEqual(["resolve_decision", "accept_plan"]));
@@ -1012,11 +1011,12 @@ describe("goal detail surface", () => {
       resolution: null,
     };
     // The first press reads the served 5/3 pair and its resolution is answered
-    // 409 stale: a worker advances the goal (6) after that read and before the
-    // POST. An answered refusal settles the attempt, so the next press must
-    // rebuild from a fresh read instead of resending the refused bytes forever.
+    // 409 stale: a concurrent operator command advances the goal (6) after that
+    // read and before the POST. An answered refusal settles the attempt, so the
+    // next press must rebuild from a fresh read instead of resending the refused
+    // bytes forever.
     let servedVersion = 5;
-    let workerAdvanced = false;
+    let concurrentlyAdvanced = false;
     let decisionResolved = false;
     const resolveBodies: Array<{ mutation_id: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> }> = [];
     const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
@@ -1041,11 +1041,12 @@ describe("goal detail surface", () => {
         const envelope = JSON.parse(rawBody) as { kind: string; mutation_id: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> };
         if (envelope.kind === "resolve_decision") {
           resolveBodies.push(envelope);
-          // The worker advances the goal between the press's own read and this
-          // POST, so the first attempt presents the pair the server just moved
-          // past — the refusal the submit-time read cannot prevent.
-          if (!workerAdvanced) {
-            workerAdvanced = true;
+          // A concurrent operator command advances the goal between the press's
+          // own read and this POST, so the first attempt presents the pair the
+          // server just moved past — the refusal the submit-time read cannot
+          // prevent.
+          if (!concurrentlyAdvanced) {
+            concurrentlyAdvanced = true;
             servedVersion = 6;
           }
           if (envelope.expected_version !== servedVersion) {

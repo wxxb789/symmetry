@@ -2305,7 +2305,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       %{
         schema_version: "symmetry.goal_command.v1",
         mutation_id: Ecto.UUID.generate(),
-        expected_version: goal.lock_version,
+        expected_version: goal.operator_version,
         expected_revision: goal.current_revision,
         kind: kind,
         payload: payload

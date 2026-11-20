@@ -55,12 +55,12 @@ export function GoalDetailPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   /**
-   * The server acknowledges a command before its worker applies it, and the
-   * applied write lands a moment later. The acceptance notice waits for the
-   * served goal to settle on the version the applied write produced instead of
-   * announcing acceptance while the page still holds the pre-application
-   * version. Bounded: a command with no further write is not delayed beyond
-   * the bound.
+   * An accepted operator command commits its own operator-version advance; the
+   * [version, state, current_revision] marker this page holds is stale from
+   * that commit, and no internal writer moves it. The acceptance notice waits
+   * for the served goal to serve a different marker held across two reads,
+   * instead of announcing acceptance while the page still holds the
+   * pre-application read. Bounded: the wait stops at the deadline.
    */
   const settleGoalRead = async (acknowledged: GoalProjection | undefined) => {
     const deadline = Date.now() + 2_500;
@@ -79,14 +79,19 @@ export function GoalDetailPage() {
 
   /**
    * Reads the served goal back at submit time and builds the envelope carrying
-   * the versions the server serves now. A worker (the goal-control and wakeup
-   * writers enqueue through Oban) can advance the goal after this page's last
-   * settled read; an envelope built from the settled read would be refused as
-   * stale. A payload given as a function is derived from that same read, so a
-   * value only the read can serve is read there too, and the function may
-   * refuse the send by throwing. The mutation identity comes from the form's
-   * frozen logical intent; a command with no frozen intent (and the plan
-   * approval's first attempt) mints one.
+   * the versions the server serves now. The served `version` is the Goal's
+   * operator-authority version, the precondition every command carries. A
+   * concurrent operator command can advance the goal after this page's last
+   * settled read, and an envelope built from the settled read would be refused
+   * as stale; internal writers (the goal-control and wakeup paths,
+   * reconciliation, settlement, automatic admission) never move the served
+   * version. A payload given as a function is derived from that same read, so
+   * a value only the read can serve is read there too, and the function may
+   * refuse the send by throwing. A new plan admission envelope takes the same
+   * read between the press's two commands; a frozen replay resends its recorded
+   * bytes without one. The mutation identity comes from the form's frozen
+   * logical intent; a command with no frozen intent (and the plan approval's
+   * first attempt) mints one.
    */
   const servedEnvelope = async (kind: CommandKind, payload: ActionPayload | ((served: GoalProjection) => ActionPayload), mutationId: string = newMutationId()) => {
     const current = await application.api.goal(goalId, new AbortController().signal);
@@ -143,8 +148,8 @@ export function GoalDetailPage() {
     onSuccess: async (_body, variables) => {
       setRefusal(null);
       releaseAttempt();
-      // The acceptance notice appears once the served goal has settled on the
-      // state this command produced, so the next command's envelope carries the
+      // The acceptance notice appears once the served goal reflects this
+      // command's own commit, so the next command's envelope carries the
       // version the server has actually written.
       const acknowledged = query.data;
       await queryClient.invalidateQueries({ queryKey: ["goal", { goalId }] });
