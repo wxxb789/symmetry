@@ -5,7 +5,11 @@ import { boardColumns, filterWorkItems, filtersOf, ownerOptions, sameWorkSearch,
 const firstProjectWork: WorkItem = { id: "11111111-1111-4111-8111-111111111111", key: "ONE-1", title: "Ship the read surface", status: "ready", blocked: false, blocker: null, assignee: { type: "agent", name: null, agent_profile: "default" }, updated_at: null };
 const secondProjectWork: WorkItem = { id: "22222222-2222-4222-8222-222222222222", key: "ONE-2", title: "Review the migration", status: "in_progress", blocked: true, blocker: "Waiting on review", assignee: { type: "human", name: "Ada", agent_profile: null }, updated_at: null };
 const unknownStateWork: WorkItem = { id: "33333333-3333-4333-8333-333333333333", key: "ONE-3", title: "Imported item", status: "future_state", blocked: false, blocker: null, assignee: { type: "unassigned", name: null, agent_profile: null }, updated_at: null };
+const unnamedAgentWork: WorkItem = { id: "44444444-4444-4444-8444-444444444444", key: "ONE-4", title: "Unnamed agent row", status: "ready", blocked: false, blocker: null, assignee: { type: "agent", name: null, agent_profile: null }, updated_at: null };
+const unnamedHumanWork: WorkItem = { id: "55555555-5555-4555-8555-555555555555", key: "ONE-5", title: "Unnamed human row", status: "ready", blocked: false, blocker: null, assignee: { type: "human", name: null, agent_profile: null }, updated_at: null };
+const recordedSentinelNameWork: WorkItem = { id: "66666666-6666-4666-8666-666666666666", key: "ONE-6", title: "A row named unrecorded", status: "ready", blocked: false, blocker: null, assignee: { type: "agent", name: "unrecorded", agent_profile: null }, updated_at: null };
 const work = [firstProjectWork, secondProjectWork, unknownStateWork];
+const sentinelWork = [unnamedAgentWork, unnamedHumanWork, recordedSentinelNameWork];
 
 describe("work URL state", () => {
   it("normalises the values the router hands back after JSON parsing", () => {
@@ -77,5 +81,28 @@ describe("work filtering and projections", () => {
     expect(summarizeWork(work)).toEqual({ total: 3, blocked: 1 });
     expect(workSummaryText(3, 1)).toBe("3 work items · 1 blocked");
     expect(workSummaryText(1, 0)).toBe("1 work item · 0 blocked");
+  });
+
+  it("re-points the legacy sentinel bookmarks to the keys the encoder mints now", () => {
+    // Pre-#111 the encoder spelled an absent value `unrecorded`; it now mints
+    // the empty-value sentinel, and `ownerKeyLabel` already reads the legacy
+    // word as the absence it named. A bookmark carrying it must reach the filter
+    // as the same key, or a URL that names a row selects no row at all.
+    expect(workSearch({ owner: "agent:unrecorded" })).toEqual({ owner: "agent:" });
+    expect(workSearch({ owner: "human:unrecorded" })).toEqual({ owner: "human:" });
+    expect(filterWorkItems(sentinelWork, filtersOf(workSearch({ owner: "agent:unrecorded" }))).map((item) => item.key)).toEqual(["ONE-4"]);
+    expect(filterWorkItems(sentinelWork, filtersOf(workSearch({ owner: "human:unrecorded" }))).map((item) => item.key)).toEqual(["ONE-5"]);
+    // The filter reads its key through the same reader, so a search that never
+    // passed the URL parser (a stored or hand-built one) re-points as well.
+    expect(filterWorkItems(sentinelWork, filtersOf({ owner: "agent:unrecorded" })).map((item) => item.key)).toEqual(["ONE-4"]);
+    // A saved view that still carries the legacy key is the same search as the
+    // URL the reader repairs, so the active-view comparison keeps working.
+    expect(sameWorkSearch(workSearch({ owner: "agent:unrecorded" }), workSearch({ owner: "agent:" }))).toBe(true);
+    // #111's escape is a recorded name, not the legacy word: it keeps matching
+    // its own row and never collapses onto the unnamed one.
+    expect(filterWorkItems(sentinelWork, filtersOf(workSearch({ owner: "agent::unrecorded" }))).map((item) => item.key)).toEqual(["ONE-6"]);
+    // Every other key travels as written through both readers.
+    expect(workSearch({ owner: "agent:builder" })).toEqual({ owner: "agent:builder" });
+    expect(filterWorkItems(work, filtersOf(workSearch({ owner: "unassigned" }))).map((item) => item.key)).toEqual(["ONE-3"]);
   });
 });

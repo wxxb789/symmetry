@@ -289,41 +289,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       both the escaped-escape case and the raw single-backslash spelling must be pinned in the
       tester. Suggested owner area: `scripts/ci` record tooling.
 
-- [ ] Re-point legacy work-surface owner bookmarks that carry the pre-#111 sentinel. The `owner`
-      param is read at `frontend/src/features/projects/filters.ts:50` and normalised at `:80-87`,
-      and the row comparison sits at `:94` (`ownerKey(item.assignee) === filters.owner`); #111
-      (`db31838`) changed the encoder (`frontend/src/features/work/presentation.ts:99-106`): an
-      agent row with no recorded name used to mint `agent:unrecorded` and now mints `agent:`
-      (`ownerKeyValue` `:94-97` escapes a recorded name that equals the legacy word or starts with
-      `:`, so a row genuinely named `unrecorded` mints `agent::unrecorded`), and `human:` keys
-      moved the same way; `human:unrecorded` likewise matches no row. A bookmark or hand-typed
-      link carrying `?owner=agent:unrecorded` matches no row, while `ownerKeyLabel` (`:110-126`)
-      still reads that key as the row's own absence label: the Work owner select
-      (`frontend/src/features/projects/work-surface.tsx:141,170`) shows "Agent (not in this
-      project)" above an empty list, even when the project has an unnamed-agent row; the label
-      side is already pinned, and
-      its own case documents the intent the filter does not keep — "labels the legacy sentinel keys
-      old bookmarks carry as the absence they named" (`frontend/src/features/work/presentation.test.ts:81-89`,
-      whose comment reads "a URL that still carries it reads as the absence it named rather than as
-      a recorded name") — while the filter case covers only `unassigned`
-      (`frontend/src/features/projects/filters.test.ts:52-59`, the owner case at `:56`), never the
-      legacy value.
-      Reproduced at `978abba` against the repository's own modules (a throwaway Node ESM probe
-      that imports `filters.ts` and `presentation.ts` through a type-stripping resolve hook; no
-      test file added and no dependency install): `ownerKey` printed `"agent:"`,
-      `"agent::unrecorded"` and `"agent:builder"` for those three assignees (rows built as
-      `{key, title, status: "ready", blocked: false, assignee}` with assignees
-      `{type: "agent", name: null, agent_profile: null}`,
-      `{type: "agent", name: "unrecorded", agent_profile: null}`,
-      `{type: "agent", name: "builder", agent_profile: "builder"}`),
-      `filterWorkItems(rows, filtersOf({owner: "agent:unrecorded"})).length` was `0` of `3`,
-      `ownerKeyLabel("agent:unrecorded")` printed `"Agent"`, and the currently minted key `agent:`
-      matched `1` of `3`. Fix direction: read a filter key through one normalising reader so the
-      legacy sentinel word maps to the empty-value sentinel the encoder now mints (or redirect the
-      legacy value at the surface), and pin the compatibility case in
-      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
-      work-surface/frontend.
-
 - Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
   workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
   shellcheck-disabled repo-wide `actionlint -shellcheck= -pyflakes=` run plus a direct
