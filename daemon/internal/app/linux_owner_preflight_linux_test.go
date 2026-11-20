@@ -863,6 +863,36 @@ func TestLinuxOwnerAclRejectsUnsafeBWriteAccess(t *testing.T) {
 	}
 }
 
+func TestUnescapeLinuxMountPathDecodesMountinfoEscapes(t *testing.T) {
+	for value, want := range map[string]string{
+		"/mnt/plain":             "/mnt/plain",
+		`/mnt/with\040space`:     "/mnt/with space",
+		`/mnt/with\011tab`:       "/mnt/with\ttab",
+		`/mnt/with\012newline`:   "/mnt/with\nnewline",
+		`/mnt/with\134backslash`: `/mnt/with\backslash`,
+		`/mnt/a\040b\040c`:       "/mnt/a b c",
+		`/mnt/a\040\011b`:        "/mnt/a \tb",
+	} {
+		got, err := unescapeLinuxMountPath(value)
+		if err != nil {
+			t.Errorf("unescapeLinuxMountPath(%q) = %v, want %q", value, err, want)
+			continue
+		}
+		if got != want {
+			t.Errorf("unescapeLinuxMountPath(%q) = %q, want %q", value, got, want)
+			continue
+		}
+		if !filepath.IsAbs(got) || filepath.Clean(got) != got {
+			t.Errorf("unescapeLinuxMountPath(%q) = %q, want the absolute canonical mount point the mount check accepts", value, got)
+		}
+	}
+	for _, value := range []string{`\`, `abc\`, `/mnt/short\04`, `/mnt/\777`, `/mnt/\04x`} {
+		if got, err := unescapeLinuxMountPath(value); err == nil {
+			t.Errorf("unescapeLinuxMountPath(%q) = %q, want escape rejection", value, got)
+		}
+	}
+}
+
 func terminalLinuxDrainJournal() state.RunJournal {
 	return state.RunJournal{
 		RunID: "run-terminal", Generation: 1, LocalState: "terminal_pending", TerminalState: "failed",
