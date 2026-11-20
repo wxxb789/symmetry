@@ -67,7 +67,8 @@ signatures.
   | `agent:::Ada`, `human:::Ada` | unchanged | the escaped recorded names the current encoder mints (a recorded name `:Ada`); not pinned |
   | `agent:builder`, `unassigned`, `type:unrecorded`, `agent:unrecorded-bot` | unchanged | keys that must not be read as the sentinel |
   | `human::Ada` (pre-#111 spelling for a recorded name `:Ada`) | `human::Ada` | no row — out of scope, tracked open in `docs/TODO.md`; not pinned |
-  | `human:Ada`, `type:robot`, `""` | unchanged | further unchanged samples, read from the implementation; not pinned |
+  | `human:Ada`, `""` | unchanged | further unchanged samples: `human:Ada` pinned by `filters.test.ts:18`; the empty key `""` skips the owner filter, pinned only through the no-owner cases |
+  | `type:robot` | `type:robot` | unchanged sample read from the implementation; not pinned |
 
 - **Idempotence.** The reader is a fixed point on every key it returns, so applying it twice — or
   applying it at both read boundaries as production does (`workSearch` then `filtersOf`) — is the
@@ -178,9 +179,10 @@ signatures.
   recorded name `:Ada`). They keep their spelling and match no row, and the legacy key for a
   recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to the escape the current
   encoder mints for the recorded name `unrecorded`, so it selects that other row and cannot be
-  disambiguated (the collision repeats for deeper colon prefixes: a legacy key carrying `n` colons
-  is the current mint for the same name with `n-1`). The contract's sentinel wording excludes
-  both shapes; they are tracked as an open entry in `docs/TODO.md` (reproduction: the throwaway
-  vitest probe recorded there).
+  disambiguated (the collision repeats for deeper colon prefixes: for a recorded name with `k >= 2`
+  leading colons, the pre-#111 key equals the current mint for the same name with `k-1` leading
+  colons, for example legacy `human:::Ada` (name `::Ada`) is the current mint for `:Ada`). The
+  contract's sentinel wording excludes both shapes; they are tracked as an open entry in
+  `docs/TODO.md` (reproduction: the throwaway vitest probe recorded there).
 - Contract/schema/fixture changes: the fix is client-side read compatibility for a first release
   that is not shipped; no backward-compatibility obligation was accepted.

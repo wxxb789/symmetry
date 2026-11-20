@@ -286,13 +286,16 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       pre-#111 key for a recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to
       the escape the current encoder mints for the recorded name `unrecorded`, so it silently
       selects that other row and cannot be disambiguated (the collision repeats for deeper colon
-      prefixes: a legacy key carrying `n` colons is the current mint for the same name with
-      `n-1`). Reproduced on this tree with a throwaway vitest probe over the repository's own
-      modules (deleted after the run, no test file kept): rows named `:Ada`, `:unrecorded` and
-      `unrecorded` mint `human:::Ada`, `human:::unrecorded` and `human::unrecorded`; the legacy
-      key `human::Ada` kept its spelling and `filterWorkItems` selected `[]`; the legacy key
-      `human::unrecorded` selected the row named `unrecorded`; and
-      `ownerKeyLabel("human::Ada")` prints `Ada`, dropping the colon.
+      prefixes: for a recorded name with `k >= 2` leading colons, the pre-#111 key equals the
+      current mint for the same name with `k-1` leading colons, for example legacy `human:::Ada`
+      (name `::Ada`) is the current mint for `:Ada`). Reproduced at `3c705d7` (production bytes
+      identical to `7f62afe`) with a throwaway vitest probe over the repository's own modules
+      (deleted after the run, no test file kept): rows named `:Ada`, `::Ada`, `:unrecorded` and
+      `unrecorded` mint `human:::Ada`, `human::::Ada`, `human:::unrecorded` and
+      `human::unrecorded`; the legacy key `human::Ada` kept its spelling and `filterWorkItems`
+      selected `[]`; the legacy key `human::unrecorded` selected the row named `unrecorded`; the
+      legacy key `human:::Ada` selected the row named `:Ada` instead (the deeper-prefix
+      collision); and `ownerKeyLabel("human::Ada")` prints `Ada`, dropping the colon.
       Reachable: `assignee_name` and `agent_profile` are length-bounded only
       (`control/lib/symmetry_control/workspaces/schemas.ex:472-473`), so a colon-leading name can
       be served. The shape was recorded as an explicit residual of the legacy-sentinel increment
