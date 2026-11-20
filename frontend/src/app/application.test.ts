@@ -34,8 +34,41 @@ describe("private query lifecycle", () => {
     expect(safeReturnTo("http://localhost/portal/goals/../login")).toBe("/portal/attention");
   });
 
-  it.each(returnTargets.cases)("keeps the shared shell return target: $name", ({ path, return_to }) => {
-    expect(safeReturnTo(new URL(path, returnTargets.base_url).href)).toBe(return_to ?? "/portal/attention");
+  it.each(returnTargets.cases)("keeps the shared shell return target: $name", (row) => {
+    // A malformed row is a corpus error, not a refusal case: fail loudly on a
+    // missing name/path and on a missing or non-string, non-null return_to.
+    const label = `shared return-target row: ${JSON.stringify(row)}`;
+    expect(typeof row.name, label).toBe("string");
+    expect(typeof row.path, label).toBe("string");
+    expect(Object.hasOwn(row, "return_to"), label).toBe(true);
+    expect(row.return_to === null || typeof row.return_to === "string", label).toBe(true);
+    expect(safeReturnTo(new URL(row.path, returnTargets.base_url).href)).toBe(row.return_to ?? "/portal/attention");
+  });
+
+  // The corpus carries one `path` string per case, so the raw empty-query and
+  // bare-fragment spellings stay out of it and are pinned instead per side: the
+  // server side pins every shell path (see the reject list of the ExUnit test
+  // for explicit internal shell return paths), and this file every shell path
+  // but `/portal/attention` (see below). The URL `search`/`hash` getters report
+  // an empty query or fragment as "", and `safeReturnTo` emits pathname +
+  // search (the parser keeps `?` and `#` in `href`), so the client keeps the
+  // location while the server refuses the raw spelling.
+  const shellPaths = [
+    "/portal",
+    // `/portal/attention` is absent: its accepted target equals the refusal fallback, so the pin cannot discriminate.
+    "/portal/chat",
+    "/portal/connections",
+    "/portal/goals/goal-123",
+    "/portal/projects",
+    "/portal/projects/project-123",
+    "/portal/runtimes",
+    "/portal/work/work-123",
+  ];
+  it.each(shellPaths.flatMap((path) => [
+    [`${path}?`, path] as const,
+    [`${path}#`, path] as const,
+  ]))("keeps the shell location for the raw URL %s", (raw, expected) => {
+    expect(safeReturnTo(`http://localhost${raw}`)).toBe(expected);
   });
 
   it("expires the session when a command refuses with 401 even though its mutation has its own error handler", async () => {

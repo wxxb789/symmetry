@@ -593,7 +593,9 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, work
   // page has open (the server-selected scope included) and marks every other
   // project's entry stale. The refetch is a manual one: query-core 5.107.1's
   // `refetchQueries` defaults `cancelRefetch: true`, so a read already in
-  // flight for that key is cancelled and superseded by the write's own read.
+  // flight for a key with cached data is cancelled and superseded by the
+  // write's own read; a first read holding no data is joined instead
+  // (query.js:353-360).
   const reconcile = () => { void queryClient.invalidateQueries({ queryKey: ["workspace"] }); };
   const editorTarget = editor === null || editor.kind === "bind" ? undefined : rows.find((row) => row.id === editor.resourceId);
   const editorSubjectRemoved = editor !== null && editor.kind !== "bind" && workspace !== undefined && editorTarget === undefined;
