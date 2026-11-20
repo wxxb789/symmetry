@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { failureMode } from "../features/planning/write-policy";
 import { createApi, Forbidden, Network, readRetry, ServerRefusal, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
 import { readWorkDetail } from "./api.fixtures";
 
@@ -119,6 +120,22 @@ describe("read boundary", () => {
       .then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(UnexpectedResponse);
     expect(failure).toMatchObject({ status: 500, transient: true });
+  });
+
+  it("keeps the server's described 5xx envelope retryable instead of authoritative", async () => {
+    // ErrorJSON renders `{error:{code:"internal_error",…}}` for every 5xx JSON
+    // request, so a raising write answers with a parseable refusal: it must not
+    // close the editor as the server's authoritative answer, because the write
+    // may have been applied.
+    const fault = { error: { code: "internal_error", message: "internal server error" } };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(fault), { status: 500 }));
+    const api = createApi(fetcher);
+    const failure = await api
+      .updateWorkItem(workItemId, { version: 1, title: "Fault probe" }, "csrf-token", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(ServerRefusal);
+    expect(failure).toMatchObject({ status: 500, code: "internal_error", message: "internal server error" });
+    expect(failureMode(failure)).toBe("retryable");
   });
 
   it("aborts the underlying request when the consuming query is cancelled", async () => {
@@ -307,16 +324,29 @@ describe("chat boundary", () => {
     expect(replayed.message.id).toBe("33333333-3333-4333-8333-333333333333");
   });
 
+  it("normalizes the answer command's absent acknowledgement id to null", async () => {
+    const body = {
+      message: { id: "33333333-3333-4333-8333-333333333333", role: "human", intent: "discuss", content: "A question", inserted_at: null, work_item_id: null },
+      reply: { id: "44444444-4444-4444-8444-444444444444", role: "assistant", intent: "discuss", content: "An answer", inserted_at: null, work_item_id: null },
+      work_item_id: null,
+      command: { command_id: "66666666-6666-4666-8666-666666666666", kind: "guidance", state: "pending", acknowledgement_outcome: null, applied_at: null },
+    };
+    const outcome = await createApi(vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(body), { status: 201 })))
+      .chatMessage({ scope: "workspace", intent: "discuss", content: "A question", action_id: "action-1" }, "csrf", new AbortController().signal);
+    expect(outcome.command?.acknowledgement_id).toBeNull();
+  });
+
   it("sends the frozen request verbatim with the caller's CSRF token and never retries", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       message: { id: "33333333-3333-4333-8333-333333333333", role: "human", intent: "guidance", content: "Steer", inserted_at: null, work_item_id: null },
       reply: { id: "44444444-4444-4444-8444-444444444444", role: "assistant", intent: "guidance", content: "Saved", inserted_at: null, work_item_id: null },
       work_item_id: "55555555-5555-4555-8555-555555555555",
-      command: { command_id: "66666666-6666-4666-8666-666666666666", kind: "guidance", state: "pending", acknowledgement_outcome: null, applied_at: null },
+      command: { command_id: "66666666-6666-4666-8666-666666666666", kind: "guidance", state: "pending", acknowledgement_outcome: null, acknowledgement_id: "88888888-8888-4888-8888-888888888888", applied_at: null },
     }), { status: 201 }));
     const payload = { scope: "run" as const, run_id: runId, intent: "guidance", content: "Steer", action_id: "action-1", work_item_id: "55555555-5555-4555-8555-555555555555", generation: 1 };
     const outcome = await createApi(fetcher).chatMessage(payload, "rotated-token", new AbortController().signal);
     expect(outcome.command?.state).toBe("pending");
+    expect(outcome.command?.acknowledgement_id).toBe("88888888-8888-4888-8888-888888888888");
     expect(outcome.workItemId).toBe("55555555-5555-4555-8555-555555555555");
     const [path, init] = fetcher.mock.calls[0] ?? [];
     expect(path).toBe("/portal/api/chat/messages");

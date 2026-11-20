@@ -3,7 +3,7 @@
 // Real authenticated fixtures only: projects, resources and work items are
 // created through the Portal API with the session CSRF token (the read-only
 // shell exposes no mutation controls), and every rendered read is decoded from
-// the running control plane. Network interception appears in four places only,
+// the running control plane. Network interception appears in five places only,
 // all explicitly separated from real-data acceptance:
 //   1. holding a genuinely captured real response to prove late responses are
 //      never rendered as another project's data or as newer state;
@@ -11,25 +11,35 @@
 //   3. the migrated malicious-response injection check;
 //   4. the daemon-free synthetic fault injection guard for the obsolete
 //      older-history request, which uses generated contract fixture shapes and
-//      is never counted as real history evidence.
+//      is never counted as real history evidence;
+//   5. the harness-held invalidation socket of the disconnected-read case,
+//      which withholds the browser's own WebSocket bytes to hold the
+//      pre-subscription window open (the socket is the real transport; only
+//      its delivery is withheld).
 import { readFile } from "node:fs/promises";
 import { allowBrowserError, assertNoBrowserErrors, expect, monitorBrowserErrors, test } from "./fixtures.mjs";
 import {
+  api,
   attachResource,
   capture,
+  closeDetail,
   controlSocket,
   createProject,
   createWorkItem,
+  detailSurface,
   login,
   moveWorkItem,
   operatorToken,
   projectItem,
+  projectUrl,
   readsStatus,
   recordKeys,
+  seedProject,
+  servedColumnTitles,
   snapshotMetrics,
   uniqueKey,
   updateWorkItem,
-  workspace
+  workUrl
 } from "./readable-fixtures.mjs";
 
 // The client's own rejoin schedule bounds the wait below: a join push times out
@@ -74,27 +84,6 @@ const ui = {
   refresh: "Refresh"
 };
 
-const projectUrl = (id, params = {}) => {
-  const query = new URLSearchParams(params).toString();
-  return `/portal/projects/${id}${query ? `?${query}` : ""}`;
-};
-const workUrl = (id, params = {}) => {
-  const query = new URLSearchParams(params).toString();
-  return `/portal/work/${id}${query ? `?${query}` : ""}`;
-};
-
-async function seedProject(page, { prefix, items = [], resources = [] }) {
-  const key = uniqueKey(prefix);
-  const project = await createProject(page, { key, name: `Readable work views ${key}` });
-  for (const resource of resources) await attachResource(page, project.id, resource);
-  const created = new Map();
-  for (const item of items) created.set(item.title, await createWorkItem(page, project.id, item));
-  return { ...project, items: created };
-}
-
-// Detail is a modal side panel on desktop and a full page at narrow widths.
-const detailSurface = (page, isMobile, title) =>
-  isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: title });
 // browser.newContext does not inherit project use options, so a fresh signed-out
 // context copies only the supported BrowserContextOptions fields from the
 // running project (exact viewport, plus mobile/touch/scale/agent semantics).
@@ -113,13 +102,6 @@ const deviceContextOptions = (testInfo) => {
 // addressed by role only.
 const detailPanel = (page, isMobile) =>
   isMobile ? page.locator("#main-content") : page.locator('[role="dialog"]');
-
-async function closeDetail(page, isMobile, { escape = false, keys } = {}) {
-  if (isMobile) await page.getByRole("link", { name: ui.backToProject }).click();
-  else if (escape && keys) await keys.press(page, "Escape");
-  else if (escape) await page.keyboard.press("Escape");
-  else await page.getByRole("button", { name: ui.closeDetail }).click();
-}
 
 // Arrow-key walk: which card/column received focus.
 const focusedCard = (page) =>
@@ -409,11 +391,7 @@ test.describe("Readable work views", () => {
     await expect(page.getByRole("region", { name: ui.boardRegion })).toBeVisible();
     // Rendered ready-column order must be the served position order, with
     // titles that cannot match position order by accident.
-    const servedReady = (await workspace(page, project.id)).body.projects
-      .find((entry) => entry.id === project.id).work_items
-      .filter((item) => item.status === "ready")
-      .sort((left, right) => left.position - right.position)
-      .map((item) => item.title);
+    const servedReady = await servedColumnTitles(page, project.id);
     const readySection = board.locator(".board-column").filter({
       has: page.getByRole("heading", { name: "ready", exact: true })
     });
@@ -426,8 +404,6 @@ test.describe("Readable work views", () => {
     const renderedOrder = renderedReady.filter((title) =>
       [orderTitles.zulu, orderTitles.mike, orderTitles.alpha].includes(title));
     expect(renderedOrder).toEqual([orderTitles.zulu, orderTitles.mike, orderTitles.alpha]);
-    expect(renderedOrder).not.toEqual([orderTitles.zulu, orderTitles.mike, orderTitles.alpha].slice().sort());
-    expect(renderedOrder).not.toEqual([orderTitles.zulu, orderTitles.alpha, orderTitles.mike]);
     // Every served work item renders as exactly one board card: no column is
     // dropped, no card is duplicated, and nothing is paginated away.
     await expect(board.getByRole("link")).toHaveCount(metrics.workItemCount);
@@ -733,7 +709,7 @@ test.describe("Readable work views", () => {
     monitorBrowserErrors(fresh);
     try {
       const document = await fresh.goto(workDetailLink);
-      expect(document.status(), "the release must serve the authenticated work detail document").toBe(200);
+      expect(document.status(), "the signed-out work detail deep link lands on the login document").toBe(200);
       await expect(fresh).toHaveURL(/\/portal\/login\?return_to=/);
       expect(new URL(fresh.url()).searchParams.get("return_to")).toBe(workDetailLink);
       await fresh.getByLabel("Operator token").fill(operatorToken);
@@ -803,7 +779,7 @@ test.describe("Readable work views", () => {
     monitorBrowserErrors(fresh);
     try {
       const document = await fresh.goto(projectLink);
-      expect(document.status(), "the release must serve the authenticated project document").toBe(200);
+      expect(document.status(), "the signed-out project deep link lands on the login document").toBe(200);
       await expect(fresh).toHaveURL(/\/portal\/login\?return_to=/);
       expect(new URL(fresh.url()).searchParams.get("return_to")).toBe(projectLink);
       await fresh.getByLabel("Operator token").fill(operatorToken);
@@ -1116,7 +1092,7 @@ test.describe("Readable work views", () => {
     await closeDetail(page, isMobile, { escape: true });
   });
 
-  test("a disconnected read recovers and reconciles with the server's own snapshot", async ({ page, isMobile }, testInfo) => {
+  test("a disconnected read recovers and reconciles with the server's own snapshot", async ({ page, isMobile }) => {
     // The browser's own connection is held before the shell starts: the page's
     // WebSocket is open to the harness and none of its bytes reach the server, so
     // this browser is connected without being a subscriber — the window the
@@ -1163,17 +1139,7 @@ test.describe("Readable work views", () => {
     // timing; the window is held here, and the epoch below is the product's own.
     const publishedAt = await page.evaluate(() => Date.now());
     socket.pushed = 0;
-    const executing = await page.evaluate(async (workItemId) => {
-      const csrf = document.querySelector('meta[name="csrf-token"]')?.content || "";
-      const response = await fetch(`/portal/api/work-items/${workItemId}/run`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { Accept: "application/json", "Content-Type": "application/json", "x-csrf-token": csrf },
-        body: JSON.stringify({ action_id: crypto.randomUUID() })
-      });
-      const body = await response.json();
-      return { status: response.status, body };
-    }, item.id);
+    const executing = await api(page, "POST", `/portal/api/work-items/${item.id}/run`, { action_id: crypto.randomUUID() });
     expect(executing.status, JSON.stringify(executing.body)).toBe(202);
     // The change reached no reader: the server pushed nothing down this socket
     // (there was no subscription to address), and the surface still renders the
@@ -1232,11 +1198,8 @@ test.describe("Readable work views", () => {
 
     // Reconnect: the next refresh reconciles with the server snapshot the API
     // serves, and the rendered state equals that snapshot — no more, no less.
-    const served = await page.evaluate(async (workItemId) => {
-      const response = await fetch(`/portal/api/work-items/${workItemId}`, { credentials: "same-origin" });
-      return response.json();
-    }, item.id);
-    expect(served.work_item.execution.state).toBe("queued");
+    const served = await api(page, "GET", `/portal/api/work-items/${item.id}`);
+    expect(served.body.work_item.execution.state).toBe("queued");
     const refresh = page.waitForResponse((response) => {
       const url = new URL(response.url());
       return url.pathname === `/portal/api/work-items/${item.id}` && response.status() === 200;
@@ -1249,7 +1212,6 @@ test.describe("Readable work views", () => {
     await expect(page.getByText("Cancelled", { exact: true })).toHaveCount(0);
     // The served detail still owns the deep link after reconnecting.
     expect(page.url()).toContain(`/portal/work/${item.id}`);
-    void testInfo;
   });
 
   test.describe("concurrency", () => {

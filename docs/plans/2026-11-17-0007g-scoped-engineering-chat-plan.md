@@ -70,14 +70,17 @@ Server-side policy change (the design's outstanding Chat requirement,
    Control itself has registered for the work item's execution binding
    (`agent_profile` + `workspace`, resolved exactly as
    `Workspaces.execution_attrs/3` resolves them) must exist and every one of
-   them must be a native harness kind that can be claimed by a goal-less task
-   (`codex`, `claude_code`, `pi`, `opencode`). `omp`/`omo` are excluded because
-   `Orchestration.next_assignable_legacy_task_and_runtime/1` filters them out of
-   the legacy path and `Orchestration.commit_new_claim!/3` rolls a goal-less
-   claim on them back (`:ownership_lost`); such bindings therefore keep the
-   legacy requirement rather than stranding the task under an impossible one.
-   An empty runtime set (no daemon has registered yet) also keeps the legacy
-   requirement, so every existing behaviour and test is preserved.
+   them must be a kind `Orchestration.native_harness_kind?/1` admits
+   (`Orchestration.native_harness_kinds/0`: `codex`, `claude_code`, `pi`,
+   `opencode`, `omp`, `omo`). A native kind that cannot claim a goal-less task
+   is unaffected: `Orchestration.next_assignable_legacy_task_and_runtime/1`
+   excludes `omp`/`omo` from such a claim and `Orchestration.commit_new_claim!/3`
+   rolls the claim back (`:ownership_lost`), so an `omp`/`omo`-only binding
+   stores the adapter requirement but the exclusion — not the requirement —
+   decides there, while a mixed binding keeps the requirement its claimable
+   sibling runtime can satisfy. An empty runtime set (no daemon has registered
+   yet) also keeps the legacy requirement, so every existing behaviour and test
+   is preserved.
 
    The native requirement reuses the exact nested shape Control already
    validates and matches (`native_goal_adapter_requirement/0` in

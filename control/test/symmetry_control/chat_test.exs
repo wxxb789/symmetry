@@ -4,6 +4,7 @@ defmodule SymmetryControl.ChatTest do
   alias SymmetryControl.{Chat, Orchestration, Workspaces}
   alias SymmetryControl.Chat.{Action, Message}
   alias SymmetryControl.Orchestration.{Command, Machine, Run, Runtime, Task}
+  alias SymmetryControl.Portal.Invalidations
   alias SymmetryControl.Workspaces.{Project, WorkItem}
   alias SymmetryControl.TelemetryReads
   alias Ecto.Adapters.SQL.Sandbox
@@ -94,6 +95,60 @@ defmodule SymmetryControl.ChatTest do
     assert {:ok, run} = Orchestration.assign_one(now: now)
     assert run.task_id == task.id
     assert run.runtime_id == runtime.id
+
+    # The same projection serves the daemon's dispatch poll, whose wire type is
+    # a boolean map. The nested adapter requirement is Control-side scheduling
+    # data: the served work must carry only boolean members — here none — while
+    # the stored task keeps the requirement the admission was decided on.
+    assert {:ok, snapshot} = Orchestration.work_snapshot(runtime.id, runtime.connection_epoch)
+
+    assert [%{work: served_work}] = SymmetryControlWeb.Protocol.snapshot(snapshot).assignments
+
+    served_requirement = Map.get(served_work, :required_capabilities, %{})
+
+    assert Enum.all?(served_requirement, fn {_key, value} -> is_boolean(value) end)
+    refute Map.has_key?(served_work, :required_capabilities)
+
+    assert Repo.get!(Task, task.id).required_capabilities == task.required_capabilities
+  end
+
+  test "a native runtime that cannot cancel is not admitted for the Chat work" do
+    project = project("NEGATE")
+    now = DateTime.utc_now()
+    runtime = register_native_runtime(now, operations: %{"cancel" => false})
+
+    # The runtime is registrable — a boolean operation value is schema-valid —
+    # and is the only runtime of this binding, so the admission decision is the
+    # capability containment in the assignment query.
+    assert runtime.capabilities["adapter"]["operations"]["cancel"] == false
+
+    assert {:ok, response, :created} =
+             Chat.post_message(%{
+               scope: "workspace",
+               target_project_id: project.id,
+               intent: "start_work",
+               action_id: "native-negative-start",
+               content: "Start through a runtime that cannot cancel",
+               work: %{title: "Native negative start"}
+             })
+
+    item = Repo.get!(WorkItem, response.work_item_id)
+    task = Repo.get!(Task, item.orchestration_task_id)
+
+    assert task.required_capabilities == %{
+             "adapter" => %{
+               "operations" => %{
+                 "start" => true,
+                 "events" => true,
+                 "cancel" => true,
+                 "pause" => "unsupported"
+               }
+             }
+           }
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: now)
+    assert Repo.get!(Task, task.id).state == "queued"
+    assert Repo.aggregate(Run, :count) == 0
   end
 
   test "a registered legacy runtime keeps the supervisory requirement and excludes native runtimes" do
@@ -395,6 +450,53 @@ defmodule SymmetryControl.ChatTest do
 
     assert {:ok, conversation} = Chat.conversation(%{scope: "run", run_id: run.id})
     assert Enum.all?(conversation.messages, &(&1.command.acknowledgement_outcome == "applied"))
+  end
+
+  test "a created chat write announces the work item and run it changed" do
+    Invalidations.subscribe()
+
+    # A binding no registered runtime matches: the live_work runtime below must
+    # claim only its own task, not this queued start.
+    project = project("ANNOUNCE", %{default_agent_profile: "announce"})
+
+    assert {:ok, start, :created} =
+             Chat.post_message(%{
+               scope: "workspace",
+               target_project_id: project.id,
+               intent: "start_work",
+               action_id: "announce-start",
+               content: "Implement the announced start",
+               work: %{title: "Announced start"}
+             })
+
+    assert start.command == nil
+    assert_receive {:portal_invalidation, %{kind: "work_item", id: work_item_id}}
+    assert work_item_id == start.work_item_id
+
+    {_project, item, run, _fence, _now} = live_work("ANNOUNC2")
+
+    guidance = %{
+      scope: "run",
+      run_id: run.id,
+      work_item_id: item.id,
+      generation: run.generation,
+      intent: "guidance",
+      action_id: "announce-guidance",
+      content: "Announce this guidance."
+    }
+
+    assert {:ok, response, :created} = Chat.post_message(guidance)
+    assert response.command.kind == "guidance"
+
+    # The durable command changed the run, and the message names its work item.
+    assert_receive {:portal_invalidation, %{kind: "run", id: run_id}}
+    assert run_id == run.id
+    assert_receive {:portal_invalidation, %{kind: "work_item", id: work_item_id}}
+    assert work_item_id == item.id
+
+    # A replayed request committed nothing new and announces nothing.
+    assert {:ok, _replay, :replayed} = Chat.post_message(guidance)
+    refute_receive {:portal_invalidation, _payload}, 100
   end
 
   test "guidance byte limits preserve exact ASCII and multibyte boundaries without partial records" do
@@ -1154,6 +1256,7 @@ defmodule SymmetryControl.ChatTest do
     kind = Keyword.get(opts, :harness_kind, "codex")
     runtime_key = Keyword.get(opts, :runtime_key, "native-chat")
     agent_profile = Keyword.get(opts, :agent_profile, "codex")
+    operations = Keyword.get(opts, :operations, %{})
     %{machine: machine} = enroll_machine("Native runtime #{runtime_key}", now)
 
     assert {:ok, [runtime]} =
@@ -1171,7 +1274,7 @@ defmodule SymmetryControl.ChatTest do
                    harness_version: "0.153.4",
                    adapter_version: "symmetry-#{kind}-1",
                    adapter_protocol_version: 1,
-                   capabilities: native_runtime_capabilities(kind),
+                   capabilities: native_runtime_capabilities(kind, operations),
                    heartbeat_interval_ms: 60_000
                  }
                ],
@@ -1181,7 +1284,7 @@ defmodule SymmetryControl.ChatTest do
     runtime
   end
 
-  defp native_runtime_capabilities(kind) do
+  defp native_runtime_capabilities(kind, operations) do
     %{
       "interactive" => false,
       "adapter" => %{
@@ -1189,18 +1292,22 @@ defmodule SymmetryControl.ChatTest do
         "native_version" => "0.153.4",
         "implementation_version" => "symmetry-#{kind}-1",
         "protocol_version" => 1,
-        "operations" => %{
-          "start" => true,
-          "events" => true,
-          "cancel" => true,
-          "resume" => false,
-          "handoff" => false,
-          "guidance" => "next_turn",
-          "pause" => "unsupported",
-          "approval_response" => false,
-          "usage" => "reported",
-          "hard_cost_limit" => false
-        }
+        "operations" =>
+          Map.merge(
+            %{
+              "start" => true,
+              "events" => true,
+              "cancel" => true,
+              "resume" => false,
+              "handoff" => false,
+              "guidance" => "next_turn",
+              "pause" => "unsupported",
+              "approval_response" => false,
+              "usage" => "reported",
+              "hard_cost_limit" => false
+            },
+            operations
+          )
       }
     }
   end

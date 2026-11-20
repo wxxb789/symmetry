@@ -10,7 +10,8 @@ defmodule SymmetryControl.Chat do
 
   alias SymmetryControl.Chat.{Action, Message, ReadModel}
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Notifier, Run, Runtime, Scheduler, Task}
+  alias SymmetryControl.Orchestration.{Command, Notifier, Run, Runtime, Scheduler, Task}
+  alias SymmetryControl.Portal.Invalidations
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
@@ -122,6 +123,7 @@ defmodule SymmetryControl.Chat do
           if disposition == :created do
             if command, do: Notifier.command_available(command)
             if params["intent"] not in ["discuss", "status"], do: Scheduler.wake()
+            announce_changes(params["intent"], command, reply)
           end
 
           {:ok, reply, disposition}
@@ -133,6 +135,22 @@ defmodule SymmetryControl.Chat do
   end
 
   def post_message(_params), do: {:error, :invalid_request}
+
+  # A created chat write announces the domain resources it changed, not only
+  # kind "chat": a start_work creates its work item, and a durable control
+  # command changes its run. The transaction has already committed here.
+  # discuss/status and a replayed request changed nothing new and announce
+  # nothing.
+  defp announce_changes("start_work", _command, reply) do
+    Invalidations.publish(%{kind: "work_item", id: reply.work_item_id})
+  end
+
+  defp announce_changes(_intent, %Command{} = command, reply) do
+    if command.run_id, do: Invalidations.publish(%{kind: "run", id: command.run_id})
+    if reply.work_item_id, do: Invalidations.publish(%{kind: "work_item", id: reply.work_item_id})
+  end
+
+  defp announce_changes(_intent, _command, _reply), do: :ok
 
   defp execute(scope, %{"intent" => intent} = params) when intent in ["discuss", "status"] do
     work_item = optional_target(scope, params)
@@ -245,8 +263,11 @@ defmodule SymmetryControl.Chat do
   # `create_new_command!` requires a legacy supervisory runtime), so a native
   # runtime can never satisfy the legacy requirement. When every runtime
   # registered for the work item's execution binding runs a native harness —
-  # `Orchestration.native_harness_kind?/1`, the one vocabulary native Goal
-  # admission selects on, asked rather than restated here — admit the start
+  # the vocabulary the native Goal admission selection query and this
+  # derivation share through `Orchestration.native_harness_kind?/1` rather than
+  # restating; the Runtime and HarnessSession schemas and the database check
+  # constraints restate it and are held to it by
+  # `SymmetryControl.NativeHarnessKindBindingTest` — admit the start
   # through the operations a native admission needs: start one turn, stream the
   # events that carry its terminal result, and remain cancellable. Every other
   # binding (no registered runtime, or any runtime without harness metadata)

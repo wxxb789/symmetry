@@ -42,8 +42,13 @@ afterEach(() => {
   applications.length = 0;
 });
 
-function renderRuntimes(path: string, workspace: { runtimes: unknown[]; registered_runtimes: unknown[] }) {
-  const body = {
+interface ServedRuntimeSet {
+  runtimes: unknown[];
+  registered_runtimes: unknown[];
+}
+
+function renderRuntimes(path: string, served: { scoped: ServedRuntimeSet; unscoped: ServedRuntimeSet }) {
+  const body = (workspace: ServedRuntimeSet) => ({
     selected_project_id: projectId,
     projects: [{
       id: projectId,
@@ -58,11 +63,16 @@ function renderRuntimes(path: string, workspace: { runtimes: unknown[]; register
     }],
     health: { status: "unknown" },
     ...workspace,
-  };
+  });
   const fetchResponse = (input: string | Request | URL): Response => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
     if (url.pathname === "/portal/api/session") return new Response(JSON.stringify({ csrf_token: "session-token" }));
-    if (url.pathname === "/portal/api/workspace") return new Response(JSON.stringify(body));
+    if (url.pathname === "/portal/api/workspace") {
+      // The scoped and unscoped reads serve different rows, so a page that
+      // ignored the URL's project scope cannot pass the scoped assertions.
+      const scoped = url.searchParams.get("project_id") === projectId;
+      return new Response(JSON.stringify(body(scoped ? served.scoped : served.unscoped)));
+    }
     return new Response("{}", { status: 404 });
   };
   const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => Promise.resolve(fetchResponse(input)));
@@ -71,11 +81,12 @@ function renderRuntimes(path: string, workspace: { runtimes: unknown[]; register
   const history: RouterHistory = createMemoryHistory({ initialEntries: [path] });
   const router = createAppRouter(application, history);
   render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+  return fetcher;
 }
 
 describe("runtimes page", () => {
   it("renders the served compatibility rows for the unscoped read", async () => {
-    renderRuntimes("/portal/runtimes", { runtimes: [runtimeA], registered_runtimes: [runtimeA, runtimeB] });
+    renderRuntimes("/portal/runtimes", { unscoped: { runtimes: [runtimeA], registered_runtimes: [runtimeA, runtimeB] }, scoped: { runtimes: [runtimeB], registered_runtimes: [runtimeA, runtimeB] } });
     await screen.findByRole("heading", { level: 1, name: "Runtimes" });
     const cards = await screen.findAllByRole("article");
     expect(cards).toHaveLength(1);
@@ -83,7 +94,7 @@ describe("runtimes page", () => {
   });
 
   it("never claims an empty registry when the unscoped read serves registered runtimes", async () => {
-    renderRuntimes("/portal/runtimes", { runtimes: [], registered_runtimes: [runtimeA] });
+    renderRuntimes("/portal/runtimes", { unscoped: { runtimes: [], registered_runtimes: [runtimeA] }, scoped: { runtimes: [runtimeB], registered_runtimes: [runtimeA] } });
     await screen.findByRole("heading", { level: 1, name: "Runtimes" });
     expect(await screen.findByText("No compatible runtimes")).toBeInTheDocument();
     expect(screen.getByText(/1 runtime is registered with this deployment/)).toBeInTheDocument();
@@ -91,18 +102,26 @@ describe("runtimes page", () => {
   });
 
   it("names the project scope when the scoped read serves no compatible runtime", async () => {
-    renderRuntimes(`/portal/runtimes?projectId=${projectId}`, { runtimes: [], registered_runtimes: [runtimeA, runtimeB] });
+    renderRuntimes(`/portal/runtimes?projectId=${projectId}`, { scoped: { runtimes: [], registered_runtimes: [runtimeA, runtimeB] }, unscoped: { runtimes: [runtimeA], registered_runtimes: [runtimeA, runtimeB] } });
     await screen.findByRole("heading", { level: 1, name: "Runtimes" });
     expect(await screen.findByText("No compatible runtimes")).toBeInTheDocument();
     expect(screen.getByText(/2 runtimes are registered with this deployment/)).toBeInTheDocument();
     expect(screen.getByText(/none is bound to this project/)).toBeInTheDocument();
   });
 
-  it("renders the scoped project's compatible rows", async () => {
-    renderRuntimes(`/portal/runtimes?projectId=${projectId}`, { runtimes: [runtimeA], registered_runtimes: [runtimeA, runtimeB] });
+  it("renders only the scoped project's compatible rows", async () => {
+    const fetcher = renderRuntimes(`/portal/runtimes?projectId=${projectId}`, { scoped: { runtimes: [runtimeB], registered_runtimes: [runtimeA, runtimeB] }, unscoped: { runtimes: [runtimeA], registered_runtimes: [runtimeA, runtimeB] } });
     await screen.findByRole("heading", { level: 1, name: "Runtimes" });
     const cards = await screen.findAllByRole("article");
     expect(cards).toHaveLength(1);
-    expect(cards[0]).toHaveAttribute("data-runtime-key", "alpha");
+    expect(cards[0]).toHaveAttribute("data-runtime-key", "beta");
+    expect(screen.queryByText("Runtime alpha")).toBeNull();
+    // The rows prove which response was rendered; the request proves the page
+    // asked for the project's own scope instead of the unscoped read.
+    const workspaceRequests = fetcher.mock.calls
+      .map(([input]) => input instanceof Request ? input.url : String(input))
+      .filter((url) => url.startsWith("/portal/api/workspace"));
+    expect(workspaceRequests).toContain(`/portal/api/workspace?project_id=${projectId}`);
+    expect(workspaceRequests).not.toContain("/portal/api/workspace");
   });
 });

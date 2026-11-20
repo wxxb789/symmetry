@@ -49,6 +49,7 @@ const ui = {
   receiptRequested: "Request sent",
   receiptQueued: "Awaiting agent acknowledgement",
   receiptApplied: "Applied",
+  receiptDeferred: "Queued for the runtime",
   receiptRejected: "Rejected by the runtime",
   receiptFailed: "Failed",
   receiptUnknown: "Outcome unknown"
@@ -225,7 +226,10 @@ test.describe("Goal 2 live daemon acceptance", () => {
     expect(inputCommand.data.acknowledgement_outcome, "the daemon acknowledged the input command").toBe("applied");
     // The rendered receipt for that served command is its acknowledgement, and
     // never the pending text of a request the runtime already applied.
-    await expect(page.locator(".receipt").filter({ hasText: ui.receiptApplied }).first()).toBeVisible();
+    // The acknowledged outcome is the only one that renders `data-outcome="applied"`
+    // (a control-plane-applied command renders a distinct outcome whose text also
+    // contains "Applied"), so the receipt is located by its outcome first.
+    await expect(page.locator('.receipt[data-outcome="applied"]').first()).toContainText(ui.receiptApplied);
     await expect(page.locator(".receipt").filter({ hasText: ui.receiptQueued })).toHaveCount(0);
 
     // Failure-repair retry: generation 1 fails, the corrected intent is
@@ -271,7 +275,10 @@ test.describe("Goal 2 live daemon acceptance", () => {
     expect(retryCommand.data.acknowledgement_outcome, "a retry is recorded by the control plane, not acknowledged by a runtime").toBeNull();
     // The rendered history refreshes after the retry settles; the server's own
     // record is asserted above, and the rendered history must agree with it.
-    await expect(page.locator(".receipt").filter({ hasText: ui.receiptDeferred }).first()).toBeVisible({ timeout: 20_000 });
+    // The retry is located by its own outcome first, as the other receipt pins
+    // in this file are: a retry must render as deferred, and any other outcome
+    // (or its absence) fails this line.
+    await expect(page.locator('.receipt[data-outcome="deferred"]').first()).toContainText(ui.receiptDeferred, { timeout: 20_000 });
     await expect(page.locator(".receipt").first()).not.toContainText(ui.receiptUnknown);
   });
 
@@ -336,7 +343,7 @@ test.describe("Goal 2 live daemon acceptance", () => {
     const cancelledDetail = await detailOf(page, cancelled.id);
     const cancelOutcome = cancelledDetail.raw.timeline.find((entry) => entry.source === "command" && entry.data.kind === "cancel");
     expect(cancelOutcome.data.acknowledgement_outcome, "the terminated run acknowledged its cancel").toBe("applied");
-    await expect(page.locator(".receipt").filter({ hasText: ui.receiptApplied }).first()).toBeVisible();
+    await expect(page.locator('.receipt[data-outcome="applied"]').first()).toContainText(ui.receiptApplied);
     await expect(page.getByRole("button", { name: ui.retry })).toBeVisible();
 
     // (3) An unconfirmed attempt after a lost response: the request really

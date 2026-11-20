@@ -238,26 +238,6 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       by the current runner by design; if a submission requires current bytes, the runs are
       re-executed, never re-derived by editing a receipt.
 
-- [ ] Decide whether the 0008b receipts need re-production under the current shared runner. They bind
-      `scripts/ci/model-routing-evaluation.py` as produced —
-      `sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56` — while `main`'s #42
-      extended that runner for the Elixir carrier
-      (`sha256:8ae5b2b6ba961924f7702aa4181e8488913b4d63171922bf1cf760e62142db50`), so the current bytes
-      refuse the 0008b records for submission at `$.evidence.tooling_sources.model-routing-evaluation.py`,
-      exactly as they refuse the committed 0008c receipts (see the model-routing entry above). The
-      producing bytes stay reachable from the annotated tag `0008b-produced-tooling` (commit `253a701`,
-      the head this branch was rebased from, tagged and pushed so the reference survives the rebase), and
-      the post-rebase audit recomputation reports exactly those four
-      tooling-digest mismatches and nothing else (`checks: 99, failures: 4`). Re-execute the runs if a
-      future submission requires receipts produced by the current bytes; never re-derive by editing a
-      receipt.
-
-      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the same question as the other two
-      re-production entries, answered by the same `docs/design/quality.md` paragraph: the 0008b
-      receipts stay verifiable against the revision tagged `0008b-produced-tooling` and fail closed
-      on submission under the current runner by design; a submission that requires current bytes
-      re-executes the runs.
-
 - [ ] Own the record-cleanliness ratchet baseline: 26 unchanged committed records under
       `docs/evaluations/**` and `docs/evidence/**` still carry a host absolute path, so the
       `record-cleanliness` CI job - which checks only the records a revision range adds or
@@ -1835,6 +1815,26 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       in `connections.md`). Evidence: the owner reads above plus the docs-only hosted CI run on
       this branch; no suite beyond that is required for a docs-only diff.
 
+- [ ] Decide whether the 0008b receipts need re-production under the current shared runner. They bind
+      `scripts/ci/model-routing-evaluation.py` as produced —
+      `sha256:9a9ff8eb65bda21e584c5fef9642f86569b46c8c8da16d3e216443e702425c56` — while `main`'s #42
+      extended that runner for the Elixir carrier
+      (`sha256:8ae5b2b6ba961924f7702aa4181e8488913b4d63171922bf1cf760e62142db50`), so the current bytes
+      refuse the 0008b records for submission at `$.evidence.tooling_sources.model-routing-evaluation.py`,
+      exactly as they refuse the committed 0008c receipts (see the model-routing entry above). The
+      producing bytes stay reachable from the annotated tag `0008b-produced-tooling` (commit `253a701`,
+      the head this branch was rebased from, tagged and pushed so the reference survives the rebase), and
+      the post-rebase audit recomputation reports exactly those four
+      tooling-digest mismatches and nothing else (`checks: 99, failures: 4`). Re-execute the runs if a
+      future submission requires receipts produced by the current bytes; never re-derive by editing a
+      receipt.
+
+      **Closed (2026-11-19, `feat/eval-tooling-bindings`):** the same question as the other two
+      re-production entries, answered by the same `docs/design/quality.md` paragraph: the 0008b
+      receipts stay verifiable against the revision tagged `0008b-produced-tooling` and fail closed
+      on submission under the current runner by design; a submission that requires current bytes
+      re-executes the runs.
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Investigate the intermittent Control failure
@@ -2052,6 +2052,16 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       and `eslint src/features/chat --max-warnings 0` exit 0 (full frontend eslint rc 0 as well).
       The open residuals stay in `docs/TODO.md`: the CI browser suites' live-daemon pagination
       cases and the served token an ended chain drops.
+
+      **Annotation (2026-11-20, branch `docs/retro-followups`):** the `adopt` branch was inert against the
+      page shape the shipped read emits only while rows commit in timestamp order. A signed
+      continuation does mean the served page is the newest 50, signed from its oldest message, but it
+      does not exclude a row older than the served page committing afterwards: `inserted_at` is set at
+      insert inside the transaction and the advisory lock is per action, not per scope, so a slow
+      concurrent post can land below a page already read, the next read at the same boundary then
+      offers a token, and the ended chain drops it — the never-continued shape the branch had covered.
+      The gap is tracked as the open TODO entry "An ended chat chain never accepts a later served
+      token" (`docs/TODO.md`); this closure is kept as recorded.
 
 ## Deferred review findings (0007g)
 

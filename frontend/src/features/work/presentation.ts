@@ -1,7 +1,9 @@
 /**
  * Presentation of work-item data for the project surface and the work detail.
  * Every rendered value is either read from the decoded envelope or explicitly
- * labelled as unknown; nothing here invents acceptance, cost, or freshness.
+ * labelled as unknown; cost and acceptance are always labelled, never invented,
+ * and a freshness claim requires a recorded time inside the freshness window
+ * (a future-dated or unusable time stays unknown).
  */
 
 import type { SymmetryWorkspaceReadV1, SymmetryWorkTimelineReadV1 } from "@symmetry/contracts";
@@ -79,12 +81,27 @@ export function ownerLabel(assignee: AssigneeLike | null | undefined): string {
   return name ?? `Unknown owner type: ${type}`;
 }
 
+/** The word the pre-fix encoder spelled an absent name with; a recorded name can equal it. */
+const legacyAbsentValue = "unrecorded";
+
+/**
+ * The value portion of an owner key. `asText` maps an absent or blank name to
+ * null, so the empty value is a sentinel no served name can mint; a recorded
+ * value that would collide with the legacy sentinel word or with the escape
+ * itself travels with a leading colon instead. The encoder is injective, so
+ * `ownerKeyLabel` reads every minted key back as the row's own label.
+ */
+function ownerKeyValue(value: string | null): string {
+  if (value === null) return "";
+  return value === legacyAbsentValue || value.startsWith(":") ? `:${value}` : value;
+}
+
 export function ownerKey(assignee: AssigneeLike | null | undefined): string {
   const type = asText(assignee?.type) ?? "unassigned";
   const name = asText(assignee?.name);
   const profile = asText(assignee?.agent_profile);
-  if (type === "agent") return `agent:${profile ?? name ?? "unrecorded"}`;
-  if (type === "human") return `human:${name ?? "unrecorded"}`;
+  if (type === "agent") return `agent:${ownerKeyValue(profile ?? name)}`;
+  if (type === "human") return `human:${ownerKeyValue(name)}`;
   if (type === "unassigned") return "unassigned";
   return `type:${type}`;
 }
@@ -94,9 +111,16 @@ export function ownerKeyLabel(key: string): string {
   if (key === "unassigned") return "Unassigned";
   const separator = key.indexOf(":");
   const kind = separator === -1 ? key : key.slice(0, separator);
-  const value = separator === -1 ? "" : key.slice(separator + 1);
-  if (kind === "agent") return `Agent · ${value}`;
-  if (kind === "human") return value;
+  const raw = separator === -1 ? "" : key.slice(separator + 1);
+  // An absent name mints the empty-value sentinel, which labels as the row's
+  // own absence label; the legacy sentinel word old bookmarks carry labels the
+  // same way, and the encoder escapes a real name that equals it, so those two
+  // never disagree. An escaped value drops the leading colon, and a `type:` key
+  // cannot carry the name its row renders, so it labels the type alone.
+  const value = raw.startsWith(":") ? raw.slice(1) : raw;
+  const absent = raw === "" || raw === legacyAbsentValue;
+  if (kind === "agent") return absent ? "Agent" : `Agent · ${value}`;
+  if (kind === "human") return absent ? "Human owner not recorded" : value;
   return `Unknown owner type: ${value || kind}`;
 }
 
@@ -247,7 +271,9 @@ export function ciLabel(delivery: DeliveryLike | null | undefined, resource?: Ci
   if (status !== "passed") return { text: `CI ${status}`, tone: status === "failed" ? "failed" : "pending", title };
   if (signal !== null) return { text: `CI passed · bound resource ${signal}`, tone: "stale", title };
   const recorded = recordedAt === null || !strictAbsoluteTimestamp.test(recordedAt) ? Number.NaN : Date.parse(recordedAt);
-  if (Number.isNaN(recorded)) return { text: "CI passed · freshness unknown", tone: "unknown", title };
+  // A time that does not parse, or that has not happened yet, is not evidence
+  // of freshness: a clock behind the server must not make a future record fresh.
+  if (Number.isNaN(recorded) || now - recorded < 0) return { text: "CI passed · freshness unknown", tone: "unknown", title };
   if (asText(ci?.source) !== "provider") return { text: "CI passed · unverified source", tone: "unknown", title };
   if (resource === null || resource === undefined) return { text: "CI passed · binding not confirmed", tone: "unknown", title };
   if (now - recorded > ciFreshnessWindowMs) return { text: "CI passed · stale", tone: "stale", title };
