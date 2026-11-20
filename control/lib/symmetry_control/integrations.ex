@@ -279,36 +279,6 @@ defmodule SymmetryControl.Integrations do
     end
   end
 
-  def execute_provider_action(
-        %Connection{} = connection,
-        %ProjectResource{} = resource,
-        %WorkItem{} = work_item,
-        operation,
-        input
-      )
-      when operation in ["change.upsert", "change.update"] and is_map(input) do
-    with true <- resource.kind == "repository" || {:error, :forbidden},
-         true <- work_item.repository_resource_id == resource.id || {:error, :forbidden},
-         true <- resource.connection_id == connection.id || {:error, :forbidden},
-         :ok <- require_capabilities(connection, ["repositories", "changes"]),
-         provider <- provider_module(connection.provider),
-         {:ok, auth} <- provider.authenticate(connection) do
-      execute_authenticated_provider_action(
-        provider,
-        connection,
-        resource,
-        work_item,
-        operation,
-        input,
-        auth
-      )
-    else
-      {:error, reason} -> record_provider_action_failure(resource, reason, :definite)
-    end
-  end
-
-  def execute_provider_action(_, _, _, _, _), do: {:error, :invalid_request}
-
   @doc false
   def execute_unprojected_provider_action(connection, resource, work_item, operation, input),
     do:
@@ -555,60 +525,6 @@ defmodule SymmetryControl.Integrations do
     case record_resource_failure(resource, reason) do
       {:error, _code, _resource} -> :ok
       {:error, _reason} -> :error
-    end
-  end
-
-  defp execute_authenticated_provider_action(
-         provider,
-         connection,
-         resource,
-         work_item,
-         operation,
-         input,
-         auth
-       ) do
-    case provider_call(fn ->
-           provider.execute(connection, resource, work_item, operation, input, auth)
-         end) do
-      {:ok, delivery} ->
-        persist_provider_delivery(connection, resource, work_item, operation, delivery)
-
-      {:error, reason} ->
-        record_provider_action_failure(resource, reason, mutation_failure_outcome(reason))
-    end
-  end
-
-  defp persist_provider_delivery(connection, resource, work_item, operation, delivery) do
-    with true <-
-           valid_provider_action_delivery?(delivery) || {:error, :invalid_provider_response},
-         {:ok, attrs} <- delivery_attrs(work_item, delivery) do
-      case persist_provider_action(connection, resource, work_item, attrs) do
-        {:ok, persisted} ->
-          {:ok,
-           provider_action_result(
-             operation,
-             resource,
-             persisted,
-             provider_action_delivery(persisted),
-             true
-           )}
-
-        {:error, reason}
-        when reason in [:stale, :state_conflict, :capability_not_granted] ->
-          {:ok,
-           provider_action_result(
-             operation,
-             resource,
-             work_item,
-             provider_action_delivery(delivery),
-             false
-           )}
-
-        {:error, reason} ->
-          record_provider_action_failure(resource, reason, :ambiguous)
-      end
-    else
-      {:error, reason} -> record_provider_action_failure(resource, reason, :ambiguous)
     end
   end
 
@@ -1192,7 +1108,7 @@ defmodule SymmetryControl.Integrations do
 
   defp provider_action_error(reason), do: reason |> failure() |> elem(0)
 
-  defp record_provider_action_failure(resource, reason, outcome \\ nil) do
+  defp record_provider_action_failure(resource, reason) do
     case provider_action_error(reason) do
       code
       when code in [
@@ -1203,20 +1119,15 @@ defmodule SymmetryControl.Integrations do
              :state_conflict,
              :ownership_lost
            ] ->
-        provider_action_failure_result(code, outcome)
+        {:error, code}
 
       provider_error ->
         case record_resource_failure(resource, reason) do
-          {:error, _code, _degraded} -> provider_action_failure_result(provider_error, outcome)
-          {:error, _update_reason} -> provider_action_failure_result(provider_error, outcome)
+          {:error, _code, _degraded} -> {:error, provider_error}
+          {:error, _update_reason} -> {:error, provider_error}
         end
     end
   end
-
-  defp provider_action_failure_result(code, nil), do: {:error, code}
-
-  defp provider_action_failure_result(code, outcome),
-    do: {:error, {:provider_action_failure, code, outcome}}
 
   defp maybe_put_delivery(attrs, delivery, source, target) do
     if Map.has_key?(delivery, source),
