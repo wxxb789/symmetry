@@ -6,6 +6,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   alias SymmetryControl.Goals
   alias SymmetryControl.{Orchestration, Repo}
   alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
   alias SymmetryControl.TelemetryReads
   alias SymmetryControlWeb.PortalSession
@@ -283,6 +284,46 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
                "status" => "review"
              })
              |> json_response(200)
+
+    # A terminal attempt a Goal adopted after it failed: the served read and the
+    # retry endpoint must both withhold the control even though an assignable
+    # runtime advertises the adapter `start` a retried generation needs.
+    enroll_adapter_runtime("gov-terminal-retry", "Goal terminal retry runtime")
+
+    terminal =
+      create_work_item(project["id"], "Goal-owned terminal attempt", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex",
+        "repository_resource_id" => repository_id
+      })
+
+    assert {:ok, created_goal, :created} =
+             Goals.create_goal(project["id"], goal_create_attrs(), "operator:test", now: @now)
+
+    goal = Repo.get!(Goals.Goal, created_goal.goal.id)
+    work_item = terminal_goal_attempt!(Repo.get!(WorkItem, terminal["id"]), goal)
+
+    # Power for the refutation: assignment could select the registered runtime
+    # for the binding the retry would apply, so the withheld control is the
+    # attempt's Goal ownership, not a missing runtime.
+    task = Repo.get!(Orchestration.Task, work_item.orchestration_task_id)
+
+    assert task.goal_id == goal.id
+    assert task.state == "failed"
+    assert Orchestration.retry_runtime_eligible?(Workspaces.retry_binding_for(task, work_item))
+
+    assert %{"work_item" => %{"execution" => %{"state" => "failed", "can_retry" => false}}} =
+             api_conn()
+             |> get("/portal/api/work-items/#{terminal["id"]}")
+             |> json_response(200)
+
+    assert %{"error" => %{"code" => "goal_authority_required"}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{terminal["id"]}/retry", %{
+               "action_id" => "gov-terminal-retry",
+               "generation" => 1
+             })
+             |> json_response(403)
   end
 
   test "archived projects can be restored through the routed API" do
@@ -1369,6 +1410,74 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
                ],
                now: @now
              )
+  end
+
+  # Adopts a legacy work item into a Goal and gives it a failed Goal attempt:
+  # the pin needs a terminal attempt, which Goal admission never creates (it
+  # only inserts queued tasks), so the fixture writes the all-or-none Goal
+  # identity the admission path writes — goal revision, context snapshot and
+  # runtime policy snapshot included. The work item returns pointed at the
+  # attempt.
+  defp terminal_goal_attempt!(work_item, goal) do
+    assert {:ok, adopted} =
+             work_item
+             |> WorkItem.goal_membership_changeset(%{
+               goal_id: goal.id,
+               admitted_revision: goal.current_revision,
+               required: true,
+               integration: false,
+               acceptance_contract: acceptance_contract(),
+               baseline_subject: %{
+                 "resource_id" => work_item.repository_resource_id,
+                 "commit" => String.duplicate("a", 40),
+                 "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+               }
+             })
+             |> Repo.update()
+
+    snapshot =
+      %Goals.ContextSnapshot{id: Ecto.UUID.generate()}
+      |> Goals.ContextSnapshot.changeset(%{
+        goal_id: goal.id,
+        goal_revision: goal.current_revision,
+        work_item_id: adopted.id,
+        schema_version: 1,
+        content_hash: :crypto.hash(:sha256, "goal terminal attempt context"),
+        payload: %{}
+      })
+      |> Repo.insert!()
+
+    {request_hash, request_hash_version} =
+      SymmetryControl.RequestHash.write(%{"goal_terminal_attempt" => adopted.id})
+
+    task =
+      %Orchestration.Task{}
+      |> Orchestration.Task.changeset(%{
+        idempotency_key: "goal:#{goal.id}:terminal-attempt",
+        request_hash: request_hash,
+        request_hash_version: request_hash_version,
+        goal: goal.title,
+        agent_profile: adopted.agent_profile,
+        workspace: adopted.workspace,
+        input: %{},
+        required_capabilities: %{},
+        state: "failed",
+        current_generation: 0,
+        attempt_generation: 1,
+        work_item_id: adopted.id,
+        goal_id: goal.id,
+        goal_revision: goal.current_revision,
+        context_snapshot_id: snapshot.id,
+        purpose: "implement",
+        admission_key: Ecto.UUID.generate(),
+        allowed_runtime_ids: [],
+        max_run_attempts: 1
+      })
+      |> Repo.insert!()
+
+    adopted
+    |> WorkItem.execution_changeset(%{orchestration_task_id: task.id, status: "in_progress"})
+    |> Repo.update!()
   end
 
   defp transition(run_id, fence, state, number) do

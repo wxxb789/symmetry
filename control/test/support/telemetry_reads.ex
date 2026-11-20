@@ -6,7 +6,7 @@ defmodule SymmetryControl.TelemetryReads do
   Each caller owns its attach block (handler id, filter forms, message tag); this
   module owns the two shared pieces: the predicate that selects the queries
   belonging to the read under test, and the drain that collects the
-  `{tag, pid, query}` messages the handler sent, oldest first.
+  `{tag, pid, query}` messages the handler sent, newest first.
   """
 
   @doc """
