@@ -3,7 +3,7 @@ import { createMemoryHistory, RouterProvider, type RouterHistory } from "@tansta
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApplication, type Application } from "../../app/application";
+import { chatConversationOptions, createApplication, type Application } from "../../app/application";
 import { createAppRouter } from "../../app/router";
 import { readWorkDetail, readWorkItem } from "../../services/api.fixtures";
 import { asRecord } from "../work/presentation";
@@ -16,12 +16,14 @@ import { asRecord } from "../work/presentation";
  */
 
 const projectId = "10000000-0000-4000-8000-000000000001";
+const secondProjectId = "10000000-0000-4000-8000-000000000002";
 const workItemId = "20000000-0000-4000-8000-000000000001";
 const runId = "30000000-0000-4000-8000-000000000001";
 const runtimeId = "40000000-0000-4000-8000-000000000001";
 const taskId = "60000000-0000-4000-8000-000000000001";
 const repositoryId = "50000000-0000-4000-8000-000000000001";
 const ciId = "50000000-0000-4000-8000-000000000002";
+const secondRepositoryId = "50000000-0000-4000-8000-000000000003";
 
 const uuid = (prefix: string, index: number) => `${prefix}-0000-4000-8000-${String(index).padStart(12, "0")}`;
 const messageId = (index: number) => uuid("90000000", index);
@@ -118,7 +120,22 @@ function runtimeRow(options: { guidance?: string; pause?: string } = {}): Record
   };
 }
 
-function workspaceBody(options: { execution?: Record<string, unknown>; runtimes?: readonly unknown[] } = {}): Record<string, unknown> {
+/** A second project with its own repository id, for target-project changes. */
+function secondProjectBody(): Record<string, unknown> {
+  return {
+    id: secondProjectId,
+    key: "TWO",
+    name: "Project Two",
+    description: null,
+    status: "active",
+    default_agent_profile: "default",
+    default_workspace: "primary",
+    resources: [{ id: secondRepositoryId, project_id: secondProjectId, kind: "repository", name: "Repo Two", version: 1 }],
+    work_items: [],
+  };
+}
+
+function workspaceBody(options: { execution?: Record<string, unknown>; runtimes?: readonly unknown[]; extraProjects?: readonly Record<string, unknown>[] } = {}): Record<string, unknown> {
   return {
     selected_project_id: projectId,
     projects: [{
@@ -140,7 +157,7 @@ function workspaceBody(options: { execution?: Record<string, unknown>; runtimes?
         key: "ONE-1",
         execution: options.execution ?? { run_id: runId, generation: 3, state: "running", runtime_id: runtimeId, can_guide: true, can_pause: true, can_resume: false },
       })],
-    }],
+    }, ...(options.extraProjects ?? [])],
     health: { status: "unknown" },
     runtimes: options.runtimes ?? [],
     registered_runtimes: [],
@@ -336,7 +353,7 @@ describe("per-scope state", () => {
   it("never lets a late write for another scope land in this scope's status or draft", async () => {
     const user = userEvent.setup();
     const held = Promise.withResolvers<Response>();
-    renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
+    const { application } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
       conversation: (url) => new Response(JSON.stringify(url.searchParams.get("scope") === "project"
         ? conversationBody({ scope: "project", projectId })
         : conversationBody({ scope: "workspace" }))),
@@ -355,7 +372,12 @@ describe("per-scope state", () => {
     await user.type(contentField(), "workspace draft");
 
     held.resolve(new Response(JSON.stringify({ message: message(9), reply: message(10, { role: "assistant" }), work_item_id: null, command: null }), { status: 201 }));
-    await waitFor(() => expect(screen.queryByText("Sending…")).not.toBeInTheDocument());
+    // The completion signal is the project scope's own query being invalidated
+    // by the send's success callback — independent of which scope is displayed
+    // — because "Sending…" is already absent from the workspace's status line
+    // and would pass on the first check.
+    const projectQueryKey = chatConversationOptions(application.api, { scope: "project", projectId, runId: null }).queryKey;
+    await waitFor(() => expect(application.queryClient.getQueryState(projectQueryKey)?.isInvalidated).toBe(true));
     expect(statusRegion()).toHaveTextContent("Messages are saved to this context.");
     expect(contentField()).toHaveValue("workspace draft");
 
@@ -421,6 +443,68 @@ describe("sending", () => {
     expect(rows).toHaveLength(1);
   });
 
+  it("reuses the frozen action identity when an in-flight edit is reverted before the retry", async () => {
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    const held = Promise.withResolvers<Response>();
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: () => new Response(JSON.stringify(conversationBody({ scope: "project", projectId }))),
+      message: (body) => {
+        bodies.push(body);
+        return bodies.length === 1
+          ? held.promise
+          : new Response(JSON.stringify({ message: message(3), reply: message(4, { role: "assistant" }), work_item_id: null, command: null }), { status: 200 });
+      },
+    });
+    await openChat();
+    await user.type(contentField(), "uncertain question");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    await waitFor(() => expect(statusRegion()).toHaveTextContent("Sending…"));
+
+    // The draft is edited while the send is in flight and reverted before the
+    // request fails: the rebuilt body is byte-equal to the frozen attempt, so
+    // the retry must reuse its identity.
+    await user.type(contentField(), " edited");
+    await user.clear(contentField());
+    await user.type(contentField(), "uncertain question");
+
+    held.reject(new TypeError("offline"));
+    await screen.findByText(/Send not confirmed/);
+    expect(contentField()).toHaveValue("uncertain question");
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Saved to this context.");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]?.["action_id"]).toBe(bodies[0]?.["action_id"]);
+    expect(JSON.stringify(bodies[1])).toBe(JSON.stringify(bodies[0]));
+  });
+
+  it("mints a new action identity when the retried draft is not the frozen body", async () => {
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: () => new Response(JSON.stringify(conversationBody({ scope: "project", projectId }))),
+      message: (body) => {
+        bodies.push(body);
+        if (bodies.length === 1) throw new TypeError("offline");
+        return new Response(JSON.stringify({ message: message(3), reply: message(4, { role: "assistant" }), work_item_id: null, command: null }), { status: 200 });
+      },
+    });
+    await openChat();
+    await user.type(contentField(), "first question");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText(/Send not confirmed/);
+
+    await user.clear(contentField());
+    await user.type(contentField(), "different question");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Saved to this context.");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]?.["content"]).toBe("different question");
+    expect(bodies[1]?.["action_id"]).not.toBe(bodies[0]?.["action_id"]);
+  });
+
   it("renders a served refusal as the server's message and never as an applied state", async () => {
     const user = userEvent.setup();
     renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
@@ -451,6 +535,61 @@ describe("sending", () => {
     expect(statusRegion().textContent).toBe("Guidance must be 32,768 UTF-8 bytes or fewer.");
     expect(contentField()).toHaveValue(oversized);
     expect(screen.queryByText("Sending…")).not.toBeInTheDocument();
+  });
+
+  it("disables the composer and sends nothing for a scope the read cannot resolve", async () => {
+    const { posts } = renderChat("/portal/chat?scope=run");
+    await openChat();
+    await screen.findByText("No run selected");
+    expect(screen.getByText("Select a run to hold a run-scoped conversation.")).toBeInTheDocument();
+    expect(contentField()).toBeDisabled();
+    expect(intentSelect()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    fireEvent.change(contentField(), { target: { value: "a message with no scope to carry it" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {});
+    expect(posts()).toHaveLength(0);
+    expect(screen.getByText("No run selected")).toBeInTheDocument();
+  });
+
+  it("clears the repository and CI selections when the target project changes and omits them from the send", async () => {
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
+      conversation: () => new Response(JSON.stringify(conversationBody({ scope: "workspace" }))),
+      workspace: () => workspaceBody({ extraProjects: [secondProjectBody()] }),
+      message: (body) => {
+        bodies.push(body);
+        return new Response(JSON.stringify({ message: message(3), reply: message(4, { role: "assistant" }), work_item_id: null, command: null }), { status: 201 });
+      },
+    });
+    await openChat();
+    await waitFor(() => expect(document.querySelector("#chat-intent option[value=\"start_work\"]")).not.toBeNull());
+    await user.selectOptions(intentSelect(), "start_work");
+    await waitFor(() => expect(document.querySelector(`#chat-target-project option[value="${projectId}"]`)).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText("Target project"), projectId);
+    await waitFor(() => expect(document.querySelector(`#chat-repository option[value="${repositoryId}"]`)).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText("Repository resource"), repositoryId);
+    await user.selectOptions(screen.getByLabelText("CI resource"), ciId);
+
+    // The resource lists re-key to the new target project, so the previous
+    // selections no longer name its resources and are cleared with it.
+    await user.selectOptions(screen.getByLabelText("Target project"), secondProjectId);
+    expect(screen.getByLabelText("Repository resource")).toHaveValue("");
+    expect(screen.getByLabelText("CI resource")).toHaveValue("");
+    // The old choice does not come back with the old target: it was discarded
+    // together with the resource list it named.
+    await user.selectOptions(screen.getByLabelText("Target project"), projectId);
+    expect(screen.getByLabelText("Repository resource")).toHaveValue("");
+    expect(screen.getByLabelText("CI resource")).toHaveValue("");
+    await user.selectOptions(screen.getByLabelText("Target project"), secondProjectId);
+
+    await user.type(contentField(), "start on the second project");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({ intent: "start_work", target_project_id: secondProjectId });
+    expect(bodies[0]?.["work"]).toEqual({});
   });
 
   it("settles a scope's pane on its own offset after a switch, even while the pane clamped it", async () => {
@@ -617,7 +756,7 @@ describe("sending", () => {
   });
 
   it("keeps the composer focused with its caret selection across a background refresh", async () => {
-    const { application } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
+    const { application, requests } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
       conversation: () => new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [message(1, { content: "history" })] }))),
     });
     await openChat();
@@ -625,9 +764,13 @@ describe("sending", () => {
     fireEvent.change(contentField(), { target: { value: "keep editing during refresh" } });
     contentField().focus();
     contentField().setSelectionRange(5, 12);
+    const before = requests.filter((request) => request.path.startsWith("/portal/api/chat?")).length;
     await act(async () => {
       await application.queryClient.refetchQueries({ queryKey: ["chat"] });
     });
+    // The refresh must actually have re-read the conversation: the DOM
+    // assertions below would also hold with no request at all.
+    await waitFor(() => expect(requests.filter((request) => request.path.startsWith("/portal/api/chat?")).length).toBeGreaterThan(before));
     expect(contentField()).toHaveFocus();
     expect(contentField()).toHaveValue("keep editing during refresh");
     expect([contentField().selectionStart, contentField().selectionEnd]).toEqual([5, 12]);
@@ -1270,9 +1413,47 @@ describe("history", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByText("loaded history")).toBeInTheDocument();
   });
+
+  it("names a failed first read instead of claiming an empty conversation", async () => {
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: () => new Response("{}", { status: 403 }),
+    });
+    await openChat();
+    expect(await screen.findByRole("alert")).toHaveTextContent("You do not have access to this workspace.");
+    const note = document.querySelector("#chat-history-note");
+    expect(note).toHaveTextContent("Messages could not be loaded.");
+    expect(note).not.toHaveTextContent("No messages recorded in this context.");
+  });
+
+  it("makes no empty-history claim when no read answered the scope", async () => {
+    renderChat("/portal/chat?scope=run");
+    await openChat();
+    await screen.findByText("No run selected");
+    expect(document.querySelector("#chat-history-note")).toBeNull();
+  });
 });
 
 describe("run scope", () => {
+  /** The served waiting transition with its decision packet. */
+  function waitingInput(): Record<string, unknown> {
+    return {
+      run_id: runId,
+      generation: 3,
+      transition_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      question: "Which strategy should be used?",
+      decision: {
+        context: "Two strategies are valid.",
+        options: [
+          { id: "staged", label: "Stage the artifact", consequence: "Keeps rollback available." },
+          { id: "defer", label: "Defer delivery", consequence: "Stays unpublished." },
+        ],
+        recommended_option_id: "staged",
+      },
+      payload: {},
+      recorded_at: "2026-11-16T11:00:00.000000Z",
+    };
+  }
+
   function runDetail(options: { waiting?: boolean; state?: string; failure?: Record<string, unknown> | null; evidence?: boolean } = {}) {
     const detail = readWorkDetail({
       id: workItemId,
@@ -1288,24 +1469,7 @@ describe("run scope", () => {
         can_pause: options.waiting !== true,
         can_resume: false,
         failure: options.failure ?? null,
-        ...(options.waiting === true ? {
-          waiting: {
-            run_id: runId,
-            generation: 3,
-            transition_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            question: "Which strategy should be used?",
-            decision: {
-              context: "Two strategies are valid.",
-              options: [
-                { id: "staged", label: "Stage the artifact", consequence: "Keeps rollback available." },
-                { id: "defer", label: "Defer delivery", consequence: "Stays unpublished." },
-              ],
-              recommended_option_id: "staged",
-            },
-            payload: {},
-            recorded_at: "2026-11-16T11:00:00.000000Z",
-          },
-        } : {}),
+        ...(options.waiting === true ? { waiting: waitingInput() } : {}),
       },
     });
     // The chat read serves its semantic page on the projection's own `timeline`
@@ -1389,13 +1553,20 @@ describe("run scope", () => {
     expect(staged).toHaveTextContent("Keeps rollback available.");
     expect(staged).toHaveTextContent("Recommended");
     expect(document.querySelector("[data-chat-decision=\"defer\"]")).not.toHaveTextContent("Recommended");
+    // The packet's own buttons are the only path to the decision intent: the
+    // composer never offers it without the waiting transition identity the
+    // server requires.
+    expect(document.querySelector("#chat-intent option[value=\"decision\"]")).toBeNull();
     await waitFor(() => expect(document.querySelector("#chat-guidance-delivery")).toHaveTextContent("Guidance is native steering for this runtime and is not dispatched from this conversation"));
 
     await user.click(staged as HTMLElement);
-    await screen.findByText("Saved · awaiting agent acknowledgement");
+    await waitFor(() => expect(statusRegion()).toHaveTextContent("Message saved; the transcript receipt tracks the acknowledgement."));
     // The scoped re-read is what renders the durable message: a run-scope send
     // invalidates the query by the surface's own identity, not the request's.
     await waitFor(() => expect(document.querySelector(`[data-message-id="${messageId(9)}"]`)).not.toBeNull());
+    // The row carries the served record's own content, not the POST
+    // response's projection of the same id.
+    expect(document.querySelector(`[data-message-id="${messageId(9)}"]`)).toHaveTextContent("Stage the artifact");
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject({
       scope: "run",
@@ -1409,9 +1580,30 @@ describe("run scope", () => {
     });
   });
 
-  it("renders the served failure text for a failed run, bounded and inert", async () => {
+  it("renders the served decision packet only under the run scope that owns it", async () => {
+    const user = userEvent.setup();
     renderChat(`/portal/chat?scope=run&runId=${runId}&projectId=${projectId}`, {
-      conversation: () => new Response(JSON.stringify(conversationBody({ scope: "run", projectId, runId, runs: [runDetail({ state: "failed", failure: { message: "x".repeat(2_500) } })] }))),
+      conversation: (url) => new Response(JSON.stringify(url.searchParams.get("scope") === "run"
+        ? conversationBody({ scope: "run", projectId, runId, runs: [runDetail({ waiting: true })] })
+        : conversationBody({ scope: "workspace" }))),
+      workspace: () => workspaceBody({ execution: { run_id: runId, generation: 3, state: "waiting_for_input", runtime_id: runtimeId, can_guide: false, can_pause: false, waiting: waitingInput() } }),
+    });
+    await openChat();
+    await screen.findByText("Run conversation — ONE-1 · Attempt 3");
+    expect(document.querySelector("#chat-decision")).not.toBeNull();
+
+    // The scope switch carries runId and the directory row still exposes the
+    // waiting execution, but a decision can only be dispatched under the run's
+    // own scope, so its buttons must not render anywhere else.
+    await user.selectOptions(scopeSelect(), "workspace");
+    await screen.findByText("Workspace conversation");
+    expect(document.querySelector("#chat-decision")).toBeNull();
+  });
+
+  it("renders the served failure text for a failed run, bounded and inert", async () => {
+    const markup = "<img src=x onerror=\"window.chatUnsafe=true\">";
+    renderChat(`/portal/chat?scope=run&runId=${runId}&projectId=${projectId}`, {
+      conversation: () => new Response(JSON.stringify(conversationBody({ scope: "run", projectId, runId, runs: [runDetail({ state: "failed", failure: { message: `${markup}${"x".repeat(2_100)}` } })] }))),
       workspace: () => workspaceBody({ execution: { run_id: runId, generation: 3, state: "failed", runtime_id: runtimeId }, runtimes: [] }),
     });
     await openChat();
@@ -1421,6 +1613,10 @@ describe("run scope", () => {
     expect(failure).toHaveAttribute("data-failure-state", "failed");
     expect(failure?.textContent).toHaveLength(2_001);
     expect(failure?.textContent?.endsWith("…")).toBe(true);
+    // Markup in served failure text never becomes document structure: the sink
+    // renders the string, not the HTML it contains.
+    expect(failure?.textContent?.startsWith(markup)).toBe(true);
+    expect(document.querySelectorAll("#chat-failure img, #chat-failure script")).toHaveLength(0);
   });
 
   it("renders the read's semantic evidence oldest first and never a raw entry", async () => {

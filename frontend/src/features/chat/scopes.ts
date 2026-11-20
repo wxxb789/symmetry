@@ -48,7 +48,11 @@ export interface ChatScopeState {
   readonly repositoryId: string;
   readonly ciId: string;
   readonly status: ChatSendStatus;
-  /** The exact request object of an unconfirmed send; a retry resends it byte for byte. */
+  /**
+   * The last attempt's exact request object. A retry rebuilds the payload from
+   * current state and reuses this attempt's identity exactly when the rebuilt
+   * body is byte-equal ignoring the action id; a changed body mints a new id.
+   */
   readonly frozen: ChatMessageRequest | null;
   /** The displayed pages, `[newest, ...older]`. */
   readonly pages: readonly ChatHistoryPage[];

@@ -33,9 +33,7 @@ defmodule SymmetryControlWeb.RouterInvalidationCoverageTest do
     {:post, "/portal/login", "the session cookie itself is not a served read"},
     {:post, "/portal/logout", "removing the session cookie changes no served read"},
     {:post, "/api/v1/machines",
-     "an enrollment changes no served read until the machine registers a session, which does publish"},
-    {:post, "/api/v1/provider-actions",
-     "the action records its own provider-action intent rows, which no served read names; the provider's effect reaches the portal through the syncer, which does publish"}
+     "an enrollment changes no served read until the machine registers a session, which does publish"}
   ]
 
   setup do
@@ -52,6 +50,7 @@ defmodule SymmetryControlWeb.RouterInvalidationCoverageTest do
     assert routes != []
 
     for {verb, path} = route <- routes, not allowlisted?(route) do
+      drain_invalidations()
       run_scope_chain(route, machine_token)
 
       assert_receive {:portal_invalidation, %{kind: kind}} when is_binary(kind),
@@ -115,9 +114,32 @@ defmodule SymmetryControlWeb.RouterInvalidationCoverageTest do
         true -> conn
       end
 
-    conn
-    |> put_req_header("accept", "application/json")
-    |> init_test_session(%{portal_operator: PortalSession.issue(operator_token())})
+    conn =
+      if :portal_browser in pipes do
+        # The browser chain accepts html and enforces CSRF. The probe carries
+        # no CSRF token, so a write route added to that scope would die in the
+        # accepts or forgery plug with an opaque error instead of reaching the
+        # assertion above; give it the chain's own contract.
+        conn
+        |> put_req_header("accept", "text/html")
+        |> put_private(:plug_skip_csrf_protection, true)
+      else
+        put_req_header(conn, "accept", "application/json")
+      end
+
+    init_test_session(conn, %{portal_operator: PortalSession.issue(operator_token())})
+  end
+
+  # An invalidation already in the mailbox — a duplicate publish, a message the
+  # test process received outside the probed chain — would satisfy the next
+  # route's assertion without that route publishing. Drain before each chain so
+  # only the chain under test can rescue its own assertion.
+  defp drain_invalidations do
+    receive do
+      {:portal_invalidation, _payload} -> drain_invalidations()
+    after
+      0 -> :ok
+    end
   end
 
   defp concrete_segments(path) do

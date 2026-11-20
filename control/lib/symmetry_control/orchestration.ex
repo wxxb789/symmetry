@@ -4410,7 +4410,7 @@ defmodule SymmetryControl.Orchestration do
     adapter_version = value(specification, :adapter_version)
     protocol_version = value(specification, :adapter_protocol_version)
 
-    harness_kind in ["generic", "codex", "claude_code", "pi", "opencode", "omp", "omo"] and
+    (harness_kind == "generic" or native_harness_kind?(harness_kind)) and
       nonempty_bounded_text?(harness_version, 240) and
       nonempty_bounded_text?(adapter_version, 240) and
       is_integer(protocol_version) and protocol_version > 0 and protocol_version <= 2_147_483_647

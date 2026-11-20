@@ -24,8 +24,9 @@ defmodule SymmetryControlWeb.Endpoint do
   # `auth_token` is a socket option, not a websocket-transport option: declared
   # inside `websocket:` it is overwritten with nil and the token parsed from the
   # `base64url.bearer.phx.` subprotocol never reaches `PortalSocket.connect/3`,
-  # which then refuses every handshake with 403. The token also has to be named
-  # in `connect_info`, because the transport forwards only the declared keys.
+  # which then refuses every handshake with 403. The `:auth_token` entry below is
+  # redundant: `Phoenix.Socket.Transport.load_config/1` adds it to `connect_info`
+  # itself when the socket option is enabled.
   socket "/portal/socket", SymmetryControlWeb.PortalSocket,
     auth_token: true,
     websocket: [connect_info: [:auth_token, :x_headers]],

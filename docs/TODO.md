@@ -66,8 +66,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 - [ ] Drop the unused `conn` parameter in
       `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:689)
-      passes `conn` to `portal_command!/4` (:691), which never reads it (it builds its own `portal_conn()`),
-      so every run reports `warning: variable "conn" is unused` at :691. Pre-existing (present in both the
+      passes `conn` to `portal_command!/4` (:692), which never reads it (it builds its own `portal_conn()`),
+      so every run reports `warning: variable "conn" is unused` at :692. Pre-existing (present in both the
       before and after `MIX_TEST_PARTITION=66` runs of the retro-b5 apply stage) and test-only; drop the
       parameter and the callers' pass-through in separate maintenance.
 

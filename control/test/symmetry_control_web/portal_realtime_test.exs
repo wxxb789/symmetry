@@ -209,20 +209,25 @@ defmodule SymmetryControlWeb.PortalRealtimeTest do
       conn =
         build_conn(method, path)
         |> Plug.Conn.put_req_header("content-type", "application/json")
-        |> Plug.Conn.put_private(:portal_invalidation_test_body, "RAW_TRANSCRIPT_TEXT")
 
       SymmetryControlWeb.Plugs.PortalInvalidations.call(conn, [])
       |> send_resp(200, "{}")
 
       assert_receive {:portal_invalidation, payload}
 
-      # The published payload carries exactly the classified identity: no request
-      # body, no transcript text, no message content.
+      # The published payload carries exactly the classified identity, derived
+      # from the path alone.
       assert payload == expected
-      refute inspect(payload) =~ "RAW_TRANSCRIPT_TEXT"
     end)
 
     refute_receive {:portal_invalidation, _payload}, 50
+
+    # A publisher handing `publish/1` extra members — a transcript-bearing body,
+    # say — cannot leak them: normalize/1 keeps the classified identity only.
+    Invalidations.publish(%{kind: "chat", messages: [%{body: "RAW_TRANSCRIPT_TEXT"}]})
+
+    assert_receive {:portal_invalidation, payload}
+    assert payload == %{kind: "chat"}
   end
 
   test "a goal change carries the goal's own event cursor" do

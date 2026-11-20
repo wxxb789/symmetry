@@ -6,8 +6,9 @@ defmodule SymmetryControlWeb.Plugs.PortalInvalidations do
   Registering the mapping here, once, keeps change discovery to a single owner:
   a controller action does not have to remember to announce its own change, and a
   new write route is announced as soon as it is classified. The classification
-  reads the request path only; identities come from path parameters, so no
-  response body is parsed and no read is added to a write request.
+  reads the request path only: identities come from path parameters, no
+  response body is parsed, and the only read added to a write request is the
+  goal event-sequence cursor lookup `Invalidations` documents for goal changes.
 
   The registered callback runs after the action returned (the domain commit is
   already done) and before the response is sent. Client refusals
