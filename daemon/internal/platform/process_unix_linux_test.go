@@ -1913,6 +1913,11 @@ func TestProcessGroupContainmentCallbackFailureRetainsAuthority(t *testing.T) {
 	}
 }
 
+// TestProcessGroupDoesNotReadProcBeforeDurableScanAcknowledgement pins the
+// scan-failure arm at the barrier. The post-barrier receive of monitorDone
+// catches only monitor-lifetime mutations on a lucky schedule;
+// TestProcessGroupInitialScanBarrierJoinsEndingMonitor exerts the barrier
+// condition itself.
 func TestProcessGroupDoesNotReadProcBeforeDurableScanAcknowledgement(t *testing.T) {
 	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
 	previousStat := readLinuxProcessStat
@@ -1957,6 +1962,11 @@ func TestProcessGroupDoesNotReadProcBeforeDurableScanAcknowledgement(t *testing.
 	}
 }
 
+// TestProcessGroupAcknowledgesObservedEscapeBeforeRetiringScanFence pins the
+// observed-escape arm at the barrier. Like the scan-failure pin, its
+// post-barrier receive catches only monitor-lifetime mutations;
+// TestProcessGroupInitialScanBarrierJoinsEndingMonitor pins the barrier
+// condition deterministically.
 func TestProcessGroupAcknowledgesObservedEscapeBeforeRetiringScanFence(t *testing.T) {
 	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
 	const escapedPID = 2345
@@ -2005,6 +2015,148 @@ func TestProcessGroupAcknowledgesObservedEscapeBeforeRetiringScanFence(t *testin
 	}
 	if group.escapedDescendant == nil || group.monitorTerminalReason != descendantMonitorTerminalObservedEscape {
 		t.Fatalf("scan state = escape:%#v terminal:%s, want retained observed escape", group.escapedDescendant, group.monitorTerminalReason)
+	}
+}
+
+// TestProcessGroupInitialSealEndsMonitorBeforeBarrierReturns pins the
+// sealMonitoring arm of endsMonitor at the barrier: when the initial clean
+// scan requests the seal, the barrier must join the monitor before it returns,
+// and the post-join seal must record the initial scan's sequence. The hooks
+// are installed before the monitor starts, so no lock is needed. Its
+// post-barrier receive catches only monitor-lifetime mutations;
+// TestProcessGroupInitialScanBarrierJoinsEndingMonitor pins the barrier
+// condition itself.
+func TestProcessGroupInitialSealEndsMonitorBeforeBarrierReturns(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) { return nil, nil }
+	sealed := make(chan uint64, 1)
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	group.sealAfterCleanScan = func(uint64) bool { return true }
+	group.sealCleanScanForTesting = true
+	group.afterDescendantScanSeal = func(sequence uint64) { sealed <- sequence }
+	t.Cleanup(func() { _ = group.stopDescendantMonitor(time.Now().Add(time.Second)) })
+	group.startDescendantMonitor()
+	if err := group.waitForInitialDescendantScan(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("initial sealing clean scan = %v, want a clean sealed containment", err)
+	}
+	select {
+	case <-group.monitorDone:
+	default:
+		t.Fatal("barrier returned before the ending monitor stopped")
+	}
+	if !group.monitorSealRequested || group.monitorTerminalReason != descendantMonitorTerminalSealed {
+		t.Fatalf("seal state = requested:%v terminal:%s, want the monitor to end sealed", group.monitorSealRequested, group.monitorTerminalReason)
+	}
+	select {
+	case sequence := <-sealed:
+		if sequence != 1 {
+			t.Fatalf("post-monitor seal sequence = %d, want the initial scan's sequence 1", sequence)
+		}
+	case <-time.After(testHangGuard):
+		t.Fatal("post-monitor seal did not complete after the monitor joined")
+	}
+	if !group.descendantScanSealed {
+		t.Fatal("clean sealing scan did not record the sealed state")
+	}
+}
+
+// TestProcessGroupInitialScanBarrierJoinsEndingMonitor is the deterministic
+// probe for the barrier join: fabricated state, no monitor goroutine and no
+// scheduler dependence. A result that ends the monitor must make the barrier
+// wait on monitorDone for the rest of the deadline (an open monitorDone means
+// the error, an exited one means success), while a continuing result must
+// return without waiting on the monitor at all.
+func TestProcessGroupInitialScanBarrierJoinsEndingMonitor(t *testing.T) {
+	const deadline = 200 * time.Millisecond
+	for _, test := range []struct {
+		name      string
+		result    descendantMonitorScanResult
+		joinOpen  bool
+		wantError bool
+	}{
+		{name: "ending scan joins an open monitor", result: descendantMonitorScanResult{leaderPresent: true, sealMonitoring: true}, wantError: true},
+		{name: "ending scan accepts an exited monitor", result: descendantMonitorScanResult{leaderPresent: true, sealMonitoring: true}, joinOpen: true},
+		{name: "continuing scan does not wait on the monitor", result: descendantMonitorScanResult{leaderPresent: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			group := &processGroup{monitorDone: make(chan struct{})}
+			group.monitorInitialScanDone = make(chan struct{})
+			group.initialScanResult = test.result
+			group.initialScanComplete = true
+			group.signalInitialScanComplete()
+			if test.joinOpen {
+				close(group.monitorDone)
+			}
+			start := time.Now()
+			err := group.waitForInitialDescendantScan(time.Now().Add(deadline))
+			elapsed := time.Since(start)
+			if test.wantError {
+				if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
+					t.Fatalf("barrier with an ending scan and an open monitor = %v after %s, want unproven containment after the join deadline", err, elapsed)
+				}
+				if elapsed < deadline*3/4 {
+					t.Fatalf("barrier returned after %s, want it to join the open monitor for at least %s", elapsed, deadline*3/4)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("barrier = %v after %s, want nil", err, elapsed)
+			}
+			if elapsed >= deadline*3/4 {
+				t.Fatalf("barrier waited %s, want no wait on the monitor", elapsed)
+			}
+		})
+	}
+}
+
+// TestProcessGroupBarrierReportsJoinedMonitorAfterDeadline pins the join's
+// expired-timer branch: when the shared timer has already fired as the join
+// starts, an ended monitor must still be reported as joined rather than as a
+// deadline failure. The scan signal lands just after the timer, so the
+// barrier's wakeup evaluates both cases of its initial select at once and,
+// whenever it starts the join, the timer is already spent; the barrier may
+// legitimately report that the initial scan did not complete before the
+// deadline, but it must never report a stopped monitor as unstopped.
+//
+// Schedule precondition: this reaches the join only when the barrier goroutine
+// starts before the deadline. That holds at default CPU, but not under
+// `-race -cpu 1`, where the barrier returns at entry with the deadline error
+// (400/400 iterations measured); the test tolerates that error, so this
+// configuration cannot detect a missing recheck. Measured detection of a
+// removed recheck: mutant red 3/3 at default CPU, 0/20 under `-race -cpu 1`.
+func TestProcessGroupBarrierReportsJoinedMonitorAfterDeadline(t *testing.T) {
+	const (
+		scanDeadline = 500 * time.Microsecond
+		closeDelay   = 2 * time.Microsecond
+	)
+	for iteration := range 400 {
+		group := &processGroup{monitorDone: make(chan struct{})}
+		group.monitorInitialScanDone = make(chan struct{})
+		group.initialScanResult = descendantMonitorScanResult{leaderPresent: true, sealMonitoring: true}
+		group.initialScanComplete = true
+		deadline := time.Now().Add(scanDeadline)
+		errc := make(chan error, 1)
+		go func() { errc <- group.waitForInitialDescendantScan(deadline) }()
+		for time.Now().Before(deadline.Add(closeDelay)) {
+		}
+		close(group.monitorDone)
+		group.signalInitialScanComplete()
+		err := <-errc
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) || strings.Contains(err.Error(), "did not stop before deadline") {
+			t.Fatalf("iteration %d: barrier reported a joined monitor as unstopped: %v", iteration, err)
+		}
 	}
 }
 
