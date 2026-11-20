@@ -1,10 +1,15 @@
 # control-test-pins plan — drop the attention test's unused `conn` and pin the pinned historical entry's `can_retry`
 
-Contract: `goal-control-test-pins.md` (GDD, 2026-11-20). Baseline for every coordinate in this
-plan and in the delivered entries: `origin/main` at
-`fdf332dcbcc8c8dc2e59f69703972ec3578c74de` (`fdf332d`, the worktree's HEAD). Test-only
-increment inside `control/test/`: `portal_goal_attention_test.exs`, `chat_test.exs`, plus the
-TODO archive move and this plan file.
+Contract: `goal-control-test-pins.md` (GDD, 2026-11-20). Coordinate baseline: the `control/lib`
+and `contracts/v1` references below resolve identically at `origin/main` at
+`fdf332dcbcc8c8dc2e59f69703972ec3578c74de` (`fdf332d`, the revision this plan was written at;
+both paths are unchanged to the delivered HEAD), and the `chat_test.exs` references below
+resolve at the delivered file's (HEAD) revision. The archived entry text stays verbatim and
+keeps the coordinates it was written with at `c6ff37a`, where they resolved — at this baseline
+the case it names starts at `chat_test.exs:746` and the contract sentence sits at the
+`:227`/`:145`/`:284` citations below. Test-only increment inside `control/test/`:
+`portal_goal_attention_test.exs`, `chat_test.exs`, plus the TODO archive move and this plan
+file.
 
 ## Deliverable shape
 
@@ -25,7 +30,7 @@ TODO archive move and this plan file.
    (`fix/control-test-pins`), the decision and the pinning test names; the CLOSED-TODO preamble
    gains the 2026-11-20 move sentence, matching the file's existing move records.
 4. No source change outside those two test files, no contract/schema change (the rule is already
-   stated in `contracts/v1/chat-read.schema.json:224` and served), no new gate, no new file
+   stated in `contracts/v1/chat-read.schema.json:227` and served), no new gate, no new file
    outside `docs/plans/`.
 
 ## Exact edge-case semantics
@@ -39,8 +44,8 @@ TODO archive move and this plan file.
   path would fail them), and the entry's own evidence is a compiler warning — no product
   decision is open.
 - **Entry 2** pins the contract sentence "A superseded run's pinned historical entry always
-  answers false" (`contracts/v1/chat-read.schema.json:224`, repeated in
-  `work-detail-read.schema.json:142`, `workspace-read.schema.json:281`) at the one surface the
+  answers false" (`contracts/v1/chat-read.schema.json:227`, repeated in
+  `work-detail-read.schema.json:145`, `workspace-read.schema.json:284`) at the one surface the
   repository says exercises the shape: the run-scope chat read of a retried run, whose
   `run_projection/2` pinned branch serves `historical: true`
   (`control/lib/symmetry_control/chat/read_model.ex:236-266`) and whose `runs/2` historical
@@ -121,7 +126,13 @@ the projected provider-action chain, contracts/protocol edits, and the frontend/
   while the pinned projection keeps carrying no retry eligibility (measured green in mutation
   (a)) — the member removal is unobservable by construction: the pinned projection carries no
   `:controls`, `:runtime` or `:retry_runtime_eligible` and `legacy_capabilities/3` only conjoins,
-  so none of the forcing's five control members can change the served value. The report and the
+  so none of the forcing's five control members can change the served value. Four of the five
+  are absent-key defaults; `can_cancel`'s `queued`/`assigned` arm (`portal_json.ex:399-402`)
+  reads the pinned task's state — `run.state` (`read_model.ex:243-245`) — and cannot fire on a
+  superseded run, which is always terminal: retry requires a failed or cancelled task
+  (`orchestration.ex:2673`), and the cancel and expiry paths persist a terminal run state
+  before the task's `attempt_generation` moves past the run's (`orchestration.ex:2787`,
+  `:3229`). The report and the
   closure record state the measured result and the pin's actual discriminating scope — the rule
   violation in mutation (c) — instead of claiming a reddening the code cannot produce. Accepted
   disclosure (orchestrator, 2026-11-21): the contract sentence's strict member-removal reading is

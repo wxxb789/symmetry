@@ -2365,7 +2365,13 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       false (`protocol.ex:314-320`), `execution_summary/1`'s can_retry gate already answers false
       (`portal_json.ex:404-405`), and `legacy_capabilities/3` (`portal_json.ex:418-426`) only
       conjoins — so all five control members the forcing merges (`:54-58`) are structurally
-      unobservable at a pinned entry; only `historical: true` (`:59`) is load-bearing, and that
+      unobservable at a pinned entry. Four of the five are absent-key defaults; `can_cancel`'s
+      `queued`/`assigned` arm (`portal_json.ex:399-402`) reads the pinned task's state, which is
+      `run.state` (`read_model.ex:243-245`), and cannot fire on a superseded run, which is
+      always terminal: retry requires a failed or cancelled task (`orchestration.ex:2673`), and
+      the cancel and expiry paths persist a terminal run state before the task's
+      `attempt_generation` moves past the run's (`orchestration.ex:2787`, `:3229`). Only
+      `historical: true` (`:59`) is load-bearing, and that
       finding is recorded here instead of assumed load-bearing. The assertion's failure control
       is the rule violation it guards: a pinned projection that serves
       `retry_runtime_eligible: true` with the forcing member removed fails exactly at `:838`
