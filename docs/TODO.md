@@ -101,31 +101,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
       that never exits still fails) in a separate maintenance change.
 
-- [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
-      (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
-      error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
-      gone), and no test pins that branch: the scripted batch child
-      (`daemon/internal/workspace/subject_test.go:1114-1147`) serves `frame <variant> <content>`
-      (valid, missing, wrong-oid, wrong-type, malformed-size, negative-size, oversized,
-      malformed-header, truncated-header, partial-content, bad-trailer, missing-trailer) and
-      `blocked-header`, and every case of `TestSubjectBatchStreamRejectsMalformedResponses`
-      (`:1315-1379`) writes exactly one request while the child is still alive, so the failure
-      surfaces on the response read (`:753`) rather than on the write. The missing case needs a new
-      child variant that answers its first request with a complete in-sync frame and then closes its
-      read end, with the close ordered so it is observable before the second request (closing before
-      the response is written, or an equivalent deterministic wait for the child's exit, works
-      because the digest writes its second request only after consuming the first response); a
-      variant that only exits after answering can still take the write into the pipe buffer, so the
-      refusal can otherwise surface on the response read instead. Every existing
-      exit-after-one-response variant answers a refusal that desyncs and aborts the digest on the
-      first blob, and the one-response exit at `:1206-1208` covers every variant except `valid` and
-      `missing`, which keep serving (`serveWorkspaceBatchFrames` `:1155-1210`); drive a multi-blob
-      commit (the fixture exists: `subjectDigestManyBlobs` `:588` with
-      `writeSubjectDigestManyBlobsFixture` `:810`) so the second request write lands on the gone
-      child. Assert that the refusal names the object, marks the stream desynced and still reaps the
-      child (the reap contract `:1373-1376` pins that for response failures), keeping the context
-      alive so `streamError` (`:808-813`) reports the pipe error instead of a cancellation.
-
 - [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
       submit-time served one. `approvePlan` builds its envelope from `query.data`
       (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
