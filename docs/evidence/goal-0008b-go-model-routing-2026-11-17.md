@@ -89,7 +89,7 @@ another run or a full test suite.
 | Gates | `protocol-tests` exit 0 with validator exit 0; `protocol-vet` exit 0 | same argv, both exit 0 |
 | Independent review | verdict `pass`, no findings, reviewer session `01a1e609-3fce-7508-b9a0-f58599717e66` | verdict `pass`, no findings, reviewer session `01a1e611-3cdf-7460-8213-d55370063a4e` |
 | Accepted | yes (`accept` exit 0) | yes (`accept` exit 0) |
-| Receipt SHA-256 | `sha256:c5b01b39f01c50c9e4f95d635aee22fd54f06576ab7e499d0c1fd70ee704f53c` | `sha256:8ad6c2d277dfac86af23fe6e858d7c8eedb9ab9e5961c10ddb8c6934e824332c` |
+| Receipt SHA-256 | `sha256:c5b01b39f01c50c9e4f95d635aee22fd54f06576ab7e499d0c1fd70ee704f53c` | `sha256:cf31f14da8a532110b58770e26adbd614d15117b98d4a4d9798440743e3cc94a` |
 | Repair rounds | 1 (coordinator-caused review redo, see negative findings; the discarded first reviewer invocation is published in `0008b-go-bounded-regression-mixed.review-attempts.json`) | 0 |
 
 The frozen named tests `TestValidateMicroUSDEnforcesWireMonetaryContract` and
@@ -197,7 +197,7 @@ Windows-only surface and the explicit statement that no claim is made for untest
 TypeScript work.
 
 Artifact digests over the repository's LF line endings: candidate policy
-`sha256:82852890944b405b99da0c95b2404547be6fea994301c631b65b5145bf3f767d`, controls record
+`sha256:02632c1e56d83f734cb5e0309c11a3819398a9f58fa4902439514264e7b89a31`, controls record
 `sha256:4ab181863fbe4a2ddec4cdb7270ffb220e10e5c9ee930d90e1a63f51ca5407aa`. The four receipts are
 bound by the policy record's per-arm `receipt_sha256`; the class A review records by
 `evidence.frozen_review_sha256` inside each receipt and by the policy record's

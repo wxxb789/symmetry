@@ -29,6 +29,9 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 The citation existence check and the changed-path classifier fixture appended to `## Record and
 documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
 
+The resolved-decision press item appended to the `## Retro review follow-ups` section below was
+moved on 2026-11-20 from branch `fix/resolve-decision-submit-read`.
+
 The closed unused-parameter attention-test warning appended to the second `## Dead-code candidates`
 section below and the closed pinned-`can_retry` entry appended to `## Retro review follow-ups` below
 were moved on 2026-11-20 from branch `fix/control-test-pins`.
@@ -46,8 +49,14 @@ The revalidated test-database recovery entry appended to `## Retro review follow
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
 
+The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
+moved on 2026-11-21 from branch `fix/served-read-closeout`.
+
 The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
+
+The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
+that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 
 ## Model-routing evaluation records
 
@@ -327,13 +336,53 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       digest and controls digest, plus `test-ablation-final-review-2026-09-29.md`'s app-startup
       and Go-probe rows (the cross-record quote this entry named). Evidence: the whole-corpus
       `--check --root-only` sweep reports 0 dirty of 111 files (superseded 2026-11-20: the
-      widened UNC leader pattern flags the two `0008b-go-bounded-regression-strong` specimens
-      named in the records README's accepted false positives; the records were deliberately
-      not re-rendered),
+      widened UNC leader pattern flagged the two `0008b-go-bounded-regression-strong` specimens;
+      both were rendered and every bound digest rebound by the records rebind of the same day,
+      see the entry below),
       `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` exits 0,
       re-running the renderer over all 30 touched files is byte-stable, and
       `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
       (16 tests) pass.
+
+- [ ] Render the two records the widened sanitize flags: `0008b-go-bounded-regression-strong.json`
+      and its `.review.json` still carried the doubly escaped backslash-run UNC specimen a reviewer
+      quoted while describing forbidden-backslash test cases, so the record-cleanliness gate refused
+      them; narrowing the pattern was rejected because a narrower UNC pattern misses a real path and
+      the README records the shape as an accepted false positive. Evidence plan: render both files
+      in the `--root-only` scope (the scope #101 rendered these two files in and the scope the CI
+      gate runs), keep the record JSON valid across the render, and rebind every digest that binds
+      a rendered file.
+
+      **Closed (2026-11-20, branch `chore/model-routing-records-rebind`):** both records were
+      rendered with `scripts/ci/model-routing-record-sanitize.py --root-only` - one substitution
+      per file, the specimen to `path-sha256:0b5e775deeadc067545d33b048502608ec874e7002aaab39e6adf32f4d370ae6`,
+      the odd trailing backslash that escapes the quote closing the quoted specimen kept outside the token -
+      and every digest binding a rendered file was recomputed and rebound:
+
+      | File | `sha256` before | `sha256` after | Bindings rebound |
+      | --- | --- | --- | --- |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.review.json` | `cf1c41b9b6fa8bd3512d6a9c6a4fdc69e6712b0c918728c8ab88a1a3b435bef7` | `d442ed8fc259e354d002e922a6817c334b618d47b0a57e671a7b8086e270e23c` | the rendered receipt's `evidence.frozen_review_sha256` and `review.evidence_sha256`; `0008b-policy.json`'s strong-arm `frozen_input_digests.review_sha256` |
+      | `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` | `8ad6c2d277dfac86af23fe6e858d7c8eedb9ab9e5961c10ddb8c6934e824332c` | `cf31f14da8a532110b58770e26adbd614d15117b98d4a4d9798440743e3cc94a` | `0008b-policy.json`'s strong-arm `receipt_sha256`; `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s strong receipt row |
+      | `docs/evaluations/model-routing/0008b-policy.json` | `82852890944b405b99da0c95b2404547be6fea994301c631b65b5145bf3f767d` | `02632c1e56d83f734cb5e0309c11a3819398a9f58fa4902439514264e7b89a31` | `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s candidate-policy digest |
+
+      The receipt's after-digest is over its final bytes (the render plus its own internal review
+      rebind). A whole-tree scan finds no other full-length or truncated referrer of the three
+      pre-rebind digests. Evidence: `resolve-digests.py` (retained in the GDD task's `evidence/`)
+      resolves the eleven policy/receipt bindings of the 0008b class and re-runs the corpus sweep -
+      111 records, 0 dirty, 131 checks, 0 failures; the renderer is byte-stable on both rendered
+      files and each parses to the same document otherwise (the token binds the exact replaced
+      bytes); `check-record-cleanliness.py` passes with a `git stash create` commit of the frozen
+      tree as `--head` - 7 changed records against the current `origin/main` and 5 against the
+      branch base, exit 0 each; and the five short `scripts/ci` Python suites pass
+      (`test-model-routing-record-sanitize.py` 54 tests, `test-check-record-cleanliness.py` 19,
+      `test-model-routing-omp-usage.py` 40, `test-model-routing-source-subject.py` 6 with one
+      skip, `test-linux-v2-source-subject.py` 4). The long runner suite
+      `test-model-routing-evaluation.py` (82 tests, real Go fixtures; no `scripts/ci` tool is
+      touched by this change) was not run to completion on this host - 27 of 82 test outcomes with
+      zero failures before the stop, partial output in the GDD evidence. The records README
+      documents the pass and the receipt/tooling rule it sits beside ("Receipt verification and
+      the bound tooling revision (2026-11-20)"), including the fourteen published-receipt `accept`
+      outcomes under the current tooling.
 
 - [ ] Bound the Windows lingering reap in `scripts/ci/model-routing-evaluation.py`. In
       `run_owned_command` (~1738-1768) a timed-out gate is tree-killed and then reaped with
@@ -1600,6 +1649,93 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       answered as its mapped protocol status before the projection runs. The residual entry is
       removed from `docs/TODO.md`.
 
+*Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the workspace-read residual stays there.*
+
+      Revalidated and closed on branch `fix/served-read-closeout` (2026-11-21). Every member the entry
+      named already sits in a `required` array at `fdf332d` and is read by the surface the entry cited,
+      at the anchors its stale line numbers drifted away from (entry lines were written against
+      `671525c`): `goal-read` accounting `known_usage_cost_microusd` (served
+      `control/lib/symmetry_control/goals/read_model.ex:2555`, read
+      `frontend/src/features/goals/detail.tsx:610`), settlement attention `proposed_next_action` and
+      `proposed_next_action_status` (`read_model.ex:1562-1563`, read `detail.tsx:316`), external wait
+      `external_ref`, `next_check_at` and `check_seq` (`read_model.ex:2623,2626-2627`, read
+      `detail.tsx:626-627`), outcome `candidate_subject` and `subject_hash`
+      (`read_model.ex:2265-2266`, read `detail.tsx:272,531-537`), and the attention entry's
+      `attention_reasons`, `active_tasks` and `nonterminal_tasks` (`read_model.ex:2657-2659`, read
+      `frontend/src/features/attention/attention.tsx:90,92`). The class is re-checked exhaustively
+      rather than member-by-member: the optional sets of `goal-read.schema.json` and
+      `attention-read.schema.json` were extracted with a `jq` walk of every `required` array (48 and 11
+      distinct names) and cross-read against `frontend/src`. Neither schema has an optional member a
+      surface reads: the Goal read's and the attention read's readers are
+      `frontend/src/features/goals/detail.tsx` and
+      `frontend/src/features/attention/attention.tsx`, and the optional names a name-level grep matches
+      elsewhere belong to other definitions (`WorkItem`/`work-detail-read`, the `ProjectBlockedEntry`
+      blocker, the planning drafts); the optional members with no reader at all are additive, as the
+      entry intends. The only optional-and-consumed members left in the served reads this entry names —
+      the Goal read, the attention read and the workspace-read row — are the workspace row's 66, which
+      stay open in `docs/TODO.md`.
+      The entry's second residual — the empty `accepted_outcomes`/`settlement_attention`/
+      `external_waits` captures — is closed at both gates it named. The real-served controller test
+      "the real served attention and goal reads validate against the contract bundle"
+      (`control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`) now builds a Goal
+      whose served document carries an accepted outcome (the columns
+      `Goals.insert_validation_outcome!/13` writes, over a completed producer run and a bound evidence
+      row; the pipeline's own validate task and run are not built, so that row's `validation_task_id`
+      stays null), a repair-required settlement receipt and a recorded terminal external wait
+      (`state` `unsupported`, `next_check_at: null`, `check_seq: 0`), asserts the consumed values
+      (`candidate_subject` equal to the item's served baseline subject, its `sha256:` digest,
+      `evidence_ids`, `state`, `reason`, `external_ref`, `resource_id`, `next_check_at`, `check_seq`) and
+      keeps `validate_served_document!("goal-read", read)`. Its rows follow the writers' durable shapes:
+      the external wait is the only shape the `goal_external_waits` identity trigger admits (completed
+      task and run, the run's `task_result` equal to the wait's `result`, a terminal state with no
+      schedule), which is also why the wait could not borrow the failed settlement run; the embedded
+      task result carries the future blocker schedule the settle path validates
+      (`validate_external_blocker/3` refuses a `null` schedule), while the wait row's own
+      `next_check_at` is null for a terminal state.
+      That served response is captured, sanitized, as
+      `contracts/fixtures/valid/goal-read.accepted-and-external.json` (manifest id
+      `goal-read.accepted-and-external`, tag `captured-response`), so the boundary probe "Goal reads
+      refuse a renamed consumed member and keep unconsumed members additive"
+      (`contracts/scripts/boundary.test.mjs`) renames `candidate_subject`, `subject_hash`,
+      `proposed_next_action`, `proposed_next_action_status`, `external_ref`, `next_check_at` and
+      `check_seq` over the capture's own bytes instead of the three inline documents the probe wrote
+      before. A serving-side rename or omission of any of those members now fails the bundle gate on
+      the served document (and the client Effect boundary) rather than decoding into a silent
+      fallback, while the same rename over the capture's own bytes fails the boundary probe.
+      The capture's `subject_hash` is recomputed over its sanitized subject — the sanitization rule
+      `contracts/README.md` now states for a replaced preimage — and the probe asserts that binding with
+      `subjectHash` over the capture's own `candidate_subject`, so a re-capture that replaces a
+      subject's identifiers cannot freeze a digest whose preimage it replaced.
+      Recorded before/after, exact commands. `mise x pnpm@12.17.0 -- pnpm contracts:test` fails on the
+      pre-increment fixture corpus with `ENOENT … contracts/fixtures/valid/goal-read.accepted-and-external.json`
+      (exit 1, `tests 35 / pass 34 / fail 1`) and passes with the capture (exit 0, `tests 35 / pass 35 /
+      fail 0`). That digest assertion's own probe: with the capture carrying the pre-sanitization digest
+      (`sha256:a354ae89…`, the value the raw served capture records) `node --test
+      contracts/scripts/boundary.test.mjs` fails at it (`actual: sha256:a354ae89…` against the
+      recomputed `expected: sha256:788053cd…`, exit 1, `tests 26 / pass 25 / fail 1`) and passes with the
+      recomputed digest (exit 0, `pass 26 / fail 0`).
+      The controller gate was probed on the serving side rather than by disabling its fixture rows: with
+      `outcome_projection/1` renamed `candidate_subject` → `candidate_subject_renamed` and
+      `external_wait_projection/1` renamed `check_seq` → `check_seq_renamed`, the gate file fails (exit
+      2, `Result: 11/12 passed`; the served document carries the renamed member); with only the wait's
+      `id` renamed — a required member the gate's own value assertions do not cover — it fails inside
+      `validate_served_document!/2` with `goal-read real served document failed the contract bundle:
+      [{"Required property id was not present.", "#/external_waits/0"}]` (exit 2, `Result: 11/12
+      passed`); restored, the file passes (exit 0, `Result: 12 passed`).
+      Package gates through the `retro-g2` recipe with `MIX_TEST_PARTITION=servedreadcloseout`:
+      `mix format --check-formatted` exit 0, `MIX_ENV=test mix compile --warnings-as-errors` exit 0,
+      the touched file exit 0 (`Result: 12 passed`). The package's full suite on this host reports
+      `Result: 926/936 passed, 21 skipped`; every one of its ten failures sits in a file this increment
+      does not touch (`goal_0006_migration_test.exs`, `goal_external_wait_migration_test.exs`,
+      `portal_integrations_test.exs`, `provider_action_controller_test.exs`, `integrations_test.exs`,
+      `chat_test.exs` — three `DBConnection` connection drops, two 60 s test timeouts, four unmet
+      `assert_receive` deadlines and one chat message-ordering assertion), and those six files re-run
+      together score `210/211`, the remaining failure being a 100 ms `assert_receive` deadline that
+      passes alone (`Result: 1 passed, 14 excluded`). The reversed-import flake closed at `978abba`
+      failed once in that full-suite run (the lock-order test's `assert_receive` for the sync
+      backend's blocked sample unmet after 5 s, mailbox empty) and passed in the isolated six-file
+      re-run; it is a load-sensitive case this increment does not touch.
+
 ## Browser acceptance under host load
 
 *Closed part of the item “Re-measure the pre-existing browser suites on a quiesced host …” in `docs/TODO.md`; the open residual stays there.*
@@ -2499,6 +2635,193 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       The gap is tracked as the open TODO entry "An ended chat chain never accepts a later served
       token" (`docs/TODO.md`); this closure is kept as recorded.
 
+      **Annotation (2026-11-21, branch `fix/chat-history-chain`):** two claims recorded above are
+      superseded, and the closure is otherwise kept as recorded. The served token an ended chain
+      dropped is no longer dropped: `retainServedPage` re-opens the chain from the served boundary
+      when a serve offers a token while no continuation is live, so the gap this block names as open
+      work — the entry "An ended chat chain never accepts a later served token" — is closed below.
+      And a definitive refusal a later load advanced past no longer "carries only its notice": its
+      reset and notice are suppressed, because the pointer belongs to the newer chain the reader's
+      next press walks (the closure below states the one-settle-tick re-read window) — the entry
+      "The chat surface's in-flight `Load older` guard is still keyed by cursor bytes" is closed
+      below. Both closures state their own pins.
+
+- [ ] The chat surface's in-flight `Load older` guard is still keyed by cursor bytes:
+      `loadingCursor` (`frontend/src/features/chat/chat.tsx:172-221`) admits a second load for the
+      same boundary while the first is in flight once a re-serve has renewed `history.loadCursor`
+      and re-rendered the button (`frontend/src/features/chat/chat.tsx:560`), and a refusal of the
+      superseded request still posts its notice after the retry already loaded the page. (The rest
+      of that damage is fixed — 2026-11-20, fix round 2: a refusal rewinds the chain pointer and
+      re-reads the captured scope only while the press still owns the chain boundary it captured,
+      so a superseded one is only this notice.) Pre-existing: base re-keyed the cursor on every
+      refresh, so the race predates the boundary-id work. Repro on those bytes: press Load older,
+      refresh while its page is in flight, press Load older again (admitted because the cursor
+      bytes changed), and let the first request's refusal settle after the second landed. Fix
+      direction: key pending loads by scope + boundary id (token bytes as the fallback) and
+      suppress the superseded refusal's notice.
+
+      **Closed (2026-11-21, `fix/chat-history-chain`):** a pending press is identified by scope +
+      boundary message id — cursor bytes only as the fallback while either side lacks a boundary
+      id — through `pendingOlderLoadFor` (`frontend/src/features/chat/scopes.ts`), the same
+      two-sided comparison `ownsChainPointer` already makes, extended by the scope key so a press
+      belongs to the scope that made it; `chat.tsx` holds one record per press in flight, admits no
+      second press for a boundary one already holds there, clears only its own record, and renders
+      the button's `aria-disabled` from that same predicate, so a token the server re-signs at the
+      same boundary leaves the press in flight unrepeatable while a press at a moved boundary is
+      still its own load. The refusal's reset and notice are one committed write judged by
+      `ownsChainPointer`: an owning press resets the pointer to the served page's own token and
+      re-reads the captured scope exactly as fix round 2 established, while a superseded refusal
+      neither resets the pointer nor posts its notice — the pointer belongs to the newer chain the
+      reader's next press walks, so the notice would contradict what the reader can see, and the
+      refused press's region is only reachable from that chain, not already loaded. The re-read
+      gate is the one judgment outside that write: it reads the last committed snapshot while the
+      write decides against the store's queued record, so inside one settle tick a refusal the
+      write judges superseded may still re-read the captured scope once — one benign read, never a
+      wrong cursor (the source comment in `chat.tsx` documents the window; the r1 fix round
+      rewrote this sentence).
+      Decision kept from the entry's reading: only a refusal's notice is
+      suppressed, because a non-refusal failure's outcome is unproven and suppressing it too would
+      hide transient read failures the reader can still act on. Pinning cases: "does not admit a
+      second Load older for the boundary already in flight when the cursor re-signs" (new; red on
+      the pre-fix bytes at `expected [ 'cursor-5', 'cursor-5-resigned' ] to deeply equal
+      [ 'cursor-5' ]`), "leaves the chain alone when the refused press no longer owns it"
+      (re-pinned: the renewal-based supersession it relied on is unreachable under the new guard,
+      so the press is superseded by a served boundary that moved instead; the case keeps its
+      no-reset/no-re-read assertions — `reads` stays 2 and `requested` reaches `cursor-2` — and
+      replaces "stays the notice" with the suppressed notice, red on the pre-fix bytes at
+      `Expected element to have text content: Messages are saved to this context. / Received: The
+      server returned an unexpected response.`), and "renews the served cursor at an unchanged
+      boundary only while the reader has not paged past it" (re-pinned to the new admission rule,
+      red on the pre-fix bytes at `Expected the element to have attribute: aria-disabled="true" /
+      Received: aria-disabled="false"`).
+
+      **Annotation (2026-11-21, branch `fix/chat-history-chain`, apply stage of the simplify review):**
+      one sentence above is inaccurate, and two pins were added. `pendingOlderLoadFor` is two-sided
+      — the boundary message's id while both sides name one, cursor bytes while either does not —
+      but `ownsChainPointer` is not: it decides on the captured side's id alone and never falls back
+      to bytes while it has one, so the two predicates can classify one press/store pair
+      differently (a press naming a boundary message is superseded by a store that holds only cursor
+      bytes at that position while the same press still holds the pendency). The predicate itself is
+      unchanged and is what the contract asks for; the source comment was corrected (`scopes.ts`),
+      and `docs/plans/2026-11-20-chat-history-chain-plan.md` carries the same annotation. The scope
+      fence's own claim — a press "must neither block nor be blocked by another scope's" — is now
+      pinned by "does not let one scope's press in flight block another scope's Load older at the
+      same cursor bytes" (red against a `pendingOlderLoadFor` without the scope term at `Expected
+      the element to have attribute: aria-disabled="false" / Received: aria-disabled="true"`, and
+      red on the pre-fix bytes at the same assertion), and the refusal-only notice decision by
+      "keeps a non-refusal failure's notice when the press no longer owns the chain" (kills both
+      "silence every superseded notice" and "silence every non-refusal notice" at `Expected element
+      to have text content: The server is temporarily unavailable. / Received: Messages are saved to
+      this context.`; green on the pre-fix bytes — it pins that decision, not the regression).
+
+- [ ] An ended chat chain never accepts a later served token: a chain drained through its own loads
+      (`nextCursor` null, the recorded `nextBoundaryId` naming an older message) or a read that
+      served the whole history (no continuation was ever established) keeps reporting "oldest
+      history loaded" while a later serve at the same boundary offers a token, so the rows below
+      the served page stay unreachable until a reload or a boundary move. Repro (rows ordered 3–54,
+      so the first page is 5–54 plus a token and the older read 3–4 ends `null`): rows 1–2 becoming
+      visible late — a slow concurrent post commits an older-timestamped row, since `inserted_at`
+      is set at insert inside the transaction and the advisory lock is per action, not per scope —
+      make the next read still bound at 5 and offer a token for it, which the ended chain drops.
+      Found by the r2 review of `fix/chat-history-boundary-id` (2026-11-20), the round that removed
+      the `adopt` branch covering the never-continued shape (the drained shape was never covered by
+      it). Fix direction: treat "ended" as no usable continuation and re-open from the served
+      boundary when a serve offers a token — the offered token's boundary is the served page's
+      oldest message, so the re-walk re-reads the drained region and dedupes against the retained
+      pages.
+
+      **Closed (2026-11-21, `fix/chat-history-chain`):** "ended" is now no usable continuation:
+      `retainServedPage` (`frontend/src/features/chat/scopes.ts`) re-opens the chain from the
+      served boundary when a serve offers a token, the served page names a boundary and
+      `state.nextCursor === null` — the reader drained the chain through its own loads, or the read
+      served the whole history — while a chain that is not ended keeps the existing rule. The
+      adopted token is signed from the served page's oldest message, so the next press re-walks the
+      drained region; `chatHistoryView` dedupes the retained pages by id and `historyGap` still
+      reaches every retained page through its captured `fetchBeforeId`, so the region renders
+      contiguous and the note reports older history again instead of "oldest history loaded". Kept
+      limit: a serve in a drained scope re-offers the button even when nothing new exists to read —
+      the server cannot know the client's retained set — so the reader re-walks the drained region
+      one press per page, each press re-reading exactly one page and the retained copies deduped
+      only at render, until it drains again; every not-moved serve re-offers the token, a plain
+      re-sign with no new rows included (an explicit refresh, a window-focus refetch, a realtime
+      `chat` invalidation, a send), and the rule cannot tell a late-visible row from such a
+      re-sign. A second kept limit is the query cache's own: the surface applies a serve when the
+      conversation query's data object changes, TanStack Query's default structural sharing keeps
+      the applied object for a refetch whose bytes deep-equal it, and the served cursor's bytes
+      change per response except when the server signed two responses in the same millisecond
+      (the signed token's embedded timestamp defaults to milliseconds; the same coincidence
+      `presentation.ts` names), so a re-serve that both re-signs identical bytes and carries
+      identical messages never reaches the surface, and the ended chain waits for the next
+      differing serve — a throwaway probe on the delivered bytes confirmed the collapse (the
+      refetch kept the first read's data object, the note stayed "oldest history loaded" and the
+      button stayed hidden). Anchoring the application on response arrival rather than object
+      identity (e.g. `structuralSharing: false` on `chatConversationOptions`) is the remedy if
+      that coincidence ever matters; the r1 fix round records it as a bounded limit. Pinning cases:
+      "re-opens a drained chain when a later serve offers a token at the served boundary" (new;
+      red on the pre-fix bytes at `Expected element to have text content: 4 messages loaded · older
+      history available / Received: 4 messages loaded · oldest history loaded.`) and "re-opens a
+      chain that never continued when a later serve offers a token at the served boundary" (new;
+      red on the pre-fix bytes at `Expected element to have text content: 2 messages loaded · older
+      history available / Received: 2 messages loaded · oldest history loaded.`).
+
+      Gates for both closures above, on branch `fix/chat-history-chain`, each row bound to the
+      revision it was measured at. Apply stage (`750a496`, this host, 2026-11-21, before that
+      commit's merge of `origin/main` `adf6d38` — which changed no `frontend/src/features/chat`
+      file but did add main-side frontend files, `router.test.tsx`, `filters.test.ts`,
+      `filters.ts`, `saved-views.test.ts` and `work/presentation.ts`): `vitest run
+      src/features/chat --no-file-parallelism` rc 0 (2 files, 86 tests); `pnpm --dir frontend test`
+      rc 0 (20 files, 498 tests); `typecheck` rc 0; `lint` rc 0; `build` rc 0 (bundle
+      `index-wiT0iX5k.js`, md5 `7d2f0e696cbf59900139eedeec33e05c`, 885870 B); `git diff --check`
+      rc 0 (the frontend has no formatter script). R1 fix round of the whole-increment review
+      (this host, 2026-11-21, re-measured at the delivered tree — `8e91434` plus the fix round's
+      record and test edits): `pnpm install --frozen-lockfile` rc 0; `vitest run src/features/chat
+      --no-file-parallelism` rc 0 (2 files, 87 tests); `pnpm --dir frontend test` rc 0 (20 files,
+      502 tests); `typecheck` rc 0; `lint` rc 0; `git diff --check` rc 0. Every new and re-pinned
+      case was also run against the pre-fix `chat.tsx`/`scopes.ts` — byte-identical copies of
+      `git show fdf332d:…`, digest-checked before and after the run — with that stage's delivered
+      test bytes: 6 failed / 41 passed (47) at the apply stage, 7 failed / 41 passed (48) at the
+      r1 fix round, rc 1, each for the reason its closure names or the pin's own claim names (the
+      r1 round's added case reddens at `expect(element).toHaveAttribute("aria-disabled",
+      "true")`). Each added pin was mutation-checked against the wrong rule it exists to kill, and
+      reddens exactly there:
+      dropping the scope key from `pendingOlderLoadFor` reddens "does not let one scope's press in
+      flight block another scope's Load older at the same cursor bytes" (`Expected the element to
+      have attribute: aria-disabled="false" / Received: aria-disabled="true"`), and both "silence
+      every superseded notice" and "silence every non-refusal notice" redden "keeps a non-refusal
+      failure's notice when the press no longer owns the chain" (`Expected element to have text
+      content: The server is temporarily unavailable. / Received: Messages are saved to this
+      context.`); the r1 fix round's two new pins kill their own rules — a `pendingOlderLoadFor`
+      comparing boundary ids whenever either side names one (leaving the bytes fallback
+      unreachable) reddens "does not admit a Load older at the same cursor bytes while either side
+      cannot name a boundary id" alone (1 failed / 47 passed), and a `.finally` clearing every
+      press record reddens the busy assertion that case and "does not let one scope's press in
+      flight block another scope's Load older at the same cursor bytes" now carry (2 failed /
+      46 passed) — while in the other direction a superseded refusal delayed past the r1 round's
+      settlement fence reddens "leaves the chain alone when the refused press no longer owns it"
+      at `expected 'pending' to be 'error'` instead of passing its negative assertions unrun; each
+      mutant reddened only the pins named and left the chat suite's other cases green. The r1
+      round also confirmed the re-open's named structural-sharing limit with a throwaway probe
+      (deleted after the run): a byte-identical re-serve kept the applied data object, the note
+      stayed "oldest history loaded", and no button appeared. The path-triggered render gate
+      (`SYMMETRY_RENDER_GATE_REQUIRED=1`, the seven focused spec files, desktop and mobile Chromium,
+      against three release instances of `750a496` serving its bundle on this host):
+      93 expected, 1 skipped (the by-design concurrency skip), 0 unexpected, rc 0 (8.5 m), and
+      `scripts/ci/assert-playwright-json.py` rc 0 over CI's own expected set; the chat spec's 12
+      cases are all expected in it. The release instances were proved to serve the bundle built at
+      `750a496`: the asset body's md5 `7d2f0e69…` matched from all three ports, port 4010 measured
+      `/portal/assets/index-wiT0iX5k.js` → HTTP 200 with 885870 B, and the pre-apply
+      `index-CS3_ZMmm.js` answered HTTP 404 (also measured on 4010). The implement-stage numbers
+      measured before the apply — 84 tests, 496 tests, 5 failed / 40 passed (45), bundle
+      `index-CS3_ZMmm.js` md5 `45798f9b…`, 93 expected / 1 skipped / 11.8 m — are superseded by
+      the apply-stage numbers above; the pre-apply receipt's earlier flaky invocation (92 expected
+      / 1 unexpected, the fixture-gated goal-context case under host load) has no counterpart in
+      the apply run. The r1 review's own re-measure at `8e91434` hit one flaky case there: the
+      untouched, load-sensitive `src/tool-cache-config.test.ts` exceeded vitest's 5 s default
+      timeout under suite parallelism (twice; green in isolation). This fix round's full-suite run
+      at the delivered tree passed 20 files / 502 tests, and the isolated file re-measured rc 0
+      (2 tests); the flake is recorded as host load acting on an untouched file, not normalized by
+      reruns.
+
 ## Deferred review findings (0007g)
 
 *Both items of this section moved here on 2026-11-19; `docs/TODO.md` keeps no residual under it.*
@@ -2622,6 +2945,71 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       (`contracts/v1/workspace-read.schema.json`, `contracts/v1/work-detail-read.schema.json`,
       `contracts/v1/chat-read.schema.json`), with the generated bindings refreshed through the
       repository generator.
+
+- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
+      submit-time served one. `approvePlan` builds its envelope from `query.data`
+      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
+      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
+      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
+      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
+      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
+      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
+      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
+      the original note: every accepted command appends an event through `append_event!/7`
+      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
+      and reconcile writers go through `Goal.transition_changeset`
+      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
+      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
+      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
+      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
+      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
+      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
+      direction: build the press's envelope from a submit-time read the way the plan admission does,
+      re-deriving the presented decision's own version from that same read, or keep the page version and
+      record the refusal plus reload as the intended recovery.
+
+      **Decided and closed (2026-11-20, owner; branch `fix/resolve-decision-submit-read`):** option A —
+      the press presents the submit-time served read, and the retry-freeze rule stays (the owner's
+      Q4=A); no backward compatibility (the first release is not shipped). `detail.tsx`'s
+      `decisionEnvelope` builds the `resolve_decision` envelope from a fresh `application.api.goal`
+      read taken inside the press: `expected_version`/`expected_revision` come from that read, and
+      `expected_decision_version` is re-derived from the same read's served decision found by the
+      decision id the card holds; a read that no longer serves that decision sends nothing (the read
+      preloads every decision row of the goal, so this narrows the lookup, not a served state). The
+      press's two envelopes — resolution, then admission — are frozen per logical intent (decision id,
+      option id, proposal hash) until the server answers, so a re-press after a lost acknowledgement
+      resends the recorded bytes: `replay_event` replays only a body whose hash equals the recorded
+      `request_hash`, and a body rebuilt from a fresh read would carry the post-application pair for a
+      command that already applied. The attempt is released on success and on any answer that settles
+      it, and kept on a transport failure or an uninterpretable answer — the settle rule the generic
+      command already applies. This recovery is usable only until the goal read refetches: the
+      committed resolution publishes its goal invalidation before its response is sent
+      (`portal_invalidations.ex:28-32`), so a client that refetches first (the resolution's own
+      publication, a reconnect, refocus or the fallback read) sees the decision resolved, the approval
+      control unmounts (`planApprovalOption`'s `open?` gate) and the frozen attempt keeps no trigger;
+      the resolved-but-unadmitted dead end that can leave behind is recorded as an open entry in
+      `docs/TODO.md`. Pinned by `frontend/src/features/goals/goal-attention.test.tsx`:
+      "builds the decision resolution from a submit-time read so a worker-advanced goal is not sent
+      stale" (red on the pre-fix bytes — the resolution carried the page's settled 4/3 pair and the
+      fixture answered the 409 `stale`, so no admission followed; green after: 5/4, then 6),
+      "replays the plan approval's decision resolution byte for byte after a lost acknowledgement"
+      (pre-fix the press failed earlier, at its first assertion `expect(first.expected_version).toBe(5)`
+      — the resolution carried the page's settled pair; green — the re-press repeated the recorded
+      bytes under the recorded identity and both commands were acknowledged) and "replays the plan
+      approval's admission byte for byte when its acknowledgement is lost" (the only pin of the frozen
+      admission half; red when the `attempt.admit ??` reuse is removed — 1 failed | 26 skipped (27) —
+      green on the branch). The fix round added two pins of the freeze's release rule: "releases the
+      plan approval attempt when the server answers its resolution" — red on `7a55b46`'s `detail.tsx`
+      and red when only the answered-error release is deleted (1 failed | 28 passed (29), the case
+      alone) — and "does not replay a frozen approval for a different proposal" — red when only the
+      freeze-key check is deleted (1 failed | 28 passed (29), the case alone); the latter stays green
+      on `7a55b46`'s `detail.tsx` by construction, because the pre-fix press keeps no attempt whose
+      bytes could leak into a changed intent. Recorded runs: implement stage (26 cases) 2 failed |
+      24 passed (26), exit 1, on `7a55b46`'s `detail.tsx`, and 26 passed (26), exit 0, on the
+      implement commit; apply stage (27 cases) 3 failed | 24 passed (27), exit 1, on `7a55b46`'s
+      `detail.tsx`, and 27 passed (27), exit 0, on the branch; fix stage (29 cases) 4 failed |
+      25 passed (29), exit 1, on `7a55b46`'s `detail.tsx` (the three pins plus the release pin), and
+      29 passed (29), exit 0, on the branch.
 
 - [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
       rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always

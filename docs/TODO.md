@@ -91,27 +91,31 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
       that never exits still fails) in a separate maintenance change.
 
-- [ ] Decide whether the Goal surface's `resolve_decision` press presents the page's goal version or a
-      submit-time served one. `approvePlan` builds its envelope from `query.data`
-      (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
-      senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
-      the plan admission `:129`), so a Goal advance between the last settled read and the press makes
-      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
-      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
-      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
-      that advances the Goal row's `lock_version` is identified, which settles the reachability half of
-      the original note: every accepted command appends an event through `append_event!/7`
-      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
-      and reconcile writers go through `Goal.transition_changeset`
-      (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
-      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
-      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
-      seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
-      rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
-      alone can produce the refusal, which is what makes the page-held version worth revisiting; fix
-      direction: build the press's envelope from a submit-time read the way the plan admission does,
-      re-deriving the presented decision's own version from that same read, or keep the page version and
-      record the refusal plus reload as the intended recovery.
+- [ ] The Goal surface offers no admission path for a resolved plan decision whose admission was
+      never accepted.
+      `PlanApproval` renders only for an open plan decision: `planApprovalOption`
+      (`frontend/src/features/goals/detail.tsx:408`) returns null unless `decision["open?"] === true`,
+      the render (`:381-382`) mounts no other admission affordance, and the resolved card shows
+      "Resolved: …" only. `NextAction` has no `accept_plan` payload path: its `accept_plan` branch
+      renders a note only ("Approve the open plan decision above first …", `:533`), `actionPayload`
+      returns null for every kind it does not build (`:626-627`), and the send button returns without
+      sending anything. The dead end is reachable through the press's own two commands by two paths.
+      (a) An answered admission refusal releases the whole attempt (`:218`), so a re-press re-resolves
+      a decision the server serves `resolved` and is refused `invalid_decision` (`apply_command!`
+      requires `decision.state == "open"`, `control/lib/symmetry_control/goals.ex:6491-6495`), while
+      the server would accept a fresh `accept_plan` built from a current read (`goals.ex:6395-6414`).
+      (b) A lost resolution acknowledgement keeps the attempt, but the goal invalidation the committed
+      resolution published before its response
+      (`control/lib/symmetry_control_web/plugs/portal_invalidations.ex:28-32`) refetches the card and
+      the `open?` gate (`:408`) unmounts the control; the server would replay the frozen resolution
+      bytes, and the admission would still need a fresh read. Pre-existing (the pre-fix press also
+      applied the resolution and could not admit) and outside `fix/resolve-decision-submit-read`'s
+      contract scope; that branch records the frozen attempt's release rule and the precondition of
+      the lost-acknowledgement replay, not this dead end. Fix direction: keep a retry control while
+      `sentApproval` holds a frozen attempt for that decision id (its frozen resolution replays
+      through `replay_event` and the admission is built from a fresh read), which covers only (b), or
+      serve `accept_plan` as an allowed action for a resolved plan decision that is not yet admitted,
+      so `NextAction` can present it through a payload path, which covers both paths.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
@@ -225,28 +229,54 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Deferred review findings (0007h)
 
-- [ ] Harden the optional-but-consumed members of the served reads so a rename cannot pass every gate
-      silently. The 0007h review confirmed these names are correct today but that the schemas leave them
-      optional while the client reads them: `accounting.known_usage_cost_microusd`
-      (`frontend/src/features/goals/detail.tsx:491`, served unconditionally at
-      `control/lib/symmetry_control/goals/read_model.ex:2539`), `settlement_attention[].proposed_next_action`
-      and `proposed_next_action_status` (`detail.tsx:245`), `external_waits[].external_ref`, `next_check_at`
-      and `check_seq` (`detail.tsx:508`), the attention `attention_reasons`/`active_tasks`/`nonterminal_tasks`
-      sets (`frontend/src/features/attention/attention.tsx:80`), and `accepted_outcomes[].candidate_subject`
-      and `subject_hash` (`detail.tsx:417`). Marking them `required` — as `integration`, `satisfied?` and the
-      unknown-cost member now are — would close the class; additive members staying unvalidated is intended.
-      A smaller residual from the same review lives here too: the rollout-off browser case went unrun in
-      hosted CI for two reasons — before `52cb4bb` its spec file was not in the render step's spec list,
-      and the step passed no `SYMMETRY_GOALS_OFF_URL` (both closed below).
-      Closed part moved to `docs/archive/CLOSED-TODO.md`.
-      The rollout-off browser-case residual is closed (2026-11-19, `fix/ci-render-gate-fixtures`, PR #98):
-      the render step starts a rollout-off release instance and runs the attention spec's rollout-off case
-      at both widths; its closure narrative and hosted evidence are in the same section there.
-      Remaining open: the legacy surfaces that
-      read workspace-read members still render their own fallbacks instead of refusing, which is
-      per-surface work outside this class; and the captures for `accepted_outcomes`, `settlement_attention`
-      and `external_waits` are empty arrays, so those members are pinned by the boundary test and the
-      real-served controller gate rather than by a fixture-level rename probe.
+- [ ] Harden the optional-but-consumed members of the served reads: the `workspace-read` row remains.
+      The Goal/attention half of this
+      item, and the empty-capture residual it carried, are closed on branch `fix/served-read-closeout`
+      (`docs/archive/CLOSED-TODO.md`, this section): every member this item named sits in a `required`
+      array at `fdf332d` and is read by the surface it cited, and the real-served controller gate now
+      serves an accepted outcome and a recorded external wait — the two collections it previously
+      validated only as empty arrays — beside the settlement attention it already asserted.
+      Still open is the same class on the workspace read, which the 0007h entry scoped out as per-surface
+      work: of the 68 members `workspace-read.schema.json` leaves optional (a `jq` walk of
+      `required` arrays), 66 are read by `frontend/src` feature code and only two are not
+      (`RuntimeSnapshot.active_runs` and `WorkspaceWorkItem.position` — verified by grep: no
+      feature-code read site for either; the four `RuntimeCapabilities` booleans `interactive`,
+      `provider_access`, `structured_input` and `supervisory_control` are consumed only as the whole
+      map, `frontend/src/features/runtimes/runtimes.tsx:24` serializing it into `data-capabilities`
+      and `browser/tests/portal-live-daemon.spec.mjs:433` asserting that attribute equals the
+      registration-side map, so no member-named read site exists for them), and
+      those surfaces render their own fallbacks instead of refusing. The 66 read members are the root
+      `runtimes` and `registered_runtimes`; project `version`, `default_agent_profile`,
+      `default_workspace` and `resources`; the resource row's `id`, `project_id`, `connection_id`,
+      `kind`, `name`, `provider`, `external_ref`, `url`, `status`, `sync_status`, `status_message`,
+      `last_synced_at` and `version`; the registered-runtime row's `runtime_id`, `runtime_name`,
+      `agent_profile` and `workspace`; the runtime snapshot's `capacity`, `reserved_capacity`,
+      `connection_epoch`, `last_heartbeat_at`, `repository_resource_id`, `agent_profile`, `workspace`
+      and `capabilities.adapter`, plus that map's `interactive`, `provider_access`, `structured_input`
+      and `supervisory_control`; the work row's `project_id`, `goal_id`, `description`, `priority`,
+      `assignee`, `workspace`, `repository_resource_id`, `repository`, `ci_resource_id`, `ci_resource`,
+      `branch`, `pull_request_url`, `ci_status`, `review_status`, `delivery`, `external`, `goal_managed`,
+      `version`, `can_start`, `execution` and `updated_at`; the `provider` and `recorded_at` of each
+      `delivery` value; `external.provider_owned_fields`; and the waiting-decision packet's `context`,
+      `reason`, `options`, `recommended_option_id` and each option's `id`, `label` and `consequence`.
+      Two options, both needing the owner because they decide whether an older partial workspace
+      projection stays renderable (the tolerance `contracts/README.md:22-23` records as "keeps accepting
+      older partial projections", while the serving projection does emit every one of those members,
+      `control/lib/symmetry_control_web/portal_json.ex:70-101,229-259` and
+      `control/lib/symmetry_control_web/protocol.ex:328-345`): option (a) drops the tolerance and requires
+      every always-emitted consumed member; because `WorkspaceWorkItem` is one shared definition body
+      across `workspace-read`, `work-detail-read` and `chat-read`
+      (`contracts/generated/effect/index.ts:633`), that single requiredness edit moves the required
+      arrays, the valid fixtures of all three schemas, the frontend fixture layer
+      (`frontend/src/services/api.fixtures.ts`) and the generated Go DTOs together, while the
+      `RuntimeCapabilities` members and the `WorkItemWaitingDecision` packet stay optional either way
+      because the projection passes the stored registration map and the agent's own waiting payload
+      through verbatim. Option (b) keeps the tolerance and pins the serving side instead, by validating a
+      real served `workspace-read` document against the contract bundle with the consumed members
+      asserted on that output — `validate_served_document!` today pins `chat-read`, `goal-read` and
+      `attention-read` only, so no gate compares a served workspace read with the contract at all.
+      Recommendation: (b) is the smaller, reversible step and keeps older projections renderable; (a) is
+      the class-consistent one.
 
 ## CI consolidation owner decisions (2026-11-17)
 
@@ -566,33 +596,3 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       re-signed cursor's bytes); a cursor the reader has paged past is not renewed by later serves,
       but its refusal after the server's 24-hour `max_age` now restarts the chain from the served
       page and re-reads it, so the next press renews the token and the re-walk dedupes.
-
-- [ ] The chat surface's in-flight `Load older` guard is still keyed by cursor bytes:
-      `loadingCursor` (`frontend/src/features/chat/chat.tsx:172-221`) admits a second load for the
-      same boundary while the first is in flight once a re-serve has renewed `history.loadCursor`
-      and re-rendered the button (`frontend/src/features/chat/chat.tsx:560`), and a refusal of the
-      superseded request still posts its notice after the retry already loaded the page. (The rest
-      of that damage is fixed — 2026-11-20, fix round 2: a refusal rewinds the chain pointer and
-      re-reads the captured scope only while the press still owns the chain boundary it captured,
-      so a superseded one is only this notice.) Pre-existing: base re-keyed the cursor on every
-      refresh, so the race predates the boundary-id work. Repro on those bytes: press Load older,
-      refresh while its page is in flight, press Load older again (admitted because the cursor
-      bytes changed), and let the first request's refusal settle after the second landed. Fix
-      direction: key pending loads by scope + boundary id (token bytes as the fallback) and
-      suppress the superseded refusal's notice.
-
-- [ ] An ended chat chain never accepts a later served token: a chain drained through its own loads
-      (`nextCursor` null, the recorded `nextBoundaryId` naming an older message) or a read that
-      served the whole history (no continuation was ever established) keeps reporting "oldest
-      history loaded" while a later serve at the same boundary offers a token, so the rows below
-      the served page stay unreachable until a reload or a boundary move. Repro (rows ordered 3–54,
-      so the first page is 5–54 plus a token and the older read 3–4 ends `null`): rows 1–2 becoming
-      visible late — a slow concurrent post commits an older-timestamped row, since `inserted_at`
-      is set at insert inside the transaction and the advisory lock is per action, not per scope —
-      make the next read still bound at 5 and offer a token for it, which the ended chain drops.
-      Found by the r2 review of `fix/chat-history-boundary-id` (2026-11-20), the round that removed
-      the `adopt` branch covering the never-continued shape (the drained shape was never covered by
-      it). Fix direction: treat "ended" as no usable continuation and re-open from the served
-      boundary when a serve offers a token — the offered token's boundary is the served page's
-      oldest message, so the re-walk re-reads the drained region and dedupes against the retained
-      pages.
