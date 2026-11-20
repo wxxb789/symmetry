@@ -2,12 +2,10 @@ defmodule SymmetryControlWeb.PortalControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
   import SymmetryControlWeb.PortalFixtures, only: [create_project: 2]
-  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0, operator_token: 0]
 
   alias SymmetryControlWeb.PortalAssets
   alias SymmetryControlWeb.PortalBundle
-
-  @operator_token "test-operator-token"
 
   # `:portal_assets` marks the cases that need the staged frontend build; see `PortalBundle`.
   @tag :portal_assets
@@ -37,7 +35,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
       conn
       |> recycle()
       |> skip_csrf()
-      |> post("/portal/login", %{"operator_token" => @operator_token})
+      |> post("/portal/login", %{"operator_token" => operator_token()})
 
     assert redirected_to(authenticated, 302) == "/portal"
     assert get_session(authenticated, :portal_operator)
@@ -46,7 +44,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
     body = html_response(page, 200)
     assert body =~ ~s(<div id="root")
     assert body =~ "/portal/assets/"
-    refute body =~ @operator_token
+    refute body =~ operator_token()
     assert get_resp_header(page, "cache-control") == ["no-store"]
 
     logged_out = page |> recycle() |> skip_csrf() |> post("/portal/logout")

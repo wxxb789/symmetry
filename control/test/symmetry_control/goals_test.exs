@@ -2633,7 +2633,7 @@ defmodule SymmetryControl.GoalsTest do
         validation_fence,
         item,
         candidate_subject,
-        assert_reason: true
+        assert_reason?: true
       )
 
     refute Repo.exists?(
@@ -2666,6 +2666,21 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     assert achieved.goal.state == "achieved"
+  end
+
+  test "attention attributes a database cast failure to the cursor only" do
+    # An uncast project_id is a caller fault, not a forged cursor: without a
+    # cursor the cast error surfaces instead of being answered as invalid_cursor.
+    assert_raise Ecto.Query.CastError, fn ->
+      Goals.attention(project_id: "not-a-uuid")
+    end
+
+    forged_cursor =
+      %{"updated_at" => "2026-11-16T10:00:00Z", "id" => "not-a-uuid"}
+      |> Jason.encode!()
+      |> Base.url_encode64(padding: false)
+
+    assert {:error, :invalid_cursor} = Goals.attention(cursor: forged_cursor)
   end
 
   test "a rejected completion Subject refuses achieve for the current revision" do
@@ -3578,7 +3593,7 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "a competing accepted Subject is historical and does not loop validation recovery" do
-    {goal, item, producer, producer_run, validation, validation_run, validation_runtime,
+    {goal, item, _producer, producer_run, validation, validation_run, validation_runtime,
      validation_fence, candidate_subject} =
       independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
 

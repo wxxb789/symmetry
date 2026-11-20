@@ -393,6 +393,34 @@ defmodule SymmetryControl.WorkspacesTest do
     assert {:ok, legacy} = Workspaces.create_work_item(project.id, %{title: "Legacy item"})
     assert legacy.creation_id == nil
     assert Repo.aggregate(WorkItem, :count) == count + 3
+
+    # The accepted boundary is the full documented range (1..128 bytes): the
+    # largest identity is created and replayed verbatim.
+    boundary_creation_id = String.duplicate("b", 128)
+
+    assert {:ok, boundary} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Boundary identity",
+               creation_id: boundary_creation_id
+             })
+
+    assert boundary.creation_id == boundary_creation_id
+
+    assert {:replayed, boundary_replay} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Boundary replay",
+               creation_id: boundary_creation_id
+             })
+
+    assert boundary_replay.id == boundary.id
+    assert boundary_replay.title == "Boundary identity"
+
+    # The smallest accepted identity is one byte.
+    assert {:ok, single_byte} =
+             Workspaces.create_work_item(project.id, %{title: "Single byte", creation_id: "x"})
+
+    assert single_byte.creation_id == "x"
+    assert Repo.aggregate(WorkItem, :count) == count + 5
   end
 
   test "retry binding fails closed without a loaded project" do

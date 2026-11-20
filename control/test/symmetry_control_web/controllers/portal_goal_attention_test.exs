@@ -232,11 +232,11 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
 
   test "attention states an unavailable project feed while the Goal feed stays served" do
     # The workspace read serves an empty workspace only while no project exists
-    # at all; an existing project (with its own blocked item) is what makes the
-    # unknown-project refusal observable, and that blocked item must not leak
-    # into the unknown project's feed.
+    # at all; an existing project is what makes the unknown-project refusal
+    # observable. Its blocked item is observable in the same project's own feed
+    # below, and must not leak into the unknown project's feed.
     project = create_project()
-    create_blocked_work_item(project)
+    blocked = create_blocked_work_item(project)
     unknown_project_id = Ecto.UUID.generate()
 
     response =
@@ -254,6 +254,21 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
                "unavailable" => %{"code" => "not_found", "message" => _message}
              }
            } = response
+
+    # The blocked item is load-bearing: the same project's feed serves it.
+    known =
+      api_conn()
+      |> get("/portal/api/attention?project_id=#{project.id}")
+      |> json_response(200)
+
+    assert %{
+             "project_blocked" => %{
+               "entries" => [%{"work_item_id" => blocked_id, "blocked" => true}],
+               "unavailable" => nil
+             }
+           } = known
+
+    assert blocked_id == blocked.id
   end
 
   test "an attention cursor whose id is not a UUID is refused as a client error" do

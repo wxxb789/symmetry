@@ -9121,10 +9121,7 @@ defmodule SymmetryControl.Goals do
   # The designation rule lives in ContractValidation.integration_designation/1.
   defp plan_integration_designated?(items) do
     items
-    |> Enum.map(fn item ->
-      {value(item, :key), value(item, :required, true) == true,
-       value(item, :integration, false) == true}
-    end)
+    |> designation_triples()
     |> ContractValidation.integration_designation()
     |> case do
       {:conflict} -> false
@@ -9133,16 +9130,23 @@ defmodule SymmetryControl.Goals do
     end
   end
 
-  defp required_plan_items(items),
-    do: Enum.filter(items, &(value(&1, :required, true) == true))
-
   # Only the exactly-one-required-item case derives a designation, and the
   # admission preflight already refused a contradicting explicit one.
   defp derived_integration_key(items) do
-    case required_plan_items(items) do
-      [required_item] -> value(required_item, :key)
-      _other_count -> nil
+    items
+    |> designation_triples()
+    |> ContractValidation.integration_designation()
+    |> case do
+      {:derived, ref} -> ref
+      _other -> nil
     end
+  end
+
+  defp designation_triples(items) do
+    Enum.map(items, fn item ->
+      {value(item, :key), value(item, :required, true) == true,
+       value(item, :integration, false) == true}
+    end)
   end
 
   defp plan_item_dependencies_valid?(item, items_by_key) do

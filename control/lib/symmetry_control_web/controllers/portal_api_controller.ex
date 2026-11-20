@@ -50,7 +50,7 @@ defmodule SymmetryControlWeb.PortalApiController do
   defp goal_attention(goal_options) do
     case SymmetryControl.Goals.attention(goal_options) do
       {:ok, page} ->
-        {:ok, %{page: page, unavailable: nil}}
+        {:ok, %{page: page}}
 
       # The caller's own input is a request error, not an unavailable feed.
       {:error, reason} when reason in [:invalid_cursor, :invalid_request] ->
