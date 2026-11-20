@@ -1121,6 +1121,8 @@ func TestWorkspaceBatchHelper(t *testing.T) {
 		serveWorkspaceBatchFrames(arguments[1], []byte(arguments[2]))
 	case len(arguments) == 3 && arguments[0] == "ready-frame-block":
 		serveWorkspaceBatchReadyFrameThenBlock(arguments[1], []byte(arguments[2]))
+	case len(arguments) == 2 && arguments[0] == "close-frame-block":
+		serveWorkspaceBatchCloseReadEndThenFrame([]byte(arguments[1]))
 	case len(arguments) == 2 && arguments[0] == "ready-block":
 		serveWorkspaceBatchReadyThenBlock(arguments[1])
 	case len(arguments) == 1 && arguments[0] == "blocked-header":
@@ -1267,6 +1269,35 @@ func serveWorkspaceBatchReadyFrameThenBlock(readyPath string, content []byte) {
 	blockWorkspaceBatchHelper()
 }
 
+// serveWorkspaceBatchCloseReadEndThenFrame answers its first request with a
+// complete in-sync frame after closing the child's own stdin read end, then
+// blocks. The close is ordered before the frame write, so a second request can
+// only follow a completed close: the digest writes it after consuming this
+// response, which is only possible once these bytes reached the pipe. The
+// second request therefore meets a pipe with no reader and is refused at the
+// write instead of landing in the pipe buffer and surfacing on a response
+// read. The child never exits on its own, so only the digest's own teardown
+// can end it.
+func serveWorkspaceBatchCloseReadEndThenFrame(content []byte) {
+	reader := bufio.NewReader(os.Stdin)
+	request, err := reader.ReadString('\n')
+	if err != nil {
+		os.Exit(2)
+	}
+	objectID := strings.TrimSuffix(request, "\n")
+	if err := os.Stdin.Close(); err != nil {
+		os.Exit(2)
+	}
+	writer := bufio.NewWriter(os.Stdout)
+	fmt.Fprintf(writer, "%s blob %d\n", objectID, len(content))
+	_, _ = writer.Write(content)
+	_ = writer.WriteByte('\n')
+	if err := writer.Flush(); err != nil {
+		os.Exit(2)
+	}
+	blockWorkspaceBatchHelper()
+}
+
 // publishWorkspaceBatchReady lets the parent synchronize on a running
 // scripted batch child instead of on a timed guess.
 func publishWorkspaceBatchReady(path string) {
@@ -1375,6 +1406,82 @@ func TestSubjectBatchStreamRejectsMalformedResponses(t *testing.T) {
 				t.Fatalf("batch helper child was not waited for and reaped: %v", state)
 			}
 		})
+	}
+}
+
+// TestSubjectBatchStreamWriteRefusalDesyncsAndReapsChild pins the batch
+// stream's request-write refusal: when the child's read end is gone, the next
+// request write fails, the digest reports the pipe error instead of a
+// cancellation or a response read, names the object it could not request,
+// marks the stream desynced, joins the path's unresolved-process fence and
+// terminates and reaps the still-live child. The scripted child closes its
+// read end before it writes its first complete in-sync frame, so the close is
+// provably older than the second request; a child that only exits after
+// answering can leave the second request inside the pipe buffer and move the
+// refusal onto the response read.
+func TestSubjectBatchStreamWriteRefusalDesyncsAndReapsChild(t *testing.T) {
+	repository := newSubjectRepository(t)
+	writeSubjectDigestManyBlobsFixture(t, repository)
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+	listing := gitOutputBytes(t, repository, "ls-tree", "--full-tree", "-r", "-z", commit)
+	records := bytes.Split(listing, []byte{0})
+	if len(records) < 3 || len(records[len(records)-1]) != 0 {
+		t.Fatalf("fixture commit listing split into %d records, want at least two NUL-terminated entries", len(records))
+	}
+	firstHeader, _, firstFound := bytes.Cut(records[0], []byte{'\t'})
+	secondHeader, _, secondFound := bytes.Cut(records[1], []byte{'\t'})
+	firstFields := bytes.Split(firstHeader, []byte{' '})
+	secondFields := bytes.Split(secondHeader, []byte{' '})
+	if !firstFound || !secondFound || len(firstFields) != 3 || len(secondFields) != 3 {
+		t.Fatalf("fixture tree listing does not start with two blob entries: %q, %q", records[0], records[1])
+	}
+	// The first response carries the first entry's committed bytes, so the
+	// frame the digest consumes is exactly the record the protocol expects
+	// before the second request is refused.
+	firstContent := gitOutputBytes(t, repository, "cat-file", "blob", string(firstFields[2]))
+	secondObject := string(secondFields[2])
+
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
+	defer cancel()
+	fence := errors.New("injected unresolved batch process fence")
+	command := workspaceBatchHelperCommand(t, ctx, "close-frame-block", string(firstContent))
+	var stream *subjectGitBatchStream
+	digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput,
+		func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
+			opened, openErr := startSubjectGitBatch(openContext, command, nil, fence)
+			stream = opened
+			return opened, openErr
+		})
+	if err == nil {
+		t.Fatalf("subject digest after the batch child's closed read end = %q, want the request-write refusal", digest)
+	}
+	if stream == nil {
+		t.Fatal("batch opener was not used")
+	}
+	if !stream.desynced {
+		t.Fatal("the request-write refusal left a record boundary unconsumed but did not mark the stream desynced")
+	}
+	if refusal := fmt.Sprintf("request object %s from Git batch stream:", secondObject); !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("subject digest error = %v, want the second request refused at the write: %q", err, refusal)
+	}
+	if strings.Contains(err.Error(), "read Git batch response header for object "+secondObject) {
+		t.Fatalf("subject digest error = %v, want the refusal at the write, not at the response read", err)
+	}
+	if !errors.Is(err, fence) {
+		t.Fatalf("subject digest error = %v, want the unresolved-process fence joined on the desynced route", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("subject digest stopped only after its context ended (%v): the refusal must be the pipe error, not a cancellation", ctx.Err())
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("subject digest error = %v, want the pipe error for a live context", err)
+	}
+	state := stream.command.ProcessState
+	if state == nil || command.Process == nil || state.Pid() != command.Process.Pid {
+		t.Fatalf("batch helper child was not waited for and reaped: %v", state)
+	}
+	if state.Success() {
+		t.Fatalf("batch helper child exited on its own instead of being terminated: %v", state)
 	}
 }
 
