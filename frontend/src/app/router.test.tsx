@@ -1127,6 +1127,32 @@ describe("workspace socket lifetime", () => {
     await act(async () => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 250); await promise; });
     expect(ScriptedTransport.instances).toHaveLength(1);
   });
+
+  it("starts the polling fallback when the session serves no socket token", async () => {
+    // A partial bootstrap serves the CSRF token but no socket_token: the shell
+    // must still connect the invalidation client — its empty-token branch reports
+    // `disconnected` and starts the polling fallback — so a visible client keeps
+    // refreshing its reads, and no socket is ever opened.
+    const served = servedFetcher();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
+      if (url.pathname === "/portal/api/session") {
+        return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
+      }
+      return served(input);
+    });
+    const socketFactory = vi.fn(() => scriptedSocket().socket);
+    const { application, unmount } = renderWorkspace("/portal/attention", fetcher, {
+      socketFactory,
+      pollIntervalMs: 20,
+      visibility: () => true,
+    });
+
+    await waitFor(() => expect(application.realtime.lastRefresh()).not.toBeNull());
+    expect(application.realtime.status()).toBe("disconnected");
+    expect(socketFactory).not.toHaveBeenCalled();
+    unmount();
+  });
 });
 
 /**

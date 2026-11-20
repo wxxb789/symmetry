@@ -6,6 +6,8 @@ defmodule SymmetryControlWeb.ServedDocument do
   """
   import ExUnit.Assertions
 
+  alias SymmetryControl.ContractSchema
+
   @schema_bundle Path.expand("../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
 
   @doc "Validates `document` against the bundle's `\"\#{name}.schema.json\"`."
@@ -15,7 +17,7 @@ defmodule SymmetryControlWeb.ServedDocument do
     schema =
       bundle
       |> Map.fetch!("#{name}.schema.json")
-      |> rewrite_pcre2_pattern_escapes()
+      |> ContractSchema.rewrite_pcre2_pattern_escapes()
       |> ExJsonSchema.Schema.resolve()
 
     case ExJsonSchema.Validator.validate(schema, document) do
@@ -28,21 +30,4 @@ defmodule SymmetryControlWeb.ServedDocument do
         )
     end
   end
-
-  # Match ContractValidation's ECMA-262-to-PCRE2 adaptation, exactly as the
-  # manifest gate does, so the bundle resolves in ExJsonSchema.
-  defp rewrite_pcre2_pattern_escapes(value) when is_map(value) do
-    Map.new(value, fn
-      {"pattern", pattern} when is_binary(pattern) ->
-        {"pattern", String.replace(pattern, "\\u0000", "\\x{0}")}
-
-      {key, child} ->
-        {key, rewrite_pcre2_pattern_escapes(child)}
-    end)
-  end
-
-  defp rewrite_pcre2_pattern_escapes(value) when is_list(value),
-    do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
-
-  defp rewrite_pcre2_pattern_escapes(value), do: value
 end

@@ -36,8 +36,11 @@ defmodule SymmetryControlWeb.PortalSocketToken do
 
   def verify(_token), do: {:error, :unauthenticated}
 
-  # Phoenix serializes the token payload with the app's JSON library, so the
-  # audience member arrives as a string key and is read exactly once here.
+  # Phoenix.Token delegates to Plug.Crypto, which signs the payload with
+  # `:erlang.term_to_binary/2` and verifies it with a non-executable
+  # binary-to-term read, so the atom-keyed map arrives with its atoms intact:
+  # `:audience` is the key that actually arrives. The string read stays as the
+  # fallback.
   defp audience_of(payload) do
     case Map.get(payload, "audience") || Map.get(payload, :audience) do
       @audience -> {:ok, @audience}

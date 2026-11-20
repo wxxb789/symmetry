@@ -18,9 +18,9 @@ export function legacyDestination(hash: string, search = ""): string | null {
   const runId = params.get("run_id");
   const chatScope = params.get("chat_scope");
   const projectPath = projectId === null ? "/portal/projects" : `/portal/projects/${encodeURIComponent(projectId)}`;
-  const scoped = (pathname: string, key = "projectId"): string => {
+  const scoped = (pathname: string): string => {
     if (projectId === null) return pathname;
-    return `${pathname}?${new URLSearchParams({ [key]: projectId })}`;
+    return `${pathname}?${new URLSearchParams({ projectId })}`;
   };
 
   if (fragment === "connections") {

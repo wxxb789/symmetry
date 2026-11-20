@@ -221,7 +221,7 @@ test.describe("Goal 0007g live scoped conversation", () => {
     await page.locator("#chat-intent").selectOption("guidance");
     await page.locator("#chat-content").fill(guidance);
     await page.locator("#chat-send").click();
-    await expect(page.locator("#chat-send-status")).toContainText("awaiting agent acknowledgement");
+    await expect(page.locator("#chat-send-status")).toContainText("Message saved; the transcript receipt tracks the acknowledgement.");
     await expect(page.locator("#chat-messages")).toContainText(guidance);
     // The run's semantic evidence is rendered as inert text from the served
     // timeline; raw tool rows never reach this surface.
@@ -309,7 +309,7 @@ test.describe("Goal 0007g live scoped conversation", () => {
       optionIds: waiting.payload.decision.options.map((option) => option.id)
     });
     await page.locator(`[data-chat-decision="${waiting.payload.decision.recommended_option_id}"]`).click();
-    await expect(page.locator("#chat-send-status")).toContainText("awaiting agent acknowledgement");
+    await expect(page.locator("#chat-send-status")).toContainText("Message saved; the transcript receipt tracks the acknowledgement.");
 
     snapshot = await waitState(page, workId, "completed", 120_000);
     expect(snapshot.work_item.execution.run_id).toBe(runId);

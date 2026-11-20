@@ -2,8 +2,9 @@
 //
 // The Goal-managed row is real: scripts/ci/portal-planning-fixture.exs creates
 // the Goal and applies WorkItem.goal_membership_changeset/2 to an existing work
-// item through Control's own changesets and database constraints — the same
-// admission shape the merged 0007c planning suite drives — and every browser
+// item through Control's own changesets and database constraints. That is a
+// database-level freeze, not the product's admission shape — the seeded
+// revision documents are outside the published contracts — and every browser
 // interaction below then runs against the running control plane. The fixture
 // needs the database coordinates of the server under test, so the case skips
 // with its exact missing environment when they are absent instead of

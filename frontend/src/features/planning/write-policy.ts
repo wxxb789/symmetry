@@ -66,9 +66,13 @@ export type VersionedWorkItem = WorkItem & { version: number };
 const pendingCreationIds = new Map<string, string>();
 
 /** The identity every attempt of this project's pending create draft replays. */
-export function workItemCreationId(projectId: string): string {
+export function workItemCreationId(projectId: string): string | null {
   const pending = pendingCreationIds.get(projectId);
   if (pending !== undefined) return pending;
+  // Without Web Crypto there is no identity for the attempt, and a create
+  // without one could be applied twice by a double click or a lost response.
+  // Refuse instead, as the control path's un-storable attempt identity does.
+  if (typeof crypto?.randomUUID !== "function") return null;
   const minted = crypto.randomUUID();
   pendingCreationIds.set(projectId, minted);
   return minted;
@@ -103,6 +107,10 @@ export type FailureMode = "fields" | "retryable" | "authoritative";
 
 export function failureMode(error: unknown): FailureMode {
   if (error instanceof ServerRefusal) {
+    // A server-side fault is no authoritative answer even when it arrives in
+    // the server's own error envelope: the write may have been applied, so the
+    // frozen intent stays retryable, exactly as `definitiveRefusal` classifies.
+    if (error.status >= 500) return "retryable";
     return error.code === "validation_failed" ? "fields" : "authoritative";
   }
   if (error instanceof Network) return "retryable";
@@ -118,7 +126,7 @@ const refusalGuidance: Record<string, string> = {
   goal_authority_required: "Goal-managed work is changed through Goal admission, not this surface.",
   not_found: "The server's current state is shown instead.",
   validation_failed: "Correct the highlighted fields and submit again.",
-  invalid_request: "Correct the request and submit again.",
+  invalid_request: "This request cannot be corrected here; the editor closes and the server's current state is shown.",
   forbidden: "Refresh the page and sign in again if the session was renewed elsewhere.",
 };
 
@@ -238,6 +246,19 @@ export interface WorkItemFormState {
   review_status: string;
 }
 
+/**
+ * The value one delivery control seeds from. The served projection substitutes
+ * a fallback for a value no one recorded (`effective_delivery` in
+ * portal_json.ex serves "unknown" for CI and "none" for review with
+ * `source: "none"`): that fallback is the projection's default, never an
+ * operator value, and seeding it would record a value the operator never
+ * entered, so only a recorded source seeds the control.
+ */
+function recordedDeliveryValue(entry: { source: string; value: string | null } | null | undefined): string {
+  if (entry === null || entry === undefined || entry.source === "none") return "";
+  return entry.value ?? "";
+}
+
 export function workItemFormStateOf(project: Project, item: WorkItem | null): WorkItemFormState {
   return {
     title: item?.title ?? "",
@@ -254,8 +275,8 @@ export function workItemFormStateOf(project: Project, item: WorkItem | null): Wo
     blocked: item?.blocked ?? false,
     blocker: item?.blocker ?? "",
     pull_request_url: item?.delivery?.pull_request.value ?? item?.pull_request_url ?? "",
-    ci_status: item?.delivery?.ci.value ?? "",
-    review_status: item?.delivery?.review.value ?? "",
+    ci_status: recordedDeliveryValue(item?.delivery?.ci),
+    review_status: recordedDeliveryValue(item?.delivery?.review),
   };
 }
 
@@ -282,11 +303,15 @@ export function workItemDraftOf(form: WorkItemFormState, options: { includeStatu
 }
 
 /**
- * The update payload is the draft plus the fields the operator *cleared*: Ecto
- * treats an empty string as "no change", so a deliberate clear travels as null
- * for the fields Control can clear. The delivery statuses and the pull request
- * URL are not clearable through Control's update changeset (its validators
- * refuse nil), so an empty control there is left out and reported instead.
+ * The update payload is the draft plus the fields the operator *cleared*: an
+ * empty string is "no change" to the changeset's cast, so a deliberate clear
+ * travels as null — the cast records the nil (only validators skip nil, which
+ * is why the clear reaches the column) and the delivery column CHECKs pass
+ * NULL. One server guard can still refuse such a change:
+ * `execution_fields_editable` refuses any execution-defining field while the
+ * item names an orchestration task in a state other than failed or cancelled,
+ * completed included. The editor states that guard while the item names such a
+ * task.
  */
 export function workItemUpdatePayload(form: WorkItemFormState, version: number, deliveryEditable: { pullRequest: boolean; ci: boolean; review: boolean }): WorkItemChanges {
   const draft = workItemDraftOf(form, { includeStatus: false, deliveryEditable });
@@ -294,7 +319,58 @@ export function workItemUpdatePayload(form: WorkItemFormState, version: number, 
   for (const key of ["description", "assignee_name", "agent_profile", "workspace", "branch", "blocker"] as const) {
     if (form[key] === "" && !(key in draft)) cleared[key] = null;
   }
+  if (deliveryEditable.pullRequest && form.pull_request_url === "" && !("pull_request_url" in draft)) cleared["pull_request_url"] = null;
+  if (deliveryEditable.ci && form.ci_status === "" && !("ci_status" in draft)) cleared["ci_status"] = null;
+  if (deliveryEditable.review && form.review_status === "" && !("review_status" in draft)) cleared["review_status"] = null;
   return { ...draft, ...cleared, version };
+}
+
+/** The payload members Control's owner rewrite discards for a non-agent owner. */
+type OwnerDependentField = "assignee_name" | "agent_profile" | "workspace";
+
+/**
+ * The owner-dependent fields Control's owner rewrite discards: its
+ * `normalize_work_item_attrs` forces them NULL for a `human` or `unassigned`
+ * owner whatever the payload carried. Paired with the label the note uses.
+ */
+const ownerDiscardedFields: Record<string, readonly (readonly [OwnerDependentField, string])[]> = {
+  human: [["agent_profile", "agent profile"], ["workspace", "workspace"]],
+  unassigned: [["assignee_name", "owner name"], ["agent_profile", "agent profile"], ["workspace", "workspace"]],
+};
+
+/**
+ * The note naming the owner-dependent values a create or update payload
+ * carried that Control's owner rewrite drops, or null when it carried none.
+ * A null value is a deliberate clear — the server applies it, so it is not a
+ * value that failed to apply — and an omitted key never travelled.
+ */
+export function ownerDiscardNote(assigneeType: string, payload: Partial<Record<OwnerDependentField, unknown>>): string | null {
+  const discarded = (ownerDiscardedFields[assigneeType] ?? [])
+    .filter(([key]) => payload[key] !== null && payload[key] !== undefined)
+    .map(([, label]) => label);
+  if (discarded.length === 0) return null;
+  const owner = assigneeType === "human" ? "a human owner" : "an unassigned item";
+  return `Control records no ${discarded.join(", ")} for ${owner}, so ${discarded.length === 1 ? "that value was" : "those values were"} not applied.`;
+}
+
+/**
+ * The orchestration-task states that accept a change to an execution-defining
+ * field. The server refuses the change while the item names a task in any
+ * other state (`execution_fields_editable`), and no path clears the item's
+ * task id, so a completed task keeps refusing.
+ */
+const executionEditableTaskStates: Record<string, true> = { failed: true, cancelled: true };
+
+/**
+ * Whether the server would refuse a change to an execution-defining field
+ * (title, description, owner, agent profile, workspace, repository, CI
+ * resource, branch, pull request URL) for this item. Keyed on the served
+ * execution — never on a client-side liveness guess — so a task any state
+ * other than failed or cancelled, completed included, freezes those writes.
+ */
+export function executionDefiningWritesRefused(item: { execution?: { state?: string | null } | null }): boolean {
+  const state = item.execution?.state;
+  return state !== null && state !== undefined && executionEditableTaskStates[state] !== true;
 }
 
 /**

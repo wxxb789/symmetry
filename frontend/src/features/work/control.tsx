@@ -73,7 +73,6 @@ interface ControlSurfaceValue {
   readonly workItemId: string;
   readonly attempts: readonly ControlAttempt[];
   readonly snapshotVersion: number;
-  readonly latestCommandId: string | null;
   readonly execution: AttemptExecution | null;
   readonly pending: Record<ActionKind, PendingState>;
   /** The older timeline entries the served first page's boundary still chains to, shared by the history and the receipt list. */
@@ -169,7 +168,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
     if (actionId === null) {
       replace(kind, {
         ...emptyAttempt(kind, unavailableActionId, scope, generation, snapshotVersion()),
-        refusal: { outcome: "failed", message: "This browser cannot store an attempt identity, so the request was not sent." },
+        refusal: { outcome: "not_sent", message: "This browser cannot store an attempt identity, so the request was not sent." },
       });
       return null;
     }
@@ -269,7 +268,6 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
     workItemId,
     attempts,
     snapshotVersion: snapshotVersion(),
-    latestCommandId: executionRow?.latest_command?.command_id ?? null,
     execution: executionRow === null ? null : { task_id: executionRow.task_id, generation: executionRow.generation, state: executionRow.state },
     pending,
     olderEntries,
@@ -343,6 +341,9 @@ export function WorkReceipts({ firstPage }: { firstPage: readonly TimelineItemLi
   // same way, so no row is served from a page the detail read no longer chains
   // to and none is dropped while the boundary still serves it.
   const olderPages = surface.olderEntries.length === 0 ? [] : [surface.olderEntries];
+  // Only a rendered page marks a command carried: the served `latest_command`
+  // can be absent from the capped page, and treating it as carried would drop
+  // its attempt's receipt without the durable row replacing it.
   const carried = new Set<string>();
   for (const entry of [...firstPage, ...olderPages.flat()]) {
     if (entry.source !== "command") continue;
@@ -350,7 +351,6 @@ export function WorkReceipts({ firstPage }: { firstPage: readonly TimelineItemLi
     const commandId = command === null ? null : asText(command["command_id"]);
     if (commandId !== null) carried.add(commandId);
   }
-  if (surface.latestCommandId !== null) carried.add(surface.latestCommandId);
 
   const history = receiptRows(firstPage, olderPages);
   const local = [...surface.attempts].reverse().flatMap((attempt) => {
@@ -451,8 +451,10 @@ function mountAttempts(item: WorkItemRow, baseline: number): ControlAttempt[] {
 
 function commandRecord(command: ControlReceipt): ReceiptCommand {
   return {
+    kind: command.kind,
     state: command.state,
     acknowledgement_outcome: command.acknowledgement_outcome,
+    acknowledgement_id: command.acknowledgement_id ?? null,
     applied_at: command.applied_at ?? null,
   };
 }

@@ -44,7 +44,7 @@ drafts or an optimistic edit belonging to another selected resource.
 ## Build and deployment
 
 Development: Vite serves the SPA and proxies `/portal/api`, `/portal/login`,
-`/portal/logout` and `/socket` to Phoenix, including WebSocket proxy. Bootstrap
+`/portal/logout` and `/portal/socket` to Phoenix, including WebSocket proxy. Bootstrap
 loads same-origin session/CSRF data from Phoenix. Proxy cookie/origin settings
 must match the configured dev origin; do not disable CSRF to fix development.
 Keep the server-rendered login page and redirect unauthenticated navigation to it.

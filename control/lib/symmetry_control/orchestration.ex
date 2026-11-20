@@ -66,13 +66,22 @@ defmodule SymmetryControl.Orchestration do
   Whether `kind` names a native harness kind.
 
   One list, two readers: native Goal admission selects runtimes on
-  `@native_harness_kinds`, and `SymmetryControl.Chat` asks this predicate to
-  decide whether a Chat-launched (goal-less) start is admitted through the
-  adapter operations rather than the legacy supervisory flag. A call site that
-  restates the vocabulary instead of asking here is how two lists drift.
+  `@native_harness_kinds` in `next_assignable_legacy_task_and_runtime/1`, and
+  `SymmetryControl.Chat` asks this predicate to decide whether a Chat-launched
+  (goal-less) start is admitted through the adapter operations rather than the
+  legacy supervisory flag. The Runtime and HarnessSession schema inclusions and
+  the database check constraints restate that vocabulary instead of reading it;
+  `SymmetryControl.NativeHarnessKindBindingTest` holds those restatements to
+  `native_harness_kinds/0`.
   """
   @spec native_harness_kind?(term()) :: boolean()
-  def native_harness_kind?(kind), do: kind in @native_harness_kinds
+  def native_harness_kind?(kind), do: kind in native_harness_kinds()
+
+  @doc """
+  The native harness kinds `native_harness_kind?/1` admits.
+  """
+  @spec native_harness_kinds() :: [String.t()]
+  def native_harness_kinds, do: @native_harness_kinds
 
   @spec enroll_machine(map(), String.t(), keyword()) ::
           {:ok, %{machine: Machine.t(), token: String.t()}, :created | :replayed}
@@ -4401,7 +4410,7 @@ defmodule SymmetryControl.Orchestration do
     adapter_version = value(specification, :adapter_version)
     protocol_version = value(specification, :adapter_protocol_version)
 
-    harness_kind in ["generic", "codex", "claude_code", "pi", "opencode", "omp", "omo"] and
+    (harness_kind == "generic" or native_harness_kind?(harness_kind)) and
       nonempty_bounded_text?(harness_version, 240) and
       nonempty_bounded_text?(adapter_version, 240) and
       is_integer(protocol_version) and protocol_version > 0 and protocol_version <= 2_147_483_647

@@ -8256,7 +8256,7 @@
       },
       "WorkItemCommand": {
         "additionalProperties": true,
-        "description": "Protocol.command/1: latest guidance command receipt for the current generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.",
+        "description": "Protocol.command/1: the task's newest command, any generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.",
         "properties": {
           "acknowledged_at": {
             "oneOf": [
@@ -39200,7 +39200,7 @@
       },
       "WorkItemCommand": {
         "additionalProperties": true,
-        "description": "Protocol.command/1: latest guidance command receipt for the current generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.",
+        "description": "Protocol.command/1: the task's newest command, any generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.",
         "properties": {
           "acknowledged_at": {
             "oneOf": [
@@ -44207,7 +44207,7 @@
       },
       "WorkItemCommand": {
         "additionalProperties": true,
-        "description": "Protocol.command/1: latest guidance command receipt for the current generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.",
+        "description": "Protocol.command/1: the task's newest command, any generation. Task-scoped commands (a cancel or retry recorded before any run exists) carry run_id and generation as null; run-scoped commands carry both.",
         "properties": {
           "acknowledged_at": {
             "oneOf": [

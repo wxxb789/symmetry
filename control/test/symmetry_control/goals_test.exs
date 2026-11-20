@@ -7772,6 +7772,18 @@ defmodule SymmetryControl.GoalsTest do
 
     first_task = Repo.get!(Task, first_admission.response["task"]["id"])
 
+    # The strict-budget admission keeps its nested adapter requirement as
+    # Control-side scheduling data, while the daemon's `required_capabilities`
+    # wire type is a boolean map: the served task document must carry only
+    # boolean members — here none — and never the nested adapter member.
+    assert first_task.required_capabilities["adapter"]["operations"]["hard_cost_limit"] == true
+
+    served_work = SymmetryControlWeb.Protocol.task(first_task).work
+
+    assert Enum.all?(Map.get(served_work, :required_capabilities, %{}), fn {_key, value} ->
+             is_boolean(value)
+           end)
+
     first_reservation =
       Repo.one!(
         from(reservation in SymmetryControl.Goals.GoalBudgetReservation,

@@ -116,7 +116,7 @@ defmodule SymmetryControlWeb.Router do
   end
 
   scope "/api/v1", SymmetryControlWeb do
-    pipe_through :api
+    pipe_through [:api, SymmetryControlWeb.Plugs.PortalInvalidations]
 
     post "/provider-actions", ProviderActionController, :create, log: false
   end

@@ -51,6 +51,29 @@ export async function api(page, method, path, body) {
   );
 }
 
+/** The deep links the readable work views and planning suites both address. */
+export const projectUrl = (id, params = {}) => {
+  const query = new URLSearchParams(params).toString();
+  return `/portal/projects/${id}${query ? `?${query}` : ""}`;
+};
+export const workUrl = (id, params = {}) => {
+  const query = new URLSearchParams(params).toString();
+  return `/portal/work/${id}${query ? `?${query}` : ""}`;
+};
+
+// Detail is a modal side panel on desktop and a full page at narrow widths.
+export const detailSurface = (page, isMobile, title) =>
+  isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: title });
+
+// The detail's own close controls, in the accessible names the frontend
+// contract implements; a mobile detail returns through its back link.
+export async function closeDetail(page, isMobile, { escape = false, keys } = {}) {
+  if (isMobile) await page.getByRole("link", { name: /^Back to projects?$/ }).click();
+  else if (escape && keys) await keys.press(page, "Escape");
+  else if (escape) await page.keyboard.press("Escape");
+  else await page.getByRole("button", { name: "Close work detail" }).click();
+}
+
 export async function createProject(page, { key, name, description = "Readable work views acceptance fixture", defaultAgentProfile, defaultWorkspace }) {
   // `defaultAgentProfile`/`defaultWorkspace` are additive: a case that must
   // reach a registered runtime names the same binding the daemon registered.
@@ -105,6 +128,39 @@ export async function projectItem(page, projectId, title) {
   const item = project.work_items.find((candidate) => candidate.title === title);
   expect(item, `work item "${title}" in project`).toBeTruthy();
   return item;
+}
+
+/**
+ * Creates a project with its resources and work items through the real API.
+ * `name` and `description` are templates over the minted key, so each suite
+ * keeps its own fixture identity while the mechanics live here.
+ */
+export async function seedProject(page, {
+  prefix,
+  name = (key) => `Readable work views ${key}`,
+  description = () => "Readable work views acceptance fixture",
+  items = [],
+  resources = []
+}) {
+  const key = uniqueKey(prefix);
+  const project = await createProject(page, { key, name: name(key), description: description(key) });
+  const attached = [];
+  for (const resource of resources) attached.push(await attachResource(page, project.id, resource));
+  const created = new Map();
+  for (const item of items) created.set(item.title, await createWorkItem(page, project.id, item));
+  return { ...project, resources: attached, items: created };
+}
+
+/** The served order of one board column: `status` titles sorted by served position. */
+export async function servedColumnTitles(page, projectId, status = "ready") {
+  const response = await workspace(page, projectId);
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  const project = response.body.projects.find((candidate) => candidate.id === projectId);
+  expect(project, `project ${projectId} in workspace`).toBeTruthy();
+  return project.work_items
+    .filter((item) => item.status === status)
+    .sort((left, right) => left.position - right.position)
+    .map((item) => item.title);
 }
 
 // Records the exact bytes and work-item count the server serves for one project
