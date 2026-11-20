@@ -55,7 +55,7 @@ import {
   type ChatReceiptView,
   type ChatRunSignals,
 } from "./presentation";
-import { chatScopeKey, ownsChainPointer, pendingOlderLoadFor, retainOlderPage, retainServedPage, useChatScopeStore, type ChatIntent, type ChatOlderLoad } from "./scopes";
+import { chatScopeKey, ownsChainPointer, pendingOlderLoadFor, retainOlderPage, retainServedPage, useChatScopeStore, type ChatIntent, type ChatOlderLoad, type ChatSendStatus } from "./scopes";
 
 const route = getRouteApi("/chat");
 
@@ -187,9 +187,9 @@ export function ChatPage() {
   const [olderLoads, setOlderLoads] = useState<readonly ChatOlderLoad[]>([]);
   const loadOlder = () => {
     const cursor = history.loadCursor;
-    const boundaryId = state.nextBoundaryId;
-    if (cursor === null || pendingOlderLoadFor(olderLoads, key, cursor, boundaryId) !== null) return;
-    const press: ChatOlderLoad = { scopeKey: key, cursor, boundaryId };
+    if (cursor === null) return;
+    const press: ChatOlderLoad = { scopeKey: key, cursor, boundaryId: state.nextBoundaryId };
+    if (pendingOlderLoadFor(olderLoads, press)) return;
     setOlderLoads((current) => [...current, press]);
     void application.queryClient
       .fetchQuery(chatOlderPageOptions(application.api, identity, cursor))
@@ -197,7 +197,7 @@ export function ChatPage() {
         (fetched) => {
           // The boundary message's id is what later reads compare, because a
           // cursor is re-signed per response.
-          updateWith(key, (previous) => retainOlderPage(previous, cursor, boundaryId, { messages: fetched.messages, nextBefore: fetched.next_before }));
+          updateWith(key, (previous) => retainOlderPage(previous, cursor, press.boundaryId, { messages: fetched.messages, nextBefore: fetched.next_before }));
         },
         (error: unknown) => {
           // The failure is the reader's to retry, so the surface names it on
@@ -228,16 +228,16 @@ export function ChatPage() {
             // scope the refusal no longer owns — one benign read, never a
             // wrong cursor.
             const queryKey = chatConversationOptions(application.api, identity).queryKey;
-            if (ownsChainPointer(latestStateOf.current(key), cursor, boundaryId) && queryClient.isFetching({ queryKey }) === 0) {
+            if (ownsChainPointer(latestStateOf.current(key), cursor, press.boundaryId) && queryClient.isFetching({ queryKey }) === 0) {
               void queryClient.refetchQueries({ queryKey });
             }
           }
           updateWith(key, (previous) => {
-            const notice: { status: { kind: "notice"; message: string } } = { status: { kind: "notice", message: errorMessage(error) } };
-            if (!ownsChainPointer(previous, cursor, boundaryId)) return refused ? previous : { ...previous, ...notice };
+            if (refused && !ownsChainPointer(previous, cursor, press.boundaryId)) return previous;
+            const status: ChatSendStatus = { kind: "notice", message: errorMessage(error) };
             return refused
-              ? { ...previous, nextCursor: previous.pages[0]?.nextBefore ?? null, nextBoundaryId: previous.pages[0]?.messages[0]?.id ?? null, ...notice }
-              : { ...previous, ...notice };
+              ? { ...previous, nextCursor: previous.pages[0]?.nextBefore ?? null, nextBoundaryId: previous.pages[0]?.messages[0]?.id ?? null, status }
+              : { ...previous, status };
           });
         },
       )
@@ -591,7 +591,7 @@ export function ChatPage() {
         id="chat-load-older"
         className="button"
         type="button"
-        aria-disabled={pendingOlderLoadFor(olderLoads, key, history.loadCursor, state.nextBoundaryId) !== null}
+        aria-disabled={pendingOlderLoadFor(olderLoads, { scopeKey: key, cursor: history.loadCursor, boundaryId: state.nextBoundaryId })}
         onClick={loadOlder}
       >Load older</button>}
     </div>

@@ -145,3 +145,12 @@ cases pin:
   and its replacement assertion explicitly.
 - The render gate may not be reachable on this host; if so it is recorded pending with the
   missing environment, and the merge is decided by CI's control job.
+
+## Annotation (2026-11-21, apply stage)
+
+The Entry 1 sentence calling the guard's identity rule "the same two-sided comparison
+`ownsChainPointer` already uses for the chain pointer" is inaccurate about `ownsChainPointer`: it
+decides on the captured side's id alone and never falls back to cursor bytes while its own id is
+present, while `pendingOlderLoadFor` is two-sided and extended by the scope key. The shipped
+predicate is what this plan and the contract demand; only the source comment's wording was
+corrected (`scopes.ts`), and `docs/archive/CLOSED-TODO.md` carries the same annotation.

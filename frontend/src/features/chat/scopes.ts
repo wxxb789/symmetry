@@ -140,7 +140,7 @@ export function retainServedPage(
   // region again and the render dedupes it against the retained pages.
   // Dropping that token instead would leave the rows below the served page
   // unreachable until a reload or a boundary move.
-  const reopened = !moved && state.nextCursor === null && served.nextBefore !== null && servedBoundaryId !== null;
+  const reopened = state.nextCursor === null && served.nextBefore !== null && servedBoundaryId !== null;
   const nextCursor = moved || renew || reopened ? served.nextBefore : state.nextCursor;
   const nextBoundaryId = moved || reopened ? servedBoundaryId : state.nextBoundaryId;
   return { ...state, pages: [page, ...state.pages.slice(1)], nextCursor, nextBoundaryId, servedSource: source };
@@ -194,23 +194,21 @@ export interface ChatOlderLoad {
 }
 
 /**
- * The pending press already holding the boundary a new press would load, or
- * null. The comparison is two-sided the way the chain-pointer rules are — the
- * boundary message's id while both sides name one, cursor bytes while either
- * does not — extended by the scope key, because a press belongs to the scope
- * that made it and must neither block nor be blocked by another scope's. A
- * cursor a re-serve signs anew at the same boundary is still the same
- * position: the page already in flight owns that region.
+ * True while a pending press already holds the boundary a new press would
+ * load. The comparison is two-sided — the boundary message's id while both
+ * sides name one, cursor bytes while either does not — and is extended by the
+ * scope key, because a press belongs to the scope that made it and must
+ * neither block nor be blocked by another scope's. A cursor a re-serve signs
+ * anew at the same boundary is still the same position: the page already in
+ * flight owns that region.
  */
 export function pendingOlderLoadFor(
   loads: readonly ChatOlderLoad[],
-  scopeKey: string,
-  cursor: string,
-  boundaryId: string | null,
-): ChatOlderLoad | null {
-  return loads.find((load) => load.scopeKey === scopeKey && (load.boundaryId !== null && boundaryId !== null
-    ? load.boundaryId === boundaryId
-    : load.cursor === cursor)) ?? null;
+  candidate: ChatOlderLoad,
+): boolean {
+  return loads.some((load) => load.scopeKey === candidate.scopeKey && (load.boundaryId !== null && candidate.boundaryId !== null
+    ? load.boundaryId === candidate.boundaryId
+    : load.cursor === candidate.cursor));
 }
 
 export interface ChatScopeStore {

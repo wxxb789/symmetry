@@ -172,8 +172,8 @@ interface RecordedRequest {
 }
 
 interface HarnessOptions {
-  /** The conversation read; `readIndex` starts at 1. */
-  conversation?: (url: URL, readIndex: number) => Response | Promise<Response>;
+  /** The conversation read. */
+  conversation?: (url: URL) => Response | Promise<Response>;
   /** The message POST; `postIndex` starts at 1. */
   message?: (body: Record<string, unknown>, postIndex: number) => Response | Promise<Response>;
   workspace?: () => Record<string, unknown>;
@@ -187,7 +187,6 @@ afterEach(() => {
 
 function renderChat(path: string, options: HarnessOptions = {}) {
   const requests: RecordedRequest[] = [];
-  let chatReads = 0;
   let messagePosts = 0;
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
@@ -197,9 +196,8 @@ function renderChat(path: string, options: HarnessOptions = {}) {
     if (url.pathname === "/portal/api/session") return new Response(JSON.stringify({ csrf_token: "session-token" }));
     if (url.pathname === "/portal/api/workspace") return new Response(JSON.stringify((options.workspace ?? workspaceBody)()));
     if (url.pathname === "/portal/api/chat") {
-      chatReads += 1;
       const respond = options.conversation ?? (() => new Response(JSON.stringify(conversationBody({ scope: "workspace" }))));
-      return await respond(url, chatReads);
+      return await respond(url);
     }
     if (url.pathname === "/portal/api/chat/messages") {
       messagePosts += 1;
@@ -1234,6 +1232,76 @@ describe("history", () => {
     expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map(messageId));
   });
 
+  // The held press's unproven failure is retried by the read policy before it
+  // settles its notice, so this case budgets for the retry schedule instead of
+  // racing the default timeout.
+  it("keeps a non-refusal failure's notice when the press no longer owns the chain", async () => {
+    const user = userEvent.setup();
+    const requested: string[] = [];
+    let reads = 0;
+    const held = Promise.withResolvers<void>();
+    const older: Record<string, ServedMessage[]> = {
+      "cursor-6": [message(2, { insertedAt: at(2) }), message(3, { insertedAt: at(3) }), message(4, { insertedAt: at(4) }), message(5, { insertedAt: at(5) })],
+      "cursor-2": [message(1, { insertedAt: at(1) })],
+    };
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          requested.push(before);
+          if (before === "cursor-5") {
+            // The first press carries the pre-move boundary and is held in
+            // flight; once the later press's page has moved the chain past
+            // that boundary it fails with the server's own fault — unproven
+            // and retryable, never a refusal.
+            return held.promise.then(() => new Response("{}", { status: 500 }));
+          }
+          return new Response(JSON.stringify(conversationBody({
+            scope: "project",
+            projectId,
+            messages: older[before] ?? [],
+            nextBefore: before === "cursor-6" ? "cursor-2" : null,
+          })));
+        }
+        reads += 1;
+        const served = [message(5, { insertedAt: at(5) }), message(6, { insertedAt: at(6) }), message(7, { insertedAt: at(7) }), message(8, { insertedAt: at(8) })];
+        return new Response(JSON.stringify(reads === 1
+          ? conversationBody({ scope: "project", projectId, messages: served, nextBefore: "cursor-5" })
+          // A serve that moved the boundary: the newest page now ends at
+          // message 6, and the held press's captured position cannot be
+          // re-signed from it.
+          : conversationBody({ scope: "project", projectId, messages: [...served.slice(1), message(9, { insertedAt: at(9) })], nextBefore: "cursor-6" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 5");
+
+    // The aging token's press is held in flight; the re-serve moves the served
+    // boundary, and the reader presses again at the moved boundary — its own
+    // position, so it is admitted — and that page lands first, moving the chain
+    // below the boundary the failing press captured.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("message 9");
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await screen.findByText("message 2");
+    expect(requested).toEqual(["cursor-5", "cursor-6"]);
+
+    // The press no longer owns the chain, but its failure proves nothing about
+    // the cursor: the unproven outcome keeps its notice — the read policy
+    // retries it first — and neither the notice nor any reset disturbs the
+    // chain the landed page established.
+    held.resolve();
+    await waitFor(() => expect(statusRegion()).toHaveTextContent("The server is temporarily unavailable."), { timeout: 8_000 });
+    expect(reads).toBe(2);
+
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested.filter((cursor) => cursor !== "cursor-5")).toEqual(["cursor-6", "cursor-2"]));
+    await screen.findByText("message 1");
+    expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map(messageId));
+  }, 20_000);
+
   it("does not admit a second Load older for the boundary already in flight when the cursor re-signs", async () => {
     const user = userEvent.setup();
     let reads = 0;
@@ -1568,6 +1636,55 @@ describe("history", () => {
     await user.selectOptions(scopeSelect(), "workspace");
     await screen.findByText("workspace history");
     expect(messageIds()).toEqual([messageId(1)]);
+  });
+
+  it("does not let one scope's press in flight block another scope's Load older at the same cursor bytes", async () => {
+    const user = userEvent.setup();
+    const requested: string[] = [];
+    const held = Promise.withResolvers<void>();
+    renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
+      conversation: (url) => {
+        const before = url.searchParams.get("before");
+        if (before !== null) {
+          requested.push(before);
+          // The project press's page is held in flight for the whole test.
+          if (url.searchParams.get("scope") === "project") {
+            return held.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(7), message(8)] }))));
+          }
+          return new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [message(1, { content: "workspace history" })] })));
+        }
+        return url.searchParams.get("scope") === "project"
+          ? new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(9), message(10)], nextBefore: "cursor-9" })))
+          // The workspace position carries the same cursor bytes without a
+          // boundary message, so the cursor bytes are all the guard's fallback
+          // has to compare — and the scope key is all that separates the two
+          // presses.
+          : new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [], nextBefore: "cursor-9" })));
+      },
+    });
+    await openChat();
+    await screen.findByText("message 9");
+
+    // The project press leaves through cursor-9 and is held in flight.
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-9"]));
+
+    // The reader leaves for the workspace scope, whose own press at the same
+    // bytes must be admitted: the scope key fences the press in flight.
+    await user.selectOptions(scopeSelect(), "workspace");
+    await waitFor(() => expect(document.querySelector("#chat-history-note")).toHaveTextContent("No messages recorded in this context."));
+    expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false");
+
+    await user.click(screen.getByRole("button", { name: "Load older" }));
+    await waitFor(() => expect(requested).toEqual(["cursor-9", "cursor-9"]));
+    await screen.findByText("workspace history");
+    expect(messageIds()).toEqual([messageId(1)]);
+
+    // The held project page still lands in the scope that pressed it.
+    held.resolve();
+    await user.selectOptions(scopeSelect(), "project");
+    await screen.findByText("message 7");
+    expect(messageIds()).toEqual([7, 8, 9, 10].map(messageId));
   });
 
   it("keeps the loaded conversation visible as stale when a read fails", async () => {

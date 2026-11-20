@@ -26,10 +26,11 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
-The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
-that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
+
+The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
+that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 
 ## Model-routing evaluation records
 
@@ -2246,6 +2247,25 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       red on the pre-fix bytes at `Expected the element to have attribute: aria-disabled="true" /
       Received: aria-disabled="false"`).
 
+      **Annotation (2026-11-21, branch `fix/chat-history-chain`, apply stage of the simplify review):**
+      one sentence above is inaccurate, and two pins were added. `pendingOlderLoadFor` is two-sided
+      — the boundary message's id while both sides name one, cursor bytes while either does not —
+      but `ownsChainPointer` is not: it decides on the captured side's id alone and never falls back
+      to bytes while it has one, so the two predicates can classify one press/store pair
+      differently (a press naming a boundary message is superseded by a store that holds only cursor
+      bytes at that position while the same press still holds the pendency). The predicate itself is
+      unchanged and is what the contract asks for; the source comment was corrected (`scopes.ts`),
+      and `docs/plans/2026-11-20-chat-history-chain-plan.md` carries the same annotation. The scope
+      fence's own claim — a press "must neither block nor be blocked by another scope's" — is now
+      pinned by "does not let one scope's press in flight block another scope's Load older at the
+      same cursor bytes" (red against a `pendingOlderLoadFor` without the scope term at `Expected
+      the element to have attribute: aria-disabled="false" / Received: aria-disabled="true"`, and
+      red on the pre-fix bytes at the same assertion), and the refusal-only notice decision by
+      "keeps a non-refusal failure's notice when the press no longer owns the chain" (kills both
+      "silence every superseded notice" and "silence every non-refusal notice" at `Expected element
+      to have text content: The server is temporarily unavailable. / Received: Messages are saved to
+      this context.`; green on the pre-fix bytes — it pins that decision, not the regression).
+
 - [ ] An ended chat chain never accepts a later served token: a chain drained through its own loads
       (`nextCursor` null, the recorded `nextBoundaryId` naming an older message) or a read that
       served the whole history (no continuation was ever established) keeps reporting "oldest
@@ -2282,20 +2302,34 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       Received: 2 messages loaded · oldest history loaded.`).
 
       Gates for both closures above, on the delivered bytes of branch `fix/chat-history-chain`
-      (this host, 2026-11-21): `vitest run src/features/chat --no-file-parallelism` rc 0 (2 files,
-      84 tests); `pnpm --dir frontend test` rc 0 (20 files, 496 tests); `typecheck` rc 0; `lint`
-      rc 0; `build` rc 0; `git diff --check` rc 0 (the frontend has no formatter script). Every new
-      and re-pinned case was also run against the pre-fix `chat.tsx`/`scopes.ts` — byte-identical
-      copies of `git show fdf332d:…`, digest-checked on restore — with the delivered test bytes:
-      5 failed / 40 passed (45), rc 1, each for the reason its closure names. The path-triggered
-      render gate (`SYMMETRY_RENDER_GATE_REQUIRED=1`, the seven focused spec files, desktop and
-      mobile Chromium, against three release instances of this revision serving the delivered
-      bundle on this host): 93 expected, 1 skipped (the by-design concurrency skip), 0 unexpected,
-      rc 0 (11.8 m), and `scripts/ci/assert-playwright-json.py` rc 0 over CI's own expected set;
-      the chat spec's 12 cases are all expected in it. An earlier invocation of the same command on
-      the same bytes ran 92 expected / 1 unexpected — the fixture-gated goal-context case exceeding
-      its 60 s test timeout under this host's concurrent-agent load — and that case is green in the
-      recorded invocation; none of this increment's files is on its path.
+      (this host, 2026-11-21; re-measured after the apply of the simplify review, which added the
+      two pins the annotation above names and corrected one comment): `vitest run
+      src/features/chat --no-file-parallelism` rc 0 (2 files, 86 tests); `pnpm --dir frontend test`
+      rc 0 (20 files, 498 tests); `typecheck` rc 0; `lint` rc 0; `build` rc 0 (bundle
+      `index-wiT0iX5k.js`, md5 `7d2f0e696cbf59900139eedeec33e05c`, 885870 B); `git diff --check`
+      rc 0 (the frontend has no formatter script). Every new and re-pinned case was also run against
+      the pre-fix `chat.tsx`/`scopes.ts` — byte-identical copies of `git show fdf332d:…`,
+      digest-checked before and after the run — with the delivered test bytes: 6 failed /
+      41 passed (47), rc 1, each for the reason its closure names. Each added pin was
+      mutation-checked against the wrong rule it exists to kill, and reddens exactly there:
+      dropping the scope key from `pendingOlderLoadFor` reddens "does not let one scope's press in
+      flight block another scope's Load older at the same cursor bytes" (`Expected the element to
+      have attribute: aria-disabled="false" / Received: aria-disabled="true"`), and both "silence
+      every superseded notice" and "silence every non-refusal notice" redden "keeps a non-refusal
+      failure's notice when the press no longer owns the chain" (`Expected element to have text
+      content: The server is temporarily unavailable. / Received: Messages are saved to this
+      context.`); each mutant left the rest of the suite green. The path-triggered render gate
+      (`SYMMETRY_RENDER_GATE_REQUIRED=1`, the seven focused spec files, desktop and mobile Chromium,
+      against three release instances of this revision serving the delivered bundle on this host):
+      93 expected, 1 skipped (the by-design concurrency skip), 0 unexpected, rc 0 (8.5 m), and
+      `scripts/ci/assert-playwright-json.py` rc 0 over CI's own expected set; the chat spec's 12
+      cases are all expected in it. The release instances were proved to serve the delivered
+      bundle: `/portal/assets/index-wiT0iX5k.js` → HTTP 200, 885870 B and md5 `7d2f0e69…` from all
+      three ports, while the pre-apply `index-CS3_ZMmm.js` is HTTP 404. The implement-stage numbers
+      measured before the apply — 84 tests, 496 tests, 5 failed / 40 passed (45), bundle
+      `index-CS3_ZMmm.js` md5 `45798f9b…`, 93 expected / 1 skipped / 11.8 m — are superseded by the
+      numbers above; the pre-apply receipt's earlier flaky invocation (92 expected / 1 unexpected,
+      the fixture-gated goal-context case under host load) has no counterpart in the apply run.
 
 ## Deferred review findings (0007g)
 
