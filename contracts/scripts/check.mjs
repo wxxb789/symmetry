@@ -232,6 +232,27 @@ const main = async () => {
     }
   }
 
+  // Every fixture gate reads the manifest, so a file no row names would be
+  // never validated; hold the served fixture directories to exactly one row.
+  const manifestPathCounts = new Map();
+  for (const fixture of manifest.fixtures) {
+    manifestPathCounts.set(fixture.path, (manifestPathCounts.get(fixture.path) ?? 0) + 1);
+  }
+  for (const directory of ["valid", "invalid"]) {
+    const directoryPath = path.join(ROOT_DIR, "contracts", "fixtures", directory);
+    for (const entry of await fs.readdir(directoryPath, { withFileTypes: true })) {
+      // The manifest describes `.json` fixtures; a gitignored OS artifact
+      // (`.DS_Store`, an editor swap file) is not a fixture and must not fail
+      // this gate.
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const rows = manifestPathCounts.get(`${directory}/${entry.name}`) ?? 0;
+      if (rows !== 1)
+        throw new Error(
+          `fixture file ${relativePath(path.join(directoryPath, entry.name))} must have exactly one manifest row, found ${rows}`,
+        );
+    }
+  }
+
   const requiredTags = [
     "missing-control-field",
     "extra-control-field",
