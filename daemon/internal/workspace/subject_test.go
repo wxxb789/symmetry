@@ -579,11 +579,12 @@ func TestWorkspaceOutputHelper(t *testing.T) {
 
 // subjectDigestFixtureBlobs is the number of committed blobs written by
 // writeSubjectDigestFixture.
-const subjectDigestFixtureBlobs = 7
+const subjectDigestFixtureBlobs = 8
 
 // subjectDigestManyBlobs is the number of committed blobs written by
-// writeSubjectDigestManyBlobsFixture so that a digest stays in flight long
-// enough to observe its Git child and to cancel it mid-stream.
+// writeSubjectDigestManyBlobsFixture so that the one-batch-stream pins count
+// streams against a digest with many committed blobs: the fixture tells one
+// persistent batch stream apart from one stream per blob.
 const subjectDigestManyBlobs = 250
 
 // TestMaterializeSubjectHashesEveryBlobInOneBatchStream pins the production
@@ -623,9 +624,54 @@ func TestMaterializeSubjectHashesEveryBlobInOneBatchStream(t *testing.T) {
 	}
 }
 
+// TestSubjectDigestSortsManifestByRawPathBytes pins the canonical manifest
+// clause that records are ordered by raw path bytes. Git writes its own tree
+// entries in that same order, so the clause is only observable when the tree
+// listing arrives in another order: the existing read-output seam feeds the
+// same committed entries reversed, and the digest must still be the canonical
+// manifest digest that the independent oracle derives.
+func TestSubjectDigestSortsManifestByRawPathBytes(t *testing.T) {
+	repository := newSubjectRepository(t)
+	writeSubjectDigestFixture(t, repository)
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+	expected := subjectManifestDigest(t, repository, commit)
+
+	reversedListing := func(ctx context.Context, repository string, maxBytes int, limitErr error, arguments ...string) ([]byte, error) {
+		output, err := subjectGitOutput(ctx, repository, maxBytes, limitErr, arguments...)
+		if err != nil {
+			return nil, err
+		}
+		records := bytes.Split(output, []byte{0})
+		if len(records) < 3 || len(records[len(records)-1]) != 0 {
+			t.Fatalf("Git tree listing for %q split into %d records, want at least two NUL-terminated entries", commit, len(records))
+		}
+		reversed := make([]byte, 0, len(output))
+		for index := len(records) - 2; index >= 0; index-- {
+			reversed = append(reversed, records[index]...)
+			reversed = append(reversed, 0)
+		}
+		if bytes.Equal(reversed, output) {
+			t.Fatalf("reversing the Git tree listing for %q did not change it: the fixture can no longer pin the raw-path-byte ordering clause", commit)
+		}
+		return reversed, nil
+	}
+
+	digest, err := gitTreeDigestWithReaders(context.Background(), repository, commit, reversedListing, openSubjectGitBatch)
+	if err != nil {
+		t.Fatalf("subject digest for a reversed tree listing error = %v", err)
+	}
+	if digest != expected {
+		t.Fatalf("subject digest for a reversed tree listing = %q, want the canonical manifest digest %q", digest, expected)
+	}
+}
+
 // TestMaterializeSubjectRejectsMissingBlobObject keeps the fail-closed
 // refusal for a committed tree that references an object the repository no
-// longer has.
+// longer has. The refusal message is asserted because every untyped digest
+// failure is mapped to the same unreachable code, so the typed error alone
+// cannot separate Git's complete "<oid> missing" response from the desynced
+// invalid-response-header refusal; the in-sync framing of this refusal stays
+// pinned by the missing row of TestSubjectBatchStreamRejectsMalformedResponses.
 func TestMaterializeSubjectRejectsMissingBlobObject(t *testing.T) {
 	repository := newSubjectRepository(t)
 	commit := gitOutput(t, repository, "rev-parse", "HEAD")
@@ -647,6 +693,9 @@ func TestMaterializeSubjectRejectsMissingBlobObject(t *testing.T) {
 	var subjectErr *SubjectError
 	if !errors.As(err, &subjectErr) || subjectErr.Code != SubjectErrorUnreachable {
 		t.Fatalf("MaterializeSubject() error = %v, want typed unreachable subject error", err)
+	}
+	if !strings.Contains(err.Error(), "is missing from the repository") {
+		t.Fatalf("MaterializeSubject() error = %v, want the missing-object refusal for the deleted committed blob", err)
 	}
 	assertNoOwnedGitChildProcesses(t)
 }
@@ -674,54 +723,74 @@ func TestMaterializeSubjectRejectsOversizedBlob(t *testing.T) {
 	assertNoOwnedGitChildProcesses(t)
 }
 
-// TestMaterializeSubjectCancellationStopsBatchStream cancels a running
-// Subject computation and requires the caller to observe the cancellation
-// while no owned Git child stream keeps running.
-func TestMaterializeSubjectCancellationStopsBatchStream(t *testing.T) {
+// TestSubjectDigestCancellationStopsBatchStream cancels a running Subject
+// digest at the scripted batch child's own readiness barrier and requires the
+// caller to observe the cancellation while the digest keeps exactly one
+// persistent batch stream and its child is waited for and reaped. The barrier
+// is the child's state, not a trace of a past event: the digest stays in
+// flight on that child from before the cancellation until the child is
+// stopped.
+func TestSubjectDigestCancellationStopsBatchStream(t *testing.T) {
 	repository := newSubjectRepository(t)
-	writeSubjectDigestManyBlobsFixture(t, repository)
 	commit := gitOutput(t, repository, "rev-parse", "HEAD")
-	tracePath := filepath.Join(t.TempDir(), "git-trace2-events.json")
-	t.Setenv("GIT_TRACE2_EVENT", tracePath)
-	manager := New(map[string]config.Workspace{
-		"primary": {
-			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways,
-		},
-	})
+	readyPath := filepath.Join(t.TempDir(), "batch-ready")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	command := workspaceBatchHelperCommand(t, ctx, "ready-block", readyPath)
+	// The default CommandContext cancellation owns the child's own teardown;
+	// WaitDelay only bounds a teardown that would otherwise never finish.
+	command.WaitDelay = testHangGuard
+	defer func() {
+		if command.Process != nil {
+			_ = command.Process.Kill()
+		}
+	}()
+
+	var opened atomic.Int32
+	var stream *subjectGitBatchStream
 	result := make(chan error, 1)
 	go func() {
-		_, err := manager.MaterializeSubject(ctx, "primary", subjectResourceID, commit)
+		_, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput,
+			func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
+				opened.Add(1)
+				openedStream, openErr := startSubjectGitBatch(openContext, command, nil, nil)
+				stream = openedStream
+				return openedStream, openErr
+			})
 		result <- err
 	}()
 
-	waitForGitTrace2Start(t, tracePath, "cat-file", 30*time.Second)
+	waitForWorkspaceBatchReady(t, readyPath, testHangGuard)
 	cancel()
 
 	select {
 	case err := <-result:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("MaterializeSubject() error = %v, want context.Canceled", err)
+			t.Fatalf("subject digest error = %v, want context.Canceled", err)
 		}
 	case <-time.After(testHangGuard):
-		t.Fatal("MaterializeSubject did not stop after context cancellation")
+		t.Fatal("subject digest did not stop after context cancellation")
 	}
-	if got := gitTrace2StartCount(gitTrace2Starts(t, tracePath), "cat-file"); got != 1 {
-		t.Fatalf("cancelled Subject computation for %d blobs started %d git cat-file processes, want exactly one persistent batch stream", subjectDigestManyBlobs, got)
+	if got := opened.Load(); got != 1 {
+		t.Fatalf("cancelled subject digest opened %d batch streams, want exactly one persistent stream", got)
+	}
+	if stream == nil || command.Process == nil || stream.command.ProcessState == nil ||
+		stream.command.ProcessState.Pid() != command.Process.Pid {
+		t.Fatalf("batch helper child was not waited for and reaped: %v", stream)
 	}
 	assertNoOwnedGitChildProcesses(t)
 }
 
 // writeSubjectDigestFixture commits a small tree whose entries exercise
 // executable files, a symlink entry, embedded binary bytes, a raw path with a
-// space and paths whose Git tree order differs from raw byte order.
+// space and a blob larger than the stream's reusable copy buffer.
 func writeSubjectDigestFixture(t *testing.T, repository string) {
 	t.Helper()
 	writeSubjectFixtureFile(t, repository, "alpha.txt", []byte("alpha\n"))
 	writeSubjectFixtureFile(t, repository, filepath.Join("alpha", "inside.txt"), []byte("inside\n"))
 	writeSubjectFixtureFile(t, repository, "binary.bin", []byte{0x00, 0x7f, 0xff, 0x80, 0x0a, 0x00, 0x01})
+	writeSubjectFixtureFile(t, repository, "large.bin", bytes.Repeat([]byte{0x00, 0x5a, 0xff, 0x0a}, 64<<10))
 	writeSubjectFixtureFile(t, repository, "odd name.txt", []byte("raw path\n"))
 	writeSubjectFixtureFile(t, repository, "tool.sh", []byte("#!/bin/sh\necho tool\n"))
 	writeSubjectFixtureFile(t, repository, "link-target.txt", []byte("alpha.txt"))
@@ -729,15 +798,15 @@ func writeSubjectDigestFixture(t *testing.T, repository string) {
 	if err := os.Remove(filepath.Join(repository, "link-target.txt")); err != nil {
 		t.Fatalf("remove symlink target fixture: %v", err)
 	}
-	runGit(t, repository, "add", "--", "alpha.txt", "alpha/inside.txt", "binary.bin", "odd name.txt", "tool.sh")
+	runGit(t, repository, "add", "--", "alpha.txt", "alpha/inside.txt", "binary.bin", "large.bin", "odd name.txt", "tool.sh")
 	runGit(t, repository, "update-index", "--chmod=+x", "tool.sh")
 	runGit(t, repository, "update-index", "--add", "--cacheinfo", "120000,"+symlinkBlob+",link.txt")
 	runGit(t, repository, "commit", "-m", "subject digest fixture")
 }
 
 // writeSubjectDigestManyBlobsFixture commits many small distinct blobs so a
-// Subject digest stays in flight long enough to sample and cancel its Git
-// child process.
+// one-batch-stream pin counts batch streams against a digest with many
+// committed blobs instead of against a single blob.
 func writeSubjectDigestManyBlobsFixture(t *testing.T, repository string) {
 	t.Helper()
 	for index := range subjectDigestManyBlobs {
@@ -764,6 +833,16 @@ func writeSubjectFixtureFile(t *testing.T, repository, name string, content []by
 // mode, type, raw path and sha256 blob digest, ordered by raw path bytes.
 func subjectManifestDigest(t *testing.T, repository, commit string) string {
 	t.Helper()
+	return subjectManifestDigestWithContent(t, repository, commit, func(objectID string) []byte {
+		return gitOutputBytes(t, repository, "cat-file", "blob", objectID)
+	})
+}
+
+// subjectManifestDigestWithContent derives the same canonical digest while the
+// caller supplies each committed blob's content, so a scripted batch stream can
+// be compared against the oracle for bytes the repository does not hold.
+func subjectManifestDigestWithContent(t *testing.T, repository, commit string, blobContent func(objectID string) []byte) string {
+	t.Helper()
 	type digestEntry struct {
 		path   []byte
 		record []byte
@@ -786,7 +865,7 @@ func subjectManifestDigest(t *testing.T, repository, commit string) string {
 		if len(fields) != 3 || !bytes.Equal(fields[1], []byte("blob")) {
 			t.Fatalf("Git tree record %d header = %q, want a blob header", index, header)
 		}
-		content := gitOutputBytes(t, repository, "cat-file", "blob", string(fields[2]))
+		content := blobContent(string(fields[2]))
 		blobDigest := sha256.Sum256(content)
 		manifest := make([]byte, 0, len(record)+96)
 		manifest = append(manifest, fields[0]...)
@@ -870,32 +949,6 @@ func gitTrace2StartCount(starts []gitTrace2StartEvent, name string) int {
 	return count
 }
 
-// waitForGitTrace2Start waits until the trace log records a process start for
-// the named Git subcommand.
-func waitForGitTrace2Start(t *testing.T, path, name string, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if content, err := os.ReadFile(path); err == nil {
-			for _, line := range strings.Split(string(content), "\n") {
-				var event gitTrace2StartEvent
-				if json.Unmarshal([]byte(line), &event) != nil || event.Event != "start" {
-					continue
-				}
-				for _, argument := range event.Argv {
-					if argument == name {
-						return
-					}
-				}
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Git trace2 log %q never recorded a %s process start within %s", path, name, timeout)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
 // gitChildProcessIDs returns the process IDs of Git commands that are direct
 // children of this test process, including children that are not yet reaped.
 // Only the Linux /proc view exposes this; other platforms return nil, so their
@@ -975,11 +1028,15 @@ func assertNoOwnedGitChildProcesses(t *testing.T) {
 // a real checkout through the public workspace entry point. It is opt-in so
 // routine runs and package suites are unaffected, and it reports the canonical
 // digest, the committed blob count, the Git process trace and the wall time as
-// one JSON record for the recorded measurement.
+// one JSON record for the recorded measurement. When
+// SYMMETRY_SUBJECT_WITNESS_EXPECTED_DIGEST carries the recorded digest, the
+// measured digest must equal it, so replaying the witness falsifies digest
+// drift instead of only logging it.
 func TestSubjectMeasurementWitness(t *testing.T) {
 	repository := os.Getenv("SYMMETRY_SUBJECT_WITNESS_REPOSITORY")
 	commit := os.Getenv("SYMMETRY_SUBJECT_WITNESS_COMMIT")
 	resourceID := os.Getenv("SYMMETRY_SUBJECT_WITNESS_RESOURCE_ID")
+	expectedDigest := os.Getenv("SYMMETRY_SUBJECT_WITNESS_EXPECTED_DIGEST")
 	if repository == "" || commit == "" || resourceID == "" {
 		t.Skip("subject measurement witness requires SYMMETRY_SUBJECT_WITNESS_REPOSITORY, SYMMETRY_SUBJECT_WITNESS_COMMIT and SYMMETRY_SUBJECT_WITNESS_RESOURCE_ID")
 	}
@@ -999,6 +1056,9 @@ func TestSubjectMeasurementWitness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaterializeSubject() for %s error = %v after %s", commit, err, elapsed)
 	}
+	if expectedDigest != "" && subject.TreeDigest != expectedDigest {
+		t.Fatalf("measured Subject tree digest for %s = %q, want the recorded expected digest %q", commit, subject.TreeDigest, expectedDigest)
+	}
 	// The process trace is read before any other Git command runs, so it
 	// records exactly the production Subject computation.
 	starts := gitTrace2Starts(t, tracePath)
@@ -1009,12 +1069,13 @@ func TestSubjectMeasurementWitness(t *testing.T) {
 	measurement := struct {
 		Commit           string `json:"commit"`
 		TreeDigest       string `json:"tree_digest"`
+		ExpectedDigest   string `json:"expected_digest,omitempty"`
 		BlobCount        int    `json:"blob_count"`
 		CatFileProcesses int    `json:"cat_file_processes"`
 		GitProcesses     int    `json:"git_processes"`
 		ElapsedMillis    int64  `json:"elapsed_ms"`
 	}{
-		Commit: commit, TreeDigest: subject.TreeDigest, BlobCount: blobCount,
+		Commit: commit, TreeDigest: subject.TreeDigest, ExpectedDigest: expectedDigest, BlobCount: blobCount,
 		CatFileProcesses: gitTrace2StartCount(starts, "cat-file"), GitProcesses: len(starts),
 		ElapsedMillis: elapsed.Milliseconds(),
 	}
@@ -1034,14 +1095,6 @@ func subjectTreeBlobCount(t *testing.T, repository, commit string) int {
 	t.Helper()
 	output := gitOutputBytes(t, repository, "ls-tree", "--full-tree", "-r", "-z", commit)
 	return bytes.Count(output, []byte{0})
-}
-
-// subjectGitCommandOutput runs the bounded workspace Git command the digest
-// uses for its committed tree listing, so an injected batch opener is always
-// paired with a real committed tree.
-func subjectGitCommandOutput(ctx context.Context, repository string, maxBytes int, limitErr error, arguments ...string) ([]byte, error) {
-	command := gitNoReplaceObjectsCommand(ctx, repository, arguments...)
-	return gitCommandOutputLimited(ctx, command, maxBytes, limitErr)
 }
 
 // workspaceBatchHelperCommand starts this test binary as a Git batch stream
@@ -1066,13 +1119,17 @@ func TestWorkspaceBatchHelper(t *testing.T) {
 	switch {
 	case len(arguments) == 3 && arguments[0] == "frame":
 		serveWorkspaceBatchFrames(arguments[1], []byte(arguments[2]))
+	case len(arguments) == 3 && arguments[0] == "ready-frame-block":
+		serveWorkspaceBatchReadyFrameThenBlock(arguments[1], []byte(arguments[2]))
+	case len(arguments) == 2 && arguments[0] == "ready-block":
+		serveWorkspaceBatchReadyThenBlock(arguments[1])
 	case len(arguments) == 1 && arguments[0] == "blocked-header":
 		// The malformed response stays in the pipe and the child never exits on
 		// its own, so only the digest's own teardown can end it.
 		_, _ = os.Stdout.WriteString("not-a-batch-header\n")
-		for {
-			time.Sleep(time.Second)
-		}
+		blockWorkspaceBatchHelper()
+	case len(arguments) == 1 && arguments[0] == "max-blob":
+		serveWorkspaceBatchMaxBlob()
 	default:
 		fmt.Fprintln(os.Stderr, "invalid workspace batch helper arguments")
 		os.Exit(2)
@@ -1089,8 +1146,12 @@ func workspaceBatchHelperArguments() []string {
 }
 
 // serveWorkspaceBatchFrames answers batch requests with the named framing
-// variant. Only the valid variant keeps serving; every malformed variant
-// answers one request and exits so its child is reaped either way.
+// variant. The valid and missing variants keep serving, because both answer
+// with a complete response that leaves the record boundary consumed; every
+// refusal variant answers one request and exits so its child is reaped either
+// way. The oversized variant writes only a header that declares a blob beyond
+// the production per-blob bound, because the digest must refuse it before any
+// content is read.
 func serveWorkspaceBatchFrames(variant string, content []byte) {
 	reader := bufio.NewReader(os.Stdin)
 	writer := bufio.NewWriter(os.Stdout)
@@ -1105,6 +1166,8 @@ func serveWorkspaceBatchFrames(variant string, content []byte) {
 			fmt.Fprintf(writer, "%s blob %d\n", objectID, len(content))
 			_, _ = writer.Write(content)
 			_ = writer.WriteByte('\n')
+		case "missing":
+			fmt.Fprintf(writer, "%s missing\n", objectID)
 		case "wrong-oid":
 			fmt.Fprintf(writer, "%s blob %d\n", strings.Repeat("0", len(objectID)), len(content))
 			_, _ = writer.Write(content)
@@ -1117,6 +1180,8 @@ func serveWorkspaceBatchFrames(variant string, content []byte) {
 			fmt.Fprintf(writer, "%s blob twelve\n", objectID)
 		case "negative-size":
 			fmt.Fprintf(writer, "%s blob %d\n", objectID, -len(content))
+		case "oversized":
+			fmt.Fprintf(writer, "%s blob %d\n", objectID, maxSubjectArtifactBlobBytes+1)
 		case "malformed-header":
 			fmt.Fprintf(writer, "%s\n", objectID)
 		case "truncated-header":
@@ -1138,9 +1203,100 @@ func serveWorkspaceBatchFrames(variant string, content []byte) {
 		if err := writer.Flush(); err != nil {
 			os.Exit(0)
 		}
-		if variant != "valid" {
+		if variant != "valid" && variant != "missing" {
 			os.Exit(0)
 		}
+	}
+}
+
+// serveWorkspaceBatchMaxBlob answers every batch request with a frame whose
+// blob is exactly the production per-blob bound, then keeps serving so the
+// digest's own stdin close ends the child with a recorded exit. The content is
+// generated in the child because a frame that large cannot travel through the
+// argument list.
+func serveWorkspaceBatchMaxBlob() {
+	content := bytes.Repeat([]byte{'z'}, maxSubjectArtifactBlobBytes)
+	reader := bufio.NewReader(os.Stdin)
+	writer := bufio.NewWriterSize(os.Stdout, 1<<20)
+	for {
+		request, err := reader.ReadString('\n')
+		if err != nil {
+			os.Exit(0)
+		}
+		objectID := strings.TrimSuffix(request, "\n")
+		fmt.Fprintf(writer, "%s blob %d\n", objectID, len(content))
+		_, _ = writer.Write(content)
+		_ = writer.WriteByte('\n')
+		if err := writer.Flush(); err != nil {
+			os.Exit(0)
+		}
+	}
+}
+
+// serveWorkspaceBatchReadyThenBlock publishes the readiness marker, consumes
+// one request and then blocks: the digest stays in flight on this child until
+// the caller's cancellation stops it.
+func serveWorkspaceBatchReadyThenBlock(readyPath string) {
+	publishWorkspaceBatchReady(readyPath)
+	reader := bufio.NewReader(os.Stdin)
+	if _, err := reader.ReadString('\n'); err != nil {
+		os.Exit(2)
+	}
+	blockWorkspaceBatchHelper()
+}
+
+// serveWorkspaceBatchReadyFrameThenBlock publishes the readiness marker,
+// answers one request with a complete blob frame, and then blocks without
+// reading further input: the digest reaches the end of its batch conversation
+// on this child while the child stays alive.
+func serveWorkspaceBatchReadyFrameThenBlock(readyPath string, content []byte) {
+	publishWorkspaceBatchReady(readyPath)
+	reader := bufio.NewReader(os.Stdin)
+	request, err := reader.ReadString('\n')
+	if err != nil {
+		os.Exit(2)
+	}
+	writer := bufio.NewWriter(os.Stdout)
+	objectID := strings.TrimSuffix(request, "\n")
+	fmt.Fprintf(writer, "%s blob %d\n", objectID, len(content))
+	_, _ = writer.Write(content)
+	_ = writer.WriteByte('\n')
+	if err := writer.Flush(); err != nil {
+		os.Exit(2)
+	}
+	blockWorkspaceBatchHelper()
+}
+
+// publishWorkspaceBatchReady lets the parent synchronize on a running
+// scripted batch child instead of on a timed guess.
+func publishWorkspaceBatchReady(path string) {
+	if err := os.WriteFile(path, []byte("ready\n"), 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "write workspace batch readiness marker: %v\n", err)
+		os.Exit(2)
+	}
+}
+
+// blockWorkspaceBatchHelper keeps a scripted batch child alive without reading
+// further input, so only the digest's own teardown can end it.
+func blockWorkspaceBatchHelper() {
+	for {
+		time.Sleep(time.Second)
+	}
+}
+
+// waitForWorkspaceBatchReady waits until a scripted batch child published its
+// readiness marker.
+func waitForWorkspaceBatchReady(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("scripted batch child did not publish its readiness marker %q within %s", path, timeout)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -1148,26 +1304,39 @@ func serveWorkspaceBatchFrames(variant string, content []byte) {
 // contract against a real committed tree and a helper child: a malformed
 // response never yields a digest, the digest fails, and the owned child is
 // waited for and reaped. The valid row is the control that the same wiring
-// yields the canonical manifest digest.
+// yields the canonical manifest digest. The missing row is the one refusal
+// whose response is a complete record, so it must keep the stream in sync and
+// the path's unresolved-process fence out of the digest error, while every
+// other refusal row is desynced and terminated through the path's cancellation
+// policy. The oversized row declares a blob beyond the production per-blob
+// bound: the refusal happens at the response header, so the declared content
+// is never consumed and the desynced routing must be observable instead of
+// passing after a teardown the digest did not choose.
 func TestSubjectBatchStreamRejectsMalformedResponses(t *testing.T) {
 	repository := newSubjectRepository(t)
 	commit := gitOutput(t, repository, "rev-parse", "HEAD")
 	blob := gitOutputNoReplace(t, repository, "rev-parse", commit+":README.md")
 	content := gitOutputBytes(t, repository, "cat-file", "blob", blob)
 	want := subjectManifestDigest(t, repository, commit)
+	fence := errors.New("injected unresolved batch process fence")
 
 	for _, variant := range []string{
-		"valid", "wrong-oid", "wrong-type", "malformed-size", "negative-size",
+		"valid", "missing", "wrong-oid", "wrong-type", "malformed-size", "negative-size", "oversized",
 		"malformed-header", "truncated-header", "partial-content", "bad-trailer", "missing-trailer",
 	} {
 		t.Run(variant, func(t *testing.T) {
+			// A refusal desyncs the stream when it leaves the last batch
+			// response unconsumed to a record boundary; the valid answer and
+			// the missing-object refusal both consume their whole record,
+			// while the oversized refusal stops at the response header.
+			desynced := variant != "valid" && variant != "missing"
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			command := workspaceBatchHelperCommand(t, ctx, "frame", variant, string(content))
 			var stream *subjectGitBatchStream
-			digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitCommandOutput,
+			digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput,
 				func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
-					opened, openErr := startSubjectGitBatch(openContext, command, nil, nil)
+					opened, openErr := startSubjectGitBatch(openContext, command, nil, fence)
 					stream = opened
 					return opened, openErr
 				})
@@ -1181,14 +1350,131 @@ func TestSubjectBatchStreamRejectsMalformedResponses(t *testing.T) {
 			} else if err == nil {
 				t.Fatalf("subject digest for malformed batch frame %q = %q, want an error", variant, digest)
 			}
+			if variant == "missing" && !strings.Contains(err.Error(), "is missing from the repository") {
+				t.Fatalf("subject digest error = %v, want the missing-object refusal", err)
+			}
+			if variant == "oversized" && !errors.Is(err, ErrSubjectArtifactTooLarge) {
+				t.Fatalf("subject digest error = %v, want the per-blob size refusal", err)
+			}
 			if stream == nil {
 				t.Fatal("batch opener was not used")
+			}
+			// close() must see a desynced stream exactly for the refusals that
+			// left a record boundary unconsumed, and close() must join the
+			// path's sentinel exactly for those: an in-sync child is asked to
+			// exit, so its digest error stays free of the unresolved-process
+			// fence.
+			if stream.desynced != desynced {
+				t.Fatalf("batch frame %q left the stream marked desynced = %t, want %t", variant, stream.desynced, desynced)
+			}
+			if joined := errors.Is(err, fence); joined != desynced {
+				t.Fatalf("subject digest error = %v, want the unresolved-process fence joined = %t for batch frame %q", err, desynced, variant)
 			}
 			state := stream.command.ProcessState
 			if state == nil || command.Process == nil || state.Pid() != command.Process.Pid {
 				t.Fatalf("batch helper child was not waited for and reaped: %v", state)
 			}
 		})
+	}
+}
+
+// TestSubjectBatchStreamObjectSizeBoundary pins the per-blob size refusal at
+// its exact boundary through the scripted batch child: a response of exactly
+// maxBytes is hashed in full, and one byte more is refused with the stream
+// marked desynced so the teardown terminates the child instead of asking it to
+// exit.
+func TestSubjectBatchStreamObjectSizeBoundary(t *testing.T) {
+	repository := newSubjectRepository(t)
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+	blob := gitOutputNoReplace(t, repository, "rev-parse", commit+":README.md")
+	content := gitOutputBytes(t, repository, "cat-file", "blob", blob)
+	contentDigest := sha256.Sum256(content)
+
+	for _, testCase := range []struct {
+		name     string
+		maxBytes int64
+		refused  bool
+	}{
+		{name: "exactly-max-bytes", maxBytes: int64(len(content))},
+		{name: "one-byte-over-max-bytes", maxBytes: int64(len(content)) - 1, refused: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			command := workspaceBatchHelperCommand(t, ctx, "frame", "valid", string(content))
+			stream, err := startSubjectGitBatch(ctx, command, nil, nil)
+			if err != nil {
+				t.Fatalf("startSubjectGitBatch() error = %v", err)
+			}
+			hasher := sha256.New()
+			streamErr := stream.streamObject(blob, hasher, testCase.maxBytes)
+			if testCase.refused {
+				if !errors.Is(streamErr, ErrSubjectArtifactTooLarge) {
+					t.Fatalf("streamObject() at maxBytes = %d error = %v, want ErrSubjectArtifactTooLarge", testCase.maxBytes, streamErr)
+				}
+				if !stream.desynced {
+					t.Fatal("the per-blob size refusal left a record boundary unconsumed but did not mark the stream desynced")
+				}
+			} else {
+				if streamErr != nil {
+					t.Fatalf("streamObject() at maxBytes = %d error = %v, want the accepted size boundary", testCase.maxBytes, streamErr)
+				}
+				if stream.desynced {
+					t.Fatal("the accepted size boundary marked the stream desynced")
+				}
+				if got := hasher.Sum(nil); !bytes.Equal(got, contentDigest[:]) {
+					t.Fatalf("streamObject() at maxBytes = %d hashed %x, want the full content digest %x", testCase.maxBytes, got, contentDigest)
+				}
+			}
+			closeErr := stream.close(streamErr)
+			if testCase.refused {
+				if !errors.Is(closeErr, ErrSubjectArtifactTooLarge) {
+					t.Fatalf("close() error = %v, want the per-blob size refusal joined", closeErr)
+				}
+			} else if closeErr != nil {
+				t.Fatalf("close() error = %v, want nil for an accepted size boundary", closeErr)
+			}
+			state := stream.command.ProcessState
+			if state == nil || command.Process == nil || state.Pid() != command.Process.Pid {
+				t.Fatalf("batch helper child was not waited for and reaped: %v", state)
+			}
+		})
+	}
+}
+
+// TestSubjectBatchStreamAcceptsBlobAtProductionSizeBoundary pins the accepted
+// side of the production per-blob bound through the scripted batch child: a
+// response of exactly maxSubjectArtifactBlobBytes is hashed in full instead of
+// being refused, so a shrunken bound or a >= comparison is observable without
+// committing a frame of that size to a fixture repository.
+func TestSubjectBatchStreamAcceptsBlobAtProductionSizeBoundary(t *testing.T) {
+	repository := newSubjectRepository(t)
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+	maxBlob := bytes.Repeat([]byte{'z'}, maxSubjectArtifactBlobBytes)
+	want := subjectManifestDigestWithContent(t, repository, commit, func(string) []byte { return maxBlob })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	command := workspaceBatchHelperCommand(t, ctx, "max-blob")
+	var stream *subjectGitBatchStream
+	digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput,
+		func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
+			opened, openErr := startSubjectGitBatch(openContext, command, nil, nil)
+			stream = opened
+			return opened, openErr
+		})
+	if err != nil {
+		t.Fatalf("subject digest at the production per-blob size boundary error = %v", err)
+	}
+	if digest != want {
+		t.Fatalf("subject digest at the production per-blob size boundary = %q, want %q", digest, want)
+	}
+	if stream == nil || stream.desynced {
+		t.Fatal("the accepted production size boundary marked the stream desynced")
+	}
+	state := stream.command.ProcessState
+	if state == nil || command.Process == nil || state.Pid() != command.Process.Pid {
+		t.Fatalf("batch helper child was not waited for and reaped: %v", state)
 	}
 }
 
@@ -1239,7 +1525,7 @@ func TestSubjectBatchStreamCancelFailureFallsBackToKill(t *testing.T) {
 	opened := make(chan *subjectGitBatchStream)
 	result := make(chan digestOutcome, 1)
 	go func() {
-		digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitCommandOutput,
+		digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput,
 			func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
 				stream, openErr := startSubjectGitBatch(openContext, command, nil, fence)
 				if stream != nil {
@@ -1285,5 +1571,162 @@ func TestSubjectBatchStreamCancelFailureFallsBackToKill(t *testing.T) {
 	}
 	if state.Success() {
 		t.Fatalf("batch helper child exited on its own instead of being killed: %v", state)
+	}
+}
+
+// TestSubjectDigestInSyncCancelJoinsProcessFence pins the in-sync cancellation
+// path: the caller cancels between batch responses, so the record boundary is
+// intact and close() has to take finish() instead of terminate(). Two
+// observables hold that routing: the digest's own teardown leaves the path's
+// cancellation policy untouched, and the path's unresolved-process fence still
+// reaches the caller, because the child was stopped by that cancellation
+// policy and never by a recorded exit. The Cancel hook fails and the child
+// ignores its closed stdin, so the child only ends when the command context's
+// own watcher kills it after the injected WaitDelay; that watcher is also the
+// single cancellation call this test expects.
+func TestSubjectDigestInSyncCancelJoinsProcessFence(t *testing.T) {
+	repository := newSubjectRepository(t)
+	commit := gitOutput(t, repository, "rev-parse", "HEAD")
+	// The scripted child answers exactly one frame and then blocks, so the
+	// fixture must hold exactly one committed blob: a second blob would leave
+	// the digest inside a response the child never answers, and the
+	// cancellation below would exercise the ctx check or the desync path
+	// instead of the in-sync teardown this pin covers.
+	if got := subjectTreeBlobCount(t, repository, commit); got != 1 {
+		t.Fatalf("the in-sync cancel pin serves exactly one batch frame, but the fixture commit has %d committed tree records", got)
+	}
+	readyPath := filepath.Join(t.TempDir(), "batch-ready")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelFailure := errors.New("injected process-group stop failure")
+	fence := errors.New("injected unresolved batch process fence")
+
+	command := workspaceBatchHelperCommand(t, ctx, "ready-frame-block", readyPath, "synthetic blob content")
+	// The failing hook never stops the child, so WaitDelay is the only bound
+	// on the injected unresolved stop and owns the helper's teardown.
+	command.WaitDelay = 2 * time.Second
+	var cancelCalls atomic.Int32
+	command.Cancel = func() error {
+		cancelCalls.Add(1)
+		return cancelFailure
+	}
+	defer func() {
+		if command.Process != nil {
+			_ = command.Process.Kill()
+		}
+	}()
+
+	var opened atomic.Int32
+	var stream *subjectGitBatchStream
+	result := make(chan error, 1)
+	go func() {
+		_, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput,
+			func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
+				opened.Add(1)
+				openedStream, openErr := startSubjectGitBatch(openContext, command, nil, fence)
+				stream = openedStream
+				return openedStream, openErr
+			})
+		result <- err
+	}()
+
+	// The child reports readiness before it answers, so the cancellation lands
+	// on a digest that is provably in flight. The digest cannot finish before
+	// that cancellation: its child never exits on its own, and the only kill
+	// that can end it is the one the cancelled context triggers.
+	waitForWorkspaceBatchReady(t, readyPath, testHangGuard)
+	cancel()
+
+	var digestErr error
+	select {
+	case digestErr = <-result:
+	case <-time.After(testHangGuard):
+		t.Fatal("subject digest did not stop after an in-sync context cancellation")
+	}
+	if digestErr == nil {
+		t.Fatal("subject digest for an in-sync cancelled batch stream = success, want an error")
+	}
+	if !errors.Is(digestErr, context.Canceled) {
+		t.Fatalf("subject digest error = %v, want context.Canceled", digestErr)
+	}
+	if !errors.Is(digestErr, fence) {
+		t.Fatalf("subject digest error = %v, want the unresolved-process fence joined on the in-sync cancel path", digestErr)
+	}
+	if got := opened.Load(); got != 1 {
+		t.Fatalf("subject digest opened %d batch streams, want exactly one persistent stream", got)
+	}
+	if stream == nil || stream.desynced {
+		t.Fatal("batch stream for an in-sync cancellation was marked desynced; this pin covers the in-sync cancel path only")
+	}
+	// finish() never invokes the path's cancellation policy, so the single call
+	// observed here is the command context watcher that also ends this
+	// unresponsive child. A terminate() route adds its own call, and the count
+	// is what separates the two routes: the joined fence and the reaped child
+	// look identical under both.
+	if got := cancelCalls.Load(); got != 1 {
+		t.Fatalf("in-sync batch teardown made %d cancellation calls, want only the command context watcher's one: close() must take finish() instead of terminate()", got)
+	}
+	state := stream.command.ProcessState
+	if state == nil || command.Process == nil || state.Pid() != command.Process.Pid {
+		t.Fatalf("batch helper child was not waited for and reaped: %v", state)
+	}
+	if state.Success() {
+		t.Fatalf("batch helper child exited on its own instead of being stopped: %v", state)
+	}
+	assertNoOwnedGitChildProcesses(t)
+}
+
+// TestSubjectBatchStreamStartFailureKeepsLaunchError pins the launch-failure
+// classification of the batch stream: releasing the path's command budget must
+// not rewrite a host or tooling failure as a caller cancellation, even though
+// the path hands its own budget context in as the batch context.
+func TestSubjectBatchStreamStartFailureKeepsLaunchError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	budgetContext, budget := context.WithCancel(ctx)
+	missing := filepath.Join(t.TempDir(), "missing-git-binary")
+	command := exec.CommandContext(budgetContext, missing, "cat-file", "--batch")
+
+	stream, err := startSubjectGitBatch(budgetContext, command, budget, nil)
+	if stream != nil || err == nil {
+		if stream != nil {
+			_ = stream.close(nil)
+		}
+		t.Fatalf("startSubjectGitBatch() for an absent Git executable = %v stream, %v error, want a launch failure", stream, err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("startSubjectGitBatch() launch failure = %v, want the launch error instead of a caller cancellation", err)
+	}
+	if !strings.Contains(err.Error(), "missing-git-binary") {
+		t.Fatalf("startSubjectGitBatch() launch failure = %v, want the failing executable named", err)
+	}
+	if budgetContext.Err() == nil {
+		t.Fatal("startSubjectGitBatch() launch failure did not release the path's command budget")
+	}
+}
+
+// TestSubjectBatchStreamStdoutPipeFailureClosesChildStdin pins the descriptor
+// cleanup of the StdoutPipe refusal: Start never runs on that branch, so
+// nothing else can release the read end StdinPipe installed on the command.
+func TestSubjectBatchStreamStdoutPipeFailureClosesChildStdin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	command := workspaceBatchHelperCommand(t, ctx, "blocked-header")
+	// A command whose stdout is already set refuses StdoutPipe before it can
+	// create its own pipe, which is the descriptor-exhaustion boundary this
+	// pin models.
+	command.Stdout = io.Discard
+
+	stream, err := startSubjectGitBatch(ctx, command, nil, nil)
+	if stream != nil || err == nil {
+		t.Fatalf("startSubjectGitBatch() with a set Stdout = %v stream, %v error, want the StdoutPipe refusal", stream, err)
+	}
+	childStdin, ok := command.Stdin.(*os.File)
+	if !ok {
+		t.Fatalf("StdinPipe did not install the child read end on the command: %T", command.Stdin)
+	}
+	if _, readErr := childStdin.Read(make([]byte, 1)); !errors.Is(readErr, os.ErrClosed) {
+		t.Fatalf("StdoutPipe failure left the child read end open: read error = %v, want os.ErrClosed", readErr)
 	}
 }
