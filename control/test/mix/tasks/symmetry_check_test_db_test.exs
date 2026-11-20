@@ -16,13 +16,14 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
   }
 
   # The database values a harness script assigns: a literal
-  # `POSTGRES_DB = "…"`, the literal default of a `-DbName` parameter, and the
-  # `-d` argument of the psql invocation the compose harness fingerprints rows
-  # with. A bare mention (for example a log-file name) is not an assignment.
+  # `POSTGRES_DB = "…"`/`'…'`, the literal default of a `-DbName` parameter in
+  # either quote style, and the `-d` argument of the psql invocation the compose
+  # harness fingerprints rows with, quoted or not. A bare mention (for example a
+  # log-file name) is not an assignment.
   @assigned_database_patterns [
-    ~r/POSTGRES_DB\s*=\s*"([^"]+)"/,
-    ~r/\$DbName\s*=\s*"([^"]+)"/,
-    ~r/-d\s+(symmetry\w+)/
+    ~r/POSTGRES_DB\s*=\s*["']([^"']+)["']/,
+    ~r/\$DbName\s*=\s*["']([^"']+)["']/,
+    ~r/-d\s+"?(symmetry\w+)"?/
   ]
 
   describe "check/2" do
@@ -64,6 +65,20 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
             flunk("#{script} assigns #{inspect(database)} but the guard does not refuse it")
         end
       end
+    end
+
+    test "extracts an assigned database value in either quote style" do
+      contents = """
+      $env:POSTGRES_DB = 'symmetry_0008e_test'
+      $env:POSTGRES_DB = "symmetry_0008g_test"
+      [string]$DbName = 'symmetry_0008h_test'
+      docker compose exec -T postgres psql -U symmetry -d "symmetry_0008f_test" -At -c $Sql
+      tee symmetry_0008i-run.log
+      """
+
+      assert contents |> assigned_databases() |> Enum.sort() ==
+               ~w(symmetry_0008e_test symmetry_0008f_test
+                  symmetry_0008g_test symmetry_0008h_test)
     end
 
     test "refuses the effective name a MIX_TEST_PARTITION suffix produces" do

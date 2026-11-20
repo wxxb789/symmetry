@@ -1180,7 +1180,10 @@ pages` below was moved on 2026-11-19 from branch `fix/paginated-reads-cursor-bin
       sixth Ecto alias, `ecto.migrations`; its cross-check pins every assigned database value of
       the harness scripts (`run-compose-daemon-tests.ps1` → `symmetry_dev`,
       `run-connection-fixture-tests.ps1` → `symmetry_0007e_test`, `run-planning-tests.ps1` →
-      `symmetry_0007c_test`), and with `MIX_ENV=test` the guard file reports `Result: 10 passed`.
+      `symmetry_0007c_test`) and extracts those values in either quote style, quoted or bare
+      `psql -d` included. `symmetry_dev` is refused as an exact name, not a family: the compose
+      harness never partition-suffixes the database it seeds, so a suffixed variant belongs to
+      no harness. With `MIX_ENV=test` the guard file reports `Result: 11 passed`.
 
 - [ ] Investigate the load-sensitive timeout fixture
       `EvaluationTests.test_timed_out_gate_terminates_its_descendants` in

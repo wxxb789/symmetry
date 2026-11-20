@@ -29,9 +29,12 @@ defmodule Mix.Tasks.Symmetry.CheckTestDb do
   families are reserved, because a harness pointed at any name in one recreates
   and seeds it: every name beginning with
   `#{Enum.join(@acceptance_database_prefixes, "`, `")}` is refused, whatever
-  suffix follows. An arbitrary `-DbName` override cannot be covered by a static
-  list; `symmetry_check_test_db_test.exs` keeps the list anchored to the values
-  the harness scripts assign.
+  suffix follows. The compose entry `#{Enum.join(@acceptance_databases, "`, `")}`
+  is refused as an exact name: the compose harness never partition-suffixes the
+  database it seeds and fingerprints, so a suffixed variant belongs to no
+  harness. An arbitrary `-DbName` override cannot be covered by a static list;
+  `symmetry_check_test_db_test.exs` keeps the list anchored to the values the
+  harness scripts assign.
 
   The task is the first step of the `test` alias and of the
   `ecto.create`/`ecto.migrate`/`ecto.migrations`/`ecto.drop`/`ecto.rollback`/`ecto.load`

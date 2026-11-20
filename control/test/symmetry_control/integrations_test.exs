@@ -1325,6 +1325,8 @@ defmodule SymmetryControl.IntegrationsTest do
         )
 
         # Without the ordered prelock, import now holds lower while delivery holds higher.
+        # The direction witness is the sibling case below, "the work-item prelock
+        # waits in ascending UUID order while a delivery holds the higher row".
         send(delivery_pid, {:continue_delivery, ref})
         assert {:ok, _repository} = Task.await(delivery, 10_000)
         assert {:ok, _tracker} = Task.await(importer, 10_000)
