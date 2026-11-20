@@ -151,35 +151,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       both the escaped-escape case and the raw single-backslash spelling must be pinned in the
       tester. Suggested owner area: `scripts/ci` record tooling.
 
-- [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
-      current encoder escapes a recorded value that starts with `:` by prefixing one
-      (`frontend/src/features/work/presentation.ts:94-97`), so a recorded name `:Ada` mints
-      `human:::Ada` (`agent:::Ada` on the agent side), while the pre-#111 encoder spelled it
-      unescaped — `human::Ada`. The reader committed with the legacy-sentinel fix
-      (`ownerKeyFilter`, `:135-139`) maps only the two sentinel words, so a bookmark or hand-typed
-      link carrying the pre-#111 spelling normalises to itself and matches no row, and the
-      pre-#111 key for a recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to
-      the escape the current encoder mints for the recorded name `unrecorded`, so it silently
-      selects that other row and cannot be disambiguated (the collision repeats for deeper colon
-      prefixes: for a recorded name with `k >= 2` leading colons, the pre-#111 key equals the
-      current mint for the same name with `k-1` leading colons, for example legacy `human:::Ada`
-      (name `::Ada`) is the current mint for `:Ada`). Reproduced at `3c705d7` (production bytes
-      identical to `7f62afe`) with a throwaway vitest probe over the repository's own modules
-      (deleted after the run, no test file kept): rows named `:Ada`, `::Ada`, `:unrecorded` and
-      `unrecorded` mint `human:::Ada`, `human::::Ada`, `human:::unrecorded` and
-      `human::unrecorded`; the legacy key `human::Ada` kept its spelling and `filterWorkItems`
-      selected `[]`; the legacy key `human::unrecorded` selected the row named `unrecorded`; the
-      legacy key `human:::Ada` selected the row named `:Ada` instead (the deeper-prefix
-      collision); and `ownerKeyLabel("human::Ada")` prints `Ada`, dropping the colon.
-      Reachable: `assignee_name` and `agent_profile` are length-bounded only
-      (`control/lib/symmetry_control/workspaces/schemas.ex:472-473`), so a colon-leading name can
-      be served. The shape was recorded as an explicit residual of the legacy-sentinel increment
-      (`docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`, "Out of scope"). Fix direction:
-      decide the reading for the colon-leading pre-#111 keys (re-point them like the sentinel, or
-      accept the collision and document it), then pin both shapes in
-      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
-      work-surface/frontend.
-
 - Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
   workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
   shellcheck-disabled repo-wide `actionlint -shellcheck= -pyflakes=` run plus a direct
@@ -239,7 +210,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
     **Operator instruction (dispatch branch, exact).** The trigger is dispatch-only by design: the
     workflow's only event is `workflow_dispatch` (`.github/workflows/linux-native-v2-acceptance.yml:3-6`),
-    its job is guarded `if: github.event_name == 'workflow_dispatch'` (`:14`), and
+    its job carries no event `if:` guard (the `on:` block at `:3-6` is the only trigger), and
     `scripts/ci/linux-v2-native-acceptance.sh:46` refuses every other event — `credentialed Linux
     acceptance requires explicit workflow_dispatch` — so nothing else can run it: the file declares no
     push, pull_request, schedule or `workflow_call` trigger, and `ci.yml` references it nowhere and holds
