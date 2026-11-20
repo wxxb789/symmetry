@@ -124,6 +124,20 @@ export function ownerKeyLabel(key: string): string {
   return `Unknown owner type: ${value || kind}`;
 }
 
+/**
+ * Reads a filter key that a URL or a saved view carries into the key the
+ * current encoder mints: the pre-fix encoder spelled an absent value
+ * `unrecorded`, so the legacy sentinel maps to the empty-value sentinel, which
+ * `ownerKeyLabel` already reads back as the absence it named. Every other key
+ * travels as written — in particular the escaped `agent::unrecorded` that a
+ * recorded name equal to the legacy word mints.
+ */
+export function ownerKeyFilter(key: string): string {
+  if (key === `agent:${legacyAbsentValue}`) return "agent:";
+  if (key === `human:${legacyAbsentValue}`) return "human:";
+  return key;
+}
+
 export function priorityLabel(priority: Text): string | null {
   const value = asText(priority);
   if (value === null) return null;
