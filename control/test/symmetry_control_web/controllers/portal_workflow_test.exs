@@ -1544,7 +1544,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
       |> Repo.insert!()
 
     work_item
-    |> WorkItem.execution_changeset(%{orchestration_task_id: task.id, status: "in_progress"})
+    |> WorkItem.execution_changeset(%{orchestration_task_id: task.id})
     |> Repo.update!()
   end
 
