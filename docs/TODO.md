@@ -608,3 +608,20 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       boundary when a serve offers a token — the offered token's boundary is the served page's
       oldest message, so the re-walk re-reads the drained region and dedupes against the retained
       pages.
+
+## Deferred review findings (PR #133)
+
+- [ ] Align the TypeScript canonical encoders' object-key sort with the UTF-8 byte order Go and
+      Elixir sort by. `contracts/ts/semantics.ts:37-47` sorts keys with `Object.keys(...).sort()`
+      and the frontend `canonicalJson` (`frontend/src/services/commands.ts:53-58`, comparator at
+      `:57`) compares UTF-16 code units, while Go `sort.Strings`
+      (`daemon/internal/protocol/goal_subject.go` `writeCanonicalJSON`'s object arm) compares
+      bytes and Elixir `Enum.sort_by(&elem(&1, 0))`
+      (`control/lib/symmetry_control/request_hash.ex:31-36`) compares binaries byte-wise, so two
+      keys that straddle the orders disagree — for example U+1F600 and U+E000: UTF-16 puts the
+      emoji first, UTF-8 the U+E000 key. Hashed documents appear to carry only ASCII keys today
+      (inference from the schema shapes, not exhaustively proved), so the class is not reachable
+      through the current seams. Found by the round-1 review of PR #133
+      (`docs/plans/2026-11-20-go-canonical-c0-case-plan.md`), recorded outside that PR. Fix
+      direction: sort by UTF-8 bytes (or code points) in both TypeScript encoders and pin a
+      cross-language vector with a non-ASCII key in each layer's suite.

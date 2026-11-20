@@ -2684,14 +2684,14 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       stay the reference, and the normalization rule now names the case
       (`docs/design/protocol.md:311-320`). `normalizeJSONStringEscapes`
       (`daemon/internal/protocol/goal_subject.go`, formerly `normalizeJSONStringLineSeparators`)
-      uppercases the hex digits of every surviving `\uXXXX` escape in the same scanner that keeps
-      `U+2028`/`U+2029` raw and leaves a literal `\\u001f` text unchanged; the shorthand escapes,
-      key order and numeric handling are unchanged, so only the nine C0 controls whose escape
-      carries a hex letter (`U+000B`, `U+000E`, `U+000F`, `U+001A`-`U+001F`) change bytes. Pinned
-      by `TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane`
+      uppercases the hex digits of every surviving C0 escape token (00-prefixed) in the same
+      scanner that keeps `U+2028`/`U+2029` raw and leaves a literal `\\u001f` text unchanged; the
+      shorthand escapes, key order and numeric handling are unchanged, so only the nine C0 controls
+      whose escape carries a hex letter (`U+000B`, `U+000E`, `U+000F`, `U+001A`-`U+001F`) change
+      bytes. Pinned by `TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane`
       (`daemon/internal/protocol/goal_subject_test.go:114-174`) and
-      `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` (`:176-199`), red before
-      the fix (bytes `\u001f` where `\u001F` was wanted, both tests, exit 1) and green after: the
+      `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` (`:176-221`), red before
+      the fix (lowercase hex where uppercase was wanted, both tests, exit 1) and green after: the
       first pins the entry's value (`{"value":"\u001F"}`, the digest Jason 1.4.5 computes,
       `sha256:520bd0e56ee01fe3ec0b1c8d5ac7cfc0c2aea0999e9de295553abe6e45dcff63`), the nine
       hex-letter escapes, the document the contracts boundary test pins
@@ -2700,11 +2700,20 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       before admission (`goal_contract_semantics.go` `canonicalPlanProposalSHA256`) against the
       control plane's digest the frontend pin already records for a description carrying
       U+000B/U+001B (`sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5`).
+      A third pin, `TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged` (`:223-235`), holds
+      the 00-token scope of the rewrite itself (it reddens against a rewrite of every four-digit
+      token).
       The reproduction no longer reproduces: the post-fix Go canonicalizer's bytes
       equal Jason 1.4.5's byte for byte over the entry's value, the nine hex-letter controls, that
-      boundary document and the plan proposal above; the digit-only C0 escapes are unchanged by
-      uppercasing and stay pinned by the existing escaping test. No recorded digest over a
-      control-bearing value is invalidated — no hex-letter C0
-      escape predates this change in any daemon source, test, fixture or testdata file, and the
-      uppercase pins named above stay valid. The reachable end-to-end refusal stays source-traced;
-      the plan is `docs/plans/2026-11-20-go-canonical-c0-case-plan.md`.
+      boundary document and the plan proposal above; the digit-only C0 escapes are unchanged
+      because the rewrite only maps the hex letters a-f, and U+0000 stays pinned by the existing
+      escaping test. No repository-asserted digest or fixture over affected bytes is invalidated:
+      no hex-letter C0 escape predates this change in any daemon source, test, fixture or testdata
+      file, and the uppercase pins named above stay valid. Two recorded digest classes are
+      superseded rather than reused: the pre-fix probe digest quoted above (its value now
+      canonicalizes to the uppercase bytes) and persisted daemon-side digests over affected bytes
+      such as `ProviderActionIntent.RequestDigest` (`daemon/internal/app/pi_provider_bridge.go`,
+      replayed at `daemon/internal/state/provider_action.go`), where a pre-fix journal fails
+      closed with `local_idempotency_conflict` and no duplicate external effect; backward
+      compatibility is waived because the first release is not shipped. The reachable end-to-end
+      refusal stays source-traced; the plan is `docs/plans/2026-11-20-go-canonical-c0-case-plan.md`.

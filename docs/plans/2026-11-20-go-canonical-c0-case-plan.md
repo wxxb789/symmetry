@@ -9,7 +9,7 @@ hash." Baseline for every coordinate in this plan: `origin/main` at
 ## Deliverable shape
 
 1. `daemon/internal/protocol/goal_subject.go` — the escape normalizer that already rewrites
-   `U+2028`/`U+2029` to raw UTF-8 also emits every surviving `\uXXXX` escape with uppercase hex
+   `U+2028`/`U+2029` to raw UTF-8 also emits every surviving C0 escape with uppercase hex
    digits; one scanner, one rule set, renamed and documented together.
 2. `daemon/internal/protocol/goal_subject_test.go` — new regression pins
    `TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane` and
@@ -65,10 +65,11 @@ Elixir and contracts encoders stay the reference; the normalization rule text na
 
 ## Exact semantics the contract demands
 
-- **Change.** In the existing escape-token scanner, a `\uXXXX` escape that is not `U+2028`/`U+2029`
-  is emitted with its four hex digits uppercased (`\u001f` → `\u001F`). The comment records the
-  rule: the control plane's `Jason` encoder spells C0 controls that way, and the canonical form is
-  the pair's shared one.
+- **Change.** In the existing escape-token scanner, a C0 control's escape token (00-prefixed) that
+  is not `U+2028`/`U+2029` is emitted with its four hex digits uppercased (`\u001f` → `\u001F`);
+  every other four-digit token keeps its bytes, so the rewrite stays inside the rule's C0 scope.
+  The comment records the rule: the control plane's `Jason` encoder spells C0 controls that way,
+  and the canonical form is the pair's shared one.
 - **Affected values.** Strings containing `U+000B`, `U+000E`, `U+000F`, `U+001A`-`U+001F` (the
   characters whose escape carries a hex letter). `U+0000`-`U+0007` and `U+0010`-`U+0019` carry
   digit-only escapes and are byte-identical before and after.
@@ -80,11 +81,18 @@ Elixir and contracts encoders stay the reference; the normalization rule text na
 - **Reachable effect.** A context snapshot whose hashed text carries one of the affected
   characters now verifies against the control plane instead of being refused
   (`context.content_hash does not match canonical snapshot`).
-- **Recorded digests.** None is invalidated: before this change, a case-insensitive search for a
-  hex-letter C0 escape (`u00[0-9a-f]{2}` with a letter in the last two digits) over `daemon/**`,
+- **Recorded digests.** No repository-asserted digest or fixture over affected bytes is
+  invalidated: before this change, a case-insensitive search for an escape of one of the nine
+  hex-letter C0 controls (U+000B, U+000E, U+000F, U+001A-U+001F) over `daemon/**`,
   `contracts/fixtures/**` and `contracts/scripts/**` matched only the boundary test's uppercase
-  pin, and no fixture or testdata file carries a raw C0 byte; the only control-bearing canonical
-  artifacts in the tree are the uppercase pins above, and they stay valid.
+  pin, and no fixture or testdata file carries a raw U+000B/U+000E/U+000F/U+001A-U+001F byte; the
+  only control-bearing canonical artifacts in the tree are the uppercase pins above, and they
+  stay valid. Two recorded digest classes outside that scope are superseded rather than reused:
+  the pre-fix probe digest the archive entry quotes (its value canonicalizes to other bytes now),
+  and persisted daemon-side digests over affected bytes such as
+  `ProviderActionIntent.RequestDigest` (`daemon/internal/app/pi_provider_bridge.go`, replayed at
+  `daemon/internal/state/provider_action.go`), where a pre-fix journal fails closed with
+  `local_idempotency_conflict` and no duplicate external effect.
 
 ## Evidence plan (commands, output and exit codes recorded in answer.md)
 
@@ -118,7 +126,8 @@ Elixir and contracts encoders stay the reference; the normalization rule text na
   identical document bytes plus recomputed digest, pinned in the Go test and already pinned by
   `contracts/scripts/boundary.test.mjs:59-71`.
 - Other TODO entries, unrelated refactors, and backward compatibility (not required; first
-  release not shipped, and no recorded digest changes).
+  release not shipped, and no repository-asserted digest or fixture changes; superseded
+  daemon-side journal digests fail closed, as "Recorded digests" above records).
 
 ## Trade-offs and residual risks
 

@@ -182,6 +182,9 @@ func TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane(t *testing.
 // and control/validation.go validateGoalContextContentHash). The expectation is
 // the control plane's digest already recorded by the frontend pin
 // (frontend/src/features/goals/goal-attention.test.tsx:751-790).
+// The second half calls canonicalPlanProposalSHA256 itself on the same proposal
+// with the optional integration member omitted, so normalizePlanProposal's
+// defaulting is part of what this test pins.
 func TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest(t *testing.T) {
 	canonical, err := CanonicalizeJSON([]byte(`{"schema_version":"symmetry.plan.v1","items":[{"description":"before\u000Bafter\u001Bend","integration":false,"change_target":null}]}`))
 	if err != nil {
@@ -195,5 +198,38 @@ func TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest(t *testing
 	const wantHash = "sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5"
 	if gotHash := "sha256:" + hex.EncodeToString(digest[:]); gotHash != wantHash {
 		t.Fatalf("canonical plan proposal hash = %s, want %s", gotHash, wantHash)
+	}
+
+	// The daemon's own seam over the same proposal: normalizePlanProposal
+	// defaults the omitted integration member to false before hashing, so this
+	// must land on the bytes and digest pinned above.
+	proposalDigest, err := canonicalPlanProposalSHA256(map[string]any{
+		"schema_version": "symmetry.plan.v1",
+		"items": []any{
+			map[string]any{
+				"description":   "before\x0bafter\x1bend",
+				"change_target": nil,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposalDigest != wantHash {
+		t.Fatalf("canonicalPlanProposalSHA256 = %s, want %s", proposalDigest, wantHash)
+	}
+}
+
+// The rewrite is scoped to the C0 tokens the normalization rule names: only a
+// 00-prefixed escape token is uppercased, so any other four-digit token keeps
+// its bytes. encoding/json emits no non-C0 escape token today (invalid UTF-8
+// becomes the raw U+FFFD bytes, and after the line-separator rule the C0
+// controls are the only escapes left), so this pins the scanner's rule
+// directly: a wide rewrite would produce an uppercase spelling neither Jason
+// nor the contracts encoder emits.
+func TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged(t *testing.T) {
+	input := []byte(`"\ufffd"`)
+	if got := normalizeJSONStringEscapes(input); !bytes.Equal(got, input) {
+		t.Fatalf("non-C0 escape token = %q, want %q", got, input)
 	}
 }

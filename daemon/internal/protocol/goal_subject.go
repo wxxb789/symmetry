@@ -195,10 +195,13 @@ func marshalJSONString(value string) ([]byte, error) {
 
 // The canonical escape spelling is the control plane's: U+2028 and U+2029 stay
 // raw UTF-8 (encoding/json escapes them even with HTML escaping disabled), and
-// a \uXXXX escape uses uppercase hex digits, as the control plane's Jason
-// encoder spells them. After the line-separator rule the only escapes left are
-// the C0 controls that have no shorthand. Scan complete escape tokens so a
-// literal \\u001f is left unchanged.
+// a C0 control's 00-prefixed escape uses uppercase hex digits, as the control
+// plane's Jason encoder spells them. Only 00-prefixed tokens are rewritten, the
+// scope the normalization rule names; every other four-digit token keeps its
+// bytes (encoding/json emits none today — invalid UTF-8 becomes the raw U+FFFD
+// bytes, not an escape — so a Go release that escapes the replacement rune
+// cannot leak a spelling no other implementation produces). Scan complete
+// escape tokens so literal escape-looking value text is left unchanged.
 func normalizeJSONStringEscapes(encoded []byte) []byte {
 	output := make([]byte, 0, len(encoded))
 	for index := 0; index < len(encoded); {
@@ -230,9 +233,10 @@ func normalizeJSONStringEscapes(encoded []byte) []byte {
 			case encoded[index+2] == '2' && encoded[index+3] == '0' && encoded[index+4] == '2' && encoded[index+5] == '9':
 				output = append(output, 0xe2, 0x80, 0xa9)
 			default:
+				uppercase := encoded[index+2] == '0' && encoded[index+3] == '0'
 				output = append(output, '\\', 'u')
 				for _, digit := range encoded[index+2 : index+6] {
-					if digit >= 'a' && digit <= 'f' {
+					if uppercase && digit >= 'a' && digit <= 'f' {
 						digit -= 'a' - 'A'
 					}
 					output = append(output, digit)
