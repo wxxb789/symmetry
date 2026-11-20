@@ -290,7 +290,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
     **Operator instruction (dispatch branch, exact).** The trigger is dispatch-only by design: the
     workflow's only event is `workflow_dispatch` (`.github/workflows/linux-native-v2-acceptance.yml:3-6`),
-    its job is guarded `if: github.event_name == 'workflow_dispatch'` (`:14`), and
+    its job carries no event `if:` guard (the `on:` block at `:3-6` is the only trigger), and
     `scripts/ci/linux-v2-native-acceptance.sh:46` refuses every other event — `credentialed Linux
     acceptance requires explicit workflow_dispatch` — so nothing else can run it: the file declares no
     push, pull_request, schedule or `workflow_call` trigger, and `ci.yml` references it nowhere and holds
