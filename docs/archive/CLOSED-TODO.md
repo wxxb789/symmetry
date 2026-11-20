@@ -52,6 +52,9 @@ moved on 2026-11-21 from branch `fix/served-read-closeout`.
 The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
 
+The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
+that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -2446,6 +2449,193 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       offers a token, and the ended chain drops it — the never-continued shape the branch had covered.
       The gap is tracked as the open TODO entry "An ended chat chain never accepts a later served
       token" (`docs/TODO.md`); this closure is kept as recorded.
+
+      **Annotation (2026-11-21, branch `fix/chat-history-chain`):** two claims recorded above are
+      superseded, and the closure is otherwise kept as recorded. The served token an ended chain
+      dropped is no longer dropped: `retainServedPage` re-opens the chain from the served boundary
+      when a serve offers a token while no continuation is live, so the gap this block names as open
+      work — the entry "An ended chat chain never accepts a later served token" — is closed below.
+      And a definitive refusal a later load advanced past no longer "carries only its notice": its
+      reset and notice are suppressed, because the pointer belongs to the newer chain the reader's
+      next press walks (the closure below states the one-settle-tick re-read window) — the entry
+      "The chat surface's in-flight `Load older` guard is still keyed by cursor bytes" is closed
+      below. Both closures state their own pins.
+
+- [ ] The chat surface's in-flight `Load older` guard is still keyed by cursor bytes:
+      `loadingCursor` (`frontend/src/features/chat/chat.tsx:172-221`) admits a second load for the
+      same boundary while the first is in flight once a re-serve has renewed `history.loadCursor`
+      and re-rendered the button (`frontend/src/features/chat/chat.tsx:560`), and a refusal of the
+      superseded request still posts its notice after the retry already loaded the page. (The rest
+      of that damage is fixed — 2026-11-20, fix round 2: a refusal rewinds the chain pointer and
+      re-reads the captured scope only while the press still owns the chain boundary it captured,
+      so a superseded one is only this notice.) Pre-existing: base re-keyed the cursor on every
+      refresh, so the race predates the boundary-id work. Repro on those bytes: press Load older,
+      refresh while its page is in flight, press Load older again (admitted because the cursor
+      bytes changed), and let the first request's refusal settle after the second landed. Fix
+      direction: key pending loads by scope + boundary id (token bytes as the fallback) and
+      suppress the superseded refusal's notice.
+
+      **Closed (2026-11-21, `fix/chat-history-chain`):** a pending press is identified by scope +
+      boundary message id — cursor bytes only as the fallback while either side lacks a boundary
+      id — through `pendingOlderLoadFor` (`frontend/src/features/chat/scopes.ts`), the same
+      two-sided comparison `ownsChainPointer` already makes, extended by the scope key so a press
+      belongs to the scope that made it; `chat.tsx` holds one record per press in flight, admits no
+      second press for a boundary one already holds there, clears only its own record, and renders
+      the button's `aria-disabled` from that same predicate, so a token the server re-signs at the
+      same boundary leaves the press in flight unrepeatable while a press at a moved boundary is
+      still its own load. The refusal's reset and notice are one committed write judged by
+      `ownsChainPointer`: an owning press resets the pointer to the served page's own token and
+      re-reads the captured scope exactly as fix round 2 established, while a superseded refusal
+      neither resets the pointer nor posts its notice — the pointer belongs to the newer chain the
+      reader's next press walks, so the notice would contradict what the reader can see, and the
+      refused press's region is only reachable from that chain, not already loaded. The re-read
+      gate is the one judgment outside that write: it reads the last committed snapshot while the
+      write decides against the store's queued record, so inside one settle tick a refusal the
+      write judges superseded may still re-read the captured scope once — one benign read, never a
+      wrong cursor (the source comment in `chat.tsx` documents the window; the r1 fix round
+      rewrote this sentence).
+      Decision kept from the entry's reading: only a refusal's notice is
+      suppressed, because a non-refusal failure's outcome is unproven and suppressing it too would
+      hide transient read failures the reader can still act on. Pinning cases: "does not admit a
+      second Load older for the boundary already in flight when the cursor re-signs" (new; red on
+      the pre-fix bytes at `expected [ 'cursor-5', 'cursor-5-resigned' ] to deeply equal
+      [ 'cursor-5' ]`), "leaves the chain alone when the refused press no longer owns it"
+      (re-pinned: the renewal-based supersession it relied on is unreachable under the new guard,
+      so the press is superseded by a served boundary that moved instead; the case keeps its
+      no-reset/no-re-read assertions — `reads` stays 2 and `requested` reaches `cursor-2` — and
+      replaces "stays the notice" with the suppressed notice, red on the pre-fix bytes at
+      `Expected element to have text content: Messages are saved to this context. / Received: The
+      server returned an unexpected response.`), and "renews the served cursor at an unchanged
+      boundary only while the reader has not paged past it" (re-pinned to the new admission rule,
+      red on the pre-fix bytes at `Expected the element to have attribute: aria-disabled="true" /
+      Received: aria-disabled="false"`).
+
+      **Annotation (2026-11-21, branch `fix/chat-history-chain`, apply stage of the simplify review):**
+      one sentence above is inaccurate, and two pins were added. `pendingOlderLoadFor` is two-sided
+      — the boundary message's id while both sides name one, cursor bytes while either does not —
+      but `ownsChainPointer` is not: it decides on the captured side's id alone and never falls back
+      to bytes while it has one, so the two predicates can classify one press/store pair
+      differently (a press naming a boundary message is superseded by a store that holds only cursor
+      bytes at that position while the same press still holds the pendency). The predicate itself is
+      unchanged and is what the contract asks for; the source comment was corrected (`scopes.ts`),
+      and `docs/plans/2026-11-20-chat-history-chain-plan.md` carries the same annotation. The scope
+      fence's own claim — a press "must neither block nor be blocked by another scope's" — is now
+      pinned by "does not let one scope's press in flight block another scope's Load older at the
+      same cursor bytes" (red against a `pendingOlderLoadFor` without the scope term at `Expected
+      the element to have attribute: aria-disabled="false" / Received: aria-disabled="true"`, and
+      red on the pre-fix bytes at the same assertion), and the refusal-only notice decision by
+      "keeps a non-refusal failure's notice when the press no longer owns the chain" (kills both
+      "silence every superseded notice" and "silence every non-refusal notice" at `Expected element
+      to have text content: The server is temporarily unavailable. / Received: Messages are saved to
+      this context.`; green on the pre-fix bytes — it pins that decision, not the regression).
+
+- [ ] An ended chat chain never accepts a later served token: a chain drained through its own loads
+      (`nextCursor` null, the recorded `nextBoundaryId` naming an older message) or a read that
+      served the whole history (no continuation was ever established) keeps reporting "oldest
+      history loaded" while a later serve at the same boundary offers a token, so the rows below
+      the served page stay unreachable until a reload or a boundary move. Repro (rows ordered 3–54,
+      so the first page is 5–54 plus a token and the older read 3–4 ends `null`): rows 1–2 becoming
+      visible late — a slow concurrent post commits an older-timestamped row, since `inserted_at`
+      is set at insert inside the transaction and the advisory lock is per action, not per scope —
+      make the next read still bound at 5 and offer a token for it, which the ended chain drops.
+      Found by the r2 review of `fix/chat-history-boundary-id` (2026-11-20), the round that removed
+      the `adopt` branch covering the never-continued shape (the drained shape was never covered by
+      it). Fix direction: treat "ended" as no usable continuation and re-open from the served
+      boundary when a serve offers a token — the offered token's boundary is the served page's
+      oldest message, so the re-walk re-reads the drained region and dedupes against the retained
+      pages.
+
+      **Closed (2026-11-21, `fix/chat-history-chain`):** "ended" is now no usable continuation:
+      `retainServedPage` (`frontend/src/features/chat/scopes.ts`) re-opens the chain from the
+      served boundary when a serve offers a token, the served page names a boundary and
+      `state.nextCursor === null` — the reader drained the chain through its own loads, or the read
+      served the whole history — while a chain that is not ended keeps the existing rule. The
+      adopted token is signed from the served page's oldest message, so the next press re-walks the
+      drained region; `chatHistoryView` dedupes the retained pages by id and `historyGap` still
+      reaches every retained page through its captured `fetchBeforeId`, so the region renders
+      contiguous and the note reports older history again instead of "oldest history loaded". Kept
+      limit: a serve in a drained scope re-offers the button even when nothing new exists to read —
+      the server cannot know the client's retained set — so the reader re-walks the drained region
+      one press per page, each press re-reading exactly one page and the retained copies deduped
+      only at render, until it drains again; every not-moved serve re-offers the token, a plain
+      re-sign with no new rows included (an explicit refresh, a window-focus refetch, a realtime
+      `chat` invalidation, a send), and the rule cannot tell a late-visible row from such a
+      re-sign. A second kept limit is the query cache's own: the surface applies a serve when the
+      conversation query's data object changes, TanStack Query's default structural sharing keeps
+      the applied object for a refetch whose bytes deep-equal it, and the served cursor's bytes
+      change per response except when the server signed two responses in the same millisecond
+      (the signed token's embedded timestamp defaults to milliseconds; the same coincidence
+      `presentation.ts` names), so a re-serve that both re-signs identical bytes and carries
+      identical messages never reaches the surface, and the ended chain waits for the next
+      differing serve — a throwaway probe on the delivered bytes confirmed the collapse (the
+      refetch kept the first read's data object, the note stayed "oldest history loaded" and the
+      button stayed hidden). Anchoring the application on response arrival rather than object
+      identity (e.g. `structuralSharing: false` on `chatConversationOptions`) is the remedy if
+      that coincidence ever matters; the r1 fix round records it as a bounded limit. Pinning cases:
+      "re-opens a drained chain when a later serve offers a token at the served boundary" (new;
+      red on the pre-fix bytes at `Expected element to have text content: 4 messages loaded · older
+      history available / Received: 4 messages loaded · oldest history loaded.`) and "re-opens a
+      chain that never continued when a later serve offers a token at the served boundary" (new;
+      red on the pre-fix bytes at `Expected element to have text content: 2 messages loaded · older
+      history available / Received: 2 messages loaded · oldest history loaded.`).
+
+      Gates for both closures above, on branch `fix/chat-history-chain`, each row bound to the
+      revision it was measured at. Apply stage (`750a496`, this host, 2026-11-21, before that
+      commit's merge of `origin/main` `adf6d38` — which changed no `frontend/src/features/chat`
+      file but did add main-side frontend files, `router.test.tsx`, `filters.test.ts`,
+      `filters.ts`, `saved-views.test.ts` and `work/presentation.ts`): `vitest run
+      src/features/chat --no-file-parallelism` rc 0 (2 files, 86 tests); `pnpm --dir frontend test`
+      rc 0 (20 files, 498 tests); `typecheck` rc 0; `lint` rc 0; `build` rc 0 (bundle
+      `index-wiT0iX5k.js`, md5 `7d2f0e696cbf59900139eedeec33e05c`, 885870 B); `git diff --check`
+      rc 0 (the frontend has no formatter script). R1 fix round of the whole-increment review
+      (this host, 2026-11-21, re-measured at the delivered tree — `8e91434` plus the fix round's
+      record and test edits): `pnpm install --frozen-lockfile` rc 0; `vitest run src/features/chat
+      --no-file-parallelism` rc 0 (2 files, 87 tests); `pnpm --dir frontend test` rc 0 (20 files,
+      502 tests); `typecheck` rc 0; `lint` rc 0; `git diff --check` rc 0. Every new and re-pinned
+      case was also run against the pre-fix `chat.tsx`/`scopes.ts` — byte-identical copies of
+      `git show fdf332d:…`, digest-checked before and after the run — with that stage's delivered
+      test bytes: 6 failed / 41 passed (47) at the apply stage, 7 failed / 41 passed (48) at the
+      r1 fix round, rc 1, each for the reason its closure names or the pin's own claim names (the
+      r1 round's added case reddens at `expect(element).toHaveAttribute("aria-disabled",
+      "true")`). Each added pin was mutation-checked against the wrong rule it exists to kill, and
+      reddens exactly there:
+      dropping the scope key from `pendingOlderLoadFor` reddens "does not let one scope's press in
+      flight block another scope's Load older at the same cursor bytes" (`Expected the element to
+      have attribute: aria-disabled="false" / Received: aria-disabled="true"`), and both "silence
+      every superseded notice" and "silence every non-refusal notice" redden "keeps a non-refusal
+      failure's notice when the press no longer owns the chain" (`Expected element to have text
+      content: The server is temporarily unavailable. / Received: Messages are saved to this
+      context.`); the r1 fix round's two new pins kill their own rules — a `pendingOlderLoadFor`
+      comparing boundary ids whenever either side names one (leaving the bytes fallback
+      unreachable) reddens "does not admit a Load older at the same cursor bytes while either side
+      cannot name a boundary id" alone (1 failed / 47 passed), and a `.finally` clearing every
+      press record reddens the busy assertion that case and "does not let one scope's press in
+      flight block another scope's Load older at the same cursor bytes" now carry (2 failed /
+      46 passed) — while in the other direction a superseded refusal delayed past the r1 round's
+      settlement fence reddens "leaves the chain alone when the refused press no longer owns it"
+      at `expected 'pending' to be 'error'` instead of passing its negative assertions unrun; each
+      mutant reddened only the pins named and left the chat suite's other cases green. The r1
+      round also confirmed the re-open's named structural-sharing limit with a throwaway probe
+      (deleted after the run): a byte-identical re-serve kept the applied data object, the note
+      stayed "oldest history loaded", and no button appeared. The path-triggered render gate
+      (`SYMMETRY_RENDER_GATE_REQUIRED=1`, the seven focused spec files, desktop and mobile Chromium,
+      against three release instances of `750a496` serving its bundle on this host):
+      93 expected, 1 skipped (the by-design concurrency skip), 0 unexpected, rc 0 (8.5 m), and
+      `scripts/ci/assert-playwright-json.py` rc 0 over CI's own expected set; the chat spec's 12
+      cases are all expected in it. The release instances were proved to serve the bundle built at
+      `750a496`: the asset body's md5 `7d2f0e69…` matched from all three ports, port 4010 measured
+      `/portal/assets/index-wiT0iX5k.js` → HTTP 200 with 885870 B, and the pre-apply
+      `index-CS3_ZMmm.js` answered HTTP 404 (also measured on 4010). The implement-stage numbers
+      measured before the apply — 84 tests, 496 tests, 5 failed / 40 passed (45), bundle
+      `index-CS3_ZMmm.js` md5 `45798f9b…`, 93 expected / 1 skipped / 11.8 m — are superseded by
+      the apply-stage numbers above; the pre-apply receipt's earlier flaky invocation (92 expected
+      / 1 unexpected, the fixture-gated goal-context case under host load) has no counterpart in
+      the apply run. The r1 review's own re-measure at `8e91434` hit one flaky case there: the
+      untouched, load-sensitive `src/tool-cache-config.test.ts` exceeded vitest's 5 s default
+      timeout under suite parallelism (twice; green in isolation). This fix round's full-suite run
+      at the delivered tree passed 20 files / 502 tests, and the isolated file re-measured rc 0
+      (2 tests); the flake is recorded as host load acting on an untouched file, not normalized by
+      reruns.
 
 ## Deferred review findings (0007g)
 

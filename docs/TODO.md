@@ -630,33 +630,3 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       re-signed cursor's bytes); a cursor the reader has paged past is not renewed by later serves,
       but its refusal after the server's 24-hour `max_age` now restarts the chain from the served
       page and re-reads it, so the next press renews the token and the re-walk dedupes.
-
-- [ ] The chat surface's in-flight `Load older` guard is still keyed by cursor bytes:
-      `loadingCursor` (`frontend/src/features/chat/chat.tsx:172-221`) admits a second load for the
-      same boundary while the first is in flight once a re-serve has renewed `history.loadCursor`
-      and re-rendered the button (`frontend/src/features/chat/chat.tsx:560`), and a refusal of the
-      superseded request still posts its notice after the retry already loaded the page. (The rest
-      of that damage is fixed — 2026-11-20, fix round 2: a refusal rewinds the chain pointer and
-      re-reads the captured scope only while the press still owns the chain boundary it captured,
-      so a superseded one is only this notice.) Pre-existing: base re-keyed the cursor on every
-      refresh, so the race predates the boundary-id work. Repro on those bytes: press Load older,
-      refresh while its page is in flight, press Load older again (admitted because the cursor
-      bytes changed), and let the first request's refusal settle after the second landed. Fix
-      direction: key pending loads by scope + boundary id (token bytes as the fallback) and
-      suppress the superseded refusal's notice.
-
-- [ ] An ended chat chain never accepts a later served token: a chain drained through its own loads
-      (`nextCursor` null, the recorded `nextBoundaryId` naming an older message) or a read that
-      served the whole history (no continuation was ever established) keeps reporting "oldest
-      history loaded" while a later serve at the same boundary offers a token, so the rows below
-      the served page stay unreachable until a reload or a boundary move. Repro (rows ordered 3–54,
-      so the first page is 5–54 plus a token and the older read 3–4 ends `null`): rows 1–2 becoming
-      visible late — a slow concurrent post commits an older-timestamped row, since `inserted_at`
-      is set at insert inside the transaction and the advisory lock is per action, not per scope —
-      make the next read still bound at 5 and offer a token for it, which the ended chain drops.
-      Found by the r2 review of `fix/chat-history-boundary-id` (2026-11-20), the round that removed
-      the `adopt` branch covering the never-continued shape (the drained shape was never covered by
-      it). Fix direction: treat "ended" as no usable continuation and re-open from the served
-      boundary when a serve offers a token — the offered token's boundary is the served page's
-      oldest message, so the re-walk re-reads the drained region and dedupes against the retained
-      pages.
