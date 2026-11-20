@@ -85,7 +85,7 @@ prerequisite to later consolidation. C4 removals: zero.
 Both commands omitted overlays:
 
 - `go test ./internal/harness ./internal/control ./internal/protocol -run '^(TestBoundedProbeRejectsSuccessAfterDeadline|TestClaudeProbeRejectsSuccessAfterProbeDeadline|TestValidateGoalCommitPathUsesUTF8RuneLength|TestValidateCommitPathUsesUTF8RuneLength)$' -count=1` - exit 0.
-- In WSL distro `symmetry-race`, from `/mnt/q/repos/symmetry/daemon`:
+- In WSL distro `symmetry-race`, from `path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153`:
   `GOMAXPROCS=2 /opt/go/bin/go test -race -p 2 ./internal/harness ./internal/control ./internal/protocol -run '^(TestBoundedProbeRejectsSuccessAfterDeadline|TestClaudeProbeRejectsSuccessAfterProbeDeadline|TestValidateGoalCommitPathUsesUTF8RuneLength|TestValidateCommitPathUsesUTF8RuneLength)$' -count=1` - exit 0 (`go1.27.0 linux/amd64`).
 
 ## Limits

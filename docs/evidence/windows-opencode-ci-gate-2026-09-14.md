@@ -12,7 +12,7 @@ the port, pinned binary provenance, and synthetic upstream scope.
 ## Local Verification
 
 On Windows, the installed executable
-`C:\Users\lhan\AppData\Local\mise\installs\opencode\1.18.30\opencode.exe`
+`path-sha256:c8215dd63a2665b78b66c2be425a1bf0f9d05782c64e365a58dc452ffe0b8eb8`
 reported version `1.18.30`. With
 `SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL=1` and that executable set in
 `SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE`, this command passed:
