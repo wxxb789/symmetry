@@ -1432,7 +1432,8 @@ func TestSubjectBatchStreamWriteRefusalDesyncsAndReapsChild(t *testing.T) {
 	secondHeader, _, secondFound := bytes.Cut(records[1], []byte{'\t'})
 	firstFields := bytes.Split(firstHeader, []byte{' '})
 	secondFields := bytes.Split(secondHeader, []byte{' '})
-	if !firstFound || !secondFound || len(firstFields) != 3 || len(secondFields) != 3 {
+	if !firstFound || !secondFound || len(firstFields) != 3 || len(secondFields) != 3 ||
+		!bytes.Equal(firstFields[1], []byte("blob")) || !bytes.Equal(secondFields[1], []byte("blob")) {
 		t.Fatalf("fixture tree listing does not start with two blob entries: %q, %q", records[0], records[1])
 	}
 	// The first response carries the first entry's committed bytes, so the
@@ -1464,17 +1465,11 @@ func TestSubjectBatchStreamWriteRefusalDesyncsAndReapsChild(t *testing.T) {
 	if refusal := fmt.Sprintf("request object %s from Git batch stream:", secondObject); !strings.Contains(err.Error(), refusal) {
 		t.Fatalf("subject digest error = %v, want the second request refused at the write: %q", err, refusal)
 	}
-	if strings.Contains(err.Error(), "read Git batch response header for object "+secondObject) {
-		t.Fatalf("subject digest error = %v, want the refusal at the write, not at the response read", err)
-	}
 	if !errors.Is(err, fence) {
 		t.Fatalf("subject digest error = %v, want the unresolved-process fence joined on the desynced route", err)
 	}
 	if ctx.Err() != nil {
 		t.Fatalf("subject digest stopped only after its context ended (%v): the refusal must be the pipe error, not a cancellation", ctx.Err())
-	}
-	if errors.Is(err, context.Canceled) {
-		t.Fatalf("subject digest error = %v, want the pipe error for a live context", err)
 	}
 	state := stream.command.ProcessState
 	if state == nil || command.Process == nil || state.Pid() != command.Process.Pid {

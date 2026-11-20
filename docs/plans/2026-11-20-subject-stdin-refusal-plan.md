@@ -72,9 +72,10 @@ the pinned branch with both runs recorded in `answer.md`:
 - baseline on the frozen tree: new test green (Windows and WSL Ubuntu-24.04);
 - mutation A: drop the object name from the refusal in `streamObject` → the pin goes red on
   assertion 1;
-- mutation B: drop `desync` from the write-refusal branch → the pin goes red on assertions 2/3
-  and 4 (the desynced/fence/live-context observables), bounded by the test's own context
-  deadline rather than the harness timeout;
+- mutation B: drop `desync` from the write-refusal branch → the pin goes red on the desynced
+  assertion (assertion 2; the live-context assertion would also fail if it were reached). The
+  fence observable is not separated by this mutation: `finish()` joins the same sentinel on its
+  `ctxErr` path. Bounded by the test's own context deadline rather than the harness timeout;
 - mutation reverted (source back to the HEAD bytes), re-run green; the tree left for
   verification carries no `subject.go` diff.
 
