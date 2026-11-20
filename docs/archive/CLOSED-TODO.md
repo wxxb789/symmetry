@@ -2266,10 +2266,11 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       dropped is no longer dropped: `retainServedPage` re-opens the chain from the served boundary
       when a serve offers a token while no continuation is live, so the gap this block names as open
       work — the entry "An ended chat chain never accepts a later served token" — is closed below.
-      And a definitive refusal a later load advanced past no longer "carries only its notice": the
-      notice is suppressed with the reset and the re-read, because the newer chain already reaches
-      the region the press wanted — the entry "The chat surface's in-flight `Load older` guard is
-      still keyed by cursor bytes" is closed below. Both closures state their own pins.
+      And a definitive refusal a later load advanced past no longer "carries only its notice": its
+      reset and notice are suppressed, because the pointer belongs to the newer chain the reader's
+      next press walks (the closure below states the one-settle-tick re-read window) — the entry
+      "The chat surface's in-flight `Load older` guard is still keyed by cursor bytes" is closed
+      below. Both closures state their own pins.
 
 - [ ] The chat surface's in-flight `Load older` guard is still keyed by cursor bytes:
       `loadingCursor` (`frontend/src/features/chat/chat.tsx:172-221`) admits a second load for the

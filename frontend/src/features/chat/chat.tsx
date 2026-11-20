@@ -214,8 +214,10 @@ export function ChatPage() {
           // and the captured scope is re-read so the next press walks the
           // served boundary instead of retrying the dead cursor. A press a
           // later load advanced past, or a serve moved the boundary away
-          // from, is superseded: the newer chain already reaches the region it
-          // wanted, so neither the reset nor the refusal's notice applies. A
+          // from, is superseded: the pointer belongs to the newer chain the
+          // reader's next press walks, from which the press's region is
+          // reachable though not yet loaded, so neither the reset nor the
+          // refusal's notice applies. A
           // non-refusal failure keeps its notice whatever the pointer says:
           // its outcome is unproven and the reader's press may still matter.
           const refused = definitiveReadRefusal(error);
