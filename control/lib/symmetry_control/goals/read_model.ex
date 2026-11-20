@@ -364,11 +364,13 @@ defmodule SymmetryControl.Goals.ReadModel do
   defp load_data(goal, opts) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    # Keep a Goal projection read on one connection: parallel preloads spawn
-    # sibling processes, and in the SQL sandbox those siblings queue for the
-    # caller's single owned connection until DBConnection drops a request that
-    # waits past its queue window. Ecto itself skips parallel preloads whenever
-    # the caller already holds a connection for the same reason.
+    # Keep a Goal projection read serialized on the calling process: parallel
+    # preloads spawn sibling processes, and in the SQL sandbox those siblings
+    # queue for the caller's single owned connection until DBConnection drops a
+    # request that waits past its queue window; under the pool they would load
+    # on other connections instead. Ecto's own skip covers only a connection
+    # pinned in the caller's process (`Repo.transaction`/`Repo.checkout`), not
+    # the sandbox's owned connection, so `in_parallel: false` stays required.
     preloaded =
       repo.preload(goal, [:revisions, :work_items, :dependencies, :outcomes, :decisions],
         in_parallel: false
