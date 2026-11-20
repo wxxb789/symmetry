@@ -222,7 +222,8 @@ defmodule SymmetryControlWeb.PortalJSON do
     projection = Map.get(projections, work_item.orchestration_task_id)
     evidence = projection && projection.evidence
     delivery = delivery(work_item, evidence)
-    execution = projection |> execution_summary() |> retry_capability(work_item)
+    goal_managed = WorkItem.goal_managed?(work_item)
+    execution = projection |> execution_summary() |> legacy_capabilities(work_item, goal_managed)
 
     %{
       id: work_item.id,
@@ -248,12 +249,12 @@ defmodule SymmetryControlWeb.PortalJSON do
       review_status: delivery.review.status,
       delivery: delivery,
       external: external_work_item(work_item),
-      goal_managed: WorkItem.goal_managed?(work_item),
+      goal_managed: goal_managed,
       version: work_item.lock_version,
       can_start:
-        is_nil(work_item.orchestration_task_id) and work_item.assignee_type == "agent" and
-          work_item.status in ["backlog", "ready"] and project_active?(work_item.project) and
-          WorkItem.external_work_available?(work_item),
+        not goal_managed and is_nil(work_item.orchestration_task_id) and
+          work_item.assignee_type == "agent" and work_item.status in ["backlog", "ready"] and
+          project_active?(work_item.project) and WorkItem.external_work_available?(work_item),
       execution: execution,
       updated_at: iso8601(work_item.updated_at)
     }
@@ -287,13 +288,14 @@ defmodule SymmetryControlWeb.PortalJSON do
 
   @doc """
   The command responses' execution summary: the same projection with the work
-  item's own retry gates applied, so a response serves the `can_retry` the
-  item's read would rather than a state-only one. Eligibility resolves the work
-  item's corrected binding (`Workspaces.retry_binding/2`, including the
-  attempt's supervisory requirement), so a re-bound work item answers the
-  response exactly as it answers the read. A bare task snapshot claims no retry
-  (`execution/1`), and a work item without its project and provider resources
-  loaded answers those gates false.
+  item's own capability gates applied, so a response serves the `can_cancel`
+  and `can_retry` the item's read would rather than state-only ones.
+  Eligibility resolves the work item's corrected binding
+  (`Workspaces.retry_binding/2`, including the attempt's supervisory
+  requirement), so a re-bound work item answers the response exactly as it
+  answers the read. A bare task snapshot claims no retry (`execution/1`), and a
+  work item without its project and provider resources loaded answers those
+  gates false.
   """
   def execution(nil, _work_item), do: nil
   def execution(task, nil), do: execution(task)
@@ -306,7 +308,7 @@ defmodule SymmetryControlWeb.PortalJSON do
       execution ->
         execution
         |> Map.put(:can_retry, work_item_retry_runtime_eligible?(task, work_item))
-        |> retry_capability(work_item)
+        |> legacy_capabilities(work_item, WorkItem.goal_managed?(work_item))
     end
   end
 
@@ -372,7 +374,9 @@ defmodule SymmetryControlWeb.PortalJSON do
   # a workspace-read projection field, resolved from the work item there and by
   # `execution/2`; a snapshot without it (the work-item-less task view) claims
   # no retry. Unknown runtime support fails closed: the served read never
-  # offers an operation no runtime could perform.
+  # offers an operation no runtime could perform. The work item's own fences —
+  # the Goal refusal of `can_cancel` and the retry conditions — are applied by
+  # `legacy_capabilities/3` after this summary.
   defp execution_summary(%{task: task_record, run: run} = snapshot) do
     task = Protocol.task(snapshot)
     runtime = Map.get(snapshot, :runtime)
@@ -403,11 +407,18 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
-  defp retry_capability(nil, _work_item), do: nil
+  # The execution members only the work item decides. `can_cancel` is withheld
+  # from every Goal-managed item in every state: the legacy cancel path refuses
+  # that item (`Workspaces.ensure_legacy_work_item/1`, the same
+  # `WorkItem.goal_managed?/1` test), and a Goal is the authority that stops its
+  # work. `can_retry` joins the attempt's own gates with the work item's
+  # agent-assignment, external-work and active-project conditions.
+  defp legacy_capabilities(nil, _work_item, _goal_managed), do: nil
 
-  defp retry_capability(execution, work_item) do
-    Map.update!(
-      execution,
+  defp legacy_capabilities(execution, work_item, goal_managed) do
+    execution
+    |> Map.update!(:can_cancel, &(&1 and not goal_managed))
+    |> Map.update!(
       :can_retry,
       &(&1 and work_item.assignee_type == "agent" and
           WorkItem.external_work_available?(work_item) and project_active?(work_item.project))

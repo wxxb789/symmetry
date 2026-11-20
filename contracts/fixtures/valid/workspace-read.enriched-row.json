@@ -68,6 +68,7 @@
             "resource_id": "33333333-3333-4333-8333-333333333333",
             "data": {"provider_updated_at": "2026-11-15T09:45:00Z"}
           },
+          "goal_managed": true,
           "version": 7,
           "can_start": false,
           "execution": {
@@ -102,7 +103,7 @@
             "can_guide": true,
             "can_pause": true,
             "can_resume": false,
-            "can_cancel": true,
+            "can_cancel": false,
             "can_retry": false,
             "intent_locked": true
           },
