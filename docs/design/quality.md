@@ -123,25 +123,28 @@ The Control suite runs against the database `control/config/test.exs` resolves:
 first, so create and migrate heal a missing or migration-behind database — but
 nothing drops or truncates one. A database whose `schema_migrations` names a
 revision older than its objects stops the alias's migrate step before any test
-runs, as Postgrex `42P07` (`duplicate_table`) on the pending migration's
-`CREATE TABLE`. That is stale local state, not a code failure; recover by
-dropping the database the test environment resolves and re-running the suite,
-which recreates and migrates it:
+runs, with a duplicate-object error on the pending migration, for example
+Postgrex `42P07` (`duplicate_table`) on a `CREATE TABLE`, or `42701`
+(`duplicate_column`)/`42710` (`duplicate_object`) for a column or constraint.
+That is stale local state, not a code failure; recover by dropping the
+repository-default test database and re-running the suite, which recreates and
+migrates it:
 
 ```sh
 cd control
-MIX_ENV=test mix ecto.drop
-mix test
+env -u POSTGRES_DB -u MIX_TEST_PARTITION MIX_ENV=test mix ecto.drop
+env -u POSTGRES_DB -u MIX_TEST_PARTITION mix test
 ```
 
 `MIX_ENV=test` is load-bearing: a bare `mix ecto.drop` resolves the development
-database. `symmetry.check_test_db` is the first step of the `ecto.drop` alias
-too, so the recipe is refused for harness-owned databases only (`symmetry_dev`
-and the `symmetry_0007c_/d_/e_` families). `symmetry_control_dev` and every
-other resolved name are dropped as named: run the recipe only in a shell
-configured for the database the test environment resolves. With
-`MIX_TEST_PARTITION` set, both commands name that partition's own suffixed
-database, which stays the CI-parallel path rather than the recovery recipe.
+database. Both commands unset `POSTGRES_DB` and `MIX_TEST_PARTITION`, so the
+recipe always targets `symmetry_control_test` whatever the shell exported; to
+recover a different dedicated test database, set `POSTGRES_DB` to that name
+explicitly. `symmetry.check_test_db` is the first step of the `ecto.drop` alias
+too, so the recipe is still refused for harness-owned databases only
+(`symmetry_dev` and the `symmetry_0007c_/d_/e_` families). `MIX_TEST_PARTITION`
+stays the CI-parallel path rather than the recovery recipe: exported, it names
+that partition's own suffixed database, and the recipe's `env -u` drops it.
 
 Run affected focused checks during development; required CI gates remain required
 before merge. Native credentialed harness tests and Windows behavior cannot be

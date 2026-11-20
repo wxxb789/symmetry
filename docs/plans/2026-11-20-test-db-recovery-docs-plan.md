@@ -18,14 +18,17 @@ branch `fix/test-db-recovery-docs`.
    marker-less bullet stays where it is" rule for these two).
 4. This plan file. No evidence file: the judging artifact is `answer.md`, as in the sibling
    docs increments (`978abba`, `fdf332d`).
-5. No Control source, mix alias, test, CI, or contract edit beyond the above.
+5. `control/test/mix/tasks/symmetry_check_test_db_test.exs` — the pin the apply round added for
+   the documented `test` alias body the recovery relies on (the exact four-entry list, guard and
+   create/migrate first, order included; mutation-checked). No other Control source, mix
+   alias, CI, or contract edit beyond the above.
 
 ## Item map (verified at `fdf332d`)
 
 | # | Entry / note (`docs/TODO.md`) | Claim | Verification | Verdict |
 | --- | --- | --- | --- | --- |
 | 1 | "Document how to recover the repository-default test database, or reset it from the test alias." | A pending migration whose object set already exists fails the `test` alias's migrate step (`42P07 duplicate_table`) and no doc names a recovery | reproduce on a throwaway database: create + migrate, delete the newest `schema_migrations` row of a table-creating migration, re-run `mix test` → `42P07`; then `MIX_ENV=test mix ecto.drop` + `mix test` → green | document the recovery in quality.md |
-| 2 | 0006h index-row note | "index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/…`" | `docs/goals/README.md:336` targets `archive/0006h-credentialed-provider-accounting.md` (fixed by `c514bd9`, #66); the archive file exists; the two prose references (`:178`, `:214`) also target it | note's premise false → remove with a CLOSED-TODO line |
+| 2 | 0006h index-row note | "index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/…`" | `docs/goals/README.md:336` targets `archive/0006h-credentialed-provider-accounting.md` (fixed by `c514bd9`, #66); the archive file exists; `:178` also links the archived path, and `:214` names only the goal id | note's premise false → remove with a CLOSED-TODO line |
 | 3 | `refusalGuidance.provider_owned` note | no `refusalNotice` call site on `/portal/connections` can receive `provider_owned` | producer search: `:provider_owned` exists only at `workspaces.ex:1003` (`provider_owned_fields_editable/2`, called from `update_work_item/2` at `:203`); only caller `portal_api_controller.ex:265` serves `PATCH /portal/api/work-items/:work_item_id` (`router.ex:82`); the page's call sites call only resource/connection endpoints; the assignment surface keeps its own map (`planning/write-policy.ts:125`) | remove the entry + pin the rendered fallback |
 
 ## Exact semantics the entries state
@@ -34,8 +37,10 @@ branch `fix/test-db-recovery-docs`.
   `symmetry_control_test`) with `MIX_TEST_PARTITION` appended as a literal suffix. The `test`
   alias runs `symmetry.check_test_db`, `ecto.create --quiet`, `ecto.migrate --quiet` first
   (`control/mix.exs:79`), so create+migrate heal a missing or behind database but never an
-  object set ahead of `schema_migrations`. The documented recovery must (a) act on the
-  database the test environment resolves, (b) not be able to touch a harness-owned database
+  object set ahead of `schema_migrations`. The documented recovery must (a) pin its target —
+  the shipped recipe unsets `POSTGRES_DB` and `MIX_TEST_PARTITION`, so it always drops
+  `symmetry_control_test` unless a dedicated name is set explicitly, (b) not be able to
+  touch a harness-owned database
   (`symmetry.check_test_db` refuses `symmetry_dev` and the `symmetry_0007c_/d_/e_` families;
   it is the first step of the `ecto.drop` alias too), and (c) keep `MIX_TEST_PARTITION` as
   the CI-parallel path, not the recovery recipe. `MIX_ENV=test` is load-bearing in the
@@ -72,10 +77,14 @@ branch `fix/test-db-recovery-docs`.
 3. Gates: touched package's full suite + format/lint/typecheck — frontend
    `typecheck`/`lint`/`test`/`build` (all exit 0, `mise x pnpm@12.17.0 -- pnpm --filter
    @symmetry/frontend …`), plus Control `mix format --check-formatted` exit 0 and
-   `mix compile --warnings-as-errors` exit 0 through the recipe. The increment's Elixir evidence is
-   the reproduction's focused `mix test` (`Result: 11 passed`); the Control full suite is outside
-   the touched package because no `control/` source file changed; the earlier attempt recorded 97
-   `53300` connection-storm failures against the saturated shared server and treated them as an
+   `mix compile --warnings-as-errors` exit 0 through the recipe. The increment's first Elixir
+   evidence was the reproduction's focused `mix test` (`Result: 11 passed`); the apply round then
+   added the alias-body pin under `control/test/`, so the full Control suite was run to completion
+   on the `control/` tree of `67310cf` with `MIX_TEST_PARTITION=testdbgates`:
+   `Result: 936 passed, 21 skipped`, 0 failures, seed 815640, 717.5 s (the later merge `8540a7d`
+   changes no `control/` file). That run's re-checks: the focused guard test (`Result: 11 passed`)
+   and the frontend connections file (56/56 passed). An earlier attempt recorded 97 `53300`
+   connection-storm failures against the saturated shared server and treated them as an
    invalid environment rather than a result.
 4. Path-triggered render gate, run as CI runs it: `SYMMETRY_RENDER_GATE_REQUIRED=1`, the seven
    spec files, both projects, against three prod release instances (4000 primary with Goal rollout
@@ -99,7 +108,8 @@ branch `fix/test-db-recovery-docs`.
 1. **Documentation over an alias change** (contract direction). A reset step inside the
    `test` alias would make `mix test` destructive by default; the documentation names the
    two verified commands instead.
-2. **The recipe uses `MIX_ENV=test mix ecto.drop` + `mix test`, not `mix ecto.reset`.**
+2. **The recipe pins its target (`env -u POSTGRES_DB -u MIX_TEST_PARTITION`) and uses
+   `MIX_ENV=test mix ecto.drop` + `mix test`, not `mix ecto.reset`.**
    `ecto.reset` expands to `ecto.setup` = create + migrate + `run priv/repo/seeds.exs`
    (`control/mix.exs:69-71`); today `seeds.exs` is a comment-only stub, but a reset that
    runs seeds couples the test database to seed content, and this repository already

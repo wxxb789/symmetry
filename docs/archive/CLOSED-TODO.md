@@ -2378,7 +2378,8 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       the recovery recipe.
       **Closed (2026-11-20/21, branch `fix/test-db-recovery-docs`): documented, not aliased.** Reproduced
       on the throwaway database `symmetry_control_test_tdbrec` on a dedicated disposable PostgreSQL
-      18.6 instance, with the exact commands the documentation now names (`MIX_ENV=test` throughout):
+      18.6 instance, with the same two commands the documentation names (`MIX_ENV=test` throughout,
+      the throwaway database set explicitly in `POSTGRES_DB` as the documented prose allows):
       `mix ecto.create --quiet` and `mix ecto.migrate --quiet` exit 0; deleting the
       `harness_session_attach_receipts` migration's `schema_migrations` row (`20260911000000`) while
       its table exists makes `mix test test/mix/tasks/symmetry_check_test_db_test.exs` stop in the
@@ -2391,8 +2392,10 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       `symmetry_control_test`, with `MIX_TEST_PARTITION` appended as a literal suffix), the failure
       signature, the two commands, why `MIX_ENV=test` is load-bearing, and that
       `symmetry.check_test_db` refuses harness-owned databases only (`symmetry_dev` and the
-      `symmetry_0007c_/d_/e_` families), while `symmetry_control_dev` and every other
-      resolved name are dropped as named. The `test` alias is unchanged
+      `symmetry_0007c_/d_/e_` families), and the documented recipe pins its target: it unsets
+      `POSTGRES_DB` and `MIX_TEST_PARTITION`, so it always drops `symmetry_control_test`
+      (`symmetry_control_dev` and other ambient names are never reached); a different dedicated
+      test database is recovered by naming it explicitly in `POSTGRES_DB`. The `test` alias is unchanged
       (the increment's contract prefers documentation over an alias change), and `MIX_TEST_PARTITION`
       stays the CI-parallel path, not the recovery recipe. Evidence: the recorded before/after runs in
       `answer.md` — create and migrate exit 0, the stale run exits 1 before any test (`42P07`,
@@ -2401,8 +2404,15 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       throwaway database dropped afterwards and zero residue in `pg_database`. The sequence ran
       against a dedicated disposable PostgreSQL 18.6 instance (`127.0.0.1:5433`), kept because the
       shared 5432 instance was saturated by concurrent agent suites when the sequence was first
-      attempted; no test was added because the change is documentation-only — the reproduction is
-      the pin.
+      attempted. The recipe's `test` alias body is pinned by
+      `control/test/mix/tasks/symmetry_check_test_db_test.exs`, test
+      "the storage aliases run the guard before any database work": the pin fails when the
+      guard is dropped from the alias head, when `ecto.create --quiet`/`ecto.migrate --quiet`
+      is removed, or when the documented order changes (10/11 each) and passes on the delivered
+      alias (11 passed). The full Control suite then ran to completion on the `control/` tree
+      of `67310cf` with `MIX_TEST_PARTITION=testdbgates`: `Result: 936 passed, 21 skipped`,
+      0 failures, seed 815640 (717.5 s); the later merge `8540a7d` changes no `control/` file.
+
 - [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
       (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
       error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
