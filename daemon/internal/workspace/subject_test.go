@@ -667,7 +667,11 @@ func TestSubjectDigestSortsManifestByRawPathBytes(t *testing.T) {
 
 // TestMaterializeSubjectRejectsMissingBlobObject keeps the fail-closed
 // refusal for a committed tree that references an object the repository no
-// longer has.
+// longer has. The refusal message is asserted because every untyped digest
+// failure is mapped to the same unreachable code, so the typed error alone
+// cannot separate Git's complete "<oid> missing" response from the desynced
+// invalid-response-header refusal; the in-sync framing of this refusal stays
+// pinned by the missing row of TestSubjectBatchStreamRejectsMalformedResponses.
 func TestMaterializeSubjectRejectsMissingBlobObject(t *testing.T) {
 	repository := newSubjectRepository(t)
 	commit := gitOutput(t, repository, "rev-parse", "HEAD")
@@ -689,6 +693,9 @@ func TestMaterializeSubjectRejectsMissingBlobObject(t *testing.T) {
 	var subjectErr *SubjectError
 	if !errors.As(err, &subjectErr) || subjectErr.Code != SubjectErrorUnreachable {
 		t.Fatalf("MaterializeSubject() error = %v, want typed unreachable subject error", err)
+	}
+	if !strings.Contains(err.Error(), "is missing from the repository") {
+		t.Fatalf("MaterializeSubject() error = %v, want the missing-object refusal for the deleted committed blob", err)
 	}
 	assertNoOwnedGitChildProcesses(t)
 }
@@ -1021,11 +1028,15 @@ func assertNoOwnedGitChildProcesses(t *testing.T) {
 // a real checkout through the public workspace entry point. It is opt-in so
 // routine runs and package suites are unaffected, and it reports the canonical
 // digest, the committed blob count, the Git process trace and the wall time as
-// one JSON record for the recorded measurement.
+// one JSON record for the recorded measurement. When
+// SYMMETRY_SUBJECT_WITNESS_EXPECTED_DIGEST carries the recorded digest, the
+// measured digest must equal it, so replaying the witness falsifies digest
+// drift instead of only logging it.
 func TestSubjectMeasurementWitness(t *testing.T) {
 	repository := os.Getenv("SYMMETRY_SUBJECT_WITNESS_REPOSITORY")
 	commit := os.Getenv("SYMMETRY_SUBJECT_WITNESS_COMMIT")
 	resourceID := os.Getenv("SYMMETRY_SUBJECT_WITNESS_RESOURCE_ID")
+	expectedDigest := os.Getenv("SYMMETRY_SUBJECT_WITNESS_EXPECTED_DIGEST")
 	if repository == "" || commit == "" || resourceID == "" {
 		t.Skip("subject measurement witness requires SYMMETRY_SUBJECT_WITNESS_REPOSITORY, SYMMETRY_SUBJECT_WITNESS_COMMIT and SYMMETRY_SUBJECT_WITNESS_RESOURCE_ID")
 	}
@@ -1045,6 +1056,9 @@ func TestSubjectMeasurementWitness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaterializeSubject() for %s error = %v after %s", commit, err, elapsed)
 	}
+	if expectedDigest != "" && subject.TreeDigest != expectedDigest {
+		t.Fatalf("measured Subject tree digest for %s = %q, want the recorded expected digest %q", commit, subject.TreeDigest, expectedDigest)
+	}
 	// The process trace is read before any other Git command runs, so it
 	// records exactly the production Subject computation.
 	starts := gitTrace2Starts(t, tracePath)
@@ -1055,12 +1069,13 @@ func TestSubjectMeasurementWitness(t *testing.T) {
 	measurement := struct {
 		Commit           string `json:"commit"`
 		TreeDigest       string `json:"tree_digest"`
+		ExpectedDigest   string `json:"expected_digest,omitempty"`
 		BlobCount        int    `json:"blob_count"`
 		CatFileProcesses int    `json:"cat_file_processes"`
 		GitProcesses     int    `json:"git_processes"`
 		ElapsedMillis    int64  `json:"elapsed_ms"`
 	}{
-		Commit: commit, TreeDigest: subject.TreeDigest, BlobCount: blobCount,
+		Commit: commit, TreeDigest: subject.TreeDigest, ExpectedDigest: expectedDigest, BlobCount: blobCount,
 		CatFileProcesses: gitTrace2StartCount(starts, "cat-file"), GitProcesses: len(starts),
 		ElapsedMillis: elapsed.Milliseconds(),
 	}
@@ -1561,12 +1576,14 @@ func TestSubjectBatchStreamCancelFailureFallsBackToKill(t *testing.T) {
 
 // TestSubjectDigestInSyncCancelJoinsProcessFence pins the in-sync cancellation
 // path: the caller cancels between batch responses, so the record boundary is
-// intact and close() has to take finish() instead of terminate(). The path's
-// unresolved-process fence must still reach the caller, because the child was
-// stopped by that cancellation policy and never by a recorded exit. The Cancel
-// hook fails here, so nothing but the digest itself can keep the unresolved
-// stop observable, and the child only ends when the injected WaitDelay kills
-// it.
+// intact and close() has to take finish() instead of terminate(). Two
+// observables hold that routing: the digest's own teardown leaves the path's
+// cancellation policy untouched, and the path's unresolved-process fence still
+// reaches the caller, because the child was stopped by that cancellation
+// policy and never by a recorded exit. The Cancel hook fails and the child
+// ignores its closed stdin, so the child only ends when the command context's
+// own watcher kills it after the injected WaitDelay; that watcher is also the
+// single cancellation call this test expects.
 func TestSubjectDigestInSyncCancelJoinsProcessFence(t *testing.T) {
 	repository := newSubjectRepository(t)
 	commit := gitOutput(t, repository, "rev-parse", "HEAD")
@@ -1642,8 +1659,13 @@ func TestSubjectDigestInSyncCancelJoinsProcessFence(t *testing.T) {
 	if stream == nil || stream.desynced {
 		t.Fatal("batch stream for an in-sync cancellation was marked desynced; this pin covers the in-sync cancel path only")
 	}
-	if cancelCalls.Load() < 1 {
-		t.Fatal("batch stream cancellation was never attempted")
+	// finish() never invokes the path's cancellation policy, so the single call
+	// observed here is the command context watcher that also ends this
+	// unresponsive child. A terminate() route adds its own call, and the count
+	// is what separates the two routes: the joined fence and the reaped child
+	// look identical under both.
+	if got := cancelCalls.Load(); got != 1 {
+		t.Fatalf("in-sync batch teardown made %d cancellation calls, want only the command context watcher's one: close() must take finish() instead of terminate()", got)
 	}
 	state := stream.command.ProcessState
 	if state == nil || command.Process == nil || state.Pid() != command.Process.Pid {

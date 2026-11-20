@@ -1897,11 +1897,23 @@ func linuxCloneTreeDigest(ctx context.Context, repository, commit string) (strin
 // this path's clean environment, process group, wait-delay and cancellation
 // policy.
 func linuxCloneOpenBatch(ctx context.Context, repository string) (*subjectGitBatchStream, error) {
+	return startLinuxCloneBatchStream(ctx, linuxCloneGitCommandTimeout, func(budgetContext context.Context) *exec.Cmd {
+		return linuxCloneGitCommand(budgetContext, repository, "cat-file", "--batch")
+	})
+}
+
+// startLinuxCloneBatchStream starts one persistent batch child under the
+// clone path's single per-batch command budget. The command is built against
+// that budget context, so a stalled child is stopped by the path's own budget
+// instead of a caller cancellation, and the budget is released when the digest
+// closes the stream. The timeout and the command builder are parameters so a
+// test can witness the budget through a stalled scripted child.
+func startLinuxCloneBatchStream(ctx context.Context, timeout time.Duration, newCommand func(context.Context) *exec.Cmd) (*subjectGitBatchStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	budgetContext, budget := context.WithTimeout(ctx, linuxCloneGitCommandTimeout)
-	command := linuxCloneGitCommand(budgetContext, repository, "cat-file", "--batch")
+	budgetContext, budget := context.WithTimeout(ctx, timeout)
+	command := newCommand(budgetContext)
 	if err := configureLinuxCloneGitChild(command); err != nil {
 		budget()
 		return nil, err
