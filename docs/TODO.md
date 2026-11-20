@@ -21,16 +21,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Dead-code candidates
 
-- `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
-
-- `frontend/src/features/connections/resources.tsx` `refusalGuidance.provider_owned`: no
-  call site of `refusalNotice` on that page can receive the code. Its only producer is
-  `Workspaces.provider_owned_fields_editable` answered by `update_work_item`
-  (`control/lib/symmetry_control/workspaces.ex`), i.e. the assignment surface, which
-  carries its own `assignmentGuidance`. Recorded by the retro-b4-goals-connections review
-  (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
-  (fix round 1); revalidate and remove in a separate maintenance change.
-
 - [ ] Revalidate and remove the callerless projected provider-action chain in
       `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
       `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
@@ -100,26 +90,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `containment_supervisor_linux.go:1836`, `prepareDescendantMonitorForOwnerLoss` `:771-794`).
       Apply the same recheck and pin both directions (a monitor that exits by the deadline joins; one
       that never exits still fails) in a separate maintenance change.
-
-- [ ] Document how to recover the repository-default test database, or reset it from the test alias.
-      The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where
-      `MIX_TEST_PARTITION` is appended as a literal suffix, so a partition run selects a different
-      database name that the test alias creates and migrates when absent), and `mix test` runs
-      `symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet` first
-      (`control/mix.exs:79`). Create and migrate make a missing or
-      migration-behind database usable, but nothing drops or truncates one: a pending migration whose
-      table already exists fails the alias's migrate step before any test runs. Observed 2026-11-20
-      while gating an unrelated Control change: an unpartitioned `mix test` stopped with Postgrex
-      `42P07` (`duplicate_table`) on a migration whose table already existed — `schema_migrations`
-      named a revision older than the object set — while the same change ran green on a partition
-      database. A maintainer reads that as a code
-      failure, and the repository documents no recovery: `ecto.reset` exists as an alias
-      (`control/mix.exs:70`) but no doc names it for the default test database, and the only documented
-      resets belong to harness-owned databases (`docs/runbooks/session-receipt-recovery-e2e.md`). Fix
-      direction: document the drop-and-recreate path for the default test database where the suite's
-      commands are documented, or add a recreate/reset step to the `test` alias so a stale default
-      database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
-      the recovery recipe.
 
 - [ ] The Goal surface offers no admission path for a resolved plan decision whose admission was
       never accepted.
