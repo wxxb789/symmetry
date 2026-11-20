@@ -13,28 +13,16 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Model-routing evaluation records
 
-- [ ] Own the record-cleanliness ratchet baseline: 26 unchanged committed records under
-      `docs/evaluations/**` and `docs/evidence/**` still carry a host absolute path, so the
-      `record-cleanliness` CI job - which checks only the records a revision range adds or
-      modifies - fails the moment a later change touches one of them. Enumerated at `5d6c858`
-      with `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only` over
-      `git ls-files docs/evaluations docs/evidence`: the four
-      `docs/evaluations/model-routing/0008b-go-bounded-regression-{mixed,strong}{,.review}.json`
-      receipts; `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md`,
-      `goal-0006-final-series-review-2026-11-15.md`,
-      `goal-0006i-exact-subject-release-acceptance-2026-11-15.md`,
-      `goal-0006j-omp-native-capability-2026-11-14.md`, `goal-0007b-readable-work-views-2026-11-15.md`,
-      `goal-0007i-portal-cutover-series-receipt-2026-11-17.md`,
-      `goal-0009-source-identity-2026-11-16.json`; the seven `goal-0006b-*` files
-      (`acceptance-environment-audit`, `acceptance-source-audit`, `convergence-receipt`,
-      `fixture-inventory`, `resumed-go-gates` and `surface-qa` of 2026-09-29, and
-      `iteration-closure-2026-10-10`); the two `pi-control-e2e-*-2026-09-13.md` files, the five
-      `test-ablation-*-2026-09-29.md` files and `windows-opencode-ci-gate-2026-09-14.md`. Each one
-      needs either an explicit decision to leave it as produced or the render-and-rebind pass
-      (re-render the text and keep every digest another record quotes consistent - of this list,
-      `test-ablation-go-probe-experiment-2026-09-29.md` is the one quoted by another record). Until
-      that decision, a change that merely touches one of these records fails the job by design, and
-      the remedy is that render pass, never an edit that breaks a binding.
+- [ ] Decide how the Control row in
+      `docs/evidence/test-ablation-final-review-2026-09-29.md:148` is bound: its digest
+      `e2672276b4f4171391a6df202dc01e9e66ccc705d72e4ee095db7471e7a1c6f9` matches no reachable
+      revision of any `test-ablation*` file (every distinct blob revision of the fourteen such
+      paths across all refs, under LF/CRLF, BOM and no-final-newline variants: 0 hits), and the
+      row has read that way since `72bcf8e`. Observed during the record render pass (PR #101),
+      which rebound the app-startup and Go-probe rows in the same table and left this one as
+      recorded; pre-existing, not introduced by that pass. Do not edit the record before the
+      decision, in a separate maintenance change: rebind the row to the reviewed artifact's
+      committed bytes, or annotate it as the as-reviewed artifact rather than the committed bytes.
 
 ## SEO / repository metadata
 
@@ -81,23 +69,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       states the hosted after-run and the docs-only sample are unmeasured. Cross-check the
       classifier's skip list against the jobs that actually ran before treating the trim as
       fully accepted.
-
-- [ ] Revalidate the unreachable resource synchronization states. `project_resources` has a
-      `project_resources_sync_status_check` constraint admitting `syncing` and `stale`, and
-      `SymmetryControl.Workspaces.ReadModel` maps them to `syncing`/`attention` labels, but no
-      writer sets either value (`Integrations.persist_sync/4`,
-      `Integrations.record_resource_failure/3` and the connection/capability resets in
-      `Integrations.update_connection/2` and `Workspaces.update_resource/2` only write
-      `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
-      constraint and labels, and decide in a separate maintenance change whether the states
-      need a writer or the vocabulary needs a migration.
-
-- [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
-      `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
-      the server answers that code, but a sync refused for an ungranted capability maps to
-      `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
-      Either the server should serve the more specific code or the client entry should be removed;
-      decide in a separate maintenance change with a test that pins the served code.
 
 ## Deferred review findings (0007f)
 

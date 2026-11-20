@@ -510,7 +510,7 @@
       "observed_installed_sha256": "c8f30088c10ad1ba1513f4afdfaf98da3bbf9b51b7bd90cbf1bd2de9cefabf68",
       "go_version": "go1.27.0",
       "cgo_enabled": false,
-      "command": "go build -buildvcs=false -o /tmp/symmetry-0009-build/symmetry-daemon ./cmd/symmetry-daemon",
+      "command": "go build -buildvcs=false -o path-sha256:49d94fe74a09e7afe7c753afa6dc7282a5063fc029246b66a48f425452d855f9 ./cmd/symmetry-daemon",
       "exit_code": 0
     },
     "windows": {

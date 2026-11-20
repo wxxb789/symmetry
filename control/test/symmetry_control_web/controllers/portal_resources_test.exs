@@ -266,7 +266,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     limited = create_connection("github", "Repositories only", "acme", ["repositories"])
 
     for kind <- ["work_tracking", "ci"] do
-      assert %{"error" => %{"code" => "forbidden", "message" => message}} =
+      assert %{"error" => %{"code" => "capability_not_granted", "message" => message}} =
                api_conn()
                |> post("/portal/api/projects/#{project["id"]}/resources", %{
                  "connection_id" => limited["id"],
@@ -290,7 +290,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
              })
              |> json_response(200)
 
-    assert %{"resource" => refused, "error" => %{"code" => "forbidden"}} =
+    assert %{"resource" => refused, "error" => %{"code" => "capability_not_granted"}} =
              sync_resource(tracker["id"]) |> json_response(403)
 
     assert refused["status"] == "degraded"
@@ -301,6 +301,26 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     served = Enum.find(project_read(project["id"])["resources"], &(&1["id"] == tracker["id"]))
     assert served["sync_status"] == "failed"
     assert served["status_message"] == "Connection capability is not granted"
+  end
+
+  test "an update cannot move a resource onto a connection without the kind's capability" do
+    project = create_project("MOVECAPS")
+    granted = create_connection("github", "Work items granted", "acme", ["work_items"])
+    tracker = create_tracker(project, granted, "Movable tracker", "acme/issues")
+    limited = create_connection("github", "Repositories only", "acme", ["repositories"])
+
+    assert %{"error" => %{"code" => "capability_not_granted", "message" => message}} =
+             api_conn()
+             |> patch("/portal/api/resources/#{tracker["id"]}", %{
+               "version" => tracker["version"],
+               "connection_id" => limited["id"]
+             })
+             |> json_response(403)
+
+    assert is_binary(message)
+
+    served = Enum.find(project_read(project["id"])["resources"], &(&1["id"] == tracker["id"]))
+    assert served["connection_id"] == granted["id"]
   end
 
   test "a definitive provider failure is recorded without touching the last synchronized state" do

@@ -1211,6 +1211,22 @@ describe("project resources", () => {
     await waitFor(() => expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads));
   });
 
+  it("renders the served capability refusal with the capability-specific next step", async () => {
+    const target = resourceFixture();
+    const harness = renderConnections(({ method, path }) => {
+      if (method !== "POST" || !path.endsWith("/sync")) return refusal(404, "not_found", "unexpected request");
+      harness.setProjects([projectFixture({ resources: [{ ...target, status: "degraded", sync_status: "failed", status_message: "Connection capability is not granted" }] })]);
+      return refusal(403, "capability_not_granted", "connection capability is not granted");
+    }, "/portal/connections", { projects: [projectFixture({ resources: [target] })] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Sync checkout service" }));
+    expect(await screen.findByText(/connection capability is not granted \(capability_not_granted\)/)).toBeVisible();
+    expect(screen.getByText(/Grant the connection the capability this resource kind needs, then try again\./)).toBeVisible();
+    const row = resourceRow("checkout service");
+    expect(await row.findByText("Failed")).toBeVisible();
+    expect(row.getByText("Connection capability is not granted")).toBeVisible();
+  });
+
   it("keeps a failed provider read explicit and never renders it as synchronized", async () => {
     const failed = resourceFixture({ status: "degraded", sync_status: "failed", status_message: "Provider returned HTTP 500", version: 5 });
     const harness = renderConnections(({ method, path }) => {

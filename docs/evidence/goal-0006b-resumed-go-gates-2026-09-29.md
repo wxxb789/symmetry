@@ -8,7 +8,7 @@ The source tree was dirty. No commit was created, and no result certifies instal
 
 ## Full daemon suites
 
-Each command ran through `wsl.exe -d symmetry-race --exec /bin/sh -lc`, with working directory `/mnt/q/repos/symmetry/daemon` and `PATH=/opt/go/bin:/usr/bin:/bin`.
+Each command ran through `wsl.exe -d symmetry-race --exec /bin/sh -lc`, with working directory `path-sha256:1fc66340f4919a2df6007600cf60522d67f344f2068dc88a6b4a581c6bb80153` and `PATH=/opt/go/bin:/usr/bin:/bin`.
 
 ```sh
 /opt/go/bin/go test -p 4 -count=1 -timeout 1200s -json ./...
@@ -59,7 +59,7 @@ Final unmutated commands, in the same WSL directory/environment:
 /opt/go/bin/go vet -p 2 ./internal/app
 ```
 
-All exited 0. The three capacity scenarios passed in 3.122 s normally and 8.088 s with race; vet emitted no output. Windows `gofmt -l Q:/repos/symmetry/daemon/internal/app/linux_owner_v2_app_test.go` exited 0 with no paths. `git diff --check` exited 0. gopls was unavailable, so no language-server pass is claimed. The [independent resumed review](goal-0006b-resumed-test-review-2026-09-29.md) matches the final fixture hash and resolves its blocking finding. Its earlier, separate timer-identity evidence limitation remains nonblocking.
+All exited 0. The three capacity scenarios passed in 3.122 s normally and 8.088 s with race; vet emitted no output. Windows `gofmt -l path-sha256:37651e4d20ff3324259aefccddc0ffaee30bfe343775562412dc1a03d8c7c9be` exited 0 with no paths. `git diff --check` exited 0. gopls was unavailable, so no language-server pass is claimed. The [independent resumed review](goal-0006b-resumed-test-review-2026-09-29.md) matches the final fixture hash and resolves its blocking finding. Its earlier, separate timer-identity evidence limitation remains nonblocking.
 
 ## Explicit skipped test events
 
