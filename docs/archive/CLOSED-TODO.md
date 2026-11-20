@@ -2584,7 +2584,10 @@ section below was moved on 2026-11-21 from branch `fix/stop-descendant-recheck`.
       That exclusion records the guest's own loopback limitation, not this change: on this host no
       127.0.0.1 connect completes at all (a five-line python listen/connect probe times out), the same
       dials fail or hang identically against `fdf332d`'s own `process_unix.go` in a throwaway copy
-      carrying only the new probes, and this file already records that guest behaviour (`:1153`).
+      carrying only the new probes, and this file already records that guest behaviour (the
+      `daemon/internal/app` intermittent `-race` package-timeout entry names it: the WSL guest hangs
+      `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` on a loopback dial that
+      never answers there).
       Windows (go1.27.4): `gofmt -l .` empty, `go vet ./...` and `go build ./cmd/...` green; the
       aggregate `go test -count=1 -timeout 600s ./...` exceeded its package budget in
       `internal/workspace` on this loaded host (600 s panic in
