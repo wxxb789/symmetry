@@ -139,9 +139,6 @@ defmodule SymmetryControl.Goals.ContractValidation do
   def validate_adapter_capabilities(data, opts \\ []),
     do: validate(:adapter_capabilities, data, opts)
 
-  @spec validate_adapter(map() | list(), keyword()) :: validation_result()
-  def validate_adapter(data, opts \\ []), do: validate_adapter_capabilities(data, opts)
-
   @doc """
   Validate a repository-relative path addressed by a committed artifact.
 
