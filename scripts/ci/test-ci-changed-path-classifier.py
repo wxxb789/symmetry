@@ -21,6 +21,11 @@ Beyond the per-fixture outputs the suite parses the workflow's jobs (`needs:`,
 `if:`, the `changes` outputs) and pins the routing: which output gates which
 job, that `legacy-route-audit` is the one unconditional job, and that the
 `github.event_name != 'pull_request'` fold runs every job off a pull request.
+The step that carries the heredoc is parsed too - its `id: paths` and its
+pull-request-only `if:` are part of the routing, because a skipped step leaves
+every output unset - and each audited corpus entry must be named by a
+family-complete literal, so a literal naming one file under a directory entry
+cannot stand in for the directory.
 The mutation cases at the bottom sabotage in-memory copies of the workflow and
 program text - never the files themselves - to prove those assertions fail when
 a predicate clause, an output fold, or a routing changes.
@@ -101,6 +106,7 @@ DAEMON_MAIN = (
 BASE_FILES = {
     "AGENTS.md": "# Agent instructions\n\nBase instructions.\n",
     "daemon/main.go": DAEMON_MAIN,
+    "docs/example.json": '{"fixture": "base"}\n',
     "docs/archive/CLOSED-TODO.md": "# Closed TODO\n\nBase archive text.\n",
     "docs/design/quality.md": "# Quality\n\nBase design text.\n",
     "docs/runbooks/portal.md": "# Portal\n\nBase runbook text.\n",
@@ -228,6 +234,35 @@ def load_audited_paths() -> tuple[str, ...]:
 def covers(literal: str, entry: str) -> bool:
     """Whether a classifier literal names the corpus entry itself or a path under it."""
     return literal == entry or literal == entry + "/" or literal.startswith(entry + "/")
+
+
+def audited_family_literal(entry: str) -> str:
+    """The literal the classifier must use to cover the whole corpus entry.
+
+    A corpus entry that names a directory must be covered by its trailing-slash family
+    prefix, so a new file under it still gates the citation job; a file entry must be
+    named exactly.
+    """
+    return entry + "/" if (ROOT / entry).is_dir() else entry
+
+
+def check_audited_family_coverage(
+    literals: dict[str, tuple[str, ...]], audited: tuple[str, ...],
+) -> None:
+    """Every corpus entry is named in run-citations by its family-complete literal.
+
+    ``covers`` alone would accept a literal naming one file inside a directory entry:
+    ``docs/runbooks/portal.md`` matches the entry's prefix and would keep today's
+    fixtures green while a new runbook silently stopped gating the citation job.
+    """
+    for entry in audited:
+        expected = audited_family_literal(entry)
+        require(
+            any(literal == expected for literal in literals["run-citations"]),
+            f"the run-citations predicate must name the corpus entry {entry!r} as "
+            f"{expected!r}, so a new path under it still gates the job; a literal naming "
+            "one file under a directory entry does not cover the family",
+        )
 
 
 # -- the workflow's job model -------------------------------------------------
@@ -381,6 +416,46 @@ def pinned_ran_jobs(job_names: collections.abc.Iterable[str], outputs: dict[str,
     return ran
 
 
+STEP_HEADER = re.compile(r"^      - ")
+STEP_KEY = re.compile(r"^        ([a-z][a-z0-9-]*): (.+?)\s*$")
+
+
+def classifier_step_keys(workflow_text: str) -> dict[str, str]:
+    """The scalar keys of the step that carries the classifier heredoc.
+
+    The step-level condition is part of the routing, not an implementation detail: the
+    program text alone runs whatever its ``if:`` says, so with the outputs' fold
+    unchanged, a step GitHub skips on a pull request leaves every output unset and
+    silently skips every gated job.
+    """
+    block = job_blocks(workflow_text).get("changes")
+    require(block is not None, "the workflow has no `changes:` job")
+    anchor = first_index(
+        block, lambda line: line.strip() == "python3 - <<'PY'",
+        "the changes job has no `python3 - <<'PY'` classifier step",
+    )
+    headers = [index for index in range(anchor) if STEP_HEADER.match(block[index])]
+    require(bool(headers), "the classifier heredoc step has no `- ` header line above it")
+    keys: dict[str, str] = {}
+    for line in block[headers[-1]:anchor]:
+        match = STEP_KEY.match(line)
+        if match is not None:
+            keys[match.group(1)] = match.group(2)
+    return keys
+
+
+def check_classifier_step(keys: dict[str, str]) -> None:
+    """The classifier heredoc runs on pull requests, under ``id: paths``, with bash."""
+    require(keys.get("id") == "paths",
+            "the classifier heredoc step must carry `id: paths`: the outputs' fold reads "
+            f"`steps.paths.outputs`; found {keys.get('id')!r}")
+    require(keys.get("if") == "github.event_name == 'pull_request'",
+            "the classifier heredoc step must run only on pull requests - the event whose "
+            f"diff (HEAD^1..HEAD) the program classifies; found {keys.get('if')!r}")
+    require(keys.get("shell") == "bash",
+            f"the classifier step must pin `shell: bash`; found {keys.get('shell')!r}")
+
+
 # -- fixture repositories -----------------------------------------------------
 
 
@@ -446,6 +521,13 @@ FIXTURES = (
         (False, False, False),
         ("AGENTS.md",),
         rewrite_fixture_file("AGENTS.md", "# Agent instructions\n\nEdited instructions.\n"),
+    ),
+    Fixture(
+        "docs-json-modified",
+        "a docs/** file that is not Markdown is documentation-only for every output",
+        (False, False, False),
+        ("docs/example.json",),
+        rewrite_fixture_file("docs/example.json", '{"fixture": "edited"}\n'),
     ),
     Fixture(
         "evaluations-record-added",
@@ -660,10 +742,9 @@ class ChangedPathClassifierTests(unittest.TestCase):
         literals = predicate_literals(self.program_text)
         self.assertEqual(set(self.audited), set(AUDITED_FIXTURES),
                          "the citation gate's audited corpus changed; teach this suite the new entries")
+        check_audited_family_coverage(literals, self.audited)
         for entry in self.audited:
             with self.subTest(audited=entry):
-                self.assertTrue(any(covers(literal, entry) for literal in literals["run-citations"]),
-                                f"{entry} is audited but the run-citations predicate never mentions it")
                 for output in ("run-heavy", "run-records"):
                     self.assertFalse(any(covers(literal, entry) for literal in literals[output]),
                                      f"{entry} is audited but the {output} predicate mentions it")
@@ -706,6 +787,9 @@ class ChangedPathClassifierTests(unittest.TestCase):
 
     def test_every_gated_job_gates_on_its_pinned_classifier_output(self) -> None:
         check_job_gating(self.model)
+
+    def test_the_classifier_step_runs_only_on_pull_requests(self) -> None:
+        check_classifier_step(classifier_step_keys(self.workflow_text))
 
     def test_pull_request_runs_exactly_the_jobs_its_outputs_gate(self) -> None:
         check_output_folds(self.model)
@@ -809,6 +893,40 @@ class ChangedPathClassifierTests(unittest.TestCase):
                          "dropping the citations clause must flip run-citations for the shared module")
         with self.assertRaises(AssertionError):
             check_fixture_triple(outputs, fixture)
+
+    def test_mutation_making_a_non_markdown_docs_path_heavy_breaks_the_docs_json_fixture(self) -> None:
+        fixture = FIXTURES_BY_NAME["docs-json-modified"]
+        mutated = self.program_text.replace(
+            'path.startswith(b"docs/") or path.endswith(b".md")',
+            '(path.startswith(b"docs/") and not path.endswith(b".json")) or path.endswith(b".md")',
+        )
+        self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
+        outputs = self.run_program(mutated, fixture)
+        self.assertEqual(triple_of(outputs), (True, False, False),
+                         "excusing only the .md arm for docs/ must flip run-heavy for the "
+                         "non-Markdown docs-json fixture")
+        with self.assertRaises(AssertionError):
+            check_fixture_triple(outputs, fixture)
+
+    def test_mutation_narrowing_the_runbooks_prefix_breaks_the_family_coverage(self) -> None:
+        mutated = self.program_text.replace(
+            'path.startswith(b"docs/runbooks/")', 'path == b"docs/runbooks/portal.md"'
+        )
+        self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
+        literals = predicate_literals(mutated)
+        self.assertNotIn("docs/runbooks/", literals["run-citations"])
+        with self.assertRaises(AssertionError):
+            check_audited_family_coverage(literals, self.audited)
+
+    def test_mutation_running_the_classifier_step_off_pull_requests_breaks_the_step_check(self) -> None:
+        mutated = self.workflow_text.replace(
+            "        id: paths\n        if: github.event_name == 'pull_request'",
+            "        id: paths\n        if: github.event_name == 'push'",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        self.assertEqual(classifier_step_keys(mutated)["if"], "github.event_name == 'push'")
+        with self.assertRaises(AssertionError):
+            check_classifier_step(classifier_step_keys(mutated))
 
 
 if __name__ == "__main__":

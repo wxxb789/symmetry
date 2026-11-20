@@ -37,6 +37,7 @@ message needs one.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import subprocess
 import sys
@@ -61,8 +62,31 @@ class DiffRefused(Exception):
 
 
 def run_git(repository: pathlib.Path, *arguments: str) -> subprocess.CompletedProcess:
+    """A git command in ``repository``, isolated from an inherited Git environment.
+
+    ``-C`` names the repository, but an inherited ``GIT_DIR`` (a hook, a wrapper or a
+    CI shell may set one) redirects every revision read to another repository and makes
+    ``--repo`` irrelevant: the gate would audit that repository's range and report a
+    vacuous pass when it holds no audited change. The environment variables that select
+    the repository, its worktree, its index or its object store are dropped so ``-C``
+    decides; the ``GIT_CONFIG_*`` variables are deliberately kept, because callers pin
+    configuration through them.
+    """
+    environment = dict(os.environ)
+    for key in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        environment.pop(key, None)
     return subprocess.run(
-        ["git", "-C", str(repository), *arguments], capture_output=True, check=False,
+        ["git", "-C", str(repository), *arguments],
+        capture_output=True,
+        check=False,
+        env=environment,
     )
 
 

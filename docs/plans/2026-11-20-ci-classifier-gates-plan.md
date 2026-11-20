@@ -23,7 +23,7 @@ entry 2 then pins the post-change routing.
    and exit codes and delegates to the module; its unchanged nineteen-test suite is the extraction's
    regression evidence.
 4. `.github/workflows/ci.yml` — a third classifier output (`run-citations`), the
-   `citation-existence` job gated on it (the `record-cleanliness` job's shape at `ci.yml:78,94`),
+   `citation-existence` job gated on it (the `record-cleanliness` job's shape at `ci.yml:82-84,94`),
    the two new fixture suites wired where the existing ones run.
 5. `scripts/ci/test-ci-changed-path-classifier.py` — the classifier fixture test: extracts the
    classifier program out of `ci.yml`, runs it over fixture diffs in scratch repositories, and pins
@@ -79,11 +79,19 @@ rules cover it as a file or as a directory: the head's `.gitignore` blobs are ma
 scratch checkout and asked with `git check-ignore --quiet` on the path and on `path/`, so a lagging
 worktree, a local `.git/info/exclude` or a global excludes file cannot answer for the revision
 under test, and `core.ignorecase` is pinned false so one set of committed bytes answers on every
-platform. A third arm covers a removed owner: when even the first segment of a multi-segment token
-is gone, the token is a citation if the comparison base held that first segment at the top level -
-the range removed or renamed it - and such a citation is refused with the path named; a first
-segment neither revision holds at the top level (a subdirectory-relative `config/test.exs`, an
-upstream `src/backend/...`) is left to review rather than guessed. The ignore arm is the deliberate
+platform, with the notice accepted only when `check-ignore -v` names a rule source that is a
+case-exact committed path (a case-insensitive filesystem otherwise resolves a differently-cased
+directory to a materialized `.gitignore` and exempts what a Linux checkout refuses). A third arm
+covers a removed owner: when even the first segment of a multi-segment token is gone, the token is
+a citation if the head revision lacks that segment but a commit reachable from the head held it at
+the top level (`git rev-list -1 <head> -- <segment>`, cached per segment; the removal may lie
+outside the comparison range, because the repair lands on the next pull request that touches the
+citing document), and such a citation is refused with the path named - unless the head's own ignore
+rules cover the token, in which case the ignore arm decides first and the run passes with the
+per-citation notice (recorded precedence, fixture-pinned). A single-segment token is never
+resolved that way, and a first segment neither the head nor its history holds at the top level (a
+subdirectory-relative `config/test.exs`, an upstream `src/backend/...`) is left to review rather
+than guessed. The ignore arm is the deliberate
 boundary for generated output: `docs/runbooks/portal.md` documents the staged portal bundle at
 `control/priv/static/portal/`, which no index contains *by the repository's own ignore rule*
 (`/.gitignore`), and a gate that flagged those mentions would force accurate prose to be degraded;
@@ -92,6 +100,10 @@ notice naming the `source:line:pattern` rule that covers it. `check-ignore` exit
 error, and that refuses the run (exit 2) instead of passing. Fenced code blocks are blanked before
 the backtick scan - a token inside a fence is example code (a JS template literal, a Go raw string,
 a shell example), not a citation - and the blanking keeps every line number the refusals report.
+The opener is recognized at any indentation and behind blockquote markers (a fence nested in a list
+item or quoted in a blockquote is still a fence), the closer must carry the same fence character,
+at least as many of them, and no info string (so a ```js line inside a fence is content, not a
+closer), and an unclosed fence blanks to the end of the document, the way CommonMark reads it.
 
 A **symbol citation** is a backticked `name/arity`, `Module.name/arity`, `name()` or
 `Module.name()` token. It is bound to a path citation when the two are consecutive backticked tokens
@@ -161,7 +173,12 @@ ungated in the `legacy-route-audit` job, the job the entry names as the pattern 
    repository, `GITHUB_OUTPUT` pointed at a temporary file. The outputs under test are the program's
    own, not a copy.
 2. **Pins** (fixture diffs, one per routing): `docs/**`-only and `*.md`-only diffs report
-   `run-heavy=false`; `docs/evaluations/**`, `docs/evidence/**`,
+   `run-heavy=false`, and a `docs/**` file that is not Markdown (`docs/example.json`) reports all
+   three outputs `false` - the `.md` exemption, not the `docs/` prefix, is what excuses a
+   documentation path; each audited corpus entry is named in `run-citations` by a family-complete
+   literal (`docs/runbooks/`, never one file under it, so a new runbook still gates the job); the
+   `id: paths` heredoc step carries the pull-request-only `if:` (a step GitHub skips leaves every
+   output unset, which the program text alone cannot show); `docs/evaluations/**`, `docs/evidence/**`,
    `scripts/ci/model-routing-record-sanitize.py`, `scripts/ci/check-record-cleanliness.py` and
    `scripts/ci/revision_scope.py` report `run-records=true`; each audited-corpus path reports
    `run-citations=true`, and so do the citation job's tool paths
@@ -178,7 +195,10 @@ ungated in the `legacy-route-audit` job, the job the entry names as the pattern 
    the workflow text; a mutation case per pin rewrites that text (drop a `run_records` clause,
    re-gate `citation-existence` on `run-heavy`, add an `if:` to `legacy-route-audit`, drop an output
    fold) and requires the assertion to fail. This is the entry's "fails when any of those routings
-   changes", reproducible in the suite instead of by editing `ci.yml` by hand.
+   changes", reproducible in the suite instead of by editing `ci.yml` by hand. The round-2 fix
+   (CR2-03) extends the set: excuse only the `.md` arm of `docs/` (the non-Markdown docs fixture
+   must flip heavy), narrow `docs/runbooks/` to one file (the family-coverage check must fail),
+   and move the classify step's `if:` off `pull_request` (the step check must fail).
 
 ## Out of scope
 
@@ -192,8 +212,11 @@ ungated in the `legacy-route-audit` job, the job the entry names as the pattern 
 - Line numbers inside *citations* are not validated (entry 1: "do not validate raw `file:line`
   values"). `docs/design/quality.md`'s two bare `ci.yml:NNN` pointers are not path citations and the
   gate cannot see them; this increment's own `ci.yml` insertions had invalidated them (the same rot
-  the gate repairs in the corpus), and the fix round repointed them to the post-change coordinates
-  (`:154-157` for the frontend commands, `:688` for the browser runner's pnpm test invocation).
+  the gate repairs in the corpus), and the fix round's second pass replaced the coordinates with
+  job/step-name pointers - the `contracts` job's `pnpm --filter @symmetry/frontend`
+  typecheck/lint/test/build steps and the browser acceptance run's
+  `pnpm --filter symmetry-browser-acceptance test` - because a line number inside the file a change
+  edits is stale the moment the change lands.
 - No second audit mode, no per-file opt-out, no configuration surface: the gate's corpus and
   grammar are code and are pinned by fixtures.
 
@@ -207,14 +230,15 @@ increment has none):
 2. `python3 scripts/ci/test-check-citation-existence.py` — the new fixture suite.
 3. `python3 scripts/ci/test-ci-changed-path-classifier.py` — the classifier fixture suite.
 4. `python3 scripts/ci/check-citation-existence.py --base $(git rev-list --max-parents=0 HEAD)
-   --head HEAD` — the corpus-wide run: red (five offenders) before the repairs; green after on a
-   dangling snapshot commit built from a temporary index
-   (`GIT_INDEX_FILE=<temp> git read-tree HEAD && git add -A && git write-tree &&
-   git commit-tree <tree> -p HEAD`), because this stage leaves the tree uncommitted and the gate
-   binds a revision: the snapshot reads the repaired documents and the increment's own new files
-   with the same code path, and neither the real index nor the working tree is touched
-   (observed on that pre-merge snapshot: exit 1 with five refusals, then exit 0 with 365 path
-   citations; the current shipped revision's re-measurement lives in the closure entry in
+   --head HEAD` — the corpus-wide run. The red observation (exit 1, the five refusals) belongs to
+   the un-repaired `fdf332d` baseline; the repaired bytes are green on a dangling snapshot commit
+   built from a temporary index — the variable must cover every index-using command, or `git add
+   -A` writes the real index instead: `(export GIT_INDEX_FILE=<temp>; git read-tree HEAD && git
+   add -A && git write-tree && git commit-tree <tree> -p HEAD)` — because this stage leaves the
+   tree uncommitted and the gate binds a revision: the snapshot reads the repaired documents and
+   the increment's own new files with the same code path, and neither the real index nor the
+   working tree is touched (observed on that pre-merge snapshot: exit 0 with 365 path citations;
+   the shipped revision's re-measurement lives in the closure entry in
    `docs/archive/CLOSED-TODO.md`, one number in one place).
 5. `actionlint -color -shellcheck= -pyflakes= .github/workflows/ci.yml` (upstream 1.7.12, the
    documented substitute on this host) plus `shellcheck --shell=bash` over every changed `run:`
@@ -226,7 +250,7 @@ increment has none):
 
 ## Decisions and their justification
 
-1. **A classifier output rather than an unconditional job.** Entry 1 points at `ci.yml:78` (the
+1. **A classifier output rather than an unconditional job.** Entry 1 points at `ci.yml:82-84` (the
    `record-cleanliness` job's classifier gate) as the shape to copy; the cost is a duplicated
    corpus predicate in the workflow, which decision-pinned fixture agreement covers. Rejected: an
    unconditional job (no duplication, but ~2 minutes of runner time on every push and pull request
@@ -271,12 +295,18 @@ grammar, fixtures and records above now implement them:
   documents it leaves alone (that repair lands in the next pull request that touches one). Both
   statements live in the gate's docstring and in `docs/design/quality.md` beside the gate list.
 - **D3 (F8's other gaps).** Ignore rules are read from the head revision's own `.gitignore` blobs,
-  materialized into a scratch checkout (`core.ignorecase` pinned false), never from the working
-  tree; and a citation whose first segment the comparison base held at the top level and the head
-  does not is refused, so a removed or renamed top-level tree no longer hides the citations under
-  it. A first segment neither revision holds at the top level stays unaudited - the corpus writes
-  subdirectory-relative and upstream paths (`config/test.exs`, `src/backend/...`) - pinned in both
-  directions.
+  materialized into a scratch checkout (`core.ignorecase` pinned false; the notice is accepted
+  only when `check-ignore -v` names a case-exact committed rule source), never from the working
+  tree; and a multi-segment citation whose first segment the head lacks but a commit reachable from
+  the head held (`git rev-list -1 <head> -- <segment>`, cached per segment) is refused, so a
+  removed or renamed top-level tree no longer hides the citations under it - the removal need not
+  lie inside the comparison range, because the repair lands on the next pull request that touches
+  the citing document (round-2 fix, R2-1). The head revision's own ignore rules still decide
+  first: a removed tree their bytes cover is reported as a per-citation notice and the run passes,
+  the recorded precedence, fixture-pinned. A single-segment token is never resolved that way, and
+  a first segment neither the head nor its history holds at the top level stays unaudited - the
+  corpus writes subdirectory-relative and upstream paths (`config/test.exs`, `src/backend/...`) -
+  pinned in both directions.
 - **Everything else as prescribed.** The wildcard-in-name and `...`/`…` forms, `path:line:col`,
   fence blanking, the connective list without `and`/`or`, fixtures for the grammar branches the
   first cut left untested, the classifier self-triggering on `revision_scope.py`,

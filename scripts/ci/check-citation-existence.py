@@ -48,13 +48,22 @@ line suffix and a leading ``./`` are stripped:
 
 The head tree need not hold a resolved multi-segment citation (that is the rot the gate
 refuses). "Resolves" has a third arm beside the head tree: a multi-segment token whose
-first segment the comparison base held at the top level and the head revision does not
-is a directory or file this very range removed or renamed, and every citation under it
-- path, directory or glob alike - is refused with the path named. A token whose first
-segment neither revision holds at the top level (a subdirectory-relative
-``config/test.exs``, an upstream source path such as PostgreSQL's ``src/backend/...``)
-names no repo-relative path the gate can resolve, and is left to review rather than
-guessed: a mis-parse must never demand a rewrite.
+first segment the head revision lacks but a commit reachable from the head held
+(``git rev-list -1 <head> -- <segment>``, asked once per distinct segment) is a
+directory or file the repository once had and the tree no longer does - the removal may
+lie outside the comparison range, because the repair lands on the next pull request
+that touches the citing document. Every citation under such a segment - path, directory
+or glob alike - is refused with the path named, unless the head revision's own ignore
+rules cover the token: the ignore arm is consulted first and the run passes with a
+per-citation notice naming the rule, the recorded precedence for the case where a
+removed tree is also ignored. On a shallow clone the arm sees only the fetched history,
+and a removal older than the shallow boundary is left to review, as before. A
+single-segment token is never resolved this way (a bare file name is a deliberate
+non-citation), and a token whose first segment neither the head nor its history holds
+at the top level (a subdirectory-relative ``config/test.exs``, an upstream source path
+such as PostgreSQL's ``src/backend/...``) names no repo-relative path the gate can
+resolve, and is left to review rather than guessed: a mis-parse must never demand a
+rewrite.
 
 Two more shapes are deliberately not citations. An extensionless multi-segment token
 without a trailing slash, a line suffix or a wildcard: this corpus writes branch names
@@ -72,7 +81,11 @@ path or a template. A symbol citation is ``name/arity``, ``Module.name/arity``,
 ``name()`` or ``Module.name()``, and it is checked only against a file-shaped path
 citation: a directory or glob citation has no single text to search. Lines inside a
 fenced code block are not audited at all: the backticks in a JS template literal, a Go
-raw string or a shell example are code, not citations.
+raw string or a shell example are code, not citations. A fence is recognized at any
+indentation and behind blockquote markers (a fence nested in a list item sits deeper
+than the top level; a fence on the same line as a list marker is not recognized), and
+only a line of the same fence character, at least as long, with nothing after it closes
+the block (``without_fenced_blocks`` states the boundary).
 
 Changed-file selection is computed against an explicit comparison base, never from the
 checkout's last commit: CI passes the pull-request base commit, or the pushed ``before``
@@ -130,9 +143,11 @@ BACKTICKED = re.compile(r"`([^`\n]+)`")
 # runners and linters print); the suffix is stripped and never validated.
 LINE_SUFFIX = re.compile(r":\d+(?::\d+)?(?:[-–,]\d+(?::\d+)?)*$")
 WILDCARD = re.compile(r"\*\*|\.\.\.|…|\*")
-# A fenced code block's opening or closing line: up to three leading spaces and three or
-# more backticks or tildes (CommonMark's fence shapes).
-FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+# A fenced code block's opening or closing line: any leading whitespace (a fence nested
+# in a list item sits deeper than the top level), any blockquote markers, then three or
+# more backticks or tildes. The second group is the info string; a closing fence may
+# not carry one, which is what keeps a line like ```js inside a fence from closing it.
+FENCE = re.compile(r"^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})(.*)$")
 FILENAME = re.compile(r"[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,8}$")
 NOT_A_CITATION = re.compile(r"[\s<>{}]")
 ARITY_SYMBOL = re.compile(r"^(?:[A-Z][A-Za-z0-9_.]*\.)?([a-z_][A-Za-z0-9_]*[!?]?)/[0-9]+$")
@@ -165,7 +180,7 @@ class Record:
         line: int,
         files: set[str],
         directories: set[str],
-        removed: frozenset[str],
+        removed: RemovedOwners,
     ) -> None:
         self.match = match
         self.line = line
@@ -182,9 +197,9 @@ def path_citation(
 
     Shapes are ``file``, ``dir`` and ``glob`` (the glob as written); the line suffix is
     stripped from ``body`` and never checked, and a leading ``./`` comes off (see the
-    module docstring). The head tree's entries and the range's removed top-level
-    entries decide the shapes only they can decide: whether a single segment is an
-    entry, and whether a multi-segment token names a repo-relative prefix at all.
+    module docstring). The head tree's entries and the head's history decide the shapes
+    only they can decide: whether a single segment is an entry, and whether a
+    multi-segment token names a repo-relative prefix at all.
     """
     if not token or "://" in token or NOT_A_CITATION.search(token):
         return (None, None)
@@ -220,18 +235,19 @@ def path_citation(
 
 
 def names_a_repo_prefix(
-    body: str, files: set[str], directories: set[str], removed: frozenset[str],
+    body: str, files: set[str], directories: set[str], removed: RemovedOwners,
 ) -> bool:
     """Whether ``body`` names a repo-relative prefix the head tree or the range explains.
 
     The head tree's entries decide for a token it holds or whose deepest existing
     ancestor it holds (``directory_prefix_exists``). When even the first segment of
-    ``body`` is gone, one arm remains: a first segment the comparison base held at the
-    top level and the head does not is an entry this very range removed or renamed, so
-    the token cites the moved owner - while a first segment neither revision holds at
-    the top level (a subdirectory-relative ``config/test.exs``, an upstream source path
-    such as PostgreSQL's ``src/backend/...``) names nothing the gate can resolve, and
-    is left to review rather than guessed (a mis-parse must never demand a rewrite).
+    ``body`` is gone, one arm remains: a first segment the head revision lacks but the
+    history behind it held (``RemovedOwners``) is an entry the repository once had and
+    removed, so the token cites the moved owner - while a first segment neither the
+    head nor its history holds at the top level (a subdirectory-relative
+    ``config/test.exs``, an upstream source path such as PostgreSQL's
+    ``src/backend/...``) names nothing the gate can resolve, and is left to review
+    rather than guessed (a mis-parse must never demand a rewrite).
     """
     return directory_prefix_exists(body, files, directories) or body.split("/", 1)[0] in removed
 
@@ -339,6 +355,14 @@ def without_fenced_blocks(text: str) -> str:
     rewrite of the example would be the mis-parse the module docstring forbids. The
     blanked lines keep their newlines - and so every line number a refusal reports -
     and become paragraph separators, so a binding never reaches across a fence.
+
+    The blanking needs the fence's shape, not CommonMark's column arithmetic: the
+    opener is recognized at any indentation and behind any blockquote markers, so a
+    fence nested in a list item (content column four or deeper) or quoted in a
+    blockquote is blanked too. A closing line carries the same fence character, at
+    least as many of them, and nothing after them - an info string makes a line
+    content, so a ```js line inside a fence does not close it early. An unclosed fence
+    blanks to the end of the document, the way CommonMark reads it.
     """
     blanked: list[str] = []
     fence: tuple[str, int] | None = None
@@ -346,7 +370,12 @@ def without_fenced_blocks(text: str) -> str:
         marker = FENCE.match(line)
         if fence is not None:
             blanked.append(re.sub(r"[^\n]", " ", line))
-            if marker is not None and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= fence[1]:
+            if (
+                marker is not None
+                and marker.group(1)[0] == fence[0]
+                and len(marker.group(1)) >= fence[1]
+                and not marker.group(2).strip()
+            ):
                 fence = None
             continue
         if marker is None:
@@ -384,30 +413,41 @@ def head_entries(repository: pathlib.Path, head: str) -> tuple[set[str], set[str
     return files, directories
 
 
-def removed_top_level(
-    repository: pathlib.Path, base: str, files: set[str], directories: set[str],
-) -> frozenset[str]:
-    """Top-level entries the comparison base held and the head revision does not.
+class RemovedOwners:
+    """Top-level entries the head revision lacks but its history once held.
 
-    A file-shaped citation whose first segment is gone from the head tree is refused
-    only when the base held that segment at the top level, because then the range
-    removed or renamed the owner this citation names; the segment is the only one the
-    ancestor walk cannot reach (a deeper removal still leaves the first segment
-    standing, and the walk finds it). The returned names are what ``names_a_repo_prefix``
-    consults, and the base tree is read once per run.
+    ``names_a_repo_prefix`` consults this when the head tree cannot explain a token's
+    first segment. The segment is the only one the ancestor walk cannot reach (a
+    deeper removal still leaves the first segment standing, and the walk finds it), and
+    the comparison base cannot be the source of the answer: a removal that merged in an
+    earlier pull request took the segment out of base and head alike, so the next
+    document-touching pull request would pass silently and stop counting the stale
+    citations. The history can answer - ``git rev-list -1 <head> -- <segment>`` lists a
+    commit whenever the repository held that top-level path at a revision reachable
+    from the head, whatever the comparison range is - and CI's ``citation-existence``
+    job checks out with ``fetch-depth: 0``, so the full history is there. On a shallow
+    clone the answer degrades toward the copy's history: a removal older than the
+    shallow boundary is not seen and the token is left to review, as it was before the
+    history arm existed. Each distinct segment is asked once per run.
     """
-    listed = revision_scope.run_git(repository, "ls-tree", "--name-only", "-z", base)
-    if listed.returncode != 0:
-        raise revision_scope.DiffRefused(
-            f"cannot read the tree of {base}: {listed.stderr.decode('utf-8', 'replace').strip()}"
-        )
-    base_entries = {
-        entry.decode("utf-8", "surrogateescape")
-        for entry in listed.stdout.split(b"\0")
-        if entry
-    }
-    head_entries_at_top = {path.split("/", 1)[0] for path in files | directories}
-    return frozenset(base_entries - head_entries_at_top)
+
+    def __init__(self, repository: pathlib.Path, head: str) -> None:
+        self.repository = repository
+        self.head = head
+        self.answers: dict[str, bool] = {}
+
+    def __contains__(self, segment: str) -> bool:
+        if segment not in self.answers:
+            listed = revision_scope.run_git(
+                self.repository, "rev-list", "-1", self.head, "--", f":(top,literal){segment}",
+            )
+            if listed.returncode != 0:
+                raise revision_scope.DiffRefused(
+                    f"cannot read the history of {self.head[:12]}: "
+                    f"{listed.stderr.decode('utf-8', 'replace').strip()}"
+                )
+            self.answers[segment] = bool(listed.stdout.strip())
+        return self.answers[segment]
 
 
 def scratch_git(scratch: pathlib.Path, *arguments: str) -> subprocess.CompletedProcess:
@@ -457,15 +497,18 @@ class HeadIgnoreRules:
         self, repository: pathlib.Path, head: str, files: set[str], scratch: pathlib.Path,
     ) -> None:
         self.scratch = scratch
+        # The committed ignore files this checkout materializes: the only rule sources
+        # a notice may name (see covering_rule).
+        self.sources = frozenset(
+            path for path in files if path == ".gitignore" or path.endswith("/.gitignore")
+        )
         initialized = scratch_git(scratch, "init", "--quiet")
         if initialized.returncode != 0:
             raise IgnoreQueryRefused(
                 "cannot prepare the ignore-rule checkout: "
                 f"{initialized.stderr.decode('utf-8', 'replace').strip()}"
             )
-        for relative in sorted(
-            path for path in files if path == ".gitignore" or path.endswith("/.gitignore")
-        ):
+        for relative in sorted(self.sources):
             _mode, payload = revision_scope.head_blob(repository, head, relative)
             target = scratch / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -476,7 +519,13 @@ class HeadIgnoreRules:
 
         The decision is the quiet query's exit code - the only shape whose status means
         "ignored" after negation is resolved - and the verbose query only names the
-        deciding rule for the notice.
+        deciding rule for the notice. The notice is only accepted when the named source
+        is one of the committed bytes this checkout materialized, spelling included: a
+        case-insensitive filesystem resolves a differently-cased directory to a
+        materialized ``.gitignore`` (``control/Gen`` finds ``control/gen/.gitignore``)
+        and ``core.ignorecase=false`` pins the pattern match, not that filesystem
+        lookup - so a source no case-exact checkout would read is treated as no rule
+        here, the answer the tree's own membership gives on every platform.
         """
         for probe in (body, f"{body}/"):
             decision = scratch_git(
@@ -493,7 +542,10 @@ class HeadIgnoreRules:
                 self.scratch, "-c", "core.ignorecase=false", "check-ignore", "-v", "--", probe,
             )
             lines = named.stdout.decode("utf-8", "replace").splitlines()
-            return lines[0].split("\t", 1)[0] if lines else f"a rule matching {probe}"
+            rule = lines[0].split("\t", 1)[0] if lines else ""
+            if rule.split(":", 1)[0] not in self.sources:
+                continue
+            return rule
         return None
 
 
@@ -507,7 +559,7 @@ def audit_document(
     head: str,
     files: set[str],
     directories: set[str],
-    removed: frozenset[str],
+    removed: RemovedOwners,
     ignore_rules: HeadIgnoreRules,
     relative: str,
     text: str,
@@ -543,13 +595,26 @@ def audit_document(
             body = record.path_body or ""
             citations += 1
             if record.path_shape == "glob":
+                pattern = glob_pattern(body)
+                candidates = files | directories
+                if pattern.endswith("/"):
+                    # A directory-family glob (`docs/runbooks/*/`) names directories:
+                    # tree paths carry no trailing slash, so the slash comes off before
+                    # matching and only directory entries are candidates. The citation
+                    # as written stays in the diagnostics.
+                    pattern = pattern.rstrip("/")
+                    candidates = directories
                 present = any(
-                    glob_matches(glob_pattern(body), path) for path in files | directories
+                    glob_matches(pattern, path) for path in candidates
                 )
                 absent = f"the cited glob `{body}` matches no entry of {head[:12]}"
             elif record.path_shape == "dir":
                 present = body in directories
-                absent = f"the cited path `{body}` is in no entry of {head[:12]}"
+                absent = (
+                    f"the cited path `{body}` names a file, not a directory"
+                    if body in files
+                    else f"the cited path `{body}` is in no entry of {head[:12]}"
+                )
             else:
                 present = body in files | directories
                 absent = f"the cited path `{body}` is in no entry of {head[:12]}"
@@ -650,10 +715,10 @@ def main(argv: list[str]) -> int:
         return 0
     try:
         files, directories = head_entries(repository, head)
-        removed = removed_top_level(repository, base, files, directories)
     except revision_scope.DiffRefused as refusal:
         print(f"{PROGRAM} refused: {refusal}", file=sys.stderr)
         return 2
+    removed = RemovedOwners(repository, head)
     with tempfile.TemporaryDirectory(prefix="citation-ignore-rules-") as scratch:
         try:
             ignore_rules = HeadIgnoreRules(repository, head, files, pathlib.Path(scratch))

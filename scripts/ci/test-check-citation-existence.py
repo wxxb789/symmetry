@@ -120,8 +120,11 @@ class CitationExistenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("2 path citation(s)", result.stdout)
 
-    def test_a_wildcard_anchor_that_is_not_a_tree_entry_is_refused(self) -> None:
-        head = self.cite_in_runbook("`docs/runbooks/gone/**.md`", "cite an absent glob anchor")
+    def test_a_glob_beneath_a_missing_directory_is_refused_for_its_members(self) -> None:
+        # The anchor's deepest existing ancestor (`docs/runbooks`) makes the token a
+        # citation; the member test then refuses it because no tree entry matches the
+        # pattern - the anchor itself is not required to be a tree entry.
+        head = self.cite_in_runbook("`docs/runbooks/gone/**.md`", "cite a glob under a missing directory")
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("docs/runbooks/gone", result.stderr)
@@ -307,6 +310,30 @@ class CitationExistenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("1 path citation(s)", result.stdout)
 
+    def test_a_directory_family_glob_matches_directory_entries(self) -> None:
+        # `docs/runbooks/*/` names the directory members: tree paths carry no trailing
+        # slash, so the gate drops it and matches directory entries - while a family
+        # that has vanished is still refused.
+        self.write("docs/runbooks/sub/portal.md", "# Sub\n")
+        head = self.cite_in_runbook("`docs/runbooks/*/`", "cite a directory family")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+        head = self.cite_in_runbook("`docs/runbooks/gone-*/`", "cite a vanished directory family")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("the cited glob `docs/runbooks/gone-*/` matches no entry", result.stderr)
+
+    def test_a_double_star_glob_spans_path_segments(self) -> None:
+        # `**` must span path segments: this pattern needs two of them (`runbooks`,
+        # `nested`) and no shallower entry satisfies it, so a `**` degraded to a
+        # single-segment wildcard cannot pass the fixture.
+        self.write("docs/runbooks/nested/deep/portal.md", "# Deep\n")
+        head = self.cite_in_runbook("`docs/**/deep/portal.md`", "cite across segments")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 path citation(s)", result.stdout)
+
     def test_an_ellipsis_truncated_name_matches_the_family(self) -> None:
         # `...` and `…` both mean "and so on": both are wildcards inside the name.
         head = self.cite_in_runbook(
@@ -369,6 +396,60 @@ class CitationExistenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("1 path citation(s)", result.stdout)
 
+    def test_a_token_inside_a_nested_list_fence_is_not_a_citation(self) -> None:
+        # A fence nested in a list item sits at the item's content column (four or
+        # deeper): CommonMark reads it as a fenced block, so the example code is
+        # blanked like any other fence instead of being audited as prose.
+        self.write(
+            "docs/runbooks/portal.md",
+            "# Portal runbook\n"
+            "\n"
+            "- outer step\n"
+            "\n"
+            "  - inner step\n"
+            "\n"
+            "    ```js\n"
+            "    const gone = `scripts/ci/gone.py`;\n"
+            "    ```\n",
+        )
+        head = self.commit("show a nested example")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0 path citation(s)", result.stdout)
+
+    def test_an_info_string_does_not_close_a_fence(self) -> None:
+        # A closing fence carries nothing after it, so the ```js line inside this fence
+        # is content: reading it as a closer would audit the example code below it.
+        self.write(
+            "docs/runbooks/portal.md",
+            "# Portal runbook\n"
+            "\n"
+            "```md\n"
+            "```js\n"
+            "const gone = `docs/runbooks/moved.md`;\n"
+            "```\n",
+        )
+        head = self.commit("show code inside a fence")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0 path citation(s)", result.stdout)
+
+    def test_a_token_inside_a_blockquoted_fence_is_not_a_citation(self) -> None:
+        # A fence inside a blockquote is a fenced block too; the quoted example code
+        # must not be audited as prose.
+        self.write(
+            "docs/runbooks/portal.md",
+            "# Portal runbook\n"
+            "\n"
+            "> ```js\n"
+            "> const gone = `docs/runbooks/moved.md`;\n"
+            "> ```\n",
+        )
+        head = self.commit("show a quoted example")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0 path citation(s)", result.stdout)
+
     def test_a_coordinating_conjunction_does_not_bind_a_path_and_symbol(self) -> None:
         # `and` joins list items: it must not demand that a symbol belonging to some
         # other file occur in the file the list happens to mention first.
@@ -424,8 +505,10 @@ class CitationExistenceTests(unittest.TestCase):
 
     def test_a_tree_the_range_removed_is_refused_for_paths_and_directories(self) -> None:
         # A wholesale removal takes the first segment with it, and the ancestor walk
-        # cannot see a segment that is gone: only the comparison base can say the token
-        # ever named a repo path. It did, and both shapes are refused.
+        # cannot see a segment that is gone: only the head's own history can say the
+        # token ever named a repo path. It did, and both shapes are refused - the
+        # directory refusal by its own text, not by the file refusal's mention of the
+        # tree.
         self.write("browser/tests/portal.spec.mjs", "// fixture\n")
         self.base = self.commit("fixture a browser tree")
         self.git("rm", "-r", "--quiet", "browser")
@@ -434,8 +517,44 @@ class CitationExistenceTests(unittest.TestCase):
         )
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("browser/tests/portal.spec.mjs", result.stderr)
-        self.assertIn("browser", result.stderr)
+        self.assertIn("the cited path `browser/tests/portal.spec.mjs` is in no entry", result.stderr)
+        self.assertIn("the cited path `browser` is in no entry", result.stderr)
+        self.assertIn("no ignore rule covers it", result.stderr)
+
+    def test_a_tree_removed_before_the_range_is_still_refused(self) -> None:
+        # The realistic next-PR shape: the removal merged in an earlier pull request
+        # that touched no audited document, so base and head both lack the first
+        # segment; the history arm still knows the tree, counts both citations and
+        # refuses them instead of letting the stale paths drop out of the count.
+        self.write("browser/tests/portal.spec.mjs", "// fixture\n")
+        self.commit("fixture a browser tree")
+        self.git("rm", "-r", "--quiet", "browser")
+        removal = self.commit("remove the browser tree")
+        head = self.cite_in_runbook(
+            "`browser/tests/portal.spec.mjs:12` and `browser/`", "cite a tree removed earlier"
+        )
+        result = self.run_gate("--base", removal, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("the cited path `browser/tests/portal.spec.mjs` is in no entry", result.stderr)
+        self.assertIn("the cited path `browser` is in no entry", result.stderr)
+        self.assertIn("no ignore rule covers it", result.stderr)
+
+    def test_an_ignore_rule_decides_before_a_removal_is_reported(self) -> None:
+        # A removed tree the head revision's own ignore rules also cover: the ignore
+        # arm is consulted first, so the run passes with the per-citation notice naming
+        # the rule instead of the removal refusal. The precedence is deliberate and
+        # pinned here, not chosen silently.
+        self.write("browser/tests/portal.spec.mjs", "// fixture\n")
+        self.base = self.commit("fixture a browser tree")
+        self.git("rm", "-r", "--quiet", "browser")
+        self.write(".gitignore", "/browser/\n")
+        head = self.cite_in_runbook(
+            "`browser/tests/portal.spec.mjs:12`", "cite a removed, ignored tree"
+        )
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("the ignore rule .gitignore:1:/browser/", result.stdout)
+        self.assertIn("browser/tests/portal.spec.mjs", result.stdout)
 
     def test_a_first_segment_neither_revision_held_is_not_a_citation(self) -> None:
         # A subdirectory-relative or upstream path (PostgreSQL's `src/backend/...`)
@@ -463,6 +582,25 @@ class CitationExistenceTests(unittest.TestCase):
         self.assertIn("1 path citation(s)", result.stdout)
         self.assertIn("the ignore rule .gitignore:1:/control/priv/static/portal/", result.stdout)
 
+    def test_an_ignore_rule_is_read_from_case_exact_bytes(self) -> None:
+        # The head tree holds `control/gen/.gitignore`; a citation of `control/Gen/...`
+        # must not be exempted because a case-insensitive filesystem resolved the
+        # directory to the other spelling - the notice is only accepted when the rule's
+        # source is one of the committed paths, so both platforms refuse the wrong
+        # case. The exactly-cased citation is exempt with the notice.
+        self.write("control/gen/.gitignore", "/absent.md\n")
+        self.commit("state a generated-output rule")
+        head = self.cite_in_runbook("`control/Gen/absent.md`", "cite the wrong case")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("control/Gen/absent.md", result.stderr)
+        self.assertIn("no ignore rule covers it", result.stderr)
+        head = self.cite_in_runbook("`control/gen/absent.md`", "cite the exact case")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("the ignore rule control/gen/.gitignore:1:/absent.md", result.stdout)
+        self.assertIn("control/gen/absent.md", result.stdout)
+
     def test_a_rule_the_working_tree_alone_holds_does_not_cover_a_citation(self) -> None:
         # An untracked ignore file is not the revision under test: it must not make a
         # citation pass.
@@ -479,6 +617,60 @@ class CitationExistenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("control/generated/index.html", result.stderr)
         self.assertIn("no ignore rule covers it", result.stderr)
+
+    def test_a_file_cited_with_a_trailing_slash_is_refused_as_a_file(self) -> None:
+        # The head tree holds the blob, so "is in no entry" would be false: the
+        # directory shape's refusal says what the path is - a file, not a directory.
+        head = self.cite_in_runbook("`docs/runbooks/portal.md/`", "cite a file as a directory")
+        result = self.run_gate("--base", self.base, "--head", head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(
+            "the cited path `docs/runbooks/portal.md` names a file, not a directory", result.stderr,
+        )
+        self.assertNotIn("the cited path `docs/runbooks/portal.md` is in no entry", result.stderr)
+
+    def test_a_rollback_range_is_compared_with_its_requested_base(self) -> None:
+        # The requested base is a descendant of the head (a rollback pushes an older
+        # revision): always narrowing to the merge base would collapse the range to the
+        # head itself and report "nothing to check", so a requested base is compared
+        # directly - the record gate's mirror test pins the same arm.
+        self.write("docs/runbooks/portal.md", "# Portal runbook\n\nSee `docs/runbooks/moved.md`.\n")
+        dirty = self.commit("land a stale citation")
+        self.write("docs/runbooks/portal.md", CLEAN_RUNBOOK)
+        clean = self.commit("repair the citation")
+        result = self.run_gate("--base", clean, "--head", dirty)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("moved.md", result.stderr)
+        self.assertNotIn("nothing to check", result.stdout)
+
+    def test_an_inherited_git_dir_does_not_redirect_the_audit(self) -> None:
+        # A hook or wrapper may leave GIT_DIR set. Without stripping it, `-C <repo>`
+        # stops deciding: the gate would read the other repository's HEAD^..HEAD -
+        # which audits no document here - and pass vacuously instead of refusing the
+        # stale citation this repository's range holds.
+        other = self.root / "other-repository"
+        subprocess.check_call(["git", "clone", "--quiet", str(self.repo), str(other)])
+        subprocess.check_call(["git", "config", "user.name", "Fixture"], cwd=str(other))
+        subprocess.check_call(
+            ["git", "config", "user.email", "fixture@example.invalid"], cwd=str(other)
+        )
+        (other / "daemon").mkdir(exist_ok=True)
+        (other / "daemon" / "main.go").write_text(
+            "package main\n\nfunc main() {}\n", encoding="utf-8", newline="\n"
+        )
+        subprocess.check_call(["git", "add", "-A"], cwd=str(other))
+        subprocess.check_call(
+            ["git", "commit", "--quiet", "-m", "change only unrelated code"], cwd=str(other)
+        )
+        head = self.cite_in_runbook("`docs/runbooks/moved.md`", "cite a moved path")
+        environment = dict(os.environ, GIT_DIR=str(other / ".git"))
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--base", "HEAD^", "--head", "HEAD"],
+            capture_output=True, text=True, check=False, env=environment,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("moved.md", result.stderr)
+        self.assertNotIn("nothing to check", result.stdout)
 
 
 if __name__ == "__main__":

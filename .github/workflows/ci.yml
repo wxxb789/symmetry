@@ -31,10 +31,10 @@ jobs:
   # And `run-citations`: a change to a document the citation existence gate audits -
   # `docs/runbooks/**`, `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md` -
   # or to the gate's own program, its fixture suite or the shared `revision_scope.py`,
-  # gates the citation-existence job below. The audited documents are the ones a
-  # documentation-only pull request changes, so this too is a separate output rather
-  # than part of run-heavy, and the self-triggering tool paths run the gate end to
-  # end exactly the same way.
+  # gates the citation-existence job below. The audited documents are the documents a
+  # documentation-only pull request can change, so this too is a separate output
+  # rather than part of run-heavy, and the self-triggering tool paths run the gate end
+  # to end exactly the same way.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -128,10 +128,10 @@ jobs:
   # in `docs/archive/CLOSED-TODO.md` - must hold in the tree of the revision under
   # test, because a cited file:line or symbol rots silently when its owner moves. Like
   # the cleanliness gate above it is deliberately independent of the heavy matrix: the
-  # documents it audits are the ones a documentation-only pull request changes, and
-  # the classifier also fires it for a change to the gate's own program, its fixture
-  # suite or the revision-range module, so a change to either of those runs the gate
-  # end to end.
+  # documents it audits are documents a documentation-only pull request can change,
+  # and the classifier also fires it for a change to the gate's own program, its
+  # fixture suite or the revision-range module, so a change to either of those runs
+  # the gate end to end.
   # The audited corpus is the check's own (`AUDITED_PATHS`); the classifier above only
   # decides whether this job runs, and `test-ci-changed-path-classifier.py` holds the
   # two together. `fetch-depth: 0` gives the job the comparison base the gate needs.

@@ -1998,20 +1998,26 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       read - is shared with the record gate through the new `scripts/ci/revision_scope.py`
       instead of being copied; `scripts/ci/test-check-record-cleanliness.py` (nineteen tests,
       observed `Ran 19 tests ... OK` on Windows and on WSL Ubuntu-24.04) is that extraction's
-      regression evidence.
+      regression evidence. The module also drops the inherited `GIT_DIR`-family variables from
+      every git call, so an exported `GIT_DIR` cannot silently redirect a gate to another
+      repository and turn its range into a vacuous pass.
       `.github/workflows/ci.yml` reports a third classifier output, `run-citations`, for a change
       to `docs/runbooks/**`, `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md`, and the
       `citation-existence` job runs whenever it is true - independently of the
       documentation-only fast path, so a runbook-only pull request runs the gate - with
       `CITATION_BASE` folded from the event exactly like `RECORD_BASE`.
-      `scripts/ci/test-check-citation-existence.py` (thirty-seven tests, observed `Ran 37 tests ...
+      `scripts/ci/test-check-citation-existence.py` (forty-eight tests, observed `Ran 48 tests ...
       OK` on Windows and on WSL Ubuntu-24.04) pins the grammar (line-suffixed, `:line:col`, and
       file-shaped citations, the directory form, wildcard families including `...`/`…`, the
-      fence blanking, the connective list without `and`/`or`, and the path-first and whole-word
-      symbol branches), the resolution boundary (the head tree, or the head revision's own ignore
-      rules for generated output, with a per-citation notice naming the rule) and the range side
-      (an unchanged, deleted or non-corpus document selects nothing; the head blob decides and
-      not the working tree).
+      fence blanking at any indentation, in a blockquote or in a nested list item, with a closing
+      fence that carries the same character, at least the opener's count and no info string, the
+      connective list without `and`/`or`, and the path-first and whole-word symbol branches), the
+      resolution boundary (the head tree, or the head revision's own ignore rules for generated
+      output, with a per-citation notice naming the rule, the notice read from case-exact
+      committed bytes and the ignore arm deciding before a removal is reported) and the range
+      side (an unchanged, deleted or non-corpus document selects nothing; the head blob decides
+      and not the working tree; a rollback range is compared with its requested base; an
+      inherited `GIT_DIR` cannot redirect the audit).
       The boundaries are deliberate and pinned, not omissions: a raw `file:line` value is never
       read (the suffix is stripped before the path is resolved), a bare file name
       (`read_model.ex`) names no repo-relative path, an extensionless multi-segment token is
@@ -2024,12 +2030,21 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       absent path no longer aborts the run (the symbol check skips a path the head tree does not
       hold; the missing non-ignored path is reported by the path arm, named, at exit 1, with no
       "does not hold exactly one entry" abort); ignore rules are read from the head revision's
-      own `.gitignore` blobs in a scratch checkout, never from the working tree; and a citation
-      whose first segment the comparison base held at the top level and the head does not is
-      refused, so a removed or renamed top-level tree no longer hides the citations under it,
-      while a first segment neither revision holds at the top level (a subdirectory-relative
+      own `.gitignore` blobs in a scratch checkout, never from the working tree, and a notice is
+      accepted only when `check-ignore -v` names a case-exact committed rule source (a
+      case-insensitive filesystem otherwise resolves a differently-cased directory to a
+      materialized ignore file and exempts what a Linux checkout refuses); and a multi-segment
+      citation whose first segment the head lacks but a commit reachable from the head held
+      (`git rev-list -1 <head> -- <segment>`, cached per segment) is refused, so a removed or
+      renamed top-level tree no longer hides the citations under it - the removal need not lie
+      inside the comparison range, because the repair lands on the next pull request that touches
+      the citing document. The head revision's own ignore rules decide first: a removed tree their
+      bytes cover is reported as a per-citation notice and the run passes, a recorded precedence
+      with a fixture of its own. A single-segment token is never resolved that way, and a first
+      segment neither the head nor its history holds at the top level (a subdirectory-relative
       `config/test.exs`, an upstream `src/backend/...`) stays unaudited, pinned in both
-      directions.
+      directions; on a shallow clone the history arm sees only the fetched history and degrades
+      to the previous behaviour.
       The gate's own first tree-wide run found five citations the corpus no longer held, all in
       this file, and they were repaired here with the revision-pinned form this file already
       uses: the two pre-cutover revisions of the deleted browser spec, whose three sites went with
@@ -2043,10 +2058,17 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       `10 changed document(s) pass the path and symbol check (365 path citation(s))` after them
       (the after run bound the uncommitted repairs and this increment's own new files with a
       dangling `git commit-tree` snapshot built from a temporary `GIT_INDEX_FILE`); at the
-      shipped revision of the fix round the same command exits 0 with
+      round-1 revision of the fix round the same command exits 0 with
       `10 changed document(s) pass the path and symbol check (374 path citation(s))` (the delta
       from the pre-merge 365 is this range's own `main` merge and the fix round's record edits;
-      the merge had already moved the count to 368).
+      the merge had already moved the count to 368), and the round-2 fix's final tree exits 0
+      with `10 changed document(s) pass the path and symbol check (381 path citation(s))`: the
+      round-2 delta of +7 is this file's own new record prose - it adds nine citations (two bare
+      `docs/` directory citations, one `docs/**` glob, one `docs/runbooks/` directory citation,
+      and the five appended by this very closing sentence, all resolving at the head) - less the
+      two `.github/workflows/ci.yml` line-number pointers removed from `docs/design/quality.md`
+      (15 citations there became 13), whose line numbers the fix round's second pass replaced
+      with job/step names.
 
 - [ ] Commit a fixture test for the `changes` job's changed-path classifier
       (`.github/workflows/ci.yml:26-65`), whose proof today is only the removed
@@ -2062,17 +2084,22 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       fails when any of those routings changes.
 
       **Closed (2026-11-20, `fix/ci-classifier-gates`):**
-      `scripts/ci/test-ci-changed-path-classifier.py` (fourteen tests, observed `Ran 14 tests ...
+      `scripts/ci/test-ci-changed-path-classifier.py` (eighteen tests, observed `Ran 18 tests ...
       OK` on Windows and on WSL Ubuntu-24.04, exit 0 on both) extracts the classifier program out
       of the `changes` job's `id: paths` step in `.github/workflows/ci.yml` and runs the
-      workflow's own text - never a copy - in fifteen scratch two-commit repositories whose diffs
+      workflow's own text - never a copy - in sixteen scratch two-commit repositories whose diffs
       are the fixtures, so every expectation below is a measured classifier run. Pinned: a
-      `docs/**`-only and a `*.md`-only diff report `run-heavy=false`; `docs/evaluations/**`,
+      `docs/**`-only and a `*.md`-only diff report `run-heavy=false`, and the round-2 fix adds
+      the discriminating pair - a `docs/**` file that is not Markdown (the suite's `example.json`
+      fixture) reports all three outputs `false`, so the `.md` exemption is what excuses a
+      documentation path, not the `docs/` prefix; `docs/evaluations/**`,
       `docs/evidence/**`, `scripts/ci/model-routing-record-sanitize.py` and
       `scripts/ci/check-record-cleanliness.py` report `run-records=true`; the citation gate's
       `AUDITED_PATHS` entries report `run-citations=true` and nothing else (the corpus is
-      imported from the gate's own module, and either a corpus entry the classifier forgets or a
-      classifier literal no corpus entry - or citation tool path - explains fails the suite); a
+      imported from the gate's own module, each entry required by its family-complete literal - a
+      directory entry by its trailing-slash prefix, so one file under it cannot stand in for the
+      family - and either a corpus entry the classifier forgets or a classifier literal no
+      corpus entry - or citation tool path - explains fails the suite); a
       daemon change reports `run-heavy=true`; a rename across the documentation boundary reports
       both sides under `--no-renames` (the fixture moves a non-Markdown file, because a `*.md`
       path is exempt from the heavy predicate on both sides and would pin nothing); a deleted
@@ -2094,12 +2121,18 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       output folds are pinned to `github.event_name != 'pull_request' || steps.paths.outputs.<key>
       == 'true'`, which the test folds to `true` for `push` and `workflow_dispatch` and evaluates
       per fixture for `pull_request`; an unrecognized `if:` shape refuses instead of passing.
-      Seven mutation cases measure that the pins bite - dropping the `docs/evaluations/` clause,
-      making the heavy predicate ignore `docs/` and `*.md`, re-gating `citation-existence` on
-      `run-heavy`, conditioning `legacy-route-audit`, dropping an output fold, and dropping
-      either `revision_scope.py` clause (records or citations) each change the measured routing
-      and fail the pinned comparison - so "the fixture test fails when any of those routings
-      changes" is pinned inside the suite, not by editing `ci.yml` by hand. It runs
+      The round-2 fix also parses the heredoc step's own scalar keys: its `id: paths` and its
+      pull-request-only `if:` are pinned, because a step GitHub skips leaves every output unset
+      and skips every gated job even with the fold and the program text unchanged. Ten mutation
+      cases measure that the pins bite - dropping the `docs/evaluations/` clause,
+      making the heavy predicate ignore `docs/` and `*.md`, excusing only the `.md` arm of
+      `docs/` (the non-Markdown docs fixture must flip heavy), narrowing `docs/runbooks/` to one
+      file (the family-coverage check must fail), re-gating `citation-existence` on
+      `run-heavy`, conditioning `legacy-route-audit`, dropping an output fold, moving the
+      classify step's `if:` off `pull_request`, and dropping either `revision_scope.py` clause
+      (records or citations) each change the measured routing and fail the pinned comparison -
+      so "the fixture test fails when any of those routings changes" is pinned inside the suite,
+      not by editing `ci.yml` by hand. It runs
       ungated in the `legacy-route-audit` job, after that job's own audit fixture test. Observed
       before/after: with `HEAD`'s pre-change `ci.yml` in place the suite fails at collection -
       `the classifier must emit exactly ['run-citations', 'run-heavy', 'run-records']; emitted
