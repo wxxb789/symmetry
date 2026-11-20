@@ -331,8 +331,8 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     end
 
     {decision_id, proposal} = request_plan_decision(conn, goal_id, items_fun)
-    approve_plan(conn, goal_id, decision_id, proposal)
-    activate(conn, goal_id)
+    approve_plan(goal_id, decision_id, proposal)
+    activate(goal_id)
 
     read = api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
@@ -688,17 +688,17 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     }
   end
 
-  defp approve_plan(conn, goal_id, decision_id, proposal) do
+  defp approve_plan(goal_id, decision_id, proposal) do
     decision_version = Repo.get!(GoalDecision, decision_id).lock_version
 
-    portal_command!(conn, goal_id, "resolve_decision", %{
+    portal_command!(goal_id, "resolve_decision", %{
       "decision_id" => decision_id,
       "expected_decision_version" => decision_version,
       "option_id" => "accept",
       "comment" => nil
     })
 
-    portal_command!(conn, goal_id, "accept_plan", %{
+    portal_command!(goal_id, "accept_plan", %{
       "proposal" => proposal,
       "proposal_hash" =>
         "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
@@ -706,10 +706,10 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     })
   end
 
-  defp activate(conn, goal_id),
-    do: portal_command!(conn, goal_id, "activate", %{"approved_revision" => 1})
+  defp activate(goal_id),
+    do: portal_command!(goal_id, "activate", %{"approved_revision" => 1})
 
-  defp portal_command!(conn, goal_id, kind, payload) do
+  defp portal_command!(goal_id, kind, payload) do
     read = api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
     api_conn()
