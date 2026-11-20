@@ -62,7 +62,8 @@ projections", each pin carrying a comment naming the accepted decision:
   pinned through the URL reader (`filtersOf(workSearch(...))`) and the bare-`WorkSearch` reader
   (`filtersOf({ ... })`), the two call sites the previous increment pinned.
 - `human:::Ada` selects the row named `:Ada` and not the row named `::Ada`, through the URL
-  reader; `workSearch` keeps its spelling as well.
+  reader and the bare-`WorkSearch` reader (`filtersOf({ ... })`); `workSearch` keeps its
+  spelling as well.
 
 Mutation check (contract clause 2): temporarily re-pointing `human::Ada` to `human:::Ada` inside
 `ownerKeyFilter` must redden the first pin (the empty selection and the spelled-key equality);
