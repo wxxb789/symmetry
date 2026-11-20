@@ -730,6 +730,30 @@ class SanitizeCliTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "", text)
                 self.assertIn("refused", result.stderr)
 
+    def test_cli_root_only_check_refuses_a_root_after_a_json_escape(self):
+        # Opus P2 (round 4): inside a quoted record, a line's root follows an
+        # escape sequence (`\n`, `\t`, ...), and the leading name lookbehind read
+        # the escape's letter as a name character glued to the root, so the root
+        # bytes passed `--check --root-only`. The escape's final character is a
+        # boundary; the name-character rejection itself stays.
+        posix_root = "/srv/store"
+        cases = (
+            '{"out":"ok\\n' + posix_root + '/x failed"}\n',
+            '{"out":"a\\t' + posix_root + '/x"}\n',
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                result = self.run_cli(text, "--check", "--root-only", "--root", posix_root)
+                self.assertEqual(result.returncode, 1, text)
+                self.assertEqual(result.stdout, "", text)
+                self.assertIn("refused", result.stderr)
+        # Boundary negative: a literal name character glued in front is still not
+        # this root.
+        passed = self.run_cli("aa" + posix_root + "/x\n", "--check", "--root-only",
+                              "--root", posix_root)
+        self.assertEqual(passed.returncode, 0, passed.stderr)
+        self.assertEqual(passed.stdout, "")
+
     def test_cli_root_only_check_refuses_a_root_before_a_space_chunk(self):
         # Sol P2: a root followed by a space-continued word (`/srv/store today`,
         # `... store ready`) is a longer sibling location, not the root alone. The

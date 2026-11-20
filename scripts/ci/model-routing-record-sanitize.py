@@ -283,9 +283,12 @@ def _root_patterns(root: str) -> tuple[re.Pattern[str], re.Pattern[str]] | None:
 
     The bounded matcher consumes the root only when it is spelled with a recorded
     separator mixture (`_ROOT_SEPARATOR`) and only at a whole-name boundary: the
-    leading lookbehind refuses a name character glued in front, and the trailing
-    lookahead refuses a name continuation behind it - a further name character, a
-    ``.``-continued name, or a space-continued path chunk (`...-user`,
+    leading lookbehind refuses a name character glued in front - except after a
+    JSON escape sequence, whose final character (the letter of ``\\n``, ``\\t``,
+    ``\\r``, ``\\b`` or ``\\f``, or the last hex digit of a ``\\uXXXX`` escape)
+    ends the escape and is a boundary - and the trailing lookahead refuses a name
+    continuation behind it - a further name character, a ``.``-continued name,
+    or a space-continued path chunk (`...-user`,
     ``.../run.bak``, ``.../run user/private``, the same continuation the path
     tails absorb). The chunked matcher is its fail-closed sibling: the same root
     followed by one or more space-continued chunks is a longer sibling location,
@@ -315,8 +318,14 @@ def _root_patterns(root: str) -> tuple[re.Pattern[str], re.Pattern[str]] | None:
     # namespace's `\\?\C:`, say), not this root; for a separator-led root the
     # match must start at the first separator of its run - a start inside the
     # run would re-try the body at every position of a long run with no match
-    # behind it (quadratic over `"/" * 100000`).
-    lookbehind = r"(?<![A-Za-z0-9_.\-\\/])"
+    # behind it (quadratic over `"/" * 100000`). A JSON escape in front of the
+    # root is a boundary, not a name: the letter of a two-character escape
+    # (`\n`, `\t`, `\r`, `\b`, `\f`) or the last hex digit of a `\uXXXX` escape
+    # ends the escape sequence, so a root that starts the next recorded line
+    # inside a quoted record (`{"out":"ok\n/srv/store/x"}`) still matches, while
+    # a literal name character glued in front (`aa/srv/store/x`) still rejects
+    # the match.
+    lookbehind = r"(?:(?<=\\[nrtbf])|(?<=\\[u][0-9A-Fa-f]{4})|(?<![A-Za-z0-9_.\-\\/]))"
     after = r"(?!" + _ROOT_NAME_CHAR + r"|\." + _ROOT_NAME_CHAR + r"|" + _SPACE_CHUNK + r")"
     return (
         re.compile(lookbehind + body + after),
