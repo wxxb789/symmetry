@@ -121,6 +121,16 @@ before merge. Native credentialed harness tests and Windows behavior cannot be
 inferred from fake-agent tests or Linux compilation. Mark unavailable checks
 pending with the missing environment; do not remove them to claim completion.
 
+Amendment (2026-11-20, owner Q10C). Verification is selected by the paths a change
+touches, not by the platform CI happens to use: a change touching `frontend/` or
+`browser/` runs the browser render gate locally before its pull request opens (the
+render step's own spec list against locally started shell and control fixtures, per
+the Browser row above), and a change touching `daemon/`, platform-specific code or
+`scripts/ci/` runs the affected suites on Linux (WSL or a Linux host) before it
+opens. CI remains the floor, not the first execution of browser-rendered or
+Linux-only behavior: the local run decides the change before review, and the hosted
+gates still decide the merge.
+
 For state-changing code test the smallest set covering each changed invariant:
 replay after commit, crash before acknowledgement, duplicate/out-of-order event,
 stale revision/fence, cancel/completion race, provider unknown outcome, cost after
