@@ -13,7 +13,8 @@ defmodule SymmetryControl.TelemetryReads do
   Whether a query's `metadata.params` reference one of the `forms` under test.
 
   A form may appear as a direct parameter, inside a list parameter, or as a
-  dumped binary id; a non-binary value never matches.
+  dumped binary id; a non-binary scalar parameter never matches; list
+  parameters are matched member-wise.
   """
   @spec read?(term(), [term()]) :: boolean()
   def read?(params, forms) do

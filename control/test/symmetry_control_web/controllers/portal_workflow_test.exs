@@ -1462,7 +1462,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
         input: %{},
         required_capabilities: %{},
         state: "failed",
-        current_generation: 0,
+        current_generation: 1,
         attempt_generation: 1,
         work_item_id: adopted.id,
         goal_id: goal.id,
