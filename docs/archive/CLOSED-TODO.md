@@ -40,6 +40,10 @@ The revalidated test-database recovery entry appended to `## Retro review follow
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
 
+The closed JSON-escape path-tail item appended to the `## Retro review follow-ups (second pass,
+2026-11-20)` section below, together with the PR #119 round-5 follow-up it closes, was moved on
+2026-11-21 from branch `fix/sanitizer-json-escape`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -2622,3 +2626,119 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       passed at both widths in every run. The gate's environment, its carrier deviations and the
       failure classification are in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`; CI
       remains the merge gate.
+
+- [ ] Stop the Windows-family path tail from absorbing a JSON escape that follows the path.
+      `_WINDOWS_TAIL` (`scripts/ci/model-routing-record-sanitize.py:110`) admits a bare backslash
+      as a path byte — deliberate, per its comment at `:104-107`, because in raw recorded text the
+      backslash is the separator — and the four Windows-family patterns listed here end in it (or
+      in its require-a-byte variant `_WINDOWS_TAIL_PLUS` `:115`): `_DRIVE_PATH` `:133-135`,
+      `_UNC_PATH` `:142-145` (`_PLUS`), `_SLASH_UNC_PATH` `:167-169` (`_PLUS`),
+      `_FILE_URL_PATH` `:204-212`
+      (the root-relative `_ROOT_RELATIVE_PATH` `:191-194` and the file-URL host-root arm `:209` do
+      not), so a recorded `\n` escape that follows a Windows path is consumed into the rendered
+      token together with the text behind it. The POSIX family already fixed exactly this
+      shape (`_POSIX_BYTE` `:122`, whose comment at `:116-121` names the failure — "consuming it would
+      swallow a JSON escape sequence together with the text behind it" — and
+      `scripts/ci/test-model-routing-record-sanitize.py:282-295`,
+      `test_a_json_escape_after_a_path_survives_the_render`, STD-A07); the Windows family has no
+      such case. Reproduced at `978abba` with the tool on two scratch inputs of one shape (a JSON
+      string recording a path, then the two-character `\n` escape, then the word `FAILED`; the
+      Windows input's path is drive-rooted and carries the JSON-escaped doubled separators). The
+      inputs, one JSONL line each, are built in Python with `BS = chr(0x5C)`: Windows
+      `'{"output":"wrote C:' + BS*2 + 'Users' + BS*2 + 'op' + BS*2 + 'run' + BS + 'nFAILED"}'`,
+      POSIX `'{"output":"wrote /' + 'tmp/run' + BS + 'nFAILED"}'`. The Windows input renders to a
+      single token whose digest is
+      `path-sha256:a3a19f2b70d9c277fa8b2ef0f62c217841c3f41ed7e6a78b689045338e4ad1e5`, and that
+      digest is the recomputed sha256 of the raw span the token bound — the path text *plus* the
+      escape *plus* `FAILED` — where a path-only render of the same input would carry
+      `26e7b5b4…` (the sha256 of the path text alone); the POSIX input of the same shape keeps the
+      escape and the word outside its token (`…path-sha256:91525b09…` followed by the escape and
+      `FAILED`). Consequence in a record: an evidence line behind the escape disappears from the
+      rendered bytes while the record stays valid JSON — the loss STD-A07 fixed on the POSIX side.
+      Fix direction: the POSIX rule is not directly portable (a raw Windows spelling uses one
+      backslash per separator, so a separator run can be shaped exactly like a JSON escape —
+      `\run` starts with `\r`), so the reading must be decided — either a JSON-aware pass that
+      respects string escapes (the tool's input is recorded JSON text), or a tail that stops
+      before an escape-shaped backslash run once at least one separator has been consumed — and
+      both the escaped-escape case and the raw single-backslash spelling must be pinned in the
+      tester. Suggested owner area: `scripts/ci` record tooling.
+
+      **Closed (2026-11-21, branch `fix/sanitizer-json-escape`), with the PR #119 round-5
+      follow-up closed in the same change:** the entry's first-named reading, one JSON-aware rule
+      shared by every path family (POSIX, drive, UNC, slash-UNC, `file:` URL, root-relative). The
+      second reading it names — a tail that stops before an escape-shaped backslash run once a
+      separator has been consumed — cannot be correct on its own, and the pins below hold that
+      boundary against it: a raw Windows spelling separates its segments with exactly that shape
+      (`\run` starts with `\r`, `\tmp` with `\t`), so it would cut a raw location at its last
+      separator and leave the segment name standing. The two halves of the shared rule:
+      `leading_boundary(excluded)` is the one leading lookbehind every family now carries — the
+      escape alternative the round-4 `--root` rule already had
+      (`(?<=\\[nrtbf])|(?<=\\[u][0-9A-Fa-f]{4})`, next to the family's own negative set) — so a
+      location behind a JSON escape is a match in every family, `_root_patterns` stops spelling
+      its own copy of the same atom, and the round-5 reproduction
+      (`printf '{"out":"ok\n/home/runner/work/x failed"}' | … --check --root-only`, exit 0 before)
+      now exits 1; and `_escape_boundary_view` returns a one-character-per-character view of the
+      recorded text in which every character of a JSON escape whose decoded character cannot be a
+      path byte (`NON_PATH_CHARACTER`, the exclusion set every byte class spells out) is written
+      over as `)`, so no tail crosses an escape. `sanitize_text` runs every pass against that view
+      while writing the same replacements into the recorded text, so a match's span still maps to
+      the same bytes and a digest still binds the raw span the token replaced. A span counts as a
+      literal only when `json.loads` accepts it — a raw Windows spelling's `\U` is not an escape —
+      and a second pass over the result runs the unmodified raw reading once more, so the renderer
+      never fails open on a spelling the JSON reading stopped seeing (`"C:\temp"`'s `\t` decodes
+      and the raw reading still renders the location). Accepted boundary, pinned rather than
+      silent: in a JSON literal an escape whose spelling also reads as a Windows separator is an
+      escape (`\repo` is a carriage return and `epo`), so a mixed spelling only a producer bug can
+      write renders the path up to the escape and leaves the escape's own spelling behind.
+      Pins in `scripts/ci/test-model-routing-record-sanitize.py` (55 cases before, 61 after): "a
+      JSON escape after a Windows path survives the render" — the entry's own Windows input
+      renders `path-sha256:26e7b5b4…` (the digest the entry records for the path text alone) with
+      the `\n` and `FAILED` outside the token, in both scopes; "a JSON escape after every Windows
+      family survives the render" (the UNC spelling with its escaped leader, the root-relative
+      spelling, the slash-UNC authority, the `file:` URL and its backslash spelling, and the
+      escaped-backslash shape `...\\n`, which stays path bytes); "a raw Windows spelling still
+      renders whole" (six raw and mixed spellings, a quoted raw spelling whose `\U` is not an
+      escape, and the odd-trailing-run-before-a-quote rule for runs of one, two and three
+      backslashes); "a quoted raw spelling the escape reading decodes still renders"
+      (`"C:\temp"`, `"C:\repo\tmp"`); "a host path after a JSON escape is caught" (the round-5
+      reproduction over the seven host roots and six escape spellings, the four Windows families
+      and the general POSIX family behind an escape, and the boundary negatives `aa/home/op/run`,
+      `../home/op/run`, `x_/home/op/run`, `aa/srv/store/x`); and the CLI case "root-only check
+      refuses a host path after a JSON escape" (the round-5 command shape exits 1, the default
+      scope refuses the same bytes, every shape's render passes the check it refused, and
+      `aa/home/runner/x` still passes).
+      Mutation checks (scratch copies of the tester beside a mutated tool, deleted afterwards): on
+      the pre-fix tool bytes (`git show 2a85cb8:scripts/ci/model-routing-record-sanitize.py`) the
+      four fix cases fail — 65 failing subtests, and no pre-existing case fails there — so no fix
+      pin passes on pre-fix bytes; the two guard cases pass on pre-fix bytes by design, because
+      they pin behavior the fix has to preserve, and each is falsified by its own mutation: the
+      raw-spelling guards by the shape-only masking mutation, the quoted-raw guard by dropping the
+      fallback pass, and the trailing-run subtests by dropping the trim rule. Removing the escape
+      alternative from `leading_boundary` fails the seven `\b` subtests (backspace is the one
+      escape whose decoded character is a path byte, so only the boundary catches it); disabling
+      `_escape_boundary_view` fails 12 subtests of the two Windows-escape cases; masking only the
+      escape's backslash fails two (the drive and `file:` URL cases behind an escape: the view
+      loses its boundary, the UNC pattern claims the path's inner backslash run, and `C:` is left
+      literal); dropping the fallback pass fails "a quoted raw spelling the escape reading decodes
+      still renders"; dropping the `json.loads` validity gate - masking every escape the grammar
+      spells, without requiring the span to parse - fails the two quoted-raw subtests of "a raw
+      Windows spelling still renders whole"; masking by shape without JSON context fails 33
+      subtests (the two Windows-escape cases, the family case and the raw-spelling guards). A
+      further variant that removed the gate and left the escape walk without an advance for the
+      letters it no longer knew is not evidence: it loops, and it is reported only as the artifact
+      it is.
+      Evidence: `python scripts/ci/test-model-routing-record-sanitize.py` 61 tests OK on Windows
+      and in WSL Ubuntu-24.04 as uid 1000; `--check` and `--check --root-only` over all 111
+      committed records under `docs/evaluations/` and `docs/evidence/`, both in process and
+      through the CLI (222 runs, every exit 0 or 1) and before and after the change: the flagged
+      sets are byte-identical (2 records under `--root-only`, both the
+      accepted false positives PR #134 renders —
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` and its
+      `.review.json` — and 51 under the default scope, the tool's documented argv/output
+      boundary) and no record renders differently, so no committed record needed re-rendering or
+      rebinding; `check-record-cleanliness.py --base 2a85cb8 --head <worktree snapshot>` rc 0 (1
+      changed record passes: this change's `docs/evaluations/model-routing/README.md` sentence)
+      and `--base 978abba --head <snapshot>` rc 0 (3 pass); `git diff --check` rc 0. Reader-facing
+      boundary: `docs/evaluations/model-routing/README.md`; the decision, the rejected readings,
+      the edge cases and the evidence plan are in
+      `docs/plans/2026-11-21-sanitizer-json-escape-plan.md`.

@@ -166,42 +166,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       over a control-bearing value as invalidated by the change. Suggested owner area: daemon
       protocol plus the Control hash owners, with the contracts owner for the normalization text.
 
-- [ ] Stop the Windows-family path tail from absorbing a JSON escape that follows the path.
-      `_WINDOWS_TAIL` (`scripts/ci/model-routing-record-sanitize.py:110`) admits a bare backslash
-      as a path byte — deliberate, per its comment at `:104-107`, because in raw recorded text the
-      backslash is the separator — and the four Windows-family patterns listed here end in it (or
-      in its require-a-byte variant `_WINDOWS_TAIL_PLUS` `:115`): `_DRIVE_PATH` `:133-135`,
-      `_UNC_PATH` `:142-145` (`_PLUS`), `_SLASH_UNC_PATH` `:167-169` (`_PLUS`),
-      `_FILE_URL_PATH` `:204-212`
-      (the root-relative `_ROOT_RELATIVE_PATH` `:191-194` and the file-URL host-root arm `:209` do
-      not), so a recorded `\n` escape that follows a Windows path is consumed into the rendered
-      token together with the text behind it. The POSIX family already fixed exactly this
-      shape (`_POSIX_BYTE` `:122`, whose comment at `:116-121` names the failure — "consuming it would
-      swallow a JSON escape sequence together with the text behind it" — and
-      `scripts/ci/test-model-routing-record-sanitize.py:282-295`,
-      `test_a_json_escape_after_a_path_survives_the_render`, STD-A07); the Windows family has no
-      such case. Reproduced at `978abba` with the tool on two scratch inputs of one shape (a JSON
-      string recording a path, then the two-character `\n` escape, then the word `FAILED`; the
-      Windows input's path is drive-rooted and carries the JSON-escaped doubled separators). The
-      inputs, one JSONL line each, are built in Python with `BS = chr(0x5C)`: Windows
-      `'{"output":"wrote C:' + BS*2 + 'Users' + BS*2 + 'op' + BS*2 + 'run' + BS + 'nFAILED"}'`,
-      POSIX `'{"output":"wrote /' + 'tmp/run' + BS + 'nFAILED"}'`. The Windows input renders to a
-      single token whose digest is
-      `path-sha256:a3a19f2b70d9c277fa8b2ef0f62c217841c3f41ed7e6a78b689045338e4ad1e5`, and that
-      digest is the recomputed sha256 of the raw span the token bound — the path text *plus* the
-      escape *plus* `FAILED` — where a path-only render of the same input would carry
-      `26e7b5b4…` (the sha256 of the path text alone); the POSIX input of the same shape keeps the
-      escape and the word outside its token (`…path-sha256:91525b09…` followed by the escape and
-      `FAILED`). Consequence in a record: an evidence line behind the escape disappears from the
-      rendered bytes while the record stays valid JSON — the loss STD-A07 fixed on the POSIX side.
-      Fix direction: the POSIX rule is not directly portable (a raw Windows spelling uses one
-      backslash per separator, so a separator run can be shaped exactly like a JSON escape —
-      `\run` starts with `\r`), so the reading must be decided — either a JSON-aware pass that
-      respects string escapes (the tool's input is recorded JSON text), or a tail that stops
-      before an escape-shaped backslash run once at least one separator has been consumed — and
-      both the escaped-escape case and the raw single-backslash spelling must be pinned in the
-      tester. Suggested owner area: `scripts/ci` record tooling.
-
 - [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
       current encoder escapes a recorded value that starts with `:` by prefixing one
       (`frontend/src/features/work/presentation.ts:94-97`), so a recorded name `:Ada` mints
