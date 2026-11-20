@@ -117,6 +117,9 @@ export interface WorkspaceWorkItem {
    */
   goal_managed?: boolean;
   version?: number;
+  /**
+   * True when the work item carries no Goal membership and the legacy launch conditions hold: no orchestration task, an agent assignee, `backlog`/`ready` status, an active project and an available external work item. A Goal-managed work item always answers false: the legacy run endpoint refuses it with `goal_authority_required`.
+   */
   can_start?: boolean;
   execution?: WorkItemExecution | null;
   updated_at?: string | null;
@@ -192,7 +195,7 @@ export interface WorkItemExecution {
   can_pause: boolean;
   can_resume: boolean;
   /**
-   * True when the task state permits a cancel and, while a runtime holds the attempt (claimed and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued or assigned attempt is applied by the control plane itself. A runtime without the advertisement is unknown and answers false.
+   * True when the task state permits a cancel and, while a runtime holds the attempt (claimed and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued or assigned attempt is applied by the control plane itself. A runtime without the advertisement is unknown and answers false. A Goal-managed work item always answers false: the legacy cancel path refuses it.
    */
   can_cancel: boolean;
   /**

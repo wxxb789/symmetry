@@ -374,10 +374,14 @@ type PurpleTimelineData struct {
 // effect generator shares one graph for both roots; the JSON Schema to TypeScript modules
 // and the quicktype Go output may still restate the shape per root.
 type RunWorkItem struct {
-	Assignee     *PurpleWorkItemAssignee  `json:"assignee,omitempty"`
-	Blocked      bool                     `json:"blocked"`
-	Blocker      *string                  `json:"blocker"`
-	Branch       *string                  `json:"branch"`
+	Assignee *PurpleWorkItemAssignee `json:"assignee,omitempty"`
+	Blocked  bool                    `json:"blocked"`
+	Blocker  *string                 `json:"blocker"`
+	Branch   *string                 `json:"branch"`
+	// True when the work item carries no Goal membership and the legacy launch conditions hold:
+	// no orchestration task, an agent assignee, `backlog`/`ready` status, an active project and
+	// an available external work item. A Goal-managed work item always answers false: the
+	// legacy run endpoint refuses it with `goal_authority_required`.
 	CanStart     *bool                    `json:"can_start,omitempty"`
 	CiResource   *string                  `json:"ci_resource"`
 	CiResourceID *string                  `json:"ci_resource_id"`
@@ -413,7 +417,8 @@ type PurpleWorkItemExecution struct {
 	// True when the task state permits a cancel and, while a runtime holds the attempt (claimed
 	// and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued
 	// or assigned attempt is applied by the control plane itself. A runtime without the
-	// advertisement is unknown and answers false.
+	// advertisement is unknown and answers false. A Goal-managed work item always answers
+	// false: the legacy cancel path refuses it.
 	CanCancel bool `json:"can_cancel"`
 	CanGuide  bool `json:"can_guide"`
 	CanPause  bool `json:"can_pause"`
@@ -1639,10 +1644,14 @@ type FluffyTimelineData struct {
 // effect generator shares one graph for both roots; the JSON Schema to TypeScript modules
 // and the quicktype Go output may still restate the shape per root.
 type SymmetryWorkDetailReadV1WorkItem struct {
-	Assignee     *FluffyWorkItemAssignee  `json:"assignee,omitempty"`
-	Blocked      bool                     `json:"blocked"`
-	Blocker      *string                  `json:"blocker"`
-	Branch       *string                  `json:"branch"`
+	Assignee *FluffyWorkItemAssignee `json:"assignee,omitempty"`
+	Blocked  bool                    `json:"blocked"`
+	Blocker  *string                 `json:"blocker"`
+	Branch   *string                 `json:"branch"`
+	// True when the work item carries no Goal membership and the legacy launch conditions hold:
+	// no orchestration task, an agent assignee, `backlog`/`ready` status, an active project and
+	// an available external work item. A Goal-managed work item always answers false: the
+	// legacy run endpoint refuses it with `goal_authority_required`.
 	CanStart     *bool                    `json:"can_start,omitempty"`
 	CiResource   *string                  `json:"ci_resource"`
 	CiResourceID *string                  `json:"ci_resource_id"`
@@ -1678,7 +1687,8 @@ type FluffyWorkItemExecution struct {
 	// True when the task state permits a cancel and, while a runtime holds the attempt (claimed
 	// and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued
 	// or assigned attempt is applied by the control plane itself. A runtime without the
-	// advertisement is unknown and answers false.
+	// advertisement is unknown and answers false. A Goal-managed work item always answers
+	// false: the legacy cancel path refuses it.
 	CanCancel bool `json:"can_cancel"`
 	CanGuide  bool `json:"can_guide"`
 	CanPause  bool `json:"can_pause"`
@@ -1823,10 +1833,14 @@ type WorkspaceResource struct {
 // effect generator shares one graph for both roots; the JSON Schema to TypeScript modules
 // and the quicktype Go output may still restate the shape per root.
 type WorkItemElement struct {
-	Assignee     *TentacledWorkItemAssignee  `json:"assignee,omitempty"`
-	Blocked      bool                        `json:"blocked"`
-	Blocker      *string                     `json:"blocker"`
-	Branch       *string                     `json:"branch"`
+	Assignee *TentacledWorkItemAssignee `json:"assignee,omitempty"`
+	Blocked  bool                       `json:"blocked"`
+	Blocker  *string                    `json:"blocker"`
+	Branch   *string                    `json:"branch"`
+	// True when the work item carries no Goal membership and the legacy launch conditions hold:
+	// no orchestration task, an agent assignee, `backlog`/`ready` status, an active project and
+	// an available external work item. A Goal-managed work item always answers false: the
+	// legacy run endpoint refuses it with `goal_authority_required`.
 	CanStart     *bool                       `json:"can_start,omitempty"`
 	CiResource   *string                     `json:"ci_resource"`
 	CiResourceID *string                     `json:"ci_resource_id"`
@@ -1887,7 +1901,8 @@ type TentacledWorkItemExecution struct {
 	// True when the task state permits a cancel and, while a runtime holds the attempt (claimed
 	// and beyond), that runtime advertises the adapter `cancel` operation; cancel of a queued
 	// or assigned attempt is applied by the control plane itself. A runtime without the
-	// advertisement is unknown and answers false.
+	// advertisement is unknown and answers false. A Goal-managed work item always answers
+	// false: the legacy cancel path refuses it.
 	CanCancel bool `json:"can_cancel"`
 	CanGuide  bool `json:"can_guide"`
 	CanPause  bool `json:"can_pause"`
