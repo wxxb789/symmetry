@@ -32,6 +32,8 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
 The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
 two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
+The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
+2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
 
 ## Model-routing evaluation records
 
@@ -2459,3 +2461,96 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       the loaded Windows host aborted that plain command twice at the default 10m test-binary
       timeout (600.509s/600.388s, 0 test failures), and green came with `-timeout 45m`
       (`ok 1119.686s`); CI's `daemon-windows` job runs the package under `-timeout 600s`.
+
+## Retro review follow-ups (second pass, 2026-11-20)
+
+- [ ] Re-point legacy work-surface owner bookmarks that carry the pre-#111 sentinel. The `owner`
+      param is read at `frontend/src/features/projects/filters.ts:50` and normalised at `:80-87`,
+      and the row comparison sits at `:94` (`ownerKey(item.assignee) === filters.owner`); #111
+      (`db31838`) changed the encoder (`frontend/src/features/work/presentation.ts:99-106`): an
+      agent row with no recorded name used to mint `agent:unrecorded` and now mints `agent:`
+      (`ownerKeyValue` `:94-97` escapes a recorded name that equals the legacy word or starts with
+      `:`, so a row genuinely named `unrecorded` mints `agent::unrecorded`), and `human:` keys
+      moved the same way; `human:unrecorded` likewise matches no row. A bookmark or hand-typed
+      link carrying `?owner=agent:unrecorded` matches no row, while `ownerKeyLabel` (`:110-126`)
+      still reads that key as the row's own absence label: the Work owner select
+      (`frontend/src/features/projects/work-surface.tsx:141,170`) shows "Agent (not in this
+      project)" above an empty list, even when the project has an unnamed-agent row; the label
+      side is already pinned, and
+      its own case documents the intent the filter does not keep — "labels the legacy sentinel keys
+      old bookmarks carry as the absence they named" (`frontend/src/features/work/presentation.test.ts:81-89`,
+      whose comment reads "a URL that still carries it reads as the absence it named rather than as
+      a recorded name") — while the filter case covers only `unassigned`
+      (`frontend/src/features/projects/filters.test.ts:52-59`, the owner case at `:56`), never the
+      legacy value.
+      Reproduced at `978abba` against the repository's own modules (a throwaway Node ESM probe
+      that imports `filters.ts` and `presentation.ts` through a type-stripping resolve hook; no
+      test file added and no dependency install): `ownerKey` printed `"agent:"`,
+      `"agent::unrecorded"` and `"agent:builder"` for those three assignees (rows built as
+      `{key, title, status: "ready", blocked: false, assignee}` with assignees
+      `{type: "agent", name: null, agent_profile: null}`,
+      `{type: "agent", name: "unrecorded", agent_profile: null}`,
+      `{type: "agent", name: "builder", agent_profile: "builder"}`),
+      `filterWorkItems(rows, filtersOf({owner: "agent:unrecorded"})).length` was `0` of `3`,
+      `ownerKeyLabel("agent:unrecorded")` printed `"Agent"`, and the currently minted key `agent:`
+      matched `1` of `3`. Fix direction: read a filter key through one normalising reader so the
+      legacy sentinel word maps to the empty-value sentinel the encoder now mints (or redirect the
+      legacy value at the surface), and pin the compatibility case in
+      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
+      work-surface/frontend.
+
+      **Fixed (2026-11-20, branch `fix/legacy-owner-bookmarks`):** the entry's first-named
+      direction, one normalising reader. `ownerKeyFilter`
+      (`frontend/src/features/work/presentation.ts:127-139`) maps the legacy sentinel word to the
+      empty-value sentinel the encoder mints now (`agent:unrecorded` → `agent:`,
+      `human:unrecorded` → `human:`) and returns every other key as written, so the escaped
+      `agent::unrecorded` #111 added stays a recorded name and no legacy spelling collapses onto
+      it; the reader is a fixed point on every key it returns. Both filter-key reads go through
+      it: `workSearch`'s `owner` param (`frontend/src/features/projects/filters.ts:50-51`), the
+      reader the router's `validateSearch`, every toolbar `setSearch`, `readSavedViews` and the
+      work detail's `listState` share — so a bookmark that still carries the pre-#111 spelling
+      reaches the surface, the toolbar's absent-owner check and `sameWorkSearch` as the minted
+      key — and `filtersOf`'s filter-state build (`:85-87`), so a search that never passed the
+      URL parser re-points as well. The visible effect on the entry's second symptom: the select
+      now matches the minted key against `ownerOptions`, renders the row's own "Agent" option,
+      and labels the absent fallback from the minted key instead of duplicating the legacy one.
+      No surface, label, encoder, storage-schema or contract change; the decision and the
+      edge-case table are written out in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`,
+      which also records the second pre-#111 shape (keys for recorded names that start with `:`,
+      for example `human::Ada`) as out of scope and tracked open in `docs/TODO.md`.
+      Pinned by `frontend/src/features/projects/filters.test.ts`, case "re-points the legacy
+      sentinel bookmarks to the keys the encoder mints now": the legacy URL key maps to the
+      minted key, both reader call sites select the unnamed-agent and unnamed-human rows, the
+      minted keys are fixed points, `agent::unrecorded` still selects the row whose recorded name
+      is `unrecorded`, and the sentinel neighbours `type:unrecorded` and `agent:unrecorded-bot`
+      travel as written; by `frontend/src/features/projects/saved-views.test.ts`, case "reads a
+      stored legacy sentinel owner key back as the key the URL reader mints" (the saved-view read
+      path repairs the stored key); and by `frontend/src/app/router.test.tsx`, case "selects the
+      row's own owner option for a legacy sentinel bookmark instead of an absent duplicate" (the
+      select reads the repaired key and renders no absent duplicate). Recorded runs: the case
+      failed on the pre-fix bytes (`1 failed | 7 passed` in the file) and passes after
+      (`8 passed`); the entry's throwaway Node ESM probe over the repository modules printed
+      `filterWorkItems(rows, filtersOf({owner:"agent:unrecorded"})).length = 0 of 3` and
+      `filterWorkItems(rows, filtersOf(workSearch({owner:"agent:unrecorded"}))).length = 0 of 3`
+      before the fix, `1 of 3` for both shapes after, with `ownerKey` keys
+      `["agent:","agent::unrecorded","agent:builder"]` and `ownerKeyLabel("agent:unrecorded")`
+      unchanged at "Agent". Gates: `pnpm install --frozen-lockfile` exit 0; frontend typecheck 0,
+      lint 0, vitest 496 passed (20 files; 494 at the implement revision), build 0. Render gate
+      (`docs/design/quality.md` amendment, `SYMMETRY_RENDER_GATE_REQUIRED=1`, the focused
+      release-shell gate's seven spec files at both widths against a `MIX_ENV=prod` release of
+      this tree, three instances on 4000/4001/4002 and a fresh migrated database): the local
+      render gate is **pending** — no fully green run on this host; CI's `control` render gate
+      decides the merge. Three full runs reported `88 passed / 5 failed / 1 skipped`,
+      `89 passed / 4 failed / 1 skipped` and `92 passed / 1 failed / 1 skipped`, with an
+      isolation pass of the failing cases at `4 passed / 2 failed`. The diagnosed failure classes
+      are environmental — a stale
+      `SYMMETRY_FIXTURE_MIX` export in the first run, fixture `mix run` database-pool drops under
+      the shared server's load, a 60 s test timeout on a fixture case, and a Playwright
+      trace-write `ENOENT` in the shared temp output directory — and one failure is recorded as
+      not investigated: the run-1 mobile `browser/tests/portal-execution-control.spec.mjs:98`
+      receipt timeout (61 polls saw only `data-outcome="queued"`), which passed in the other runs
+      on the same bytes; so did every other failing case, and the owner-filter end-to-end case
+      (`browser/tests/portal-work-views.spec.mjs:117`, list/board/filters over real served rows)
+      passed at both widths in every run. The gate's environment, its carrier deviations and the
+      failure classification are in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`; CI
+      remains the merge gate.
