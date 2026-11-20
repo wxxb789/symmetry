@@ -116,6 +116,39 @@ changing the forwarded response status, headers or body.
 | TS (`frontend/`) | frontend typecheck/lint/test/build commands from frontend.md; CI runs them in the `contracts` job (`.github/workflows/ci.yml:107-110`); the browser runner is already pnpm (`.github/workflows/ci.yml:618`) |
 | Wire contract | `pnpm contracts:check` (schemas, fixtures through Effect decoders, generated-file drift; regenerate with `pnpm contracts:generate`); Go and Elixir fixture decoders run in their test suites |
 
+The Control suite runs against the database `control/config/test.exs` resolves:
+`POSTGRES_DB` (repository default `symmetry_control_test`) with
+`MIX_TEST_PARTITION` appended as a literal suffix. The `test` alias runs
+`symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet`
+first, so create and migrate heal a missing or migration-behind database — but
+nothing drops or truncates one. A database whose `schema_migrations` names a
+revision older than its objects stops the alias's migrate step before any test
+runs, with a duplicate-object error on the pending migration, for example
+Postgrex `42P07` (`duplicate_table`) on a `CREATE TABLE`, or `42701`
+(`duplicate_column`)/`42710` (`duplicate_object`) for a column or constraint.
+That is stale local state, not a code failure; recover by dropping the
+repository-default test database and re-running the suite, which recreates and
+migrates it:
+
+```sh
+cd control
+env -u POSTGRES_DB -u MIX_TEST_PARTITION MIX_ENV=test mix ecto.drop
+env -u POSTGRES_DB -u MIX_TEST_PARTITION mix test
+```
+
+`MIX_ENV=test` is load-bearing: a bare `mix ecto.drop` resolves the development
+database. Both commands unset `POSTGRES_DB` and `MIX_TEST_PARTITION`, so the
+recipe always targets `symmetry_control_test` whatever the shell exported; to
+recover a different dedicated test database, name it in place of the unset:
+`env -u MIX_TEST_PARTITION POSTGRES_DB=<name> MIX_ENV=test mix ecto.drop`,
+then `env -u MIX_TEST_PARTITION POSTGRES_DB=<name> mix test`.
+`symmetry.check_test_db` is the first step of the `ecto.drop` alias
+too, so the recipe is still refused for harness-owned databases only
+(`symmetry_dev` and the `symmetry_0007c_/d_/e_` families). `MIX_TEST_PARTITION`
+stays the CI-parallel path rather than the recovery recipe: exported, it names
+that partition's own suffixed database, and the recipe's `env -u` unsets it, so
+the partition database is left alone.
+
 Run affected focused checks during development; required CI gates remain required
 before merge. Native credentialed harness tests and Windows behavior cannot be
 inferred from fake-agent tests or Linux compilation. Mark unavailable checks

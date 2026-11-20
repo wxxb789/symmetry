@@ -26,8 +26,19 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The closed unused-parameter attention-test warning appended to the second `## Dead-code candidates`
+section below and the closed pinned-`can_retry` entry appended to `## Retro review follow-ups` below
+were moved on 2026-11-20 from branch `fix/control-test-pins`.
+
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
+
+The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
+2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
+
+The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
+two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
+moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
 
 ## Model-routing evaluation records
 
@@ -1377,6 +1388,61 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       23 failed `control` job logs grepped across all their attempts) finds exactly one occurrence
       of the failure: run `43891279765` attempt 1, job `133383740181`.
 
+- [ ] Drop the unused `conn` parameter in
+      `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:650-651)
+      passes `conn` to `portal_command!/4` (:653), which never reads it (it builds its own `api_conn()`),
+      so every run reports `warning: variable "conn" is unused` at :653. Pre-existing (present in both the
+      before and after `MIX_TEST_PARTITION=66` runs of the retro-b5 apply stage) and test-only; drop the
+      parameter and the callers' pass-through in separate maintenance.
+
+      **Closed (2026-11-20, branch `fix/control-test-pins`):** the parameter and its pass-through are
+      gone — `portal_command!/3`, `approve_plan/3`, `activate/1` — and the served requests are
+      unchanged (the helper only ever read `goal_id` and built its own `api_conn()`). Pinned by the
+      one case that drives those helpers, "the real served attention and goal reads validate against
+      the contract bundle": `mix test
+      test/symmetry_control_web/controllers/portal_goal_attention_test.exs` (12 passed, exit 0), and
+      by the compile output the entry records: the same command printed `warning: variable "conn" is
+      unused` at `portal_goal_attention_test.exs:653:24` before the change and prints no `unused`
+      line after it.
+
+- `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
+  Revalidated and removed (2026-11-20/21, branch `fix/test-db-recovery-docs`): the premise no longer
+  holds at `fdf332d` — the index row (`docs/goals/README.md:336`) links
+  `archive/0006h-credentialed-provider-accounting.md`, its row link fixed by `c514bd9` (#66); the
+  prose sentence at `:178` has linked the archived path since the archiving commit `10f5b69` (#18);
+  the file exists at the linked path (checked with
+  `ls docs/goals/archive/0006h-credentialed-provider-accounting.md`). The only other live mention,
+  the goal id `` `0006h` `` at `:214`, names no path. No fix remained to make, so the note was
+  removed from `docs/TODO.md` (the increment's contract directs the removal over the file's
+  marker-less-note rule) and carries no open action.
+
+- `frontend/src/features/connections/resources.tsx` `refusalGuidance.provider_owned`: no
+  call site of `refusalNotice` on that page can receive the code. Its only producer is
+  `Workspaces.provider_owned_fields_editable` answered by `update_work_item`
+  (`control/lib/symmetry_control/workspaces.ex`), i.e. the assignment surface, which
+  carries its own `assignmentGuidance`. Recorded by the retro-b4-goals-connections review
+  (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
+  (fix round 1); revalidate and remove in a separate maintenance change.
+  **Closed (2026-11-20/21, branch `fix/test-db-recovery-docs`): revalidated and removed.** The claim
+  holds at `fdf332d`: `:provider_owned` has exactly one producer in the control plane —
+  `provider_owned_fields_editable/2` (`control/lib/symmetry_control/workspaces.ex:994-1007`,
+  returning at `:1003`), answered only by `update_work_item/2` (`:203`) — and that function's sole
+  caller is `PortalApiController.update_work_item`
+  (`control/lib/symmetry_control_web/controllers/portal_api_controller.ex:265`) serving
+  `PATCH /portal/api/work-items/:work_item_id` (`control/lib/symmetry_control_web/router.ex:82`),
+  the assignment surface, which carries its own guidance
+  (`frontend/src/features/planning/write-policy.ts:125`,
+  `frontend/src/features/work/assignment.tsx:82`). The connections page's `refusalNotice` call
+  sites (`resources.tsx:338,443-444,486-487,617,633`; `connections.tsx:176-177,226,241,291`) answer
+  only resource and connection commands, none of which can return the code — unlike the sibling
+  `capability_not_granted` entry, whose code the server was changed to serve instead
+  (`fix/connections-refusal-guidance`, PR #96), this code has no connections-page flow to serve it.
+  The `provider_owned` key was removed from `refusalGuidance`; the shared fold renders the server's
+  own message for it. Pinned by `frontend/src/features/connections/connections.test.tsx` —
+  "leaves a provider_owned refusal to the server's own message, without assignment-surface
+  guidance" (failed before the removal with the guidance suffix rendered, passes after; before/after
+  runs in `answer.md`).
+
 ## Deferred review findings (0007f)
 
 - [ ] Revalidate the `/portal/connections?projectId=…` session return target.
@@ -2354,3 +2420,245 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       (`contracts/v1/workspace-read.schema.json`, `contracts/v1/work-detail-read.schema.json`,
       `contracts/v1/chat-read.schema.json`), with the generated bindings refreshed through the
       repository generator.
+
+- [ ] Pin `can_retry: false` for a superseded run's pinned historical entry. The contract states the
+      rule (`contracts/v1/chat-read.schema.json:224`: "A superseded run's pinned historical entry always
+      answers false", repeated in `work-detail-read.schema.json:142` and
+      `workspace-read.schema.json:281`), and the read model serves it
+      (`control/lib/symmetry_control/chat/read_model.ex:51-59` forces it for a historical projection),
+      but the case that exercises exactly that shape — "historical run chat remains pinned after retry
+      and cannot control a newer attempt" (`control/test/symmetry_control/chat_test.exs:644-789`) —
+      asserts `historical` (`:734`) and `refute …can_cancel` (`:735`) and never `can_retry`; the file
+      contains no `can_retry` occurrence at all, and no other case targets a pinned historical chat
+      entry. Add the assertion in a separate maintenance change and keep the case's other assertions:
+      the rule is behavioural, so the pin must fail if the historical branch stops forcing the flag.
+
+      **Closed (2026-11-20, branch `fix/control-test-pins`):** `refute
+      detail.work_item.execution.can_retry` was added beside the case's `refute …can_cancel` in
+      "historical run chat remains pinned after retry and cannot control a newer attempt"
+      (`control/test/symmetry_control/chat_test.exs:838`) with every other assertion kept. Mutation
+      evidence, measured rather than assumed (all three runs `mix test
+      test/symmetry_control/chat_test.exs:746`): removing the whole historical forcing block
+      (`chat/read_model.ex:51-65`) reddens the case (`0/1 passed`, exit 2) at `:836`
+      `assert …historical` — the block's observable effect at this entry is the historical flag;
+      removing only its `can_retry: false` member leaves the case green (`1 passed`, exit 0): the
+      pinned projection (`run_projection/2`'s else-branch, `:262-266`) carries no `controls`,
+      `runtime` or `retry_runtime_eligible`, `Protocol.task/1` defaults the absent controls to
+      false (`protocol.ex:314-320`), `execution_summary/1`'s can_retry gate already answers false
+      (`portal_json.ex:404-405`), and `legacy_capabilities/3` (`portal_json.ex:418-426`) only
+      conjoins — so all five control members the forcing merges (`:54-58`) are structurally
+      unobservable at a pinned entry. Four of the five are absent-key defaults; `can_cancel`'s
+      `queued`/`assigned` arm (`portal_json.ex:399-402`) reads the pinned task's state, which is
+      `run.state` (`read_model.ex:243-245`), and cannot fire on a superseded run, which is
+      always terminal: retry requires a failed or cancelled task (`orchestration.ex:2673`), and
+      the cancel and expiry paths persist a terminal run state before the task's
+      `attempt_generation` moves past the run's (`orchestration.ex:2787`, `:3229`). Only
+      `historical: true` (`:59`) is load-bearing, and that
+      finding is recorded here instead of assumed load-bearing. The assertion's failure control
+      is the rule violation it guards: a pinned projection that serves
+      `retry_runtime_eligible: true` with the forcing member removed fails exactly at `:838`
+      (`Expected false or nil, got true`, exit 2) — the pin's discriminating mutation is (c), the
+      pinned entry starting to serve retry eligibility.
+
+- [ ] Document how to recover the repository-default test database, or reset it from the test alias.
+      The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where
+      `MIX_TEST_PARTITION` is appended as a literal suffix, so a partition run selects a different
+      database name that the test alias creates and migrates when absent), and `mix test` runs
+      `symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet` first
+      (`control/mix.exs:79`). Create and migrate make a missing or
+      migration-behind database usable, but nothing drops or truncates one: a pending migration whose
+      table already exists fails the alias's migrate step before any test runs. Observed 2026-11-20
+      while gating an unrelated Control change: an unpartitioned `mix test` stopped with Postgrex
+      `42P07` (`duplicate_table`) on a migration whose table already existed — `schema_migrations`
+      named a revision older than the object set — while the same change ran green on a partition
+      database. A maintainer reads that as a code
+      failure, and the repository documents no recovery: `ecto.reset` exists as an alias
+      (`control/mix.exs:70`) but no doc names it for the default test database, and the only documented
+      resets belong to harness-owned databases (`docs/runbooks/session-receipt-recovery-e2e.md`). Fix
+      direction: document the drop-and-recreate path for the default test database where the suite's
+      commands are documented, or add a recreate/reset step to the `test` alias so a stale default
+      database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
+      the recovery recipe.
+      **Closed (2026-11-20/21, branch `fix/test-db-recovery-docs`): documented, not aliased.** Reproduced
+      on the throwaway database `symmetry_control_test_tdbrec` on a dedicated disposable PostgreSQL
+      18.6 instance, in the documented explicit-name form of the two commands (`env -u MIX_TEST_PARTITION
+      POSTGRES_DB=symmetry_control_test_tdbrec` throughout, `MIX_ENV=test` on the drop); fix round 2
+      re-ran the sequence with exactly those bytes and these results:
+      `mix ecto.create --quiet` and `mix ecto.migrate --quiet` exit 0; deleting the
+      `harness_session_attach_receipts` migration's `schema_migrations` row (`20260911000000`) while
+      its table exists makes `mix test test/mix/tasks/symmetry_check_test_db_test.exs` stop in the
+      alias's migrate step with `** (Postgrex.Error) ERROR 42P07 (duplicate_table) relation
+      "harness_session_attach_receipts" already exists` and exit 1 before any test runs;
+      `MIX_ENV=test mix ecto.drop` exits 0 (`The database for SymmetryControl.Repo has been dropped`),
+      and the same `mix test` then recreates and migrates the database and reports `Result: 11 passed`,
+      exit 0. `docs/design/quality.md` (Commands and gates) now documents the recovery beside the
+      suite's commands: the database `config/test.exs` resolves (`POSTGRES_DB`, repository default
+      `symmetry_control_test`, with `MIX_TEST_PARTITION` appended as a literal suffix), the failure
+      signature, the two commands, why `MIX_ENV=test` is load-bearing, and that
+      `symmetry.check_test_db` refuses harness-owned databases only (`symmetry_dev` and the
+      `symmetry_0007c_/d_/e_` families), and the documented recipe pins its target: it unsets
+      `POSTGRES_DB` and `MIX_TEST_PARTITION`, so it always drops `symmetry_control_test`
+      (`symmetry_control_dev` and other ambient names are never reached); a different dedicated
+      test database is recovered by naming it explicitly in `POSTGRES_DB`. The recipe's default form
+      (`env -u POSTGRES_DB -u MIX_TEST_PARTITION`) was exercised end to end by fix round 2 on the same
+      instance under a hostile shell (`POSTGRES_DB=symmetry_control_dev`, `MIX_TEST_PARTITION=hostile`):
+      its `MIX_ENV=test mix ecto.drop` removed exactly `symmetry_control_test` and never created
+      `symmetry_control_dev`; `mix run --no-start` probes print `symmetry_control_test` for that form and
+      `symmetry_control_test_x` for the explicit-name form. The `test` alias is unchanged
+      (the increment's contract prefers documentation over an alias change), and `MIX_TEST_PARTITION`
+      stays the CI-parallel path, not the recovery recipe. Evidence: the recorded before/after runs in
+      `answer.md`, and fix round 2's re-run of the same sequence with the documented explicit-name
+      bytes — create and migrate exit 0, the stale run exits 1 before any test (`42P07`,
+      `duplicate_table`, the pending migration's `CREATE TABLE`), `mix ecto.drop` exits 0 and the
+      recovered run recreates and migrates the database (`Result: 11 passed`, exit 0), with the
+      throwaway database dropped afterwards and zero residue in `pg_database`. The sequence ran
+      against a dedicated disposable PostgreSQL 18.6 instance (`127.0.0.1:5433`), kept because the
+      shared 5432 instance was saturated by concurrent agent suites when the sequence was first
+      attempted. The recipe's `test` alias body is pinned by
+      `control/test/mix/tasks/symmetry_check_test_db_test.exs`, test
+      "the storage aliases run the guard before any database work": the pin fails when the
+      guard is dropped from the alias head, when `ecto.create --quiet`/`ecto.migrate --quiet`
+      is removed, or when the documented order changes (10/11 each) and passes on the delivered
+      alias (11 passed). The full Control suite then ran to completion on the `control/` tree
+      of `67310cf` with `MIX_TEST_PARTITION=testdbgates`: `Result: 936 passed, 21 skipped`,
+      0 failures, seed 815640 (717.5 s); the later merge `8540a7d` changes no `control/` file.
+
+- [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
+      (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
+      error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
+      gone), and no test pins that branch: the scripted batch child
+      (`daemon/internal/workspace/subject_test.go:1114-1147`) serves `frame <variant> <content>`
+      (valid, missing, wrong-oid, wrong-type, malformed-size, negative-size, oversized,
+      malformed-header, truncated-header, partial-content, bad-trailer, missing-trailer) and
+      `blocked-header`, and every case of `TestSubjectBatchStreamRejectsMalformedResponses`
+      (`:1315-1379`) writes exactly one request while the child is still alive, so the failure
+      surfaces on the response read (`:753`) rather than on the write. The missing case needs a new
+      child variant that answers its first request with a complete in-sync frame and then closes its
+      read end, with the close ordered so it is observable before the second request (closing before
+      the response is written, or an equivalent deterministic wait for the child's exit, works
+      because the digest writes its second request only after consuming the first response); a
+      variant that only exits after answering can still take the write into the pipe buffer, so the
+      refusal can otherwise surface on the response read instead. Every existing
+      exit-after-one-response variant answers a refusal that desyncs and aborts the digest on the
+      first blob, and the one-response exit at `:1206-1208` covers every variant except `valid` and
+      `missing`, which keep serving (`serveWorkspaceBatchFrames` `:1155-1210`); drive a multi-blob
+      commit (the fixture exists: `subjectDigestManyBlobs` `:588` with
+      `writeSubjectDigestManyBlobsFixture` `:810`) so the second request write lands on the gone
+      child. Assert that the refusal names the object, marks the stream desynced and still reaps the
+      child (the reap contract `:1373-1376` pins that for response failures), keeping the context
+      alive so `streamError` (`:808-813`) reports the pipe error instead of a cancellation.
+
+      **Covered and closed (2026-11-20; branch `fix/subject-stdin-refusal`):** test-only closure —
+      the write-refusal branch is correct as implemented, so `subject.go` keeps no diff against
+      `fdf332d` and no behavior change is claimed. The scripted batch child gains the
+      `close-frame-block` variant (`serveWorkspaceBatchCloseReadEndThenFrame`,
+      `daemon/internal/workspace/subject_test.go`): it reads its first request, closes its own stdin
+      read end, then writes the complete in-sync frame for that request from the first committed
+      entry's real bytes and blocks, so the close is ordered ahead of the response that gates the
+      digest's second request and the refusal provably lands on the write rather than the response
+      read (`:753`). Pinned by `TestSubjectBatchStreamWriteRefusalDesyncsAndReapsChild` (same file)
+      over a `writeSubjectDigestManyBlobsFixture` commit: the digest fails, `stream.desynced` is
+      true, the error names the second tree entry (`request object <oid> from Git batch stream:`),
+      joins the path's unresolved-process fence, is not a cancellation (context alive), and the
+      terminated blocked child is waited for and reaped with `!ProcessState.Success()`. Failure
+      control, re-broken on demand: dropping the object name from the refusal reddens the pin on the
+      message assertion; dropping `desync` from the branch reddens it on the desynced assertion
+      after the test's own `testHangGuard` deadline, because the in-sync `finish()` route cannot end
+      a blocked child; the restored branch is green. Run on Windows and WSL Ubuntu-24.04
+      (`go test ./internal/workspace/... -count=1`; plus `-race` on Linux). On the final test bytes
+      the loaded Windows host aborted that plain command twice at the default 10m test-binary
+      timeout (600.509s/600.388s, 0 test failures), and green came with `-timeout 45m`
+      (`ok 1119.686s`); CI's `daemon-windows` job runs the package under `-timeout 600s`.
+
+## Retro review follow-ups (second pass, 2026-11-20)
+
+- [ ] Re-point legacy work-surface owner bookmarks that carry the pre-#111 sentinel. The `owner`
+      param is read at `frontend/src/features/projects/filters.ts:50` and normalised at `:80-87`,
+      and the row comparison sits at `:94` (`ownerKey(item.assignee) === filters.owner`); #111
+      (`db31838`) changed the encoder (`frontend/src/features/work/presentation.ts:99-106`): an
+      agent row with no recorded name used to mint `agent:unrecorded` and now mints `agent:`
+      (`ownerKeyValue` `:94-97` escapes a recorded name that equals the legacy word or starts with
+      `:`, so a row genuinely named `unrecorded` mints `agent::unrecorded`), and `human:` keys
+      moved the same way; `human:unrecorded` likewise matches no row. A bookmark or hand-typed
+      link carrying `?owner=agent:unrecorded` matches no row, while `ownerKeyLabel` (`:110-126`)
+      still reads that key as the row's own absence label: the Work owner select
+      (`frontend/src/features/projects/work-surface.tsx:141,170`) shows "Agent (not in this
+      project)" above an empty list, even when the project has an unnamed-agent row; the label
+      side is already pinned, and
+      its own case documents the intent the filter does not keep — "labels the legacy sentinel keys
+      old bookmarks carry as the absence they named" (`frontend/src/features/work/presentation.test.ts:81-89`,
+      whose comment reads "a URL that still carries it reads as the absence it named rather than as
+      a recorded name") — while the filter case covers only `unassigned`
+      (`frontend/src/features/projects/filters.test.ts:52-59`, the owner case at `:56`), never the
+      legacy value.
+      Reproduced at `978abba` against the repository's own modules (a throwaway Node ESM probe
+      that imports `filters.ts` and `presentation.ts` through a type-stripping resolve hook; no
+      test file added and no dependency install): `ownerKey` printed `"agent:"`,
+      `"agent::unrecorded"` and `"agent:builder"` for those three assignees (rows built as
+      `{key, title, status: "ready", blocked: false, assignee}` with assignees
+      `{type: "agent", name: null, agent_profile: null}`,
+      `{type: "agent", name: "unrecorded", agent_profile: null}`,
+      `{type: "agent", name: "builder", agent_profile: "builder"}`),
+      `filterWorkItems(rows, filtersOf({owner: "agent:unrecorded"})).length` was `0` of `3`,
+      `ownerKeyLabel("agent:unrecorded")` printed `"Agent"`, and the currently minted key `agent:`
+      matched `1` of `3`. Fix direction: read a filter key through one normalising reader so the
+      legacy sentinel word maps to the empty-value sentinel the encoder now mints (or redirect the
+      legacy value at the surface), and pin the compatibility case in
+      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
+      work-surface/frontend.
+
+      **Fixed (2026-11-20, branch `fix/legacy-owner-bookmarks`):** the entry's first-named
+      direction, one normalising reader. `ownerKeyFilter`
+      (`frontend/src/features/work/presentation.ts:127-139`) maps the legacy sentinel word to the
+      empty-value sentinel the encoder mints now (`agent:unrecorded` → `agent:`,
+      `human:unrecorded` → `human:`) and returns every other key as written, so the escaped
+      `agent::unrecorded` #111 added stays a recorded name and no legacy spelling collapses onto
+      it; the reader is a fixed point on every key it returns. Both filter-key reads go through
+      it: `workSearch`'s `owner` param (`frontend/src/features/projects/filters.ts:50-51`), the
+      reader the router's `validateSearch`, every toolbar `setSearch`, `readSavedViews` and the
+      work detail's `listState` share — so a bookmark that still carries the pre-#111 spelling
+      reaches the surface, the toolbar's absent-owner check and `sameWorkSearch` as the minted
+      key — and `filtersOf`'s filter-state build (`:85-87`), so a search that never passed the
+      URL parser re-points as well. The visible effect on the entry's second symptom: the select
+      now matches the minted key against `ownerOptions`, renders the row's own "Agent" option,
+      and labels the absent fallback from the minted key instead of duplicating the legacy one.
+      No surface, label, encoder, storage-schema or contract change; the decision and the
+      edge-case table are written out in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`,
+      which also records the second pre-#111 shape (keys for recorded names that start with `:`,
+      for example `human::Ada`) as out of scope and tracked open in `docs/TODO.md`.
+      Pinned by `frontend/src/features/projects/filters.test.ts`, case "re-points the legacy
+      sentinel bookmarks to the keys the encoder mints now": the legacy URL key maps to the
+      minted key, both reader call sites select the unnamed-agent and unnamed-human rows, the
+      minted keys are fixed points, `agent::unrecorded` still selects the row whose recorded name
+      is `unrecorded`, and the sentinel neighbours `type:unrecorded` and `agent:unrecorded-bot`
+      travel as written; by `frontend/src/features/projects/saved-views.test.ts`, case "reads a
+      stored legacy sentinel owner key back as the key the URL reader mints" (the saved-view read
+      path repairs the stored key); and by `frontend/src/app/router.test.tsx`, case "selects the
+      row's own owner option for a legacy sentinel bookmark instead of an absent duplicate" (the
+      select reads the repaired key and renders no absent duplicate). Recorded runs: the case
+      failed on the pre-fix bytes (`1 failed | 7 passed` in the file) and passes after
+      (`8 passed`); the entry's throwaway Node ESM probe over the repository modules printed
+      `filterWorkItems(rows, filtersOf({owner:"agent:unrecorded"})).length = 0 of 3` and
+      `filterWorkItems(rows, filtersOf(workSearch({owner:"agent:unrecorded"}))).length = 0 of 3`
+      before the fix, `1 of 3` for both shapes after, with `ownerKey` keys
+      `["agent:","agent::unrecorded","agent:builder"]` and `ownerKeyLabel("agent:unrecorded")`
+      unchanged at "Agent". Gates: `pnpm install --frozen-lockfile` exit 0; frontend typecheck 0,
+      lint 0, vitest 496 passed (20 files; 494 at the implement revision), build 0. Render gate
+      (`docs/design/quality.md` amendment, `SYMMETRY_RENDER_GATE_REQUIRED=1`, the focused
+      release-shell gate's seven spec files at both widths against a `MIX_ENV=prod` release of
+      this tree, three instances on 4000/4001/4002 and a fresh migrated database): the local
+      render gate is **pending** — no fully green run on this host; CI's `control` render gate
+      decides the merge. Three full runs reported `88 passed / 5 failed / 1 skipped`,
+      `89 passed / 4 failed / 1 skipped` and `92 passed / 1 failed / 1 skipped`, with an
+      isolation pass of the failing cases at `4 passed / 2 failed`. The diagnosed failure classes
+      are environmental — a stale
+      `SYMMETRY_FIXTURE_MIX` export in the first run, fixture `mix run` database-pool drops under
+      the shared server's load, a 60 s test timeout on a fixture case, and a Playwright
+      trace-write `ENOENT` in the shared temp output directory — and one failure is recorded as
+      not investigated: the run-1 mobile `browser/tests/portal-execution-control.spec.mjs:98`
+      receipt timeout (61 polls saw only `data-outcome="queued"`), which passed in the other runs
+      on the same bytes; so did every other failing case, and the owner-filter end-to-end case
+      (`browser/tests/portal-work-views.spec.mjs:117`, list/board/filters over real served rows)
+      passed at both widths in every run. The gate's environment, its carrier deviations and the
+      failure classification are in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`; CI
+      remains the merge gate.
