@@ -245,11 +245,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 - [ ] Stop the Windows-family path tail from absorbing a JSON escape that follows the path.
       `_WINDOWS_TAIL` (`scripts/ci/model-routing-record-sanitize.py:110`) admits a bare backslash
       as a path byte — deliberate, per its comment at `:104-107`, because in raw recorded text the
-      backslash is the separator — and every Windows-family pattern ends in it (or in its
-      require-a-byte variant `_WINDOWS_TAIL_PLUS` `:115`): `_DRIVE_PATH`
-      `:133-135`, `_UNC_PATH` `:142-145`, `_SLASH_UNC_PATH` `:167-169` (`_PLUS`), `_FILE_URL_PATH`
-      `:204-212`, so a recorded `\n` escape that follows a Windows path is consumed into the
-      rendered token together with the text behind it. The POSIX family already fixed exactly this
+      backslash is the separator — and the four Windows-family patterns listed here end in it (or
+      in its require-a-byte variant `_WINDOWS_TAIL_PLUS` `:115`): `_DRIVE_PATH` `:133-135`,
+      `_UNC_PATH` `:142-145`, `_SLASH_UNC_PATH` `:167-169` (`_PLUS`), `_FILE_URL_PATH` `:204-212`
+      (the root-relative `_ROOT_RELATIVE_PATH` `:191-194` and the file-URL host-root arm `:209` do
+      not), so a recorded `\n` escape that follows a Windows path is consumed into the rendered
+      token together with the text behind it. The POSIX family already fixed exactly this
       shape (`_POSIX_BYTE` `:122`, whose comment at `:116-121` names the failure — "consuming it would
       swallow a JSON escape sequence together with the text behind it" — and
       `scripts/ci/test-model-routing-record-sanitize.py:282-295`,
@@ -286,7 +287,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       its own case documents the intent the filter does not keep — "labels the legacy sentinel keys
       old bookmarks carry as the absence they named" (`frontend/src/features/work/presentation.test.ts:81-89`,
       whose comment reads "a URL that still carries it reads as the absence it named rather than as
-      a recorded name") — while the filter case covers only `unassigned` and a currently minted key
+      a recorded name") — while the filter case covers only `unassigned`
       (`frontend/src/features/projects/filters.test.ts:52-59`, the owner case at `:56`), never the
       legacy value.
       Reproduced at `978abba` against the repository's own modules (a throwaway Node ESM probe
@@ -311,10 +312,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   `-color -shellcheck= -pyflakes=` finished in 0.6 s at exit 0 with no findings, and the
   2026-11-15 trim record already carries a 120 s sample of the same shape
   (`docs/evidence/ci-process-trim-2026-11-15.md:228-234`). No CI job invokes `actionlint` (a
-  repository search for the name matches `docs/` only), and CI executes both workflow files on
-  Linux, so this is a local-lint gap only: nothing in a hosted run is skipped by it. The local
-  pre-PR form stays shellcheck-enabled over the workflows a change touches and
-  `-shellcheck= -pyflakes=` for the rest. Owner area: CI tooling.
+  repository search for the name matches `docs/` only), so this is a local-lint gap only: nothing
+  in a hosted run is skipped by it. The local pre-PR form stays shellcheck-enabled over the
+  workflows a change touches and `-shellcheck= -pyflakes=` for the rest. Owner area: CI tooling.
 
 ## Deferred review findings (0007h)
 
