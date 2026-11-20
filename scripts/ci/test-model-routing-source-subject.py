@@ -77,7 +77,7 @@ class SourceSubjectTests(unittest.TestCase):
         path = self.write("scripts/run.sh", "#!/bin/sh\n")
         os.chmod(path, 0o755)
         if not path.stat().st_mode & 0o111:
-            self.skipTest("this platform does not report an owner-execute bit")
+            self.skipTest("this platform does not report an execute bit")
         self.assertEqual(
             tool.entry_bytes(self.root, "scripts/run.sh").split(b"\0", 1)[0], b"100755"
         )
