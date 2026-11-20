@@ -55,7 +55,7 @@ import {
   type ChatReceiptView,
   type ChatRunSignals,
 } from "./presentation";
-import { chatScopeKey, refusedPressStillOwnsChain, retainOlderPage, retainServedPage, useChatScopeStore, type ChatIntent } from "./scopes";
+import { chatScopeKey, ownsChainPointer, retainOlderPage, retainServedPage, useChatScopeStore, type ChatIntent } from "./scopes";
 
 const route = getRouteApi("/chat");
 
@@ -199,7 +199,7 @@ export function ChatPage() {
             // a later load advanced past, or a renewed cursor superseded, no
             // longer owns the pointer: its refusal must neither rewind the
             // chain nor re-read the scope, so only the notice below stays.
-            updateWith(key, (previous) => (refusedPressStillOwnsChain(previous, cursor, boundaryId)
+            updateWith(key, (previous) => (ownsChainPointer(previous, cursor, boundaryId)
               ? { ...previous, nextCursor: previous.pages[0]?.nextBefore ?? null, nextBoundaryId: previous.pages[0]?.messages[0]?.id ?? null }
               : previous));
             // The read goes to the captured scope's own query — never the
@@ -210,7 +210,7 @@ export function ChatPage() {
             // scope the refusal no longer owns — one benign read, never a
             // wrong cursor.
             const queryKey = chatConversationOptions(application.api, identity).queryKey;
-            if (refusedPressStillOwnsChain(latestStateOf.current(key), cursor, boundaryId) && queryClient.isFetching({ queryKey }) === 0) {
+            if (ownsChainPointer(latestStateOf.current(key), cursor, boundaryId) && queryClient.isFetching({ queryKey }) === 0) {
               void queryClient.refetchQueries({ queryKey });
             }
           }

@@ -343,6 +343,8 @@ describe("history view", () => {
   const third = message("11111111-0003-4003-8003-000000000003", { insertedAt: "2026-11-16T09:02:00.000000Z" });
   const fourth = message("11111111-0004-4004-8004-000000000004", { insertedAt: "2026-11-16T09:03:00.000000Z" });
 
+  const seeded = (index: number) => message(`11111111-00${String(index).padStart(2, "0")}-4001-8001-0000000000${String(index).padStart(2, "0")}`, { insertedAt: `2026-11-16T09:${String(index).padStart(2, "0")}:00.000000Z` });
+
   it("renders the current page alone when no older page is retained", () => {
     const view = chatHistoryView([page([third, fourth], { nextBefore: "cursor-1" })], "cursor-1");
     expect(view.messages.map((item) => item.id)).toEqual([third.id, fourth.id]);
@@ -393,7 +395,6 @@ describe("history view", () => {
   });
 
   it("keeps the gap when a later page chains from the moved boundary but the retained chain it left behind is not reached", () => {
-    const seeded = (index: number) => message(`11111111-000${index}-4001-8001-0000000000${String(index).padStart(2, "0")}`, { insertedAt: `2026-11-16T09:0${index}:00.000000Z` });
     const one = seeded(1);
     const two = seeded(2);
     const three = seeded(3);
@@ -424,7 +425,6 @@ describe("history view", () => {
   });
 
   it("keeps naming the next region when the chain reaches only one of several retained pages", () => {
-    const seeded = (index: number) => message(`11111111-00${String(index).padStart(2, "0")}-4001-8001-0000000000${String(index).padStart(2, "0")}`, { insertedAt: `2026-11-16T09:${String(index).padStart(2, "0")}:00.000000Z` });
     const one = seeded(1);
     const two = seeded(2);
     const three = seeded(3);

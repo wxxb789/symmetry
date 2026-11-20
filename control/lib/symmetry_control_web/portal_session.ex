@@ -5,6 +5,13 @@ defmodule SymmetryControlWeb.PortalSession do
   @shell_path ~r{\A/portal(?:/(?:attention|chat|connections|goals/[A-Za-z0-9_-]+|projects(?:/[A-Za-z0-9_-]+)?|runtimes|work/[A-Za-z0-9_-]+))?\z}
   @connection_identifier_param ~r{\AconnectionId=[A-Za-z0-9_-]+\z}
   @legacy_identifier_param ~r{\A(?:project_id|run_id)=[A-Za-z0-9_-]+\z}
+  # Conversation-surface search state the shell itself writes into its own
+  # URLs: the scope selection and the selected project or run.
+  @chat_scope_param ~r{\Ascope=(?:workspace|project|run)\z}
+  @chat_identifier_param ~r{\A(?:projectId|runId)=[A-Za-z0-9_-]+\z}
+  # The retired classic carrier's scope value, kept only so the one-time
+  # `/portal` hash redirect can run after login.
+  @legacy_chat_scope_param ~r{\Achat_scope=(?:workspace|project|run)\z}
   # Work-surface search state the shell itself writes into its own URLs: the
   # view, the text filters, and the JSON-encoded blocked flag. Values stay
   # anchored to that encoding, so an unencoded control character or an
@@ -48,8 +55,7 @@ defmodule SymmetryControlWeb.PortalSession do
   # scope selection, never a destination of its own.
   defp shell_query?("/portal/chat", query), do: chat_query?(query)
 
-  defp shell_query?("/portal/attention", query),
-    do: Regex.match?(~r{\AprojectId=[A-Za-z0-9_-]+\z}, query)
+  defp shell_query?("/portal/attention", query), do: Regex.match?(@work_project_param, query)
 
   # The connections surface carries the selected connection and the project
   # whose resource surface it scopes; both are shell-written view state. Without
@@ -78,23 +84,10 @@ defmodule SymmetryControlWeb.PortalSession do
     |> Enum.all?(fn param -> Enum.any?(patterns, &Regex.match?(&1, param)) end)
   end
 
-  defp chat_query?(query) do
-    query
-    |> String.split("&")
-    |> Enum.all?(fn param ->
-      Regex.match?(~r{\Ascope=(?:workspace|project|run)\z}, param) or
-        Regex.match?(~r{\A(?:projectId|runId)=[A-Za-z0-9_-]+\z}, param)
-    end)
-  end
+  defp chat_query?(query), do: all_params?(query, [@chat_scope_param, @chat_identifier_param])
 
-  defp legacy_hash_query?(query) do
-    query
-    |> String.split("&")
-    |> Enum.all?(fn param ->
-      Regex.match?(@legacy_identifier_param, param) or
-        param in ["chat_scope=workspace", "chat_scope=project", "chat_scope=run"]
-    end)
-  end
+  defp legacy_hash_query?(query),
+    do: all_params?(query, [@legacy_identifier_param, @legacy_chat_scope_param])
 
   def issue(operator_token, opts \\ []) when is_binary(operator_token) do
     %{

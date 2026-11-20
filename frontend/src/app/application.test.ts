@@ -38,6 +38,16 @@ describe("private query lifecycle", () => {
     expect(safeReturnTo(new URL(path, returnTargets.base_url).href)).toBe(return_to ?? "/portal/attention");
   });
 
+  // The corpus carries one `path` string per case, so the two raw forms it
+  // cannot express stay out of it and are pinned per side instead: the URL
+  // parser normalizes the empty query or fragment away, so the client keeps
+  // the location while the server refuses the raw spelling (see the reject
+  // list of the ExUnit test for explicit internal shell return paths).
+  it("keeps the shell location for a raw URL carrying an empty query or fragment", () => {
+    expect(safeReturnTo("http://localhost/portal/connections?")).toBe("/portal/connections");
+    expect(safeReturnTo("http://localhost/portal/connections#")).toBe("/portal/connections");
+  });
+
   it("expires the session when a command refuses with 401 even though its mutation has its own error handler", async () => {
     const replace = vi.fn();
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) =>
