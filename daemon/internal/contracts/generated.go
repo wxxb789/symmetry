@@ -62,13 +62,13 @@ type SymmetryAdmissionV1Subject struct {
 	TreeDigest string `json:"tree_digest"`
 }
 
-// Consumed members of the Portal attention read: the existing server-side Goal attention
-// feed merged with the project-level blocked work items the workspace read already serves.
-// Every member a surface consumes that the served projection always emits is required (a
-// served null stays nullable), so renaming one cannot pass every gate while the page
-// silently renders a zero or a fallback; unconsumed presentation members remain additive,
-// and every policy member (attention reasons, blockers, readiness) is the server's own
-// projection, never a client derivation.
+// Members of the Portal attention read: the existing server-side Goal attention feed merged
+// with the project-level blocked work items the workspace read already serves. Every member
+// this read requires is one the served projection always emits (a served null stays
+// nullable), whether or not a surface reads it, so omitting or renaming one cannot pass
+// every gate while the page silently renders a zero or a fallback; served members this read
+// leaves optional stay additive, and every policy member (attention reasons, blockers,
+// readiness) is the server's own projection, never a client derivation.
 type SymmetryAttentionReadV1 struct {
 	GoalAttention     GoalAttentionFeed  `json:"goal_attention"`
 	ProjectBlocked    ProjectBlockedFeed `json:"project_blocked"`
@@ -462,9 +462,11 @@ type PurpleWorkItemExternal struct {
 	URL                 *string  `json:"url"`
 }
 
-// Consumed fields of the existing portal connection read and its mutation projections.
-// Presentation values stay open strings so an unknown status, capability or auth type
-// remains renderable; unconsumed presentation fields remain additive.
+// Fields of the existing portal connection read and its mutation projections. Presentation
+// values stay open strings so an unknown status, capability or auth type remains
+// renderable; every member this read requires is one the projection always emits — the
+// connection and bound-resource identity, version and provider metadata are pinned beside
+// the fields the console renders — while the remaining served members stay additive.
 type SymmetryConnectionsReadV1 struct {
 	Connections []Connection         `json:"connections"`
 	Providers   []ConnectionProvider `json:"providers"`
@@ -990,19 +992,27 @@ type InitialRevisionExecutionPolicy struct {
 	PerRunCostLimitMicrousd *string         `json:"per_run_cost_limit_microusd"`
 }
 
-// Consumed members of the Portal Goal detail read: the existing Goal projection with
-// objective, accepted progress, blockers, the server's own allowed actions, settlement
-// attention, budget reservation and consumption, waiting-external boundaries and the
-// read-only dependency projection. Every member a surface consumes that the projection
-// always serves is required (a served null stays nullable), so renaming one cannot pass
-// every gate while the client silently reads undefined; unconsumed presentation members
-// remain additive, and the client never derives a Goal policy member and never offers an
-// action the served allowed_actions does not list.
+// Members of the Portal Goal detail read: the existing Goal projection with objective,
+// accepted progress, blockers, the server's own allowed actions, settlement attention,
+// budget reservation and consumption, waiting-external boundaries and the read-only
+// dependency projection. Requiredness here is a per-member pin, not a consumption claim:
+// every member this read requires is one the serving projection always emits (a served null
+// stays nullable), whether or not a surface reads it — the Goal id, blocker_reasons, the
+// completion flags, the accepted-outcome disposition, the graph-edge id and the settlement
+// `required?` member are pinned exactly that way — so omitting or renaming one fails this
+// bundle, the Elixir served-document test and the Effect boundary instead of decoding into
+// a silent fallback. Served members this read leaves optional stay additive, and the client
+// never derives a Goal policy member and never offers an action the served allowed_actions
+// does not list.
 type SymmetryGoalReadV1 struct {
 	AcceptedOutcomes []GoalReadOutcome  `json:"accepted_outcomes"`
 	Accounting       GoalReadAccounting `json:"accounting"`
 	// The server's exact action list for the rendered version/revision. The surface offers this
-	// list and nothing else.
+	// list and nothing else, with one documented authority exception: an open plan decision
+	// whose served options carry `accept` renders the plan-approval control although the read
+	// model never lists decision resolution here (a pending plan decision instead suppresses
+	// `request_plan`); that control is driven by the served decision itself and the server
+	// validates the decision version and the plan admission.
 	AllowedActions      []string                                `json:"allowed_actions"`
 	AttentionReasons    []string                                `json:"attention_reasons,omitempty"`
 	BlockerReasons      []string                                `json:"blocker_reasons"`
@@ -1096,7 +1106,11 @@ type GoalReadDecision struct {
 	Resolution   map[string]interface{}   `json:"resolution"`
 	State        string                   `json:"state"`
 	UpdatedAt    *string                  `json:"updated_at"`
-	WorkItemID   *string                  `json:"work_item_id"`
+	// The durable decision lock version, merged for every served decision from the GoalDecision
+	// row (`PortalJSON.goal_decision`); the plan-resolution command presents it as
+	// `expected_decision_version`, so a serving-side rename must not silently resolve as null.
+	Version    int64   `json:"version"`
+	WorkItemID *string `json:"work_item_id"`
 }
 
 type GoalReadExternalWait struct {

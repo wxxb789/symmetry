@@ -304,6 +304,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     limit = bounded_limit(Keyword.get(opts, :limit, @attention_limit), @attention_limit)
     state = Keyword.get(opts, :state)
     project_id = Keyword.get(opts, :project_id)
+    cursor = Keyword.get(opts, :cursor) || Keyword.get(opts, :after)
 
     query =
       from goal in Goal,
@@ -313,10 +314,8 @@ defmodule SymmetryControl.Goals.ReadModel do
     query = if state, do: where(query, [goal], goal.state == ^state), else: query
     query = if project_id, do: where(query, [goal], goal.project_id == ^project_id), else: query
 
-    with {:ok, query} <-
-           attention_cursor(query, Keyword.get(opts, :cursor) || Keyword.get(opts, :after)) do
-      rows = repo.all(query)
-
+    with {:ok, query, cursor_id} <- attention_cursor(query, cursor),
+         {:ok, rows} <- run_attention_query(query, repo, cursor_id) do
       {page, rest} = Enum.split(rows, limit)
 
       entries =
@@ -333,8 +332,25 @@ defmodule SymmetryControl.Goals.ReadModel do
       next_cursor = next_attention_cursor(rest, page)
       {:ok, %{entries: entries, next_after: next_cursor, next_cursor: next_cursor}}
     end
+  end
+
+  # A cursor the database cannot cast is forged client input: the read refuses
+  # it exactly like an undecodable cursor instead of surfacing a server fault.
+  # Attribution is by value equality, so only a cast failure of a different
+  # value than the cursor (an uncast `project_id` from an internal caller, say)
+  # is a server-side query fault and stays one. Known limit: the identical
+  # forged value in two parameters is attributed to the cursor; unreachable
+  # over HTTP, where the portal route pre-casts `project_id` through
+  # `Ecto.UUID.cast` and the operator route refuses the parameter outright.
+  defp run_attention_query(query, repo, cursor_id) do
+    {:ok, repo.all(query)}
   rescue
-    error in [Ecto.Query.CastError] -> {:error, error}
+    error in [Ecto.Query.CastError] ->
+      if cursor_id != nil and error.value == cursor_id do
+        {:error, :invalid_cursor}
+      else
+        reraise(error, __STACKTRACE__)
+      end
   end
 
   @doc "Fetch one authorized compact ContextSnapshot projection."
@@ -1992,21 +2008,18 @@ defmodule SymmetryControl.Goals.ReadModel do
     end)
   end
 
-  # The completion contract owns the integration designation: a revision with
-  # exactly one required work item designates that item, and an explicit
-  # designation on any other item contradicts the contract instead of
-  # overriding it, so such a revision has no usable integration item. Every
-  # other required count keeps the explicit designation.
+  # The designation rule lives in ContractValidation.integration_designation/1.
   defp effective_integration_item_ids(work_items) do
-    case Enum.filter(work_items, &map_value(&1, :required, true)) do
-      [required_item] ->
-        required_id = map_value(required_item, :id)
-        marked_ids = marked_integration_item_ids(work_items)
-
-        if Enum.all?(marked_ids, &(&1 == required_id)), do: [required_id], else: []
-
-      _other_count ->
-        marked_integration_item_ids(work_items)
+    work_items
+    |> Enum.map(fn item ->
+      {map_value(item, :id), map_value(item, :required, true) == true,
+       map_value(item, :integration, false) == true}
+    end)
+    |> ContractValidation.integration_designation()
+    |> case do
+      {:derived, id} -> [id]
+      {:conflict} -> []
+      {:explicit, ids} -> ids
     end
   end
 
@@ -2662,17 +2675,19 @@ defmodule SymmetryControl.Goals.ReadModel do
     encode_attention_cursor(map_value(last, :updated_at), map_value(last, :id))
   end
 
-  defp attention_cursor(query, nil), do: {:ok, query}
+  defp attention_cursor(query, nil), do: {:ok, query, nil}
 
   defp attention_cursor(query, %{updated_at: updated_at, id: id}) do
     with {:ok, updated_at} <- attention_timestamp(updated_at),
          true <- is_binary(id) and id != "" do
-      {:ok,
-       where(
-         query,
-         [goal],
-         goal.updated_at < ^updated_at or (goal.updated_at == ^updated_at and goal.id < ^id)
-       )}
+      query =
+        where(
+          query,
+          [goal],
+          goal.updated_at < ^updated_at or (goal.updated_at == ^updated_at and goal.id < ^id)
+        )
+
+      {:ok, query, id}
     else
       _ -> {:error, :invalid_cursor}
     end

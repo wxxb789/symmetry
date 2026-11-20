@@ -4,7 +4,7 @@ export type UUID = string;
 export type PositiveInteger = number;
 
 /**
- * Consumed members of the Portal attention read: the existing server-side Goal attention feed merged with the project-level blocked work items the workspace read already serves. Every member a surface consumes that the served projection always emits is required (a served null stays nullable), so renaming one cannot pass every gate while the page silently renders a zero or a fallback; unconsumed presentation members remain additive, and every policy member (attention reasons, blockers, readiness) is the server's own projection, never a client derivation.
+ * Members of the Portal attention read: the existing server-side Goal attention feed merged with the project-level blocked work items the workspace read already serves. Every member this read requires is one the served projection always emits (a served null stays nullable), whether or not a surface reads it, so omitting or renaming one cannot pass every gate while the page silently renders a zero or a fallback; served members this read leaves optional stay additive, and every policy member (attention reasons, blockers, readiness) is the server's own projection, never a client derivation.
  */
 export interface SymmetryAttentionReadV1 {
   selected_project_id: UUID | null;

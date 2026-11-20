@@ -36,6 +36,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
 
+- `frontend/src/features/connections/resources.tsx` `refusalGuidance.provider_owned`: no
+  call site of `refusalNotice` on that page can receive the code. Its only producer is
+  `Workspaces.provider_owned_fields_editable` answered by `update_work_item`
+  (`control/lib/symmetry_control/workspaces.ex`), i.e. the assignment surface, which
+  carries its own `assignmentGuidance`. Recorded by the retro-b4-goals-connections review
+  (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
+  (fix round 1); revalidate and remove in a separate maintenance change.
+
 - [ ] Investigate the intermittent Control failure `reversed import and delivery updates
       lock WorkItems in UUID order without deadlocking` in
       `control/test/symmetry_control/integrations_test.exs:1161` (`assert
@@ -88,9 +96,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       producer; revalidate the surviving provider-action tests either way.
 
 - [ ] Drop the unused `conn` parameter in
-      `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:689)
-      passes `conn` to `portal_command!/4` (:692), which never reads it (it builds its own `portal_conn()`),
-      so every run reports `warning: variable "conn" is unused` at :692. Pre-existing (present in both the
+      `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:650-651)
+      passes `conn` to `portal_command!/4` (:653), which never reads it (it builds its own `api_conn()`),
+      so every run reports `warning: variable "conn" is unused` at :653. Pre-existing (present in both the
       before and after `MIX_TEST_PARTITION=66` runs of the retro-b5 apply stage) and test-only; drop the
       parameter and the callers' pass-through in separate maintenance.
 
@@ -252,16 +260,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       sets (`frontend/src/features/attention/attention.tsx:80`), and `accepted_outcomes[].candidate_subject`
       and `subject_hash` (`detail.tsx:417`). Marking them `required` — as `integration`, `satisfied?` and the
       unknown-cost member now are — would close the class; additive members staying unvalidated is intended.
-      Two smaller residuals from the same review live here too: the rollout-off browser case went unrun in
+      A smaller residual from the same review lives here too: the rollout-off browser case went unrun in
       hosted CI for two reasons — before `52cb4bb` its spec file was not in the render step's spec list,
-      and the step passed no `SYMMETRY_GOALS_OFF_URL` (both closed below) — and the retained
-      `:goal_admission_disabled` inline branch is unreachable in production because the attention read is
-      not admission-gated.
+      and the step passed no `SYMMETRY_GOALS_OFF_URL` (both closed below).
       Closed part moved to `docs/archive/CLOSED-TODO.md`.
       The rollout-off browser-case residual is closed (2026-11-19, `fix/ci-render-gate-fixtures`, PR #98):
       the render step starts a rollout-off release instance and runs the attention spec's rollout-off case
       at both widths; its closure narrative and hosted evidence are in the same section there.
-      Remaining open: the `:goal_admission_disabled` residual above stays open; the legacy surfaces that
+      Remaining open: the legacy surfaces that
       read workspace-read members still render their own fallbacks instead of refusing, which is
       per-surface work outside this class; and the captures for `accepted_outcomes`, `settlement_attention`
       and `external_waits` are empty arrays, so those members are pinned by the boundary test and the

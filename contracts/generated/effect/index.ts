@@ -1056,6 +1056,7 @@ export const DefinitionGoalReadDecisionGraph = S.suspend(() => withObjectPropert
   "resolution": exactOneOf(S.Union(withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null), withObjectPropertyBounds(openObject(S.Struct({})), undefined, undefined), S.Null),
   "state": stringConstraints(S.String, undefined, undefined, undefined),
   "updated_at": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true }),
+  "version": DefinitionPositiveIntegerGraph,
   "work_item_id": S.optionalWith(exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null), { exact: true })
 })), undefined, undefined));
 

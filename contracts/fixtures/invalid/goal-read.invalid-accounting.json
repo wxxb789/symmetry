@@ -260,7 +260,7 @@
     "settled_reservation_count": 0,
     "unknown_reservation_count": 0,
     "usage_cost_microusd": "0",
-    "usage_cost_unknown?": "true",
+    "usage_cost_unknown?": false,
     "usage_records": 0
   },
   "lifecycle": {

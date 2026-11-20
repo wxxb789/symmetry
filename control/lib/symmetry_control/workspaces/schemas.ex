@@ -381,7 +381,7 @@ defmodule SymmetryControl.Workspaces.WorkItem do
       :ci_status,
       :review_status
     ])
-    |> validate_length(:creation_id, min: 1, max: 128)
+    |> validate_length(:creation_id, min: 1, max: 128, count: :bytes)
     |> unique_constraint([:project_id, :creation_id],
       name: :work_items_project_creation_id_index
     )

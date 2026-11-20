@@ -1,25 +1,27 @@
-import { Schema } from "effect";
-
 /**
  * Goal commands and their canonical identities.
  *
  * The control plane hashes a plan proposal with `RequestHash.canonical/1`: one
  * JSON document with lexicographically sorted object keys, array order
- * preserved, Elixir `Jason` scalar encoding. `canonicalJson`/`canonicalDigest`
- * reproduce exactly that encoding so the surface can present the server's own
- * proposal unchanged; the server still validates the hash and refuses a
- * mismatch, so nothing here grants authority.
+ * preserved and every string escaped exactly as `Jason` escapes it (the
+ * contracts package's `encodeJsonString`: an uppercase `\u00XX` for a C0
+ * control, where `JSON.stringify` would emit lowercase hex and hash different
+ * bytes). `canonicalJson`/`canonicalDigest` reproduce that encoding, and
+ * `planApprovalCommand` applies the same per-item defaults Control injects
+ * before it hashes (the contracts package's `canonicalPlanProposal`), so the
+ * surface presents the very document the server validates; the server still
+ * checks the hash and refuses a mismatch, so nothing here grants authority.
  */
+import { canonicalPlanProposal, encodeJsonString, type SymmetryPlanProposalV1 } from "@symmetry/contracts";
 
-export const GoalCommandEnvelope = Schema.Struct({
-  schema_version: Schema.Literal("symmetry.goal_command.v1"),
-  mutation_id: Schema.String,
-  expected_version: Schema.Number,
-  expected_revision: Schema.Number,
-  kind: Schema.String,
-  payload: Schema.Unknown,
-});
-export type GoalCommandEnvelope = typeof GoalCommandEnvelope.Type;
+export interface GoalCommandEnvelope {
+  readonly schema_version: "symmetry.goal_command.v1";
+  readonly mutation_id: string;
+  readonly expected_version: number;
+  readonly expected_revision: number;
+  readonly kind: string;
+  readonly payload: unknown;
+}
 
 export type CommandKind =
   | "request_plan"
@@ -45,7 +47,7 @@ export function canonicalJson(value: unknown): string {
     if (!Number.isInteger(value) && Math.abs(value) < 1e-6 && value !== 0) return value.toExponential();
     return JSON.stringify(value);
   }
-  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "string") return encodeJsonString(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>);
@@ -53,7 +55,7 @@ export function canonicalJson(value: unknown): string {
       throw new TypeError("canonical JSON rejects undefined members");
     }
     const sorted = entries.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-    return `{${sorted.map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`).join(",")}}`;
+    return `{${sorted.map(([key, nested]) => `${encodeJsonString(key)}:${canonicalJson(nested)}`).join(",")}}`;
   }
   throw new TypeError(`canonical JSON rejects ${typeof value} values`);
 }
@@ -63,6 +65,23 @@ export async function canonicalDigest(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalJson(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * The plan-approval pair the server binds for `accept_plan`: the proposal with
+ * the per-item defaults Control itself applies before hashing (`integration:
+ * false`, `change_target: null`, the contract's own `canonicalPlanProposal`)
+ * and the digest of exactly that document.
+ *
+ * The caller emits both: Control re-checks `RequestHash.canonical(proposal)`
+ * against `proposal_hash` and binds the admission to the recorded decision
+ * action hash, so a raw document hashed as-is is refused once the decision is
+ * already resolved. A document the contract cannot normalize throws here and
+ * the caller refuses it before anything is sent.
+ */
+export async function planApprovalCommand(proposal: unknown): Promise<{ proposal: unknown; proposalHash: string }> {
+  const defaulted = canonicalPlanProposal(proposal as SymmetryPlanProposalV1);
+  return { proposal: defaulted, proposalHash: await canonicalDigest(defaulted) };
 }
 
 /**
@@ -86,12 +105,6 @@ export class MutationRefused extends Error {
   get stale(): boolean {
     return this.status === 409 && (this.code === "stale" || this.code === "stale_revision");
   }
-}
-
-export function refuseMessage(error: unknown): string {
-  return error instanceof MutationRefused
-    ? error.message
-    : "The server could not complete this action. Try again.";
 }
 
 /** UUIDv4 mutation identity, one per logical action attempt. */

@@ -45,27 +45,17 @@ end
 defmodule SymmetryControl.ResourceSyncIdentityLossTest do
   use SymmetryControl.DataCase, async: false
 
+  import SymmetryControl.IntegrationFixtures, only: [tracked_resource!: 1]
+
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.IdentityLossProviderStub
-  alias SymmetryControl.Workspaces
+  alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces.{ProjectResource, ReadModel}
 
   @checked_at ~U[2026-09-04 10:00:00.000000Z]
 
   setup do
-    previous = Application.get_env(:symmetry_control, :integration_providers)
-
-    Application.put_env(:symmetry_control, :integration_providers,
-      github: IdentityLossProviderStub
-    )
-
-    on_exit(fn ->
-      if previous do
-        Application.put_env(:symmetry_control, :integration_providers, previous)
-      else
-        Application.delete_env(:symmetry_control, :integration_providers)
-      end
-    end)
+    TestEnv.put!(:integration_providers, github: IdentityLossProviderStub)
 
     :ok
   end
@@ -161,30 +151,13 @@ defmodule SymmetryControl.ResourceSyncIdentityLossTest do
   end
 
   defp resource_fixture do
-    assert {:ok, project} =
-             Workspaces.create_project(%{
-               name: "Identity loss",
-               key: "S" <> String.slice(Ecto.UUID.generate(), 0, 6),
-               default_agent_profile: "codex",
-               default_workspace: "primary"
-             })
-
-    assert {:ok, connection} =
-             Integrations.create_connection(%{
-               provider: "github",
-               name: "Identity loss " <> Ecto.UUID.generate(),
-               account_ref: "acme",
-               auth_type: "gh_cli",
-               capabilities: ["work_items"]
-             })
-
-    assert {:ok, resource} =
-             Workspaces.create_resource(project.id, %{
-               connection_id: connection.id,
-               kind: "work_tracking",
-               name: "Issues",
-               external_ref: "acme/symmetry"
-             })
+    {project, _connection, resource} =
+      tracked_resource!(
+        project_name: "Identity loss",
+        project_key: "S" <> String.slice(Ecto.UUID.generate(), 0, 6),
+        connection_name: "Identity loss " <> Ecto.UUID.generate(),
+        resource_name: "Issues"
+      )
 
     resource =
       resource

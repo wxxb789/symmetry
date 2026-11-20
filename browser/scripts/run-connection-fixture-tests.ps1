@@ -91,15 +91,21 @@ $env:POSTGRES_HOST = "127.0.0.1"
 $env:POSTGRES_PORT = "55444"
 $env:POSTGRES_USER = "postgres"
 $env:POSTGRES_PASSWORD = "postgres"
-$env:POSTGRES_DB = "symmetry_0007e_test"
+# Run-owned database name, like the per-port build path above: every run drops
+# and recreates the database it configures, so a name several runs share lets a
+# second concurrent run on another port destroy the first run's projects,
+# connections, resources and work items mid-spec. The `symmetry_0007e_` family
+# prefix stays reserved by Mix.Tasks.Symmetry.CheckTestDb.
+$env:POSTGRES_DB = "symmetry_0007e_test_$Port"
 
 Push-Location $controlRoot
 try {
-  # The acceptance database is dedicated to this fixture, and previous runs leave
-  # projects, connections, resources and work items behind (other portal specs use
-  # the same database). A growing connection list makes every page read slower and
-  # the run less reproducible, and the rows are referenced across tables, so the
-  # fixture recreates the database instead of deleting rows selectively.
+  # The acceptance database is dedicated to this run, and a rerun on the same
+  # port finds the previous run's projects, connections, resources and work
+  # items still there. A growing connection list makes every page read slower
+  # and the run less reproducible, and the rows are referenced across tables,
+  # so the fixture recreates its own database instead of deleting rows
+  # selectively.
   mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix ecto.drop --quiet
   if ($LASTEXITCODE -ne 0) { throw "mix ecto.drop failed with exit code ${LASTEXITCODE}: refusing to run on an inherited database" }
   mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix ecto.create --quiet
@@ -130,9 +136,11 @@ try {
     "set `"SYMMETRY_FIXTURE_STATE_FILE=$stateFile`" && " +
     "set `"SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS=expired-fixture`" && " +
     # The periodic sweep stays enabled (the real syncer child is part of the
-    # topology /healthz reports), but its 5-minute cadence would re-synchronize
-    # the acceptance rows mid-run and turn a failure or unavailability a test is
-    # observing back into a success. One hour keeps it out of the run's window.
+    # application's supervision topology; /healthz itself reports the database,
+    # scheduler, reconciler and provider access, not the syncer), but its
+    # 5-minute cadence would re-synchronize the acceptance rows mid-run and turn
+    # a failure or unavailability a test is observing back into a success. One
+    # hour keeps it out of the run's window.
     "set `"SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS=3600000`" && " +
     "cd /d `"$controlRoot`" && " +
     "mise exec elixir@1.20.4-otp-29 erlang@29.1.2 -- mix run --no-halt --no-start ../scripts/ci/portal-connection-fixture.exs"

@@ -106,10 +106,11 @@ defmodule SymmetryControlWeb.PortalJSON do
   The attention entry point: Goal attention merged with the project blocked items
   the workspace read already serves.
 
-  `goal_result` is `%{page: Goals attention page, unavailable: reason | nil}`.
-  A Goal read that is unavailable (rollout disabled, refusal, unexpected error)
-  is stated as the mapped protocol error while the real workspace blockers are
-  still served; nothing here invents a Goal entry or hides an authority refusal.
+  `goal_result` is `%{page: Goals attention page}`. The wire's `unavailable`
+  member stays (the frontend decodes it) but is always `null`: no read path
+  produces an unavailable Goal feed, and a failed Goal read is answered as its
+  mapped protocol status before this projection runs. Nothing here invents a
+  Goal entry or hides an authority refusal.
   """
   def attention(selected_project_id, goal_result, workspace_result) do
     goal_page = goal_result.page
@@ -119,17 +120,10 @@ defmodule SymmetryControlWeb.PortalJSON do
       goal_attention: %{
         entries: goal_page.entries,
         next_cursor: goal_page.next_cursor,
-        unavailable: goal_unavailable(goal_result.unavailable)
+        unavailable: nil
       },
       project_blocked: project_blocked(workspace_result)
     }
-  end
-
-  defp goal_unavailable(nil), do: nil
-
-  defp goal_unavailable(reason) do
-    {_status, code, message} = Protocol.error_details(reason)
-    %{code: code, message: message}
   end
 
   defp project_blocked({:ok, model}) do
@@ -179,9 +173,11 @@ defmodule SymmetryControlWeb.PortalJSON do
   @doc """
   Portal projection of one Goal read.
 
-  Every authority member (allowed_actions, blockers, readiness, decision
-  version) stays exactly what the durable projection serves; this function only
-  adds the project label the surface renders and stamps the served timestamps.
+  Every authority member (allowed_actions, blockers, readiness) stays exactly
+  what the durable projection serves; this function only adds the project label
+  the surface renders, injects each decision's `version` from
+  `decision_versions` (the durable projection serves none), and stamps the
+  served timestamps.
   """
   def goal(projection, project \\ nil, decision_versions \\ %{}) do
     {project_key, project_name} = project_label(project)

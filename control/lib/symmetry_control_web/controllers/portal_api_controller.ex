@@ -1,6 +1,8 @@
 defmodule SymmetryControlWeb.PortalApiController do
   use SymmetryControlWeb, :controller
 
+  import SymmetryControlWeb.QueryParams
+
   alias SymmetryControl.Integrations
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Workspaces
@@ -23,13 +25,11 @@ defmodule SymmetryControlWeb.PortalApiController do
   project-level blocked work items the workspace read already serves.
 
   Goal rollout is not required for this page: the feed serves the durable Goal
-  projection whether or not admission is enabled. The Goal feed's own admission
-  refusal is the only refusal stated inline under HTTP 200 (the real workspace
-  blockers stay served); caller-input errors keep their protocol status; any
-  other Goal-feed reason is a server fault and surfaces with its real status.
-  When the workspace read is unavailable the Goal entries are still served and
-  the Project feed states the refusal. Nothing here grants or implies Goal
-  authority.
+  projection whether or not admission is enabled. Caller-input errors keep their
+  protocol status; every other Goal-feed reason is a server fault and is answered
+  as a 500 `internal_error`. When the workspace read is unavailable the Goal
+  entries are still served and the Project feed states the refusal. Nothing here
+  grants or implies Goal authority.
   """
   def attention(conn, params) do
     with {:ok, project_id, goal_options} <- attention_options(conn, params),
@@ -50,16 +50,11 @@ defmodule SymmetryControlWeb.PortalApiController do
   defp goal_attention(goal_options) do
     case SymmetryControl.Goals.attention(goal_options) do
       {:ok, page} ->
-        {:ok, %{page: page, unavailable: nil}}
+        {:ok, %{page: page}}
 
       # The caller's own input is a request error, not an unavailable feed.
       {:error, reason} when reason in [:invalid_cursor, :invalid_request] ->
         {:error, reason}
-
-      # The feed's own admission refusal is the one refusal this page states
-      # inline: the page serves the real project blockers and names the refusal.
-      {:error, :goal_admission_disabled} ->
-        {:ok, %{page: empty_attention_page(), unavailable: :goal_admission_disabled}}
 
       # Anything else is a server fault. It must surface with its real status
       # instead of being reported as a client error inside a 200 response.
@@ -67,8 +62,6 @@ defmodule SymmetryControlWeb.PortalApiController do
         {:error, :internal_error}
     end
   end
-
-  defp empty_attention_page, do: %{entries: [], next_after: nil, next_cursor: nil}
 
   defp attention_options(conn, params) when is_map(params) do
     # The route's own path params are not caller input; every other parameter
@@ -78,8 +71,10 @@ defmodule SymmetryControlWeb.PortalApiController do
          {:ok, cursor} <- optional_text(Map.get(params, "cursor")),
          {:ok, limit} <- optional_positive_integer(Map.get(params, "limit")) do
       goal_options =
-        [project_id: project_id, cursor: cursor, limit: limit]
-        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        []
+        |> maybe_put(:project_id, project_id)
+        |> maybe_put(:cursor, cursor)
+        |> maybe_put(:limit, limit)
 
       {:ok, project_id, goal_options}
     else
@@ -91,16 +86,6 @@ defmodule SymmetryControlWeb.PortalApiController do
 
   defp error_invalid_request, do: {:error, :invalid_request}
 
-  defp allowed_query_params?(conn, params, allowed) do
-    path_keys = MapSet.new(Map.keys(conn.path_params))
-
-    params
-    |> Map.keys()
-    |> MapSet.new()
-    |> MapSet.difference(path_keys)
-    |> MapSet.subset?(MapSet.new(allowed))
-  end
-
   defp optional_uuid(nil), do: {:ok, nil}
 
   defp optional_uuid(value) when is_binary(value) do
@@ -111,23 +96,6 @@ defmodule SymmetryControlWeb.PortalApiController do
   end
 
   defp optional_uuid(_value), do: {:error, :invalid_request}
-
-  defp optional_text(nil), do: {:ok, nil}
-  defp optional_text(value) when is_binary(value) and byte_size(value) > 0, do: {:ok, value}
-  defp optional_text(_value), do: {:error, :invalid_request}
-
-  defp optional_positive_integer(nil), do: {:ok, nil}
-
-  defp optional_positive_integer(value) when is_integer(value) and value > 0, do: {:ok, value}
-
-  defp optional_positive_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, ""} when parsed > 0 -> {:ok, parsed}
-      _ -> {:error, :invalid_request}
-    end
-  end
-
-  defp optional_positive_integer(_value), do: {:error, :invalid_request}
 
   def create_connection(conn, params) do
     case Integrations.create_connection(params) do

@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { connectionsOptions, workspaceOptions } from "../../app/application";
 import { useSessionToken } from "../../app/session";
 import {
+  ownValue,
   ServerRefusal,
   type Api,
   type Connection,
@@ -13,13 +14,16 @@ import {
   type ConnectionProvider,
   type ConnectionResource,
 } from "../../services/api";
+import { restoreFocus } from "../../components/focus";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
-import { FieldErrors, ProjectResources, StatusBadge, formatLabel, providerLabel, refusalNotice, restoreFocus } from "./resources";
+import { DialogFrame, FieldErrors, ProjectResources, StatusBadge, formatLabel, providerLabel, refusalNotice } from "./resources";
 
 const authTypes: Record<string, string> = { gh_cli: "GitHub CLI · HTTPS", entra_id: "Microsoft Entra ID" };
 const capabilityLabels: Record<string, string> = { repositories: "Repositories", work_items: "Work items", changes: "Changes", ci: "CI" };
-const authLabel = (value: string) => authTypes[value] ?? `Unknown authentication: ${value || "unspecified"}`;
-const capabilityLabel = (value: string) => capabilityLabels[value] ?? `Unknown capability: ${value}`;
+// Own keys only: a served auth type or capability may name a prototype member
+// (`constructor`), which a plain index would return as Object's own function.
+const authLabel = (value: string) => ownValue(authTypes, value) ?? `Unknown authentication: ${value || "unspecified"}`;
+const capabilityLabel = (value: string) => ownValue(capabilityLabels, value) ?? `Unknown capability: ${value}`;
 const noPendingRequests: { check: number; remove: number } = { check: 0, remove: 0 };
 
 function ResourceRows({ resources }: { resources: readonly ConnectionResource[] }) {
@@ -132,67 +136,51 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
   const failure = save.error;
   const stale = failure instanceof ServerRefusal && failure.code === "stale";
   const blocked = save.isPending || stale;
-  return <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
-    <Dialog.Portal>
-      <Dialog.Overlay className="dialog-overlay" />
-      <Dialog.Content className="command-dialog connection-dialog" aria-describedby="connection-dialog-description"
-        onCloseAutoFocus={(event) => {
-          const target = opener.current;
-          opener.current = null;
-          restoreFocus(event, target, fallbackFocus.current);
+  return <DialogFrame title={connection ? "Connection settings" : "New connection"} closeLabel="Close connection dialog" descriptionId="connection-dialog-description" openerRef={opener} fallbackFocus={fallbackFocus} onClose={onClose}
+    description="Connections authenticate through this server's provider session. No credential is entered, displayed or stored in the browser.">
+    <form className="connection-form" onSubmit={(event) => { event.preventDefault(); if (!blocked) { onWriteStart(); save.mutate(draft); } }}>
+      <label htmlFor="connection-provider">Provider</label>
+      <select id="connection-provider" name="provider" value={draft.provider} disabled={Boolean(connection) || save.isPending}
+        onChange={(event) => {
+          // Read the DOM value before the deferred updater runs: React
+          // resets currentTarget once the event handler returns.
+          const providerId = event.currentTarget.value;
+          const next = providers.find((candidate) => candidate.id === providerId);
+          setDraft((current) => ({ ...current, provider: next?.id ?? "", capabilities: next?.capabilities ?? current.capabilities }));
         }}>
-        <div className="dialog-heading">
-          <Dialog.Title>{connection ? "Connection settings" : "New connection"}</Dialog.Title>
-          <Dialog.Close asChild><button className="icon-button" type="button" aria-label="Close connection dialog"><X size={20} aria-hidden="true" /></button></Dialog.Close>
-        </div>
-        <Dialog.Description id="connection-dialog-description" className="muted">
-          Connections authenticate through this server's provider session. No credential is entered, displayed or stored in the browser.
-        </Dialog.Description>
-        <form className="connection-form" onSubmit={(event) => { event.preventDefault(); if (!blocked) { onWriteStart(); save.mutate(draft); } }}>
-          <label htmlFor="connection-provider">Provider</label>
-          <select id="connection-provider" name="provider" value={draft.provider} disabled={Boolean(connection) || save.isPending}
-            onChange={(event) => {
-              // Read the DOM value before the deferred updater runs: React
-              // resets currentTarget once the event handler returns.
-              const providerId = event.currentTarget.value;
-              const next = providers.find((candidate) => candidate.id === providerId);
-              setDraft((current) => ({ ...current, provider: next?.id ?? "", capabilities: next?.capabilities ?? current.capabilities }));
-            }}>
-            {providers.map((option) => <option key={option.id} value={option.id}>{providerLabel(option.id)}</option>)}
-          </select>
-          <FieldErrors error={failure} field="provider" />
+        {providers.map((option) => <option key={option.id} value={option.id}>{providerLabel(option.id)}</option>)}
+      </select>
+      <FieldErrors error={failure} field="provider" />
 
-          <label htmlFor="connection-name">Name</label>
-          <input id="connection-name" name="name" value={draft.name} disabled={blocked} required
-            onChange={(event) => { const name = event.currentTarget.value; setDraft((current) => ({ ...current, name })); }} />
-          <FieldErrors error={failure} field="name" />
+      <label htmlFor="connection-name">Name</label>
+      <input id="connection-name" name="name" value={draft.name} disabled={blocked} required
+        onChange={(event) => { const name = event.currentTarget.value; setDraft((current) => ({ ...current, name })); }} />
+      <FieldErrors error={failure} field="name" />
 
-          <label htmlFor="connection-account">Account or organization</label>
-          <input id="connection-account" name="account_ref" value={draft.account_ref} disabled={Boolean(connection) || blocked} required
-            onChange={(event) => { const accountRef = event.currentTarget.value; setDraft((current) => ({ ...current, account_ref: accountRef })); }} />
-          <FieldErrors error={failure} field="account_ref" />
+      <label htmlFor="connection-account">Account or organization</label>
+      <input id="connection-account" name="account_ref" value={draft.account_ref} disabled={Boolean(connection) || blocked} required
+        onChange={(event) => { const accountRef = event.currentTarget.value; setDraft((current) => ({ ...current, account_ref: accountRef })); }} />
+      <FieldErrors error={failure} field="account_ref" />
 
-          <fieldset className="capability-fieldset" disabled={blocked}>
-            <legend>Capabilities</legend>
-            <p className="muted text-small">Authentication: {authLabel(provider?.auth_type ?? connection?.auth_type ?? "")}. The server requires repositories for changes.</p>
-            {(provider?.capabilities ?? connection?.capabilities ?? []).map((capability) => <label key={capability} className="capability-option">
-              <input type="checkbox" name="capabilities" value={capability} checked={draft.capabilities.includes(capability)} onChange={() => toggleCapability(capability)} />
-              {capabilityLabel(capability)}
-            </label>)}
-          </fieldset>
-          <FieldErrors error={failure} field="capabilities" />
+      <fieldset className="capability-fieldset" disabled={blocked}>
+        <legend>Capabilities</legend>
+        <p className="muted text-small">Authentication: {authLabel(provider?.auth_type ?? connection?.auth_type ?? "")}. The server requires repositories for changes.</p>
+        {(provider?.capabilities ?? connection?.capabilities ?? []).map((capability) => <label key={capability} className="capability-option">
+          <input type="checkbox" name="capabilities" value={capability} checked={draft.capabilities.includes(capability)} onChange={() => toggleCapability(capability)} />
+          {capabilityLabel(capability)}
+        </label>)}
+      </fieldset>
+      <FieldErrors error={failure} field="capabilities" />
 
-          {failure && <p className="notice notice-error" role="alert">{stale
-            ? `${refusalNotice(failure)} This connection changed elsewhere; close and reopen it to edit the server's current values.`
-            : refusalNotice(failure)}</p>}
-          <div className="dialog-actions">
-            <button className="button" type="submit" disabled={blocked}>{save.isPending ? "Saving…" : connection ? "Save" : "Connect"}</button>
-            <button className="button" type="button" onClick={onClose} disabled={save.isPending}>Cancel</button>
-          </div>
-        </form>
-      </Dialog.Content>
-    </Dialog.Portal>
-  </Dialog.Root>;
+      {failure && <p className="notice notice-error" role="alert">{stale
+        ? `${refusalNotice(failure)} This connection changed elsewhere; close and reopen it to edit the server's current values.`
+        : refusalNotice(failure)}</p>}
+      <div className="dialog-actions">
+        <button className="button" type="submit" disabled={blocked}>{save.isPending ? "Saving…" : connection ? "Save" : "Connect"}</button>
+        <button className="button" type="button" onClick={onClose} disabled={save.isPending}>Cancel</button>
+      </div>
+    </form>
+  </DialogFrame>;
 }
 
 interface DetailProps {
@@ -222,8 +210,10 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
   // connection id), and its requests belong to that connection, not to the
   // instance: the page holds the pending state by connection id so a remount
   // while the operator inspects another connection cannot forget a running
-  // check or removal, and it drops a continuation whose connection the
-  // operator is no longer showing instead of letting it act on newer state.
+  // check or removal. A continuation that settles for a connection the
+  // operator has left neither navigates nor reopens anything — only its own
+  // notice is stated (an empty selection still counts as the operator's own
+  // request, see `noticeFor`).
   const check = useMutation({
     mutationFn: () => api.checkConnection(connection.id, csrf, new AbortController().signal),
     onMutate: () => onRequest(connection.id, "check", true),

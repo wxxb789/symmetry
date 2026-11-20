@@ -1325,7 +1325,7 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       definition; and the attention read's entry `blockers`/`settlement_attention`/`updated_at` plus its
       `GoalBlocker` and `SettlementAttention` members, which no surface consumes there.
 
-*Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; its `:goal_admission_disabled` residual and the notes stay there.*
+*Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; its remaining notes stay there.*
 
       Closed on branch `fix/ci-render-gate-fixtures` (2026-11-19, PR #98). The original text: “the
       rollout-off browser case skips in hosted CI because it needs `SYMMETRY_GOALS_OFF_URL`”. The render
@@ -1345,6 +1345,18 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       attention workspace › with Goal rollout off a present Goal still serves its real attention entry
       (914ms)` and `✓ 72 [mobile-chromium] › … (832ms)`; the render step reports `93 passed (2.6m)`,
       `1 skipped`.
+
+*Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the `:goal_admission_disabled` residual no longer stays there.*
+
+      Closed on branch `retro/b2-control-goals` (2026-11-20, PR #114). The original residual: “the
+      retained `:goal_admission_disabled` inline branch is unreachable in production because the
+      attention read is not admission-gated”. No read path ever produced that page state, so the
+      branch, its `empty_attention_page/0` helper and its direct-call test are deleted; the reason
+      itself keeps its producers on the write path (`goals.ex` rolls it back on `request_plan`,
+      `accept_plan` and `admit_task`; `protocol.ex` maps it to a 409). The `goal_attention.unavailable`
+      member stays on the wire as `null` (the frontend still decodes it) and a failed Goal read is
+      answered as its mapped protocol status before the projection runs. The residual entry is
+      removed from `docs/TODO.md`.
 
 ## Browser acceptance under host load
 

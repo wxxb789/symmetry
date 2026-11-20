@@ -318,9 +318,13 @@ const WorkItemReceiptBody = Schema.Struct({
   disposition: Schema.optional(Schema.NonEmptyString),
   work_item: Schema.Struct({ id: Schema.NonEmptyString }),
 });
-// Every resource mutation answers with the served projection; the fields below
-// are the ones a continuation reads. A failed sync answers 502 with the same
-// projection plus `error`, which `parseRefusal` carries as the server's reason.
+// Resource create/update/sync receipts answer with the served projection; the
+// fields below are the ones a continuation reads. A sync the provider or the
+// binding refuses answers with the server's mapped status and the same
+// projection plus `error`, which `parseRefusal` carries as the server's
+// reason; every other refusal — a `:stale`/`:state_conflict` sync and every
+// create/update refusal — answers `{error}` alone, and a removal answers
+// `{deleted_resource_id}` instead (see `DeletedResourceBody`).
 const ResourceReceiptBody = Schema.Struct({
   resource: Schema.Struct({
     id: Schema.NonEmptyString,
@@ -913,11 +917,22 @@ const CommandErrorBody = Schema.Struct({
   }),
 });
 
+// Every accepted Goal write (a command or a creation) answers with the
+// server's receipt snapshot, which repeats the Goal identity and the mutation
+// identity. These two members are the receipt's own contract here: an empty
+// 200 is not a receipt and must never be announced as an applied write.
+const GoalReceiptBody = Schema.Struct({
+  goal_id: Schema.NonEmptyString,
+  mutation_id: Schema.NonEmptyString,
+});
+
 /**
  * One Goal command, authenticated by the portal session's CSRF token. Every
- * refusal is returned as `MutationRefused` carrying exactly the members the
- * server sent, so the surface renders the conflict instead of guessing it; a
- * transport or session failure keeps its own read error.
+ * domain refusal is returned as `MutationRefused` carrying exactly the members
+ * the server sent, so the surface renders the conflict instead of guessing it;
+ * a transport failure keeps its own read error, a 401/redirect expiry is
+ * classified like every other read, and an accepted write returns the decoded
+ * receipt.
  */
 export async function postGoalCommand(
   fetcher: typeof fetch,
@@ -955,9 +970,27 @@ export async function postPortalCommand(
   if (response.type === "opaqueredirect" || response.status === 302 || response.status === 303) {
     throw new Unauthenticated({ message: "Your session has ended. Sign in to continue." });
   }
+  // An expired portal session answers a write with its own JSON 401; it is a
+  // session failure for the whole app, never a domain refusal of this command.
+  if (response.status === 401) {
+    throw new Unauthenticated({ message: "Your session has ended. Sign in to continue." });
+  }
   const document = Schema.decodeUnknownOption(Schema.parseJson(Schema.Unknown))(await response.text());
   const payload = document._tag === "Some" ? document.value : null;
-  if (response.ok) return payload;
+  if (response.ok) {
+    // An accepted write answers with the server's receipt snapshot, which
+    // repeats the Goal identity and the mutation identity. A 200 without it is
+    // an answer this surface cannot read safely, never a success to announce.
+    const receipt = Schema.decodeUnknownOption(GoalReceiptBody)(payload);
+    if (receipt._tag === "None") {
+      throw new UnexpectedResponse({
+        message: "The server response could not be read safely. Refresh or contact your operator.",
+        status: response.status,
+        transient: false,
+      });
+    }
+    return receipt.value;
+  }
   throw refusal(response.status, payload);
 }
 
@@ -985,4 +1018,30 @@ export function errorMessage(error: unknown): string {
     error instanceof UnexpectedResponse || error instanceof ServerRefusal
     ? error.message
     : "The workspace could not be loaded. Try again.";
+}
+
+/**
+ * Own-key lookup over a map keyed by served strings.
+ *
+ * A served value may name a prototype member (`constructor`, `toString`), and
+ * a plain index would then return Object's own member: a label would render a
+ * function as a React child, or a status would read as a known label. Missing
+ * own keys are `undefined`, so every call site keeps its own fallback text.
+ */
+export function ownValue<T>(map: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
+/**
+ * The refusal fold every write surface renders: a `ServerRefusal` keeps the
+ * server's own message and code, and the surface contributes the operator's
+ * next step for the codes its guidance map itself owns (a prototype-named code
+ * contributes none). Any other error renders the message `errorMessage` gives
+ * it — a refusal's own text, or the generic workspace message for a bare
+ * `Error`.
+ */
+export function refusalNotice(error: unknown, guidance: Record<string, string>): string {
+  if (!(error instanceof ServerRefusal)) return errorMessage(error);
+  const step = ownValue(guidance, error.code);
+  return `${error.message} (${error.code})${step ? ` — ${step}` : ""}`;
 }

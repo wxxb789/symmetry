@@ -343,7 +343,9 @@ asserted the same way by
 `pnpm --filter symmetry-browser-acceptance test:control-isolation`
 (`browser/scripts/control-instance-isolation.test.mjs`): it runs each harness
 against a recording `mise` stub and reads back the `MIX_BUILD_PATH` every mix
-invocation received, including an inherited value the harness must override.
+invocation received, including an inherited value the harness must override,
+and, for the connection harness, the run-owned `POSTGRES_DB` every invocation
+must carry: the database name is derived from the same port.
 The fixture keeps the application's real supervision topology —
 scheduler, reconciler and provider access stay up — and readiness requires
 `/healthz` to answer `ok`. The harness refuses a `-PortalUrl` whose port
@@ -351,11 +353,16 @@ is not the one it starts the fixture on, refuses an occupied port, and stops onl
 the process tree it started plus the listener PID recorded after the identity
 handshake.
 
+The harness names its database after the port it serves
+(`symmetry_0007e_test_<port>`), like its instance build path, so two concurrent
+runs cannot drop each other's rows; a hand-run that mirrors the harness should
+use the same convention:
+
 ```sh
 cd control
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55444 POSTGRES_DB=symmetry_0007e_test mix ecto.create
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55444 POSTGRES_DB=symmetry_0007e_test mix ecto.migrate
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55444 POSTGRES_DB=symmetry_0007e_test \
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55444 POSTGRES_DB=symmetry_0007e_test_4021 mix ecto.create
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55444 POSTGRES_DB=symmetry_0007e_test_4021 mix ecto.migrate
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55444 POSTGRES_DB=symmetry_0007e_test_4021 \
   SYMMETRY_OPERATOR_TOKEN=<run token> SYMMETRY_FIXTURE_IDENTITY=<run identity> \
   SYMMETRY_FIXTURE_IDENTITY_FILE=/tmp/symmetry-fixture-identity.json \
   SYMMETRY_FIXTURE_STATE_FILE=/tmp/symmetry-fixture-state.json \
@@ -381,10 +388,11 @@ SYMMETRY_PORTAL_URL=http://127.0.0.1:4021 SYMMETRY_OPERATOR_TOKEN=<run token> \
 ```
 
 `scripts/run-connection-fixture-tests.ps1` does that whole sequence in one
-command — creates the per-run steering file, recreates and migrates the fixture
-database in this worktree's own container (other portal specs leave projects,
-work items and resources behind it), starts the fixture control plane in its own
-instance build path (`MIX_BUILD_PATH` under
+command — creates the per-run steering file, recreates and migrates its own
+fixture database (`symmetry_0007e_test_<port>`: a rerun on one port starts from
+a fresh recreation, while concurrent runs on different ports cannot drop each
+other's rows) in this worktree's own container, starts the fixture control plane
+in its own instance build path (`MIX_BUILD_PATH` under
 `control/_build/instances/connections-<port>`, never the shared
 `control/_build/dev`), waits for the identity file and a healthy `/healthz`,
 runs the spec (its 22 tests must pass on the desktop and mobile projects; a skip
@@ -400,10 +408,12 @@ The fixture is deliberately quieter than a development server — it logs at
 `warning` level so the acceptance run's output stays readable — but it does not
 change the application topology under test. It does pin
 `SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS=3600000`: the periodic integration sweep
-stays enabled (the real syncer child is part of the topology `/healthz` reports),
-but its five-minute cadence would otherwise re-synchronize the acceptance rows
-mid-run and turn a failure or an unavailability a flow is observing back into a
-success. Nothing else about the application is reconfigured.
+stays enabled (the real syncer child stays in the application's supervision
+tree; `/healthz` itself reports the database, scheduler, reconciler and provider
+access, not the syncer), but its five-minute cadence would otherwise
+re-synchronize the acceptance rows mid-run and turn a failure or an
+unavailability a flow is observing back into a success. Nothing else about the
+application is reconfigured.
 
 The classic resource checks are retired in the same change:
 `tests/portal-classic-resources.spec.mjs` (four tests, eight runs across the

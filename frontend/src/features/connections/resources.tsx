@@ -2,9 +2,11 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { restoreFocus } from "../../components/focus";
 import { EmptyState, ErrorState, LoadingState } from "../../components/workspace";
 import {
-  errorMessage,
+  ownValue,
+  refusalNotice as sharedRefusalNotice,
   ServerRefusal,
   type Api,
   type Connection,
@@ -14,16 +16,17 @@ import {
 
 // This module owns the project-resource surface on `/portal/connections` and
 // the display primitives both surfaces on that page share (status badges, field
-// errors, refusal notices, focus restore). The connection surface imports them
-// so the import direction stays one-way and there is exactly one refusal map.
+// errors, refusal notices, the dialog frame). The connection surface imports
+// them so the import direction stays one-way and there is exactly one refusal
+// map.
 
 const knownStatuses: Record<string, true> = { healthy: true, degraded: true, offline: true, unknown: true };
 const knownSyncStatuses: Record<string, true> = { unknown: true, syncing: true, synced: true, stale: true, failed: true };
 const providerLabels: Record<string, string> = { github: "GitHub", azure_devops: "Azure DevOps" };
 const kindLabels: Record<string, string> = { repository: "Repository", work_tracking: "Work tracking", ci: "CI", agent: "Agent", runtime: "Runtime", connection: "Connection" };
-// Kinds this surface creates. `connection` is a served local kind the classic
-// dialog offers; it carries no provider state to synchronize and no registered
-// reference to select, so it renders correctly here but is not offered.
+// Kinds this surface creates. `connection` is a served local kind this surface
+// renders but does not offer: it carries no provider state to synchronize and
+// no registered reference to select.
 const bindableKinds: readonly string[] = ["repository", "work_tracking", "ci", "agent", "runtime"];
 // The kind -> connection capability rule the server enforces
 // (`ensure_connection_capability/2`): a connection is offered for a kind only
@@ -41,32 +44,18 @@ const refusalGuidance: Record<string, string> = {
   capability_not_granted: "Grant the connection the capability this resource kind needs, then try again.",
   provider_unauthorized: "Reauthenticate the provider session on this server, then test the connection again.",
   provider_failure: "Check provider availability, then test the connection again.",
-  validation_failed: "Correct the highlighted fields and submit again.",
+  validation_failed: "The server rejected this submission; re-read the current values and try again.",
 };
 
 export const formatLabel = (value: string) => value.replaceAll("_", " ");
-export const providerLabel = (value: string) => providerLabels[value] ?? `Unknown provider: ${value || "unspecified"}`;
-const kindLabel = (value: string) => kindLabels[value] ?? `Unknown kind: ${value}`;
-const isLocalKind = (kind: string) => localKinds[kind] === true;
-
-// Radix restores focus on close only to a Dialog.Trigger, and none of these
-// dialogs has one: the invoking control is captured before Radix moves keyboard
-// focus inside, and focused again when the dialog closes. That control can be
-// disabled while its write is still pending — the dialog stays closable so the
-// operator can keep working — and focusing a disabled control never moves
-// focus, which would drop keyboard focus to the body. Those closes fall back to
-// the section heading, which no pending write can disable.
-export function restoreFocus(event: Event, opener: HTMLElement | null, fallback: HTMLElement | null) {
-  const target = opener?.isConnected && !opener.matches(":disabled")
-    ? opener
-    : fallback?.isConnected && !fallback.matches(":disabled") ? fallback : null;
-  if (!target) return;
-  event.preventDefault();
-  target.focus();
-}
+export const providerLabel = (value: string) => ownValue(providerLabels, value) ?? `Unknown provider: ${value || "unspecified"}`;
+const kindLabel = (value: string) => ownValue(kindLabels, value) ?? `Unknown kind: ${value}`;
+const isLocalKind = (kind: string) => ownValue(localKinds, kind) === true;
 
 export function StatusBadge({ status, scope }: { status: string; scope: "connection" | "resource" | "sync" }) {
-  const known = scope === "sync" ? knownSyncStatuses[status] : knownStatuses[status];
+  // Own keys only: a served status may be `constructor`, and a plain index
+  // would render Object's own member as a "known" label.
+  const known = scope === "sync" ? ownValue(knownSyncStatuses, status) : ownValue(knownStatuses, status);
   const tone = status === "healthy" || status === "synced" ? "status-complete" : status === "degraded" || status === "failed" || status === "offline" ? "status-attention" : "";
   return <span className={`status-badge ${tone}`} data-status={status}>{known ? formatLabel(status).replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()) : `Unknown ${scope} status: ${status || "unspecified"}`}</span>;
 }
@@ -77,11 +66,7 @@ export function FieldErrors({ error, field }: { error: unknown; field: string })
   return <p className="field-error" role="alert">{messages.join(" ")}</p>;
 }
 
-export function refusalNotice(error: unknown): string {
-  if (!(error instanceof ServerRefusal)) return errorMessage(error);
-  const guidance = refusalGuidance[error.code];
-  return `${error.message} (${error.code})${guidance ? ` — ${guidance}` : ""}`;
-}
+export const refusalNotice = (error: unknown) => sharedRefusalNotice(error, refusalGuidance);
 
 const asText = (value: unknown): string | null => typeof value === "string" && value !== "" ? value : null;
 const asVersion = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -158,7 +143,7 @@ function decodeRuntimes(workspace: Workspace | undefined): RegisteredRuntime[] {
 }
 
 const eligibleConnections = (kind: string, connections: readonly Connection[]): readonly Connection[] => {
-  const capability = kindCapabilities[kind];
+  const capability = ownValue(kindCapabilities, kind);
   return capability === undefined ? [] : connections.filter((connection) => connection.capabilities.includes(capability));
 };
 
@@ -190,7 +175,7 @@ const safeUrl = (value: string): string | null => {
   }
 };
 
-interface DialogFrameProps {
+export interface DialogFrameProps {
   title: string;
   closeLabel: string;
   descriptionId: string;
@@ -201,7 +186,7 @@ interface DialogFrameProps {
   children: ReactNode;
 }
 
-function DialogFrame({ title, closeLabel, descriptionId, description, openerRef, fallbackFocus, onClose, children }: DialogFrameProps) {
+export function DialogFrame({ title, closeLabel, descriptionId, description, openerRef, fallbackFocus, onClose, children }: DialogFrameProps) {
   return <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
     <Dialog.Portal>
       <Dialog.Overlay className="dialog-overlay" />

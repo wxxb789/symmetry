@@ -45,7 +45,7 @@
         "work_item_id": "55555555-5555-4555-8555-555555555555",
         "blocker": "waiting_dependency",
         "depends_on_id": "44444444-4444-4444-8444-444444444444",
-        "satisfied?": "no"
+        "satisfied?": false
       }
     ],
     "cycle_detected?": false

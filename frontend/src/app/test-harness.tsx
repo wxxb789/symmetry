@@ -1,7 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { render } from "@testing-library/react";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { Application } from "./application";
 import { createApplication } from "./application";
 import { createAppRouter } from "./router";
@@ -12,8 +12,12 @@ import { createAppRouter } from "./router";
  * answers a path the surface does not call fails the assertion instead of
  * silently passing.
  */
-export function renderRoute(path: string, fetcher: typeof fetch) {
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
+export function renderRoute(
+  path: string,
+  fetcher: typeof fetch,
+  options: { location?: { href: string; replace: (url: string) => void } } = {},
+) {
+  const application = createApplication({ fetcher, location: options.location ?? { href: `http://localhost${path}`, replace: vi.fn() } });
   const history = createMemoryHistory({ initialEntries: [path] });
   const router = createAppRouter(application, history);
   const { unmount } = render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
@@ -44,4 +48,18 @@ export function recordingFetcher(handler: ResponseHandler) {
 
 export function applicationOf(rendered: { application: Application }): Application {
   return rendered.application;
+}
+
+/**
+ * Applications a suite's render helpers created, with every query client
+ * cleared after the case so a write that settles late cannot leak into the
+ * next one.
+ */
+export function trackApplications(): Application[] {
+  const applications: Application[] = [];
+  afterEach(() => {
+    for (const application of applications) application.queryClient.clear();
+    applications.length = 0;
+  });
+  return applications;
 }

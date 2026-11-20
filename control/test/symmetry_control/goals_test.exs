@@ -2296,11 +2296,7 @@ defmodule SymmetryControl.GoalsTest do
 
     producer_runtime = runtime_fixture(@validation_runtime_id)
 
-    candidate_subject = %{
-      "resource_id" => item_repository_resource_id(item),
-      "commit" => String.duplicate("c", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
-    }
+    candidate_subject = candidate_subject(item_repository_resource_id(item))
 
     {producer_run, _producer_fence} =
       completed_goal_run_fixture(producer, producer_runtime, candidate_subject)
@@ -2329,8 +2325,7 @@ defmodule SymmetryControl.GoalsTest do
                  purpose: "validate",
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
+               }),
                rollout_enabled: true
              )
 
@@ -2400,8 +2395,7 @@ defmodule SymmetryControl.GoalsTest do
                  purpose: "validate",
                  validation_of_task_id: validation.id,
                  reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
+               }),
                rollout_enabled: true
              )
 
@@ -2557,23 +2551,7 @@ defmodule SymmetryControl.GoalsTest do
     {optional_run, _optional_fence} =
       completed_goal_run_fixture(optional_producer, runtime_fixture(), candidate_subject)
 
-    %SymmetryControl.Goals.WorkOutcome{}
-    |> SymmetryControl.Goals.WorkOutcome.changeset(%{
-      goal_id: goal.id,
-      goal_revision: goal.current_revision,
-      work_item_id: optional_dependency.id,
-      producing_task_id: optional_producer.id,
-      producing_run_id: optional_run.id,
-      validation_task_id: nil,
-      candidate_subject: candidate_subject,
-      subject_hash: SymmetryControl.RequestHash.canonical(candidate_subject),
-      producing_result_id: optional_run.result["task_result"]["result_id"],
-      evidence_ids: [],
-      disposition: "accepted",
-      reason: "validation_passed",
-      decision_id: nil
-    })
-    |> Repo.insert!()
+    insert_accepted_work_outcome!(goal, optional_dependency.id, optional_run, candidate_subject)
 
     assert {:error, :integration_outcome_required} =
              command_current(goal.id, "achieve", %{
@@ -2647,19 +2625,16 @@ defmodule SymmetryControl.GoalsTest do
         acceptance_contract: check_and_operator_acceptance_contract()
       })
 
-    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
-
-    assert {:ok, %{evidence: stored_evidence}, :created} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               evidence,
-               now: @now
-             )
-
-    assert {:ok, %{"settlement" => "accepted", "reason" => "validation_passed"}} =
-             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+    {evidence, stored_evidence} =
+      append_validation_evidence_and_settle_accepted!(
+        validation,
+        validation_run,
+        validation_runtime,
+        validation_fence,
+        item,
+        candidate_subject,
+        assert_reason?: true
+      )
 
     refute Repo.exists?(
              from(decision in SymmetryControl.Goals.GoalDecision,
@@ -2693,24 +2668,35 @@ defmodule SymmetryControl.GoalsTest do
     assert achieved.goal.state == "achieved"
   end
 
+  test "attention attributes a database cast failure to the cursor only" do
+    # An uncast project_id is a caller fault, not a forged cursor: without a
+    # cursor the cast error surfaces instead of being answered as invalid_cursor.
+    assert_raise Ecto.Query.CastError, fn ->
+      Goals.attention(project_id: "not-a-uuid")
+    end
+
+    forged_cursor =
+      %{"updated_at" => "2026-11-16T10:00:00Z", "id" => "not-a-uuid"}
+      |> Jason.encode!()
+      |> Base.url_encode64(padding: false)
+
+    assert {:error, :invalid_cursor} = Goals.attention(cursor: forged_cursor)
+  end
+
   test "a rejected completion Subject refuses achieve for the current revision" do
     {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
      validation_fence, candidate_subject} =
       independent_validation_attempt_fixture()
 
-    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
-
-    assert {:ok, %{evidence: stored_evidence}, :created} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               evidence,
-               now: @now
-             )
-
-    assert {:ok, %{"settlement" => "accepted"}} =
-             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+    {evidence, stored_evidence} =
+      append_validation_evidence_and_settle_accepted!(
+        validation,
+        validation_run,
+        validation_runtime,
+        validation_fence,
+        item,
+        candidate_subject
+      )
 
     assert {:ok, completion_request, :created} =
              command_current(goal.id, "request_decision", %{
@@ -2762,19 +2748,15 @@ defmodule SymmetryControl.GoalsTest do
         acceptance_contract: check_and_operator_acceptance_contract()
       })
 
-    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
-
-    assert {:ok, %{evidence: _stored_evidence}, :created} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               evidence,
-               now: @now
-             )
-
-    assert {:ok, %{"settlement" => "accepted"}} =
-             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+    {evidence, _stored_evidence} =
+      append_validation_evidence_and_settle_accepted!(
+        validation,
+        validation_run,
+        validation_runtime,
+        validation_fence,
+        item,
+        candidate_subject
+      )
 
     assert {:ok, completion_request, :created} =
              command_current(goal.id, "request_decision", %{
@@ -2871,8 +2853,7 @@ defmodule SymmetryControl.GoalsTest do
                  purpose: "validate",
                  validation_of_task_id: revised_producer.id,
                  reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
+               }),
                rollout_enabled: true
              )
 
@@ -2947,19 +2928,15 @@ defmodule SymmetryControl.GoalsTest do
      validation_fence, candidate_subject} =
       independent_validation_attempt_fixture(check_contract(), %{plan_integration: false})
 
-    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
-
-    assert {:ok, %{evidence: stored_evidence}, :created} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               evidence,
-               now: @now
-             )
-
-    assert {:ok, %{"settlement" => "accepted"}} =
-             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+    {evidence, stored_evidence} =
+      append_validation_evidence_and_settle_accepted!(
+        validation,
+        validation_run,
+        validation_runtime,
+        validation_fence,
+        item,
+        candidate_subject
+      )
 
     refute Repo.exists?(
              from(decision in SymmetryControl.Goals.GoalDecision,
@@ -3030,19 +3007,15 @@ defmodule SymmetryControl.GoalsTest do
      validation_fence, candidate_subject} =
       independent_validation_attempt_fixture(check_contract(), %{plan_integration: false})
 
-    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
-
-    assert {:ok, %{evidence: stored_evidence}, :created} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               evidence,
-               now: @now
-             )
-
-    assert {:ok, %{"settlement" => "accepted"}} =
-             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+    {evidence, stored_evidence} =
+      append_validation_evidence_and_settle_accepted!(
+        validation,
+        validation_run,
+        validation_runtime,
+        validation_fence,
+        item,
+        candidate_subject
+      )
 
     conflicting =
       optional_goal_work_item!(goal, item, "Conflicting integration candidate", true)
@@ -3063,23 +3036,9 @@ defmodule SymmetryControl.GoalsTest do
     # A storage-marker implementation would accept this conflicting item as the
     # integration role and find this accepted outcome, turning the achieve below
     # into a success instead of the deterministic contract refusal.
-    %SymmetryControl.Goals.WorkOutcome{}
-    |> SymmetryControl.Goals.WorkOutcome.changeset(%{
-      goal_id: goal.id,
-      goal_revision: goal.current_revision,
-      work_item_id: conflicting.id,
-      producing_task_id: conflicting_producer.id,
-      producing_run_id: conflicting_run.id,
-      validation_task_id: nil,
-      candidate_subject: candidate_subject,
-      subject_hash: SymmetryControl.RequestHash.canonical(candidate_subject),
-      producing_result_id: conflicting_run.result["task_result"]["result_id"],
-      evidence_ids: [stored_evidence.id],
-      disposition: "accepted",
-      reason: "validation_passed",
-      decision_id: nil
-    })
-    |> Repo.insert!()
+    insert_accepted_work_outcome!(goal, conflicting.id, conflicting_run, candidate_subject, [
+      stored_evidence.id
+    ])
 
     projection = fetch_goal!(goal.id)
 
@@ -3099,19 +3058,15 @@ defmodule SymmetryControl.GoalsTest do
      validation_fence, candidate_subject} =
       legacy_unmarked_validation_attempt_fixture()
 
-    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
-
-    assert {:ok, %{evidence: stored_evidence}, :created} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               evidence,
-               now: @now
-             )
-
-    assert {:ok, %{"settlement" => "accepted"}} =
-             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+    {evidence, stored_evidence} =
+      append_validation_evidence_and_settle_accepted!(
+        validation,
+        validation_run,
+        validation_runtime,
+        validation_fence,
+        item,
+        candidate_subject
+      )
 
     projection = fetch_goal!(goal.id)
 
@@ -3138,21 +3093,12 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "a multi-required plan keeps its explicit integration marker and payload obligations" do
-    {goal, _items} = goal_with_items_fixture(%{}, 2)
-
-    projection = fetch_goal!(goal.id)
-
-    assert projection.completion.required_items == 2
-    assert [integration_item] = Enum.filter(projection.work_items, & &1.integration)
+    {goal, projection, integration_item} = multi_required_goal_fixture!()
 
     other_item = Enum.find(projection.work_items, &(&1.id != integration_item.id))
     refute other_item.integration
 
-    subject = %{
-      "resource_id" => item_repository_resource_id(integration_item),
-      "commit" => String.duplicate("c", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
-    }
+    subject = candidate_subject(item_repository_resource_id(integration_item))
 
     assert {:error, :invalid_request} =
              command_current(goal.id, "achieve", %{
@@ -3171,19 +3117,11 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "a multi-required plan refuses an omitted integration payload as an invalid request" do
-    {goal, _items} = goal_with_items_fixture(%{}, 2)
-
-    projection = fetch_goal!(goal.id)
+    {goal, projection, integration_item} = multi_required_goal_fixture!()
 
     assert projection.state == "active"
-    assert projection.completion.required_items == 2
-    assert [integration_item] = Enum.filter(projection.work_items, & &1.integration)
 
-    subject = %{
-      "resource_id" => item_repository_resource_id(integration_item),
-      "commit" => String.duplicate("c", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
-    }
+    subject = candidate_subject(item_repository_resource_id(integration_item))
 
     assert {:error, :invalid_request} =
              command_current(goal.id, "achieve", %{
@@ -3353,11 +3291,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, producer} =
       admitted_task_fixture("primary", check_contract(), %{execution_policy: policy})
 
-    candidate_subject = %{
-      "resource_id" => item_repository_resource_id(item),
-      "commit" => String.duplicate("c", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
-    }
+    candidate_subject = candidate_subject(item_repository_resource_id(item))
 
     {producer_run, _producer_fence} =
       completed_goal_run_fixture(producer, runtime_fixture(), candidate_subject)
@@ -3365,23 +3299,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, %{"settlement" => "awaiting_validation"}} =
              Goals.settle_task(producer.id, producer_run.id, 1, now: @now)
 
-    %SymmetryControl.Goals.WorkOutcome{}
-    |> SymmetryControl.Goals.WorkOutcome.changeset(%{
-      goal_id: goal.id,
-      goal_revision: goal.current_revision,
-      work_item_id: item.id,
-      producing_task_id: producer.id,
-      producing_run_id: producer_run.id,
-      validation_task_id: nil,
-      candidate_subject: candidate_subject,
-      subject_hash: SymmetryControl.RequestHash.canonical(candidate_subject),
-      producing_result_id: producer_run.result["task_result"]["result_id"],
-      evidence_ids: [],
-      disposition: "accepted",
-      reason: "validation_passed",
-      decision_id: nil
-    })
-    |> Repo.insert!()
+    insert_accepted_work_outcome!(goal, item.id, producer_run, candidate_subject)
 
     set_goal_due!(goal.id)
 
@@ -3675,7 +3593,7 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "a competing accepted Subject is historical and does not loop validation recovery" do
-    {goal, item, producer, producer_run, validation, validation_run, validation_runtime,
+    {goal, item, _producer, producer_run, validation, validation_run, validation_runtime,
      validation_fence, candidate_subject} =
       independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
 
@@ -3693,23 +3611,7 @@ defmodule SymmetryControl.GoalsTest do
 
     accepted_subject = Map.put(candidate_subject, "commit", String.duplicate("a", 40))
 
-    %SymmetryControl.Goals.WorkOutcome{}
-    |> SymmetryControl.Goals.WorkOutcome.changeset(%{
-      goal_id: goal.id,
-      goal_revision: goal.current_revision,
-      work_item_id: item.id,
-      producing_task_id: producer.id,
-      producing_run_id: producer_run.id,
-      validation_task_id: nil,
-      candidate_subject: accepted_subject,
-      subject_hash: SymmetryControl.RequestHash.canonical(accepted_subject),
-      producing_result_id: producer_run.result["task_result"]["result_id"],
-      evidence_ids: [],
-      disposition: "accepted",
-      reason: "validation_passed",
-      decision_id: nil
-    })
-    |> Repo.insert!()
+    insert_accepted_work_outcome!(goal, item.id, producer_run, accepted_subject)
 
     assert {:ok, review, :created} =
              command_current(goal.id, "request_decision", %{
@@ -3947,8 +3849,7 @@ defmodule SymmetryControl.GoalsTest do
                  purpose: "validate",
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
+               }),
                rollout_enabled: true
              )
 
@@ -4914,11 +4815,7 @@ defmodule SymmetryControl.GoalsTest do
       ]
     )
 
-    candidate_subject = %{
-      "resource_id" => item_repository_resource_id(item),
-      "commit" => String.duplicate("c", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
-    }
+    candidate_subject = candidate_subject(item_repository_resource_id(item))
 
     {producer_run, _fence} =
       completed_goal_run_fixture(producer, producer_runtime, candidate_subject)
@@ -4985,11 +4882,7 @@ defmodule SymmetryControl.GoalsTest do
 
     runtime = runtime_fixture()
 
-    progressed_subject = %{
-      "resource_id" => item_repository_resource_id(item),
-      "commit" => String.duplicate("c", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
-    }
+    progressed_subject = candidate_subject(item_repository_resource_id(item))
 
     {run, _fence} = completed_goal_run_fixture(task, runtime, progressed_subject)
     progress_result = task_result(task, "progress", %{"subject" => progressed_subject})
@@ -5627,11 +5520,7 @@ defmodule SymmetryControl.GoalsTest do
     source_item = Enum.find(current_goal.work_items, &(&1.title == "Source work"))
     dependent_item = Enum.find(current_goal.work_items, &(&1.title == "Dependent work"))
 
-    candidate_subject = %{
-      "resource_id" => repository.id,
-      "commit" => String.duplicate("c", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
-    }
+    candidate_subject = candidate_subject(repository.id)
 
     configure_automatic_runtimes!(dependent_item, [source_runtime, validation_runtime])
 
@@ -5662,8 +5551,7 @@ defmodule SymmetryControl.GoalsTest do
                  purpose: "validate",
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
+               }),
                rollout_enabled: true
              )
 
@@ -6821,8 +6709,7 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: producer.id,
                  admission_key: Ecto.UUID.generate(),
                  reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
+               }),
                rollout_enabled: true,
                validation_profiles:
                  validation_profiles([validation_runtime_id], [validation_runtime_id])
@@ -6848,8 +6735,7 @@ defmodule SymmetryControl.GoalsTest do
                  purpose: "validate",
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
+               }),
                rollout_enabled: true,
                validation_profiles:
                  validation_profiles(
@@ -6886,8 +6772,7 @@ defmodule SymmetryControl.GoalsTest do
                  purpose: "validate",
                  validation_of_task_id: empty_producer.id,
                  reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
+               }),
                rollout_enabled: true,
                validation_profiles:
                  validation_profiles([Ecto.UUID.generate()], [Ecto.UUID.generate()])
@@ -8229,35 +8114,53 @@ defmodule SymmetryControl.GoalsTest do
     {goal, items}
   end
 
+  defp multi_required_goal_fixture! do
+    {goal, _items} = goal_with_items_fixture(%{}, 2)
+
+    projection = fetch_goal!(goal.id)
+
+    assert projection.completion.required_items == 2
+    assert [integration_item] = Enum.filter(projection.work_items, & &1.integration)
+
+    {goal, projection, integration_item}
+  end
+
   defp optional_goal_work_item!(goal, source_item, title, integration? \\ false) do
     source_item = Repo.get!(WorkItem, source_item.id)
 
+    insert_goal_work_item!(
+      %{
+        project_id: goal.project_id,
+        repository_resource_id: source_item.repository_resource_id,
+        title: title,
+        description: "Optional work outside the completion dependency closure.",
+        status: "backlog",
+        priority: "no_priority",
+        position: 0,
+        assignee_type: "agent",
+        assignee_name: source_item.agent_profile,
+        agent_profile: source_item.agent_profile,
+        workspace: source_item.workspace,
+        blocked: false
+      },
+      %{
+        goal_id: goal.id,
+        admitted_revision: goal.current_revision,
+        required: false,
+        integration: integration?,
+        acceptance_contract: source_item.acceptance_contract,
+        baseline_subject: source_item.baseline_subject,
+        baseline_dependency_id: nil,
+        change_target: nil
+      }
+    )
+  end
+
+  defp insert_goal_work_item!(work_item_attrs, membership_attrs) do
     %WorkItem{id: Ecto.UUID.generate()}
-    |> WorkItem.changeset(%{
-      project_id: goal.project_id,
-      repository_resource_id: source_item.repository_resource_id,
-      title: title,
-      description: "Optional work outside the completion dependency closure.",
-      status: "backlog",
-      priority: "no_priority",
-      position: 0,
-      assignee_type: "agent",
-      assignee_name: source_item.agent_profile,
-      agent_profile: source_item.agent_profile,
-      workspace: source_item.workspace,
-      blocked: false
-    })
+    |> WorkItem.changeset(work_item_attrs)
     |> Ecto.Changeset.apply_changes()
-    |> WorkItem.goal_membership_changeset(%{
-      goal_id: goal.id,
-      admitted_revision: goal.current_revision,
-      required: false,
-      integration: integration?,
-      acceptance_contract: source_item.acceptance_contract,
-      baseline_subject: source_item.baseline_subject,
-      baseline_dependency_id: nil,
-      change_target: nil
-    })
+    |> WorkItem.goal_membership_changeset(membership_attrs)
     |> Repo.insert!()
   end
 
@@ -8265,33 +8168,32 @@ defmodule SymmetryControl.GoalsTest do
   # integration role: the stored marker stays false, exactly as the column
   # default left pre-amendment rows, and the identity guard freezes it.
   defp legacy_unmarked_work_item!(project, repository, goal, title) do
-    %WorkItem{id: Ecto.UUID.generate()}
-    |> WorkItem.changeset(%{
-      project_id: project.id,
-      repository_resource_id: repository.id,
-      title: title,
-      description: "Required work admitted before the integration derivation.",
-      status: "backlog",
-      priority: "no_priority",
-      position: 0,
-      assignee_type: "agent",
-      assignee_name: "codex",
-      agent_profile: "codex",
-      workspace: project.default_workspace,
-      blocked: false
-    })
-    |> Ecto.Changeset.apply_changes()
-    |> WorkItem.goal_membership_changeset(%{
-      goal_id: goal.id,
-      admitted_revision: goal.current_revision,
-      required: true,
-      integration: false,
-      acceptance_contract: check_contract(),
-      baseline_subject: baseline_subject(repository.id).subject,
-      baseline_dependency_id: nil,
-      change_target: nil
-    })
-    |> Repo.insert!()
+    insert_goal_work_item!(
+      %{
+        project_id: project.id,
+        repository_resource_id: repository.id,
+        title: title,
+        description: "Required work admitted before the integration derivation.",
+        status: "backlog",
+        priority: "no_priority",
+        position: 0,
+        assignee_type: "agent",
+        assignee_name: "codex",
+        agent_profile: "codex",
+        workspace: project.default_workspace,
+        blocked: false
+      },
+      %{
+        goal_id: goal.id,
+        admitted_revision: goal.current_revision,
+        required: true,
+        integration: false,
+        acceptance_contract: check_contract(),
+        baseline_subject: baseline_subject(repository.id).subject,
+        baseline_dependency_id: nil,
+        change_target: nil
+      }
+    )
   end
 
   defp put_goal_acceptance_contract(attrs, nil), do: attrs
@@ -8560,6 +8462,56 @@ defmodule SymmetryControl.GoalsTest do
      }}
   end
 
+  defp insert_accepted_work_outcome!(goal, work_item_id, run, subject, evidence_ids \\ []) do
+    %SymmetryControl.Goals.WorkOutcome{}
+    |> SymmetryControl.Goals.WorkOutcome.changeset(%{
+      goal_id: goal.id,
+      goal_revision: goal.current_revision,
+      work_item_id: work_item_id,
+      producing_task_id: run.task_id,
+      producing_run_id: run.id,
+      validation_task_id: nil,
+      candidate_subject: subject,
+      subject_hash: SymmetryControl.RequestHash.canonical(subject),
+      producing_result_id: run.result["task_result"]["result_id"],
+      evidence_ids: evidence_ids,
+      disposition: "accepted",
+      reason: "validation_passed",
+      decision_id: nil
+    })
+    |> Repo.insert!()
+  end
+
+  defp append_validation_evidence_and_settle_accepted!(
+         validation,
+         validation_run,
+         validation_runtime,
+         validation_fence,
+         item,
+         candidate_subject,
+         opts \\ []
+       ) do
+    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
+
+    assert {:ok, %{evidence: stored_evidence}, :created} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               evidence,
+               now: @now
+             )
+
+    assert {:ok, settlement} = Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+    assert settlement["settlement"] == "accepted"
+
+    if Keyword.get(opts, :assert_reason?, false) do
+      assert settlement["reason"] == "validation_passed"
+    end
+
+    {evidence, stored_evidence}
+  end
+
   defp running_goal_run_fixture(task, runtime) do
     claim_id = Ecto.UUID.generate()
     lease_token = Ecto.UUID.generate()
@@ -8614,6 +8566,34 @@ defmodule SymmetryControl.GoalsTest do
     |> Repo.insert!()
   end
 
+  defp settled_validation_attempt!(goal, item, producer, candidate_subject) do
+    {producer_run, _producer_fence} =
+      completed_goal_run_fixture(producer, runtime_fixture(), candidate_subject)
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(producer.id, producer_run.id, 1, now: @now)
+
+    assert {:ok, validation_admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 purpose: "validate",
+                 validation_of_task_id: producer.id,
+                 reserved_microusd: 0
+               }),
+               rollout_enabled: true
+             )
+
+    validation = Repo.get!(Task, validation_admission.response["task"]["id"])
+    validation_runtime = runtime_fixture(@validation_runtime_id)
+
+    {validation_run, validation_fence} =
+      completed_goal_run_fixture(validation, validation_runtime, candidate_subject)
+
+    {producer_run, validation, validation_run, validation_runtime, validation_fence}
+  end
+
   defp independent_validation_attempt_fixture(
          acceptance_contract \\ check_contract(),
          revision_overrides \\ %{}
@@ -8633,38 +8613,10 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, producer} =
       admitted_task_fixture("primary", acceptance_contract, revision_overrides)
 
-    candidate_subject = %{
-      "resource_id" => item_repository_resource_id(item),
-      "commit" => String.duplicate("c", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
-    }
+    candidate_subject = candidate_subject(item_repository_resource_id(item))
 
-    producer_runtime = runtime_fixture()
-
-    {producer_run, _producer_fence} =
-      completed_goal_run_fixture(producer, producer_runtime, candidate_subject)
-
-    assert {:ok, %{"settlement" => "awaiting_validation"}} =
-             Goals.settle_task(producer.id, producer_run.id, 1, now: @now)
-
-    assert {:ok, validation_admission, :created} =
-             command_current(
-               goal.id,
-               "admit_task",
-               admission_payload(item, %{
-                 purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
-               rollout_enabled: true
-             )
-
-    validation = Repo.get!(Task, validation_admission.response["task"]["id"])
-    validation_runtime = runtime_fixture(@validation_runtime_id)
-
-    {validation_run, validation_fence} =
-      completed_goal_run_fixture(validation, validation_runtime, candidate_subject)
+    {producer_run, validation, validation_run, validation_runtime, validation_fence} =
+      settled_validation_attempt!(goal, item, producer, candidate_subject)
 
     {goal, item, producer, producer_run, validation, validation_run, validation_runtime,
      validation_fence, candidate_subject}
@@ -8710,36 +8662,10 @@ defmodule SymmetryControl.GoalsTest do
 
     producer = Repo.get!(Task, admitted.response["task"]["id"])
 
-    candidate_subject = %{
-      "resource_id" => repository.id,
-      "commit" => String.duplicate("c", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
-    }
+    candidate_subject = candidate_subject(repository.id)
 
-    {producer_run, _producer_fence} =
-      completed_goal_run_fixture(producer, runtime_fixture(), candidate_subject)
-
-    assert {:ok, %{"settlement" => "awaiting_validation"}} =
-             Goals.settle_task(producer.id, producer_run.id, 1, now: @now)
-
-    assert {:ok, validation_admission, :created} =
-             command_current(
-               created.goal.id,
-               "admit_task",
-               admission_payload(item, %{
-                 purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
-               })
-               |> Map.delete(:subject),
-               rollout_enabled: true
-             )
-
-    validation = Repo.get!(Task, validation_admission.response["task"]["id"])
-    validation_runtime = runtime_fixture(@validation_runtime_id)
-
-    {validation_run, validation_fence} =
-      completed_goal_run_fixture(validation, validation_runtime, candidate_subject)
+    {producer_run, validation, validation_run, validation_runtime, validation_fence} =
+      settled_validation_attempt!(goal, item, producer, candidate_subject)
 
     {goal, item, producer, producer_run, validation, validation_run, validation_runtime,
      validation_fence, candidate_subject}
@@ -9438,6 +9364,14 @@ defmodule SymmetryControl.GoalsTest do
         "commit" => String.duplicate("a", 40),
         "tree_digest" => "sha256:" <> String.duplicate("b", 64)
       }
+    }
+  end
+
+  defp candidate_subject(resource_id) do
+    %{
+      "resource_id" => resource_id,
+      "commit" => String.duplicate("c", 40),
+      "tree_digest" => "sha256:" <> String.duplicate("d", 64)
     }
   end
 

@@ -44,29 +44,19 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
   use SymmetryControlWeb.ConnCase, async: false
 
   import Ecto.Query
+  import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
 
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.Connection
-  alias SymmetryControlWeb.PortalSession
-
-  @operator_token "test-operator-token"
+  alias SymmetryControl.TestEnv
 
   setup do
-    previous = Application.get_env(:symmetry_control, :integration_providers)
-
-    Application.put_env(:symmetry_control, :integration_providers,
+    TestEnv.put!(:integration_providers,
       github: SymmetryControl.Integrations.ProviderStub,
       azure_devops: SymmetryControl.Integrations.ProviderStub
     )
-
-    on_exit(fn ->
-      if previous do
-        Application.put_env(:symmetry_control, :integration_providers, previous)
-      else
-        Application.delete_env(:symmetry_control, :integration_providers)
-      end
-    end)
 
     :ok
   end
@@ -115,15 +105,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
     connection = create_connection("Read projection")
     project = create_project()
 
-    assert %{"resource" => resource} =
-             api_conn()
-             |> post("/portal/api/projects/#{project["id"]}/resources", %{
-               "connection_id" => connection["id"],
-               "kind" => "work_tracking",
-               "name" => "Read tracker",
-               "external_ref" => "acme/symmetry"
-             })
-             |> json_response(201)
+    resource = create_tracker(project, connection, "Read tracker")
 
     assert %{"providers" => providers, "connections" => connections} =
              api_conn() |> get("/portal/api/connections") |> json_response(200)
@@ -165,10 +147,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
 
     assert replayed["id"] == created["id"]
 
-    assert %{"connections" => connections} =
-             api_conn() |> get("/portal/api/connections") |> json_response(200)
-
-    assert length(Enum.filter(connections, &(&1["name"] == "Replayed submission"))) == 1
+    assert_single_connection_named("Replayed submission")
 
     # Ecto attributes a composite unique constraint to its first field; the
     # message names the actual conflict so the console can render it verbatim.
@@ -215,10 +194,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
 
     assert replayed["id"] == created["id"]
 
-    assert %{"connections" => connections} =
-             api_conn() |> get("/portal/api/connections") |> json_response(200)
-
-    assert length(Enum.filter(connections, &(&1["name"] == "Capability-free submission"))) == 1
+    assert_single_connection_named("Capability-free submission")
   end
 
   test "a replay never accepts an invalid payload as a repeat of the applied connection" do
@@ -244,10 +220,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
              |> post("/portal/api/connections", %{payload | "capabilities" => ["ci", 123]})
              |> json_response(422)
 
-    assert %{"connections" => connections} =
-             api_conn() |> get("/portal/api/connections") |> json_response(200)
-
-    assert Enum.count(connections, &(&1["name"] == "Strict replay")) == 1
+    assert_single_connection_named("Strict replay")
   end
 
   test "the loser of a concurrent identical create replays instead of refusing" do
@@ -947,33 +920,9 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
              |> json_response(202)
   end
 
-  defp create_project(key \\ "CONN") do
-    %{"project" => project} =
-      api_conn()
-      |> post("/portal/api/projects", %{
-        "name" => "Connected engineering",
-        "key" => key,
-        "default_agent_profile" => "codex",
-        "default_workspace" => "primary"
-      })
-      |> json_response(201)
+  defp create_project(key \\ "CONN"), do: create_project(key, "Connected engineering")
 
-    project
-  end
-
-  defp create_connection(name) do
-    %{"connection" => connection} =
-      api_conn()
-      |> post("/portal/api/connections", %{
-        "provider" => "github",
-        "name" => name,
-        "account_ref" => "acme",
-        "capabilities" => ["work_items"]
-      })
-      |> json_response(201)
-
-    connection
-  end
+  defp create_connection(name), do: create_connection("github", name, "acme", ["work_items"])
 
   defp create_tracker(project, connection, name) do
     %{"resource" => resource} =
@@ -989,12 +938,10 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
     resource
   end
 
-  defp api_conn do
-    Phoenix.ConnTest.build_conn()
-    |> init_test_session(%{portal_operator: PortalSession.issue(@operator_token)})
-    |> skip_csrf()
-    |> put_req_header("accept", "application/json")
-  end
+  defp assert_single_connection_named(name) do
+    assert %{"connections" => connections} =
+             api_conn() |> get("/portal/api/connections") |> json_response(200)
 
-  defp skip_csrf(conn), do: put_private(conn, :plug_skip_csrf_protection, true)
+    assert Enum.count(connections, &(&1["name"] == name)) == 1
+  end
 end

@@ -46,8 +46,68 @@ const canonicalize = (value: unknown): unknown => {
   return value;
 };
 
+// The shorthand escapes Jason emits for the characters that have one; every
+// other C0 control is escaped as an uppercase `\u00XX` code point.
+const jsonEscapes: Record<number, string> = {
+  0x08: "\\b",
+  0x09: "\\t",
+  0x0a: "\\n",
+  0x0c: "\\f",
+  0x0d: "\\r",
+  0x22: '\\"',
+  0x5c: "\\\\",
+};
+
+/**
+ * One JSON string encoded exactly as Elixir `Jason` encodes it: the shorthand
+ * escapes above, an uppercase `\u00XX` for every other C0 control, and every
+ * other code point literal (Jason's generated `escape_json/1`,
+ * `deps/jason/lib/encode.ex`). `JSON.stringify` escapes the same characters
+ * with lowercase hex (`\u000b`), and the control plane hashes the exact text
+ * `RequestHash.canonical/1` produces, so the two forms hash as different bytes.
+ */
+export const encodeJsonString = (value: string): string => {
+  let encoded = '"';
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code === 0x22 || code === 0x5c) {
+      encoded += jsonEscapes[code] ?? `\\u${code.toString(16).toUpperCase().padStart(4, "0")}`;
+    } else {
+      encoded += value[index];
+    }
+  }
+  return `${encoded}"`;
+};
+
+/**
+ * Canonical JSON text: object keys already sorted by `canonicalize`, arrays in
+ * order, every string escaped as Jason escapes it. Values JSON cannot carry
+ * (functions, symbols, `undefined`) are dropped from objects and rendered as
+ * `null` in arrays, exactly as `JSON.stringify` treats them; at the top level
+ * they leave nothing to encode.
+ */
+const encodeCanonicalJson = (value: unknown): string | undefined => {
+  if (typeof value === "string") return encodeJsonString(value);
+  if (Array.isArray(value)) {
+    const items: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      items.push(encodeCanonicalJson(value[index]) ?? "null");
+    }
+    return `[${items.join(",")}]`;
+  }
+  if (isJsonObject(value)) {
+    const members: string[] = [];
+    for (const key of Object.keys(value)) {
+      const member = encodeCanonicalJson(value[key]);
+      if (member !== undefined) members.push(`${encodeJsonString(key)}:${member}`);
+    }
+    return `{${members.join(",")}}`;
+  }
+  return JSON.stringify(value);
+};
+
 export const canonicalJson = (value: unknown): string => {
-  const encoded = JSON.stringify(canonicalize(value));
+  const encoded = encodeCanonicalJson(canonicalize(value));
   if (encoded === undefined) {
     throw new SemanticError("semantic_mismatch", "value cannot be encoded as canonical JSON");
   }
@@ -87,7 +147,14 @@ type ProviderChangeTarget = Exclude<
   null
 >;
 
-const canonicalPlanProposal = (proposal: SymmetryPlanProposalV1): JsonObject => ({
+/**
+ * The proposal document Control hashes and validates for `request_decision`
+ * and `accept_plan`: Elixir `canonical_plan_proposal` injects `integration:
+ * false` and `change_target: null` per item before the request hash is
+ * computed, so a client that presents a digest must present this document
+ * (exported for the portal's plan approval, which computes the same digest).
+ */
+export const canonicalPlanProposal = (proposal: SymmetryPlanProposalV1): JsonObject => ({
   ...proposal,
   items: proposal.items.map((item) => ({
     ...item,

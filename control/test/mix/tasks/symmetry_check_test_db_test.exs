@@ -11,7 +11,7 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
   # silently dropping out of the cross-check below.
   @database_owning_scripts %{
     "run-compose-daemon-tests.ps1" => "symmetry_dev",
-    "run-connection-fixture-tests.ps1" => "symmetry_0007e_test",
+    "run-connection-fixture-tests.ps1" => "symmetry_0007e_test_$Port",
     "run-planning-tests.ps1" => "symmetry_0007c_test"
   }
 

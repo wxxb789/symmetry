@@ -62,6 +62,7 @@ export {
 };
 export type * from "../generated/ts/index.js";
 export { SemanticError, WireJsonError };
+export { canonicalPlanProposal, encodeJsonString } from "./semantics.ts";
 
 function boundary<A>(
   schema: Schema.Schema<A, unknown>,
