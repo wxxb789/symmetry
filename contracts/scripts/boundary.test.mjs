@@ -20,7 +20,7 @@ import {
   WireJsonError,
 } from "../ts/index.ts";
 import { parsePresentationJson, parseWireJson } from "../ts/wire-json.ts";
-import { canonicalJson } from "../ts/semantics.ts";
+import { canonicalJson, subjectHash } from "../ts/semantics.ts";
 import {
   allOf,
   arrayConstraints,
@@ -233,48 +233,7 @@ function renameMember(target, member) {
  * stays optional, so an additive presentation member is still accepted.
  */
 test("Goal reads refuse a renamed consumed member and keep unconsumed members additive", async () => {
-  const document = await fixture("goal-read.active");
-  const served = {
-    ...document,
-    accepted_outcomes: [
-      {
-        id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-        work_item_id: "44444444-4444-4444-8444-444444444444",
-        candidate_subject: {
-          resource_id: "88888888-8888-4888-8888-888888888888",
-          commit: "a".repeat(40),
-          tree_digest: `sha256:${"b".repeat(64)}`,
-        },
-        subject_hash: `sha256:${"c".repeat(64)}`,
-        evidence_ids: ["99999999-9999-4999-8999-999999999999"],
-        disposition: "accepted",
-        inserted_at: "2026-11-16T09:50:00Z",
-      },
-    ],
-    settlement_attention: [
-      {
-        event_id: "77777777-7777-4777-8777-777777777777",
-        goal_revision: 1,
-        task_id: "66666666-6666-4666-8666-666666666666",
-        "required?": true,
-        settlement: "awaiting_validation",
-        reason: null,
-        proposed_next_action: "Run the bound validation profile",
-        proposed_next_action_status: "proposal_only",
-      },
-    ],
-    external_waits: [
-      {
-        id: "12121212-1212-4212-8212-121212121212",
-        state: "waiting",
-        reason: null,
-        resource_id: "88888888-8888-4888-8888-888888888888",
-        external_ref: "wxxb789/symmetry",
-        next_check_at: "2026-11-16T11:00:00Z",
-        check_seq: 3,
-      },
-    ],
-  };
+  const served = await fixture("goal-read.active");
 
   const decoded = await Effect.runPromise(
     Effect.either(GoalRead.decodeJson(JSON.stringify(served))),
@@ -291,9 +250,6 @@ test("Goal reads refuse a renamed consumed member and keep unconsumed members ad
     ["a graph node", (value) => renameMember(value.graph.nodes[0], "blockers")],
     ["a graph edge", (value) => renameMember(value.graph.edges[0], "blocker")],
     ["a decision", (value) => renameMember(value.decisions[0], "resolution")],
-    ["an accepted outcome", (value) => renameMember(value.accepted_outcomes[0], "candidate_subject")],
-    ["settlement attention", (value) => renameMember(value.settlement_attention[0], "proposed_next_action")],
-    ["an external wait", (value) => renameMember(value.external_waits[0], "next_check_at")],
     ["the accounting", (value) => renameMember(value.accounting, "known_usage_cost_microusd")],
   ];
   for (const [label, rename] of goalRenames) {
@@ -316,6 +272,49 @@ test("Goal reads refuse a renamed consumed member and keep unconsumed members ad
     Either.isRight(additiveResult),
     `an unconsumed presentation member stays additive: ${String(additiveResult.left)}`,
   );
+
+  // The capture that carries the consumed outcome, settlement and wait
+  // collections: every member renamed below comes from that document's own
+  // bytes, so the fixture a server's next capture replaces is the fixture the
+  // rename is probed on, not a document this test writes.
+  const settled = await fixture("goal-read.accepted-and-external");
+  const settledDecoded = await Effect.runPromise(
+    Effect.either(GoalRead.decodeJson(JSON.stringify(settled))),
+  );
+  assert.ok(
+    Either.isRight(settledDecoded),
+    `the served capture must decode before any rename: ${String(settledDecoded.left)}`,
+  );
+
+  // The capture's digest binds its own preimage: a recapture that replaces the
+  // subject's identifiers has to recompute `subject_hash` over the replaced
+  // subject, exactly as the serving projection does before serving it.
+  assert.equal(
+    settled.accepted_outcomes[0].subject_hash,
+    await subjectHash(settled.accepted_outcomes[0].candidate_subject),
+    "the accepted outcome's digest must bind its own candidate subject",
+  );
+
+  for (const [label, rename] of [
+    ["an accepted outcome", (value) => renameMember(value.accepted_outcomes[0], "candidate_subject")],
+    ["an accepted outcome digest", (value) => renameMember(value.accepted_outcomes[0], "subject_hash")],
+    ["a settlement proposal", (value) => renameMember(value.settlement_attention[0], "proposed_next_action")],
+    [
+      "a settlement proposal status",
+      (value) => renameMember(value.settlement_attention[0], "proposed_next_action_status"),
+    ],
+    ["an external wait reference", (value) => renameMember(value.external_waits[0], "external_ref")],
+    ["an external wait schedule", (value) => renameMember(value.external_waits[0], "next_check_at")],
+    ["an external wait sequence", (value) => renameMember(value.external_waits[0], "check_seq")],
+  ]) {
+    const renamed = structuredClone(settled);
+    rename(renamed);
+    const result = await Effect.runPromise(
+      Effect.either(GoalRead.decodeJson(JSON.stringify(renamed))),
+    );
+    assert.ok(Either.isLeft(result), `${label}: a renamed consumed member must be refused`);
+    assert.equal(result.left._tag, "ParseError", `${label}: the refusal is a parse failure`);
+  }
 
   const attention = structuredClone(await fixture("attention-read.basic"));
   const attentionDecoded = await Effect.runPromise(

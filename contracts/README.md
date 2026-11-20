@@ -87,19 +87,25 @@ asymmetries it cannot express.
 Served-read fixtures are derived from real responses. `attention-read.schema.json`
 and `goal-read.schema.json` describe what the portal projection actually serves,
 so their positive fixtures are sanitized captures of a running server's own
-output (identifiers, labels and timestamps replaced; member names and shapes
-untouched), and their member names are the server's spellings — including the
-suffixed `required?`, `accepted?`, `satisfied?`, `cycle_detected?`,
-`usage_cost_unknown?` and `ready_to_achieve?` booleans. `chat-read.schema.json`
-follows the same rule: its positive fixtures are sanitized captures of
+output (identifiers, labels and timestamps replaced, and a digest recomputed
+over the preimage it replaced so the binding the server served survives; member
+names and shapes untouched), and their member names are the server's spellings
+— including the suffixed `required?`, `accepted?`, `satisfied?`,
+`cycle_detected?`, `usage_cost_unknown?` and `ready_to_achieve?` booleans.
+`chat-read.schema.json` follows the same rule: its positive fixtures are
+sanitized captures of
 `Chat.conversation/1`'s own response, and the chat controller test "the real
 served conversation read validates against the contract bundle" serves a real
 conversation and validates it against this bundle. Two gates keep that
 honest: the portal controller test "the real served attention and goal reads
 validate against the contract bundle" builds a real Goal with a dependency
-edge, an integration work item, a settlement receipt and an unknown-cost usage
-leaf, serves it through `PortalJSON.goal/3` and `PortalJSON.attention/3`, and
-validates both documents against this bundle; the Elixir fixture-manifest test
+edge, an integration work item, a settlement receipt, an unknown-cost usage
+leaf, an accepted outcome and a recorded terminal external wait,
+serves it through `PortalJSON.goal/3` and `PortalJSON.attention/3`, and
+validates both documents against this bundle; its served response is captured,
+sanitized, as `goal-read.accepted-and-external`, so the boundary probe renames
+the outcome, settlement and wait members over a document the server produced
+rather than over one the test writes. The Elixir fixture-manifest test
 resolves the positive fixtures through the same bundle. The frontend's
 served-read fixtures import these documents
 (`frontend/src/services/api.fixtures.ts`), so a test override cannot

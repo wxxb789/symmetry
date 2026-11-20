@@ -16,7 +16,17 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
   import SymmetryControlWeb.TestConn, only: [api_conn: 0, operator_conn: 1, assert_error: 3]
 
-  alias SymmetryControl.Goals.{ContextSnapshot, GoalDecision, GoalEvent, RunUsage}
+  alias SymmetryControl.Goals.{
+    ContextSnapshot,
+    GoalDecision,
+    GoalEvent,
+    GoalExternalWait,
+    RunEvidence,
+    RunUsage,
+    WorkOutcome
+  }
+
+  alias SymmetryControl.RequestHash
   alias SymmetryControl.Orchestration.{Machine, Run, Runtime, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
@@ -290,8 +300,9 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   # against the contract bundle. A fixture that spells a member differently
   # from the server fails here, on the server's own output, instead of passing
   # review. The scenario exercises a dependency edge, an integration work item,
-  # a settlement receipt and an unknown-cost usage leaf so those member names
-  # are pinned by the projection itself.
+  # a settlement receipt, an unknown-cost usage leaf, an accepted outcome and a
+  # recorded terminal external wait, so the members those documents consume are
+  # pinned by the projection itself and not only by the boundary's own document.
   test "the real served attention and goal reads validate against the contract bundle", %{
     conn: conn
   } do
@@ -310,6 +321,11 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
           required: true,
           integration: true,
           depends_on_keys: ["implement"]
+        ),
+        plan_item("external", "Await the external check", repository_id,
+          required: false,
+          integration: false,
+          depends_on_keys: []
         )
       ]
     end
@@ -326,11 +342,16 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert [%{"satisfied?" => false, "blocker" => "waiting_dependency"}] = read["graph"]["edges"]
     assert read["graph"]["cycle_detected?"] == false
 
-    insert_settlement_with_unknown_usage!(
-      goal_id,
-      read["current_revision"],
-      integration_item["id"]
-    )
+    revision = read["current_revision"]
+    implement_item = served_work_item!(read, "Merge the attention feed")
+    external_item = served_work_item!(read, "Await the external check")
+
+    insert_settlement_with_unknown_usage!(goal_id, revision, integration_item["id"])
+
+    {accepted_subject, accepted_evidence_id} =
+      insert_accepted_outcome!(goal_id, revision, implement_item)
+
+    external_ref = insert_unsupported_external_wait!(goal_id, revision, external_item)
 
     read = api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
@@ -339,6 +360,38 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
 
     assert [%{"required?" => true, "settlement" => "repair_required"}] =
              read["settlement_attention"]
+
+    subject_hash =
+      "sha256:" <> Base.encode16(RequestHash.canonical(accepted_subject), case: :lower)
+
+    assert [
+             %{
+               "work_item_id" => accepted_item_id,
+               "candidate_subject" => candidate_subject,
+               "subject_hash" => served_subject_hash,
+               "evidence_ids" => [evidence_id],
+               "disposition" => "accepted"
+             }
+           ] = read["accepted_outcomes"]
+
+    assert accepted_item_id == implement_item["id"]
+    assert candidate_subject == accepted_subject
+    assert served_subject_hash == subject_hash
+    assert evidence_id == accepted_evidence_id
+
+    assert [
+             %{
+               "state" => "unsupported",
+               "reason" => "unsupported_external_check",
+               "resource_id" => wait_resource_id,
+               "external_ref" => wait_external_ref,
+               "next_check_at" => nil,
+               "check_seq" => 0
+             }
+           ] = read["external_waits"]
+
+    assert wait_resource_id == external_item["repository_resource_id"]
+    assert wait_external_ref == external_ref
 
     attention =
       api_conn()
@@ -665,13 +718,14 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     |> json_response(200)
   end
 
-  # A durable task/run/settlement receipt with one unknown-cost usage leaf over
-  # an admitted work item: the served projection must state `required?` and
-  # `usage_cost_unknown?` for the document gate. The rows follow the durable
-  # shapes the settlement writer produces (payload/response agreement included).
-  defp insert_settlement_with_unknown_usage!(goal_id, revision, work_item_id) do
-    now = DateTime.utc_now()
+  defp served_work_item!(read, title) do
+    Enum.find(read["work_items"], &(&1["title"] == title)) ||
+      flunk("the served goal read must carry the work item #{inspect(title)}")
+  end
 
+  # One admitted work item's durable task, bound the way admission binds it: the
+  # gate rows below all hang off a task the projection follows through the item.
+  defp insert_goal_task!(goal_id, revision, work_item_id, state) do
     snapshot =
       %ContextSnapshot{}
       |> ContextSnapshot.changeset(%{
@@ -679,7 +733,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
         goal_revision: revision,
         work_item_id: work_item_id,
         schema_version: 1,
-        content_hash: :crypto.hash(:sha256, "served-document-gate-context"),
+        content_hash: :crypto.hash(:sha256, "served-document-gate-context-#{work_item_id}"),
         payload: %{"sources" => []}
       })
       |> Repo.insert!()
@@ -688,7 +742,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       %Task{}
       |> Task.changeset(%{
         idempotency_key: "served-gate-task-#{System.unique_integer([:positive])}",
-        request_hash: :crypto.hash(:sha256, "served-document-gate"),
+        request_hash: :crypto.hash(:sha256, "served-document-gate-#{work_item_id}"),
         goal_id: goal_id,
         goal_revision: revision,
         work_item_id: work_item_id,
@@ -701,7 +755,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
         workspace: "primary",
         required_capabilities: %{},
         input: %{},
-        state: "failed",
+        state: state,
         current_generation: 1,
         attempt_generation: 1,
         purpose: "implement"
@@ -713,19 +767,61 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       set: [orchestration_task_id: task.id]
     )
 
+    task
+  end
+
+  defp insert_goal_run!(task, state, result \\ nil) do
+    now = DateTime.utc_now()
     runtime = insert_runtime!()
 
-    run =
-      %Run{}
-      |> Run.changeset(%{
-        task_id: task.id,
-        runtime_id: runtime.id,
-        generation: 1,
-        state: "failed",
-        assigned_at: now,
-        assignment_expires_at: DateTime.add(now, 60, :second)
-      })
-      |> Repo.insert!()
+    %Run{}
+    |> Run.changeset(%{
+      task_id: task.id,
+      runtime_id: runtime.id,
+      generation: 1,
+      state: state,
+      assigned_at: now,
+      assignment_expires_at: DateTime.add(now, 60, :second),
+      result: result
+    })
+    |> Repo.insert!()
+  end
+
+  # One `task_settled` goal event with the next sequence. The read model only
+  # turns an event into a settlement entry when its payload and response agree
+  # on the task/run/generation identity, so both carry the response's identity.
+  defp insert_goal_event!(goal_id, revision, response, hash_marker) do
+    sequence =
+      Repo.aggregate(from(event in GoalEvent, where: event.goal_id == ^goal_id), :max, :sequence)
+
+    %GoalEvent{}
+    |> GoalEvent.changeset(%{
+      id: Ecto.UUID.generate(),
+      goal_id: goal_id,
+      sequence: (sequence || 0) + 1,
+      kind: "task_settled",
+      actor_ref: "system:settlement",
+      request_hash: :crypto.hash(:sha256, "served-document-gate-#{hash_marker}"),
+      revision: revision,
+      payload: %{
+        "task_id" => response["task_id"],
+        "run_id" => response["run_id"],
+        "generation" => response["generation"],
+        "state" => response["state"],
+        "goal_revision" => revision
+      },
+      response: Map.delete(response, "state")
+    })
+    |> Repo.insert!()
+  end
+
+  # A durable task/run/settlement receipt with one unknown-cost usage leaf over
+  # an admitted work item: the served projection must state `required?` and
+  # `usage_cost_unknown?` for the document gate. The rows follow the durable
+  # shapes the settlement writer produces (payload/response agreement included).
+  defp insert_settlement_with_unknown_usage!(goal_id, revision, work_item_id) do
+    task = insert_goal_task!(goal_id, revision, work_item_id, "failed")
+    run = insert_goal_run!(task, "failed")
 
     %RunUsage{}
     |> RunUsage.changeset(%{
@@ -740,41 +836,164 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     })
     |> Repo.insert!()
 
-    settled = %{
-      "goal_id" => goal_id,
-      "goal_revision" => revision,
-      "task_id" => task.id,
-      "run_id" => run.id,
-      "generation" => 1,
-      "settlement" => "repair_required",
-      "reason" => "task failed before a verified result",
-      "proposed_next_action" => "Run the bound repair",
-      "proposed_next_action_status" => "proposal_only",
-      "evidence_refs" => []
-    }
-
-    sequence =
-      Repo.aggregate(from(event in GoalEvent, where: event.goal_id == ^goal_id), :max, :sequence)
-
-    %GoalEvent{}
-    |> GoalEvent.changeset(%{
-      id: Ecto.UUID.generate(),
-      goal_id: goal_id,
-      sequence: (sequence || 0) + 1,
-      kind: "task_settled",
-      actor_ref: "system:settlement",
-      request_hash: :crypto.hash(:sha256, "served-document-gate-settlement"),
-      revision: revision,
-      payload: %{
+    insert_goal_event!(
+      goal_id,
+      revision,
+      %{
+        "state" => run.state,
+        "goal_id" => goal_id,
+        "goal_revision" => revision,
         "task_id" => task.id,
         "run_id" => run.id,
-        "generation" => 1,
-        "state" => "failed",
-        "goal_revision" => revision
+        "generation" => run.generation,
+        "settlement" => "repair_required",
+        "reason" => "task failed before a verified result",
+        "proposed_next_action" => "Run the bound repair",
+        "proposed_next_action_status" => "proposal_only",
+        "evidence_refs" => []
       },
-      response: settled
+      "settlement"
+    )
+  end
+
+  # An accepted outcome over an admitted work item: the served projection must
+  # carry the consumed outcome members (`candidate_subject`, `subject_hash`,
+  # `evidence_ids`) for the document gate. The row carries the columns
+  # `Goals.insert_validation_outcome!/13` writes, over a completed producer run
+  # and a bound evidence row; the acceptance pipeline's validate task and its
+  # run are not built here, so `validation_task_id` stays null and the gate
+  # mints the producing result id the writer takes from the producer run.
+  defp insert_accepted_outcome!(goal_id, revision, item) do
+    subject = item["baseline"]["subject"]
+    subject_hash = RequestHash.canonical(subject)
+
+    task = insert_goal_task!(goal_id, revision, item["id"], "completed")
+    run = insert_goal_run!(task, "completed")
+
+    evidence =
+      %RunEvidence{}
+      |> RunEvidence.changeset(%{
+        run_id: run.id,
+        evidence_key: "served-gate-evidence-#{System.unique_integer([:positive])}",
+        kind: "check",
+        subject_hash: subject_hash,
+        source_ref: %{"kind" => "validator", "profile" => "served_document_gate"},
+        source_revision: subject["commit"],
+        validator_profile: "served_document_gate",
+        verdict: "passed",
+        payload: %{"summary" => "The bound validation profile passed."}
+      })
+      |> Repo.insert!()
+
+    %WorkOutcome{}
+    |> WorkOutcome.changeset(%{
+      goal_id: goal_id,
+      goal_revision: revision,
+      work_item_id: item["id"],
+      producing_task_id: task.id,
+      producing_run_id: run.id,
+      candidate_subject: subject,
+      subject_hash: subject_hash,
+      producing_result_id: Ecto.UUID.generate(),
+      evidence_ids: [evidence.id],
+      disposition: "accepted",
+      reason: "validation_passed",
+      decision_id: nil
     })
     |> Repo.insert!()
+
+    {subject, evidence.id}
+  end
+
+  # A recorded terminal external wait over the item whose completed run reported
+  # a blocked-external result: the served projection must carry `state`,
+  # `reason`, `external_ref`, `next_check_at` and `check_seq` for the document
+  # gate. The row follows what `Goals.create_external_wait!/8` writes, and the
+  # identity trigger requires exactly this shape (completed task and run, the
+  # run's `task_result` equal to the wait's `result`, the item's repository
+  # resource in the subject), so the row cannot be invented more loosely.
+  defp insert_unsupported_external_wait!(goal_id, revision, item) do
+    subject = item["baseline"]["subject"]
+    subject_hash = RequestHash.canonical(subject)
+    result_id = Ecto.UUID.generate()
+    external_ref = "ci://build/unsupported"
+
+    blocked_result = %{
+      "schema_version" => "symmetry.task_result.v1",
+      "result_id" => result_id,
+      "kind" => "blocked",
+      "summary" => "The bound external check is unsupported.",
+      "subject" => subject,
+      "subject_hash" => "sha256:" <> Base.encode16(subject_hash, case: :lower),
+      "evidence_refs" => [],
+      "blocker" => %{
+        "kind" => "external",
+        "resource_id" => item["repository_resource_id"],
+        "external_ref" => external_ref,
+        "next_check_at" => nil
+      },
+      "proposed_next_action" => nil,
+      "proposal" => nil,
+      "reason" => nil,
+      "diagnostics" => []
+    }
+
+    task = insert_goal_task!(goal_id, revision, item["id"], "completed")
+    run = insert_goal_run!(task, "completed", %{"task_result" => blocked_result})
+
+    event =
+      insert_goal_event!(
+        goal_id,
+        revision,
+        %{
+          "state" => run.state,
+          "goal_id" => goal_id,
+          "goal_revision" => revision,
+          "task_id" => task.id,
+          "run_id" => run.id,
+          "generation" => run.generation,
+          "settlement" => "blocked",
+          "result_id" => result_id,
+          "result_kind" => "blocked",
+          "reason" => "unsupported_external_check",
+          "blocker" => blocked_result["blocker"],
+          "decision_id" => nil,
+          "proposed_next_action" => nil,
+          "proposed_next_action_status" => nil,
+          "subject_hash" => blocked_result["subject_hash"],
+          "evidence_refs" => []
+        },
+        "external-wait"
+      )
+
+    %GoalExternalWait{id: Ecto.UUID.generate()}
+    |> GoalExternalWait.changeset(%{
+      goal_id: goal_id,
+      goal_revision: revision,
+      work_item_id: item["id"],
+      task_id: task.id,
+      run_id: run.id,
+      run_generation: run.generation,
+      source_ref: %{
+        "kind" => "task_result",
+        "task_id" => task.id,
+        "run_id" => run.id,
+        "generation" => run.generation,
+        "result_id" => result_id
+      },
+      result_id: result_id,
+      result: blocked_result,
+      resource_id: item["repository_resource_id"],
+      external_ref: external_ref,
+      subject: subject,
+      subject_hash: subject_hash,
+      next_check_at: nil,
+      state: "unsupported",
+      receipt_event_id: event.id
+    })
+    |> Repo.insert!()
+
+    external_ref
   end
 
   defp insert_runtime! do

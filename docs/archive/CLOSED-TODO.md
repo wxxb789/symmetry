@@ -26,6 +26,9 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
+moved on 2026-11-21 from branch `fix/served-read-closeout`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -1433,6 +1436,89 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
       member stays on the wire as `null` (the frontend still decodes it) and a failed Goal read is
       answered as its mapped protocol status before the projection runs. The residual entry is
       removed from `docs/TODO.md`.
+
+*Closed part of the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`; the workspace-read residual stays there.*
+
+      Revalidated and closed on branch `fix/served-read-closeout` (2026-11-21). Every member the entry
+      named already sits in a `required` array at `fdf332d` and is read by the surface the entry cited,
+      at the anchors its stale line numbers drifted away from (entry lines were written against
+      `978abba`): `goal-read` accounting `known_usage_cost_microusd` (served
+      `control/lib/symmetry_control/goals/read_model.ex:2555`, read
+      `frontend/src/features/goals/detail.tsx:610`), settlement attention `proposed_next_action` and
+      `proposed_next_action_status` (`read_model.ex:1562-1563`, read `detail.tsx:316`), external wait
+      `external_ref`, `next_check_at` and `check_seq` (`read_model.ex:2610`, read `detail.tsx:626-627`),
+      outcome `candidate_subject` and `subject_hash` (`read_model.ex:2255`, read
+      `detail.tsx:272,531-537`), and the attention entry's `attention_reasons`, `active_tasks` and
+      `nonterminal_tasks` (`read_model.ex:2657-2659`, read
+      `frontend/src/features/attention/attention.tsx:90,92`). The class is re-checked exhaustively
+      rather than member-by-member: the optional sets of `goal-read.schema.json` and
+      `attention-read.schema.json` were extracted with a `jq` walk of every `required` array (48 and 11
+      distinct names) and cross-read against `frontend/src`. Neither schema has an optional member a
+      surface reads: the Goal read's and the attention read's readers are
+      `frontend/src/features/goals/detail.tsx` and
+      `frontend/src/features/attention/attention.tsx`, and the optional names a name-level grep matches
+      elsewhere belong to other definitions (`WorkItem`/`work-detail-read`, the `ProjectBlockedEntry`
+      blocker, the planning drafts); the optional members with no reader at all are additive, as the
+      entry intends. The only optional-and-consumed members left in the served reads this entry names —
+      the Goal read, the attention read and the workspace-read row — are the workspace row's 62, which
+      stay open in `docs/TODO.md`.
+      The entry's second residual — the empty `accepted_outcomes`/`settlement_attention`/
+      `external_waits` captures — is closed at both gates it named. The real-served controller test
+      "the real served attention and goal reads validate against the contract bundle"
+      (`control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`) now builds a Goal
+      whose served document carries an accepted outcome (the columns
+      `Goals.insert_validation_outcome!/13` writes, over a completed producer run and a bound evidence
+      row; the pipeline's own validate task and run are not built, so that row's `validation_task_id`
+      stays null), a repair-required settlement receipt and a recorded terminal external wait
+      (`state` `unsupported`, `next_check_at: null`, `check_seq: 0`), asserts the consumed values
+      (`candidate_subject` equal to the item's served baseline subject, its `sha256:` digest,
+      `evidence_ids`, `state`, `reason`, `external_ref`, `resource_id`, `next_check_at`, `check_seq`) and
+      keeps `validate_served_document!("goal-read", read)`. Its rows follow the writers' durable shapes:
+      the external wait is the only shape the `goal_external_waits` identity trigger admits (completed
+      task and run, the run's `task_result` equal to the wait's `result`, a terminal state with no
+      schedule), which is also why the wait could not borrow the failed settlement run.
+      That served response is captured, sanitized, as
+      `contracts/fixtures/valid/goal-read.accepted-and-external.json` (manifest id
+      `goal-read.accepted-and-external`, tag `captured-response`), so the boundary probe "Goal reads
+      refuse a renamed consumed member and keep unconsumed members additive"
+      (`contracts/scripts/boundary.test.mjs`) renames `candidate_subject`, `subject_hash`,
+      `proposed_next_action`, `proposed_next_action_status`, `external_ref`, `next_check_at` and
+      `check_seq` over the capture's own bytes instead of the three inline documents the probe wrote
+      before. A serving-side rename or omission of any of those members now fails the bundle gate and
+      the fixture gate, not only the boundary's own document.
+      The capture's `subject_hash` is recomputed over its sanitized subject — the sanitization rule
+      `contracts/README.md` now states for a replaced preimage — and the probe asserts that binding with
+      `subjectHash` over the capture's own `candidate_subject`, so a re-capture that replaces a
+      subject's identifiers cannot freeze a digest whose preimage it replaced.
+      Recorded before/after, exact commands. `mise x pnpm@12.17.0 -- pnpm contracts:test` fails on the
+      pre-increment fixture corpus with `ENOENT … contracts/fixtures/valid/goal-read.accepted-and-external.json`
+      (exit 1, `tests 35 / pass 34 / fail 1`) and passes with the capture (exit 0, `tests 35 / pass 35 /
+      fail 0`). That digest assertion's own probe: with the capture carrying the pre-sanitization digest
+      (`sha256:a354ae89…`, the value the raw served capture records) `node --test
+      contracts/scripts/boundary.test.mjs` fails at it (`actual: sha256:a354ae89…` against the
+      recomputed `expected: sha256:788053cd…`, exit 1, `tests 26 / pass 25 / fail 1`) and passes with the
+      recomputed digest (exit 0, `pass 26 / fail 0`).
+      The controller gate was probed on the serving side rather than by disabling its fixture rows: with
+      `outcome_projection/1` renamed `candidate_subject` → `candidate_subject_renamed` and
+      `external_wait_projection/1` renamed `check_seq` → `check_seq_renamed`, the gate file fails (exit
+      2, `Result: 11/12 passed`; the served document carries the renamed member); with only the wait's
+      `id` renamed — a required member the gate's own value assertions do not cover — it fails inside
+      `validate_served_document!/2` with `goal-read real served document failed the contract bundle:
+      [{"Required property id was not present.", "#/external_waits/0"}]` (exit 2, `Result: 11/12
+      passed`); restored, the file passes (exit 0, `Result: 12 passed`).
+      Package gates through the `retro-g2` recipe with `MIX_TEST_PARTITION=servedreadcloseout`:
+      `mix format --check-formatted` exit 0, `MIX_ENV=test mix compile --warnings-as-errors` exit 0,
+      the touched file exit 0 (`Result: 12 passed`). The package's full suite on this host reports
+      `Result: 926/936 passed, 21 skipped`; every one of its ten failures sits in a file this increment
+      does not touch (`goal_0006_migration_test.exs`, `goal_external_wait_migration_test.exs`,
+      `portal_integrations_test.exs`, `provider_action_controller_test.exs`, `integrations_test.exs`,
+      `chat_test.exs` — three `DBConnection` connection drops, two 60 s test timeouts, four unmet
+      `assert_receive` deadlines and one chat message-ordering assertion), and those six files re-run
+      together score `210/211`, the remaining failure being a 100 ms `assert_receive` deadline that
+      passes alone (`Result: 1 passed, 14 excluded`). The reversed-import flake closed at `978abba`
+      failed once in that full-suite run (the lock-order test's `assert_receive` for the sync
+      backend's blocked sample unmet after 5 s, mailbox empty) and passed in the isolated six-file
+      re-run; it is a load-sensitive case this increment does not touch.
 
 ## Browser acceptance under host load
 
