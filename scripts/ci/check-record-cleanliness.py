@@ -55,138 +55,29 @@ import sys
 SCRIPT_DIRECTORY = pathlib.Path(__file__).resolve().parent
 SANITIZE_TOOL = SCRIPT_DIRECTORY / "model-routing-record-sanitize.py"
 RECORD_PATHS = ("docs/evaluations", "docs/evidence")
-ZERO_COMMIT = "0" * 40
-# A record's head entry must be a regular file blob: a symlink's stored bytes are its
-# target text and a gitlink's are a subproject commit, neither of which is the record.
-REGULAR_BLOB_MODES = {"100644", "100755"}
-# A record is selected when the diff reports it as added, modified or type-changed:
-# each case leaves a file at the head revision whose text this gate must parse.
-SELECTED_STATUSES = {"A", "M", "T"}
+PROGRAM = "check-record-cleanliness"
+# The revision-range machinery is shared with scripts/ci/check-citation-existence.py;
+# importing the sibling keeps one implementation of the base fallback and the head-blob
+# read. The module is resolved from this script's own directory, so the gate is run the
+# same way from any working directory.
+import revision_scope  # noqa: E402  (imported after SCRIPT_DIRECTORY's contract above)
 
-
-class ComparisonBaseRefused(Exception):
-    """A requested comparison base that cannot yield a comparable range."""
-
-
-class DiffRefused(Exception):
-    """A revision range git cannot diff, or whose output shape is unexpected."""
-
-
-def run_git(repository: pathlib.Path, *arguments: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(repository), *arguments], capture_output=True, check=False,
-    )
-
-
-def resolve_commit(repository: pathlib.Path, revision: str) -> str | None:
-    completed = run_git(repository, "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}")
-    if completed.returncode != 0:
-        return None
-    return completed.stdout.decode("ascii", "replace").strip()
+REGULAR_BLOB_MODES = revision_scope.REGULAR_BLOB_MODES
+ComparisonBaseRefused = revision_scope.ComparisonBaseRefused
+DiffRefused = revision_scope.DiffRefused
+resolve_commit = revision_scope.resolve_commit
+narrow_to_merge_base = revision_scope.narrow_to_merge_base
+head_blob = revision_scope.head_blob
 
 
 def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> tuple[str | None, bool]:
-    """The commit to compare ``head`` against, plus whether it came from the fallback.
-
-    The fallback rules are the module docstring's; the shape only this function owns
-    is its refusal: a fallback that would compare the head with itself raises
-    ``ComparisonBaseRefused`` instead of returning a base. A requested base that
-    resolves is returned as ``(commit, False)`` and is compared directly; only a
-    fallback base is returned as ``(commit, True)`` for the caller to narrow, because
-    narrowing a requested base would collapse a non-fast-forward push to an empty
-    range and hide the records it reintroduces.
-    """
-    requested_unreachable = False
-    if requested and requested != ZERO_COMMIT:
-        resolved = resolve_commit(repository, requested)
-        if resolved is not None:
-            return resolved, False
-        requested_unreachable = True
-        print(
-            f"check-record-cleanliness: base {requested} is not present in this checkout "
-            "(a force-push?); comparing against the origin/main merge base instead",
-            file=sys.stderr,
-        )
-    merge_base = run_git(repository, "merge-base", head, "origin/main")
-    if merge_base.returncode == 0:
-        resolved = merge_base.stdout.decode("ascii", "replace").strip()
-        if requested_unreachable and resolved == head:
-            raise ComparisonBaseRefused(
-                f"the requested base {requested} is not present in this checkout and the "
-                "origin/main fallback is the head itself, so the range would be empty; a "
-                "force-push rewrites history, so name the revision this change is to be "
-                "compared against"
-            )
-        return resolved, True
-    first_parent = resolve_commit(repository, f"{head}^")
-    return first_parent, True
-
-
-def narrow_to_merge_base(repository: pathlib.Path, base: str, head: str) -> str:
-    """The merge base of base and head when one exists, so base-branch commits stay out.
-
-    Only the fallback base is narrowed. A requested base that resolves is compared
-    directly, because a rollback or rewritten push makes the head an ancestor of that
-    base: ``merge-base`` would then collapse the range to the head itself and report
-    ``nothing to check`` while the push reintroduces records the base had cleaned.
-    """
-    merge_base = run_git(repository, "merge-base", base, head)
-    if merge_base.returncode != 0:
-        return base
-    return merge_base.stdout.decode("ascii", "replace").strip() or base
+    """The revision-range base, with this gate's name in the fallback hint."""
+    return revision_scope.resolve_base(repository, requested, head, PROGRAM)
 
 
 def changed_records(repository: pathlib.Path, base: str, head: str) -> list[str]:
     """Records added or modified between ``base`` and ``head``, sorted."""
-    completed = run_git(
-        repository, "diff", "--name-status", "--no-renames", "-z", base, head, "--", *RECORD_PATHS,
-    )
-    if completed.returncode != 0:
-        raise DiffRefused(
-            "cannot diff "
-            f"{base}..{head}: {completed.stderr.decode('utf-8', 'replace').strip()}"
-        )
-    fields = [field.decode("utf-8", "surrogateescape") for field in completed.stdout.split(b"\0") if field]
-    if len(fields) % 2 != 0:
-        raise DiffRefused("unexpected git diff output shape")
-    selected = [fields[index + 1] for index in range(0, len(fields), 2) if fields[index] in SELECTED_STATUSES]
-    return sorted(selected)
-
-
-def head_blob(repository: pathlib.Path, head: str, relative: str) -> tuple[str, bytes]:
-    """The Git mode and blob bytes of one selected record at the head revision.
-
-    Reading the head commit's own blob is what binds the revision under test: a
-    working tree left at another revision, or a worktree file that is a symlink to
-    elsewhere, cannot substitute bytes for it. The mode is returned so the caller can
-    refuse a record the head does not store as a regular file.
-    """
-    listed = run_git(repository, "ls-tree", "-z", head, "--", relative)
-    if listed.returncode != 0:
-        raise DiffRefused(
-            f"cannot read {relative} at {head}: {listed.stderr.decode('utf-8', 'replace').strip()}"
-        )
-    entries = [entry for entry in listed.stdout.split(b"\0") if entry]
-    if len(entries) != 1:
-        raise DiffRefused(f"the head revision {head} does not hold exactly one entry for {relative}")
-    header = entries[0].split(b"\t", 1)[0].split(b" ")
-    if len(header) != 3:
-        raise DiffRefused(f"unexpected ls-tree entry for {relative} at {head}")
-    mode, _kind, object_id = (field.decode("ascii") for field in header)
-    if mode not in REGULAR_BLOB_MODES:
-        # The mode decides before the blob is read: a gitlink's object id is the
-        # subproject commit, so `cat-file blob` on it fails with "bad file" and the
-        # gate would exit 2 (an unusable range) instead of the documented
-        # non-regular refusal (exit 1). The caller refuses every non-regular mode
-        # and never reads the payload.
-        return mode, b""
-    blob = run_git(repository, "cat-file", "blob", object_id)
-    if blob.returncode != 0:
-        raise DiffRefused(
-            f"cannot read the blob of {relative} at {head}: "
-            f"{blob.stderr.decode('utf-8', 'replace').strip()}"
-        )
-    return mode, blob.stdout
+    return revision_scope.changed_paths(repository, base, head, RECORD_PATHS)
 
 
 def check_record(payload: bytes) -> tuple[str, str]:
