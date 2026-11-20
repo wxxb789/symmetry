@@ -382,7 +382,6 @@ function NextAction({ goal, busy, onCommand, resources }: { goal: GoalProjection
 
   const allowed = goal.allowed_actions;
   const repositories = resources.filter((resource) => resource.kind === "repository");
-  const integrationItem = goal.work_items.find((item) => item["integration"] === true);
 
   const identity = (kind: string): string => {
     const existing = mutationIds[kind];
@@ -423,13 +422,13 @@ function NextAction({ goal, busy, onCommand, resources }: { goal: GoalProjection
           <label className="field">Reason<input value={reason} onChange={(event) => setReason(event.currentTarget.value)} required /></label>
           <p className="text-small muted">An amendment opens a new revision and pauses the goal; the accepted authority and execution policy of the current revision are carried unchanged into the new revision.</p>
         </>}
-        {kind === "achieve" && <AchieveForm goal={goal} integrationItem={integrationItem} />}
+        {kind === "achieve" && <AchieveForm goal={goal} />}
         {kind === "accept_plan" && <p>Approve the open plan decision above first; the server admits the plan only from a resolved plan decision.</p>}
         {kind === "resolve_decision" && <p>Decisions are resolved from their own card above; the server validates the decision version you present.</p>}
         {!actionInputs(kind) && kind !== "activate" && kind !== "achieve" && <p className="text-small muted">This surface has no command form for this action; the server still lists it as allowed.</p>}
         <button className="button primary" type="submit" disabled={busy} onClick={() => {
           if (!isCommandKind(kind)) return;
-          const payload = actionPayload(kind, goal, { reason, commit, treeDigest, resourceId, modelProfile, objective, evidenceSubject: currentSubject(goal, integrationItem) });
+          const payload = actionPayload(kind, goal, { reason, commit, treeDigest, resourceId, modelProfile, objective });
           if (payload) send(kind, payload);
         }}>Send {actionLabel(kind)}</button>
       </form>}
@@ -448,15 +447,26 @@ function actionInputs(kind: string): boolean {
   return kind === "pause" || kind === "resume" || kind === "cancel" || kind === "request_plan" || kind === "amend";
 }
 
-function currentSubject(goal: GoalProjection, integrationItem: GoalWorkItem | undefined) {
+/**
+ * The single source of the achieve command's context: the integration work
+ * item the server designates, the accepted integration subject and every
+ * accepted evidence record. The form renders exactly the members the payload
+ * sends, so the preview cannot drift from what is submitted.
+ */
+function achieveContext(goal: GoalProjection) {
+  const integrationItem = goal.work_items.find((item) => item["integration"] === true);
   const outcome = integrationItem?.accepted_outcome ?? (goal.accepted_outcomes ?? [])[0];
-  return outcome?.candidate_subject ?? null;
+  return {
+    integrationItem,
+    subject: outcome?.candidate_subject ?? null,
+    evidenceIds: [...new Set((goal.accepted_outcomes ?? []).flatMap((accepted) => accepted.evidence_ids ?? []))],
+  };
 }
 
 function actionPayload(
   kind: string,
   goal: GoalProjection,
-  input: { reason: string; commit: string; treeDigest: string; resourceId: string; modelProfile: string; objective: string; evidenceSubject: unknown },
+  input: { reason: string; commit: string; treeDigest: string; resourceId: string; modelProfile: string; objective: string },
 ): ActionPayload | null {
   switch (kind) {
     case "activate":
@@ -489,14 +499,13 @@ function actionPayload(
         requested_session_id: null,
       };
     case "achieve": {
-      if (!input.evidenceSubject) return null;
-      const evidenceIds = [...new Set((goal.accepted_outcomes ?? []).flatMap((outcome) => outcome.evidence_ids ?? []))];
-      const integrationWorkItemId = goal.work_items.find((item) => item["integration"] === true)?.id;
+      const { integrationItem, subject, evidenceIds } = achieveContext(goal);
+      if (!subject) return null;
       return {
-        subject: input.evidenceSubject,
+        subject,
         // Exactly-one-required-item contracts bind their integration item
         // server-side; the member is sent only when a designation is served.
-        ...(integrationWorkItemId === undefined ? {} : { integration_work_item_id: integrationWorkItemId }),
+        ...(integrationItem === undefined ? {} : { integration_work_item_id: integrationItem.id }),
         evidence_ids: evidenceIds,
         decision_id: null,
       };
@@ -506,9 +515,8 @@ function actionPayload(
   }
 }
 
-function AchieveForm({ goal, integrationItem }: { goal: GoalProjection; integrationItem: GoalWorkItem | undefined }) {
-  const subject = currentSubject(goal, integrationItem);
-  const evidenceIds = [...new Set((goal.accepted_outcomes ?? []).flatMap((outcome) => outcome.evidence_ids ?? []))];
+function AchieveForm({ goal }: { goal: GoalProjection }) {
+  const { integrationItem, subject, evidenceIds } = achieveContext(goal);
   return <div>
     <p>The achieve command presents the accepted integration subject and every accepted evidence record: <span className="mono">{subject ? JSON.stringify(subject) : "no accepted subject is served"}</span></p>
     <p className="text-small muted">Evidence records: {evidenceIds.length === 0 ? "none" : evidenceIds.join(", ")}</p>

@@ -4,8 +4,8 @@
 // control plane, the accepted Goal API, and a real PostgreSQL database. No
 // response is substituted and no capability is faked; refusals and conflicts
 // are produced by the server.
-import fs from "node:fs/promises";
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
+import { capture } from "./readable-fixtures.mjs";
 
 const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
 // A second release instance started with Goal rollout off. Without it the
@@ -180,16 +180,6 @@ async function createGoalWithPlan(page, project, repositoryId, title) {
   const decisionId = decision.response.body.response.decision.id;
 
   return { goalId, proposal, decisionId, proposalJson: JSON.stringify(proposal) };
-}
-
-async function capture(page, testInfo, name, observations) {
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  const image = testInfo.outputPath(`${name}.png`);
-  await page.screenshot({ path: image, fullPage: true });
-  await testInfo.attach(name, { path: image, contentType: "image/png" });
-  await fs.writeFile(testInfo.outputPath(`${name}.json`), JSON.stringify({
-    url: page.url(), viewport: page.viewportSize(), observations
-  }, null, 2));
 }
 
 test.describe("Goal attention workspace", () => {
@@ -372,7 +362,7 @@ test.describe("Goal attention workspace", () => {
     expect(conflict.body.error.code).toBe("idempotency_conflict");
   });
 
-  test("the dependency projection renders read-only and the receipts paginate over the served boundary", async ({ page }, testInfo) => {
+  test("the dependency projection renders read-only; the receipts render the server's newest page", async ({ page }, testInfo) => {
     allowBrowserError(page, /status of 409/);
     await login(page);
     const project = await createProject(page, "E");
@@ -428,7 +418,7 @@ test.describe("Goal attention workspace", () => {
     await capture(page, testInfo, "goal-receipts", `The receipts list rendered ${loaded} of ${events.body.entries.length} real audit events the server recorded`);
   });
 
-  test("the Goal detail read refuses an unauthorized context snapshot and renders the refusal", async ({ page }) => {
+  test("the Goal detail read refuses an unauthorized context snapshot", async ({ page }) => {
     allowBrowserError(page, /status of 404|status of 401/);
     await login(page);
     const project = await createProject(page, "F");

@@ -2471,7 +2471,8 @@
       "tags": [
         "read-projection",
         "attention-merge",
-        "nullable"
+        "nullable",
+        "captured-response"
       ]
     },
     {
@@ -2502,7 +2503,8 @@
       "tags": [
         "read-projection",
         "goal-read",
-        "draft-plan-offer"
+        "draft-plan-offer",
+        "captured-response"
       ]
     },
     {
@@ -2540,9 +2542,29 @@
       ]
     },
     {
+      "id": "goal-read.invalid-graph-edge-satisfaction",
+      "schema": "goal-read",
+      "path": "invalid/goal-read.invalid-graph-edge-satisfaction.json",
+      "valid": false,
+      "tags": [
+        "read-projection",
+        "wrong-type"
+      ]
+    },
+    {
       "id": "goal-read.invalid-accounting",
       "schema": "goal-read",
       "path": "invalid/goal-read.invalid-accounting.json",
+      "valid": false,
+      "tags": [
+        "read-projection",
+        "wrong-type"
+      ]
+    },
+    {
+      "id": "goal-read.invalid-accounting-usage-flag",
+      "schema": "goal-read",
+      "path": "invalid/goal-read.invalid-accounting-usage-flag.json",
       "valid": false,
       "tags": [
         "read-projection",

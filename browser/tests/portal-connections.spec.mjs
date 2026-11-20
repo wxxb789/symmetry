@@ -47,6 +47,7 @@ import {
   monitorBrowserErrors,
   test
 } from "./fixtures.mjs";
+import { capture } from "./readable-fixtures.mjs";
 
 const fixtureVariables = [
   "SYMMETRY_OPERATOR_TOKEN",
@@ -353,16 +354,6 @@ async function assertNoCredentials(page, recorded) {
   for (const error of recorded.pageErrors) {
     expect(error, "page errors must not contain a provider credential").not.toMatch(secretPattern);
   }
-}
-
-async function capture(page, testInfo, name, observations) {
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  const image = testInfo.outputPath(`${name}.png`);
-  await page.screenshot({ path: image, fullPage: true });
-  await testInfo.attach(name, { path: image, contentType: "image/png" });
-  await fs.writeFile(testInfo.outputPath(`${name}.json`), JSON.stringify({
-    url: page.url(), viewport: page.viewportSize(), observations
-  }, null, 2));
 }
 
 async function createThroughConsole(page, { provider, name, account, capabilities }) {

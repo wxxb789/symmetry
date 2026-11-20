@@ -1,5 +1,3 @@
-import { Schema } from "effect";
-
 /**
  * Goal commands and their canonical identities.
  *
@@ -11,15 +9,14 @@ import { Schema } from "effect";
  * mismatch, so nothing here grants authority.
  */
 
-export const GoalCommandEnvelope = Schema.Struct({
-  schema_version: Schema.Literal("symmetry.goal_command.v1"),
-  mutation_id: Schema.String,
-  expected_version: Schema.Number,
-  expected_revision: Schema.Number,
-  kind: Schema.String,
-  payload: Schema.Unknown,
-});
-export type GoalCommandEnvelope = typeof GoalCommandEnvelope.Type;
+export interface GoalCommandEnvelope {
+  schema_version: "symmetry.goal_command.v1";
+  mutation_id: string;
+  expected_version: number;
+  expected_revision: number;
+  kind: string;
+  payload: unknown;
+}
 
 export type CommandKind =
   | "request_plan"
@@ -86,12 +83,6 @@ export class MutationRefused extends Error {
   get stale(): boolean {
     return this.status === 409 && (this.code === "stale" || this.code === "stale_revision");
   }
-}
-
-export function refuseMessage(error: unknown): string {
-  return error instanceof MutationRefused
-    ? error.message
-    : "The server could not complete this action. Try again.";
 }
 
 /** UUIDv4 mutation identity, one per logical action attempt. */

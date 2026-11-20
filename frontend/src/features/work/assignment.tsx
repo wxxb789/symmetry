@@ -4,8 +4,10 @@ import { X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { workspaceOptions } from "../../app/application";
 import { useSessionToken } from "../../app/session";
+import { restoreFocus } from "../../components/focus";
 import {
   errorMessage,
+  refusalNotice,
   ServerRefusal,
   type Api,
   type WorkDetail,
@@ -83,12 +85,6 @@ const assignmentGuidance: Record<string, string> = {
   validation_failed: "Correct the highlighted fields and submit again.",
 };
 
-function refusalNotice(error: unknown): string {
-  if (!(error instanceof ServerRefusal)) return errorMessage(error);
-  const guidance = assignmentGuidance[error.code];
-  return `${error.message} (${error.code})${guidance ? ` — ${guidance}` : ""}`;
-}
-
 /** Empty text means "server default": the field is submitted as null, never as "". */
 function present(value: string): string | null {
   const trimmed = value.trim();
@@ -114,13 +110,6 @@ function editorBlockedReason(readState: ProjectReadState, projectId: string | nu
   }
   if (typeof version !== "number") return "The served work item carried no version, so the assignment cannot be fenced. Refresh the page to read its current revision.";
   return null;
-}
-
-/** Radix restores focus on close only to a Dialog.Trigger; this dialog has none. */
-function restoreFocus(event: Event, opener: HTMLElement | null) {
-  if (!opener || !opener.isConnected || opener.matches(":disabled")) return;
-  event.preventDefault();
-  opener.focus();
 }
 
 export function AssignmentSection({ api, item }: { api: Api; item: WorkItemDetail }) {
@@ -268,7 +257,7 @@ function AssignmentEditor({ api, csrf, item, project, blockedReason, repositoryR
     <Dialog.Portal>
       <Dialog.Overlay className="dialog-overlay" />
       <Dialog.Content className="command-dialog assignment-dialog" aria-describedby="assignment-dialog-description"
-        onCloseAutoFocus={(event) => { const origin = opener.current; opener.current = null; restoreFocus(event, origin); }}>
+        onCloseAutoFocus={(event) => { const origin = opener.current; opener.current = null; restoreFocus(event, origin, null); }}>
         <div className="dialog-heading">
           <Dialog.Title>Assignment</Dialog.Title>
           <Dialog.Close asChild><button className="icon-button" type="button" aria-label="Close assignment dialog"><X size={20} aria-hidden="true" /></button></Dialog.Close>
@@ -321,8 +310,8 @@ function AssignmentEditor({ api, csrf, item, project, blockedReason, repositoryR
           {intentLocked && <p className="notice" role="status">A live execution holds this item's intent, so assignment is locked until the execution settles.</p>}
           {blockedReason !== null && <p className="notice" role="status">{blockedReason}</p>}
           {refusal !== null && <p className="notice notice-error" role="alert">{stale
-            ? `${refusalNotice(refusal)} Close and reopen the editor to work from the re-read assignment.`
-            : refusalNotice(refusal)}</p>}
+            ? `${refusalNotice(refusal, assignmentGuidance)} Close and reopen the editor to work from the re-read assignment.`
+            : refusalNotice(refusal, assignmentGuidance)}</p>}
           <div className="dialog-actions">
             <button className="button" type="submit" disabled={blocked}>{save.isPending ? "Saving…" : "Save assignment"}</button>
             <button className="button" type="button" onClick={onClose} disabled={save.isPending}>Cancel</button>

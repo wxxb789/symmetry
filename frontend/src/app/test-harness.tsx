@@ -1,7 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { render } from "@testing-library/react";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { Application } from "./application";
 import { createApplication } from "./application";
 import { createAppRouter } from "./router";
@@ -44,4 +44,18 @@ export function recordingFetcher(handler: ResponseHandler) {
 
 export function applicationOf(rendered: { application: Application }): Application {
   return rendered.application;
+}
+
+/**
+ * Applications a suite's render helpers created, with every query client
+ * cleared after the case so a write that settles late cannot leak into the
+ * next one.
+ */
+export function trackApplications(): Application[] {
+  const applications: Application[] = [];
+  afterEach(() => {
+    for (const application of applications) application.queryClient.clear();
+    applications.length = 0;
+  });
+  return applications;
 }

@@ -13,22 +13,28 @@ const projects = [
   { id: secondProjectId, key: "TWO", name: "Project Two", description: null, status: "active", work_items: [] },
 ];
 
-const rendered: Array<{ unmount: () => void }> = [];
-afterEach(() => { for (const entry of rendered) entry.unmount(); rendered.length = 0; localStorage.clear(); });
+afterEach(() => { localStorage.clear(); });
 
-function render(path: string, fetcher: Parameters<typeof renderRoute>[1]) {
-  const result = renderRoute(path, fetcher);
-  rendered.push(result);
-  return result;
+// The routes every case in this file shares: the session stub and the workspace
+// read for the first project. Each case's handler names only the routes it
+// exercises; anything it leaves unanswered is answered here.
+function portalFetcher(handler: (path: string, init?: RequestInit) => Response | undefined) {
+  return recordingFetcher((path, init) => {
+    const answered = handler(path, init);
+    if (answered !== undefined) return answered;
+    const url = new URL(path, "http://localhost");
+    if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
+    return jsonResponse(workspaceResponse(projectId));
+  });
 }
 
 function workspaceResponse(selected: string) {
-  return { selected_project_id: selected, projects: projects.map((project) => ({ ...project, work_items: [] })) };
+  return { selected_project_id: selected, projects };
 }
 
 describe("attention entry point", () => {
   it("lists Goal attention and the project blocked work together", async () => {
-    const { fetcher } = recordingFetcher((path) => {
+    const { fetcher } = portalFetcher((path) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === "/portal/api/attention") {
         return jsonResponse(readAttention({
@@ -37,11 +43,9 @@ describe("attention entry point", () => {
           blocked: [{ projectId, projectName: "Project One", workItemId: "44444444-4444-4444-8444-444444444444", key: "ONE-7", title: "Operator review required", blocker: "Needs architecture decision" }],
         }));
       }
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
-    render("/portal/attention", fetcher);
+    renderRoute("/portal/attention", fetcher);
     expect(await screen.findByRole("link", { name: "Deliver the attention entry point" })).toHaveAttribute("href", `/portal/goals/${goalId}`);
     expect(screen.getByText("waiting_dependency")).toBeVisible();
     expect(screen.getByText("Settlement attention: awaiting_validation")).toBeVisible();
@@ -53,7 +57,7 @@ describe("attention entry point", () => {
   });
 
   it("renders a served Goal-feed refusal statement while keeping the project blocked work", async () => {
-    const { fetcher } = recordingFetcher((path) => {
+    const { fetcher } = portalFetcher((path) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === "/portal/api/attention") {
         return jsonResponse(readAttention({
@@ -63,11 +67,9 @@ describe("attention entry point", () => {
           goalUnavailable: { code: "goal_admission_disabled", message: "goal admission is disabled" },
         }));
       }
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
-    render("/portal/attention", fetcher);
+    renderRoute("/portal/attention", fetcher);
     expect(await screen.findByRole("heading", { name: "Goal attention is unavailable on this server" })).toBeVisible();
     expect(screen.getByText(/goal admission is disabled/)).toBeVisible();
     expect(screen.getByText("goal_admission_disabled")).toBeVisible();
@@ -77,7 +79,7 @@ describe("attention entry point", () => {
 
   it("loads the Goal feed's older page with the served cursor and never repeats an entry", async () => {
     const olderGoalId = "55555555-5555-4555-8555-555555555555";
-    const { fetcher, calls } = recordingFetcher((path) => {
+    const { fetcher, calls } = portalFetcher((path) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === "/portal/api/attention") {
         const cursor = url.searchParams.get("cursor");
@@ -85,12 +87,10 @@ describe("attention entry point", () => {
           ? readAttention({ selectedProjectId: projectId, goals: [{ goalId: olderGoalId, projectId, title: "Older goal attention" }], nextCursor: null })
           : readAttention({ selectedProjectId: projectId, goals: [{ goalId, projectId, title: "Newest goal attention" }], nextCursor: "cursor-one" }));
       }
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
     const user = userEvent.setup();
-    render("/portal/attention", fetcher);
+    renderRoute("/portal/attention", fetcher);
     expect(await screen.findByRole("link", { name: "Newest goal attention" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Load more Goal attention" }));
     expect(await screen.findByRole("link", { name: "Older goal attention" })).toBeVisible();
@@ -102,7 +102,7 @@ describe("attention entry point", () => {
     const olderGoalId = "55555555-5555-4555-8555-555555555555";
     const replacedChainGoalId = "66666666-6666-4666-8666-666666666666";
     let firstPageReads = 0;
-    const { fetcher } = recordingFetcher((path) => {
+    const { fetcher } = portalFetcher((path) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === "/portal/api/attention") {
         const cursor = url.searchParams.get("cursor");
@@ -121,12 +121,10 @@ describe("attention entry point", () => {
           nextCursor: firstPageReads === 1 ? "cursor-one" : "cursor-two",
         }));
       }
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
     const user = userEvent.setup();
-    const route = render("/portal/attention", fetcher);
+    const route = renderRoute("/portal/attention", fetcher);
     expect(await screen.findByRole("link", { name: "Newest goal attention" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Load more Goal attention" }));
     expect(await screen.findByRole("link", { name: "Older goal attention" })).toBeVisible();
@@ -142,12 +140,11 @@ describe("attention entry point", () => {
   });
 
   it("offers goal creation only against a selected project and keeps the server's refusal", async () => {
-    const { fetcher, calls } = recordingFetcher((path, init) => {
+    const { fetcher, calls } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === "/portal/api/attention") {
         return jsonResponse(readAttention({ selectedProjectId: projectId, blocked: [] }));
       }
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
       if (url.pathname === `/portal/api/projects/${projectId}/goals`) {
         expect(init?.headers).toMatchObject({ "x-csrf-token": "session-token" });
         const rawBody = typeof init?.body === "string" ? init.body : "{}";
@@ -156,11 +153,10 @@ describe("attention entry point", () => {
         expect(body.initial_revision.objective).toBe("Expose the attention entry point");
         return jsonResponse({ error: { code: "invalid_contract", message: "goal contract is invalid" } }, 422);
       }
-      return jsonResponse(workspaceResponse(projectId));
     });
 
     const user = userEvent.setup();
-    render("/portal/attention", fetcher);
+    renderRoute("/portal/attention", fetcher);
     await screen.findByRole("heading", { name: "Attention" });
     await user.click(await screen.findByRole("button", { name: /New goal/ }));
     await user.type(screen.getByLabelText("Title"), "Goal from the attention page");
@@ -169,12 +165,29 @@ describe("attention entry point", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("goal contract is invalid (invalid_contract)");
     expect(calls.some((call) => call.path.includes("/portal/api/projects/") && call.path.endsWith("/goals"))).toBe(true);
   });
+
+  it("offers no goal creation when the served attention read selects no project", async () => {
+    const { fetcher } = portalFetcher((path) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/portal/api/attention") {
+        return jsonResponse(readAttention({ selectedProjectId: null, blocked: [] }));
+      }
+    });
+
+    renderRoute("/portal/attention", fetcher);
+    await screen.findByRole("heading", { name: "Attention" });
+    expect(await screen.findByText("No Goal needs attention")).toBeVisible();
+    // The create control is driven by the served project scope; without a
+    // selected project it stays disabled and offers no create form.
+    expect(screen.getByRole("button", { name: /New goal/ })).toBeDisabled();
+    expect(screen.queryByRole("heading", { name: "Create a Goal" })).not.toBeInTheDocument();
+  });
 });
 
 describe("goal detail surface", () => {
   it("renders the objective, accepted progress, budget truth and the read-only dependency projection", async () => {
     const acceptedSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "a".repeat(40), tree_digest: `sha256:${"b".repeat(64)}` };
-    const { fetcher } = recordingFetcher((path) => {
+    const { fetcher } = portalFetcher((path) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({
@@ -212,11 +225,9 @@ describe("goal detail surface", () => {
           ? { entries: [{ id: "event-1", sequence: 1, kind: "goal_created", actor_ref: "portal_operator", revision: 1, payload: {}, response: {}, inserted_at: "2026-11-16T09:00:00Z" }], next_after: 1 }
           : { entries: [{ id: "event-2", sequence: 2, kind: "amend", actor_ref: "portal_operator", revision: 2, payload: {}, response: {}, inserted_at: "2026-11-16T09:30:00Z" }], next_after: null });
       }
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     expect(await screen.findByRole("heading", { level: 1, name: "Deliver the attention entry point" })).toBeVisible();
     expect(screen.getByText("Merge Goal attention with the project blocked items")).toBeVisible();
     expect(screen.getByText("1 of 2 required items accepted")).toBeVisible();
@@ -250,7 +261,7 @@ describe("goal detail surface", () => {
 
   it("sends the served expected version and revision, and renders the stale conflict without overwriting", async () => {
     let commandCalls = 0;
-    const { fetcher, calls } = recordingFetcher((path, init) => {
+    const { fetcher, calls } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({
@@ -276,12 +287,10 @@ describe("goal detail surface", () => {
         return jsonResponse({ error: { code: "stale", message: "resource changed since it was loaded", current_version: 9, current_revision: 3, allowed_actions: ["resume", "cancel"] } }, 409);
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
     const user = userEvent.setup();
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Stale conflict goal" });
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Hold while the operator reviews");
@@ -305,7 +314,7 @@ describe("goal detail surface", () => {
     // submit, not the settled one, or the server refuses it as stale.
     let advanced = false;
     const commands: Array<{ expected_version: number; expected_revision: number }> = [];
-    const { fetcher } = recordingFetcher((path, init) => {
+    const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Worker-advanced goal", state: "active", currentRevision: 1, version: advanced ? 9 : 8, allowedActions: ["pause", "amend", "cancel"] }));
@@ -320,12 +329,10 @@ describe("goal detail surface", () => {
         return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 4, kind: "amend", revision: 1 } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
     const user = userEvent.setup();
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Worker-advanced goal" });
     // The settled page still shows version 8: the worker's advance is not read yet.
     expect(screen.getByText(/· revision 1 · version 8$/)).toBeVisible();
@@ -345,7 +352,7 @@ describe("goal detail surface", () => {
 
   it("carries a fresh mutation identity per logical action attempt and reports the server receipt", async () => {
     const identities: string[] = [];
-    const { fetcher } = recordingFetcher((path, init) => {
+    const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Replay goal", state: "active", allowedActions: ["pause", "amend", "cancel"] }));
@@ -357,12 +364,10 @@ describe("goal detail surface", () => {
         return jsonResponse({ goal_id: goalId, mutation_id: body.mutation_id, event: { id: body.mutation_id, sequence: 2, kind: "pause", revision: 1 } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
     const user = userEvent.setup();
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Replay goal" });
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Operator pause");
@@ -381,7 +386,7 @@ describe("goal detail surface", () => {
   it("offers only the served actions and builds the achieve envelope from a server-shaped multi-item plan", async () => {
     const acceptedSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "a".repeat(40), tree_digest: `sha256:${"b".repeat(64)}` };
     let achievePayload: Record<string, unknown> | null = null;
-    const { fetcher } = recordingFetcher((path, init) => {
+    const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({
@@ -408,12 +413,10 @@ describe("goal detail surface", () => {
         return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 3, kind: "achieve", revision: 1 }, response: { state: "achieved" } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
     const user = userEvent.setup();
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Ready goal" });
     await user.click(screen.getByRole("button", { name: "Achieve" }));
     await user.click(screen.getByRole("button", { name: "Send Achieve" }));
@@ -427,41 +430,48 @@ describe("goal detail surface", () => {
   });
 
   it("renders the served refusal when the server does not allow an action", async () => {
-    const { fetcher } = recordingFetcher((path: string) => {
+    const { fetcher } = portalFetcher((path: string) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Draft goal", state: "draft", allowedActions: ["request_plan", "amend", "cancel"] }));
       }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        return jsonResponse({ error: { code: "forbidden", message: "action is not allowed for this goal" } }, 403);
+      }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
-    render(`/portal/goals/${goalId}`, fetcher);
+    const user = userEvent.setup();
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Draft goal" });
     expect(screen.getByRole("button", { name: "Request a plan" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Activate" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Achieve" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    // A refused amend keeps the server's own message and code on the surface.
+    await user.click(screen.getByRole("button", { name: "Amend" }));
+    await user.type(screen.getByRole("textbox", { name: "Objective" }), "Amend an action the server forbids");
+    await user.type(screen.getByLabelText("Reason"), "Operator amendment");
+    await user.click(screen.getByRole("button", { name: "Send Amend" }));
+    const refusal = await screen.findByRole("alert");
+    expect(refusal).toHaveTextContent("action is not allowed for this goal");
+    expect(refusal).toHaveTextContent("forbidden");
   });
 
   it("recovers a refused command transport with a retryable error and never claims success", async () => {
-    const { fetcher } = recordingFetcher((path: string, init?: RequestInit) => {
+    const { fetcher } = portalFetcher((path: string) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Offline goal", state: "active", allowedActions: ["pause", "amend", "cancel"] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        void init;
         throw new TypeError("network down");
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
     const user = userEvent.setup();
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Offline goal" });
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Operator pause");
@@ -471,17 +481,15 @@ describe("goal detail surface", () => {
   });
 
   it("renders the empty receipts state when the event read answers without an error", async () => {
-    const { fetcher } = recordingFetcher((path: string) => {
+    const { fetcher } = portalFetcher((path: string) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Quiet goal", state: "active", allowedActions: [] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Quiet goal" });
     // react-query starts `error` at null, not undefined: a successful empty page
     // must render the empty state, never a failure panel.
@@ -505,7 +513,7 @@ describe("goal detail surface", () => {
       resolution: null,
     };
     const commands: Array<Record<string, unknown>> = [];
-    const { fetcher } = recordingFetcher((path: string, init?: RequestInit) => {
+    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Plan goal", state: "draft", allowedActions: ["amend", "cancel"], decisions: [decision] }));
@@ -516,12 +524,10 @@ describe("goal detail surface", () => {
         return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 2, kind: "resolve_decision", revision: 1 } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
     const user = userEvent.setup();
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Plan goal" });
     // A JSON document contains braces that user-event's keyboard parser reads as
     // key descriptors; set the controlled textarea value directly instead.
@@ -538,21 +544,25 @@ describe("goal detail surface", () => {
     expect(resolve.payload?.["option_id"]).toBe("accept");
     expect(admit.kind).toBe("accept_plan");
     expect(admit.payload?.["decision_id"]).toBe(decision.id);
+    // The plan admission carries the server's own digest for this proposal; the
+    // vector was computed in this worktree with the portable Elixir toolchain
+    // and cross-checked with Python hashlib:
+    //   mix run --no-start -e 'IO.puts("sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(%{"schema_version" => "symmetry.plan.v1", "items" => []}), case: :lower))'
+    // i.e. sha256 over {"items":[],"schema_version":"symmetry.plan.v1"}.
+    expect(admit.payload?.["proposal_hash"]).toBe("sha256:e9a1f1719763b645d05e4b1fcc241b7c7fb71c0594876ae16428757a7e222805");
   });
 
   it("offers no plan approval when the served plan decision carries no acceptance option", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", goal_revision: 1, kind: "plan", state: "open", "open?": true, version: 3, question: "Accept the proposed plan?", options: [{ id: "reject", label: "Reject", consequence: "Keep the current approved state." }], resolution: null };
-    const { fetcher } = recordingFetcher((path: string) => {
+    const { fetcher } = portalFetcher((path: string) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "No option goal", state: "draft", allowedActions: ["amend", "cancel"], decisions: [decision] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "No option goal" });
     expect(screen.queryByRole("button", { name: "Resolve the decision with accept" })).not.toBeInTheDocument();
     expect(screen.getByText("The served plan decision carries no acceptance option; this surface offers no resolution for it.")).toBeVisible();
@@ -560,19 +570,43 @@ describe("goal detail surface", () => {
 
   it("offers no plan approval for a resolved plan decision", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", goal_revision: 1, kind: "plan", state: "resolved", "open?": false, version: 4, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: { option_id: "accept" } };
-    const { fetcher } = recordingFetcher((path: string) => {
+    const { fetcher } = portalFetcher((path: string) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Resolved plan goal", state: "draft", allowedActions: ["activate", "amend", "cancel"], decisions: [decision] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
-      if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-      return jsonResponse(workspaceResponse(projectId));
     });
 
-    render(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
     await screen.findByRole("heading", { level: 1, name: "Resolved plan goal" });
     expect(screen.queryByRole("button", { name: "Resolve the decision with accept" })).not.toBeInTheDocument();
     expect(screen.getByText(/Resolved: \{"option_id":"accept"\}/)).toBeVisible();
+  });
+
+  it("renders the explicit absence text for a served non-scalar member", async () => {
+    const { fetcher } = portalFetcher((path) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({
+          id: goalId,
+          projectId,
+          projectName: "Project One",
+          title: "Open-member goal",
+          state: "active",
+          allowedActions: [],
+          // The served read keeps open-JSON members as served: a non-scalar
+          // `execution.state` must render the explicit absence text instead of
+          // stringifying the object.
+          workItems: [{ id: "44444444-4444-4444-8444-444444444444", number: 1, title: "Open-member item", status: "in_progress", "required?": true, integration: false, "accepted?": false, accepted_outcome: null, execution: { state: ["running", "queued"] }, blockers: [] }],
+        }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Open-member goal" });
+    expect(screen.getByText("Execution: unknown state")).toBeVisible();
+    expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument();
   });
 });

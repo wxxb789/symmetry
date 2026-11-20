@@ -979,3 +979,15 @@ export function errorMessage(error: unknown): string {
     ? error.message
     : "The workspace could not be loaded. Try again.";
 }
+
+/**
+ * The refusal fold every write surface renders: a `ServerRefusal` keeps the
+ * server's own message and code, and the surface contributes the operator's
+ * next step for the codes its guidance map names. A non-refusal error renders
+ * its own message.
+ */
+export function refusalNotice(error: unknown, guidance: Record<string, string>): string {
+  if (!(error instanceof ServerRefusal)) return errorMessage(error);
+  const step = guidance[error.code];
+  return `${error.message} (${error.code})${step ? ` — ${step}` : ""}`;
+}
