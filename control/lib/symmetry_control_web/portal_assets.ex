@@ -2,12 +2,9 @@ defmodule SymmetryControlWeb.PortalAssets do
   @moduledoc """
   Locates the built portal bundle that Phoenix serves as the workspace document.
 
-  The bundle is frontend build output, not source: `pnpm --filter
-  @symmetry/frontend build` runs Vite and then `frontend/scripts/stage-assets.mjs`,
-  which replaces `priv/static/portal/` with the new `index.html` and hashed
-  assets. That directory is gitignored, so a fresh checkout has no bundle until
-  the build runs. CI stages it in the `control` job from the `contracts` job's
-  `portal-assets` artifact (`.github/workflows/ci.yml`) before `mix test`.
+  The bundle is gitignored build output holding `index.html` and its hashed
+  assets; a fresh checkout has none until the frontend build stages it
+  (`docs/runbooks/portal.md`).
   """
 
   @doc """

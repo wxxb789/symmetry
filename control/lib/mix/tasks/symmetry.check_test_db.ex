@@ -1,6 +1,10 @@
 defmodule Mix.Tasks.Symmetry.CheckTestDb do
   @shortdoc "Refuses test-environment Ecto commands against browser acceptance databases"
 
+  # Database families created, migrated and seeded by the browser acceptance
+  # harnesses. Add an entry here when a harness introduces another family.
+  @acceptance_database_prefixes ~w(symmetry_0007c_ symmetry_0007d_ symmetry_0007e_)
+
   @moduledoc """
   Refuses to run `mix test`, `mix ecto.create`, `mix ecto.migrate`,
   `mix ecto.drop`, `mix ecto.rollback` or `mix ecto.load` when the test
@@ -17,8 +21,8 @@ defmodule Mix.Tasks.Symmetry.CheckTestDb do
   evaluates the effective database name the repository configures. It reserves
   whole harness database families, because the planning harness takes the
   database name as a `-DbName` parameter: every name beginning with
-  `symmetry_0007c_`, `symmetry_0007d_` or `symmetry_0007e_` is refused,
-  whatever suffix follows.
+  `#{Enum.join(@acceptance_database_prefixes, "`, `")}` is refused, whatever
+  suffix follows.
 
   The task is the first step of the `test` alias and of the
   `ecto.create`/`ecto.migrate`/`ecto.drop`/`ecto.rollback`/`ecto.load` aliases in
@@ -29,10 +33,6 @@ defmodule Mix.Tasks.Symmetry.CheckTestDb do
   """
 
   use Mix.Task
-
-  # Database families created, migrated and seeded by the browser acceptance
-  # harnesses. Add an entry here when a harness introduces another family.
-  @acceptance_database_prefixes ~w(symmetry_0007c_ symmetry_0007d_ symmetry_0007e_)
 
   @impl true
   def run(_args) do

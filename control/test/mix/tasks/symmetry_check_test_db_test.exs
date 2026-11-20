@@ -7,6 +7,8 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
 
   describe "check/2" do
     test "refuses every browser acceptance database family in the test environment" do
+      # The planning harness takes its database as a `-DbName` parameter, so a
+      # recorded run's `symmetry_0007c_shell` must be refused like any suffix.
       for prefix <- @acceptance_database_prefixes,
           database <- [prefix <> "test", prefix <> "shell"] do
         assert {:error, message} = CheckTestDb.check(:test, database)
@@ -16,8 +18,22 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
       end
     end
 
-    test "refuses a harness database named outside its default, because -DbName is a parameter" do
-      assert {:error, _message} = CheckTestDb.check(:test, "symmetry_0007c_shell")
+    test "refuses every database the browser harness scripts configure" do
+      scripts = Path.wildcard(Path.expand("../../../../browser/scripts/*.ps1", __DIR__))
+
+      configured =
+        scripts
+        |> Enum.flat_map(&Regex.scan(~r/symmetry_0007\w*/, File.read!(&1)))
+        |> Enum.map(fn [name | _] -> name end)
+        |> Enum.uniq()
+
+      # A renamed, moved or emptied script must fail loudly instead of checking nothing.
+      assert configured != []
+
+      for database <- configured do
+        assert {:error, message} = CheckTestDb.check(:test, database)
+        assert message =~ database
+      end
     end
 
     test "refuses the effective name a MIX_TEST_PARTITION suffix produces" do
