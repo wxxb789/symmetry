@@ -29,6 +29,7 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 The closed unused-parameter attention-test warning appended to the second `## Dead-code candidates`
 section below and the closed pinned-`can_retry` entry appended to `## Retro review follow-ups` below
 were moved on 2026-11-20 from branch `fix/control-test-pins`.
+
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
 
@@ -2353,16 +2354,21 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       (`control/test/symmetry_control/chat_test.exs:838`) with every other assertion kept. Mutation
       evidence, measured rather than assumed (all three runs `mix test
       test/symmetry_control/chat_test.exs:746`): removing the whole historical forcing block
-      (`chat/read_model.ex:51-64`) reddens the case (`0/1 passed`, exit 2) at `:836`
+      (`chat/read_model.ex:51-65`) reddens the case (`0/1 passed`, exit 2) at `:836`
       `assert …historical` — the block's observable effect at this entry is the historical flag;
-      removing only its `can_retry: false` member leaves the case green (`1 passed`, exit 0), because
-      the pinned projection (`run_projection/2`'s else-branch, `:262-266`) carries no
-      `retry_runtime_eligible`, so `execution_summary/1`'s state gate (`portal_json.ex:404-405`)
-      already answers false without the forcing — the member is defensive today, and that finding is
-      recorded here instead of assumed load-bearing. The assertion's failure control is the rule
-      violation it guards: a pinned projection that serves `retry_runtime_eligible: true` with the
-      forcing member removed fails exactly at `:838` (`Expected false or nil, got true`, exit 2), so a
-      pinned historical entry that starts answering true is caught by this pin.
+      removing only its `can_retry: false` member leaves the case green (`1 passed`, exit 0): the
+      pinned projection (`run_projection/2`'s else-branch, `:262-266`) carries no `controls`,
+      `runtime` or `retry_runtime_eligible`, `Protocol.task/1` defaults the absent controls to
+      false (`protocol.ex:314-320`), `execution_summary/1`'s can_retry gate already answers false
+      (`portal_json.ex:404-405`), and `legacy_capabilities/3` (`portal_json.ex:418-426`) only
+      conjoins — so all five control members the forcing merges (`:54-58`) are structurally
+      unobservable at a pinned entry; only `historical: true` (`:59`) is load-bearing, and that
+      finding is recorded here instead of assumed load-bearing. The assertion's failure control
+      is the rule violation it guards: a pinned projection that serves
+      `retry_runtime_eligible: true` with the forcing member removed fails exactly at `:838`
+      (`Expected false or nil, got true`, exit 2) — the pin's discriminating mutation is (c), the
+      pinned entry starting to serve retry eligibility.
+
 - [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
       (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
       error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is

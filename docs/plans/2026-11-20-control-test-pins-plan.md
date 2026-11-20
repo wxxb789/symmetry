@@ -45,7 +45,7 @@ TODO archive move and this plan file.
   `run_projection/2` pinned branch serves `historical: true`
   (`control/lib/symmetry_control/chat/read_model.ex:236-266`) and whose `runs/2` historical
   forcing forces `can_retry: false` among the other controls
-  (`control/lib/symmetry_control/chat/read_model.ex:51-64`). The served value must stay
+  (`control/lib/symmetry_control/chat/read_model.ex:51-65`). The served value must stay
   `false`; the assertion is `refute`, matching the sibling `refute …can_cancel`.
 - Mutation-check semantics: the pinned projection (`run_projection/2` else-branch, `:262-266`)
   carries no `retry_runtime_eligible`, while the served execution derives the state gate from
@@ -66,7 +66,7 @@ the rule violation.
 | Mutation | Result |
 | --- | --- |
 | (a) `can_retry: false` member of the forcing removed | `1 passed`, exit 0 — the pinned path answers false through the state gate without the member |
-| (b) whole historical forcing block (`read_model.ex:51-64`) removed | `0/1 passed`, exit 2, failing at `chat_test.exs:836` `assert …historical` — the block's observable effect at this entry is the historical flag |
+| (b) whole historical forcing block (`read_model.ex:51-65`) removed | `0/1 passed`, exit 2, failing at `chat_test.exs:836` `assert …historical` — the block's observable effect at this entry is the historical flag |
 | (c) pinned projection serves `retry_runtime_eligible: true` + member (a) removed | `0/1 passed`, exit 2, failing exactly at `chat_test.exs:838` `refute …can_retry` (`Expected false or nil, got true`) |
 
 Reading: the pin is not a tautology — it fails exactly when a pinned historical entry starts
@@ -119,9 +119,14 @@ the projected provider-action chain, contracts/protocol edits, and the frontend/
   captured warning line, not a failing test.
 - The `refute …can_retry` pin does not distinguish the `can_retry: false` member's removal alone
   while the pinned projection keeps carrying no retry eligibility (measured green in mutation
-  (a)); the report and the closure record state the measured result and the pin's actual
-  discriminating scope — the rule violation in mutation (c) — instead of claiming a reddening
-  the code cannot produce.
+  (a)) — the member removal is unobservable by construction: the pinned projection carries no
+  `:controls`, `:runtime` or `:retry_runtime_eligible` and `legacy_capabilities/3` only conjoins,
+  so none of the forcing's five control members can change the served value. The report and the
+  closure record state the measured result and the pin's actual discriminating scope — the rule
+  violation in mutation (c) — instead of claiming a reddening the code cannot produce. Accepted
+  disclosure (orchestrator, 2026-11-21): the contract sentence's strict member-removal reading is
+  unsatisfiable at this revision; the pin is measured against mutation (c); no code or test
+  change.
 - The full suite needs the staged frontend bundle; if the pnpm staging fails on this host, the
   four `:portal_assets` cases are recorded as pending with the missing environment, never as
   passed (quality.md).
