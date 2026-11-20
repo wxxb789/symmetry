@@ -3,13 +3,15 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   import Ecto.Query
 
+  import SymmetryControlWeb.PortalFixtures, only: [create_project: 2]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
+
   alias SymmetryControl.Goals
   alias SymmetryControl.{Orchestration, Repo}
   alias SymmetryControl.Orchestration.RunTransition
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
   alias SymmetryControl.TelemetryReads
-  alias SymmetryControlWeb.PortalSession
 
   @now ~U[2026-09-04 11:00:00.000000Z]
 
@@ -1152,19 +1154,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
            "expected every cancel response read query on #{inspect(reader)}, got #{inspect(processes)}"
   end
 
-  defp create_project(key) do
-    %{"project" => project} =
-      api_conn()
-      |> post("/portal/api/projects", %{
-        "name" => "Project #{key}",
-        "key" => key,
-        "default_agent_profile" => "codex",
-        "default_workspace" => "primary"
-      })
-      |> json_response(201)
-
-    project
-  end
+  defp create_project(key), do: create_project(key, "Project #{key}")
 
   defp create_work_item(project_id, title, attrs \\ %{}) do
     %{"work_item" => work_item} =
@@ -1293,13 +1283,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
         allowed_runtime_ids: ["00000000-0000-4000-8000-000000000001"]
       ]
     ]
-  end
-
-  defp api_conn do
-    Phoenix.ConnTest.build_conn()
-    |> init_test_session(%{portal_operator: PortalSession.issue("test-operator-token")})
-    |> put_private(:plug_skip_csrf_protection, true)
-    |> put_req_header("accept", "application/json")
   end
 
   defp claim_current_task do

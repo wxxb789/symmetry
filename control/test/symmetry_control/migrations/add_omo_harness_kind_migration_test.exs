@@ -1,7 +1,6 @@
 defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
-  use ExUnit.Case, async: false
+  use SymmetryControl.MigrationCase, async: false
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddOmoHarnessKind
 
@@ -99,18 +98,7 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
   end
 
   defp with_schema(test) do
-    schema = "add_omo_harness_kind_migration_#{System.unique_integer([:positive])}"
-    create_schema!(schema)
-    repo = start_schema_repo(schema)
-    previous_dynamic_repo = Repo.put_dynamic_repo(repo)
-
-    try do
-      test.()
-    after
-      Repo.put_dynamic_repo(previous_dynamic_repo)
-      GenServer.stop(repo)
-      drop_schema!(schema)
-    end
+    with_schema("add_omo_harness_kind_migration", test)
   end
 
   defp migrate_all_up! do
@@ -233,23 +221,5 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
 
   defp migrations_path do
     Path.expand("../../../priv/repo/migrations", __DIR__)
-  end
-
-  defp start_schema_repo(schema) do
-    config =
-      Application.fetch_env!(:symmetry_control, Repo)
-      |> Keyword.merge(name: nil, pool: DBConnection.ConnectionPool, pool_size: 1)
-      |> Keyword.put(:parameters, search_path: schema)
-
-    {:ok, repo} = Repo.start_link(config)
-    repo
-  end
-
-  defp create_schema!(schema) do
-    Sandbox.unboxed_run(Repo, fn -> Repo.query!("CREATE SCHEMA #{schema}") end)
-  end
-
-  defp drop_schema!(schema) do
-    Sandbox.unboxed_run(Repo, fn -> Repo.query!("DROP SCHEMA IF EXISTS #{schema} CASCADE") end)
   end
 end

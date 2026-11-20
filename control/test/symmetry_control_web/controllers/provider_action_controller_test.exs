@@ -240,27 +240,20 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Run, Runtime, Task}
   alias SymmetryControl.Repo
+  alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
 
   @enrollment_token "test-enrollment-token"
 
   setup %{conn: conn} do
-    previous_providers = Application.get_env(:symmetry_control, :integration_providers)
-    previous_controller = Application.get_env(:symmetry_control, :provider_action_test_controller)
-
-    Application.put_env(:symmetry_control, :integration_providers,
+    TestEnv.put!(:integration_providers,
       github: SymmetryControl.Integrations.ProviderActionTestStub,
       azure_devops: SymmetryControl.Integrations.ProviderActionTestStub
     )
 
-    Application.put_env(:symmetry_control, :provider_action_test_controller, self())
+    TestEnv.put!(:provider_action_test_controller, self())
     :ets.new(:provider_action_test_state, [:named_table, :public, :set])
-
-    on_exit(fn ->
-      restore_env(:integration_providers, previous_providers)
-      restore_env(:provider_action_test_controller, previous_controller)
-    end)
 
     {machine_id, machine_token} = enroll(conn)
     runtime_id = register(conn, machine_id, machine_token)

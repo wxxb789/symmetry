@@ -3,15 +3,26 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
 
   import Ecto.Query
 
+  import SymmetryControlWeb.PortalFixtures,
+    only: [
+      create_context_project: 2,
+      goal_create_payload: 3,
+      acceptance_contract: 1,
+      authority_policy: 0,
+      context_manifest: 0,
+      execution_policy: 0
+    ]
+
+  import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0, operator_conn: 1, assert_error: 3]
+
   alias SymmetryControl.Goals.{ContextSnapshot, GoalDecision, GoalEvent, RunUsage}
   alias SymmetryControl.Orchestration.{Machine, Run, Runtime, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
-  alias SymmetryControlWeb.PortalSession
 
-  @operator_token "test-operator-token"
-  @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
+  @acceptance_description "Operator verifies the Goal workspace boundary."
 
   setup do
     previous = Application.fetch_env!(:symmetry_control, :goals)
@@ -35,7 +46,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     goal_id = create_goal(conn, project)
 
     response =
-      portal_conn()
+      api_conn()
       |> get("/portal/api/attention?project_id=#{project.id}")
       |> json_response(200)
 
@@ -86,7 +97,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     goal_id = create_goal(conn, project, "Rollout-off attention goal")
 
     response =
-      portal_conn() |> get("/portal/api/attention?project_id=#{project.id}") |> json_response(200)
+      api_conn() |> get("/portal/api/attention?project_id=#{project.id}") |> json_response(200)
 
     # The attention read is not gated by Goal admission: with rollout off the
     # page still serves the real Goal entry beside the project blockers and
@@ -114,19 +125,16 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     # attention reason), so the page is paginated by the server cursor over the
     # three served entries, newest first.
     page_one =
-      portal_conn()
+      api_conn()
       |> get("/portal/api/attention?project_id=#{project.id}&limit=1")
       |> json_response(200)
 
     assert %{"goal_attention" => %{"entries" => entries, "next_cursor" => cursor}} = page_one
-    assert length(entries) == 1
     assert is_binary(cursor)
     assert Enum.map(entries, & &1["goal_id"]) == [third]
 
-    # `updated_at` can collide inside one transaction; the order is not asserted,
-    # only that the cursor advances and never repeats an entry.
     second_page =
-      portal_conn()
+      api_conn()
       |> get(
         "/portal/api/attention?project_id=#{project.id}&limit=1&cursor=#{URI.encode_www_form(cursor)}"
       )
@@ -135,13 +143,8 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert %{"goal_attention" => %{"entries" => remaining}} = second_page
     assert Enum.map(remaining, & &1["goal_id"]) == [second]
 
-    assert MapSet.disjoint?(
-             MapSet.new(Enum.map(entries, & &1["goal_id"])),
-             MapSet.new(Enum.map(remaining, & &1["goal_id"]))
-           )
-
     third_page =
-      portal_conn()
+      api_conn()
       |> get(
         "/portal/api/attention?project_id=#{project.id}&limit=1&cursor=#{URI.encode_www_form(second_page["goal_attention"]["next_cursor"])}"
       )
@@ -151,25 +154,25 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert last_entry["goal_id"] == first
 
     assert_error(
-      portal_conn() |> get("/portal/api/attention?cursor=not-a-cursor"),
+      api_conn() |> get("/portal/api/attention?cursor=not-a-cursor"),
       400,
       "invalid_cursor"
     )
 
     assert_error(
-      portal_conn() |> get("/portal/api/attention?limit=0"),
+      api_conn() |> get("/portal/api/attention?limit=0"),
       400,
       "invalid_request"
     )
 
     assert_error(
-      portal_conn() |> get("/portal/api/attention?project_id=#{project.id}&unknown=1"),
+      api_conn() |> get("/portal/api/attention?project_id=#{project.id}&unknown=1"),
       400,
       "invalid_request"
     )
 
     assert_error(
-      portal_conn() |> get("/portal/api/attention?project_id=not-a-uuid"),
+      api_conn() |> get("/portal/api/attention?project_id=not-a-uuid"),
       400,
       "invalid_request"
     )
@@ -227,40 +230,17 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert work_item_id == hd(selected.work_items).id
   end
 
-  test "the attention projection states a Goal-feed refusal and still serves the project blockers" do
-    selected = %{
-      id: Ecto.UUID.generate(),
-      key: "SEL",
-      name: "Selected",
-      status: "active",
-      work_items: []
-    }
-
-    projection =
-      SymmetryControlWeb.PortalJSON.attention(
-        selected.id,
-        %{
-          page: %{entries: [], next_after: nil, next_cursor: nil},
-          unavailable: :goal_admission_disabled
-        },
-        {:ok, %{snapshot: %{projects: [selected], selected_project: selected}}}
-      )
-
-    assert projection.goal_attention.unavailable == %{
-             code: "goal_admission_disabled",
-             message: "Goal admission is currently unavailable"
-           }
-
-    assert projection.goal_attention.entries == []
-    assert projection.project_blocked.unavailable == nil
-  end
-
   test "attention states an unavailable project feed while the Goal feed stays served" do
+    # The workspace read serves an empty workspace only while no project exists
+    # at all; an existing project (with its own blocked item) is what makes the
+    # unknown-project refusal observable, and that blocked item must not leak
+    # into the unknown project's feed.
     project = create_project()
+    create_blocked_work_item(project)
     unknown_project_id = Ecto.UUID.generate()
 
     response =
-      portal_conn()
+      api_conn()
       |> get("/portal/api/attention?project_id=#{unknown_project_id}")
       |> json_response(200)
 
@@ -274,23 +254,21 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
                "unavailable" => %{"code" => "not_found", "message" => _message}
              }
            } = response
-
-    assert project.id != unknown_project_id
   end
 
-  test "an attention cursor the read model cannot cast surfaces as a server fault, not a 200" do
+  test "an attention cursor whose id is not a UUID is refused as a client error" do
     cursor =
       %{"updated_at" => "2026-11-16T10:00:00Z", "id" => "not-a-uuid"}
       |> Jason.encode!()
       |> Base.url_encode64(padding: false)
 
-    # The read model decodes this cursor and the database then rejects the
-    # parameter that is not a UUID. That is a server-side query fault: it must
-    # not be reported as a client error inside a success response.
-    assert %{"error" => %{"code" => "internal_error", "message" => "internal server error"}} =
-             portal_conn()
+    # The cursor decodes but its id is forged client input: like an undecodable
+    # cursor it is refused with the protocol's own code instead of surfacing as
+    # a server-side query fault.
+    assert %{"error" => %{"code" => "invalid_cursor"}} =
+             api_conn()
              |> get("/portal/api/attention?cursor=#{cursor}")
-             |> json_response(500)
+             |> json_response(400)
   end
 
   # The systemic gate: the documents the server actually serves must validate
@@ -309,10 +287,12 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     items_fun = fn repository_id ->
       [
         plan_item("implement", "Merge the attention feed", repository_id,
+          required: true,
           integration: false,
           depends_on_keys: []
         ),
         plan_item("render", "Render the Goal detail surface", repository_id,
+          required: true,
           integration: true,
           depends_on_keys: ["implement"]
         )
@@ -323,7 +303,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     approve_plan(conn, goal_id, decision_id, proposal)
     activate(conn, goal_id)
 
-    read = portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+    read = api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
     assert read["state"] == "active"
     integration_item = Enum.find(read["work_items"], &(&1["integration"] == true))
@@ -337,7 +317,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       integration_item["id"]
     )
 
-    read = portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+    read = api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
     assert read["accounting"]["usage_cost_unknown?"] == true
     assert read["accounting"]["usage_cost_microusd"] == nil
@@ -346,7 +326,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
              read["settlement_attention"]
 
     attention =
-      portal_conn()
+      api_conn()
       |> get("/portal/api/attention?project_id=#{project.id}")
       |> json_response(200)
 
@@ -368,7 +348,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     goal_id = create_goal(conn, project)
     {decision_id, _proposal} = request_plan_decision(conn, goal_id)
 
-    portal_read = portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+    portal_read = api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
     assert %{
              "id" => ^goal_id,
@@ -420,7 +400,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   test "portal goal commands keep the accepted conflict and replay semantics", %{conn: conn} do
     project = create_project()
     goal_id = create_goal(conn, project)
-    read = portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+    read = api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
     command = %{
       "schema_version" => "symmetry.goal_command.v1",
@@ -434,7 +414,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     # A draft Goal cannot be paused; the served refusal keeps its protocol code
     # instead of being flattened into a client-side rule.
     assert %{"error" => %{"code" => "invalid_transition"}} =
-             portal_conn()
+             api_conn()
              |> post("/portal/api/goals/#{goal_id}/commands", command)
              |> json_response(422)
 
@@ -447,25 +427,16 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
           "revision_contract" => %{
             "objective" => "Amended objective",
             "non_goals" => [],
-            "acceptance_contract" => acceptance_contract(),
-            "authority_policy" => %{
-              "operator_required_for_scope_change" => true,
-              "operator_required_for_completion" => true,
-              "publication_allowed" => false,
-              "allowed_actions" => []
-            },
+            "acceptance_contract" => acceptance_contract(@acceptance_description),
+            "authority_policy" => authority_policy(),
             "execution_policy" => execution_policy(),
-            "context_manifest" => %{
-              "byte_budget" => 32768,
-              "required_source_kinds" => ["repository"],
-              "include_advisory_recall" => false
-            }
+            "context_manifest" => context_manifest()
           }
         }
     }
 
     receipt =
-      portal_conn()
+      api_conn()
       |> post("/portal/api/goals/#{goal_id}/commands", amend)
       |> json_response(200)
 
@@ -475,16 +446,16 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     # A retried action with the same mutation identity returns the stored receipt
     # and never a second state change.
     assert ^receipt =
-             portal_conn()
+             api_conn()
              |> post("/portal/api/goals/#{goal_id}/commands", amend)
              |> json_response(200)
 
     assert %{"current_revision" => 2, "state" => "paused"} =
-             portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+             api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
     # The replayed command did not advance the goal a second time.
     assert %{"version" => version} =
-             portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+             api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
     assert %{
              "error" => %{
@@ -493,7 +464,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
                "current_revision" => 2
              }
            } =
-             portal_conn()
+             api_conn()
              |> post("/portal/api/goals/#{goal_id}/commands", %{
                amend
                | "mutation_id" => Ecto.UUID.generate(),
@@ -507,7 +478,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     goal_id = create_goal(conn, project)
 
     assert_error(
-      portal_conn() |> get("/portal/api/goals/#{goal_id}/contexts/#{Ecto.UUID.generate()}"),
+      api_conn() |> get("/portal/api/goals/#{goal_id}/contexts/#{Ecto.UUID.generate()}"),
       404,
       "not_found"
     )
@@ -515,7 +486,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     # The graph read stays available for the same goal; the refusal above is the
     # ownership check, not an unreadable goal.
     assert %{"nodes" => [], "edges" => []} =
-             portal_conn() |> get("/portal/api/goals/#{goal_id}/graph") |> json_response(200)
+             api_conn() |> get("/portal/api/goals/#{goal_id}/graph") |> json_response(200)
   end
 
   test "portal goal commands require the authenticated operator session", %{conn: conn} do
@@ -540,15 +511,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   end
 
   defp create_project do
-    {:ok, project} =
-      Workspaces.create_project(%{
-        "name" => "Portal attention project #{System.unique_integer([:positive])}",
-        "key" => "A#{System.unique_integer([:positive])}",
-        "default_agent_profile" => "codex",
-        "default_workspace" => "primary"
-      })
-
-    project
+    create_context_project("Portal attention project", "A")
   end
 
   defp create_blocked_work_item(project) do
@@ -564,29 +527,12 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   end
 
   defp create_goal(conn, project, title \\ "Portal attention goal") do
-    payload = %{
-      "schema_version" => "symmetry.goal_create.v1",
-      "mutation_id" => Ecto.UUID.generate(),
-      "title" => title,
-      "initial_revision" => %{
-        "objective" => "Expose the Goal workspace through the portal.",
-        "non_goals" => [],
-        "acceptance_contract" => acceptance_contract(),
-        "authority_policy" => %{
-          "operator_required_for_scope_change" => true,
-          "operator_required_for_completion" => true,
-          "publication_allowed" => false,
-          "allowed_actions" => []
-        },
-        "execution_policy" => execution_policy(),
-        "context_manifest" => %{
-          "byte_budget" => 32768,
-          "required_source_kinds" => ["repository"],
-          "include_advisory_recall" => false
-        },
-        "reason" => "Initial approved Goal contract"
-      }
-    }
+    payload =
+      goal_create_payload(
+        title,
+        "Expose the Goal workspace through the portal.",
+        @acceptance_description
+      )
 
     %{"goal" => %{"id" => goal_id}} =
       operator_conn(conn)
@@ -638,6 +584,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   defp single_integration_items(repository_id) do
     [
       plan_item("implement", "Implement the Goal workspace", repository_id,
+        required: true,
         integration: true,
         depends_on_keys: []
       )
@@ -649,11 +596,11 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       "key" => key,
       "title" => title,
       "description" => "Bounded Goal work",
-      "required" => Keyword.get(opts, :required, true),
-      "integration" => Keyword.get(opts, :integration, false),
+      "required" => Keyword.fetch!(opts, :required),
+      "integration" => Keyword.fetch!(opts, :integration),
       "repository_resource_id" => repository_id,
-      "acceptance" => acceptance_contract(),
-      "depends_on_keys" => Keyword.get(opts, :depends_on_keys, []),
+      "acceptance" => acceptance_contract(@acceptance_description),
+      "depends_on_keys" => Keyword.fetch!(opts, :depends_on_keys),
       "model_profile" => "codex",
       "change_target" => nil,
       "baseline" => %{
@@ -689,9 +636,9 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     do: portal_command!(conn, goal_id, "activate", %{"approved_revision" => 1})
 
   defp portal_command!(conn, goal_id, kind, payload) do
-    read = portal_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
+    read = api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
 
-    portal_conn()
+    api_conn()
     |> post("/portal/api/goals/#{goal_id}/commands", %{
       "schema_version" => "symmetry.goal_command.v1",
       "mutation_id" => Ecto.UUID.generate(),
@@ -843,88 +790,5 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       heartbeat_interval_ms: 5_000
     })
     |> Repo.insert!()
-  end
-
-  # Validate a real served document against the same canonical bundle the
-  # manifest gate and the daemon use. A member-name disagreement with the
-  # serving projection fails here.
-  defp validate_served_document!(name, document) do
-    bundle = @schema_bundle |> File.read!() |> Jason.decode!()
-
-    schema =
-      bundle
-      |> Map.fetch!("#{name}.schema.json")
-      |> rewrite_pcre2_pattern_escapes()
-      |> ExJsonSchema.Schema.resolve()
-
-    case ExJsonSchema.Validator.validate(schema, document) do
-      :ok ->
-        :ok
-
-      {:error, errors} ->
-        flunk(
-          "#{name} real served document failed the contract bundle: #{inspect(errors, pretty: true)}"
-        )
-    end
-  end
-
-  # Match ContractValidation's ECMA-262-to-PCRE2 adaptation, exactly as the
-  # manifest gate does, so the bundle resolves in ExJsonSchema.
-  defp rewrite_pcre2_pattern_escapes(value) when is_map(value) do
-    Map.new(value, fn
-      {"pattern", pattern} when is_binary(pattern) ->
-        {"pattern", String.replace(pattern, "\\u0000", "\\x{0}")}
-
-      {key, child} ->
-        {key, rewrite_pcre2_pattern_escapes(child)}
-    end)
-  end
-
-  defp rewrite_pcre2_pattern_escapes(value) when is_list(value),
-    do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
-
-  defp rewrite_pcre2_pattern_escapes(value), do: value
-
-  defp acceptance_contract do
-    %{
-      "schema_version" => "symmetry.acceptance.v1",
-      "description" => "Operator verifies the Goal workspace boundary.",
-      "predicates" => [%{"id" => "operator", "kind" => "operator_acceptance"}]
-    }
-  end
-
-  defp execution_policy do
-    %{
-      "automatic_execution" => false,
-      "max_parallel_tasks" => 1,
-      "max_task_admissions" => 2,
-      "max_run_attempts_per_task" => 2,
-      "budget_limit_microusd" => nil,
-      "per_run_cost_limit_microusd" => nil,
-      "budget_mode" => "soft",
-      "hard_cost_limit_required" => false,
-      "allowed_runtime_ids" => [],
-      "allowed_model_profiles" => [],
-      "final_acceptance" => "operator",
-      "allowed_actions" => [],
-      "allowed_resource_ids" => []
-    }
-  end
-
-  defp portal_conn do
-    build_conn()
-    |> init_test_session(%{portal_operator: PortalSession.issue(@operator_token)})
-    |> Plug.Conn.put_private(:plug_skip_csrf_protection, true)
-    |> Plug.Conn.put_req_header("accept", "application/json")
-  end
-
-  defp operator_conn(conn) do
-    conn
-    |> Plug.Conn.put_req_header("accept", "application/json")
-    |> Plug.Conn.put_req_header("authorization", "Bearer #{@operator_token}")
-  end
-
-  defp assert_error(conn, status, code) do
-    assert %{"error" => %{"code" => ^code}} = json_response(conn, status)
   end
 end

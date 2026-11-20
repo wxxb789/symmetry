@@ -45,28 +45,19 @@ end
 defmodule SymmetryControl.ResourceSyncInflightMarkerTest do
   use SymmetryControl.DataCase, async: false
 
+  import SymmetryControl.IntegrationFixtures, only: [tracked_resource!: 1]
+
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.{Connection, InflightMarkerProvider, Syncer}
+  alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.{Project, ProjectResource}
 
   setup do
-    keys = [:integration_providers, :inflight_marker_test_controller]
-    previous = Enum.map(keys, &{&1, Application.fetch_env(:symmetry_control, &1)})
+    TestEnv.put!(:integration_providers, github: InflightMarkerProvider)
 
-    Application.put_env(:symmetry_control, :integration_providers, github: InflightMarkerProvider)
-
-    Application.put_env(:symmetry_control, :inflight_marker_test_controller, self())
-
-    on_exit(fn ->
-      for {key, value} <- previous do
-        case value do
-          {:ok, original} -> Application.put_env(:symmetry_control, key, original)
-          :error -> Application.delete_env(:symmetry_control, key)
-        end
-      end
-    end)
+    TestEnv.put!(:inflight_marker_test_controller, self())
 
     :ok
   end
@@ -222,21 +213,13 @@ defmodule SymmetryControl.ResourceSyncInflightMarkerTest do
   end
 
   defp fixture do
-    assert {:ok, project} =
-             Workspaces.create_project(%{
-               name: "In-flight marker",
-               key: "S" <> String.slice(Ecto.UUID.generate(), 0, 6),
-               default_agent_profile: "codex",
-               default_workspace: "primary"
-             })
-
-    assert {:ok, connection} =
-             Integrations.create_connection(%{
-               provider: "github",
-               name: "Marker " <> Ecto.UUID.generate(),
-               account_ref: "acme",
-               capabilities: ["work_items"]
-             })
+    {project, connection, resource} =
+      tracked_resource!(
+        project_name: "In-flight marker",
+        project_key: "S" <> String.slice(Ecto.UUID.generate(), 0, 6),
+        connection_name: "Marker " <> Ecto.UUID.generate(),
+        resource_name: "Marker issues"
+      )
 
     on_exit(fn ->
       Sandbox.unboxed_run(Repo, fn ->
@@ -244,14 +227,6 @@ defmodule SymmetryControl.ResourceSyncInflightMarkerTest do
         Repo.delete_all(from row in Connection, where: row.id == ^connection.id)
       end)
     end)
-
-    assert {:ok, resource} =
-             Workspaces.create_resource(project.id, %{
-               connection_id: connection.id,
-               kind: "work_tracking",
-               name: "Marker issues",
-               external_ref: "acme/symmetry"
-             })
 
     resource =
       resource

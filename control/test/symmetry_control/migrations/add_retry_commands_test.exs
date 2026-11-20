@@ -1,7 +1,6 @@
 defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
-  use ExUnit.Case, async: false
+  use SymmetryControl.MigrationCase, async: false
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddRetryCommands
   alias SymmetryControl.Repo.Migrations.AddTaskCommandOwnership
@@ -70,19 +69,11 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
 
   defp with_schema(test) do
     load_migration_modules!()
-    schema = "goal2_retry_#{System.unique_integer([:positive])}"
-    create_schema!(schema)
-    repo = start_schema_repo(schema)
-    previous_dynamic_repo = Repo.put_dynamic_repo(repo)
 
-    try do
+    with_schema("goal2_retry", fn ->
       migrate_up!()
       test.()
-    after
-      Repo.put_dynamic_repo(previous_dynamic_repo)
-      GenServer.stop(repo)
-      drop_schema!(schema)
-    end
+    end)
   end
 
   defp migrate_up! do
@@ -160,24 +151,6 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
         |> Code.compile_file()
       end
     end)
-  end
-
-  defp start_schema_repo(schema) do
-    config =
-      Application.fetch_env!(:symmetry_control, Repo)
-      |> Keyword.merge(name: nil, pool: DBConnection.ConnectionPool, pool_size: 1)
-      |> Keyword.put(:parameters, search_path: schema)
-
-    {:ok, repo} = Repo.start_link(config)
-    repo
-  end
-
-  defp create_schema!(schema) do
-    Sandbox.unboxed_run(Repo, fn -> Repo.query!("CREATE SCHEMA #{schema}") end)
-  end
-
-  defp drop_schema!(schema) do
-    Sandbox.unboxed_run(Repo, fn -> Repo.query!("DROP SCHEMA IF EXISTS #{schema} CASCADE") end)
   end
 
   defp uuid, do: Ecto.UUID.bingenerate()

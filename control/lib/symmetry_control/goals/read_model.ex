@@ -334,7 +334,10 @@ defmodule SymmetryControl.Goals.ReadModel do
       {:ok, %{entries: entries, next_after: next_cursor, next_cursor: next_cursor}}
     end
   rescue
-    error in [Ecto.Query.CastError] -> {:error, error}
+    # A cursor parameter the database cannot cast is forged client input: the
+    # read refuses it exactly like an undecodable cursor instead of surfacing a
+    # server fault.
+    _error in [Ecto.Query.CastError] -> {:error, :invalid_cursor}
   end
 
   @doc "Fetch one authorized compact ContextSnapshot projection."
@@ -1992,21 +1995,18 @@ defmodule SymmetryControl.Goals.ReadModel do
     end)
   end
 
-  # The completion contract owns the integration designation: a revision with
-  # exactly one required work item designates that item, and an explicit
-  # designation on any other item contradicts the contract instead of
-  # overriding it, so such a revision has no usable integration item. Every
-  # other required count keeps the explicit designation.
+  # The designation rule lives in ContractValidation.integration_designation/1.
   defp effective_integration_item_ids(work_items) do
-    case Enum.filter(work_items, &map_value(&1, :required, true)) do
-      [required_item] ->
-        required_id = map_value(required_item, :id)
-        marked_ids = marked_integration_item_ids(work_items)
-
-        if Enum.all?(marked_ids, &(&1 == required_id)), do: [required_id], else: []
-
-      _other_count ->
-        marked_integration_item_ids(work_items)
+    work_items
+    |> Enum.map(fn item ->
+      {map_value(item, :id), map_value(item, :required, true) == true,
+       map_value(item, :integration, false) == true}
+    end)
+    |> ContractValidation.integration_designation()
+    |> case do
+      {:derived, id} -> [id]
+      {:conflict} -> []
+      {:explicit, ids} -> ids
     end
   end
 

@@ -1,14 +1,17 @@
 defmodule SymmetryControlWeb.GoalControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  import SymmetryControlWeb.PortalFixtures,
+    only: [acceptance_contract: 1, create_context_project: 2, goal_create_payload: 3]
+
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0, operator_conn: 1, assert_error: 3]
+
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
-  alias SymmetryControlWeb.PortalSession
   alias SymmetryControlWeb.Protocol
 
   @enrollment_token "test-enrollment-token"
-  @operator_token "test-operator-token"
 
   test "operator creates and reads a goal, and creation replays by mutation identity", %{
     conn: conn
@@ -241,14 +244,14 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     )
 
     created =
-      portal_conn()
+      api_conn()
       |> post("/portal/api/projects/#{project.id}/goals", goal_payload())
       |> json_response(201)
 
     assert %{"goal" => %{"id" => goal_id}} = created
 
     assert %{"id" => ^goal_id} =
-             portal_conn()
+             api_conn()
              |> get("/portal/api/goals/#{goal_id}")
              |> json_response(200)
   end
@@ -265,7 +268,7 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       )
 
     assert_error(
-      portal_conn()
+      api_conn()
       |> put_req_header("content-type", "application/json")
       |> post("/portal/api/projects/#{project.id}/goals", body),
       400,
@@ -363,7 +366,7 @@ defmodule SymmetryControlWeb.GoalControllerTest do
           "required" => true,
           "integration" => true,
           "repository_resource_id" => repository.id,
-          "acceptance" => acceptance_contract(),
+          "acceptance" => acceptance_contract("Operator verifies the Goal API boundary."),
           "depends_on_keys" => [],
           "model_profile" => "codex",
           "change_target" => nil,
@@ -425,17 +428,7 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     |> json_response(200)
   end
 
-  defp create_project do
-    {:ok, project} =
-      SymmetryControl.Workspaces.create_project(%{
-        "name" => "Goal API project #{System.unique_integer([:positive])}",
-        "key" => "G#{System.unique_integer([:positive])}",
-        "default_agent_profile" => "codex",
-        "default_workspace" => "primary"
-      })
-
-    project
-  end
+  defp create_project, do: create_context_project("Goal API project", "G")
 
   defp enable_goal_rollout do
     goals_config = Application.fetch_env!(:symmetry_control, :goals)
@@ -450,51 +443,11 @@ defmodule SymmetryControlWeb.GoalControllerTest do
   end
 
   defp goal_payload do
-    %{
-      "schema_version" => "symmetry.goal_create.v1",
-      "title" => "Validate durable Goal API",
-      "mutation_id" => Ecto.UUID.generate(),
-      "initial_revision" => %{
-        "objective" => "Expose the durable Goal API through authenticated operator routes.",
-        "non_goals" => [],
-        "acceptance_contract" => acceptance_contract(),
-        "authority_policy" => %{
-          "operator_required_for_scope_change" => true,
-          "operator_required_for_completion" => true,
-          "publication_allowed" => false,
-          "allowed_actions" => []
-        },
-        "execution_policy" => %{
-          "automatic_execution" => false,
-          "max_parallel_tasks" => 1,
-          "max_task_admissions" => 2,
-          "max_run_attempts_per_task" => 2,
-          "budget_limit_microusd" => nil,
-          "per_run_cost_limit_microusd" => nil,
-          "budget_mode" => "soft",
-          "hard_cost_limit_required" => false,
-          "allowed_runtime_ids" => [],
-          "allowed_model_profiles" => [],
-          "final_acceptance" => "operator",
-          "allowed_actions" => [],
-          "allowed_resource_ids" => []
-        },
-        "context_manifest" => %{
-          "byte_budget" => 32768,
-          "required_source_kinds" => ["repository"],
-          "include_advisory_recall" => false
-        },
-        "reason" => "Initial approved Goal contract"
-      }
-    }
-  end
-
-  defp acceptance_contract do
-    %{
-      "schema_version" => "symmetry.acceptance.v1",
-      "description" => "Operator verifies the Goal API boundary.",
-      "predicates" => [%{"id" => "operator", "kind" => "operator_acceptance"}]
-    }
+    goal_create_payload(
+      "Validate durable Goal API",
+      "Expose the durable Goal API through authenticated operator routes.",
+      "Operator verifies the Goal API boundary."
+    )
   end
 
   defp enroll(conn) do
@@ -512,19 +465,5 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     {response["machine_id"], response["machine_token"]}
   end
 
-  defp operator_conn(conn), do: bearer(conn, @operator_token)
-
-  defp portal_conn do
-    Phoenix.ConnTest.build_conn()
-    |> init_test_session(%{portal_operator: PortalSession.issue(@operator_token)})
-    |> skip_csrf()
-    |> put_req_header("accept", "application/json")
-  end
-
   defp bearer(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
-  defp skip_csrf(conn), do: put_private(conn, :plug_skip_csrf_protection, true)
-
-  defp assert_error(conn, status, code) do
-    assert %{"error" => %{"code" => ^code}} = json_response(conn, status)
-  end
 end

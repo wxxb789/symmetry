@@ -1,25 +1,16 @@
 defmodule SymmetryControlWeb.PortalResourceIdentityTest do
   use SymmetryControlWeb.ConnCase, async: false
 
-  alias SymmetryControlWeb.PortalSession
+  import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
 
-  @operator_token "test-operator-token"
+  alias SymmetryControl.TestEnv
 
   setup do
-    previous = Application.get_env(:symmetry_control, :integration_providers)
-
-    Application.put_env(:symmetry_control, :integration_providers,
+    TestEnv.put!(:integration_providers,
       github: SymmetryControl.Integrations.ProviderStub,
       azure_devops: SymmetryControl.Integrations.ProviderStub
     )
-
-    on_exit(fn ->
-      if previous do
-        Application.put_env(:symmetry_control, :integration_providers, previous)
-      else
-        Application.delete_env(:symmetry_control, :integration_providers)
-      end
-    end)
 
     :ok
   end
@@ -133,43 +124,10 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
              |> json_response(422)
   end
 
-  defp create_project(key) do
-    %{"project" => project} =
-      api_conn()
-      |> post("/portal/api/projects", %{
-        "name" => "Connected identity #{key}",
-        "key" => key,
-        "default_agent_profile" => "codex",
-        "default_workspace" => "primary"
-      })
-      |> json_response(201)
-
-    project
-  end
-
-  defp create_connection(provider, name, account_ref, capabilities) do
-    %{"connection" => connection} =
-      api_conn()
-      |> post("/portal/api/connections", %{
-        "provider" => provider,
-        "name" => name,
-        "account_ref" => account_ref,
-        "capabilities" => capabilities
-      })
-      |> json_response(201)
-
-    connection
-  end
+  defp create_project(key), do: create_project(key, "Connected identity #{key}")
 
   defp create_resource(project, attrs) do
     api_conn()
     |> post("/portal/api/projects/#{project["id"]}/resources", attrs)
-  end
-
-  defp api_conn do
-    Phoenix.ConnTest.build_conn()
-    |> init_test_session(%{portal_operator: PortalSession.issue(@operator_token)})
-    |> put_private(:plug_skip_csrf_protection, true)
-    |> put_req_header("accept", "application/json")
   end
 end
