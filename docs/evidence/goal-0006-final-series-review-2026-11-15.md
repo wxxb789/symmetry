@@ -16,6 +16,11 @@ their responsible goals without repeating those implementations or changing any
 acceptance condition. A model cannot convert the local achieved Goal into
 acceptance of the entire series.
 
+**Annotation (recorded 2026-11-20):** "0006k has no closure record" above held at recording
+time; 0006k was administratively archived 2026-11-17 (#55 `e72290a`), so
+`docs/goals/archive/0006k-omo-native-capability.md` exists and the goal index carries its
+closure paragraph. The sentence above is kept as recorded.
+
 ## Subject record
 
 | Field | Re-derived value / provenance | Validity boundary |
@@ -189,6 +194,12 @@ tracks the existing maintenance candidates (its historical line numbers are not
 new proof). [0006c][continuity] records the retained-session path-replacement
 window: point-in-time path validation is not atomic exclusion of a same-principal
 writer. This review establishes no fix or new exploit evidence for those items.
+
+**Annotation (recorded 2026-11-20):** the tracking pointer above no longer holds for either
+named candidate: the Control test unused-variable warnings item closed to
+`docs/archive/CLOSED-TODO.md` on 2026-11-19, and the OMP descendant-monitor stop gap is
+recorded only in the [0006j receipt][omp] — it has no `docs/TODO.md` entry. The sentence above
+is kept as recorded; the underlying limits are unchanged.
 
 ## Review method, commands and scope
 

@@ -149,8 +149,18 @@ adding a marker.
 | Release gate (deployable artifacts) | proved for the artifacts CI builds | Control: `MIX_ENV=prod mix release` success in the `control` job; daemon: linux/amd64 static build + Windows binaries built in CI; compose: both stacks smoke-tested end to end. | A tagged release does not exist by repo convention (pre-0.0.1); nothing to gate beyond the built artifacts. |
 | Protocol v1 and goal-less compatibility | proved | CI `legacy-route-audit` green on the Subject tree; goal-less/generic paths exercised by the Subject tree's own suites (fake-agent E2E in the `integration` job's live daemon scenarios: 8 named scenarios all PASS, incl. `TestCoreDaemonWorkflows`); rollout-scoped integration job with `SYMMETRY_GOALS_ROLLOUT_ENABLED=true`. | None for this tree. |
 | Hosted Linux/Windows native acceptance (`linux-native-v2-acceptance`) | **pending operator dispatch** | Job is `workflow_dispatch`-only with environment `linux-v2-native-acceptance` (`.github/workflows/ci.yml` lines 14-16); skipped in both completed runs on the Subject tree — a skipped qualification job is unavailable evidence, never a passed predicate. | Operator dispatch: workflow "CI" on ref `main` at `8ded77150ec0ae49d52355670fdad78a348bf1d5`, selecting the `linux-native-v2-acceptance` job, **after which the Subject tree must not change**. It runs 12 case sets (shared, synthetic_goal_cleanup, stage_replay_create_started, stage_replay_leaf_bound, stage_replay_launcher_bound, ack_loss_launcher_bound, stale_leaf, migration, stale_journal_run_key, stale_journal_run_key_legacy, stale_journal_fence, stale_journal_subject). |
-| Operator acceptance and `achieve` | **pending by construction** — the `achieve` binding was later satisfied 2026-11-15 (see "Achieve record" above); recording-time status kept. | `achieve` is an operator command path (`control/lib/symmetry_control/goals.ex`): it requires the goal in active/paused state, a final-acceptance authority decision, an integration WorkItem with an accepted outcome matching the exact Subject, accepted outcomes for every required item, no unresolved decisions, no nonterminal tasks, and evidence bound to the same subject hash. | The operator must: (1) dispatch and pass the hosted job above on the unchanged Subject tree; (2) review this receipt; (3) issue the authorized `achieve` with `subject` bound to `8ded77150ec0ae49d52355670fdad78a348bf1d5` / tree `3a1dec551b0e2c630f6720d8a542343648270793`, the integration work item, the evidence IDs of this receipt and the cited runs, and the final-acceptance decision. |
+| Operator acceptance and `achieve` | **pending by construction** | `achieve` is an operator command path (`control/lib/symmetry_control/goals.ex`): it requires the goal in active/paused state, a final-acceptance authority decision, an integration WorkItem with an accepted outcome matching the exact Subject, accepted outcomes for every required item, no unresolved decisions, no nonterminal tasks, and evidence bound to the same subject hash. | The operator must: (1) dispatch and pass the hosted job above on the unchanged Subject tree; (2) review this receipt; (3) issue the authorized `achieve` with `subject` bound to `8ded77150ec0ae49d52355670fdad78a348bf1d5` / tree `3a1dec551b0e2c630f6720d8a542343648270793`, the integration work item, the evidence IDs of this receipt and the cited runs, and the final-acceptance decision. |
 | Independent semantic review | proved for the implementation head | Codex review completed with zero findings and zero unresolved findings on `109f6037…` (tree-identical); recorded in the CI-runs section. | None for the implementation. A separate independent review of this receipt itself belongs to the 0006-final review goal. |
+
+**Annotation (recorded 2026-11-20):** the OmO `5.1.69` row's "0006k remains an active goal"
+clause held at recording time; 0006k was administratively archived 2026-11-17 (#55
+`e72290a`) and `docs/goals/archive/0006k-omo-native-capability.md` exists. "No closure
+receipt" stands — no 0006k goal receipt or credentialed execution was recorded — so the row's
+evidence scope is unchanged.
+
+**Annotation (recorded 2026-11-20):** the matrix row "Operator acceptance and `achieve`" keeps
+its recording-time pending status and text; the `achieve` binding it records as pending was
+later satisfied 2026-11-15 on the local acceptance stack (see "Achieve record" above).
 
 ## Recorded defects and limits at the Subject (not fixed by this documentation-only goal)
 
@@ -199,7 +209,16 @@ concurrently with anything.
 | Migration, backup/restore, release gate, protocol v1/goal-less | Rows above; the hosted-DR gap is explicit. |
 | Independent semantic review | Codex zero-findings review on the tree-identical head. |
 | Successful hosted required checks | 11/12 jobs green on the tree-identical head and on the Subject itself; the 12th was dispatched on 2026-11-15 and both available Linux environments proved ineligible — recorded in "Hosted acceptance attempts" below, not claimed as a pass. |
-| Authenticated operator acceptance and `achieve` | **Pending**; exact remaining predicates listed in the matrix. No self-acceptance. The `achieve` binding was later satisfied 2026-11-15 (see "Achieve record" above); recording-time status kept. |
+| Authenticated operator acceptance and `achieve` | **Pending**; exact remaining predicates listed in the matrix. No self-acceptance. |
+
+**Annotation (recorded 2026-11-20):** the clause row "One exact, reviewable Subject" cites the
+Subject record's "tree digest"; that term means the Git tree OID
+`3a1dec551b0e2c630f6720d8a542343648270793` (`git rev-parse HEAD^{tree}`), not the protocol
+`tree_digest`. The row keeps its recording-time text.
+
+**Annotation (recorded 2026-11-20):** the clause row "Authenticated operator acceptance and
+`achieve`" keeps its recording-time **Pending** status and text; the `achieve` binding was
+later satisfied 2026-11-15 on the local acceptance stack (see "Achieve record" above).
 
 ## Hosted acceptance attempts and the Linux host situation — 2026-11-15 (supersedes the "pending operator dispatch" status in the matrix above)
 
