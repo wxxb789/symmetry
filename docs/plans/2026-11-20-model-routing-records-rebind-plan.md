@@ -70,9 +70,10 @@ amendment; `origin/main` at `fdf332dcbcc8c8dc2e59f69703972ec3578c74de`), whose
   before: 2 dirty - the two 0008b-strong files; after: 0), and the cleanliness gate itself in the CI
   scope over the changed set (see "Gates" below).
 - Digest resolution: `resolve-digests.py` (retained under the GDD task's `evidence/`, run from the
-  repo root): resolves the ten policy/receipt bindings of the 0008b class, scans every tracked file
-  for the three pre-rebind digests (must be absent) and the three rebound digests (referrer sets must
-  match), and re-runs the corpus sweep. Output recorded in `answer.md`.
+  repo root): resolves the eleven policy/receipt bindings of the 0008b class, scans every tracked file
+  for the three pre-rebind digests (must be absent outside `docs/archive/CLOSED-TODO.md`, which quotes
+  them as the cascade history) and the three rebound digests (referrer sets must match), and re-runs
+  the corpus sweep. Output recorded in `answer.md`.
 - Per-receipt `accept`: fourteen runs against the four series' run stores, one transcript each
   (command + exit code + message), summarized in the README table and recorded in `answer.md`.
 - Gates: the six Python suites the records README lists under "Gates"

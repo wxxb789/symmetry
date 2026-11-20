@@ -338,7 +338,7 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       **Closed (2026-11-20, branch `chore/model-routing-records-rebind`):** both records were
       rendered with `scripts/ci/model-routing-record-sanitize.py --root-only` - one substitution
       per file, the specimen to `path-sha256:0b5e775deeadc067545d33b048502608ec874e7002aaab39e6adf32f4d370ae6`,
-      the odd trailing backslash that escapes the record's closing quote kept outside the token -
+      the odd trailing backslash that escapes the quote closing the quoted specimen kept outside the token -
       and every digest binding a rendered file was recomputed and rebound:
 
       | File | `sha256` before | `sha256` after | Bindings rebound |
@@ -350,7 +350,7 @@ moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
       The receipt's after-digest is over its final bytes (the render plus its own internal review
       rebind). A whole-tree scan finds no other full-length or truncated referrer of the three
       pre-rebind digests. Evidence: `resolve-digests.py` (retained in the GDD task's `evidence/`)
-      resolves the ten policy/receipt bindings of the 0008b class and re-runs the corpus sweep -
+      resolves the eleven policy/receipt bindings of the 0008b class and re-runs the corpus sweep -
       111 records, 0 dirty, 131 checks, 0 failures; the renderer is byte-stable on both rendered
       files and each parses to the same document otherwise (the token binds the exact replaced
       bytes); `check-record-cleanliness.py` passes with a `git stash create` commit of the frozen
