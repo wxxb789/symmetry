@@ -21,38 +21,28 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Dead-code candidates
 
-- `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
-
-- `frontend/src/features/connections/resources.tsx` `refusalGuidance.provider_owned`: no
-  call site of `refusalNotice` on that page can receive the code. Its only producer is
-  `Workspaces.provider_owned_fields_editable` answered by `update_work_item`
-  (`control/lib/symmetry_control/workspaces.ex`), i.e. the assignment surface, which
-  carries its own `assignmentGuidance`. Recorded by the retro-b4-goals-connections review
-  (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
-  (fix round 1); revalidate and remove in a separate maintenance change.
-
-- [ ] Revalidate and remove the callerless projected provider-action chain in
-      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
-      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
-      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
-      document names it — and the chain behind it is its own:
-      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
-      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
-      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
-      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
-      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
-      were live. Inside that chain one disjunct can never match on any path the code gives it: the
-      clause `{:error, reason} when reason in [:stale, :state_conflict,
-      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
-      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
-      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
-      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
-      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
-      declares no such error key. `:capability_not_granted` is produced by
-      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
-      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
-      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
-      producer; revalidate the surviving provider-action tests either way.
+- [ ] Revalidate and remove two pre-existing dead surfaces found while applying the
+      provider-action-chain-removal simplify findings (2026-11-21).
+      (a) `Integrations.execute_accepted_resource_sync/2` and its catch-all
+      (`control/lib/symmetry_control/integrations.ex:554`, `:579`) have zero callers tree-wide:
+      `git grep -nw "execute_accepted_resource_sync" -- control/` matches only those two definition
+      clauses (the unanchored form also matches the `_unprojected` sibling's name), while the live
+      sibling `execute_accepted_resource_sync_unprojected/2` is called at
+      `control/lib/symmetry_control/integrations/provider_access.ex:1569`, `:1808`.
+      `record_provider_action_failure/2` (`integrations.ex:1111`) is reachable only from its two call
+      sites `:572`, `:575` inside this function and is dead with it; removing (a) must remove it too
+      (`compile --warnings-as-errors` will otherwise fail).
+      (b) The `{:provider_action_failure, code, outcome}` 3-tuple clause of `provider_failure/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:2311`) has no producer: its only
+      literal builder was the non-nil-outcome clause of `provider_action_failure_result/2`
+      (`integrations.ex:1134-1135` before the apply stage removed it), fed by the then-existing
+      `outcome` argument of `record_provider_action_failure/3`; it was unreachable once the
+      callerless projected chain was deleted. The surviving builders emit only the 4-tuple form:
+      the sole literal builder is `unprojected_provider_action_failure/1` (`integrations.ex:369`,
+      pass-through at `:364-365`), while `:514` is the clause head of
+      `project_provider_action_failure/2` matching the 4-tuple and `provider_access.ex:2315` the
+      4-tuple clause head of `provider_failure/1`.
+      Do not delete either surface here; revalidate and remove in a separate maintenance change.
 
 ## Retro review follow-ups
 
@@ -122,26 +112,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       direction: build the press's envelope from a submit-time read the way the plan admission does,
       re-deriving the presented decision's own version from that same read, or keep the page version and
       record the refusal plus reload as the intended recovery.
-
-- [ ] Document how to recover the repository-default test database, or reset it from the test alias.
-      The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where
-      `MIX_TEST_PARTITION` is appended as a literal suffix, so a partition run selects a different
-      database name that the test alias creates and migrates when absent), and `mix test` runs
-      `symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet` first
-      (`control/mix.exs:79`). Create and migrate make a missing or
-      migration-behind database usable, but nothing drops or truncates one: a pending migration whose
-      table already exists fails the alias's migrate step before any test runs. Observed 2026-11-20
-      while gating an unrelated Control change: an unpartitioned `mix test` stopped with Postgrex
-      `42P07` (`duplicate_table`) on a migration whose table already existed — `schema_migrations`
-      named a revision older than the object set — while the same change ran green on a partition
-      database. A maintainer reads that as a code
-      failure, and the repository documents no recovery: `ecto.reset` exists as an alias
-      (`control/mix.exs:70`) but no doc names it for the default test database, and the only documented
-      resets belong to harness-owned databases (`docs/runbooks/session-receipt-recovery-e2e.md`). Fix
-      direction: document the drop-and-recreate path for the default test database where the suite's
-      commands are documented, or add a recreate/reset step to the `test` alias so a stale default
-      database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
-      the recovery recipe.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
@@ -232,35 +202,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       both the escaped-escape case and the raw single-backslash spelling must be pinned in the
       tester. Suggested owner area: `scripts/ci` record tooling.
 
-- [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
-      current encoder escapes a recorded value that starts with `:` by prefixing one
-      (`frontend/src/features/work/presentation.ts:94-97`), so a recorded name `:Ada` mints
-      `human:::Ada` (`agent:::Ada` on the agent side), while the pre-#111 encoder spelled it
-      unescaped — `human::Ada`. The reader committed with the legacy-sentinel fix
-      (`ownerKeyFilter`, `:135-139`) maps only the two sentinel words, so a bookmark or hand-typed
-      link carrying the pre-#111 spelling normalises to itself and matches no row, and the
-      pre-#111 key for a recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to
-      the escape the current encoder mints for the recorded name `unrecorded`, so it silently
-      selects that other row and cannot be disambiguated (the collision repeats for deeper colon
-      prefixes: for a recorded name with `k >= 2` leading colons, the pre-#111 key equals the
-      current mint for the same name with `k-1` leading colons, for example legacy `human:::Ada`
-      (name `::Ada`) is the current mint for `:Ada`). Reproduced at `3c705d7` (production bytes
-      identical to `7f62afe`) with a throwaway vitest probe over the repository's own modules
-      (deleted after the run, no test file kept): rows named `:Ada`, `::Ada`, `:unrecorded` and
-      `unrecorded` mint `human:::Ada`, `human::::Ada`, `human:::unrecorded` and
-      `human::unrecorded`; the legacy key `human::Ada` kept its spelling and `filterWorkItems`
-      selected `[]`; the legacy key `human::unrecorded` selected the row named `unrecorded`; the
-      legacy key `human:::Ada` selected the row named `:Ada` instead (the deeper-prefix
-      collision); and `ownerKeyLabel("human::Ada")` prints `Ada`, dropping the colon.
-      Reachable: `assignee_name` and `agent_profile` are length-bounded only
-      (`control/lib/symmetry_control/workspaces/schemas.ex:472-473`), so a colon-leading name can
-      be served. The shape was recorded as an explicit residual of the legacy-sentinel increment
-      (`docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`, "Out of scope"). Fix direction:
-      decide the reading for the colon-leading pre-#111 keys (re-point them like the sentinel, or
-      accept the collision and document it), then pin both shapes in
-      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
-      work-surface/frontend.
-
 - Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
   workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
   shellcheck-disabled repo-wide `actionlint -shellcheck= -pyflakes=` run plus a direct
@@ -320,7 +261,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
     **Operator instruction (dispatch branch, exact).** The trigger is dispatch-only by design: the
     workflow's only event is `workflow_dispatch` (`.github/workflows/linux-native-v2-acceptance.yml:3-6`),
-    its job is guarded `if: github.event_name == 'workflow_dispatch'` (`:14`), and
+    its job carries no event `if:` guard (the `on:` block at `:3-6` is the only trigger), and
     `scripts/ci/linux-v2-native-acceptance.sh:46` refuses every other event — `credentialed Linux
     acceptance requires explicit workflow_dispatch` — so nothing else can run it: the file declares no
     push, pull_request, schedule or `workflow_call` trigger, and `ci.yml` references it nowhere and holds

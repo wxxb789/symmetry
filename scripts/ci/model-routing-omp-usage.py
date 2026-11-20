@@ -44,8 +44,9 @@ SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/@~-]{0,127}$")
 
 # Secret-like key detector copied verbatim from scripts/ci/model-routing-evaluation.py
-# (SECRET_KEY_PATTERN) and must stay in sync with it: a session-controlled record
-# type name the runner's secret-key scan would refuse must never be exported raw.
+# (SECRET_KEY_PATTERN); test-model-routing-omp-usage.py pins the two copies (pattern
+# and flags) equal, because a session-controlled record type name the runner's
+# secret-key scan would refuse must never be exported raw.
 SECRET_KEY_PATTERN = re.compile(
     r"(^|[^a-z0-9])(api[_-]?key|apikey|secret|password|passwd|token|bearer"
     r"|private[_-]?key|access[_-]?key)([^a-z0-9]|$)",
@@ -107,19 +108,31 @@ def safe_label(value):
     return isinstance(value, str) and SAFE_LABEL_RE.match(value) is not None
 
 
+def path_like(value):
+    """Whether one safe-token value spells a filesystem location rather than a name.
+
+    A backslash anywhere, an absolute POSIX spelling, a Windows drive prefix and a
+    `file:` URL (any case spelling of the scheme is the same URL) are all location
+    spellings a session-controlled value may carry.
+    """
+    return ("\\" in value or value.startswith("/")
+            or re.match(r"^[A-Za-z]:", value) is not None
+            or re.match(r"(?i:file):", value) is not None)
+
+
 def export_session_identifier(value, message, code, note):
     """Validate one session-derived identifier and hash path-like values.
 
     Values that fail safe_token() keep the caller's refusal message, so an
     unsafe value is still refused rather than partially leaked. Values that fit
-    safe_token() but look like filesystem paths -- backslash-separated,
-    absolute POSIX, or a Windows drive prefix -- are exported as a digest and
-    recorded as a limitation, so a private location never leaves this tool. A
-    provider-qualified model may contain `/` and stays raw: only a leading
-    slash counts as path-like.
+    safe_token() but look like filesystem locations -- backslash-separated,
+    absolute POSIX, a Windows drive prefix, or a `file:` URL -- are exported as
+    a digest and recorded as a limitation, so a private location never leaves
+    this tool. A provider-qualified model may contain `/` and stays raw: only a
+    leading slash counts as path-like.
     """
     refuse(safe_token(value), message)
-    if "\\" in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value) is not None:
+    if path_like(value):
         note(code)
         digest = "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
         return digest, True
@@ -133,6 +146,28 @@ def observed_number(value):
         refuse(math.isfinite(value), "session record has a non-finite usage value")
     refuse(value >= 0, "session record has a negative usage value")
     return value
+
+
+def summed_number(left, right):
+    """Add two observed numbers, refusing a total that leaves the finite range.
+
+    Every addend passed observed_number on its own, but two finite floats can sum to
+    infinity and an int beyond float range meeting a float total raises OverflowError;
+    an int-only total can itself sit beyond float range, where the runner's
+    finite-number check would refuse the emitted row downstream. The extractor never
+    defers a total it can already see is out of range, so all three refuse here.
+    """
+    try:
+        total = left + right
+    except OverflowError:
+        raise UsageRefusal("session usage totals exceed the finite number range")
+    try:
+        magnitude = float(total)
+    except OverflowError:
+        raise UsageRefusal("session usage totals exceed the finite number range")
+    if not math.isfinite(magnitude):
+        raise UsageRefusal("session usage totals exceed the finite number range")
+    return total
 
 
 def content_digest(value):
@@ -183,15 +218,6 @@ def resolved_model_identity(resolved_model):
     return {"provider": provider, "model": model}
 
 
-def recognized_record_type(record_type):
-    """Whether extract_usage consumes this type, exactly as its branches do."""
-    if record_type in ("session", "session_init", "model_change", "message", "custom_message"):
-        return True
-    if "thinking" in record_type and ("level" in record_type or "change" in record_type):
-        return True
-    return "fallback" in record_type
-
-
 def session_init_metadata(record, note):
     values = {}
     resolved_model_redacted = False
@@ -218,6 +244,23 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
     def note(code):
         if code not in limitations:
             limitations.append(code)
+
+    def identity_item(record, message):
+        """One `{record, model, provider, api, resolved_model}` identity item.
+
+        `record` first, then the identity fields present on the record in the
+        fixed schema order `model`, `provider`, `api`, `resolvedModel`; each value
+        passes through export_session_identifier, so an unsafe value refuses with
+        the caller's message and a path-like value is hashed and noted.
+        """
+        item = {"record": records - 1}
+        for source, target in (("model", "model"), ("provider", "provider"),
+                               ("api", "api"), ("resolvedModel", "resolved_model")):
+            value = record.get(source)
+            if value is None:
+                continue
+            item[target], _ = export_session_identifier(value, message, "model_identity_redacted", note)
+        return item
 
     session_id = None
     session_ids = set()
@@ -265,16 +308,24 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                 record = strict_json(line)
             except json.JSONDecodeError:
                 raise UsageRefusal("session record is not valid JSON")
+            except ValueError:
+                # `json.loads` refuses an integer literal past its conversion-digit
+                # limit with a plain ValueError; a line that carries one is a
+                # structured refusal about the record's numbers, not a traceback.
+                raise UsageRefusal("session record carries an integer outside the supported range")
             refuse(isinstance(record, dict), "session record is not a JSON object")
             record_type = record.get("type")
             refuse(safe_token(record_type), "session record has a missing or unsafe type")
-            if not recognized_record_type(record_type):
-                unrecognized_record_types = True
-                note("unrecognized_record_types")
-            if SECRET_KEY_PATTERN.search(record_type):
+            secret_like_type = SECRET_KEY_PATTERN.search(record_type) is not None
+            path_like_type = path_like(record_type)
+            if secret_like_type or path_like_type:
                 # A session-controlled type name the runner's secret-key scan would
-                # refuse must never be exported raw; count a digest instead.
-                note("secret_like_entry_type_redacted")
+                # refuse, or one that spells a private filesystem location, must never
+                # be exported raw; count a digest instead and record each reason.
+                if secret_like_type:
+                    note("secret_like_entry_type_redacted")
+                if path_like_type:
+                    note("path_like_entry_type_redacted")
                 entry_type = "sha256:" + hashlib.sha256(
                     record_type.encode("utf-8", "surrogatepass")).hexdigest()
             else:
@@ -322,15 +373,7 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                             prompt_hashes.append({"kind": kind, "sha256": digest})
                 session_inits.append(init_metadata)
             elif record_type == "model_change":
-                item = {"record": records - 1}
-                for source, target in (("model", "model"), ("provider", "provider"),
-                                       ("api", "api"), ("resolvedModel", "resolved_model")):
-                    value = record.get(source)
-                    if value is None:
-                        continue
-                    item[target], _ = export_session_identifier(
-                        value, "session model change has an unsafe value",
-                        "model_identity_redacted", note)
+                item = identity_item(record, "session model change has an unsafe value")
                 if len(item) > 1:
                     model_changes.append(item)
                 else:
@@ -346,22 +389,21 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                                               and not isinstance(value, bool) and value >= 0),
                         "session thinking change has an unsafe level",
                     )
-                    level = value
+                    # A level spelling is session-controlled, so it may export only
+                    # against the known level tokens (or a numeric level): any other
+                    # string can be a path or another private value in level's
+                    # clothing and stays unexported.
+                    if isinstance(value, int) or value in THINKING_SUFFIXES:
+                        level = value
+                    else:
+                        note("thinking_level_change_unrecognized")
                     break
                 if level is None:
                     note("thinking_level_change_unrecognized")
                 else:
                     thinking_level_changes.append({"record": records - 1, "level": level})
             elif "fallback" in record_type:
-                item = {"record": records - 1}
-                for source, target in (("model", "model"), ("provider", "provider"),
-                                       ("api", "api"), ("resolvedModel", "resolved_model")):
-                    value = record.get(source)
-                    if value is None:
-                        continue
-                    item[target], _ = export_session_identifier(
-                        value, "session fallback record has an unsafe identity",
-                        "model_identity_redacted", note)
+                item = identity_item(record, "session fallback record has an unsafe identity")
                 if len(item) > 1:
                     fallback_records.append(item)
                 else:
@@ -404,7 +446,8 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                         if "cacheRead" in observed and "cacheWrite" in observed:
                             # cached = cacheRead + cacheWrite for the same records; it is
                             # counted separately from input and is not a subset of input.
-                            observed["cached"] = observed["cacheRead"] + observed["cacheWrite"]
+                            observed["cached"] = summed_number(observed["cacheRead"],
+                                                               observed["cacheWrite"])
                         cost = usage.get("cost")
                         refuse(cost is None or isinstance(cost, dict),
                                "session assistant cost is not a JSON object")
@@ -425,7 +468,7 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                         if field not in observed:
                             complete[field] = False
                     for field, value in observed.items():
-                        sums[field] = sums.get(field, 0) + value
+                        sums[field] = summed_number(sums.get(field, 0), value)
                         counts[field] = counts.get(field, 0) + 1
                 elif role == "user":
                     user_messages += 1
@@ -446,6 +489,9 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
                 else:
                     prompt_hashes.append({"kind": "custom_message",
                                           "index": custom_messages - 1, "sha256": digest})
+            else:
+                unrecognized_record_types = True
+                note("unrecognized_record_types")
 
     if assistant_messages == 0:
         note("no_assistant_messages")
@@ -600,6 +646,17 @@ def token_argument(value):
     return value
 
 
+def contains_non_finite(value):
+    """Whether one emitted structure holds a nan or infinity float anywhere."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(contains_non_finite(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_non_finite(item) for item in value)
+    return False
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Extract allowlisted routing and usage metadata from one OMP session JSONL "
@@ -626,7 +683,18 @@ def main(argv=None):
     except (OSError, UnicodeError):
         print("refused: could not read the session file", file=sys.stderr)
         return 1
-    print(json.dumps(row, separators=(",", ":")))
+    try:
+        line = json.dumps(row, separators=(",", ":"), allow_nan=False)
+    except ValueError:
+        # The single emit point is the last line of defense: a value the encoder
+        # refuses must not leave the tool, and the message names the actual cause -
+        # a nan or infinity float is a non-finite number, while a finite integer
+        # past Python's conversion-digit limit is not.
+        reason = ("a non-finite number"
+                  if contains_non_finite(row) else "a number outside the serializable range")
+        print(f"refused: usage row carries {reason}", file=sys.stderr)
+        return 1
+    print(line)
     return 0
 
 

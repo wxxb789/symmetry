@@ -36,8 +36,18 @@ were moved on 2026-11-20 from branch `fix/control-test-pins`.
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
 
+The closed callerless projected provider-action chain appended to the same second `## Dead-code
+candidates` section below was moved on 2026-11-20 from branch `fix/provider-action-chain-removal`.
+
 The closed legacy owner-bookmark item appended to the `## Retro review follow-ups (second pass,
 2026-11-20)` section below was moved on 2026-11-20 from branch `fix/legacy-owner-bookmarks`.
+
+The revalidated test-database recovery entry appended to `## Retro review follow-ups` below and the
+two revalidated dead-code notes appended to the second `## Dead-code candidates` section below were
+moved on 2026-11-20/21 from branch `fix/test-db-recovery-docs`.
+
+The accepted colon-owner-keys item appended to the `## Retro review follow-ups (second pass,
+2026-11-20)` section below was moved on 2026-11-21 from branch `fix/colon-owner-keys`.
 
 ## Model-routing evaluation records
 
@@ -1347,6 +1357,56 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       23 failed `control` job logs grepped across all their attempts) finds exactly one occurrence
       of the failure: run `43891279765` attempt 1, job `133383740181`.
 
+- [ ] Revalidate and remove the callerless projected provider-action chain in
+      `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
+      `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
+      matches only those two clauses (this entry's own citation aside): no caller, test, capture or
+      document names it — and the chain behind it is its own:
+      `execute_authenticated_provider_action/7` (`:561`, sole call `:296`) →
+      `persist_provider_delivery/5` (`:581`, sole call `:574`). The path in use is the sibling
+      `execute_unprojected_provider_action/5` and `/6` (`:313-352`, called from
+      `control/lib/symmetry_control/integrations/provider_access.ex:1578`); the projected variant is a
+      public `def`, so the compiler cannot warn about the missing referent while the file reads as if it
+      were live. Inside that chain one disjunct can never match on any path the code gives it: the
+      clause `{:error, reason} when reason in [:stale, :state_conflict,
+      :capability_not_granted]` (`:596-597`) can only see the returns of `persist_provider_action/4`
+      (`:983`), which produces `:stale` (`:1039`), `:state_conflict` (`:1799`), `:not_found`
+      (`:1800`) and a changeset relayed from `Repo.update` (`:1947`, captured at `:1951` and passed
+      through at `:1955`); the `:provider_action_intents` disjunct of `normalize_stale_result`
+      (`:1954`) cannot fire from this path, whose only changeset (`WorkItem.delivery_changeset/2`)
+      declares no such error key. `:capability_not_granted` is produced by
+      `require_capabilities/2` (`:1792-1796`), which runs in the outer `with` at `:293`, before the case.
+      Decide in a separate maintenance change whether the projected variant is dead surface — delete the
+      chain and the disjunct together — or missing its caller, in which case the disjunct needs a
+      producer; revalidate the surviving provider-action tests either way.
+
+      **Closed (2026-11-20, branch `fix/provider-action-chain-removal`): dead surface; the chain and
+      its unreachable disjunct were deleted.** The revalidation the entry asked for was run at
+      `fdf332d` over all tracked files with the entry's own citation excluded
+      (`git grep -n "execute_provider_action" -- . ':!docs/TODO.md'`): only the two definition
+      clauses match; `execute_authenticated_provider_action/7` has the single call the entry names
+      (`:296`) and `persist_provider_delivery/5` the single call `:574`, both inside the deleted
+      chain, and no `apply`/capture/`function_exported?`/string spelling names any of them
+      anywhere in the repository. With zero callers and no shipped release, the entry's fork is
+      settled as dead surface: `execute_provider_action/5`, its catch-all clause and the two private
+      helpers behind it are gone, together with the `:capability_not_granted` member of the
+      `[:stale, :state_conflict, :capability_not_granted]` clause that died with its only containing
+      function (on that path the value has no producer: `require_capabilities/2` runs in the outer
+      `with`, before the case). The `:provider_action_intents` disjunct of `normalize_stale_result`
+      is unchanged and stays: it is live through `delete_connection/2`, which pipes
+      `Connection.delete_changeset/1` through it, and that changeset's
+      `no_assoc_constraint(:provider_action_intents)` (`integrations/schemas.ex:87`) is the error key
+      the disjunct maps to `:state_conflict`. The live unprojected path
+      (`execute_unprojected_provider_action/5` and `/6`) and every helper the chain shared with it
+      are kept, and the surviving provider-action tests pass unchanged. Its consequence was removed in
+      the same branch (`9be4364`): with every non-default caller gone,
+      `record_provider_action_failure/3`'s `outcome` input became dead, so it is now `/2` and
+      `provider_action_failure_result/2` is deleted; the two surviving 2-arg call sites
+      (`integrations.ex:572`, `:575`) return the same values as before. Pinned by
+      `control/test/symmetry_control/integrations_test.exs`, "the callerless projected
+      provider-action variant stays out of the module surface" (recorded failing at `fdf332d` and
+      passing after the deletion, in the increment's answer).
+
 - [ ] Drop the unused `conn` parameter in
       `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs`: `activate/2` (:650-651)
       passes `conn` to `portal_command!/4` (:653), which never reads it (it builds its own `api_conn()`),
@@ -1363,6 +1423,44 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       by the compile output the entry records: the same command printed `warning: variable "conn" is
       unused` at `portal_goal_attention_test.exs:653:24` before the change and prints no `unused`
       line after it.
+
+- `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
+  Revalidated and removed (2026-11-20/21, branch `fix/test-db-recovery-docs`): the premise no longer
+  holds at `fdf332d` — the index row (`docs/goals/README.md:336`) links
+  `archive/0006h-credentialed-provider-accounting.md`, its row link fixed by `c514bd9` (#66); the
+  prose sentence at `:178` has linked the archived path since the archiving commit `10f5b69` (#18);
+  the file exists at the linked path (checked with
+  `ls docs/goals/archive/0006h-credentialed-provider-accounting.md`). The only other live mention,
+  the goal id `` `0006h` `` at `:214`, names no path. No fix remained to make, so the note was
+  removed from `docs/TODO.md` (the increment's contract directs the removal over the file's
+  marker-less-note rule) and carries no open action.
+
+- `frontend/src/features/connections/resources.tsx` `refusalGuidance.provider_owned`: no
+  call site of `refusalNotice` on that page can receive the code. Its only producer is
+  `Workspaces.provider_owned_fields_editable` answered by `update_work_item`
+  (`control/lib/symmetry_control/workspaces.ex`), i.e. the assignment surface, which
+  carries its own `assignmentGuidance`. Recorded by the retro-b4-goals-connections review
+  (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
+  (fix round 1); revalidate and remove in a separate maintenance change.
+  **Closed (2026-11-20/21, branch `fix/test-db-recovery-docs`): revalidated and removed.** The claim
+  holds at `fdf332d`: `:provider_owned` has exactly one producer in the control plane —
+  `provider_owned_fields_editable/2` (`control/lib/symmetry_control/workspaces.ex:994-1007`,
+  returning at `:1003`), answered only by `update_work_item/2` (`:203`) — and that function's sole
+  caller is `PortalApiController.update_work_item`
+  (`control/lib/symmetry_control_web/controllers/portal_api_controller.ex:265`) serving
+  `PATCH /portal/api/work-items/:work_item_id` (`control/lib/symmetry_control_web/router.ex:82`),
+  the assignment surface, which carries its own guidance
+  (`frontend/src/features/planning/write-policy.ts:125`,
+  `frontend/src/features/work/assignment.tsx:82`). The connections page's `refusalNotice` call
+  sites (`resources.tsx:338,443-444,486-487,617,633`; `connections.tsx:176-177,226,241,291`) answer
+  only resource and connection commands, none of which can return the code — unlike the sibling
+  `capability_not_granted` entry, whose code the server was changed to serve instead
+  (`fix/connections-refusal-guidance`, PR #96), this code has no connections-page flow to serve it.
+  The `provider_owned` key was removed from `refusalGuidance`; the shared fold renders the server's
+  own message for it. Pinned by `frontend/src/features/connections/connections.test.tsx` —
+  "leaves a provider_owned refusal to the server's own message, without assignment-surface
+  guidance" (failed before the removal with the guidance suffix rendered, passes after; before/after
+  runs in `answer.md`).
 
 ## Deferred review findings (0007f)
 
@@ -2564,6 +2662,69 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       (`Expected false or nil, got true`, exit 2) — the pin's discriminating mutation is (c), the
       pinned entry starting to serve retry eligibility.
 
+- [ ] Document how to recover the repository-default test database, or reset it from the test alias.
+      The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where
+      `MIX_TEST_PARTITION` is appended as a literal suffix, so a partition run selects a different
+      database name that the test alias creates and migrates when absent), and `mix test` runs
+      `symmetry.check_test_db`, `ecto.create --quiet` and `ecto.migrate --quiet` first
+      (`control/mix.exs:79`). Create and migrate make a missing or
+      migration-behind database usable, but nothing drops or truncates one: a pending migration whose
+      table already exists fails the alias's migrate step before any test runs. Observed 2026-11-20
+      while gating an unrelated Control change: an unpartitioned `mix test` stopped with Postgrex
+      `42P07` (`duplicate_table`) on a migration whose table already existed — `schema_migrations`
+      named a revision older than the object set — while the same change ran green on a partition
+      database. A maintainer reads that as a code
+      failure, and the repository documents no recovery: `ecto.reset` exists as an alias
+      (`control/mix.exs:70`) but no doc names it for the default test database, and the only documented
+      resets belong to harness-owned databases (`docs/runbooks/session-receipt-recovery-e2e.md`). Fix
+      direction: document the drop-and-recreate path for the default test database where the suite's
+      commands are documented, or add a recreate/reset step to the `test` alias so a stale default
+      database cannot decide a local verdict; `MIX_TEST_PARTITION` stays the CI-parallel path it is, not
+      the recovery recipe.
+      **Closed (2026-11-20/21, branch `fix/test-db-recovery-docs`): documented, not aliased.** Reproduced
+      on the throwaway database `symmetry_control_test_tdbrec` on a dedicated disposable PostgreSQL
+      18.6 instance, in the documented explicit-name form of the two commands (`env -u MIX_TEST_PARTITION
+      POSTGRES_DB=symmetry_control_test_tdbrec` throughout, `MIX_ENV=test` on the drop); fix round 2
+      re-ran the sequence with exactly those bytes and these results:
+      `mix ecto.create --quiet` and `mix ecto.migrate --quiet` exit 0; deleting the
+      `harness_session_attach_receipts` migration's `schema_migrations` row (`20260911000000`) while
+      its table exists makes `mix test test/mix/tasks/symmetry_check_test_db_test.exs` stop in the
+      alias's migrate step with `** (Postgrex.Error) ERROR 42P07 (duplicate_table) relation
+      "harness_session_attach_receipts" already exists` and exit 1 before any test runs;
+      `MIX_ENV=test mix ecto.drop` exits 0 (`The database for SymmetryControl.Repo has been dropped`),
+      and the same `mix test` then recreates and migrates the database and reports `Result: 11 passed`,
+      exit 0. `docs/design/quality.md` (Commands and gates) now documents the recovery beside the
+      suite's commands: the database `config/test.exs` resolves (`POSTGRES_DB`, repository default
+      `symmetry_control_test`, with `MIX_TEST_PARTITION` appended as a literal suffix), the failure
+      signature, the two commands, why `MIX_ENV=test` is load-bearing, and that
+      `symmetry.check_test_db` refuses harness-owned databases only (`symmetry_dev` and the
+      `symmetry_0007c_/d_/e_` families), and the documented recipe pins its target: it unsets
+      `POSTGRES_DB` and `MIX_TEST_PARTITION`, so it always drops `symmetry_control_test`
+      (`symmetry_control_dev` and other ambient names are never reached); a different dedicated
+      test database is recovered by naming it explicitly in `POSTGRES_DB`. The recipe's default form
+      (`env -u POSTGRES_DB -u MIX_TEST_PARTITION`) was exercised end to end by fix round 2 on the same
+      instance under a hostile shell (`POSTGRES_DB=symmetry_control_dev`, `MIX_TEST_PARTITION=hostile`):
+      its `MIX_ENV=test mix ecto.drop` removed exactly `symmetry_control_test` and never created
+      `symmetry_control_dev`; `mix run --no-start` probes print `symmetry_control_test` for that form and
+      `symmetry_control_test_x` for the explicit-name form. The `test` alias is unchanged
+      (the increment's contract prefers documentation over an alias change), and `MIX_TEST_PARTITION`
+      stays the CI-parallel path, not the recovery recipe. Evidence: the recorded before/after runs in
+      `answer.md`, and fix round 2's re-run of the same sequence with the documented explicit-name
+      bytes — create and migrate exit 0, the stale run exits 1 before any test (`42P07`,
+      `duplicate_table`, the pending migration's `CREATE TABLE`), `mix ecto.drop` exits 0 and the
+      recovered run recreates and migrates the database (`Result: 11 passed`, exit 0), with the
+      throwaway database dropped afterwards and zero residue in `pg_database`. The sequence ran
+      against a dedicated disposable PostgreSQL 18.6 instance (`127.0.0.1:5433`), kept because the
+      shared 5432 instance was saturated by concurrent agent suites when the sequence was first
+      attempted. The recipe's `test` alias body is pinned by
+      `control/test/mix/tasks/symmetry_check_test_db_test.exs`, test
+      "the storage aliases run the guard before any database work": the pin fails when the
+      guard is dropped from the alias head, when `ecto.create --quiet`/`ecto.migrate --quiet`
+      is removed, or when the documented order changes (10/11 each) and passes on the delivered
+      alias (11 passed). The full Control suite then ran to completion on the `control/` tree
+      of `67310cf` with `MIX_TEST_PARTITION=testdbgates`: `Result: 936 passed, 21 skipped`,
+      0 failures, seed 815640 (717.5 s); the later merge `8540a7d` changes no `control/` file.
+
 - [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
       (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
       error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
@@ -2666,7 +2827,9 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       No surface, label, encoder, storage-schema or contract change; the decision and the
       edge-case table are written out in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`,
       which also records the second pre-#111 shape (keys for recorded names that start with `:`,
-      for example `human::Ada`) as out of scope and tracked open in `docs/TODO.md`.
+      for example `human::Ada`) as out of scope and tracked open in `docs/TODO.md`. That entry
+      was closed on 2026-11-21 (branch `fix/colon-owner-keys`); its closure below in this
+      archive records the decision.
       Pinned by `frontend/src/features/projects/filters.test.ts`, case "re-points the legacy
       sentinel bookmarks to the keys the encoder mints now": the legacy URL key maps to the
       minted key, both reader call sites select the unnamed-agent and unnamed-human rows, the
@@ -2703,3 +2866,66 @@ The closed legacy owner-bookmark item appended to the `## Retro review follow-up
       passed at both widths in every run. The gate's environment, its carrier deviations and the
       failure classification are in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`; CI
       remains the merge gate.
+
+- [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
+      current encoder escapes a recorded value that starts with `:` by prefixing one
+      (`frontend/src/features/work/presentation.ts:94-97`), so a recorded name `:Ada` mints
+      `human:::Ada` (`agent:::Ada` on the agent side), while the pre-#111 encoder spelled it
+      unescaped — `human::Ada`. The reader committed with the legacy-sentinel fix
+      (`ownerKeyFilter`, `:135-139`) maps only the two sentinel words, so a bookmark or hand-typed
+      link carrying the pre-#111 spelling normalises to itself and matches no row, and the
+      pre-#111 key for a recorded name `:unrecorded` (`human::unrecorded`) is byte-identical to
+      the escape the current encoder mints for the recorded name `unrecorded`, so it silently
+      selects that other row and cannot be disambiguated (the collision repeats for deeper colon
+      prefixes: for a recorded name with `k >= 2` leading colons, the pre-#111 key equals the
+      current mint for the same name with `k-1` leading colons, for example legacy `human:::Ada`
+      (name `::Ada`) is the current mint for `:Ada`). Reproduced at `3c705d7` (production bytes
+      identical to `7f62afe`) with a throwaway vitest probe over the repository's own modules
+      (deleted after the run, no test file kept): rows named `:Ada`, `::Ada`, `:unrecorded` and
+      `unrecorded` mint `human:::Ada`, `human::::Ada`, `human:::unrecorded` and
+      `human::unrecorded`; the legacy key `human::Ada` kept its spelling and `filterWorkItems`
+      selected `[]`; the legacy key `human::unrecorded` selected the row named `unrecorded`; the
+      legacy key `human:::Ada` selected the row named `:Ada` instead (the deeper-prefix
+      collision); and `ownerKeyLabel("human::Ada")` prints `Ada`, dropping the colon.
+      Reachable: `assignee_name` and `agent_profile` are length-bounded only
+      (`control/lib/symmetry_control/workspaces/schemas.ex:472-473`), so a colon-leading name can
+      be served. The shape was recorded as an explicit residual of the legacy-sentinel increment
+      (`docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`, "Out of scope"). Fix direction:
+      decide the reading for the colon-leading pre-#111 keys (re-point them like the sentinel, or
+      accept the collision and document it), then pin both shapes in
+      `frontend/src/features/projects/filters.test.ts`. Suggested owner area: portal
+      work-surface/frontend.
+
+      **Accepted and documented (2026-11-21, branch `fix/colon-owner-keys`):** the repo
+      owner/conductor decided, under the human owner's standing "no backward compatibility"
+      directive, to accept the collision and document it; no legacy re-point is added for
+      colon-leading keys — a key is always read as a current mint. The colliding pre-#111
+      spellings are byte-identical to the current mints of other names (`human::unrecorded`
+      for the recorded name `unrecorded`, `human:::Ada` for `:Ada`, every deeper prefix
+      shifting by one), so those cannot be disambiguated. The remaining case
+      (`human::Ada`, once the name `:Ada`) equals no current mint, and a re-point of only that
+      unambiguous subset would add compatibility code the owner does not require. The semantics
+      table, the decision and the trade-offs are in
+      `docs/plans/2026-11-21-colon-owner-keys-plan.md`; the reading is stated in the
+      `ownerKeyFilter` comment (`frontend/src/features/work/presentation.ts`, comment-only
+      edit). Pinned by `frontend/src/features/projects/filters.test.ts`, case "reads the
+      pre-#111 colon-leading owner keys as the current mints, accepting the collision":
+      `human::Ada` keeps its spelling and selects no row through both reader call sites while
+      `ownerKeyLabel` still renders `Ada`; `human::unrecorded` selects the row named
+      `unrecorded` and not the row named `:unrecorded`; `human:::Ada` selects the row named
+      `:Ada` and not the row named `::Ada`. Mutation check: re-pointing `human::Ada` to
+      `human:::Ada` in `ownerKeyFilter` reddens the first pin (file `1 failed | 8 passed (9)`,
+      assertion `filters.test.ts:136`, `expected { owner: 'human:::Ada' } to deeply equal
+      { owner: 'human::Ada' }`); reverted byte-identically (`diff` clean), focused run back to
+      `9 passed`, re-run `9 passed` after the final comment revision. Recorded runs: focused
+      vitest `9 passed` exit 0; full vitest `497 passed` (20 files) exit 0 on three runs, the
+      last on the final bytes (48.9s / 52.0s / 38.9s) — a first full run exited 1 with its
+      failure lines not retained (the capture pipe kept only a slow-environment performance
+      hint and the pnpm `[ELIFECYCLE]` line; the reruns on identical bytes are the working
+      verdict and CI remains the merge gate). Gates: `pnpm install --frozen-lockfile` exit 0; frontend typecheck 0,
+      lint 0, build 0; `git diff --check` 0. The browser render gate was not run and the
+      contract does not require it: the only production-source edit is a comment, and the built
+      portal bytes are identical with the comment in and out (`index.html`
+      `sha256:d2f694ddf97d861a1e00cfa577ef7ed36f0b6e2213aa4e917cb55cf52371a8e0`,
+      `assets/index-Cy35eFtz.css` `sha256:0c216884aa5315566e05140b108408e7f878c0890f4c26ad6cb74794f1cafa09`,
+      `assets/index-xLlmZ95U.js` `sha256:7b7562c7296d733a4c45b270be8b99f07bbf7703b147da4171730e3d73e5b133`).
