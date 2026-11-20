@@ -311,11 +311,12 @@ const WorkItemReceiptBody = Schema.Struct({
   work_item: Schema.Struct({ id: Schema.NonEmptyString }),
 });
 // Resource create/update/sync receipts answer with the served projection; the
-// fields below are the ones a continuation reads. A refused write (a sync the
-// provider or the binding refuses, say) answers with the server's mapped
-// status and the same projection plus `error`, which `parseRefusal` carries as
-// the server's reason; a removal answers `{deleted_resource_id}` instead (see
-// `DeletedResourceBody`).
+// fields below are the ones a continuation reads. A sync the provider or the
+// binding refuses answers with the server's mapped status and the same
+// projection plus `error`, which `parseRefusal` carries as the server's
+// reason; every other refusal — a `:stale`/`:state_conflict` sync and every
+// create/update refusal — answers `{error}` alone, and a removal answers
+// `{deleted_resource_id}` instead (see `DeletedResourceBody`).
 const ResourceReceiptBody = Schema.Struct({
   resource: Schema.Struct({
     id: Schema.NonEmptyString,

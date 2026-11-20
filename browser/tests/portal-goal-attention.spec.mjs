@@ -458,9 +458,9 @@ test.describe("Goal attention workspace", () => {
     expect(served.status, JSON.stringify(served.body)).toBe(200);
     expect(served.body.snapshot_id).toBe(snapshotId);
 
-    // 404: a second Goal in the same project owns the same repository, so this
-    // refusal discriminates the snapshot's goal scoping, not project or
-    // resource ownership.
+    // 404: a second Goal in the same project is served by the same resource
+    // pool, so this refusal discriminates the snapshot's goal scoping, not the
+    // project, the pool or the resource.
     const foreignGoalId = await createGoal(page, project, "Context foreign goal");
     const foreign = await api(page, "GET", `/portal/api/goals/${foreignGoalId}/contexts/${snapshotId}`);
     expect(foreign.status).toBe(404);

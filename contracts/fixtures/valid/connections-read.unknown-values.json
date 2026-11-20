@@ -10,7 +10,7 @@
       "account_ref": "acme",
       "auth_type": "future_auth",
       "capabilities": ["future_capability"],
-      "status": "degraded",
+      "status": "future_status",
       "status_message": "Provider authentication failed",
       "metadata": {},
       "last_checked_at": "2026-11-16T08:30:00.000000Z",

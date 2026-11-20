@@ -3,14 +3,16 @@
  *
  * The control plane hashes a plan proposal with `RequestHash.canonical/1`: one
  * JSON document with lexicographically sorted object keys, array order
- * preserved, Elixir `Jason` scalar encoding. `canonicalJson`/`canonicalDigest`
- * reproduce that encoding, and `planApprovalCommand` applies the same
- * per-item defaults Control injects before it hashes (the contracts package's
- * `canonicalPlanProposal`), so the surface presents the very document the
- * server validates; the server still checks the hash and refuses a mismatch,
- * so nothing here grants authority.
+ * preserved and every string escaped exactly as `Jason` escapes it (the
+ * contracts package's `encodeJsonString`: an uppercase `\u00XX` for a C0
+ * control, where `JSON.stringify` would emit lowercase hex and hash different
+ * bytes). `canonicalJson`/`canonicalDigest` reproduce that encoding, and
+ * `planApprovalCommand` applies the same per-item defaults Control injects
+ * before it hashes (the contracts package's `canonicalPlanProposal`), so the
+ * surface presents the very document the server validates; the server still
+ * checks the hash and refuses a mismatch, so nothing here grants authority.
  */
-import { canonicalPlanProposal, type SymmetryPlanProposalV1 } from "@symmetry/contracts";
+import { canonicalPlanProposal, encodeJsonString, type SymmetryPlanProposalV1 } from "@symmetry/contracts";
 
 export interface GoalCommandEnvelope {
   readonly schema_version: "symmetry.goal_command.v1";
@@ -45,7 +47,7 @@ export function canonicalJson(value: unknown): string {
     if (!Number.isInteger(value) && Math.abs(value) < 1e-6 && value !== 0) return value.toExponential();
     return JSON.stringify(value);
   }
-  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "string") return encodeJsonString(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>);
@@ -53,7 +55,7 @@ export function canonicalJson(value: unknown): string {
       throw new TypeError("canonical JSON rejects undefined members");
     }
     const sorted = entries.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-    return `{${sorted.map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`).join(",")}}`;
+    return `{${sorted.map(([key, nested]) => `${encodeJsonString(key)}:${canonicalJson(nested)}`).join(",")}}`;
   }
   throw new TypeError(`canonical JSON rejects ${typeof value} values`);
 }

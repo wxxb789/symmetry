@@ -34,6 +34,13 @@ function workspaceResponse(selected: string) {
   return { selected_project_id: selected, projects };
 }
 
+// The mutation identity the open action form displays: the identity the send
+// carries with it.
+function displayedIdentity() {
+  const text = screen.getByText(/mutation identity [0-9a-f]/).textContent ?? "";
+  return text.match(/mutation identity ([0-9a-f-]{36})/)?.[1] ?? "";
+}
+
 describe("attention entry point", () => {
   it("lists Goal attention and the project blocked work together", async () => {
     const { fetcher } = portalFetcher((path) => {
@@ -368,28 +375,31 @@ describe("goal detail surface", () => {
 
   it("freezes one mutation identity per logical intent until the server answers", async () => {
     const identities: string[] = [];
+    const bodies: string[] = [];
     let attempted = 0;
+    let servedVersion = 3;
     const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
-        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Replay goal", state: "active", allowedActions: ["pause", "amend", "cancel"] }));
+        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Replay goal", state: "active", version: servedVersion, allowedActions: ["pause", "amend", "cancel"] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
         const rawBody = typeof init?.body === "string" ? init.body : "{}";
         const body = JSON.parse(rawBody) as { mutation_id: string };
         identities.push(body.mutation_id);
+        bodies.push(rawBody);
         // The first attempt's acknowledgement is lost at the transport layer:
         // the server may still have applied it, so the intent must replay.
-        if (attempted++ === 0) throw new TypeError("network down");
+        if (attempted++ === 0) {
+          // The applied command advanced the goal (as any writer does) before
+          // the operator re-sends.
+          servedVersion = 4;
+          throw new TypeError("network down");
+        }
         return jsonResponse({ goal_id: goalId, mutation_id: body.mutation_id, event: { id: body.mutation_id, sequence: 2, kind: "pause", revision: 1 } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
-
-    const displayedIdentity = () => {
-      const text = screen.getByText(/mutation identity [0-9a-f]/).textContent ?? "";
-      return text.match(/mutation identity ([0-9a-f-]{36})/)?.[1] ?? "";
-    };
 
     const user = userEvent.setup();
     renderRoute(`/portal/goals/${goalId}`, fetcher);
@@ -411,6 +421,14 @@ describe("goal detail surface", () => {
     // applied state (bounded), so this wait allows for that bound.
     expect(await screen.findByText("Pause accepted by the server.", {}, { timeout: 5_000 })).toBeVisible();
     await waitFor(() => expect(identities).toEqual([shown, shown]));
+    // The re-send repeated the frozen attempt byte for byte — the identity and
+    // both expected versions the first attempt carried, not the version the
+    // goal now serves — because the server replays only a byte-equal body and
+    // refuses the reused identity as different input otherwise.
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toBe(bodies[0]);
+    const resent = JSON.parse(bodies[1] ?? "{}") as { expected_version?: number };
+    expect(resent.expected_version).toBe(3);
     // The settled attempt releases its identity: the next intent mints a new one.
     await user.click(screen.getByRole("button", { name: "Pause" }));
     const renewed = displayedIdentity();
@@ -458,14 +476,20 @@ describe("goal detail surface", () => {
   });
 
   it("never announces success from an undecodable receipt", async () => {
-    const { fetcher } = portalFetcher((path) => {
+    const identities: string[] = [];
+    const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Empty receipt goal", state: "active", allowedActions: ["pause", "amend", "cancel"] }));
       }
       // A 200 without the receipt the accepted command answers with is a
       // response the surface cannot read safely, never a success.
-      if (url.pathname === `/portal/api/goals/${goalId}/commands`) return jsonResponse({});
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        const body = JSON.parse(rawBody) as { mutation_id: string };
+        identities.push(body.mutation_id);
+        return jsonResponse({});
+      }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
@@ -476,6 +500,16 @@ describe("goal detail surface", () => {
     await user.type(screen.getByLabelText("Reason"), "Operator pause");
     await user.click(screen.getByRole("button", { name: "Send Pause" }));
     expect(await screen.findByText(/could not be read safely/)).toBeVisible();
+    expect(screen.queryByText(/accepted by the server/)).not.toBeInTheDocument();
+    // An unreadable answer settles nothing: the surface cannot know whether the
+    // server applied the command, so the reopened form presents the same frozen
+    // identity and a re-send carries it.
+    const first = identities[0] ?? "";
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    expect(displayedIdentity()).toBe(first);
+    await user.click(screen.getByRole("button", { name: "Send Pause" }));
+    await waitFor(() => expect(identities).toEqual([first, first]));
     expect(screen.queryByText(/accepted by the server/)).not.toBeInTheDocument();
   });
 
@@ -712,6 +746,47 @@ describe("goal detail surface", () => {
     const expectedProposal = { ...omittedProposal, items: omittedProposal.items.map((item) => ({ ...item, integration: false })) };
     expect(admit.payload?.["proposal"]).toEqual(expectedProposal);
     expect(admit.payload?.["proposal_hash"]).toBe("sha256:aaae9efde4b51964698a64eac92a5f485213e1b072801d139b0b1a2c597f2519");
+  });
+
+  it("escapes C0 controls in the canonical digest exactly as the server's Jason does", async () => {
+    const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", kind: "plan", state: "open", "open?": true, version: 2, goal_revision: 1, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: null };
+    const commands: Array<Record<string, unknown>> = [];
+    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === `/portal/api/goals/${goalId}`) {
+        return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Control-character plan goal", state: "draft", allowedActions: ["amend", "cancel"], decisions: [decision] }));
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
+        const rawBody = typeof init?.body === "string" ? init.body : "{}";
+        commands.push(JSON.parse(rawBody) as Record<string, unknown>);
+        return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 2, kind: "resolve_decision", revision: 1 } });
+      }
+      if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
+    });
+
+    const user = userEvent.setup();
+    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Control-character plan goal" });
+    // A LongText description admits U+000B and U+001B (the contract bans only
+    // U+0000), and the control plane's Jason escapes them with uppercase hex
+    // where `JSON.stringify` emits lowercase hex — two texts that hash as
+    // different bytes.
+    const document = { schema_version: "symmetry.plan.v1", items: [{ description: "before\u000Bafter\u001Bend" }] };
+    // A JSON document contains braces that user-event's keyboard parser reads as
+    // key descriptors; set the controlled textarea value directly instead.
+    fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify(document) } });
+    await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
+    await waitFor(() => expect(commands.length).toBe(2));
+    const admit = commands[1] as { kind?: string; payload?: Record<string, unknown> } | undefined;
+    if (!admit) throw new Error("the plan admission was not sent");
+    expect(admit.kind).toBe("accept_plan");
+    // The server's own digest for the defaulted document, computed in this
+    // worktree with the portable Elixir toolchain and cross-checked with Python
+    // hashlib:
+    //   mix run --no-start -e 'IO.puts("sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(%{"schema_version" => "symmetry.plan.v1", "items" => [%{"description" => "before\x0Bafter\x1Bend", "integration" => false, "change_target" => nil}]}), case: :lower))'
+    // i.e. sha256 over
+    // {"items":[{"change_target":null,"description":"before\u000Bafter\u001Bend","integration":false}],"schema_version":"symmetry.plan.v1"}.
+    expect(admit.payload?.["proposal_hash"]).toBe("sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5");
   });
 
   it("offers no plan approval when the served plan decision carries no acceptance option", async () => {

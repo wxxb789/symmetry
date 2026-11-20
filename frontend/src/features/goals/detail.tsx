@@ -1,13 +1,13 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouteContext } from "@tanstack/react-router";
 import { AlertCircle, CircleCheck, Inbox, ScrollText, ShieldAlert } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { goalEventsOptions, goalOptions, sessionOptions, workspaceOptions } from "../../app/application";
 import { useRealtimeEpoch } from "../../app/realtime";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
 import { servedMember, servedText } from "./served-text";
 import { errorMessage, Network, ownValue, postGoalCommand, UnexpectedResponse, type GoalDecision, type GoalEvent, type GoalGraph, type GoalProjection, type GoalWorkItem, type Workspace } from "../../services/api";
-import { commandEnvelope, MutationRefused, newMutationId, planApprovalCommand, type CommandKind } from "../../services/commands";
+import { commandEnvelope, MutationRefused, newMutationId, planApprovalCommand, type CommandKind, type GoalCommandEnvelope } from "../../services/commands";
 
 type ActionPayload = Record<string, unknown>;
 
@@ -83,21 +83,39 @@ export function GoalDetailPage() {
   };
 
   /**
-   * A command attempt's identity stays frozen until the server answers: a lost
-   * acknowledgement must replay the same mutation, while a settled attempt
-   * releases the identity so the next logical intent mints a new one.
+   * The envelope this page last sent for the identity it was given. A command
+   * attempt stays frozen until the server answers, and a lost acknowledgement
+   * must replay the same bytes — the mutation identity, both expected versions,
+   * the kind and the payload — because the server replays a command only when
+   * the request body hashes equal to the recorded one (`replay_event`); a body
+   * rebuilt from a fresh read would carry the version the applied command
+   * produced, the same identity with different input, and is answered
+   * `idempotency_conflict` for a command that already applied. A settled
+   * attempt releases its envelope with its identity, and a changed payload is a
+   * different intent with a new identity, hence a new envelope.
    */
+  const sentEnvelope = useRef<{ mutationId: string; envelope: GoalCommandEnvelope } | null>(null);
+
   const [identityEpoch, setIdentityEpoch] = useState(0);
+  const releaseAttempt = () => {
+    sentEnvelope.current = null;
+    setIdentityEpoch((epoch) => epoch + 1);
+  };
 
   const command = useMutation({
     mutationFn: async ({ kind, payload, mutationId }: { kind: CommandKind; payload: ActionPayload; mutationId: string }) => {
       const csrf = session.data?.csrf_token;
       if (!csrf) throw new Error("The session token is unavailable; refresh the page.");
-      return postGoalCommand(application.fetcher, csrf, goalId, await servedEnvelope(kind, payload, mutationId));
+      const frozen = sentEnvelope.current;
+      const envelope = frozen !== null && frozen.mutationId === mutationId
+        ? frozen.envelope
+        : await servedEnvelope(kind, payload, mutationId);
+      sentEnvelope.current = { mutationId, envelope };
+      return postGoalCommand(application.fetcher, csrf, goalId, envelope);
     },
     onSuccess: async (_body, variables) => {
       setRefusal(null);
-      setIdentityEpoch((epoch) => epoch + 1);
+      releaseAttempt();
       // The acceptance notice appears once the served goal has settled on the
       // state this command produced, so the next command's envelope carries the
       // version the server has actually written.
@@ -115,9 +133,9 @@ export function GoalDetailPage() {
       // An answer was received (a refusal or any other status), so the attempt
       // is settled and its identity released; a transport failure or an
       // uninterpretable answer leaves the command's fate unknown and keeps the
-      // frozen identity so a re-send replays instead of applying twice.
+      // frozen envelope so a re-send replays instead of applying twice.
       const unknownOutcome = error instanceof Network || error instanceof UnexpectedResponse;
-      if (!unknownOutcome) setIdentityEpoch((epoch) => epoch + 1);
+      if (!unknownOutcome) releaseAttempt();
     },
   });
 
@@ -138,7 +156,7 @@ export function GoalDetailPage() {
         application.fetcher,
         csrf,
         goalId,
-        commandEnvelope("resolve_decision", { decision_id: decision.id, expected_decision_version: decision.version ?? null, option_id: optionId, comment: "Accepted from the Goal surface." }, { version: goal.version, current_revision: goal.current_revision }),
+        commandEnvelope("resolve_decision", { decision_id: decision.id, expected_decision_version: decision.version, option_id: optionId, comment: "Accepted from the Goal surface." }, { version: goal.version, current_revision: goal.current_revision }),
       );
       if (!resolved) throw new Error("The server returned no receipt for the decision resolution.");
 
@@ -456,7 +474,7 @@ function NextAction({ goal, busy, onCommand, identityEpoch, resources }: { goal:
       {/* The action list is exactly what the server allows; no client rule adds to it. */}
       <button className="button action-button" type="button" disabled={busy} aria-expanded={openAction === kind} onClick={() => setOpenAction(openAction === kind ? null : kind)}>{actionLabel(kind)}</button>
       {openAction === kind && <form className="action-form" onSubmit={(event) => event.preventDefault()}>
-        {openIdentity !== null && <p className="text-small muted">Carries the version and revision the server serves at submit and mutation identity {openIdentity}.</p>}
+        {openIdentity !== null && <p className="text-small muted">Carries mutation identity {openIdentity}; this attempt freezes the version and revision the server serves at its first send, so a re-send after a lost acknowledgement repeats the same bytes and the server replays the recorded command instead of applying it twice.</p>}
         {(kind === "pause" || kind === "resume" || kind === "cancel") && <label className="field">Reason<input value={reason} onChange={(event) => setReason(event.currentTarget.value)} required /></label>}
         {kind === "activate" && <p>The current revision {goal.current_revision} is the approved revision this command presents.</p>}
         {kind === "request_plan" && <>

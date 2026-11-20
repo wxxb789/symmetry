@@ -31,12 +31,29 @@ const mixInvocation = process.env.SYMMETRY_FIXTURE_MIX
 // is dropped from its environment.
 const { PHX_SERVER: _phxServer, ...fixtureEnvironment } = process.env;
 
+const snapshotAnswerPattern = /^snapshot_id=(.*)$/;
 const snapshotIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * The fixture's marked answer out of its stdout, or null when the output
+ * carries no marked line. The application the fixture starts logs to the same
+ * stdout and its handler writes asynchronously, so the answer is recognised by
+ * its own `snapshot_id=` marker — the last marked line — and never by the shape
+ * of a bare id a log line could carry too.
+ */
+export function parseSnapshotAnswer(output) {
+  const answers = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .map((line) => snapshotAnswerPattern.exec(line)?.[1] ?? null)
+    .filter((answer) => answer !== null);
+  return answers.at(-1) ?? null;
+}
+
+/**
  * Reads the newest ContextSnapshot id the server wrote for `goalId`, or throws
- * when the Goal admitted no planning task (the fixture answers `none`) or the
- * fixture did not answer with an id.
+ * when the Goal admitted no planning task (the fixture answers
+ * `snapshot_id=none`) or the fixture did not answer with the marker.
  */
 export function readGoalContextSnapshot(goalId) {
   // File mode: `mix run file.exs -- args` would put the literal "--" into
@@ -53,15 +70,14 @@ export function readGoalContextSnapshot(goalId) {
     }
   ).trim();
 
-  // The application the fixture starts logs to stdout too, and its background
-  // children can interleave with the fixture's own answer: the answer is the
-  // last line that names a snapshot id, and the final line only reports the
-  // refusal (`none`) or an unexpected answer.
-  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const snapshotId = lines.filter((line) => snapshotIdPattern.test(line)).at(-1);
-  if (snapshotId !== undefined) return snapshotId;
-  const answer = lines.at(-1) ?? "";
-  if (answer === "" || answer === "none") {
+  const answer = parseSnapshotAnswer(output);
+  if (answer !== null && answer !== "none") {
+    if (!snapshotIdPattern.test(answer)) {
+      throw new Error(`the context fixture answered an unreadable snapshot id for goal ${goalId}: ${JSON.stringify(answer)}`);
+    }
+    return answer;
+  }
+  if (answer === "none") {
     throw new Error(`goal ${goalId} admitted no ContextSnapshot: the fixture answered ${JSON.stringify(answer)}`);
   }
   throw new Error(`the context fixture did not answer with a snapshot id for goal ${goalId}: ${JSON.stringify(output)}`);

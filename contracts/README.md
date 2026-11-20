@@ -110,12 +110,13 @@ projection always emits (a served `null` stays nullable), and the
 Goal-connection reads carry that pin past consumption: a member is required
 whether or not a surface reads it today. Commit
 `3bc87b0` set the precedent by requiring the consumed-and-always-served
-members; `blocker_reasons`, the completion flags, the accepted-outcome
-disposition, the graph-edge id and the settlement `required?` member are
-pinned exactly that way with no page reading them, so a serving-side rename or
-omission fails the bundle gate, the Elixir served-document test and the Effect
-boundary instead of decoding into a silent fallback. Served members these reads
-leave optional stay additive, and `contracts/scripts/boundary.test.mjs` pins
+members; the Goal read's `blocker_reasons`, the completion flags, the
+accepted-outcome disposition, the graph-edge id and the settlement `required?`
+member are pinned exactly that way with no page reading them, so a
+serving-side rename or omission fails the bundle gate, the Elixir
+served-document test and the Effect boundary instead of decoding into a silent
+fallback. Served members these reads leave optional stay additive, and
+`contracts/scripts/boundary.test.mjs` pins
 both directions: a renamed required member of the served Goal and attention
 reads is refused, while a renamed member the read leaves optional still
 decodes.
