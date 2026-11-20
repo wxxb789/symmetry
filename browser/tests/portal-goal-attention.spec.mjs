@@ -295,13 +295,26 @@ test.describe("Goal attention workspace", () => {
     await page.getByRole("textbox", { name: "Objective" }).fill("Stale amendment attempt");
     await page.getByLabel("Reason").fill("Attempted with a stale page");
 
-    // Another operator moves the goal first: the open decision carries a fresh
-    // version the page has not loaded.
-    const moved = await goalCommand(page, goalId, "cancel", { reason: "Concurrent operator decision" });
-    expect(moved.response.status).toBe(200);
+    // The surface re-reads the served versions at submit time, so the stale
+    // window left is a write that lands while the command is in flight: the
+    // Amend POST is held at the network boundary, another operator cancels the
+    // goal, and the released command then carries a version the server has
+    // already advanced. The in-flight request is passed through unchanged.
+    let cancelIssued = false;
+    let cancelStatus = null;
+    await page.route(`**/portal/api/goals/${goalId}/commands`, async (route) => {
+      if (!cancelIssued) {
+        cancelIssued = true;
+        const cancelled = await goalCommand(page, goalId, "cancel", { reason: "Concurrent operator decision" });
+        cancelStatus = cancelled.response.status;
+      }
+      await route.continue();
+    });
 
     await page.getByRole("button", { name: "Send Amend" }).click();
     await expect(page.getByRole("heading", { name: "The goal changed since this page loaded" })).toBeVisible();
+    expect(cancelIssued, "the concurrent cancel was issued while the command was in flight").toBe(true);
+    expect(cancelStatus).toBe(200);
     await expect(page.getByText(/Server state: version/)).toBeVisible();
     await expect(page.locator("code")).toHaveText("stale");
     await expect(page.getByRole("button", { name: "Reload the current state" })).toBeVisible();
