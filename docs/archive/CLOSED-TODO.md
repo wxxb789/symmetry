@@ -1253,14 +1253,16 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
       whether the delivery backend held `work_items`.
 
       **Closed (2026-11-20, branch `investigate/flake-reversed-import`): hypothesis (a), proven.**
-      The attempt-1 job log (job `133383740181`) still reads through
-      `repos/{owner}/{repo}/actions/jobs/<id>/logs` after `gh run view` stops serving it: at
+      The attempt-1 job log (job `133383740181`) reads through
+      `repos/{owner}/{repo}/actions/jobs/<id>/logs` (a default `gh run view` serves the rerun;
+      attempt 1 stays readable via `gh run view <run> --attempt 1 --log`): at
       `15:02:09.882 UTC` backend `[180]` is cancelled `while locking tuple (0,152) in relation
       "work_items"` in the import's ordered prelock
       (`SELECT w0."id" FROM "work_items" AS w0 WHERE ... ORDER BY w0."id" FOR UPDATE`) by the
       test's own `Task.shutdown(..., :brutal_kill)` teardown, i.e. the delivery-attributed wait
-      was the prelock the assertion exists for, while the failed sample at `15:02:09.897` printed
-      the pre-sync `matching_repository` lookup as `pg_stat_activity.query`. The fields disagree
+      was the prelock the assertion exists for, while the failure report at `15:02:09.897` printed
+      the sample that had failed the assertion - necessarily taken before that teardown - with the
+      pre-sync `matching_repository` lookup as `pg_stat_activity.query`. The fields disagree
       because `pg_stat_get_activity` copies the shared activity array into a materialized result
       when the sampling statement starts (`src/backend/utils/adt/pgstatfuncs.c:331-345` (REL_18_STABLE);
       `src/backend/utils/activity/backend_status.c:813-836`, "if not already done in this
@@ -1279,16 +1281,19 @@ below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
       `after`-block teardown. The deferred maintenance fix is PR #87 (`3c71aec`), exactly what
       the entry asked to leave separate; the lock-order witness tests stay (PR #87 re-predicated
       the wait sample on lock-manager facts). Reproduced outside the suite on PostgreSQL 18.6
-      (probe scripts kept with the investigation): a poll in one transaction returns
-      `blocked=true` with `query` = the pre-lookup statement,
-      `String.contains?(query, "\"work_items\"")` false, while the helper's lock-manager sample
-      on the same wait reports `blocked=true`, `ungranted=true`,
-      `waiter_on_delivery_xid=true` and `blocker_holds_work_items=true`; the local demonstration
-      bounds the snapshot window with a transaction; it does not recreate the CI timing itself;
-      25 varied-seed runs of the two lock-order tests (`integrations_test.exs:1204`, `:1352`) plus
-      `--seed 310068` stay green on the committed helper. A paginated sweep of the 369 `ci.yml`
-      runs created 2026-11-14..2026-11-20 (77 runs that can hold a failed `control` job; 23
-      failed `control` job logs grepped across all their attempts) finds exactly one occurrence
+      (probe scripts kept with the investigation): a poll in one transaction shows the import
+      blocked with `query` = the `matching_repository` lookup statement that precedes the lock
+      wait, so `String.contains?(query, "\"work_items\"")` is false; the lock-manager sample on
+      the same wait finds the import blocked by the delivery backend, its lock ungranted, its
+      wait bound to the delivery backend's transaction, and that backend holding a granted
+      `work_items` lock. The local demonstration bounds the snapshot window with a transaction;
+      it does not recreate the CI timing itself;
+      25 varied-seed runs of the two lock-order tests (`integrations_test.exs:1204`, `:1352`) stay
+      green on the committed helper. A paginated sweep as of `2026-11-20T10:24Z` of the 369
+      `ci.yml` runs created 2026-11-14..2026-11-20 (the newest fetched run, created `10:22:43Z`,
+      was still running; 77 runs that can hold a failed `control` job, the newest of them
+      `44687273091` (created `06:21:56Z`) with `control` = success and no `reversed import` line;
+      23 failed `control` job logs grepped across all their attempts) finds exactly one occurrence
       of the failure: run `43891279765` attempt 1, job `133383740181`.
 
 ## Deferred review findings (0007f)
