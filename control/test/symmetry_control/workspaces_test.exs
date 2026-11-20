@@ -423,6 +423,29 @@ defmodule SymmetryControl.WorkspacesTest do
     assert Repo.aggregate(WorkItem, :count) == count + 5
   end
 
+  test "the persisted creation identity guard counts bytes, not graphemes" do
+    project = project_fixture()
+    assert {:ok, item} = Workspaces.create_work_item(project.id, %{title: "Guarded identity"})
+
+    # 65 graphemes / 130 bytes: the create path's own predicate refuses an identity this
+    # long before the changeset runs, so the persisted guard is asserted directly — it is
+    # the last line for any other writer.
+    multibyte_id = String.duplicate("é", 65)
+    assert String.length(multibyte_id) == 65
+    assert byte_size(multibyte_id) == 130
+
+    multibyte_errors =
+      errors_on(WorkItem.changeset(item, %{creation_id: multibyte_id})).creation_id
+
+    assert "should be at most 128 byte(s)" in multibyte_errors
+
+    boundary_id = String.duplicate("b", 128)
+    boundary = WorkItem.changeset(item, %{creation_id: boundary_id})
+
+    assert boundary.valid?
+    assert boundary.changes.creation_id == boundary_id
+  end
+
   test "retry binding fails closed without a loaded project" do
     item = %WorkItem{
       agent_profile: nil,

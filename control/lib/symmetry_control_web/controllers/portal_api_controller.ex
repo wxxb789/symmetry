@@ -26,10 +26,10 @@ defmodule SymmetryControlWeb.PortalApiController do
 
   Goal rollout is not required for this page: the feed serves the durable Goal
   projection whether or not admission is enabled. Caller-input errors keep their
-  protocol status; any other Goal-feed reason is a server fault and surfaces
-  with its real status. When the workspace read is unavailable the Goal entries
-  are still served and the Project feed states the refusal. Nothing here grants
-  or implies Goal authority.
+  protocol status; every other Goal-feed reason is a server fault and is answered
+  as a 500 `internal_error`. When the workspace read is unavailable the Goal
+  entries are still served and the Project feed states the refusal. Nothing here
+  grants or implies Goal authority.
   """
   def attention(conn, params) do
     with {:ok, project_id, goal_options} <- attention_options(conn, params),

@@ -1347,11 +1347,13 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 
       Closed on branch `retro/b2-control-goals` (2026-11-20, PR #114). The original residual: “the
       retained `:goal_admission_disabled` inline branch is unreachable in production because the
-      attention read is not admission-gated”. No write path ever produced that page state, so the
-      branch, its `empty_attention_page/0` helper and its direct-call test are deleted; the
-      `goal_attention.unavailable` member stays on the wire as `null` (the frontend still decodes it)
-      and a failed Goal read is answered as its mapped protocol status before the projection runs.
-      The residual entry is removed from `docs/TODO.md`.
+      attention read is not admission-gated”. No read path ever produced that page state, so the
+      branch, its `empty_attention_page/0` helper and its direct-call test are deleted; the reason
+      itself keeps its producers on the write path (`goals.ex` rolls it back on `request_plan`,
+      `accept_plan` and `admit_task`; `protocol.ex` maps it to a 409). The `goal_attention.unavailable`
+      member stays on the wire as `null` (the frontend still decodes it) and a failed Goal read is
+      answered as its mapped protocol status before the projection runs. The residual entry is
+      removed from `docs/TODO.md`.
 
 ## Browser acceptance under host load
 

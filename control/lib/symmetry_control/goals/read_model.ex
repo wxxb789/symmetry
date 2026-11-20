@@ -336,9 +336,12 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   # A cursor the database cannot cast is forged client input: the read refuses
   # it exactly like an undecodable cursor instead of surfacing a server fault.
-  # Only the cursor's own value is blamed on the cursor; any other cast failure
-  # in this read (an uncast `project_id` from an internal caller, say) is a
-  # server-side query fault and stays one.
+  # Attribution is by value equality, so only a cast failure of a different
+  # value than the cursor (an uncast `project_id` from an internal caller, say)
+  # is a server-side query fault and stays one. Known limit: the identical
+  # forged value in two parameters is attributed to the cursor; unreachable
+  # over HTTP, where the portal route pre-casts `project_id` through
+  # `Ecto.UUID.cast` and the operator route refuses the parameter outright.
   defp run_attention_query(query, repo, cursor_id) do
     {:ok, repo.all(query)}
   rescue
