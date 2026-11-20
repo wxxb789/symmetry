@@ -160,8 +160,10 @@ def head_blob(repository: pathlib.Path, head: str, relative: str) -> tuple[str, 
     the head does not store as a regular file.
 
     The pathspec is anchored to the repository root and matched literally
-    (``:(top,literal)``), because a slashless path is otherwise a basename pattern and a
-    top-level ``README.md`` would match every ``README.md`` in the tree.
+    (``:(top,literal)``): the read does not depend on the process working directory, and
+    no character of the path is interpreted as a glob. No tracked path holds a glob
+    metacharacter today, so this closes the interpretation rather than a measured
+    mis-read.
     """
     listed = run_git(repository, "ls-tree", "-z", head, "--", f":(top,literal){relative}")
     if listed.returncode != 0:

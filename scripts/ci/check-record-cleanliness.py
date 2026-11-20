@@ -14,25 +14,15 @@ root, say) stays literal here - by the tool's own boundary, not by omission.
 
 Changed-file selection is computed against an explicit comparison base, never from
 the checkout's last commit: CI passes the pull-request base commit, or the pushed
-``before`` commit for a push. The selected paths' bytes are read from the ``--head``
-revision's Git blob - never from the working tree - so the checkout need not be at
-``--head`` and a worktree file cannot substitute bytes for the revision under test;
-a record whose head entry is not a regular file blob (a symlink storing its target
-text, or a gitlink) is refused. An empty or all-zero base - a new branch, a tag push,
-a manual run - names no earlier revision of this branch and falls back to the merge
-base with ``origin/main`` and then to ``HEAD^``; when that range is empty it reports
-``nothing to check`` and passes, because the revision was compared with itself by
-construction, not by omission. A base that was requested and is not present in this
-checkout (a force-push's ``before``) takes the same fallback with a hint, but a
-fallback that would compare the head with itself refuses: the rewritten history now
-sits on ``origin/main``, and a vacuous pass would hide the records such a push adds.
-A requested base that resolves is compared directly (``git diff base head``), so a
-non-fast-forward push that reintroduces an earlier record is still checked instead of
-being narrowed to an empty range; only the fallback base - already a merge base with
-``origin/main``, or ``HEAD^`` - is narrowed to its merge base with the head. Only a
-range that cannot be compared at all, or a requested base that cannot be, refuses.
-Unchanged records are deliberately not checked (the pre-existing 0008-series records
-are tracked by their own TODO entries), and deleted records have nothing to check.
+``before`` commit for a push. The base fallback, its narrowing and the head-blob read
+are ``revision_scope``'s, shared with ``check-citation-existence.py``. The selected
+paths' bytes are read from the ``--head`` revision's Git blob - never from the working
+tree - so the checkout need not be at ``--head`` and a worktree file cannot substitute
+bytes for the revision under test; a record whose head entry is not a regular file blob
+(a symlink storing its target text, or a gitlink) is refused. Only a range that cannot
+be compared at all, or a requested base that cannot be, refuses. Unchanged records are
+deliberately not checked (the pre-existing 0008-series records are tracked by their own
+TODO entries), and deleted records have nothing to check.
 
 Usage::
 
@@ -52,22 +42,16 @@ import pathlib
 import subprocess
 import sys
 
+# The revision-range machinery is shared with scripts/ci/check-citation-existence.py;
+# importing the sibling keeps one implementation of the base fallback and the head-blob
+# read. The module resolves from this script's own directory, so the gate is run the same
+# way from any working directory.
+import revision_scope
+
 SCRIPT_DIRECTORY = pathlib.Path(__file__).resolve().parent
 SANITIZE_TOOL = SCRIPT_DIRECTORY / "model-routing-record-sanitize.py"
 RECORD_PATHS = ("docs/evaluations", "docs/evidence")
 PROGRAM = "check-record-cleanliness"
-# The revision-range machinery is shared with scripts/ci/check-citation-existence.py;
-# importing the sibling keeps one implementation of the base fallback and the head-blob
-# read. The module is resolved from this script's own directory, so the gate is run the
-# same way from any working directory.
-import revision_scope  # noqa: E402  (imported after SCRIPT_DIRECTORY's contract above)
-
-REGULAR_BLOB_MODES = revision_scope.REGULAR_BLOB_MODES
-ComparisonBaseRefused = revision_scope.ComparisonBaseRefused
-DiffRefused = revision_scope.DiffRefused
-resolve_commit = revision_scope.resolve_commit
-narrow_to_merge_base = revision_scope.narrow_to_merge_base
-head_blob = revision_scope.head_blob
 
 
 def resolve_base(repository: pathlib.Path, requested: str | None, head: str) -> tuple[str | None, bool]:
@@ -117,13 +101,13 @@ def main(argv: list[str]) -> int:
     if not SANITIZE_TOOL.is_file():
         print(f"check-record-cleanliness refused: {SANITIZE_TOOL} is missing", file=sys.stderr)
         return 2
-    head = resolve_commit(repository, arguments.head)
+    head = revision_scope.resolve_commit(repository, arguments.head)
     if head is None:
         print(f"check-record-cleanliness refused: cannot resolve the head {arguments.head!r}", file=sys.stderr)
         return 2
     try:
         base, fallback = resolve_base(repository, arguments.base, head)
-    except ComparisonBaseRefused as refusal:
+    except revision_scope.ComparisonBaseRefused as refusal:
         print(f"check-record-cleanliness refused: {refusal}", file=sys.stderr)
         return 2
     if base is None:
@@ -135,10 +119,10 @@ def main(argv: list[str]) -> int:
         return 2
 
     if fallback:
-        base = narrow_to_merge_base(repository, base, head)
+        base = revision_scope.narrow_to_merge_base(repository, base, head)
     try:
         records = changed_records(repository, base, head)
-    except DiffRefused as refusal:
+    except revision_scope.DiffRefused as refusal:
         print(f"check-record-cleanliness refused: {refusal}", file=sys.stderr)
         return 2
     if not records:
@@ -149,11 +133,11 @@ def main(argv: list[str]) -> int:
     nonregular: list[tuple[str, str]] = []
     for relative in records:
         try:
-            mode, payload = head_blob(repository, head, relative)
-        except DiffRefused as refusal:
+            mode, payload = revision_scope.head_blob(repository, head, relative)
+        except revision_scope.DiffRefused as refusal:
             print(f"check-record-cleanliness refused: {refusal}", file=sys.stderr)
             return 2
-        if mode not in REGULAR_BLOB_MODES:
+        if mode not in revision_scope.REGULAR_BLOB_MODES:
             nonregular.append((relative, f"the head revision stores it as mode {mode}"))
             continue
         status, detail = check_record(payload)

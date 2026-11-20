@@ -85,8 +85,9 @@ class RecordCleanlinessTests(unittest.TestCase):
         # path alone selects no record and the gate reports "nothing to check": the
         # selector side of the tool-path case, with the tool's own behaviour covered
         # by its own suite. The ci.yml classifier arm that turns this path into a job
-        # trigger is not executed here (this suite runs no workflow conditions); the
-        # classifier fixture is tracked as its own TODO entry in docs/TODO.md.
+        # trigger is not executed here (this suite runs no workflow conditions); its own
+        # fixture suite is scripts/ci/test-ci-changed-path-classifier.py, recorded as
+        # closed under "Record and documentation hygiene" in docs/archive/CLOSED-TODO.md.
         self.write("scripts/ci/model-routing-record-sanitize.py", "print('not the real tool')\n")
         head = self.commit("touch the sanitize tool")
         result = self.run_gate("--base", self.base, "--head", head)

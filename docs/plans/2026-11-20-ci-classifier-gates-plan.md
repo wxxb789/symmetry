@@ -20,7 +20,7 @@ entry 2 then pins the post-change routing.
    `origin/main` → `HEAD^` fallback, merge-base narrowing, changed-path selection, head-blob read)
    extracted from `check-record-cleanliness.py` and shared by both gates, so the new gate does not
    fork a hardened, CI-event-shaped algorithm. `check-record-cleanliness.py` keeps its CLI, messages
-   and exit codes and delegates to the module; its unchanged sixteen-test suite is the extraction's
+   and exit codes and delegates to the module; its unchanged nineteen-test suite is the extraction's
    regression evidence.
 4. `.github/workflows/ci.yml` — a third classifier output (`run-citations`), the
    `citation-existence` job gated on it (the `record-cleanliness` job's shape at `ci.yml:78,94`),
@@ -174,7 +174,7 @@ Gates actually run, with exit codes, in this order (never a measurement/benchmar
 increment has none):
 
 1. `python3 scripts/ci/test-check-record-cleanliness.py` — before and after the shared-module
-   extraction (16 tests, unchanged).
+   extraction (19 tests, unchanged).
 2. `python3 scripts/ci/test-check-citation-existence.py` — the new fixture suite.
 3. `python3 scripts/ci/test-ci-changed-path-classifier.py` — the classifier fixture suite.
 4. `python3 scripts/ci/check-citation-existence.py --base $(git rev-list --max-parents=0 HEAD)
