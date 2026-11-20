@@ -318,13 +318,8 @@ defmodule SymmetryControlWeb.PortalJSON do
   # the current attempt's supervisory requirement, for a goal-less terminal
   # attempt. A live attempt answers without a query.
   defp work_item_retry_runtime_eligible?(%Task{} = task, %WorkItem{} = work_item) do
-    is_nil(task.goal_id) and task.state in ["failed", "cancelled"] and
-      Orchestration.retry_runtime_eligible?(
-        Map.merge(
-          %{task_id: task.id},
-          Workspaces.retry_binding(work_item, task.required_capabilities)
-        )
-      )
+    Orchestration.retryable_attempt?(task) and
+      Orchestration.retry_runtime_eligible?(Workspaces.retry_binding_for(task, work_item))
   end
 
   defp work_item_retry_runtime_eligible?(%{task: %Task{} = task}, %WorkItem{} = work_item),
@@ -406,7 +401,7 @@ defmodule SymmetryControlWeb.PortalJSON do
           (task.state in ["claimed", "running", "paused", "waiting_for_input"] and
              Orchestration.adapter_operation_supported?(runtime, :cancel)),
       can_retry:
-        task.state in ["failed", "cancelled"] and
+        Orchestration.retryable_attempt?(task_record) and
           Map.get(snapshot, :retry_runtime_eligible, false),
       intent_locked: task.state not in ["failed", "cancelled"]
     }

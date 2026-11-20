@@ -416,6 +416,19 @@ defmodule SymmetryControl.WorkspacesTest do
              Workspaces.retry_binding(item, %{"supervisory_control" => true})
   end
 
+  test "retry binding resolves a blank binding as the project's defaults" do
+    project = project_fixture()
+
+    # A row with a blank agent binding cannot be written: the
+    # `work_items_owner_fields_check` constraint requires an agent's profile and
+    # workspace, so this arm is defensive and resolves the project defaults
+    # instead of letting a blank binding match no runtime.
+    item = %WorkItem{agent_profile: nil, workspace: nil, project: project}
+
+    assert %{agent_profile: "codex", workspace: "primary", required_capabilities: %{}} =
+             Workspaces.retry_binding(item)
+  end
+
   defp project_fixture do
     assert {:ok, project} =
              Workspaces.create_project(%{

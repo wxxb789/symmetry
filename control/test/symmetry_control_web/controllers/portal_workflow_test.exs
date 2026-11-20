@@ -7,6 +7,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   alias SymmetryControl.{Orchestration, Repo}
   alias SymmetryControl.Orchestration.RunTransition
   alias SymmetryControl.Workspaces.WorkItem
+  alias SymmetryControl.TelemetryReads
   alias SymmetryControlWeb.PortalSession
 
   @now ~U[2026-09-04 11:00:00.000000Z]
@@ -479,56 +480,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   test "an archived project withholds the retry control the endpoint refuses" do
     project = create_project("ARCV")
-    key = Ecto.UUID.generate()
-
-    assert {:ok, enrolled, :created} =
-             Orchestration.enroll_machine(
-               %{name: "archive-retry-machine", machine_token: "token-#{key}"},
-               key,
-               enrollment_token: "enrollment-secret",
-               expected_enrollment_token: "enrollment-secret",
-               now: @now
-             )
-
-    assert {:ok, [_runtime]} =
-             Orchestration.register_runtimes(
-               enrolled.machine.id,
-               Ecto.UUID.generate(),
-               [
-                 %{
-                   runtime_key: "archive-retry-runtime",
-                   name: "Archive retry runtime",
-                   capacity: 1,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   harness_kind: "generic",
-                   harness_version: "generic-v1",
-                   adapter_version: "generic-v1",
-                   adapter_protocol_version: 1,
-                   capabilities: %{
-                     "adapter" => %{
-                       "kind" => "generic",
-                       "native_version" => "generic-v1",
-                       "implementation_version" => "generic-v1",
-                       "protocol_version" => 1,
-                       "operations" => %{
-                         "start" => true,
-                         "events" => true,
-                         "cancel" => true,
-                         "resume" => false,
-                         "handoff" => false,
-                         "guidance" => "unsupported",
-                         "pause" => "unsupported",
-                         "approval_response" => false,
-                         "usage" => "unknown",
-                         "hard_cost_limit" => false
-                       }
-                     }
-                   }
-                 }
-               ],
-               now: @now
-             )
+    enroll_adapter_runtime("archive-retry", "Archive retry runtime")
 
     item =
       create_work_item(project["id"], "Archived retry", %{
@@ -581,56 +533,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   test "a re-bound work item drives the cancel response's retry gate like the read" do
     project = create_project("REBD")
-    key = Ecto.UUID.generate()
-
-    assert {:ok, enrolled, :created} =
-             Orchestration.enroll_machine(
-               %{name: "rebound-retry-machine", machine_token: "token-#{key}"},
-               key,
-               enrollment_token: "enrollment-secret",
-               expected_enrollment_token: "enrollment-secret",
-               now: @now
-             )
-
-    assert {:ok, [_runtime]} =
-             Orchestration.register_runtimes(
-               enrolled.machine.id,
-               Ecto.UUID.generate(),
-               [
-                 %{
-                   runtime_key: "rebound-retry-runtime",
-                   name: "Rebound retry runtime",
-                   capacity: 1,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   harness_kind: "generic",
-                   harness_version: "generic-v1",
-                   adapter_version: "generic-v1",
-                   adapter_protocol_version: 1,
-                   capabilities: %{
-                     "adapter" => %{
-                       "kind" => "generic",
-                       "native_version" => "generic-v1",
-                       "implementation_version" => "generic-v1",
-                       "protocol_version" => 1,
-                       "operations" => %{
-                         "start" => true,
-                         "events" => true,
-                         "cancel" => true,
-                         "resume" => false,
-                         "handoff" => false,
-                         "guidance" => "unsupported",
-                         "pause" => "unsupported",
-                         "approval_response" => false,
-                         "usage" => "unknown",
-                         "hard_cost_limit" => false
-                       }
-                     }
-                   }
-                 }
-               ],
-               now: @now
-             )
+    enroll_adapter_runtime("rebound-retry", "Rebound retry runtime")
 
     item =
       create_work_item(project["id"], "Re-bound retry", %{
@@ -1098,7 +1001,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
       handler_id,
       [:symmetry_control, :repo, :query],
       fn _event, _measurements, metadata, %{reader: reader, forms: forms} ->
-        if work_item_read?(metadata.params, forms),
+        if TelemetryReads.read?(metadata.params, forms),
           do: send(reader, {:work_item_read, self(), to_string(metadata.query)})
       end,
       %{reader: reader, forms: forms}
@@ -1111,7 +1014,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              |> get("/portal/api/work-items/#{item.id}")
              |> json_response(200)
 
-    reads = work_item_reads([])
+    reads = TelemetryReads.drain(:work_item_read)
     queries = Enum.map(reads, fn {_pid, query} -> query end)
     processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
 
@@ -1126,22 +1029,86 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
            "expected every work item detail read query on #{inspect(reader)}, got #{inspect(processes)}"
   end
 
-  defp work_item_reads(reads) do
-    receive do
-      {:work_item_read, pid, query} -> work_item_reads([{pid, query} | reads])
-    after
-      0 -> reads
-    end
-  end
+  test "a work item cancel response keeps every query on the calling process" do
+    project = create_project("CNCL")
 
-  defp work_item_read?(params, forms) do
-    params
-    |> List.wrap()
-    |> Enum.any?(fn
-      value when is_binary(value) -> value in forms
-      values when is_list(values) -> Enum.any?(values, &(&1 in forms))
-      _value -> false
-    end)
+    assert {:ok, connection} =
+             SymmetryControl.Integrations.create_connection(%{
+               provider: "github",
+               name: "cancel-read-" <> Ecto.UUID.generate(),
+               account_ref: "acme",
+               auth_type: "gh_cli",
+               capabilities: ["repositories", "work_items", "ci"]
+             })
+
+    assert {:ok, repository} =
+             SymmetryControl.Workspaces.create_resource(project["id"], %{
+               connection_id: connection.id,
+               kind: "repository",
+               name: "Cancel read repository",
+               external_ref: "acme/cancel-read"
+             })
+
+    assert {:ok, item} =
+             SymmetryControl.Workspaces.create_work_item(project["id"], %{
+               title: "Cancel on one connection",
+               status: "ready",
+               priority: "medium",
+               assignee_type: "agent",
+               repository_resource_id: repository.id
+             })
+
+    assert %{"execution" => %{"state" => "queued"}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item.id}/run", %{"action_id" => "cancel-read-run"})
+             |> json_response(202)
+
+    reader = self()
+
+    forms = [
+      item.id,
+      Ecto.UUID.dump!(item.id),
+      project["id"],
+      Ecto.UUID.dump!(project["id"]),
+      repository.id,
+      Ecto.UUID.dump!(repository.id)
+    ]
+
+    handler_id = {__MODULE__, :cancel_read, item.id}
+
+    :telemetry.attach(
+      handler_id,
+      [:symmetry_control, :repo, :query],
+      fn _event, _measurements, metadata, %{reader: reader, forms: forms} ->
+        if TelemetryReads.read?(metadata.params, forms),
+          do: send(reader, {:cancel_read, self(), to_string(metadata.query)})
+      end,
+      %{reader: reader, forms: forms}
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert %{"execution" => %{"state" => "cancelled"}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item.id}/cancel", %{
+               "action_id" => "cancel-read-cancel",
+               "generation" => 1
+             })
+             |> json_response(202)
+
+    reads = TelemetryReads.drain(:cancel_read)
+    queries = Enum.map(reads, fn {_pid, query} -> query end)
+    processes = reads |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
+
+    # Two preloads must have rows for this test to have power: Ecto only
+    # preloads in parallel from two preloads with fetch work, and every parallel
+    # preload would queue for the sandbox connection the test process owns
+    # (the recorded intermittent checkout-timeout failure).
+    assert Enum.any?(queries, &String.contains?(&1, "\"projects\""))
+    assert Enum.any?(queries, &String.contains?(&1, "\"project_resources\""))
+
+    assert processes == [reader],
+           "expected every cancel response read query on #{inspect(reader)}, got #{inspect(processes)}"
   end
 
   defp create_project(key) do
@@ -1346,6 +1313,62 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     }
 
     {runtime, fence, run}
+  end
+
+  # An enrolled machine with one adapter-backed runtime for the project's
+  # default binding, advertising `start` and `cancel`: the fixture the served
+  # retry gate's responses need a selectable runtime for.
+  defp enroll_adapter_runtime(key, name) do
+    enrollment_key = Ecto.UUID.generate()
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(
+               %{name: "#{key}-machine", machine_token: "token-#{enrollment_key}"},
+               enrollment_key,
+               enrollment_token: "enrollment-secret",
+               expected_enrollment_token: "enrollment-secret",
+               now: @now
+             )
+
+    assert {:ok, [_runtime]} =
+             Orchestration.register_runtimes(
+               enrolled.machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "#{key}-runtime",
+                   name: name,
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   harness_kind: "generic",
+                   harness_version: "generic-v1",
+                   adapter_version: "generic-v1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "adapter" => %{
+                       "kind" => "generic",
+                       "native_version" => "generic-v1",
+                       "implementation_version" => "generic-v1",
+                       "protocol_version" => 1,
+                       "operations" => %{
+                         "start" => true,
+                         "events" => true,
+                         "cancel" => true,
+                         "resume" => false,
+                         "handoff" => false,
+                         "guidance" => "unsupported",
+                         "pause" => "unsupported",
+                         "approval_response" => false,
+                         "usage" => "unknown",
+                         "hard_cost_limit" => false
+                       }
+                     }
+                   }
+                 }
+               ],
+               now: @now
+             )
   end
 
   defp transition(run_id, fence, state, number) do
