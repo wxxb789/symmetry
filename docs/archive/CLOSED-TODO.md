@@ -2354,15 +2354,34 @@ section below was moved on 2026-11-20 from branch `fix/ablation-control-row-anno
       `request_hash`, and a body rebuilt from a fresh read would carry the post-application pair for a
       command that already applied. The attempt is released on success and on any answer that settles
       it, and kept on a transport failure or an uninterpretable answer — the settle rule the generic
-      command already applies. Pinned by `frontend/src/features/goals/goal-attention.test.tsx`:
+      command already applies. This recovery is usable only until the goal read refetches: the
+      committed resolution publishes its goal invalidation before its response is sent
+      (`portal_invalidations.ex:28-32`), so a client that refetches first (the resolution's own
+      publication, a reconnect, refocus or the fallback read) sees the decision resolved, the approval
+      control unmounts (`planApprovalOption`'s `open?` gate) and the frozen attempt keeps no trigger;
+      the resolved-but-unadmitted dead end that can leave behind is recorded as an open entry in
+      `docs/TODO.md`. Pinned by `frontend/src/features/goals/goal-attention.test.tsx`:
       "builds the decision resolution from a submit-time read so a worker-advanced goal is not sent
       stale" (red on the pre-fix bytes — the resolution carried the page's settled 4/3 pair and the
-      fixture answered the 409 `stale`, so no admission followed; green after: 5/4, then 6) and
+      fixture answered the 409 `stale`, so no admission followed; green after: 5/4, then 6),
       "replays the plan approval's decision resolution byte for byte after a lost acknowledgement"
-      (red — the re-press minted a fresh identity and rebuilt the body from the page's read, so the
-      fixture refused the resolved decision; green — the re-press repeated the recorded bytes and both
-      commands were acknowledged). Recorded runs: the two cases fail 2/26 with exit 1 on HEAD's
-      `detail.tsx` and pass 26/26 with exit 0 on the branch.
+      (pre-fix the press failed earlier, at its first assertion `expect(first.expected_version).toBe(5)`
+      — the resolution carried the page's settled pair; green — the re-press repeated the recorded
+      bytes under the recorded identity and both commands were acknowledged) and "replays the plan
+      approval's admission byte for byte when its acknowledgement is lost" (the only pin of the frozen
+      admission half; red when the `attempt.admit ??` reuse is removed — 1 failed | 26 skipped (27) —
+      green on the branch). The fix round added two pins of the freeze's release rule: "releases the
+      plan approval attempt when the server answers its resolution" — red on `7a55b46`'s `detail.tsx`
+      and red when only the answered-error release is deleted (1 failed | 28 passed (29), the case
+      alone) — and "does not replay a frozen approval for a different proposal" — red when only the
+      freeze-key check is deleted (1 failed | 28 passed (29), the case alone); the latter stays green
+      on `7a55b46`'s `detail.tsx` by construction, because the pre-fix press keeps no attempt whose
+      bytes could leak into a changed intent. Recorded runs: implement stage (26 cases) 2 failed |
+      24 passed (26), exit 1, on `7a55b46`'s `detail.tsx`, and 26 passed (26), exit 0, on the
+      implement commit; apply stage (27 cases) 3 failed | 24 passed (27), exit 1, on `7a55b46`'s
+      `detail.tsx`, and 27 passed (27), exit 0, on the branch; fix stage (29 cases) 4 failed |
+      25 passed (29), exit 1, on `7a55b46`'s `detail.tsx` (the three pins plus the release pin), and
+      29 passed (29), exit 0, on the branch.
 - [ ] Cover the subject batch stream's stdin-write refusal. `subjectGitBatchStream.streamObject`
       (`daemon/internal/workspace/subject.go:744`) marks the stream desynced and wraps the write
       error when `stream.stdin.Write` fails (`:750-751`, via `desync` `:819`; the child's read end is
