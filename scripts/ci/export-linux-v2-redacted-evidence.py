@@ -235,9 +235,11 @@ LEGACY_REPLAY_KEYS = LEGACY_COMMON_KEYS | {
 # The restarted daemon's stdout/stderr logs, written into each case root beside
 # witness-evidence.json by every restarted-daemon start at
 # daemon/e2e/production_linux_containment_witness_test.go:1723-1754
-# (startLinuxResumeBarrierDaemonWitness) and
+# (startLinuxResumeBarrierDaemonWitness),
 # daemon/e2e/production_daemon_crash_witness_test.go:386-394
-# (startProductionDaemonWitness); the case exports a tail exactly when such a
+# (startProductionDaemonWitness) and
+# daemon/e2e/production_linux_containment_replay_witness_test.go:754-762
+# (startLinuxReplayDaemonWitness); the case exports a tail exactly when such a
 # log exists, so a case that never restarted the daemon publishes nothing. Only
 # the tail of a failed run is exported, as a sanitized projection of the
 # daemon's own slog JSON records; the sources are never copied.
@@ -268,8 +270,9 @@ LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
 # fields must extend the set in the same change; test-linux-v2-evidence.py
 # scans the log call sites and the known producer call sites and fails when a
 # literal is missing from its set. Values reaching these fields through a
-# variable (for example a stateName passed down a helper) are covered by this
-# rule, not by that scan.
+# variable (for example a stateName passed down a helper, or the outcome values
+# assigned from a literal at app.go:7936-7972, 8939-8969, 9549 and
+# supervisory.go:140) are covered by this rule, not by that scan.
 DAEMON_LOG_TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$")
 DAEMON_LOG_LEVELS = ("DEBUG", "INFO", "WARN", "ERROR")
 DAEMON_LOG_MESSAGES = frozenset({

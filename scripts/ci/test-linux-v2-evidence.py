@@ -20,6 +20,9 @@ DAEMON_LOG_SCAN_DIRECTORIES = ("daemon/internal/app", "daemon/internal/platform"
 DAEMON_LOG_SCANNED_PRODUCERS = (
     # call, zero-based argument index, allowlist field
     ("queueFailure", 2, "stage"),
+    ("queueTerminalTransitionWithRetry", 2, "state"),
+    ("queueTerminalTransitionAndAcknowledgementWithContext", 2, "state"),
+    ("queueTerminalTransitionAndAcknowledgementWithContext", 5, "outcome"),
     ("stopRecoveredJournal", 1, "reason"),
     ("terminateForLease", 1, "reason"),
     ("handleOrdinaryDeliveryError", 3, "reason"),

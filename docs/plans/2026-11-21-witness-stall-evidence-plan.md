@@ -14,10 +14,12 @@ gains an open entry (`docs/TODO.md`), plus this plan. No Go, workflow, contract 
    `.../second-daemon.stderr.log`, written into the case root by every restarted-daemon start:
    `startLinuxResumeBarrierDaemonWitness`
    (`daemon/e2e/production_linux_containment_witness_test.go:1723-1754`, the lease-arm/replay
-   barrier) and `startProductionDaemonWitness`
+   barrier), `startProductionDaemonWitness`
    (`daemon/e2e/production_daemon_crash_witness_test.go:386-394`, the bind/prepare/clean-seal
-   restarts) — i.e. beside the `witness-evidence.json` the exporter already reads (`:848`) — as
-   bounded, sanitized JSON
+   restarts) and `startLinuxReplayDaemonWitness`
+   (`daemon/e2e/production_linux_containment_replay_witness_test.go:754-762`, the response-lost and
+   helper-crash replays) — i.e. beside the `witness-evidence.json` the exporter already reads
+   (`:848`) — as bounded, sanitized JSON
    documents `<case>-second-daemon-stdout.json` / `<case>-second-daemon-stderr.json` in the same
    private output directory. The upload step already globs `*.json` from that directory
    (`.github/workflows/ci.yml:1838-1845`), so no workflow change is needed.
@@ -54,10 +56,11 @@ gains an open entry (`docs/TODO.md`), plus this plan. No Go, workflow, contract 
   failing case's logs" is implemented as "every case's restarted-daemon log tails, on a run the CI
   judged failed". The decider is the written log, not a live daemon: a case exports a tail exactly
   when `<case>/second-daemon.{stdout,stderr}.log` exists when the exporter runs. In the legacy case
-  set only four cases reach a restarted-daemon start — `bind-before-commit`,
-  `prepare-before-bind`, `daemon-after-resume-clean-seal-boundary` and the failing
-  `lease-arm-before-resume`; `commit-before-resume` and `daemon-after-resume` return before the
-  restart (production witness `:1000-1012` and the unsealed-mirror branch), so they publish nothing.
+  set seven cases reach a restarted-daemon start — `bind-before-commit`, `prepare-before-bind`,
+  `daemon-after-resume-clean-seal-boundary`, the failing `lease-arm-before-resume`,
+  `stop-response-lost`, `release-response-lost` and `helper-dead-mirror`; `commit-before-resume`
+  and `daemon-after-resume` return before the restart (production witness `:1000-1012` and the
+  unsealed-mirror branch), so they publish nothing.
   Passed runs publish no log documents (the tail of a green run is noise, and the contract scopes
   the export to failing cases).
 - **Bounded tail.** At most 65536 bytes are read from the end of each log file
