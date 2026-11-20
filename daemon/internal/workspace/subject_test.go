@@ -1036,14 +1036,6 @@ func subjectTreeBlobCount(t *testing.T, repository, commit string) int {
 	return bytes.Count(output, []byte{0})
 }
 
-// subjectGitCommandOutput runs the bounded workspace Git command the digest
-// uses for its committed tree listing, so an injected batch opener is always
-// paired with a real committed tree.
-func subjectGitCommandOutput(ctx context.Context, repository string, maxBytes int, limitErr error, arguments ...string) ([]byte, error) {
-	command := gitNoReplaceObjectsCommand(ctx, repository, arguments...)
-	return gitCommandOutputLimited(ctx, command, maxBytes, limitErr)
-}
-
 // workspaceBatchHelperCommand starts this test binary as a Git batch stream
 // double for the batch framing and teardown regressions.
 func workspaceBatchHelperCommand(t *testing.T, ctx context.Context, arguments ...string) *exec.Cmd {
@@ -1165,7 +1157,7 @@ func TestSubjectBatchStreamRejectsMalformedResponses(t *testing.T) {
 			defer cancel()
 			command := workspaceBatchHelperCommand(t, ctx, "frame", variant, string(content))
 			var stream *subjectGitBatchStream
-			digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitCommandOutput,
+			digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput,
 				func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
 					opened, openErr := startSubjectGitBatch(openContext, command, nil, nil)
 					stream = opened
@@ -1183,6 +1175,18 @@ func TestSubjectBatchStreamRejectsMalformedResponses(t *testing.T) {
 			}
 			if stream == nil {
 				t.Fatal("batch opener was not used")
+			}
+			// Every malformed response is a refusal that leaves the record
+			// boundary unconsumed, so close() must see the stream desynced and
+			// terminate the child instead of asking it to exit. The helper exits
+			// on its own after one frame, so this flag is the only observable
+			// that distinguishes terminate from finish in this table.
+			if variant == "valid" {
+				if stream.desynced {
+					t.Fatal("valid batch frame left the stream marked desynced")
+				}
+			} else if !stream.desynced {
+				t.Fatalf("malformed batch frame %q left the stream in sync; a refusal past a record boundary must mark the stream desynced", variant)
 			}
 			state := stream.command.ProcessState
 			if state == nil || command.Process == nil || state.Pid() != command.Process.Pid {
@@ -1239,7 +1243,7 @@ func TestSubjectBatchStreamCancelFailureFallsBackToKill(t *testing.T) {
 	opened := make(chan *subjectGitBatchStream)
 	result := make(chan digestOutcome, 1)
 	go func() {
-		digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitCommandOutput,
+		digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput,
 			func(openContext context.Context, streamRepository string) (*subjectGitBatchStream, error) {
 				stream, openErr := startSubjectGitBatch(openContext, command, nil, fence)
 				if stream != nil {

@@ -1900,14 +1900,9 @@ func linuxCloneOpenBatch(ctx context.Context, repository string) (*subjectGitBat
 	}
 	budgetContext, budget := context.WithTimeout(ctx, linuxCloneGitCommandTimeout)
 	command := linuxCloneGitCommand(budgetContext, repository, "cat-file", "--batch")
-	command.Stderr = io.Discard
-	if err := platform.ConfigureProcess(command); err != nil {
+	if err := configureLinuxCloneGitChild(command); err != nil {
 		budget()
-		return nil, fmt.Errorf("configure exact Git process group: %w", err)
-	}
-	if err := platform.ConfigureHeadlessProcess(command); err != nil {
-		budget()
-		return nil, fmt.Errorf("configure headless Git process: %w", err)
+		return nil, err
 	}
 	return startSubjectGitBatch(budgetContext, command, budget, ErrLinuxCloneProcessUnresolved)
 }
@@ -1972,6 +1967,22 @@ func linuxCloneGitCommand(ctx context.Context, repository string, arguments ...s
 	return command
 }
 
+// configureLinuxCloneGitChild applies the Linux clone path's shared child
+// containment policy before Start: pidfd-checked process-group leadership,
+// discarded stderr, and a headless start. Callers take their stdout pipe after
+// this configuration and keep this path's command budget and cancellation
+// policy on the command itself.
+func configureLinuxCloneGitChild(command *exec.Cmd) error {
+	command.Stderr = io.Discard
+	if err := platform.ConfigureProcess(command); err != nil {
+		return fmt.Errorf("configure exact Git process group: %w", err)
+	}
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return fmt.Errorf("configure headless Git process: %w", err)
+	}
+	return nil
+}
+
 func runLinuxCloneGitStdout(ctx context.Context, command *exec.Cmd, maxBytes int64, limitErr error, destination io.Writer) (int64, error) {
 	if ctx == nil || command == nil || destination == nil || maxBytes <= 0 || limitErr == nil {
 		return 0, errors.New("Linux clone Git output operation is incomplete")
@@ -1979,16 +1990,12 @@ func runLinuxCloneGitStdout(ctx context.Context, command *exec.Cmd, maxBytes int
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if err := platform.ConfigureProcess(command); err != nil {
-		return 0, fmt.Errorf("configure exact Git process group: %w", err)
+	if err := configureLinuxCloneGitChild(command); err != nil {
+		return 0, err
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return 0, err
-	}
-	command.Stderr = io.Discard
-	if err := platform.ConfigureHeadlessProcess(command); err != nil {
-		return 0, fmt.Errorf("configure headless Git process: %w", err)
 	}
 	if err := command.Start(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {

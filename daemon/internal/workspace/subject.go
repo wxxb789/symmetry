@@ -543,11 +543,14 @@ type subjectGitBatchStream struct {
 }
 
 func gitTreeDigest(ctx context.Context, repository, commit string) (string, error) {
-	return gitTreeDigestWithReaders(ctx, repository, commit,
-		func(ctx context.Context, repository string, maxBytes int, limitErr error, arguments ...string) ([]byte, error) {
-			command := gitNoReplaceObjectsCommand(ctx, repository, arguments...)
-			return gitCommandOutputLimited(ctx, command, maxBytes, limitErr)
-		}, openSubjectGitBatch)
+	return gitTreeDigestWithReaders(ctx, repository, commit, subjectGitOutput, openSubjectGitBatch)
+}
+
+// subjectGitOutput runs the bounded workspace Git command used for the
+// committed tree listing of the subject digest.
+func subjectGitOutput(ctx context.Context, repository string, maxBytes int, limitErr error, arguments ...string) ([]byte, error) {
+	command := gitNoReplaceObjectsCommand(ctx, repository, arguments...)
+	return gitCommandOutputLimited(ctx, command, maxBytes, limitErr)
 }
 
 func gitTreeDigestWithReaders(ctx context.Context, repository, commit string, readOutput subjectGitOutputReader, openBatch subjectGitBatchOpener) (string, error) {
@@ -616,13 +619,13 @@ func hashTreeManifest(ctx context.Context, stream *subjectGitBatchStream, entrie
 			return err
 		}
 		hasher.Reset()
-		if err := stream.hashObject(entries[index].objectID, hasher, maxSubjectArtifactBlobBytes); err != nil {
+		if err := stream.streamObject(entries[index].objectID, hasher, maxSubjectArtifactBlobBytes); err != nil {
 			return fmt.Errorf("read committed blob %q: %w", string(entries[index].path), err)
 		}
-		// Sum appends into the entry digest storage, so streaming a committed
-		// blob allocates no per-object buffer.
-		blobDigest := hasher.Sum(entries[index].digest[:0])
-		copy(entries[index].digest[:], blobDigest)
+		// Sum appends the digest into the entry's own storage (cap exactly
+		// sha256.Size), so this in-place append both computes and stores the
+		// digest without a per-object buffer or a second store.
+		_ = hasher.Sum(entries[index].digest[:0])
 	}
 	return nil
 }
@@ -721,64 +724,55 @@ func startSubjectGitBatch(ctx context.Context, command *exec.Cmd, budget context
 	}, nil
 }
 
-// hashObject requests one committed object from the batch child and streams
+// streamObject requests one committed object from the batch child and streams
 // its content into content. It refuses missing objects, non-blob responses and
 // content beyond maxBytes without retaining the object.
-func (stream *subjectGitBatchStream) hashObject(objectID string, content io.Writer, maxBytes int64) error {
+func (stream *subjectGitBatchStream) streamObject(objectID string, content io.Writer, maxBytes int64) error {
 	if err := stream.ctx.Err(); err != nil {
 		return err
 	}
 	stream.request = append(stream.request[:0], objectID...)
 	stream.request = append(stream.request, '\n')
 	if _, err := stream.stdin.Write(stream.request); err != nil {
-		stream.desynced = true
-		return stream.streamError(fmt.Errorf("request object %s from Git batch stream: %w", objectID, err))
+		return stream.desync(stream.streamError(fmt.Errorf("request object %s from Git batch stream: %w", objectID, err)))
 	}
 	header, err := stream.stdout.ReadSlice('\n')
 	if err != nil {
-		stream.desynced = true
-		return stream.streamError(fmt.Errorf("read Git batch response header for object %s: %w", objectID, err))
+		return stream.desync(stream.streamError(fmt.Errorf("read Git batch response header for object %s: %w", objectID, err)))
 	}
 	fields := bytes.Split(bytes.TrimSuffix(header, []byte{'\n'}), []byte{' '})
 	if len(fields) == 2 && string(fields[0]) == objectID && string(fields[1]) == "missing" {
 		return fmt.Errorf("committed object %s is missing from the repository", objectID)
 	}
 	if len(fields) != 3 || string(fields[0]) != objectID {
-		stream.desynced = true
-		return fmt.Errorf("Git batch stream returned an invalid response header for object %s", objectID)
+		return stream.desync(fmt.Errorf("Git batch stream returned an invalid response header for object %s", objectID))
 	}
 	if string(fields[1]) != "blob" {
-		stream.desynced = true
-		return fmt.Errorf("Git batch stream returned type %q for object %s", string(fields[1]), objectID)
+		return stream.desync(fmt.Errorf("Git batch stream returned type %q for object %s", string(fields[1]), objectID))
 	}
 	size, err := strconv.ParseInt(string(fields[2]), 10, 64)
 	if err != nil || size < 0 {
-		stream.desynced = true
-		return fmt.Errorf("Git batch stream returned an invalid size for object %s", objectID)
+		return stream.desync(fmt.Errorf("Git batch stream returned an invalid size for object %s", objectID))
 	}
 	if size > maxBytes {
-		stream.desynced = true
-		return fmt.Errorf("%w: object %s is %d bytes", ErrSubjectArtifactTooLarge, objectID, size)
+		return stream.desync(fmt.Errorf("%w: object %s is %d bytes", ErrSubjectArtifactTooLarge, objectID, size))
 	}
-	if err := stream.hashContent(content, size); err != nil {
-		stream.desynced = true
-		return stream.streamError(fmt.Errorf("read content of object %s from Git batch stream: %w", objectID, err))
+	if err := stream.copyExact(content, size); err != nil {
+		return stream.desync(stream.streamError(fmt.Errorf("read content of object %s from Git batch stream: %w", objectID, err)))
 	}
 	trailer, err := stream.stdout.ReadByte()
 	if err != nil {
-		stream.desynced = true
-		return stream.streamError(fmt.Errorf("read content terminator of object %s from Git batch stream: %w", objectID, err))
+		return stream.desync(stream.streamError(fmt.Errorf("read content terminator of object %s from Git batch stream: %w", objectID, err)))
 	}
 	if trailer != '\n' {
-		stream.desynced = true
-		return fmt.Errorf("Git batch stream did not terminate object %s content", objectID)
+		return stream.desync(fmt.Errorf("Git batch stream did not terminate object %s content", objectID))
 	}
 	return nil
 }
 
-// hashContent copies exactly size bytes of batch output into content through
-// the stream's reusable buffer.
-func (stream *subjectGitBatchStream) hashContent(content io.Writer, size int64) error {
+// copyExact copies exactly size bytes of batch output into content through the
+// stream's reusable buffer.
+func (stream *subjectGitBatchStream) copyExact(content io.Writer, size int64) error {
 	for remaining := size; remaining > 0; {
 		chunk := int64(len(stream.buffer))
 		if remaining < chunk {
@@ -801,6 +795,15 @@ func (stream *subjectGitBatchStream) streamError(err error) error {
 	if ctxErr := stream.ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
+	return err
+}
+
+// desync marks the stream desynced before returning err. Every refusal that
+// leaves the last batch response unconsumed to a record boundary must go
+// through here: close() derives its terminate-versus-ask-to-exit choice from
+// that flag.
+func (stream *subjectGitBatchStream) desync(err error) error {
+	stream.desynced = true
 	return err
 }
 
