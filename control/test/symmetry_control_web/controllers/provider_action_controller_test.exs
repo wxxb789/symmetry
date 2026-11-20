@@ -828,25 +828,33 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     HTTPStub.verify_shared!()
   end
 
-  # The four replay cases share one expectation and differ only in the caller
-  # binding, the committed terminal state, and the injected failure, so one loop
-  # registers one named test per case.
-  for {name, binding, terminal_state, failure} <- [
+  # The five replay cases share one expectation and differ only in the caller
+  # binding, the committed terminal outcome (state and, for failures, the stored
+  # code), and the injected failure, so one loop registers one named test per
+  # case.
+  for {name, binding, terminal_state, failure, code} <- [
         {"stale exact unknown caller replays committed success before authentication", :exact,
-         "succeeded", :authentication},
+         "succeeded", :authentication, nil},
         {"stale exact unknown caller replays committed failure before authentication", :exact,
-         "failed", :authentication},
+         "failed", :authentication, "forbidden"},
+        # A stored-row decode pin, not an end-to-end write-then-replay flow:
+        # `authorized_connection/3` widens every execute context's capabilities
+        # before dispatch, so no live flow commits this pair. The case pins
+        # `stored_failure/1`'s decode of the `capability_not_granted` code.
+        {"stale exact unknown caller replays a stored capability refusal row", :exact, "failed",
+         :authentication, "capability_not_granted"},
         {"stale generic unknown caller replays committed success before network readback",
-         :generic, "succeeded", :transport},
+         :generic, "succeeded", :transport, nil},
         {"stale generic unknown caller replays committed failure before network readback",
-         :generic, "failed", :transport}
+         :generic, "failed", :transport, "forbidden"}
       ] do
     test name, context do
       assert_terminal_replay_after_dispatch_lock(
         context,
         unquote(binding),
         unquote(terminal_state),
-        unquote(failure)
+        unquote(failure),
+        unquote(code)
       )
     end
   end
@@ -2831,7 +2839,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     goal_context
   end
 
-  defp assert_terminal_replay_after_dispatch_lock(context, binding, terminal_state, failure) do
+  defp assert_terminal_replay_after_dispatch_lock(context, binding, terminal_state, failure, code) do
     goal_context = exact_github_context(context)
 
     {intent, input} =
@@ -2918,7 +2926,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
                 }
               }
             else
-              %{"code" => "forbidden"}
+              %{"code" => code}
             end
 
           # The request has committed its unknown decision and is waiting to acquire
@@ -2944,7 +2952,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
       if terminal_state == "succeeded" do
         assert json_response(response, 200) == completed.result
       else
-        assert_error(response, 403, "forbidden")
+        assert_error(response, 403, code)
       end
 
       replay =

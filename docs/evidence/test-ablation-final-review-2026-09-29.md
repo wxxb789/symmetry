@@ -144,10 +144,10 @@ Evidence-report SHA-256 values reviewed:
 
 | Report | SHA-256 |
 | --- | --- |
-| app startup | `326edbd8e3ea39569b6039c8b2b83f3ca877381a7341f14b7068ddbe959ca405` |
+| app startup | `92a66cbd166ebe9cf0f896556c30a1663b15501b9f100bcb4ff28f38f050194c` |
 | Control | `e2672276b4f4171391a6df202dc01e9e66ccc705d72e4ee095db7471e7a1c6f9` |
 | contracts | `73b76e1edd0360a26d5d2acf4a77b529b065e041136a85ab14e879d0f3bef8f7` |
-| Go probe | `f7f04b84d20688f12c75ad17d4fed2975036827e1ceadaf378d8f713d405b1f0` |
+| Go probe | `c983ee0acd0c5f9c16e95deebcc779e952addc824dea09378c12aaa5b5869d1a` |
 | CI peer | `2df049683fce4256bc1f125fae33b6b4b793a838cefd129aa1b1725a1a3f8e5e` |
 | inline parser | `8e81e32f72d2f9fb86954a65959ca104148d8f0c05c5a788cbbe62b58bd38aa2` |
 
@@ -183,7 +183,7 @@ files remained unchanged; in particular,
 `5b5170dd95621b43c1eb0b3ddc36ab5bf8a65017af8747ebbffcbf4640e5e755`.
 Existing unchanged-file test warnings and expected module-redefinition warnings
 were visible rather than suppressed. The owned PostgreSQL cluster
-`/tmp/symmetry-ablation-final.Cgnkmf` was stopped and removed.
+`path-sha256:224713ce8358fd53b4694785f2bf68201fac86882c2210003415d9c6420dbeba` was stopped and removed.
 
 Control evidence used Elixir 1.19.6, OTP 28, and PostgreSQL 17.11, not the newer
 CI matrix. This environment limit remains explicit; it is not a pending local

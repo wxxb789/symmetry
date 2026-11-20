@@ -18,6 +18,8 @@ defmodule SymmetryControlWeb.Protocol do
     invalid_request: {400, "invalid_request", "request payload is invalid"},
     unauthenticated: {401, "unauthenticated", "credential is missing or invalid"},
     forbidden: {403, "forbidden", "credential does not own this resource"},
+    capability_not_granted:
+      {403, "capability_not_granted", "connection capability is not granted"},
     provider_owned: {409, "provider_owned", "field is authoritative in the external provider"},
     not_found: {404, "not_found", "resource was not found"},
     requested_session_not_found:

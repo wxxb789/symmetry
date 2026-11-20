@@ -56,7 +56,7 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       re-derivations recorded in the audit) remain bound to the pre-rebase reviewed revision and are labelled as
       history.
 
-- [x] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
+- [ ] Decide whether the 0008c evaluation records keep their raw host paths. The four committed
       receipts (`docs/evaluations/model-routing/0008c-{a-mixed,a-strong,b-mixed,b-strong}.json`,
       `environment.measured.mix_build_path` and `mix_deps_path`) and the committed copy of
       `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` state the operator's absolute
@@ -70,18 +70,19 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       keeping the roots: closed 2026-11-19 on branch
       `chore/eval-record-scrub` under the owner's one-time Q2 authorization (revalidated first, as the entry asked):
       the four receipts and the evidence record were rendered through `scripts/ci/model-routing-record-sanitize.py`
-      (`sha256:b8b252f3…`) — two substitutions per receipt (`mix_build_path`/`mix_deps_path` ->
+      (`sha256:b8b252f3…`, the tool's bytes on 2026-11-19; #79 (`21cf326`) has since changed it to
+      `sha256:52f7c182…`) — two substitutions per receipt (`mix_build_path`/`mix_deps_path` ->
       `<disposable-root>/… (outside the checkout)`) and one in the evidence record — and every digest that binds
       them was recomputed and rebound: the four receipt digests quoted by `0008c-candidate-policy.md` and by the
       evidence record (`9432545d…`/`26d8e003…`/`e79fe173…`/`1be7b419…` ->
       `93050ced…`/`5ee9b87b…`/`ceae34ce…`/`af12819d…`). The tool's `--check` exits 0 on the two receipts whose
       absolute-path matches were all host paths (`0008c-a-strong.json`, `0008c-b-mixed.json`); the other two keep
-      only repo-relative prose fixtures (`/control/priv/static/portal/`, `/\`, `sync_status`) that rendering would
+      only repo-relative prose fixtures that rendering would
       corrupt. Full before/after digest table (including a later second-generation rebind of
       `0008a-controls.json`'s rendered `missing-gate` stderr digest) and the deliberately-left list:
-      `docs/evaluations/model-routing/README.md`, "Record rendering exception (2026-11-19)".
+      `docs/evaluations/model-routing/README.md:305`, "Record rendering exception (2026-11-19)".
 
-- [x] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
+- [ ] Open: no checker re-derives the commit/path digest bindings quoted by the model-routing records, which is
       how the unreachable 0008a manifest binding survived review. A future increment could add a gate that
       resolves every quoted `git show <commit>:<path>` binding and recomputes every quoted manifest digest
       against the revision it names. This change moves `scripts/ci/model-routing-evaluation.py` and
@@ -256,6 +257,74 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       receipts stay verifiable against the revision tagged `0008b-produced-tooling` and fail closed
       on submission under the current runner by design; a submission that requires current bytes
       re-executes the runs.
+
+- [ ] Own the record-cleanliness ratchet baseline: 26 unchanged committed records under
+      `docs/evaluations/**` and `docs/evidence/**` still carry a host absolute path, so the
+      `record-cleanliness` CI job - which checks only the records a revision range adds or
+      modifies - fails the moment a later change touches one of them. Enumerated at `5d6c858`
+      with `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only` over
+      `git ls-files docs/evaluations docs/evidence`: the four
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-{mixed,strong}{,.review}.json`
+      receipts; `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md`,
+      `goal-0006-final-series-review-2026-11-15.md`,
+      `goal-0006i-exact-subject-release-acceptance-2026-11-15.md`,
+      `goal-0006j-omp-native-capability-2026-11-14.md`, `goal-0007b-readable-work-views-2026-11-15.md`,
+      `goal-0007i-portal-cutover-series-receipt-2026-11-17.md`,
+      `goal-0009-source-identity-2026-11-16.json`; the seven `goal-0006b-*` files
+      (`acceptance-environment-audit`, `acceptance-source-audit`, `convergence-receipt`,
+      `fixture-inventory`, `resumed-go-gates` and `surface-qa` of 2026-09-29, and
+      `iteration-closure-2026-10-10`); the two `pi-control-e2e-*-2026-09-13.md` files, the five
+      `test-ablation-*-2026-09-29.md` files and `windows-opencode-ci-gate-2026-09-14.md`. Each one
+      needs either an explicit decision to leave it as produced or the render-and-rebind pass
+      (re-render the text and keep every digest another record quotes consistent - of this list,
+      `test-ablation-go-probe-experiment-2026-09-29.md` is the one quoted by another record). Until
+      that decision, a change that merely touches one of these records fails the job by design, and
+      the remedy is that render pass, never an edit that breaks a binding.
+
+      **Closed (2026-11-19, `chore/render-dirty-records`):** rendered rather than kept as produced.
+      A fresh whole-corpus enumeration (`--check --root-only` over `git ls-files docs/evaluations
+      docs/evidence`) reproduced exactly the 26 records listed above, and each was rendered in
+      place through `scripts/ci/model-routing-record-sanitize.py` in the `--root-only` scope, with
+      no disposable root configured for these legacy records. That scope with the #83 run-store
+      roots configured renders #83's (`29462e9`) rendered bytes exactly for `0008a-audit.json` and
+      the four `0008c` receipts, provided each root is spelled as `29462e9^` spells it:
+      the `symmetry-0008a-…` temporary run root with JSON-doubled backslashes for the `0008a`
+      records (the plain spelling matches nothing and does not reproduce those bytes) and the
+      `symmetry-0008c-eval` temporary run root in either separator spelling for the `0008c`
+      receipts, because the root replacement is a literal string match (both roots are readable
+      in the `29462e9^` record bytes and are not repeated here). #83's committed bytes
+      additionally carry its own digest rebinds (in
+      `0008a-controls.json` the `stderr_sha256` rebind `c12881ae…` -> `8503bfa2…`, and the
+      receipt and audit digests quoted by `0008c-candidate-policy.md`,
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md` and
+      `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md`). This pass
+      rendered 83 host-path substitutions over the 26 files, so every host location, scratch roots
+      included, became a deterministic `path-sha256:` token while product routes stay literal.
+      Host-shaped specimen paths quoted inside reviewer prose were not spared: six of the 83
+      substitutions tokenized the `//etc/passwd` and `\\dir\\file.go` specimens in
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-mixed.json` (line 627) and its
+      `.review.json` (line 6), and the `C:\\dir\\file` specimen in
+      `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` (line 487) and its
+      `.review.json` (line 6); their pre-render spellings remain recoverable from git history at
+      the base commit (`b33188b`). One tool fix was required and ships with a
+      regression test: the renderer consumed the backslash that escapes a quoted path's closing
+      quote, leaving a bare quote that made `0008b-go-bounded-regression-strong{,.review}.json`
+      invalid JSON; an odd trailing backslash now stays outside the token, old-versus-fixed
+      rendering differs on exactly those two files, and `--check` verdicts are unchanged on all
+      111 corpus files. Every digest that bound a rendered file was recomputed and rebound, each
+      new value equal to its file's recomputed `sha256` (old->new table in the branch's PR): the
+      review digests inside the two receipts; `0008b-policy.json`'s two `review_sha256` values,
+      two `receipt_sha256` values and `review_attempts_sha256`; `0008b-controls.json`'s embedded
+      accept output (with its `output_sha256` recomputed over the edited text) and
+      `source_accepted_receipt_sha256`; the mixed `review-attempts` record's `review_sha256`; and
+      `docs/evidence/goal-0008b-go-model-routing-2026-11-17.md`'s two receipt digests, policy
+      digest and controls digest, plus `test-ablation-final-review-2026-09-29.md`'s app-startup
+      and Go-probe rows (the cross-record quote this entry named). Evidence: the whole-corpus
+      `--check --root-only` sweep reports 0 dirty of 111 files,
+      `python scripts/ci/check-record-cleanliness.py --base origin/main --head HEAD` exits 0,
+      re-running the renderer over all 30 touched files is byte-stable, and
+      `test-model-routing-record-sanitize.py` (28 tests) with `test-check-record-cleanliness.py`
+      (16 tests) pass.
 
 ## Dead-code candidates
 
@@ -552,8 +621,12 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       class (runs 44147815717 `9c73a05`, 44230735630 `d60d50d`, 44253118123 `9192241`). The three
       load-bound start waits this text records as "unchanged" were subsequently converted to the
       package's documented hang guard — `time.After(testHangGuard)`, 30 s at `app_test.go:7281`,
-      applied at `harness_test.go:4284`/`:4290`, `:4506`, `:4600` by `4094624` (#57) — so a
-      further occurrence would be a new finding, not an open action of this item. The moved
+      applied at `harness_test.go:4284`/`:4290`, `:4506`, `:4600` by `4094624` (#57) (positions at
+      `4094624`; #92 (`535019d`) has since replaced the three start waits with
+      `waitForNativeRunning`, `harness_test.go:4739`-`:4774`, and left the fourth position — that
+      test's terminal `waitTurnEntered` wait, `4094624` `:4290` and HEAD `:4286` — in place with
+      its `time.After(testHangGuard)` select) — so a further occurrence would be a
+      new finding, not an open action of this item. The moved
       text's final line keeps its original `docs/TODO.md` pointer; the helper-witness item it
       names is the entry closed above in this archive.
 
@@ -773,6 +846,79 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       `ubuntu-latest` (`.github/workflows/ci.yml:96`, steps at 134-139) — so its evidence above is
       local to this Windows host.
 
+- [ ] Revalidate the unreachable resource synchronization states. `project_resources` has a
+      `project_resources_sync_status_check` constraint admitting `syncing` and `stale`, and
+      `SymmetryControl.Workspaces.ReadModel` maps them to `syncing`/`attention` labels, but no
+      writer sets either value (`Integrations.persist_sync/4`,
+      `Integrations.record_resource_failure/3` and the connection/capability resets in
+      `Integrations.update_connection/2` and `Workspaces.update_resource/2` only write
+      `unknown`, `synced` and `failed`). Observed while implementing goal 0007d; keep the
+      constraint and labels, and decide in a separate maintenance change whether the states
+      need a writer or the vocabulary needs a migration.
+      Closed (2026-11-19, `fix/connections-refusal-guidance`): the premise is stale on main —
+      docs-only change, no product code touched. The writers landed on main in `9d9a641` (#42)
+      after the 0007d observation: `Integrations.mark_resource_syncing/1`
+      (`control/lib/symmetry_control/integrations.ex:683`) commits `sync_status: "syncing"`
+      through `update_sync_marker/2` (`:701`, `:709`) before the provider call, and
+      `record_resource_failure/3` (`:1651`) persists
+      `sync_status: if(code == :not_found, do: "stale", else: "failed")` (`:1676`);
+      `ReadModel.synchronization_health/1`
+      (`control/lib/symmetry_control/workspaces/read_model.ex:575-584`) maps `stale` to
+      `attention` and `syncing` to `syncing`. Both states are pinned by tests from the same
+      commit: `control/test/symmetry_control/resource_sync_inflight_marker_test.exs:197,202`
+      assert the committed `syncing` marker, and
+      `control/test/symmetry_control/resource_sync_identity_loss_test.exs:76,131,134` assert a
+      `:not_found` provider answer persists `stale` and the read model reports `attention`.
+      Verification (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`):
+      `mix test test/symmetry_control/resource_sync_inflight_marker_test.exs test/symmetry_control/resource_sync_identity_loss_test.exs`
+      → `Result: 8 passed`, rc 0. The constraint and labels stay as recorded; with real writers
+      for both values, neither an added writer nor a vocabulary migration is needed.
+
+- [ ] Revalidate the `capability_not_granted` guidance entry on the resource surface. The new
+      `refusalGuidance` key in `frontend/src/features/connections/resources.tsx` is only reachable if
+      the server answers that code, but a sync refused for an ungranted capability maps to
+      `failure(:capability_not_granted)` → `forbidden` on the wire, so the key is currently dead.
+      Either the server should serve the more specific code or the client entry should be removed;
+      decide in a separate maintenance change with a test that pins the served code.
+      Closed (2026-11-19, `fix/connections-refusal-guidance`, PR #96): the owner chose the
+      serve-the-specific-code route. `Protocol` maps `capability_not_granted` to HTTP 403 with
+      message `connection capability is not granted` (`protocol.ex:21-22`) — the same status
+      class as `forbidden`, because the credential is valid but the bound connection does not
+      grant the capability; `failure(:capability_not_granted)` now returns the specific code
+      instead of `:forbidden` (`integrations.ex:1704-1705`). The live refusals are the
+      read/sync path — `require_capability/2` in `sync_marked_resource/1`
+      (`integrations.ex:726`) — and the bind/update path —
+      `Workspaces.ensure_connection_capability/2` (`workspaces.ex:1000-1014`), called by
+      `prepare_resource_attrs/2` for both create and update (`workspaces.ex:1049`). The
+      provider-action classification entries are defensive, not live:
+      `record_provider_action_failure/3` (`integrations.ex:1201`) and the `:definite` list
+      in `mutation_failure_outcome/1` (`integrations.ex:626-636`) would store a pre-dispatch
+      capability refusal as `failed` with the `capability_not_granted` code, like
+      `:forbidden`, and `stored_failure/1` (`provider_access.ex:2367`) decodes that stored
+      code — but no live flow stores it today, because `authorized_connection/3`
+      (`provider_access.ex:1515-1538`) widens every execute context's capabilities before
+      dispatch. Pins:
+      `portal_resources_test.exs:264` (bind and sync answer 403 `capability_not_granted`),
+      `portal_resources_test.exs:306` (a PATCH moving a work-tracking resource onto a
+      repositories-only connection answers 403 `capability_not_granted`),
+      `resource_sync_identity_loss_test.exs:113`, `integrations_test.exs:947`,
+      `integrations_test.exs:976` (a pre-dispatch capability refusal classifies `:definite`),
+      and the frontend test `connections.test.tsx` "renders the served capability refusal with
+      the capability-specific next step" (a 403 `capability_not_granted` sync refusal renders
+      "Grant the connection the capability this resource kind needs, then try again.").
+      Red-first: the updated pins failed on the pre-change code with the served `forbidden`
+      (`2/5 passed`, 3 failed); after the change the affected control files report `Result:
+      123 passed`, rc 0 (`MIX_ENV=test`, `MIX_TEST_PARTITION=61`: `mix test
+      test/symmetry_control/resource_sync_identity_loss_test.exs
+      test/symmetry_control_web/controllers/portal_resources_test.exs
+      test/symmetry_control/integrations_test.exs
+      test/symmetry_control_web/controllers/provider_action_controller_test.exs`), with
+      `mix format --check-formatted` and `mix compile --warnings-as-errors` rc 0, frontend
+      typecheck/lint rc 0 and `vitest run` 413 tests passed, and `pnpm contracts:check` green
+      (no schema or fixture enumerates portal error codes). Neither the Go daemon nor the
+      browser specs branch on the literal `forbidden` for these paths (the daemon acts on the
+      HTTP status and forwards the envelope code), so no other client changed.
+
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
 - [ ] Revalidate the two host limits the 0007i gates worked around, so a future run does not rediscover
@@ -818,6 +964,8 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       `browser/tests/portal-goal-attention.spec.mjs:455` `SYMMETRY_GOALS_OFF_URL`), and the mobile
       project (`browser/playwright.config.mjs` Pixel 7) drives the same release target as desktop, so
       no case passes silently without the release.
+
+## Dead-code candidates
 
 - [ ] Align the frontend `return_to` allowlist with the server's per-path query rules, or record
       the asymmetry deliberately. `frontend/src/app/application.ts` (`safeReturnTo`) accepts any
@@ -885,9 +1033,10 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       deadline rather than a longer test timeout.
       Revalidated and closed by branch `fix/flake-load-sensitive-go` (2026-11-19): no further change
       was needed because `8082317` (#44) already replaced the 1 s `context.WithTimeout` around
-      `WaitTurn` with the package's documented `testHangGuard` (30 s, "turns a hung harness into a
-      failure; never a statement about how fast the adapter should be") and made the failing wait
-      name the outstanding step (`mustSettle(t, "WaitTurn", err)`), so elapsed time no longer
+      `WaitTurn` with the package's documented `testHangGuard` (30 s, "It only turns a hung harness
+      into a failure; it is never a statement about how fast a turn should complete, so it sits
+      far above any real scheduling delay, race instrumentation included.") and made the failing
+      wait name the outstanding step (`mustSettle(t, "WaitTurn", err)`), so elapsed time no longer
       decides the verdict and a guard expiry can no longer be reported as this test's behavioural
       failure. Re-run on this host while the other regression workers loaded it: plain
       `go test -count=20 -cpu 1,2 -run '^TestFinalAssistantMessageAcceptsReasoningBlocksBesideSingleTextBlock$'
@@ -1415,18 +1564,19 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       report's embedded results and confirmed the focused 35/1/0 and broad 79/15/0 rows with no flaky cases -
       evidence for the 0007b receipts' browser rows, not a defect.
 
-- [x] Re-publish the pre-existing personal absolute paths in the committed 0008a
+- [ ] Re-publish the pre-existing personal absolute paths in the committed 0008a
       evaluation artifacts through `scripts/ci/model-routing-record-sanitize.py`
       instead of rewriting history:
       `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
       strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
       `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (the `EVIDENCE_ROOT` value, an operator-profile drive path). The 0008b change renders its own new
+      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
       records with that helper and records the rendering in the record
       (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
       record's quoted digest consistent when the older records are re-published.
       Closed 2026-11-19 on branch `chore/eval-record-scrub`: re-published through
-      `scripts/ci/model-routing-record-sanitize.py` (`sha256:b8b252f3…`) as the
+      `scripts/ci/model-routing-record-sanitize.py` (`sha256:b8b252f3…`, the tool's bytes on
+      2026-11-19; #79 (`21cf326`) has since changed it to `sha256:52f7c182…`) as the
       entry directs — `0008a-controls.json` 32 substitutions (the 14
       disposable-root strings -> `<disposable-root>`, plus 9 toolchain
       interpreter argv entries (one rendered to `path-sha256:4d144641…`) and 9
@@ -1447,6 +1597,42 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       closures. The full table is in
       `docs/evaluations/model-routing/README.md`, "Record rendering exception
       (2026-11-19)".
+
+- [ ] Revalidate the stale 0008-series prerequisite text:
+      `docs/goals/0008d-typescript-model-routing.md:13` says "the accepted 0008b
+      and 0008c results" while the 0008b candidate policy is produced and awaiting
+      the owner's verdict. Pre-existing and not introduced by the 0008b evidence
+      change; correct the wording once the 0008b verdict lands. (The `0006h`
+      index-row dead link above is the same class of stale documentation and is
+      already tracked.)
+
+      **Closed (2026-11-19, `docs/0008-prerequisite-text`):** the frozen-bytes
+      convention resolves this item instead of a wording edit: no archived goal
+      document has been edited in place after placement
+      (`git log --diff-filter=M --name-only -- docs/goals/archive/` prints nothing).
+      Placement-time content changes occur during archive moves and are not
+      relevant to the frozen-bytes argument. The index's archive notes record the
+      archived documents' content as unchanged
+      (`docs/goals/README.md:47` 0008a, `:61` 0008d, `:100` 0008b, `:313` the 0007
+      series), and owner verdicts are recorded separately as they arrive (`:309`);
+      `73e083f` moved this goal document into `archive/` byte-identically. The
+      correction therefore lands live: the closure re-points the item to
+      `docs/goals/archive/0008d-typescript-model-routing.md:13` — the item text
+      stays verbatim — and a new recording note in `docs/goals/README.md` names
+      the archived sentence and the verdicts that govern it — the owner accepted
+      0008b on 2026-11-18 (`8a689bd`, row `:348`), while 0008c is produced and
+      awaiting the owner's verdict with no acceptance recorded (`:349`;
+      `docs/evidence/goal-0008c-elixir-model-routing-2026-11-17.md:3`). The 0008b
+      half of the archived sentence became true when the verdict landed; the 0008c
+      half stays as written, which is the convention's accepted state rather than
+      an open action — no 0008c acceptance is declared, and a future verdict is
+      recorded in the index row like the others. Check run on this branch:
+      `rg -n 'accepted 0008b|0008c'
+      docs/goals/archive/0008d-typescript-model-routing.md docs/goals/README.md`
+      (the archived line is unchanged; `docs/goals/README.md:117-123` is the new
+      note). The cross-referenced `0006h` note stays in `docs/TODO.md` as a
+      decision note, untouched here; its index-row link was already repointed
+      to the archived document by `c514bd9` (#66).
 
 ## Deferred review findings (0007i, rebased onto `ca29a8e`)
 
