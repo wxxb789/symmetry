@@ -328,6 +328,96 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              |> json_response(403)
   end
 
+  test "a Goal-managed item serves no start or cancel control, agreeing with the endpoints' refusal" do
+    enable_goal_rollout()
+
+    project = create_project("GSF")
+
+    assert %{"resource" => %{"id" => repository_id}} =
+             api_conn()
+             |> post("/portal/api/projects/#{project["id"]}/resources", %{
+               "kind" => "repository",
+               "name" => "Goal start fence repository",
+               "status" => "healthy"
+             })
+             |> json_response(201)
+
+    goal_managed = goal_managed_work_item!(project["id"], repository_id)
+
+    legacy =
+      create_work_item(project["id"], "Same-shaped legacy work", %{
+        "status" => "backlog",
+        "assignee_type" => "agent",
+        "agent_profile" => "codex",
+        "repository_resource_id" => repository_id
+      })
+
+    # The plan-admission shape — backlog, agent assignee, no orchestration task,
+    # active project, available external work — satisfies every other `can_start`
+    # conjunct, and the legacy sibling differs only in Goal membership.
+    managed = served_work_item(goal_managed.id)
+
+    assert managed["goal_managed"] == true
+    assert managed["can_start"] == false
+    assert managed["execution"] == nil
+
+    sibling = served_work_item(legacy["id"])
+
+    assert sibling["goal_managed"] == false
+    assert sibling["can_start"] == true
+
+    # The served flag agrees with the endpoint: the same item's run request is
+    # refused exactly as the legacy launch refuses Goal-owned work.
+    assert %{"error" => %{"code" => "goal_authority_required"}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{goal_managed.id}/run", %{
+               "action_id" => "gsf-managed-run"
+             })
+             |> json_response(403)
+
+    # The legacy sibling's same-shaped launch applies — the endpoint agreeing
+    # with the `can_start: true` it was served — and leaves a queued attempt
+    # whose cancel control is served.
+    assert %{
+             "work_item" => %{"status" => "in_progress"},
+             "execution" => %{"state" => "queued", "generation" => 1, "can_cancel" => true}
+           } =
+             api_conn()
+             |> post("/portal/api/work-items/#{legacy["id"]}/run", %{
+               "action_id" => "gsf-legacy-run"
+             })
+             |> json_response(202)
+
+    assert %{"execution" => %{"state" => "queued", "can_cancel" => true}} =
+             served_work_item(legacy["id"])
+
+    # The admission-created attempt shape — a queued Goal task on the item —
+    # serves the same execution state the legacy attempt above serves, with no
+    # cancel control.
+    queued_goal_attempt!(goal_managed, Repo.get!(Goals.Goal, goal_managed.goal_id))
+
+    managed_queued = served_work_item(goal_managed.id)
+
+    assert managed_queued["execution"]["state"] == "queued"
+    assert managed_queued["execution"]["can_cancel"] == false
+
+    assert %{"error" => %{"code" => "goal_authority_required"}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{goal_managed.id}/cancel", %{
+               "action_id" => "gsf-managed-cancel",
+               "generation" => 1
+             })
+             |> json_response(403)
+
+    assert %{"disposition" => "created", "command" => %{"kind" => "cancel"}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{legacy["id"]}/cancel", %{
+               "action_id" => "gsf-legacy-cancel",
+               "generation" => 1
+             })
+             |> json_response(202)
+  end
+
   test "archived projects can be restored through the routed API" do
     project = create_project("ARC")
 
@@ -1156,6 +1246,15 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   defp create_project(key), do: create_project(key, "Project #{key}")
 
+  defp served_work_item(work_item_id) do
+    assert %{"work_item" => work_item} =
+             api_conn()
+             |> get("/portal/api/work-items/#{work_item_id}")
+             |> json_response(200)
+
+    work_item
+  end
+
   defp create_work_item(project_id, title, attrs \\ %{}) do
     %{"work_item" => work_item} =
       api_conn()
@@ -1393,6 +1492,60 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
                ],
                now: @now
              )
+  end
+
+  # Gives an already Goal-managed work item a queued Goal attempt: the shape
+  # admission writes once a Goal starts the item's work — a queued task
+  # carrying the Goal identity — so the served execution has a cancellable
+  # state whose cancel control the Goal fence withholds. The fixture writes the
+  # same task fields the admission path writes and points the work item at the
+  # attempt.
+  defp queued_goal_attempt!(work_item, goal) do
+    assert WorkItem.goal_managed?(work_item)
+
+    snapshot =
+      %Goals.ContextSnapshot{id: Ecto.UUID.generate()}
+      |> Goals.ContextSnapshot.changeset(%{
+        goal_id: goal.id,
+        goal_revision: goal.current_revision,
+        work_item_id: work_item.id,
+        schema_version: 1,
+        content_hash: :crypto.hash(:sha256, "goal queued attempt context #{work_item.id}"),
+        payload: %{}
+      })
+      |> Repo.insert!()
+
+    {request_hash, request_hash_version} =
+      SymmetryControl.RequestHash.write(%{"goal_queued_attempt" => work_item.id})
+
+    task =
+      %Orchestration.Task{}
+      |> Orchestration.Task.changeset(%{
+        idempotency_key: "goal:#{goal.id}:queued-attempt:#{work_item.id}",
+        request_hash: request_hash,
+        request_hash_version: request_hash_version,
+        goal: goal.title,
+        agent_profile: work_item.agent_profile,
+        workspace: work_item.workspace,
+        input: %{},
+        required_capabilities: %{},
+        state: "queued",
+        current_generation: 0,
+        attempt_generation: 1,
+        work_item_id: work_item.id,
+        goal_id: goal.id,
+        goal_revision: goal.current_revision,
+        context_snapshot_id: snapshot.id,
+        purpose: "implement",
+        admission_key: Ecto.UUID.generate(),
+        allowed_runtime_ids: [],
+        max_run_attempts: 1
+      })
+      |> Repo.insert!()
+
+    work_item
+    |> WorkItem.execution_changeset(%{orchestration_task_id: task.id})
+    |> Repo.update!()
   end
 
   # Adopts a legacy work item into a Goal and gives it a failed Goal attempt:

@@ -44,34 +44,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   (2026-11-20) and re-confirmed while correcting that map's `validation_failed` string
   (fix round 1); revalidate and remove in a separate maintenance change.
 
-- [ ] Investigate the intermittent Control failure `reversed import and delivery updates
-      lock WorkItems in UUID order without deadlocking` in
-      `control/test/symmetry_control/integrations_test.exs:1161` (`assert
-      String.contains?(query, "\"work_items\"")` inside `assert_sync_waiting_on_work_item/3`,
-      with Postgrex connections disconnecting in the same log). Observed in run 43891279765
-      job 133383740181 on the 0008a PR (`839/840 passed, 21 skipped`), green on rerun of the
-      same job (that run then completed successfully). Revalidate whether the captured SQL can
-      be asserted before the sync query is issued; keep the assertion itself and leave the fix
-      to separate maintenance.
-
-      Update (2026-11-19, branch `fix/flake-control-reversed-import`): the helper now reads the
-      wait from the lock manager instead of the statement text - the failed attempt-1 log names
-      the repository lookup in `pg_stat_activity.query` while the import was in a
-      delivery-attributed lock wait - accepts a sample only once the import's backend holds an
-      ungranted lock and the delivery backend blocks it, and asserts on the accepted sample
-      that the import's ungranted lock waits on the delivery backend's transaction
-      (`pg_locks.transactionid = (SELECT backend_xid FROM pg_stat_activity WHERE pid = delivery)`)
-      while the delivery backend holds a granted `work_items` lock; the raw sample (query, wait
-      event, all three lock facts) is printed on deadline and in the accepted-path assertion.
-      The waiter-bound xid is the discriminating fact: the `work_items` relation fact alone is
-      invariant (a paused delivery always holds those locks), so it cannot separate the
-      hypotheses - (a) `pg_stat_activity.query` is not the waiting statement for this backend at
-      sample time (prepared-statement/activity reporting under load) while the lock wait is
-      real, or (b) a transient pre-sync lock wait. Not reproduced locally (three pre-fix runs
-      with seed 310068 left the target test green), so the entry stays open; a recurrence now
-      shows the importer's wait event, whether it waited on the delivery transaction, and
-      whether the delivery backend held `work_items`.
-
 - [ ] Revalidate and remove the callerless projected provider-action chain in
       `control/lib/symmetry_control/integrations.ex`. `execute_provider_action/5` (`:282-308`, catch-all
       `:310`) has no referent in the repository — a tree-wide search for `execute_provider_action`
@@ -207,26 +179,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       contains no `can_retry` occurrence at all, and no other case targets a pinned historical chat
       entry. Add the assertion in a separate maintenance change and keep the case's other assertions:
       the rule is behavioural, so the pin must fail if the historical branch stops forcing the flag.
-
-- [ ] Owner decision: should the served `can_start` exclude goal-managed work items? `portal_json.ex`
-      serves `can_start` from five conjuncts with no `goal_managed?` term
-      (`control/lib/symmetry_control_web/portal_json.ex:257-260`, beside `goal_managed:` at `:255`),
-      while the legacy run endpoint refuses every goal-managed item: `POST
-      /portal/api/work-items/:work_item_id/run` (`control/lib/symmetry_control_web/router.ex:86`) →
-      `Workspaces.launch_work_item/2` (`control/lib/symmetry_control/workspaces.ex:308`, guard at `:317`)
-      → `ensure_legacy_work_item/1` (`:865-869`) → 403 `goal_authority_required`
-      (`control/lib/symmetry_control_web/protocol.ex:72-73`). A goal-managed item in the shape plan
-      admission creates — backlog, agent assignee, no orchestration task (`goals.ex:6699-6714`) — is
-      therefore served `can_start: true` once it is ready in an active project with available external
-      work, and the work surface renders "Start run" from
-      it (`frontend/src/features/work/control.tsx:306`), which the endpoint then refuses. The same
-      payload already fences one flag of the family (`can_retry` delegates to
-      `Orchestration.retryable_attempt?/1`, which matches `goal_id: nil` only,
-      `control/lib/symmetry_control/orchestration.ex:647-650`), while `can_cancel` is unfenced
-      (`portal_json.ex:399`) even though the legacy cancel path applies the same guard
-      (`workspaces.ex:345-349`). Decide once whether the served `can_*` flags gain the goal fence or
-      whether they deliberately describe the legacy path only and the client gates on `goal_managed`,
-      then pin the decision with a serving test.
 
 - [ ] Document how to recover the repository-default test database, or reset it from the test alias.
       The suite's own database is `symmetry_control_test` (`control/config/test.exs:13-15`, where

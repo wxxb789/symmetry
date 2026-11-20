@@ -23,6 +23,9 @@ The 0007f render-gate fixture item and the 0007h rollout-off residual appended t
 review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 from branch
 `fix/ci-render-gate-fixtures`.
 
+The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
+below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -1220,6 +1223,79 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       keeps the documented quiet-host requirement (the model-routing runbook forbids running this
       workflow beside a full test suite on the same host).
 
+- [ ] Investigate the intermittent Control failure `reversed import and delivery updates
+      lock WorkItems in UUID order without deadlocking` in
+      `control/test/symmetry_control/integrations_test.exs:1204` (`:1161` at the failing run's
+      revision; `assert String.contains?(query, "\"work_items\"")` inside
+      `assert_sync_waiting_on_work_item/3`, with Postgrex connections disconnecting in the same
+      log). Observed in run 43891279765
+      job 133383740181 on the 0008a PR (`839/840 passed, 21 skipped`), green on rerun of the
+      same job (that run then completed successfully). Revalidate whether the captured SQL can
+      be asserted before the sync query is issued; keep the assertion itself and leave the fix
+      to separate maintenance.
+
+      Update (2026-11-19, branch `fix/flake-control-reversed-import`): the helper now reads the
+      wait from the lock manager instead of the statement text - the failed attempt-1 log names
+      the repository lookup in `pg_stat_activity.query` while the import was in a
+      delivery-attributed lock wait - accepts a sample only once the import's backend holds an
+      ungranted lock and the delivery backend blocks it, and asserts on the accepted sample
+      that the import's ungranted lock waits on the delivery backend's transaction
+      (`pg_locks.transactionid = (SELECT backend_xid FROM pg_stat_activity WHERE pid = delivery)`)
+      while the delivery backend holds a granted `work_items` lock; the raw sample (query, wait
+      event, all three lock facts) is printed on deadline and in the accepted-path assertion.
+      The waiter-bound xid is the discriminating fact: the `work_items` relation fact alone is
+      invariant (a paused delivery always holds those locks), so it cannot separate the
+      hypotheses - (a) `pg_stat_activity.query` is not the waiting statement for this backend at
+      sample time (prepared-statement/activity reporting under load) while the lock wait is
+      real, or (b) a transient pre-sync lock wait. Not reproduced locally (three pre-fix runs
+      with seed 310068 left the target test green), so the entry stays open; a recurrence now
+      shows the importer's wait event, whether it waited on the delivery transaction, and
+      whether the delivery backend held `work_items`.
+
+      **Closed (2026-11-20, branch `investigate/flake-reversed-import`): hypothesis (a), proven.**
+      The attempt-1 job log (job `133383740181`) reads through
+      `repos/{owner}/{repo}/actions/jobs/<id>/logs` (a default `gh run view` serves the rerun;
+      attempt 1 stays readable via `gh run view <run> --attempt 1 --log`): at
+      `15:02:09.882 UTC` backend `[180]` is cancelled `while locking tuple (0,152) in relation
+      "work_items"` in the import's ordered prelock
+      (`SELECT w0."id" FROM "work_items" AS w0 WHERE ... ORDER BY w0."id" FOR UPDATE`) by the
+      test's own `Task.shutdown(..., :brutal_kill)` teardown, i.e. the delivery-attributed wait
+      was the prelock the assertion exists for, while the failure report at `15:02:09.897` printed
+      the sample that had failed the assertion - necessarily taken before that teardown - with the
+      pre-sync `matching_repository` lookup as `pg_stat_activity.query`. The fields disagree
+      because `pg_stat_get_activity` copies the shared activity array into a materialized result
+      when the sampling statement starts (`src/backend/utils/adt/pgstatfuncs.c:331-345` (REL_18_STABLE);
+      `src/backend/utils/activity/backend_status.c:813-836`, "if not already done in this
+      transaction"), so `query` is fixed at that snapshot while `pg_blocking_pids()`/`pg_locks`
+      read live lock data later in the same statement; the prelock's own text is reported at
+      Bind/Execute (`src/backend/tcop/postgres.c:1680`, `:2176`) before the row wait, so only a
+      sampling statement whose snapshot-to-evaluation span outlasts the import's Bind-to-block
+      span can pair the stale text with the live wait - what CI load widened. Hypothesis (b) is
+      excluded: nothing between the lookup and the prelock issues a query, and the paused
+      delivery holds no lock the import's earlier statements request
+      (`control/lib/symmetry_control/integrations.ex:758-799`, `:858-888`, `:1269-1278`). No
+      opposite lock order exists to fix either: both sync paths prelock WorkItem rows ascending
+      by id in one statement (`:1269-1278`), and the delivery's descending update order
+      (`:758-782` collection, `:971-981` writes) runs after that ascending prelock; the failure
+      log records no `40P01`/deadlock, and the two Postgrex disconnects are the same
+      `after`-block teardown. The deferred maintenance fix is PR #87 (`3c71aec`), exactly what
+      the entry asked to leave separate; the lock-order witness tests stay (PR #87 re-predicated
+      the wait sample on lock-manager facts). Reproduced outside the suite on PostgreSQL 18.6
+      (probe scripts kept with the investigation): a poll in one transaction shows the import
+      blocked with `query` = the `matching_repository` lookup statement that precedes the lock
+      wait, so `String.contains?(query, "\"work_items\"")` is false; the lock-manager sample on
+      the same wait finds the import blocked by the delivery backend, its lock ungranted, its
+      wait bound to the delivery backend's transaction, and that backend holding a granted
+      `work_items` lock. The local demonstration bounds the snapshot window with a transaction;
+      it does not recreate the CI timing itself;
+      25 varied-seed runs of the two lock-order tests (`integrations_test.exs:1204`, `:1352`) stay
+      green on the committed helper. A paginated sweep as of `2026-11-20T10:24Z` of the 369
+      `ci.yml` runs created 2026-11-14..2026-11-20 (the newest fetched run, created `10:22:43Z`,
+      was still running; 77 runs that can hold a failed `control` job, the newest of them
+      `44687273091` (created `06:21:56Z`) with `control` = success and no `reversed import` line;
+      23 failed `control` job logs grepped across all their attempts) finds exactly one occurrence
+      of the failure: run `43891279765` attempt 1, job `133383740181`.
+
 ## Deferred review findings (0007f)
 
 - [ ] Revalidate the `/portal/connections?projectId=…` session return target.
@@ -2157,3 +2233,43 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
       host's `mixwrap` toolchain because its `mise` cannot install the pinned Elixir); the
       connection-fixture harness is covered by the stub test only on this host, whose fixed fixture
       database port 55444 has no container here.
+
+## Retro review follow-ups
+
+- [ ] Owner decision: should the served `can_start` exclude goal-managed work items? `portal_json.ex`
+      serves `can_start` from five conjuncts with no `goal_managed?` term
+      (`control/lib/symmetry_control_web/portal_json.ex:257-260`, beside `goal_managed:` at `:255`),
+      while the legacy run endpoint refuses every goal-managed item: `POST
+      /portal/api/work-items/:work_item_id/run` (`control/lib/symmetry_control_web/router.ex:86`) →
+      `Workspaces.launch_work_item/2` (`control/lib/symmetry_control/workspaces.ex:308`, guard at `:317`)
+      → `ensure_legacy_work_item/1` (`:865-869`) → 403 `goal_authority_required`
+      (`control/lib/symmetry_control_web/protocol.ex:72-73`). A goal-managed item in the shape plan
+      admission creates — backlog, agent assignee, no orchestration task (`goals.ex:6699-6714`) — is
+      therefore served `can_start: true` once it is ready in an active project with available external
+      work, and the work surface renders "Start run" from
+      it (`frontend/src/features/work/control.tsx:306`), which the endpoint then refuses. The same
+      payload already fences one flag of the family (`can_retry` delegates to
+      `Orchestration.retryable_attempt?/1`, which matches `goal_id: nil` only,
+      `control/lib/symmetry_control/orchestration.ex:647-650`), while `can_cancel` is unfenced
+      (`portal_json.ex:399`) even though the legacy cancel path applies the same guard
+      (`workspaces.ex:345-349`). Decide once whether the served `can_*` flags gain the goal fence or
+      whether they deliberately describe the legacy path only and the client gates on `goal_managed`,
+      then pin the decision with a serving test.
+
+      **Decided and closed (2026-11-20, owner; branch `feat/can-start-goal-fence`):** option A — the
+      server fences the flag family; no backward compatibility (the first release is not shipped).
+      Served `can_start` and `can_cancel` are false for every Goal-managed work item, resolved from
+      the same `WorkItem.goal_managed?/1` predicate `Workspaces.ensure_legacy_work_item/1` refuses
+      with (`control/lib/symmetry_control_web/portal_json.ex`: `work_item/2` reuses the value it
+      already serves as `goal_managed`, and `legacy_capabilities/3` applies it to the execution
+      projection the command-response `execution/2` shares); the run/cancel refusals, the 403 code,
+      `can_retry` and the client (no Goal gating added) are unchanged. Pinned by
+      `control/test/symmetry_control_web/controllers/portal_workflow_test.exs`: "a Goal-managed item
+      serves no start or cancel control, agreeing with the endpoints' refusal" — the plan-admission
+      shape and a queued Goal attempt serve `false` beside the endpoints' 403
+      `goal_authority_required`, while the same-shaped legacy item keeps `can_start: true` and its
+      queued attempt keeps `can_cancel: true` — beside the existing case's `can_retry: false` pin.
+      The published descriptions now state the fence
+      (`contracts/v1/workspace-read.schema.json`, `contracts/v1/work-detail-read.schema.json`,
+      `contracts/v1/chat-read.schema.json`), with the generated bindings refreshed through the
+      repository generator.
