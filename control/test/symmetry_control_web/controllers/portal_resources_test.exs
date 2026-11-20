@@ -112,6 +112,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   import Ecto.Query
   import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
+  import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
   import SymmetryControlWeb.TestConn, only: [api_conn: 0]
 
   alias SymmetryControl.Orchestration
@@ -126,6 +127,46 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   @delivery_updated_at ~U[2026-09-05 09:45:00.000000Z]
   @delivery_head_sha "9f2c1d4b6a8e0f3c5d7b9a1e2f4c6d8b0a2e4f6c"
   @delivery_ci_url "https://github.com/acme/symmetry/actions/runs/9"
+
+  # The optional-but-consumed members of `workspace-read`
+  # (`contracts/v1/workspace-read.schema.json`): each name is read by
+  # `frontend/src` feature code and absent from its definition's `required`
+  # array, so the bundle comparison alone cannot refuse a serving-side rename of
+  # it. The presence assertions in "the real served workspace read carries every
+  # member the surface reads" are what fails red for these. Frontend read sites,
+  # list by list:
+  #
+  #   root             features/runtimes/runtimes.tsx:81,85,95; features/connections/resources.tsx:136
+  #   project row      features/projects/projects.tsx:89,108; features/planning/write-policy.ts:50,201;
+  #                    features/work/assignment.tsx:250; features/connections/resources.tsx:130
+  #   resource row     features/connections/resources.tsx:102-116; features/work/assignment.tsx:53-57
+  #   registered row   features/connections/resources.tsx:137-140
+  #   runtime row      features/runtimes/runtimes.tsx:17,25,37-41
+  #   capabilities     features/runtimes/runtimes.tsx:16,50-56 read `adapter`; the four booleans have no
+  #                    member-named read site — the whole map is serialized into `data-capabilities`
+  #                    (`runtimes.tsx:24`) and `browser/tests/portal-live-daemon.spec.mjs` asserts that
+  #                    attribute equals the registration-side map
+  #   work row         features/work/control.tsx:304,444; features/work/assignment.tsx:152-155;
+  #                    features/planning/write-policy.ts:27-28,40,264-279; features/work/detail.tsx:310-343,370
+  #   delivery value   features/work/presentation.ts:293,339-340,347-348,355-356
+  #   external row     features/work/detail.tsx:320; features/planning/write-policy.ts:20
+  #   waiting decision features/work/presentation.ts:399-409
+  @workspace_read_members ~w(runtimes registered_runtimes)
+  @workspace_project_members ~w(version default_agent_profile default_workspace resources)
+  @workspace_resource_members ~w(id project_id connection_id kind name provider external_ref url
+    status sync_status status_message last_synced_at version)
+  @workspace_registered_runtime_members ~w(runtime_id runtime_name agent_profile workspace)
+  @workspace_runtime_members ~w(capacity reserved_capacity connection_epoch last_heartbeat_at
+    repository_resource_id agent_profile workspace)
+  @workspace_runtime_capability_members ~w(adapter interactive provider_access structured_input
+    supervisory_control)
+  @workspace_work_item_members ~w(project_id goal_id description priority assignee workspace
+    repository_resource_id repository ci_resource_id ci_resource branch pull_request_url
+    ci_status review_status delivery external goal_managed version can_start execution updated_at)
+  @workspace_delivery_value_members ~w(provider recorded_at)
+  @workspace_external_members ~w(provider_owned_fields)
+  @workspace_waiting_decision_members ~w(context reason options recommended_option_id)
+  @workspace_waiting_decision_option_members ~w(id label consequence)
 
   setup do
     TestEnv.put!(:integration_providers,
@@ -967,6 +1008,181 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert Enum.map(project_read(project["id"])["resources"], & &1["id"]) == [repository["id"]]
   end
 
+  # The workspace-read gate: a real served document — never a fixture — is
+  # validated against the canonical bundle AND every member the surface reads is
+  # asserted present. The bundle comparison refuses a renamed member only where
+  # the schema requires it, so the member lists above carry the
+  # optional-but-consumed names, the class a serving-side rename would otherwise
+  # leave green. `WorkspaceWorkItem` is one definition body across
+  # `workspace-read`, `work-detail-read` and `chat-read`, and
+  # `PortalJSON.work_item/2` is the one body that serves it: the provider-sourced
+  # delivery values, the external row and the waiting packet pinned here are that
+  # shared row's own shape.
+  test "the real served workspace read carries every member the surface reads" do
+    project = create_project("WSGATE")
+
+    connection =
+      create_connection("github", "Workspace gate binding", "acme", [
+        "repositories",
+        "changes",
+        "ci",
+        "work_items"
+      ])
+
+    repository =
+      create_resource(
+        project,
+        connection,
+        "repository",
+        "Workspace gate repository",
+        "acme/symmetry"
+      )
+
+    ci =
+      create_resource(project, connection, "ci", "Workspace gate pipeline", "acme/symmetry-ci")
+
+    tracker = create_tracker(project, connection, "Workspace gate tracker", "acme/issues")
+
+    steer("Workspace gate tracker", {:ok, tracker_document(connection)})
+    assert %{"resource" => _tracker_synced} = sync_resource(tracker["id"]) |> json_response(200)
+
+    # The repository's own document: the `changes` capability makes the launch
+    # derive a change scope from the repository's default branch, so the synced
+    # metadata carries it.
+    steer("Workspace gate repository", {:ok, repository_document(connection, "acme/symmetry")})
+
+    steer_delivery("Workspace gate repository", {:ok, provider_delivery(@delivery_url)})
+
+    runtime = register_gate_runtime("workspace-gate")
+
+    item =
+      create_work_item(project, "Workspace gate item", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex",
+        "workspace" => "primary"
+      })
+
+    assert %{"work_item" => bound} =
+             api_conn()
+             |> patch("/portal/api/work-items/#{item["id"]}", %{
+               "version" => item["version"],
+               "description" => "Served by the workspace gate.",
+               "priority" => "urgent",
+               "repository_resource_id" => repository["id"],
+               "ci_resource_id" => ci["id"],
+               "branch" => "codex/workspace-gate",
+               "pull_request_url" => @delivery_seed_url,
+               "review_status" => "required",
+               "ci_status" => "pending",
+               "blocked" => true,
+               "blocker" => "Waiting on the operator decision"
+             })
+             |> json_response(200)
+
+    assert %{"resource" => _repository_synced} =
+             sync_resource(repository["id"]) |> json_response(200)
+
+    # `execution` is served only for a work item with an attempt, and the
+    # waiting packet only for a `waiting_for_input` attempt: the fixture drives
+    # the durable states the shared row's optional members need.
+    assert %{"execution" => %{"generation" => 1, "task_id" => task_id}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/run", %{
+               "action_id" => "workspace-gate-run"
+             })
+             |> json_response(202)
+
+    {run, fence} = claim_gate_attempt(runtime, task_id, 4_100)
+    transition(run, fence, "running", 4_101)
+    transition(run, fence, "waiting_for_input", 4_102, waiting_decision_payload())
+
+    served =
+      api_conn() |> get("/portal/api/workspace?project_id=#{project["id"]}") |> json_response(200)
+
+    validate_served_document!("workspace-read", served)
+
+    assert_served_members!("workspace-read root", served, @workspace_read_members)
+
+    assert_served_rows!(
+      "workspace-read project row",
+      served["projects"],
+      @workspace_project_members
+    )
+
+    [project_row] = served["projects"]
+
+    assert_served_rows!(
+      "workspace-read resource row",
+      project_row["resources"],
+      @workspace_resource_members
+    )
+
+    assert_served_rows!(
+      "workspace-read work row",
+      project_row["work_items"],
+      @workspace_work_item_members
+    )
+
+    assert_served_rows!(
+      "workspace-read runtime row",
+      served["runtimes"],
+      @workspace_runtime_members
+    )
+
+    assert_served_rows!(
+      "workspace-read registered runtime row",
+      served["registered_runtimes"],
+      @workspace_registered_runtime_members
+    )
+
+    Enum.each(served["runtimes"] ++ served["registered_runtimes"], fn row ->
+      assert_served_members!(
+        "workspace-read runtime capabilities",
+        row["capabilities"],
+        @workspace_runtime_capability_members
+      )
+    end)
+
+    delivery_item = Enum.find(project_row["work_items"], &(&1["id"] == bound["id"]))
+
+    Enum.each(["pull_request", "ci", "review"], fn field ->
+      value = delivery_item["delivery"][field]
+      assert value["source"] == "provider"
+
+      assert_served_members!(
+        "workspace-read delivery #{field} value",
+        value,
+        @workspace_delivery_value_members
+      )
+    end)
+
+    external_item = Enum.find(project_row["work_items"], &(&1["external"] != nil))
+    assert external_item, "the gate scenario must serve an external row"
+    assert external_item["external"]["provider"] == "github"
+
+    assert_served_members!(
+      "workspace-read external row",
+      external_item["external"],
+      @workspace_external_members
+    )
+
+    decision = delivery_item["execution"]["waiting"]["decision"]
+
+    assert_served_members!(
+      "workspace-read waiting decision",
+      decision,
+      @workspace_waiting_decision_members
+    )
+
+    Enum.each(decision["options"], fn option ->
+      assert_served_members!(
+        "workspace-read waiting decision option",
+        option,
+        @workspace_waiting_decision_option_members
+      )
+    end)
+  end
+
   defp create_project(key), do: create_project(key, "Resource project #{key}")
 
   defp create_resource(project, connection, kind, name, external_ref) do
@@ -1089,6 +1305,172 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
                ]
              )
   end
+
+  # The runtime row the workspace gate serves: registered with every
+  # `RuntimeCapabilities` member the surface reads — `adapter` plus the four
+  # booleans — so the registered map's pass-through is exercised whole, and
+  # advertising the adapter `start` operation the item's launch needs a
+  # selectable runtime for.
+  #
+  # `assert_served_members!/3` and `assert_served_rows!/3` are the gate's
+  # presence oracle: a member is pinned by key, so a served `null` stays
+  # accepted while a renamed or omitted key fails here. They are defined in this
+  # file rather than in `test/support` so a single-file run stays
+  # self-contained.
+  defp assert_served_members!(label, served, members) do
+    assert is_map(served), "#{label} is not served at all: #{inspect(served)}"
+
+    assert Enum.all?(members, &Map.has_key?(served, &1)),
+           "#{label} stopped serving #{inspect(Enum.reject(members, &Map.has_key?(served, &1)))}"
+  end
+
+  defp assert_served_rows!(label, rows, members) do
+    assert is_list(rows) and rows != [], "#{label}: the gate must serve at least one row"
+    Enum.each(rows, &assert_served_members!(label, &1, members))
+  end
+
+  defp register_gate_runtime(key) do
+    enrollment_key = Ecto.UUID.generate()
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(
+               %{name: "#{key}-machine", machine_token: "token-#{enrollment_key}"},
+               enrollment_key,
+               enrollment_token: "enrollment-secret",
+               expected_enrollment_token: "enrollment-secret"
+             )
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(
+               enrolled.machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "#{key}-runtime",
+                   name: "Workspace gate runtime",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   harness_kind: "generic",
+                   harness_version: "generic-v1",
+                   adapter_version: "generic-v1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "interactive" => true,
+                     "structured_input" => true,
+                     "provider_access" => true,
+                     "supervisory_control" => true,
+                     "adapter" => %{
+                       "kind" => "generic",
+                       "native_version" => "generic-v1",
+                       "implementation_version" => "generic-v1",
+                       "protocol_version" => 1,
+                       "operations" => %{
+                         "start" => true,
+                         "events" => true,
+                         "cancel" => true,
+                         "resume" => false,
+                         "handoff" => false,
+                         "guidance" => "unsupported",
+                         "pause" => "unsupported",
+                         "approval_response" => false,
+                         "usage" => "unknown",
+                         "hard_cost_limit" => false
+                       }
+                     }
+                   }
+                 }
+               ]
+             )
+
+    runtime
+  end
+
+  # Claims the gate item's queued attempt for the runtime the gate registered:
+  # that runtime is the only one assignment can select for this test's binding,
+  # so the picked attempt must be the gate item's own.
+  defp claim_gate_attempt(runtime, task_id, claim_number) do
+    assert {:ok, run} = Orchestration.assign_one()
+    assert run.task_id == task_id
+
+    assert {:ok, claimed} =
+             Orchestration.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: uuid(claim_number)
+               }
+             )
+
+    {run,
+     %{
+       runtime_id: runtime.id,
+       runtime_epoch: runtime.connection_epoch,
+       generation: run.generation,
+       claim_id: claimed.claim_id,
+       lease_token: claimed.lease_token
+     }}
+  end
+
+  defp transition(run, fence, state, number, payload \\ %{}) do
+    assert {:ok, _run} = Orchestration.transition(run.id, fence, state, payload, uuid(number))
+  end
+
+  # The agent's waiting packet. The read model serves the transition's payload as
+  # the authoritative packet when it carries a decision
+  # (`workspaces/read_model.ex:221`), so this is the packet the surface reads.
+  defp waiting_decision_payload do
+    %{
+      "question" => "Which reviewer should accept this?",
+      "decision" => %{
+        "context" => "The attempt needs an operator decision before it continues.",
+        "reason" => "consequential",
+        "options" => [
+          %{
+            "id" => "reviewer-a",
+            "label" => "Reviewer A",
+            "consequence" => "Reviews the change first."
+          },
+          %{
+            "id" => "reviewer-b",
+            "label" => "Reviewer B",
+            "consequence" => "Reviews the change second."
+          }
+        ],
+        "recommended_option_id" => "reviewer-a"
+      }
+    }
+  end
+
+  # The tracker's own sync document: the shape `Integrations` writes an external
+  # work item from.
+  defp tracker_document(connection) do
+    %{
+      resource: %{
+        url: provider_url(connection, "acme/issues"),
+        metadata: %{"remote_kind" => "work_tracking"}
+      },
+      work_items: [provider_item("701", "https://github.com/acme/issues/701")]
+    }
+  end
+
+  defp repository_document(connection, external_ref) do
+    %{
+      resource: %{
+        url: provider_url(connection, external_ref),
+        metadata: %{"remote_kind" => "repository", "default_branch" => "main"}
+      },
+      work_items: []
+    }
+  end
+
+  # A deterministic version-4 UUID: the contract bundle's `UUID` pattern pins the
+  # version and variant nibbles, so a zeroed UUID is refused by the gate's own
+  # bundle comparison.
+  defp uuid(number),
+    do: "00000000-0000-4000-8000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 
   defp provider_item(external_id, external_url) do
     %{

@@ -4,6 +4,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   import Ecto.Query
 
   import SymmetryControlWeb.PortalFixtures, only: [create_project: 2]
+  import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
   import SymmetryControlWeb.TestConn, only: [api_conn: 0]
 
   alias SymmetryControl.Goals
@@ -14,6 +15,33 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   alias SymmetryControl.TelemetryReads
 
   @now ~U[2026-09-04 11:00:00.000000Z]
+
+  # The members of `work-detail-read` and `work-timeline-read` the surfaces read
+  # and the bundle comparison cannot refuse on its own. The work row's names are
+  # absent from `WorkspaceWorkItem`'s `required` array, and the waiting packet's
+  # names are absent from `WorkItemWaitingDecision`'s, so a serving-side rename
+  # of one of those passes the bundle; the timeline item's five names are
+  # required inside each `oneOf` variant of `WorkItemTimelineItem`, so the bundle
+  # refuses their renames and the pin restates them. The presence assertions in
+  # "the real served work detail and timeline carry every member the surfaces
+  # read" are what fails red for the first two classes. Frontend read sites, list
+  # by list:
+  #
+  #   work row         features/work/control.tsx:304,444; features/work/assignment.tsx:152-155;
+  #                    features/planning/write-policy.ts:27-28,40,264-279;
+  #                    features/work/detail.tsx:310-343,370 — the row body is
+  #                    `WorkspaceWorkItem`, shared with `workspace-read` and served by the same
+  #                    `PortalJSON.work_item/2`; this file states the pin again because the detail
+  #                    read must keep its own row contract if the two reads stop sharing the body
+  #   timeline item    features/work/presentation.ts:479-521; features/work/receipts.ts:155-178;
+  #                    features/work/history.tsx:60-62
+  #   waiting decision features/work/presentation.ts:389-409
+  @work_row_members ~w(project_id goal_id description priority assignee workspace
+    repository_resource_id repository ci_resource_id ci_resource branch pull_request_url
+    ci_status review_status delivery external goal_managed version can_start execution updated_at)
+  @timeline_item_members ~w(source run_id generation recorded_at data)
+  @waiting_decision_members ~w(context reason options recommended_option_id)
+  @waiting_decision_option_members ~w(id label consequence)
 
   test "project settings and resource lifecycle reject stale browser writes" do
     project = create_project("SYM")
@@ -1244,6 +1272,116 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
            "expected every cancel response read query on #{inspect(reader)}, got #{inspect(processes)}"
   end
 
+  # The work-detail and work-timeline gates: both reads are served from the same
+  # durable rows, so one scenario drives them and each pin names its own read.
+  # The bundle comparison refuses a renamed member only where the schema requires
+  # it, so the member lists above carry the optional-but-consumed names, the class
+  # a serving-side rename would otherwise leave green.
+  test "the real served work detail and timeline carry every member the surfaces read" do
+    project = create_project("DTGATE")
+
+    item =
+      create_work_item(project["id"], "Detail gate item", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex",
+        "description" => "Served by the work-detail gate."
+      })
+
+    assert %{"execution" => %{"generation" => 1, "task_id" => task_id}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/run", %{
+               "action_id" => "detail-gate-run"
+             })
+             |> json_response(202)
+
+    {_runtime, fence, run} = claim_current_task()
+    assert run.task_id == task_id
+    transition(run.id, fence, "running", 5_101)
+
+    # One item per timeline source — an event, the waiting transition and the
+    # input command below — so the item pin and the bundle comparison exercise
+    # all three `data` variants.
+    assert {:ok, [_event]} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [
+                 %{
+                   event_id: uuid(5_102),
+                   sequence: 1,
+                   kind: "progress",
+                   payload: %{"message" => "Detail gate progress"},
+                   occurred_at: @now
+                 }
+               ],
+               now: @now
+             )
+
+    waiting_id = uuid(5_103)
+
+    assert {:ok, _waiting_run} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "waiting_for_input",
+               waiting_decision_payload(),
+               waiting_id,
+               now: @now
+             )
+
+    assert %{"command" => _command} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/input", %{
+               # The decision packet makes the choice an option id
+               # (`Orchestration.validate_decision_choice!/4`).
+               "input" => %{"option_id" => "reviewer-a"},
+               "action_id" => "detail-gate-input",
+               "waiting_transition_id" => waiting_id
+             })
+             |> json_response(202)
+
+    detail = api_conn() |> get("/portal/api/work-items/#{item["id"]}") |> json_response(200)
+
+    validate_served_document!("work-detail-read", detail)
+
+    row = detail["work_item"]
+    assert_served_members!("work-detail-read work row", row, @work_row_members)
+
+    assert_served_rows!(
+      "work-detail-read timeline item",
+      detail["raw"]["timeline"],
+      @timeline_item_members
+    )
+
+    decision = row["execution"]["waiting"]["decision"]
+
+    assert_served_members!(
+      "work-detail-read waiting decision",
+      decision,
+      @waiting_decision_members
+    )
+
+    Enum.each(decision["options"], fn option ->
+      assert_served_members!(
+        "work-detail-read waiting decision option",
+        option,
+        @waiting_decision_option_members
+      )
+    end)
+
+    page =
+      api_conn() |> get("/portal/api/work-items/#{item["id"]}/timeline") |> json_response(200)
+
+    validate_served_document!("work-timeline-read", page)
+
+    assert_served_rows!("work-timeline-read item", page["items"], @timeline_item_members)
+
+    for source <- ["event", "transition", "command"] do
+      assert Enum.any?(page["items"], &(&1["source"] == source)),
+             "the timeline page must serve the #{source} variant the surface reads"
+    end
+  end
+
   defp create_project(key), do: create_project(key, "Project #{key}")
 
   defp served_work_item(work_item_id) do
@@ -1621,8 +1759,54 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              Orchestration.transition(run_id, fence, state, %{}, uuid(number), now: @now)
   end
 
+  # `assert_served_members!/3` and `assert_served_rows!/3` are the gate's presence
+  # oracle: a member is pinned by key, so a served `null` stays accepted while a
+  # renamed or omitted key fails here. They are defined in this file rather than
+  # in `test/support` so a single-file run stays self-contained.
+  defp assert_served_members!(label, served, members) do
+    assert is_map(served), "#{label} is not served at all: #{inspect(served)}"
+
+    assert Enum.all?(members, &Map.has_key?(served, &1)),
+           "#{label} stopped serving #{inspect(Enum.reject(members, &Map.has_key?(served, &1)))}"
+  end
+
+  defp assert_served_rows!(label, rows, members) do
+    assert is_list(rows) and rows != [], "#{label}: the gate must serve at least one row"
+    Enum.each(rows, &assert_served_members!(label, &1, members))
+  end
+
+  # The agent's waiting packet. The read model serves the transition's payload as
+  # the authoritative packet when it carries a decision
+  # (`workspaces/read_model.ex:221`), so this is the packet the surface reads;
+  # its members are the ones `Orchestration.validate_decision_packet!/2` admits.
+  defp waiting_decision_payload do
+    %{
+      "question" => "Which reviewer should accept this?",
+      "decision" => %{
+        "context" => "The attempt needs an operator decision before it continues.",
+        "reason" => "consequential",
+        "options" => [
+          %{
+            "id" => "reviewer-a",
+            "label" => "Reviewer A",
+            "consequence" => "Reviews the change first."
+          },
+          %{
+            "id" => "reviewer-b",
+            "label" => "Reviewer B",
+            "consequence" => "Reviews the change second."
+          }
+        ],
+        "recommended_option_id" => "reviewer-a"
+      }
+    }
+  end
+
+  # A deterministic version-4 UUID: the contract bundle's `UUID` pattern pins the
+  # version and variant nibbles, so a zeroed UUID is refused by the served-document
+  # gates that read these ids back.
   defp uuid(number),
-    do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
+    do: "00000000-0000-4000-8000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 
   defp enforce_csrf(conn),
     do: %{conn | private: Map.delete(conn.private, :plug_skip_csrf_protection)}

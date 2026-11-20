@@ -1747,6 +1747,46 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       backend's blocked sample unmet after 5 s, mailbox empty) and passed in the isolated six-file
       re-run; it is a load-sensitive case this increment does not touch.
 
+*Closed the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`;
+nothing of it stays there — option (b) of its own text landed, so the workspace-read residual and the
+whole class it names are closed.*
+
+      Recorded on branch `refactor/rf-w1-13-served-doc-gates` (2026-11-21, baseline `a3039f0`). The
+      four portal reads that had schemas and manifest fixtures but no served-response gate are now
+      gated on their real controller responses: `workspace-read` in `portal_resources_test.exs`
+      (a project with a provider-synced repository, a `ci` resource, a work-tracking row, an
+      adapter-backed runtime registered with all five `RuntimeCapabilities` members, and one work item
+      bound to the repository and the CI resource, run, claimed and transitioned to
+      `waiting_for_input` with a decision packet), `work-detail-read` and `work-timeline-read` from one
+      scenario in `portal_workflow_test.exs` (the same attempt plus one event, one transition and one
+      input command, so the timeline items cover all three sources), and `connections-read` on the
+      existing connection-read test in `portal_integrations_test.exs`. Every gate calls
+      `validate_served_document!/2` on the response and asserts the members the surfaces read: the
+      workspace pin is this item's own 66 members, the detail pin adds the shared `WorkspaceWorkItem`
+      row body plus the `WorkItemTimelineItem` names and the waiting decision packet, and
+      `connections-read` has no optional-but-consumed member to pin — every member of `Connection`
+      (12), `ConnectionResource` (17) and `ConnectionProvider` (3) sits in its definition's `required`
+      array — so its bundle comparison is the complete rename oracle and the gate's added assertion is
+      that a populated response exercises all three definitions. The bundle comparison alone could not
+      have closed this: all four schemas set `additionalProperties: true` and none sets it `false`
+      (22/34/8/4 occurrences). Option (a) (dropping the schema tolerance) stays a product decision and
+      is not taken here.
+      Recorded red, exact commands. With `PortalJSON.work_item/2` serving `goal_id_renamed` for
+      `goal_id`, `portal_resources_test.exs` fails *after* its bundle comparison passed —
+      `workspace-read work row stopped serving ["goal_id"]`, exit 2 — and
+      `portal_workflow_test.exs` fails the same way (`work-detail-read work row stopped serving
+      ["goal_id"]`, the served row's keys printing `goal_id_renamed`), exit 2: failing these gates
+      needs no required-member rename, an optional consumed one is enough. With
+      `Protocol.timeline_item/2` serving `recorded_at_renamed`, the detail gate fails inside the bundle
+      comparison at `#/raw/timeline/0-3` and `#/timeline/0-3` (exit 2), and no serving rename reaches
+      the standalone timeline page without reaching that embedded copy, because the detail read serves
+      the same `Protocol.timeline_page/2` items at `raw.timeline`. With `PortalJSON.connection/2`
+      serving `auth_type_renamed`, the connections gate fails inside the bundle comparison
+      (`Required property auth_type was not present. #/connections/0`), exit 2. All three mutations are
+      reverted; `git diff` over `control/lib` and `control/test/support` is empty. The three gated
+      files score `Result: 45 passed`, exit 0, with `mix format --check-formatted` and
+      `mix compile --warnings-as-errors` green.
+
 ## Browser acceptance under host load
 
 *Closed part of the item “Re-measure the pre-existing browser suites on a quiesced host …” in `docs/TODO.md`; the open residual stays there.*
