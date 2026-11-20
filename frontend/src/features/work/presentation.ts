@@ -134,11 +134,13 @@ export function ownerKeyLabel(key: string): string {
  *
  * The pre-#111 spellings for recorded names that start with `:` are not
  * re-pointed; the collision is accepted (repo owner, 2026-11-21). A key is
- * always read as a current mint, because those spellings are byte-identical to
- * mints of other names and cannot be disambiguated: `human::Ada` (once the
- * name `:Ada`) is the mint of no row and selects none while it still labels as
- * `Ada`; `human::unrecorded` (once `:unrecorded`) is the mint of the recorded
- * name `unrecorded`; `human:::Ada` (once `::Ada`) is the mint of `:Ada`.
+ * always read as a current mint. Some of those spellings are byte-identical to
+ * mints of other names and cannot be disambiguated: `human::unrecorded` (once
+ * `:unrecorded`) is the mint of the recorded name `unrecorded`, and
+ * `human:::Ada` (once `::Ada`) is the mint of `:Ada`. The rest mint no row:
+ * `human::Ada` (once `:Ada`) selects none while it still labels as `Ada`.
+ * Re-pointing only that unambiguous subset was declined as compatibility code
+ * the owner does not require.
  * Pinned by `filters.test.ts`, "reads the pre-#111 colon-leading owner keys as
  * the current mints, accepting the collision".
  */

@@ -67,7 +67,7 @@ signatures.
   | `agent:::Ada`, `human:::Ada` | unchanged | the escaped recorded names the current encoder mints (a recorded name `:Ada`); `human:::Ada` accepted and pinned (`docs/plans/2026-11-21-colon-owner-keys-plan.md`); `agent:::Ada` not pinned |
   | `agent:builder`, `unassigned`, `type:unrecorded`, `agent:unrecorded-bot` | unchanged | keys that must not be read as the sentinel |
   | `human::Ada` (pre-#111 spelling for a recorded name `:Ada`) | `human::Ada` | no row — accepted and pinned (`docs/plans/2026-11-21-colon-owner-keys-plan.md`); entry closed in `docs/archive/CLOSED-TODO.md` |
-  | `human:Ada`, `""` | unchanged | further unchanged samples: `human:Ada` pinned by `filters.test.ts:18`; the empty key `""` skips the owner filter, pinned only through the no-owner cases |
+  | `human:Ada`, `""` | unchanged | further unchanged samples: `human:Ada` pinned by `filters.test.ts`, case "normalises the values the router hands back after JSON parsing"; the empty key `""` skips the owner filter, pinned only through the no-owner cases |
   | `type:robot` | `type:robot` | unchanged sample read from the implementation; not pinned |
 
 - **Idempotence.** The reader is a fixed point on every key it returns, so applying it twice — or

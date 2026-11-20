@@ -20,10 +20,12 @@ The accepted reading: **a key is always read as a current mint.** `ownerKeyFilte
 (`agent:unrecorded`, `human:unrecorded`); every other key travels as written. The pre-#111
 encoder spelled a recorded value unescaped, while the current encoder prefixes one colon to a
 value that starts with `:` or equals the legacy word (`ownerKeyValue`), so the pre-#111 key for a
-recorded name with `k >= 1` leading colons is byte-identical to the current mint for the same
-name with `k-1` leading colons, or — `human::Ada` (once the name `:Ada`) — to no mint at all.
-The two cannot be disambiguated, so re-pointing only an "unambiguous subset" would add
-compatibility code the owner does not require.
+recorded name with `k >= 2` leading colons, or for the name `:unrecorded`, is byte-identical to
+the current mint for the same name with one colon fewer; only those colliding spellings
+cannot be disambiguated. The remaining case, a name with exactly one leading colon and a
+remainder other than the legacy word (`:Ada`), equals no current mint: the legacy key
+`human::Ada` selects no row while it still labels as `Ada`. Re-pointing only that unambiguous
+subset was declined as compatibility code the owner does not require.
 
 Semantics fixed by the pins (`ownerKeyLabel` renders `raw.slice(1)` for a value starting with
 `:`, `raw === "" || raw === legacyAbsentValue` as the absence):

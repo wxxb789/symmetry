@@ -2483,7 +2483,9 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       No surface, label, encoder, storage-schema or contract change; the decision and the
       edge-case table are written out in `docs/plans/2026-11-20-legacy-owner-bookmarks-plan.md`,
       which also records the second pre-#111 shape (keys for recorded names that start with `:`,
-      for example `human::Ada`) as out of scope and tracked open in `docs/TODO.md`.
+      for example `human::Ada`) as out of scope and tracked open in `docs/TODO.md`. That entry
+      was closed on 2026-11-21 (branch `fix/colon-owner-keys`); its closure below in this
+      archive records the decision.
       Pinned by `frontend/src/features/projects/filters.test.ts`, case "re-points the legacy
       sentinel bookmarks to the keys the encoder mints now": the legacy URL key maps to the
       minted key, both reader call sites select the unnamed-agent and unnamed-human rows, the
@@ -2553,12 +2555,13 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
       **Accepted and documented (2026-11-21, branch `fix/colon-owner-keys`):** the repo
       owner/conductor decided, under the human owner's standing "no backward compatibility"
       directive, to accept the collision and document it; no legacy re-point is added for
-      colon-leading keys — a key is always read as a current mint. The pre-#111 spellings are
-      byte-identical to the current mints of other names (`human::unrecorded` for the recorded
-      name `unrecorded`, `human:::Ada` for `:Ada`, every deeper prefix shifting by one) or to
-      no mint at all (`human::Ada`, once the name `:Ada`), so they cannot be disambiguated; a
-      re-point of only the unambiguous subset would add compatibility code the owner does not
-      require. The semantics table, the decision and the trade-offs are in
+      colon-leading keys — a key is always read as a current mint. The colliding pre-#111
+      spellings are byte-identical to the current mints of other names (`human::unrecorded`
+      for the recorded name `unrecorded`, `human:::Ada` for `:Ada`, every deeper prefix
+      shifting by one), so those cannot be disambiguated. The remaining case
+      (`human::Ada`, once the name `:Ada`) equals no current mint, and a re-point of only that
+      unambiguous subset would add compatibility code the owner does not require. The semantics
+      table, the decision and the trade-offs are in
       `docs/plans/2026-11-21-colon-owner-keys-plan.md`; the reading is stated in the
       `ownerKeyFilter` comment (`frontend/src/features/work/presentation.ts`, comment-only
       edit). Pinned by `frontend/src/features/projects/filters.test.ts`, case "reads the
