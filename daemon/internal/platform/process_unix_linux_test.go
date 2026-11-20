@@ -2160,14 +2160,14 @@ func TestProcessGroupBarrierReportsJoinedMonitorAfterDeadline(t *testing.T) {
 	}
 }
 
-// TestProcessGroupStopDescendantMonitorJoinsEndingMonitor is the deterministic
-// probe for the stop path's deadline join: fabricated state, no monitor
-// goroutine and no scheduler dependence. monitorDone is close-only, so an
-// exited monitor stays ready and must be joined without waiting for the
-// deadline, while an open monitor must still consume the whole deadline and
-// keep the unchanged deadline error (fail-closed).
+// TestProcessGroupStopDescendantMonitorJoinsEndingMonitor pins the stop path's
+// two non-racing join directions with fabricated state, no monitor goroutine
+// and no scheduler dependence: an already exited monitor (monitorDone is
+// close-only, so it stays ready) is joined without consuming the deadline,
+// while an open monitor fails closed with the unchanged deadline error after
+// the full wait. The deadline-race recheck itself is pinned by
+// TestProcessGroupStopDescendantMonitorReportsJoinedMonitorAfterDeadline.
 func TestProcessGroupStopDescendantMonitorJoinsEndingMonitor(t *testing.T) {
-	const deadline = 200 * time.Millisecond
 	for _, test := range []struct {
 		name          string
 		monitorExited bool
@@ -2180,6 +2180,13 @@ func TestProcessGroupStopDescendantMonitorJoinsEndingMonitor(t *testing.T) {
 			group := &processGroup{monitorStop: make(chan struct{}), monitorDone: make(chan struct{})}
 			if test.monitorExited {
 				close(group.monitorDone)
+			}
+			// The exited case proves the join consumes no real deadline, so
+			// its only meaningful bound is the package hang guard; the open
+			// case keeps the 200 ms budget its deadline error is about.
+			deadline := 200 * time.Millisecond
+			if test.monitorExited {
+				deadline = testHangGuard
 			}
 			start := time.Now()
 			err := group.stopDescendantMonitor(time.Now().Add(deadline))
@@ -2196,8 +2203,8 @@ func TestProcessGroupStopDescendantMonitorJoinsEndingMonitor(t *testing.T) {
 			if err != nil {
 				t.Fatalf("stop with an exited monitor = %v after %s, want the monitor joined", err, elapsed)
 			}
-			if elapsed >= deadline*3/4 {
-				t.Fatalf("stop waited %s for an exited monitor, want an immediate join", elapsed)
+			if elapsed >= testHangGuard {
+				t.Fatalf("stop waited %s for an exited monitor, want a join before the %s hang guard", elapsed, testHangGuard)
 			}
 		})
 	}
