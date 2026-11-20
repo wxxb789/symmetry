@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -191,6 +192,13 @@ class ExporterTest(unittest.TestCase):
     def write_json(self, path: pathlib.Path, value: dict) -> bytes:
         path.parent.mkdir(parents=True, exist_ok=True)
         data = json.dumps(value, indent=2).encode() + b"\n"
+        path.write_bytes(data)
+        os.chmod(path, 0o600)
+        return data
+
+    def write_log(self, path: pathlib.Path, lines: list[bytes]) -> bytes:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = b"\n".join(lines) + b"\n"
         path.write_bytes(data)
         os.chmod(path, 0o600)
         return data
@@ -467,6 +475,149 @@ class ExporterTest(unittest.TestCase):
         result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("bounded regular file", result.stderr)
+
+    def test_legacy_failed_run_exports_sanitized_restarted_daemon_log_tails(self) -> None:
+        source = self.private_dir("log-source")
+        output = self.private_dir("log-output")
+        originals = self.populate_legacy(source)
+        case = "lease-arm-before-resume"
+        stdout_lines = [
+            json.dumps({
+                "time": "2026-11-20T18:42:24.695900552Z", "level": "WARN", "msg": "stop_recovered_process_failed",
+                "run_id": "LEASE-TOKEN-abc123def456", "generation": 1, "stage": "process_exit", "state": "stopping",
+                "reason": "owner_loss", "outcome": "lost", "kind": "stop", "attempt": 2, "runtime_epoch": 7,
+                "skew_ms": -250, "lease_safety_margin_ms": 1500, "command_id": "private-command",
+                "error": "open /home/runner/work/symmetry/daemon.json: permission denied",
+                "workspace": "/home/runner/work/_temp/symmetry-linux-containment-witness/lease-arm-before-resume",
+            }).encode(),
+            json.dumps({
+                "time": "2026-11-20T18:42:25Z", "level": "INFO",
+                "msg": "/home/runner/work/_temp/symmetry-linux-containment-witness", "error": "JOINED-TOKEN-77ff",
+            }).encode(),
+            b"goroutine 1 [running]: /home/runner/work/symmetry/daemon/internal/app/app.go:2148",
+            b'{"time":"2026-11-20T18:42:26Z","level":"INFO","msg":"runtime_registered","msg":"duplicated"}',
+        ]
+        stdout_bytes = self.write_log(source / case / "second-daemon.stdout.log", stdout_lines)
+        self.write_log(source / case / "second-daemon.stderr.log", [b"run daemon: linux child subreaper: operation not permitted"])
+        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
+        self.assertEqual((document["version"], document["case"], document["daemon"], document["stream"]),
+                         (1, case, "second", "stdout"))
+        self.assertFalse(document["truncated"])
+        self.assertEqual(document["dropped_lines"], 2)
+        self.assertEqual(document["messages"], [
+            {"time": "2026-11-20T18:42:24.695900552Z", "level": "WARN", "msg": "stop_recovered_process_failed",
+             "attempt": 2, "generation": 1, "lease_safety_margin_ms": 1500, "runtime_epoch": 7, "skew_ms": -250,
+             "kind": "stop", "outcome": "lost", "reason": "owner_loss", "stage": "process_exit", "state": "stopping"},
+            {"time": "2026-11-20T18:42:25Z", "level": "INFO"},
+        ])
+        stderr_document = json.loads((output / f"{case}-second-daemon-stderr.json").read_text())
+        self.assertEqual((stderr_document["messages"], stderr_document["dropped_lines"]), ([], 1))
+        published = (output / f"{case}-second-daemon-stdout.json").read_bytes() + \
+            (output / f"{case}-second-daemon-stderr.json").read_bytes()
+        for forbidden in (b"/home/runner", b"LEASE-TOKEN-abc123def456", b"JOINED-TOKEN-77ff", b"permission denied",
+                          b"private-command", b"goroutine", b"duplicated", b"operation not permitted", b'"error"',
+                          b'"run_id"', b'"workspace"'):
+            self.assertNotIn(forbidden, published)
+        manifest = json.loads((output / "manifest.json").read_text())
+        self.assertEqual(len(manifest["files"]), 18)
+        self.assertFalse(manifest["raw_logs_included"])
+        entries = {entry["file"]: entry for entry in manifest["files"]}
+        self.assertEqual(
+            entries[f"{case}-second-daemon-stdout.json"],
+            {"file": f"{case}-second-daemon-stdout.json", "bytes": len((output / f"{case}-second-daemon-stdout.json").read_bytes()),
+             "sha256": hashlib.sha256((output / f"{case}-second-daemon-stdout.json").read_bytes()).hexdigest(),
+             "kind": "daemon_log_tail", "daemon": "second", "stream": "stdout", "truncated": False,
+             "records": 2, "dropped_lines": 2},
+        )
+        self.assertEqual(entries[f"{case}-second-daemon-stderr.json"]["records"], 0)
+        for path, data in originals.items():
+            self.assertEqual(path.read_bytes(), data)
+        self.assertEqual((source / case / "second-daemon.stdout.log").read_bytes(), stdout_bytes)
+
+    def test_legacy_passed_run_omits_daemon_log_tails(self) -> None:
+        source = self.private_dir("log-passed-source")
+        output = self.private_dir("log-passed-output")
+        self.populate_legacy(source)
+        case = "lease-arm-before-resume"
+        self.write_log(source / case / "second-daemon.stdout.log",
+                       [json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered"}).encode()])
+        result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((output / "manifest.json").read_text())
+        self.assertEqual(len(manifest["files"]), 16)
+        self.assertEqual(sorted(path.name for path in output.iterdir()),
+                         sorted(["manifest.json"] + [f"{name}.json" for name in LEGACY_NAMES]))
+        self.assertEqual([entry for entry in manifest["files"] if entry.get("kind") == "daemon_log_tail"], [])
+
+    def test_legacy_daemon_log_tail_is_bounded_to_its_last_bytes(self) -> None:
+        source = self.private_dir("tail-source")
+        output = self.private_dir("tail-output")
+        self.populate_legacy(source)
+        case = "lease-arm-before-resume"
+        lines = [
+            json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": f"record_{index:04d}"}).encode()
+            for index in range(2400)
+        ]
+        raw = self.write_log(source / case / "second-daemon.stdout.log", lines)
+        self.assertGreater(len(raw), 64 << 10)
+        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
+        self.assertTrue(document["truncated"])
+        boundary = raw.find(b"\n", len(raw) - (64 << 10)) + 1
+        expected = [json.loads(line)["msg"] for line in raw[boundary:].split(b"\n") if line]
+        self.assertEqual([message["msg"] for message in document["messages"]], expected)
+        self.assertEqual(document["dropped_lines"], 0)
+        self.assertLess(len(document["messages"]), len(lines))
+        self.assertEqual(document["messages"][-1]["msg"], f"record_{len(lines) - 1:04d}")
+
+    def test_legacy_daemon_log_tail_rejects_nonprivate_or_linked_log(self) -> None:
+        for index, kind in enumerate(("permissions", "symlink", "directory")):
+            with self.subTest(kind=kind):
+                source = self.private_dir(f"log-boundary-source-{index}")
+                output = self.private_dir(f"log-boundary-output-{index}")
+                self.populate_legacy(source)
+                case = "lease-arm-before-resume"
+                path = source / case / "second-daemon.stdout.log"
+                self.write_log(path, [json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered"}).encode()])
+                if kind == "permissions":
+                    os.chmod(path, 0o644)
+                elif kind == "symlink":
+                    target = path.with_name("private.log")
+                    path.rename(target)
+                    path.symlink_to(target)
+                else:
+                    path.unlink()
+                    path.mkdir()
+                result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("private regular file", result.stderr)
+                self.assertFalse((output / f"{case}-second-daemon-stdout.json").exists())
+                self.assertFalse((output / "manifest.json").exists())
+
+    def test_legacy_daemon_log_tail_credential_scan_fails_closed(self) -> None:
+        source = self.private_dir("log-secret-source")
+        output = self.private_dir("log-secret-output")
+        self.populate_legacy(source)
+        case = "lease-arm-before-resume"
+        secret = "CANARY-LEASE-TOKEN-9"
+        self.write_log(source / case / "second-daemon.stdout.log", [json.dumps({
+            "time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": "claim_failed", "state": secret,
+        }).encode()])
+        secret_file = self.root / "log-secrets"
+        secret_file.write_bytes(secret.encode() + b"\0")
+        os.chmod(secret_file, 0o600)
+        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source),
+                                 "--secret-values-file", str(secret_file))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("configured credential value", result.stderr)
+        self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertTrue((output / "bind-before-commit.json").exists())
+        self.assertFalse((output / f"{case}-second-daemon-stdout.json").exists())
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertNotIn(secret.encode(), b"".join(path.read_bytes() for path in output.iterdir()))
 
     def test_missing_legacy_evidence_writes_failed_incomplete_manifest(self) -> None:
         source = self.private_dir("source")

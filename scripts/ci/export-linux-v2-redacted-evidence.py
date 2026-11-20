@@ -232,6 +232,26 @@ LEGACY_REPLAY_KEYS = LEGACY_COMMON_KEYS | {
     "scan_release", "duplicate_stop_marker", "duplicate_stop_seen",
 }
 
+# The restarted daemon's stdout/stderr logs, written into each case root beside
+# witness-evidence.json by the witness at
+# daemon/e2e/production_linux_containment_witness_test.go:1723-1754. Only the
+# tail of a failed run is exported, as a sanitized projection of the daemon's
+# own slog JSON records; the sources are never copied.
+LEGACY_DAEMON_LOG_TAIL_BYTES = 64 << 10
+LEGACY_DAEMON_LOG_LABEL = "second"
+LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
+# The shapes the daemon's own slog.NewJSONHandler writer (daemon/internal/app/app.go:460)
+# produces on stdout (daemon/cmd/symmetry-daemon/main.go:89). Message keys are
+# snake_case identifiers; every other value is an enum-like token, a bounded
+# integer, or private text and identities the projection below never emits.
+DAEMON_LOG_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$")
+DAEMON_LOG_LEVELS = ("DEBUG", "INFO", "WARN", "ERROR")
+DAEMON_LOG_MESSAGE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+DAEMON_LOG_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+DAEMON_LOG_TEXT_KEYS = ("state", "stage", "reason", "outcome", "kind")
+DAEMON_LOG_INT_KEYS = ("attempt", "bytes", "generation", "lease_safety_margin_ms", "runtime_epoch", "skew_ms")
+DAEMON_LOG_INT_LIMIT = 1 << 31
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"redacted evidence export failed: {message}")
@@ -622,6 +642,68 @@ def project_pid_reuse(value) -> dict:
     return result
 
 
+def project_daemon_log_record(value) -> dict | None:
+    """Project one daemon slog line to its allowlisted, private-free shape.
+
+    The record keeps its time and level whenever both match the shapes the
+    daemon's own JSON log handler emits, so the daemon's activity timeline
+    survives even when its message text cannot be published. Every other field
+    is dropped: identities, paths, error text and any unknown attribute.
+    """
+    if not isinstance(value, dict):
+        return None
+    time_value = value.get("time")
+    level = value.get("level")
+    if not (isinstance(level, str) and level in DAEMON_LOG_LEVELS and
+            isinstance(time_value, str) and DAEMON_LOG_TIME.fullmatch(time_value)):
+        return None
+    record = {"time": time_value, "level": level}
+    message = value.get("msg")
+    if isinstance(message, str) and DAEMON_LOG_MESSAGE.fullmatch(message):
+        record["msg"] = message
+    for key in DAEMON_LOG_TEXT_KEYS:
+        child = value.get(key)
+        if isinstance(child, str) and DAEMON_LOG_TEXT.fullmatch(child):
+            record[key] = child
+    for key in DAEMON_LOG_INT_KEYS:
+        child = value.get(key)
+        if isinstance(child, int) and not isinstance(child, bool) and -DAEMON_LOG_INT_LIMIT < child < DAEMON_LOG_INT_LIMIT:
+            record[key] = child
+    return record
+
+
+def sanitize_daemon_log_tail(raw: bytes) -> tuple[list[dict], int]:
+    messages = []
+    dropped = 0
+    for line in raw.split(b"\n"):
+        if not line:
+            continue
+        try:
+            value = json.loads(line.decode("utf-8", errors="strict"), object_pairs_hook=reject_duplicate_keys)
+        except (UnicodeError, ValueError, json.JSONDecodeError):
+            value = None
+        record = None if value is None else project_daemon_log_record(value)
+        if record is None:
+            dropped += 1
+            continue
+        messages.append(record)
+    return messages, dropped
+
+
+def build_daemon_log_document(case: str, stream: str, raw: bytes, truncated: bool) -> bytes:
+    messages, dropped = sanitize_daemon_log_tail(raw)
+    document = {
+        "version": 1,
+        "case": case,
+        "daemon": LEGACY_DAEMON_LOG_LABEL,
+        "stream": stream,
+        "truncated": truncated,
+        "dropped_lines": dropped,
+        "messages": messages,
+    }
+    return json.dumps(document, separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
+
+
 def project_legacy_document(document: dict) -> dict:
     if "raw_journal_snapshots" in document:
         family = "replay"
@@ -741,6 +823,44 @@ def read_regular(path: pathlib.Path, secret_values: tuple[bytes, ...], validate:
     if len(raw) != info.st_size:
         fail("allowlisted source changed while being read")
     return raw, validate_document(raw, secret_values) if validate else None
+
+
+def read_daemon_log_tail(path: pathlib.Path, maximum: int) -> tuple[bytes, bool]:
+    """Read at most the last `maximum` bytes of one private daemon log.
+
+    Unlike read_regular this file may be empty and its total size is not
+    capped: only the tail is published, and the daemon that wrote it may still
+    be appending. The identity re-check keeps the same symlink/short-write
+    boundary every other allowlisted source passes; when the read starts
+    mid-line, the partial first line is discarded before sanitization.
+    """
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+        fail("allowlisted daemon log must be a private regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_ino != info.st_ino or opened.st_dev != info.st_dev:
+                fail("allowlisted daemon log changed during open")
+            truncated = opened.st_size > maximum
+            os.lseek(fd, max(opened.st_size - maximum, 0), os.SEEK_SET)
+            data = bytearray()
+            while len(data) < maximum:
+                chunk = os.read(fd, maximum - len(data))
+                if not chunk:
+                    break
+                data.extend(chunk)
+        finally:
+            os.close(fd)
+    except OSError:
+        fail("allowlisted daemon log could not be read")
+    raw = bytes(data)
+    if truncated:
+        boundary = raw.find(b"\n")
+        raw = raw[boundary + 1:] if boundary >= 0 else b""
+    return raw, truncated
 
 
 def atomic_write(directory: pathlib.Path, name: str, contents: bytes, uid: int, gid: int) -> None:
@@ -884,6 +1004,35 @@ def main() -> int:
                 fail("evidence destination already exists")
             atomic_write(output, target, data, runner_uid, runner_gid)
         copied.append({"file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+
+    # A failed witness run is the one case whose daemon-side stall the uploaded
+    # evidence must explain, so the restarted daemon's log tails are published
+    # as sanitized projections. Per-case verdicts are not visible here (the
+    # exporter reads files, not the go-test event stream), so the CI's run
+    # verdict is the trigger and every case that wrote a restarted-daemon log
+    # gets its tail exported.
+    if arguments.mode == "legacy" and arguments.run_status == "failed":
+        for name in LEGACY_WITNESSES:
+            for stream in LEGACY_DAEMON_LOG_STREAMS:
+                try:
+                    source = witness_root / name / f"{LEGACY_DAEMON_LOG_LABEL}-daemon.{stream}.log"
+                    raw, truncated = read_daemon_log_tail(source, LEGACY_DAEMON_LOG_TAIL_BYTES)
+                except FileNotFoundError:
+                    continue
+                target = f"{name}-{LEGACY_DAEMON_LOG_LABEL}-daemon-{stream}.json"
+                data = build_daemon_log_document(name, stream, raw, truncated)
+                document = validate_document(data, secret_values)
+                destination = output / target
+                if destination.exists() or destination.is_symlink():
+                    fail("evidence destination already exists")
+                atomic_write(output, target, data, runner_uid, runner_gid)
+                copied.append({
+                    "file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                    "kind": "daemon_log_tail", "daemon": document["daemon"], "stream": document["stream"],
+                    "truncated": document["truncated"], "records": len(document["messages"]),
+                    "dropped_lines": document["dropped_lines"],
+                })
+                expected_destinations.add(target)
 
     for child in output.iterdir():
         if child.name not in expected_destinations and child.name != "manifest.json":
