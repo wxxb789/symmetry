@@ -27,6 +27,7 @@ import {
   createProject,
   createWorkItem,
   detailSurface,
+  deviceContextOptions,
   login,
   moveWorkItem,
   operatorToken,
@@ -84,20 +85,6 @@ const ui = {
   refresh: "Refresh"
 };
 
-// browser.newContext does not inherit project use options, so a fresh signed-out
-// context copies only the supported BrowserContextOptions fields from the
-// running project (exact viewport, plus mobile/touch/scale/agent semantics).
-// No storageState is passed: the context stays signed out.
-const deviceContextOptions = (testInfo) => {
-  const use = testInfo.project.use ?? {};
-  return {
-    ...(use.viewport ? { viewport: use.viewport } : {}),
-    ...(use.isMobile === undefined ? {} : { isMobile: use.isMobile }),
-    ...(use.hasTouch === undefined ? {} : { hasTouch: use.hasTouch }),
-    ...(use.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: use.deviceScaleFactor }),
-    ...(use.userAgent ? { userAgent: use.userAgent } : {})
-  };
-};
 // Error branches render before the detail title is known, so the dialog is
 // addressed by role only.
 const detailPanel = (page, isMobile) =>

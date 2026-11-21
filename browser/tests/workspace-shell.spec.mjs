@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
+import { api, capture, historyWrites, login, recordHistoryWrites } from "./readable-fixtures.mjs";
 
 const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
 // The expiry release is started by the render gate, which exports
@@ -21,55 +21,21 @@ if (process.env.SYMMETRY_RENDER_GATE_REQUIRED === "1" && !process.env.SYMMETRY_S
 const EXPIRY_GUARD_MS = 6_000;
 const EXPIRY_POLL_INTERVALS = [100, 250, 500];
 
-// Records the application's own history writes before its module runs. The
-// one-time legacy repair replaces the location once; the router then writes its
-// own entry state with an empty URL, which names no location and is not a
-// navigation. Counting the writes that do name a location is how a case can
-// state "no second redirect" from the app's own behaviour instead of from a
-// sleep that a returning redirect would satisfy.
-function recordHistoryWrites() {
-  window.__historyWrites = [];
-  for (const name of ["replaceState", "pushState"]) {
-    const original = window.history[name].bind(window.history);
-    window.history[name] = (...args) => {
-      window.__historyWrites.push({ name, url: String(args[2] ?? "") });
-      return original(...args);
-    };
-  }
-}
-
-const historyWrites = (page) => page.evaluate(() => window.__historyWrites);
-
-async function login(page, path = "/portal/attention") {
-  await page.goto(`/portal/login?return_to=${encodeURIComponent(path)}`);
-  await page.getByLabel("Operator token").fill(operatorToken);
-  await page.getByRole("button", { name: "Open workspace" }).click();
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "Project", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Search or navigate", exact: true })).toBeVisible();
-}
-
-async function api(page, path, body) {
-  return page.evaluate(async ({ path, body }) => {
-    const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
-    const response = await fetch(path, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "content-type": "application/json", "x-csrf-token": csrf },
-      body: JSON.stringify(body)
-    });
-    return { status: response.status, body: await response.json() };
-  }, { path, body });
-}
+// The shared login plus this suite's own readiness marker, the command palette
+// trigger: every authenticated entry here waited for it before the
+// consolidation, so the marker is passed to the shared helper rather than
+// dropped, and every call site keeps its one-line shape.
+const shellLogin = (page, path = "/portal/attention") =>
+  login(page, path, { assert: [page.getByRole("button", { name: "Search or navigate", exact: true })] });
 
 async function project(page, suffix, withWork = false) {
   const key = `S${Date.now().toString(36).slice(-5)}${suffix}`.toUpperCase().slice(0, 8);
   const name = `Shell acceptance ${key}`;
-  const response = await api(page, "/portal/api/projects", { key, name, description: "Real Phoenix workspace fixture" });
+  const response = await api(page, "POST", "/portal/api/projects", { key, name, description: "Real Phoenix workspace fixture" });
   expect(response.status).toBe(201);
   const id = response.body.project.id;
   if (withWork) {
-    const work = await api(page, `/portal/api/projects/${id}/work-items`, {
+    const work = await api(page, "POST", `/portal/api/projects/${id}/work-items`, {
       title: `Review the exact workspace subject ${key}`,
       description: "Read-only shell evidence",
       status: "ready",
@@ -81,16 +47,6 @@ async function project(page, suffix, withWork = false) {
     expect(work.status).toBe(201);
   }
   return { id, name, key };
-}
-
-async function capture(page, testInfo, name, observations) {
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  const image = testInfo.outputPath(`${name}.png`);
-  await page.screenshot({ path: image, fullPage: true });
-  await testInfo.attach(name, { path: image, contentType: "image/png" });
-  await fs.writeFile(testInfo.outputPath(`${name}.json`), JSON.stringify({
-    url: page.url(), viewport: page.viewportSize(), observations
-  }, null, 2));
 }
 
 test("signed-out entry, authenticated empty shell, release assets and logout", async ({ page }, testInfo) => {
@@ -125,7 +81,7 @@ test("signed-out entry, authenticated empty shell, release assets and logout", a
 });
 
 test("project URL, refresh recovery, history and keyboard focus", async ({ page, isMobile }, testInfo) => {
-  await login(page);
+  await shellLogin(page);
   const selected = await project(page, "N", true);
   await page.goto("/portal/projects");
   await page.getByLabel("Project", { exact: true }).selectOption(selected.id);
@@ -183,7 +139,7 @@ test("project URL, refresh recovery, history and keyboard focus", async ({ page,
 });
 
 test("real response loading, network failure and recovery", async ({ page }, testInfo) => {
-  await login(page);
+  await shellLogin(page);
   const { promise: barrier, resolve: release } = Promise.withResolvers();
   await page.route("**/portal/api/workspace*", async (route) => {
     await barrier;
@@ -215,10 +171,10 @@ test("real response loading, network failure and recovery", async ({ page }, tes
 });
 
 test("Attention scope survives selection and login with fractional resource metadata", async ({ page, isMobile }, testInfo) => {
-  await login(page);
+  await shellLogin(page);
   const empty = await project(page, "A");
   const blocked = await project(page, "B", true);
-  const resource = await api(page, `/portal/api/projects/${blocked.id}/resources`, {
+  const resource = await api(page, "POST", `/portal/api/projects/${blocked.id}/resources`, {
     kind: "repository", name: "Fractional observation", provider: "manual",
     external_ref: "workspace-read-evidence", metadata: { ratio: 0.5, weight: 1e-3 }
   });
@@ -263,13 +219,13 @@ test("Attention scope survives selection and login with fractional resource meta
 });
 
 test("existing tab refreshes logout CSRF after shared-cookie login on explicit visibility notification", async ({ page, context }, testInfo) => {
-  await login(page);
+  await shellLogin(page);
   const originalDocument = await page.evaluate(() => performance.timeOrigin);
   const other = await context.newPage();
   await other.goto("/portal/attention");
   await other.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(other).toHaveURL(/\/portal\/login$/);
-  await login(other);
+  await shellLogin(other);
   const refreshed = page.waitForResponse((response) => response.url().endsWith("/portal/api/session") && response.status() === 200);
   await other.close();
   await page.bringToFront();
@@ -285,7 +241,7 @@ test("existing tab refreshes logout CSRF after shared-cookie login on explicit v
 });
 
 test("the legacy hash repair lands on the new route exactly once", async ({ page }, testInfo) => {
-  await login(page);
+  await shellLogin(page);
   const selected = await project(page, "C");
   const documentLoads = [];
   const recordLoad = (request) => {
@@ -321,7 +277,7 @@ test("the legacy hash repair lands on the new route exactly once", async ({ page
 });
 
 test("signed-out legacy project board link survives real login onto its new route", async ({ page }, testInfo) => {
-  await login(page);
+  await shellLogin(page);
   const selected = await project(page, "L");
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   // The shell awaits the current session token before the native logout POST;
@@ -346,7 +302,7 @@ test("invalid credentials and a missing CSRF header are refused by the real serv
   await page.getByRole("button", { name: "Open workspace" }).click();
   await expect(page.getByRole("alert")).toContainText("Operator token is invalid");
 
-  await login(page);
+  await shellLogin(page);
   // The migrated session-boundary probe: an authenticated same-origin POST
   // without the session's CSRF header is refused by the server, not by a stub.
   const withoutCsrf = await page.evaluate(async () => {
