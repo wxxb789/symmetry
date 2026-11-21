@@ -1452,22 +1452,7 @@ func validateProviderActionRequest(access protocol.ProviderAccess, actionID, res
 }
 
 func validateProviderActionUUID(value, field string) error {
-	if len(value) != 36 {
-		return fmt.Errorf("%s must be a canonical UUID", field)
-	}
-	for index := 0; index < len(value); index++ {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			if value[index] != '-' {
-				return fmt.Errorf("%s must be a canonical UUID", field)
-			}
-			continue
-		}
-		character := value[index]
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
-			return fmt.Errorf("%s must use lowercase hexadecimal UUID digits", field)
-		}
-	}
-	return nil
+	return protocol.ValidateUUID(value, field, protocol.GoalMachineUUIDPolicy)
 }
 
 func decodeProviderActionResponse(data []byte, expectedActionID, expectedResourceID, expectedOperation string) (ProviderActionResponse, error) {

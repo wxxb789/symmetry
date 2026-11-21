@@ -788,3 +788,29 @@ instead of appended.
       (exit 2, `Required version … does not match the running version …`) instead of reporting a
       different finding set than the one the 2026-11-21 baseline fixed (373 findings at
       `a3039f0`, of which 220 E501 at `line-length = 120`).
+
+## Deferred review findings (PR #154)
+
+- [ ] Revalidate and remove nine test-only provider entry points (2026-11-21, branch
+      `refactor/rf-w2-06-provider-support`; plan
+      `docs/plans/2026-11-21-rf-w2-06-provider-support-plan.md`; found by the Opus review of
+      PR #154 (P3-2)). `GitHub.check/1`, `GitHub.sync_resource/2`, `GitHub.sync_delivery/3`
+      (`control/lib/symmetry_control/integrations/providers/github.ex:41,58,453`), the
+      `AzureDevOps` twins (`azure_devops.ex:63,78,204`) and their new homes `Support.check/2`,
+      `Support.sync_resource/3`, `Support.sync_delivery/4` (`support.ex:12,18,27`) have no
+      production caller in `control/lib`: only the two provider suites call them. Evidence, run at
+      `e4cac8d5`:
+      `rg -n "provider\.(check|sync_resource|sync_delivery)\(" control/lib/symmetry_control/integrations.ex`
+      matches only the auth-bearing callbacks — `:224` `provider.check(connection, auth)`,
+      `:480`/`:619` `provider.sync_resource(connection, resource, auth)`, `:700`
+      `provider.sync_delivery(connection, resource, item, auth)`;
+      `rg -n "\b(GitHub|AzureDevOps)\.(check|sync_resource|sync_delivery)\(" control/lib` has no
+      matches (exit 1); `rg -n "\bSupport\.(check|sync_resource|sync_delivery)\(" control/lib`
+      matches only the six provider wrapper bodies themselves; and
+      `rg -n "\b(GitHub|AzureDevOps|Support)\.(check|sync_resource|sync_delivery)\(" control/test`
+      yields 17 call sites, 9 in `github_test.exs` and 8 in `azure_devops_test.exs`. Dynamic
+      `apply/3` dispatch is not exhaustively ruled out, but every production dispatch goes through
+      the `provider_call` closures above [inference]. Cleanup direction: migrate the tests to
+      `authenticate/1` plus the auth-bearing callback arity, then delete the six provider wrappers
+      and the three `Support` delegators, as a separately authorized change; `integrations.ex:690`
+      already short-circuits a nil `pull_request_url`.

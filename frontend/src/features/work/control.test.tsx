@@ -57,7 +57,7 @@ function detailBody(options: {
     ...(options.timeline === undefined ? {} : { timeline: options.timeline }),
     ...(options.nextBefore === undefined ? {} : { nextBefore: options.nextBefore }),
   });
-  return { ...body, work_item: { ...(body["work_item"] as Record<string, unknown>), ...options.item } };
+  return { ...body, work_item: { ...(body.work_item as Record<string, unknown>), ...options.item } };
 }
 
 const runningDetail = () => detailBody({ execution: { task_id: taskId, run_id: null, generation: 1, state: "running", can_cancel: true } });
@@ -103,7 +103,7 @@ function stubMatchMedia(desktop: boolean) {
   });
 }
 
-beforeEach(() => stubMatchMedia(false));
+beforeEach(() => { stubMatchMedia(false); });
 
 /** The reads neither harness scripts: the workspace snapshot, or the routeless 404. */
 function unscriptedResponse(pathname: string) {
@@ -216,7 +216,7 @@ describe("control mutation boundary", () => {
     });
     await openDetail();
     await user.click(screen.getByRole("button", { name: control }));
-    await waitFor(() => expect(harness.posts()).toHaveLength(1));
+    await waitFor(() => { expect(harness.posts()).toHaveLength(1); });
     expect(harness.posts()[0]?.path).toBe(`/portal/api/work-items/${subjectId}/${path}`);
     expect(harness.posts()[0]?.headers["x-csrf-token"]).toBe("session-token");
     expect(harness.posts()[0]?.headers["x-csrfToken"]).toBeUndefined();
@@ -236,9 +236,9 @@ describe("control mutation boundary", () => {
     await act(async () => {
       await harness.application.queryClient.invalidateQueries({ queryKey: ["session"] });
     });
-    await waitFor(() => expect(harness.requests.filter((request) => request.path === "/portal/api/session")).toHaveLength(2));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.path === "/portal/api/session")).toHaveLength(2); });
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
-    await waitFor(() => expect(harness.posts()).toHaveLength(1));
+    await waitFor(() => { expect(harness.posts()).toHaveLength(1); });
     expect(harness.posts()[0]?.headers["x-csrf-token"]).toBe("rotated-session-token");
   });
 
@@ -306,7 +306,7 @@ describe("capability-bound controls", () => {
     // runtime advertises neither). A state-derived surface would keep the
     // controls live; this one renders only the served signal.
     await user.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull(); });
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(document.querySelector(".control-bar .chip")).toHaveTextContent("Running");
   });
@@ -425,7 +425,7 @@ describe("control receipts", () => {
     await user.click(screen.getByRole("button", { name: "Load older history" }));
     expect(await screen.findByText("Applied")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(harness.detailReads()).toBeGreaterThanOrEqual(2));
+    await waitFor(() => { expect(harness.detailReads()).toBeGreaterThanOrEqual(2); });
     // The refreshed read re-keys the query, so its own control replaces the
     // exhausted one — which is what proves this render is the refreshed one.
     await screen.findByRole("button", { name: "Load older history" });
@@ -449,7 +449,7 @@ describe("control receipts", () => {
     expect(await screen.findByText("Applied")).toBeInTheDocument();
     expect(harness.cursors).toEqual(["cursor-1"]);
     await user.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(harness.detailReads()).toBeGreaterThanOrEqual(2));
+    await waitFor(() => { expect(harness.detailReads()).toBeGreaterThanOrEqual(2); });
     // The refreshed read's own first page renders before the page it did not
     // serve is judged: nothing else proves the render is the refreshed one.
     expect(await screen.findByText("Awaiting agent acknowledgement")).toBeInTheDocument();
