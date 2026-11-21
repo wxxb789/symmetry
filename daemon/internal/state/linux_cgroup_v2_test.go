@@ -18,6 +18,7 @@ import (
 )
 
 func TestLinuxCgroupV2ReservationAndCommitReplayUseFreshWriteBarriers(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-cgroup-v2-replay", 1)
 	journal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
@@ -192,6 +193,7 @@ func TestLinuxCgroupV2ReservationAndCommitReplayUseFreshWriteBarriers(t *testing
 }
 
 func TestLinuxCgroupV2MirrorStopReceiptRequiresOpaqueRelease(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-cgroup-v2-mirror", 1)
 	journal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
@@ -250,6 +252,7 @@ func TestLinuxCgroupV2MirrorStopReceiptRequiresOpaqueRelease(t *testing.T) {
 }
 
 func TestLinuxCgroupV2PreGateStopReceiptKeepsReservationPendingUntilOpaqueRemoval(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-cgroup-v2-pre-gate-stop", 1)
 	journal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
@@ -326,6 +329,7 @@ func TestLinuxCgroupV2PreGateStopReceiptKeepsReservationPendingUntilOpaqueRemova
 }
 
 func TestLinuxCgroupReservationBlocksWorkspaceCleanupAndRequiresIndependentAbortProof(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-cgroup-v2-abort", 1)
 	journal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
@@ -476,9 +480,11 @@ func TestLinuxCgroupReservationBlocksWorkspaceCleanupAndRequiresIndependentAbort
 }
 
 func TestLinuxV2AdmissionRejectsTerminalUnremovedAndUnprovenForeignOwners(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	for _, scenario := range []string{"terminal-empty-pid-unremoved-leaf", "migration-unproven"} {
 		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			target, targetIntent := newLinuxCloneJournal(t, "admission-target-"+scenario)
 			target.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
@@ -548,6 +554,7 @@ func TestLinuxV2AdmissionRejectsTerminalUnremovedAndUnprovenForeignOwners(t *tes
 }
 
 func TestLinuxV2AdmissionFailsClosedOnCorruptForeignJournal(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	store := mustStore(t)
 	target, intent := newLinuxCloneJournal(t, "admission-corrupt-target")
@@ -574,9 +581,11 @@ func TestLinuxV2AdmissionFailsClosedOnCorruptForeignJournal(t *testing.T) {
 }
 
 func TestLinuxV2AdmissionRequiresLegacyReleaseEvidence(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	for _, scenario := range []string{"claiming-without-grant", "running-before-process-registration"} {
 		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			foreign := stoppedTestJournal("admission-legacy-"+scenario, 1)
 			foreign.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
@@ -596,6 +605,7 @@ func TestLinuxV2AdmissionRequiresLegacyReleaseEvidence(t *testing.T) {
 	}
 
 	t.Run("bound v1 stop receipt only until normal clear and deletion", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		foreign := testJournal("admission-v1-stop-receipt", 1)
 		foreign.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
@@ -655,8 +665,10 @@ func TestLinuxV2AdmissionRequiresLegacyReleaseEvidence(t *testing.T) {
 }
 
 func TestLinuxV2AdmissionAllowsLiveFencedAndPhysicallyReleasedOwners(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	t.Run("healthy active helper requires exact App liveness fence", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		target, targetIntent := newLinuxCloneJournal(t, "admission-live-target")
 		target.LeaseExpiresAt = time.Now().UTC().Add(3 * time.Hour)
@@ -835,6 +847,7 @@ func TestLinuxV2AdmissionAllowsLiveFencedAndPhysicallyReleasedOwners(t *testing.
 
 	for _, terminalState := range []string{"failed", "cancelled"} {
 		t.Run("retained released "+terminalState, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			target := stoppedTestJournal("admission-released-target-"+terminalState, 1)
 			target.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
@@ -898,12 +911,14 @@ func TestLinuxV2AdmissionAllowsLiveFencedAndPhysicallyReleasedOwners(t *testing.
 }
 
 func TestLinuxV2TargetAdmissionRejectsUnsafeLifecycleAtEveryEffectCAS(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	stages := []string{"clone-intent", "cgroup-reserve", "create-start", "launcher-grant", "promotion-intent"}
 	lifecycle := []string{"expired", "stale", "terminal", "cancelled", "cancelling", "uncertain"}
 	for _, stage := range stages {
 		for _, state := range lifecycle {
 			t.Run(stage+"/"+state, func(t *testing.T) {
+				t.Parallel()
 				store := mustStore(t)
 				key, fence, intent, reservation := setupLinuxV2AdmissionStage(t, store, stage+"-"+state, stage)
 				if state == "cancelled" {
@@ -1080,6 +1095,7 @@ func readStateJournalBytes(t *testing.T, store *Store, key RunKey) []byte {
 }
 
 func TestV1LinuxGroupReceiptAndScansCannotAuthorizeV2CgroupState(t *testing.T) {
+	t.Parallel()
 	store, key, handoff := committedLinuxScanHandoffForTest(t, "linux-v1-v2-isolation")
 	for _, owner := range []string{authority.SupervisorScanOwnerHelper, authority.SupervisorScanOwnerMirror} {
 		seal := testStateScanUpdate(handoff, owner, authority.SupervisorScanPhaseSeal, 1, "")

@@ -17,8 +17,7 @@ defmodule SymmetryControlWeb.TaskController do
                Orchestration.submit_task(work, idempotency_key),
              {:ok, snapshot} <- Orchestration.task_snapshot(task.id) do
           Scheduler.wake()
-          status = if disposition == :created, do: :created, else: :ok
-          conn |> put_status(status) |> json(Protocol.task(snapshot))
+          conn |> put_status(created_or_ok(disposition)) |> json(Protocol.task(snapshot))
         else
           {:error, reason} -> Protocol.error(conn, reason)
         end
@@ -50,8 +49,7 @@ defmodule SymmetryControlWeb.TaskController do
         Scheduler.wake()
       end
 
-      status = if disposition == :created, do: :created, else: :ok
-      conn |> put_status(status) |> json(Protocol.command(command))
+      conn |> put_status(created_or_ok(disposition)) |> json(Protocol.command(command))
     else
       false -> Protocol.error(conn, :goal_authority_required)
       {:error, reason} -> Protocol.error(conn, reason)
@@ -82,13 +80,19 @@ defmodule SymmetryControlWeb.TaskController do
            "waiting_transition_id" => waiting_id
          } = body
        )
-       when map_size(body) == 4 and is_map(payload) and is_integer(generation) and generation > 0 and
+       when map_size(body) == 4,
+       do: provide_input_command(payload, generation, waiting_id)
+
+  defp command_request(_), do: {:error, :invalid_request}
+
+  defp provide_input_command(payload, generation, waiting_id)
+       when is_map(payload) and is_integer(generation) and generation > 0 and
               is_binary(waiting_id),
        do:
          {:ok, "provide_input", Protocol.normalize_map(payload),
           [expected_generation: generation, expected_waiting_transition_id: waiting_id]}
 
-  defp command_request(_), do: {:error, :invalid_request}
+  defp provide_input_command(_payload, _generation, _waiting_id), do: {:error, :invalid_request}
 
   defp idempotency_key(conn) do
     case get_req_header(conn, "idempotency-key") do
@@ -104,6 +108,9 @@ defmodule SymmetryControlWeb.TaskController do
       do: {:ok, work},
       else: {:error, :invalid_request}
   end
+
+  defp created_or_ok(:created), do: :created
+  defp created_or_ok(_disposition), do: :ok
 
   defp body_params(conn) when is_map(conn.body_params), do: conn.body_params
   defp body_params(_conn), do: %{}
