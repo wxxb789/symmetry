@@ -4,7 +4,8 @@ import { AlertCircle } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useSessionToken } from "../../app/session";
 import type { MoveIntent, Project, WorkItem } from "../../services/api";
-import { EmptyState, StatusBadge, statusLabel } from "../../components/workspace";
+import { StatusBadge, statusLabel } from "../../components/primitives";
+import { EmptyState } from "../../components/workspace";
 import { acceptanceLabel, ciLabel, ciResourcesOf, costHint, costLabel, noBlocker, noReportedResult, ownerKeyLabel, ownerLabel, priorityLabel, reportedResult, type CiResourceLike } from "../work/presentation";
 import { boardMoveRequest, hasServedRevision, isGoalManaged, providerOwnedControlsOf, refusalNotice, workItemMovePolicy } from "../planning/write-policy";
 import {

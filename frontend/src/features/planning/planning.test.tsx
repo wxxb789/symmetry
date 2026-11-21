@@ -453,7 +453,8 @@ describe("project planning", () => {
     const user = userEvent.setup();
     const harness = createHarness();
     renderWorkspace("/portal/projects", harness);
-    await user.click(await screen.findByRole("button", { name: "New project" }));
+    const invoking = await screen.findByRole("button", { name: "New project" });
+    await user.click(invoking);
     await user.type(screen.getByLabelText("Name"), "Third project");
     await user.type(screen.getByLabelText("Key"), "THR");
     const create = screen.getByRole("button", { name: "Create" });
@@ -462,6 +463,8 @@ describe("project planning", () => {
     await screen.findByText("Project created.");
     expect(postsOf(harness, "/portal/api/projects")).toHaveLength(1);
     expect(await screen.findByRole("heading", { level: 2, name: "Third project" })).toBeVisible();
+    // The clean close restores focus to the control that opened the editor.
+    expect(invoking).toHaveFocus();
   });
 
   it("keeps the editor open with the server's field error and submits after correction", async () => {
@@ -590,7 +593,8 @@ describe("project planning", () => {
     };
     harness.state.detail[firstItemId] = served;
     renderWorkspace(`/portal/work/${firstItemId}`, harness);
-    await user.click(await screen.findByRole("button", { name: "Edit work item" }));
+    const invoking = await screen.findByRole("button", { name: "Edit work item" });
+    await user.click(invoking);
     await user.clear(screen.getByLabelText("Description"));
     await user.clear(screen.getByLabelText("Branch"));
     await user.clear(screen.getByLabelText("Pull request URL"));
@@ -598,6 +602,8 @@ describe("project planning", () => {
     await user.selectOptions(screen.getByLabelText("Review"), "");
     await user.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText("Work item updated.");
+    // The clean close restores focus to the control that opened the editor.
+    expect(invoking).toHaveFocus();
     // An emptied control is an explicit clear: Ecto reads "" as "no change",
     // so the payload has to carry null for the value to be removed. The
     // delivery controls clear the same way: a nil change is accepted there too.

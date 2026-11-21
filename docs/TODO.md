@@ -127,20 +127,20 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 - [ ] The Goal surface offers no admission path for a resolved plan decision whose admission was
       never accepted.
       `PlanApproval` renders only for an open plan decision: `planApprovalOption`
-      (`frontend/src/features/goals/detail.tsx:408`) returns null unless `decision["open?"] === true`,
-      the render (`:381-382`) mounts no other admission affordance, and the resolved card shows
+      (`frontend/src/features/goals/detail.tsx:413`) returns null unless `decision["open?"] === true`,
+      the render (`:388`) mounts no other admission affordance, and the resolved card shows
       "Resolved: …" only. `NextAction` has no `accept_plan` payload path: its `accept_plan` branch
-      renders a note only ("Approve the open plan decision above first …", `:533`), `actionPayload`
-      returns null for every kind it does not build (`:626-627`), and the send button returns without
+      renders a note only ("Approve the open plan decision above first …", `:539`), `actionPayload`
+      returns null for every kind it does not build (`:632-633`), and the send button returns without
       sending anything. The dead end is reachable through the press's own two commands by two paths.
-      (a) An answered admission refusal releases the whole attempt (`:218`), so a re-press re-resolves
+      (a) An answered admission refusal releases the whole attempt (`:224`), so a re-press re-resolves
       a decision the server serves `resolved` and is refused `invalid_decision` (`apply_command!`
       requires `decision.state == "open"`, `control/lib/symmetry_control/goals.ex:6491-6495`), while
       the server would accept a fresh `accept_plan` built from a current read (`goals.ex:6395-6414`).
       (b) A lost resolution acknowledgement keeps the attempt, but the goal invalidation the committed
       resolution published before its response
       (`control/lib/symmetry_control_web/plugs/portal_invalidations.ex:28-32`) refetches the card and
-      the `open?` gate (`:408`) unmounts the control; the server would replay the frozen resolution
+      the `open?` gate (`:414`) unmounts the control; the server would replay the frozen resolution
       bytes, and the admission would still need a fresh read. Pre-existing (the pre-fix press also
       applied the resolution and could not admit) and outside `fix/resolve-decision-submit-read`'s
       contract scope; that branch records the frozen attempt's release rule and the precondition of
@@ -547,24 +547,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       through the current seams. Found by the round-1 review of PR #133, outside that PR's
       scope. Fix direction: sort by UTF-8 bytes (or code points) in both TypeScript encoders
       and pin a cross-language vector with a non-ASCII key in each layer's suite.
-
-## Deferred review findings (PR #145)
-
-- [ ] Consolidate the served-document gate helpers after the increment that owns
-      `control/test/support/**` (W1-12) has landed. `assert_served_members!/3`, `assert_served_rows!/3`,
-      `waiting_decision_payload/0`, the deterministic version-4 `uuid/1` and the bundle-derived
-      `gate_members/3`/`declared_members/2` are duplicated between
-      `control/test/symmetry_control_web/controllers/portal_resources_test.exs`
-      (`assert_served_members!/3` at `:1665`, `assert_served_rows!/3` at `:1672`,
-      `gate_members/3` at `:1683`, `declared_members/2` at `:1695`,
-      `waiting_decision_payload/0` at `:1749`, `uuid/1` at `:1797`) and the same six
-      in `control/test/symmetry_control_web/controllers/portal_workflow_test.exs`
-      (`:1896`, `:1903`, `:1914`, `:1926`, `:1949`, `:1975`). Each file
-      keeps its own copy because `control/test/support/**` was outside the gate increment's owned
-      files and a module defined in one test file would break a single-file run of the others, but
-      the copies can drift. Move them into `SymmetryControlWeb.ServedDocument` (the natural home for
-      the bundle-derived pair too) and have both gate files import them. Found by the adversarial
-      review of PR #145 (P3-2).
 
 ## Deferred review findings (rf-w2-16 clone-aliasing gate)
 
