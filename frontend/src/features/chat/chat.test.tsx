@@ -295,9 +295,9 @@ describe("per-scope state", () => {
         : conversationBody({ scope: "workspace" }))),
     });
     await openChat();
-    await waitFor(() => expect(document.querySelector("#chat-intent option[value=\"start_work\"]")).not.toBeNull());
+    await waitFor(() => { expect(document.querySelector("#chat-intent option[value=\"start_work\"]")).not.toBeNull(); });
     await user.selectOptions(intentSelect(), "start_work");
-    await waitFor(() => expect(document.querySelector(`#chat-target-project option[value="${projectId}"]`)).not.toBeNull());
+    await waitFor(() => { expect(document.querySelector(`#chat-target-project option[value="${projectId}"]`)).not.toBeNull(); });
     await user.selectOptions(screen.getByLabelText("Target project"), projectId);
     await user.selectOptions(screen.getByLabelText("Repository resource"), repositoryId);
     await user.selectOptions(screen.getByLabelText("CI resource"), ciId);
@@ -375,7 +375,7 @@ describe("per-scope state", () => {
     // — because "Sending…" is already absent from the workspace's status line
     // and would pass on the first check.
     const projectQueryKey = chatConversationOptions(application.api, { scope: "project", projectId, runId: null }).queryKey;
-    await waitFor(() => expect(application.queryClient.getQueryState(projectQueryKey)?.isInvalidated).toBe(true));
+    await waitFor(() => { expect(application.queryClient.getQueryState(projectQueryKey)?.isInvalidated).toBe(true); });
     expect(statusRegion()).toHaveTextContent("Messages are saved to this context.");
     expect(contentField()).toHaveValue("workspace draft");
 
@@ -402,7 +402,7 @@ describe("per-scope state", () => {
     await user.type(contentField(), "project draft");
     const before = projectReads();
     await user.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(projectReads()).toBeGreaterThan(before));
+    await waitFor(() => { expect(projectReads()).toBeGreaterThan(before); });
 
     await user.selectOptions(scopeSelect(), "workspace");
     expect(contentField()).toHaveValue("workspace draft");
@@ -420,7 +420,7 @@ describe("sending", () => {
       message: (body) => {
         bodies.push(body);
         if (bodies.length === 1) throw new TypeError("offline");
-        served.push(message(3, { content: String(body["content"]) }), message(4, { role: "assistant", content: "reply" }));
+        served.push(message(3, { content: String(body.content) }), message(4, { role: "assistant", content: "reply" }));
         return new Response(JSON.stringify({ message: message(3), reply: message(4), work_item_id: null, command: null }), { status: 200 });
       },
     });
@@ -435,7 +435,7 @@ describe("sending", () => {
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toEqual(bodies[0]);
     expect(JSON.stringify(bodies[1])).toBe(JSON.stringify(bodies[0]));
-    expect(bodies[1]?.["action_id"]).toBe(bodies[0]?.["action_id"]);
+    expect(bodies[1]?.action_id).toBe(bodies[0]?.action_id);
     await screen.findByText("uncertain question");
     const rows = [...document.querySelectorAll("#chat-messages [data-message-id]")].filter((node) => node.textContent?.includes("uncertain question"));
     expect(rows).toHaveLength(1);
@@ -457,7 +457,7 @@ describe("sending", () => {
     await openChat();
     await user.type(contentField(), "uncertain question");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(bodies).toHaveLength(1));
+    await waitFor(() => { expect(bodies).toHaveLength(1); });
     await waitFor(() => expect(statusRegion()).toHaveTextContent("Sending…"));
 
     // The draft is edited while the send is in flight and reverted before the
@@ -474,7 +474,7 @@ describe("sending", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByText("Saved to this context.");
     expect(bodies).toHaveLength(2);
-    expect(bodies[1]?.["action_id"]).toBe(bodies[0]?.["action_id"]);
+    expect(bodies[1]?.action_id).toBe(bodies[0]?.action_id);
     expect(JSON.stringify(bodies[1])).toBe(JSON.stringify(bodies[0]));
   });
 
@@ -499,8 +499,8 @@ describe("sending", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByText("Saved to this context.");
     expect(bodies).toHaveLength(2);
-    expect(bodies[1]?.["content"]).toBe("different question");
-    expect(bodies[1]?.["action_id"]).not.toBe(bodies[0]?.["action_id"]);
+    expect(bodies[1]?.content).toBe("different question");
+    expect(bodies[1]?.action_id).not.toBe(bodies[0]?.action_id);
   });
 
   it("renders a served refusal as the server's message and never as an applied state", async () => {
@@ -525,7 +525,7 @@ describe("sending", () => {
       workspace: () => workspaceBody({ execution: { run_id: runId, generation: 3, state: "running", runtime_id: runtimeId, can_guide: true } }),
     });
     await openChat();
-    await waitFor(() => expect(document.querySelector("#chat-intent option[value=\"guidance\"]")).not.toBeNull());
+    await waitFor(() => { expect(document.querySelector("#chat-intent option[value=\"guidance\"]")).not.toBeNull(); });
     await user.selectOptions(intentSelect(), "guidance");
     const oversized = "x".repeat(32_769);
     fireEvent.change(contentField(), { target: { value: oversized } });
@@ -563,11 +563,11 @@ describe("sending", () => {
       },
     });
     await openChat();
-    await waitFor(() => expect(document.querySelector("#chat-intent option[value=\"start_work\"]")).not.toBeNull());
+    await waitFor(() => { expect(document.querySelector("#chat-intent option[value=\"start_work\"]")).not.toBeNull(); });
     await user.selectOptions(intentSelect(), "start_work");
-    await waitFor(() => expect(document.querySelector(`#chat-target-project option[value="${projectId}"]`)).not.toBeNull());
+    await waitFor(() => { expect(document.querySelector(`#chat-target-project option[value="${projectId}"]`)).not.toBeNull(); });
     await user.selectOptions(screen.getByLabelText("Target project"), projectId);
-    await waitFor(() => expect(document.querySelector(`#chat-repository option[value="${repositoryId}"]`)).not.toBeNull());
+    await waitFor(() => { expect(document.querySelector(`#chat-repository option[value="${repositoryId}"]`)).not.toBeNull(); });
     await user.selectOptions(screen.getByLabelText("Repository resource"), repositoryId);
     await user.selectOptions(screen.getByLabelText("CI resource"), ciId);
 
@@ -585,9 +585,9 @@ describe("sending", () => {
 
     await user.type(contentField(), "start on the second project");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(bodies).toHaveLength(1));
+    await waitFor(() => { expect(bodies).toHaveLength(1); });
     expect(bodies[0]).toMatchObject({ intent: "start_work", target_project_id: secondProjectId });
-    expect(bodies[0]?.["work"]).toEqual({});
+    expect(bodies[0]?.work).toEqual({});
   });
 
   it("settles a scope's pane on its own offset after a switch, even while the pane clamped it", async () => {
@@ -631,7 +631,7 @@ describe("sending", () => {
     await screen.findByText("project history");
     fireEvent.scroll(node, { target: { scrollTop: 120 } });
     await user.selectOptions(scopeSelect(), "workspace");
-    await waitFor(() => expect(requests.filter((request) => request.path.includes("scope=workspace")).length).toBeGreaterThan(1));
+    await waitFor(() => { expect(requests.filter((request) => request.path.includes("scope=workspace")).length).toBeGreaterThan(1); });
     expect(node.scrollTop).toBe(40);
     await act(async () => {
       await application.queryClient.invalidateQueries({ queryKey: ["chat"] });
@@ -768,7 +768,7 @@ describe("sending", () => {
     });
     // The refresh must actually have re-read the conversation: the DOM
     // assertions below would also hold with no request at all.
-    await waitFor(() => expect(requests.filter((request) => request.path.startsWith("/portal/api/chat?")).length).toBeGreaterThan(before));
+    await waitFor(() => { expect(requests.filter((request) => request.path.startsWith("/portal/api/chat?")).length).toBeGreaterThan(before); });
     expect(contentField()).toHaveFocus();
     expect(contentField()).toHaveValue("keep editing during refresh");
     expect([contentField().selectionStart, contentField().selectionEnd]).toEqual([5, 12]);
@@ -878,7 +878,7 @@ describe("history", () => {
     // Loading older from the refreshed boundary closes the gap and keeps the
     // already loaded history deduped.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    await waitFor(() => { expect(document.querySelector("#chat-history-gap")).toBeNull(); });
     expect(messageIds()).toEqual([messageId(1), messageId(2), messageId(5), messageId(6)]);
 
     // A later refresh on the same boundary reports no gap either.
@@ -943,7 +943,7 @@ describe("history", () => {
     // the note goes away and the messages it named render again.
     await user.click(screen.getByRole("button", { name: "Load older" }));
     await screen.findByText("message 9");
-    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    await waitFor(() => { expect(document.querySelector("#chat-history-gap")).toBeNull(); });
     expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12, 13, 14].map(messageId));
   });
 
@@ -991,7 +991,7 @@ describe("history", () => {
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("message 9");
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested.length).toBe(2));
+    await waitFor(() => { expect(requested.length).toBe(2); });
     expect(requested).toEqual(["cursor-5", "cursor-3"]);
     await screen.findByText("message 1");
 
@@ -1006,7 +1006,7 @@ describe("history", () => {
     expect(gap).toHaveAttribute("data-boundary-retained", messageId(4));
     await user.click(screen.getByRole("button", { name: "Load older" }));
     await screen.findByText("message 5");
-    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    await waitFor(() => { expect(document.querySelector("#chat-history-gap")).toBeNull(); });
     expect(requested).toEqual(["cursor-5", "cursor-3", "cursor-8"]);
     expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(messageId));
   });
@@ -1059,7 +1059,7 @@ describe("history", () => {
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("message 9");
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested.length).toBe(1));
+    await waitFor(() => { expect(requested.length).toBe(1); });
     expect(requested).toEqual(["cursor-5-resigned"]);
 
     // Another re-serve at the same boundary renews the surface's cursor
@@ -1090,7 +1090,7 @@ describe("history", () => {
     expect(messageIds()).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11].map(messageId));
 
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested.length).toBe(2));
+    await waitFor(() => { expect(requested.length).toBe(2); });
     expect(requested).toEqual(["cursor-5-resigned", "cursor-3"]);
     await screen.findByText("message 1");
     expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(messageId));
@@ -1146,20 +1146,20 @@ describe("history", () => {
     // The press is refused — the token aged past the server's `max_age` — and
     // the refusal stays the composer's notice.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-9", "cursor-7"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-9", "cursor-7"]); });
     await waitFor(() => expect(statusRegion()).toHaveTextContent("The server returned an unexpected response."));
 
     // The refusal restarts the chain from the served page and re-reads it, so
     // the boundary is re-signed and the next press walks below it again.
     await screen.findByText("message 12");
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-9", "cursor-7", "cursor-9-resigned-2"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-9", "cursor-7", "cursor-9-resigned-2"]); });
     // The re-walked page lands deduped — its messages already render — and
     // continues the chain below the retained page.
     await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false"));
     expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12].map(messageId));
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-9", "cursor-7", "cursor-9-resigned-2", "cursor-7-resigned"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-9", "cursor-7", "cursor-9-resigned-2", "cursor-7-resigned"]); });
     await screen.findByText("message 5");
     expect(messageIds()).toEqual([5, 6, 7, 8, 9, 10, 11, 12].map(messageId));
   });
@@ -1209,7 +1209,7 @@ describe("history", () => {
     // position, so it is admitted — and that page lands first, moving the chain
     // below the boundary the refused press captured.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-5"]); });
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("message 9");
     await user.click(screen.getByRole("button", { name: "Load older" }));
@@ -1223,7 +1223,7 @@ describe("history", () => {
     // The refusal's settlement is observable in the read's own query: the held
     // read lands there as an error before its handler judges the press, so the
     // negative assertions below cannot pass while that judgment is unrun.
-    await waitFor(() => expect(application.queryClient.getQueryState(["chat-older", { scope: "project", projectId, runId: null, before: "cursor-5" }])?.status).toBe("error"));
+    await waitFor(() => { expect(application.queryClient.getQueryState(["chat-older", { scope: "project", projectId, runId: null, before: "cursor-5" }])?.status).toBe("error"); });
     await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false"));
     expect(statusRegion()).toHaveTextContent("Messages are saved to this context.");
     expect(reads).toBe(2);
@@ -1231,7 +1231,7 @@ describe("history", () => {
     // The next press continues below the page that landed, not from the
     // served boundary the refused press predated.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-5", "cursor-6", "cursor-2"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-5", "cursor-6", "cursor-2"]); });
     await screen.findByText("message 1");
     expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map(messageId));
   });
@@ -1285,7 +1285,7 @@ describe("history", () => {
     // position, so it is admitted — and that page lands first, moving the chain
     // below the boundary the failing press captured.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-5"]); });
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("message 9");
     await user.click(screen.getByRole("button", { name: "Load older" }));
@@ -1301,7 +1301,7 @@ describe("history", () => {
     expect(reads).toBe(2);
 
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested.filter((cursor) => cursor !== "cursor-5")).toEqual(["cursor-6", "cursor-2"]));
+    await waitFor(() => { expect(requested.filter((cursor) => cursor !== "cursor-5")).toEqual(["cursor-6", "cursor-2"]); });
     await screen.findByText("message 1");
     expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map(messageId));
   }, 20_000);
@@ -1348,7 +1348,7 @@ describe("history", () => {
 
     // The press leaves through the aging token and is held in flight.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-5"]); });
 
     // The re-serve re-signs the same boundary position. A press made now would
     // load the region the held press already owns there, so the surface keeps
@@ -1357,7 +1357,7 @@ describe("history", () => {
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("message 9");
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-5"]); });
     expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "true");
 
     // The held press's refusal is the reader's to see: the press still owns the
@@ -1365,7 +1365,7 @@ describe("history", () => {
     // token, that scope is re-read to renew it, and the button is ready again.
     held.resolve();
     await waitFor(() => expect(statusRegion()).toHaveTextContent("The server returned an unexpected response."));
-    await waitFor(() => expect(reads).toBe(3));
+    await waitFor(() => { expect(reads).toBe(3); });
     await waitFor(() => expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false"));
 
     // The next press walks the renewed token; its page lands and the chain
@@ -1374,7 +1374,7 @@ describe("history", () => {
     await screen.findByText("message 3");
     expect(requested).toEqual(["cursor-5", "cursor-5-resigned"]);
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-5", "cursor-5-resigned", "cursor-3"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-5", "cursor-5-resigned", "cursor-3"]); });
     await screen.findByText("message 1");
     expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map(messageId));
     expect(screen.queryByRole("button", { name: "Load older" })).not.toBeInTheDocument();
@@ -1423,7 +1423,7 @@ describe("history", () => {
 
     await user.click(screen.getByRole("button", { name: "Load older" }));
     await screen.findByText("message 1");
-    await waitFor(() => expect(requested).toEqual(["cursor-5", "cursor-5-late"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-5", "cursor-5-late"]); });
     // The re-walked page re-reads the drained region; the render keeps one copy
     // of every message.
     expect(messageIds()).toEqual([1, 2, 3, 4, 5, 6].map(messageId));
@@ -1466,7 +1466,7 @@ describe("history", () => {
 
     await user.click(screen.getByRole("button", { name: "Load older" }));
     await screen.findByText("message 1");
-    await waitFor(() => expect(requested).toEqual(["cursor-3"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-3"]); });
     expect(messageIds()).toEqual([1, 2, 3, 4].map(messageId));
     expect(document.querySelector("#chat-history-gap")).toBeNull();
     expect(document.querySelector("#chat-history-note")).toHaveTextContent("4 messages loaded · oldest history loaded");
@@ -1521,7 +1521,7 @@ describe("history", () => {
     expect(document.querySelector("#chat-history-gap")).toHaveAttribute("data-boundary-current", messageId(11));
     await user.click(screen.getByRole("button", { name: "Load older" }));
     await screen.findByText("message 9");
-    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    await waitFor(() => { expect(document.querySelector("#chat-history-gap")).toBeNull(); });
     expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12, 13, 14].map(messageId));
   });
 
@@ -1574,7 +1574,7 @@ describe("history", () => {
     // the region between the two chains and closes the gap.
     await user.click(screen.getByRole("button", { name: "Load older" }));
     await screen.findByText("message 9");
-    await waitFor(() => expect(document.querySelector("#chat-history-gap")).toBeNull());
+    await waitFor(() => { expect(document.querySelector("#chat-history-gap")).toBeNull(); });
     expect(messageIds()).toEqual([7, 8, 9, 10, 11, 12, 13, 14].map(messageId));
   });
 
@@ -1599,7 +1599,7 @@ describe("history", () => {
     // The refusal is the reader's to see and retry: it is named on the status
     // line, the surface keeps the pages it has, and the button is ready again.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(statusRegion().textContent).toBe("The workspace changed. Refresh to load its current state."));
+    await waitFor(() => { expect(statusRegion().textContent).toBe("The workspace changed. Refresh to load its current state."); });
     expect(messageIds()).toEqual([9, 10].map(messageId));
     expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false");
 
@@ -1670,7 +1670,7 @@ describe("history", () => {
 
     // The project press leaves through cursor-9 and is held in flight.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-9"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-9"]); });
 
     // The reader leaves for the workspace scope, whose own press at the same
     // bytes must be admitted: the scope key fences the press in flight.
@@ -1679,7 +1679,7 @@ describe("history", () => {
     expect(screen.getByRole("button", { name: "Load older" })).toHaveAttribute("aria-disabled", "false");
 
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-9", "cursor-9"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-9", "cursor-9"]); });
     await screen.findByText("workspace history");
     expect(messageIds()).toEqual([messageId(1)]);
 
@@ -1729,14 +1729,14 @@ describe("history", () => {
     // The press leaves through cursor-5, minted at the boundary message 5, and
     // is held in flight.
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-5"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-5"]); });
 
     // The moved boundary admits its own press; that page's token leaves the
     // chain pointer at the held press's own cursor bytes without a boundary id.
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await screen.findByText("message 7");
     await user.click(screen.getByRole("button", { name: "Load older" }));
-    await waitFor(() => expect(requested).toEqual(["cursor-5", "cursor-7"]));
+    await waitFor(() => { expect(requested).toEqual(["cursor-5", "cursor-7"]); });
 
     // The pending press is identified by its bytes while either side lacks a
     // boundary id, so the button reports the region busy instead of admitting a
@@ -1919,7 +1919,7 @@ describe("run scope", () => {
     await waitFor(() => expect(statusRegion()).toHaveTextContent("Message saved; the transcript receipt tracks the acknowledgement."));
     // The scoped re-read is what renders the durable message: a run-scope send
     // invalidates the query by the surface's own identity, not the request's.
-    await waitFor(() => expect(document.querySelector(`[data-message-id="${messageId(9)}"]`)).not.toBeNull());
+    await waitFor(() => { expect(document.querySelector(`[data-message-id="${messageId(9)}"]`)).not.toBeNull(); });
     // The row carries the served record's own content, not the POST
     // response's projection of the same id.
     expect(document.querySelector(`[data-message-id="${messageId(9)}"]`)).toHaveTextContent("Stage the artifact");
@@ -1949,28 +1949,28 @@ describe("run scope", () => {
     });
     await openChat();
     await screen.findByRole("heading", { name: "Which strategy should be used?" });
-    const staged = document.querySelector("[data-chat-decision=\"staged\"]") as HTMLElement;
-    const defer = document.querySelector("[data-chat-decision=\"defer\"]") as HTMLElement;
+    const staged = document.querySelector("[data-chat-decision=\"staged\"]")!;
+    const defer = document.querySelector("[data-chat-decision=\"defer\"]")!;
 
     await user.click(staged);
     // The decision attempt keeps no composer draft, so its unconfirmed copy
     // never promises one.
     await screen.findByText("Decision not confirmed. Choosing the same option again reuses the same action identity.");
     expect(bodies).toHaveLength(1);
-    expect(bodies[0]?.["option_id"]).toBe("staged");
+    expect(bodies[0]?.option_id).toBe("staged");
 
     // Re-choosing the same option rebuilds the byte-equal body and reuses the
     // frozen attempt's identity, exactly as the composer retry does.
     await user.click(staged);
-    await waitFor(() => expect(bodies).toHaveLength(2));
+    await waitFor(() => { expect(bodies).toHaveLength(2); });
     expect(bodies[1]).toEqual(bodies[0]);
     expect(JSON.stringify(bodies[1])).toBe(JSON.stringify(bodies[0]));
 
     // Another option is a different operation and mints a new identity.
     await user.click(defer);
-    await waitFor(() => expect(bodies).toHaveLength(3));
-    expect(bodies[2]?.["option_id"]).toBe("defer");
-    expect(bodies[2]?.["action_id"]).not.toBe(bodies[0]?.["action_id"]);
+    await waitFor(() => { expect(bodies).toHaveLength(3); });
+    expect(bodies[2]?.option_id).toBe("defer");
+    expect(bodies[2]?.action_id).not.toBe(bodies[0]?.action_id);
   });
 
   it("renders the served decision packet only under the run scope that owns it", async () => {
@@ -2068,7 +2068,7 @@ describe("rendering safety", () => {
     });
     // The fixture's work item carries the delivery url; the served top-level
     // pull_request_url is the value the run context renders.
-    const workItem = { ...(asRecord(detail["work_item"]) ?? {}), pull_request_url: "javascript:alert(1)" };
+    const workItem = { ...(asRecord(detail.work_item) ?? {}), pull_request_url: "javascript:alert(1)" };
     renderChat(`/portal/chat?scope=run&runId=${runId}&projectId=${projectId}`, {
       conversation: () => new Response(JSON.stringify(conversationBody({
         scope: "run",

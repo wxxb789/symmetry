@@ -90,7 +90,7 @@ function GoalAttention({ entries, unavailable, nextCursor, fetching, onLoadMore 
         <p className="text-small muted">Revision {entry.current_revision} · {entry.active_tasks ?? 0} active task(s) · {entry.nonterminal_tasks ?? 0} nonterminal</p>
         {(entry.blocker_reasons?.length ?? 0) > 0 && <p className="blocker">{entry.blocker_reasons?.join(", ")}</p>}
         {(entry.attention_reasons?.length ?? 0) > 0 && <p className="text-small muted">Settlement attention: {entry.attention_reasons?.join(", ")}</p>}
-        {entry["ready_to_achieve?"] === true && <p className="goal-ready"><CircleCheck size={14} aria-hidden="true" />Ready to achieve on the server</p>}
+        {entry["ready_to_achieve?"] && <p className="goal-ready"><CircleCheck size={14} aria-hidden="true" />Ready to achieve on the server</p>}
       </div>
     </li>)}</ul>}
     {nextCursor && <button className="button" type="button" disabled={fetching} onClick={onLoadMore}>{fetching ? "Loading…" : "Load more Goal attention"}</button>}
@@ -189,8 +189,8 @@ function NewGoalButton({ projectId }: { projectId: string | null }) {
     <button className="button" type="button" disabled={!project} onClick={() => { create.reset(); setOpen(!open); setNotice(null); }} aria-expanded={open}><Plus size={16} aria-hidden="true" />New goal</button>
     {open && <form className="dialog-panel" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}>
       <h2>Create a Goal</h2>
-      <label className="field">Title<input value={title} onChange={(event) => setTitle(event.currentTarget.value)} required /></label>
-      <label className="field">Objective<input value={objective} onChange={(event) => setObjective(event.currentTarget.value)} required /></label>
+      <label className="field">Title<input value={title} onChange={(event) => { setTitle(event.currentTarget.value); }} required /></label>
+      <label className="field">Objective<input value={objective} onChange={(event) => { setObjective(event.currentTarget.value); }} required /></label>
       <p className="text-small muted">The initial revision carries operator final acceptance, the repository context requirement and the soft budget mode. The server validates the contract and returns its own refusal.</p>
       {failure && <p className="form-error" role="alert">{failure instanceof MutationRefused ? `${failure.message} (${failure.code})` : errorMessage(failure)}</p>}
       {notice && !failure && <p role="status">{notice}</p>}

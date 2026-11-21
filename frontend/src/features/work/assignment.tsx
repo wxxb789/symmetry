@@ -155,7 +155,7 @@ export function AssignmentSection({ api, item }: { api: Api; item: WorkItemDetai
       <div><dt>CI resource</dt><dd>{asText(item.ci_resource) ?? "Repository provider"}</dd></div>
     </dl>
     {intentLocked && <p className="notice" role="status">A live execution holds this item's intent, so assignment is locked until the execution settles.</p>}
-    {notice !== null && <p className="notice" role="status">{notice}<button className="button" type="button" onClick={() => setNotice(null)}>Dismiss</button></p>}
+    {notice !== null && <p className="notice" role="status">{notice}<button className="button" type="button" onClick={() => { setNotice(null); }}>Dismiss</button></p>}
     <div className="assignment-actions">
       <button className="button" type="button" disabled={intentLocked} onClick={() => { setNotice(null); setEditingFor(item.id); }}>Edit assignment</button>
     </div>
@@ -169,7 +169,7 @@ export function AssignmentSection({ api, item }: { api: Api; item: WorkItemDetai
       repositoryResources={resourcesOfKind(project, projectId, "repository")}
       ciResources={resourcesOfKind(project, projectId, "ci")}
       onSaved={saved}
-      onClose={() => setEditingFor(null)}
+      onClose={() => { setEditingFor(null); }}
     />}
   </section>;
 }
@@ -229,7 +229,7 @@ function AssignmentEditor({ api, csrf, item, project, blockedReason, fallbackFoc
       };
       return api.assignWorkItem(target.id, assignment, csrf, new AbortController().signal);
     },
-    onSuccess: (receipt) => onSaved(receipt.workItemId, receipt.version),
+    onSuccess: (receipt) => { onSaved(receipt.workItemId, receipt.version); },
     // A settled write re-reads both reads this surface steers from — the work
     // detail and the project read the option sets came from — even when the
     // operator has already left the item and this editor is unmounted.
