@@ -923,7 +923,18 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 	enterRecovery := func() error {
 		// Keep the authenticated endpoint alive whether stop succeeds now or
 		// still needs a retry through recovery.
-		ownerLostLatched = ownerLostLatched || channelClosedV2(watchdog.ownerLost())
+		//
+		// Every path that reaches here is an owner-transport-loss boundary:
+		// the owner watchdog published owner loss, the control pipe reached
+		// EOF/a read error, or a response write failed on a pipe whose reader
+		// is gone. Latch owner loss now: the watchdog goroutine may not have
+		// published its notification yet, and the first stop must not take the
+		// live-owner branch, whose final descendant scan persists its fence
+		// over the dead owner transport. That failed persist latches sticky
+		// descendant uncertainty and refuses every recovery stop, so no stop
+		// receipt can ever be minted (CI 2026-11-21). The owner-loss branch
+		// seals descendant scans locally and never depends on owner I/O.
+		ownerLostLatched = true
 		_ = stop()
 		return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, watchdog.ownerLost(), stop, !committed && !resumed, group.descendantScanSealSequence, ownerRecoveryMarker, ownerLossProofResultCategory)
 	}
