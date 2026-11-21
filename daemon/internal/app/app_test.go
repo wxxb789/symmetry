@@ -1793,7 +1793,7 @@ func TestCancelWinsInputLifecycleGateWithoutWritingStdin(t *testing.T) {
 	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
 	terminated := make(chan struct{}, 1)
 	process := &recordingProcess{onTerminate: func() { terminated <- struct{}{} }}
-	active := &runningRun{process: process, claimed: true}
+	active := &runningRun{process: process, runLifecycle: runLifecycle{claimed: true}}
 	active.inputMu.Lock()
 	daemon := &daemon{
 		store:   store,
@@ -1832,7 +1832,7 @@ func TestConclusiveCleanupStopsQueuedInputAndCancellationReceipts(t *testing.T) 
 	store, key := claimedStore(t)
 	defer store.Close()
 	process := &recordingProcess{}
-	active := &runningRun{process: process, claimed: true}
+	active := &runningRun{process: process, runLifecycle: runLifecycle{claimed: true}}
 	active.inputMu.Lock()
 	daemon := &daemon{
 		store:       store,
@@ -3127,7 +3127,7 @@ func TestTerminalGraceReleasesSlotExactlyOnceWithoutVerdict(t *testing.T) {
 			return timer
 		}},
 		background:    context.Background(),
-		running:       map[state.RunKey]*runningRun{key: {slotHeld: true}},
+		running:       map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true}}},
 		slots:         slots,
 		leaseDuration: 10 * time.Second,
 	}
@@ -3167,7 +3167,7 @@ func TestTerminalGraceRejectsLaterTerminalReplacement(t *testing.T) {
 			return timer
 		}},
 		background: context.Background(),
-		running:    map[state.RunKey]*runningRun{key: {slotHeld: true}},
+		running:    map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true}}},
 		slots:      make(chan struct{}, 1),
 	}
 	daemon.slots <- struct{}{}
@@ -3245,7 +3245,7 @@ func TestRenewalRequiresLiveNonterminalProcess(t *testing.T) {
 				}
 			},
 			active: func(key state.RunKey) map[state.RunKey]*runningRun {
-				return map[state.RunKey]*runningRun{key: {process: fakeProcess{}, terminal: true}}
+				return map[state.RunKey]*runningRun{key: {process: fakeProcess{}, runLifecycle: runLifecycle{terminal: true}}}
 			},
 		},
 		{
@@ -3337,7 +3337,7 @@ func TestBlockedReactorDoesNotBlockLiveness(t *testing.T) {
 			timer := &manualDeadlineTimer{channel: make(chan time.Time, 1), delay: delay}
 			timers <- timer
 			return timer
-		}}, background: context.Background(), running: map[state.RunKey]*runningRun{key: {slotHeld: true}}, slots: slots, runtimeID: "runtime-1", runtimeEpoch: 1}
+		}}, background: context.Background(), running: map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true}}}, slots: slots, runtimeID: "runtime-1", runtimeEpoch: 1}
 		reconciled := make(chan struct{})
 		go func() { daemon.reconcile(context.Background()); close(reconciled) }()
 		<-api.reconcileEntered
@@ -3424,7 +3424,7 @@ func TestCancelCancelsRenewalAndIgnoresLateResponse(t *testing.T) {
 		control:       control,
 		options:       options{clock: func() time.Time { return now }, newID: ids()},
 		leaseDuration: 10 * time.Second,
-		running:       map[state.RunKey]*runningRun{key: {slotHeld: true, claimed: true, process: fakeProcess{}}},
+		running:       map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true, claimed: true}, process: fakeProcess{}}},
 		slots:         make(chan struct{}, 1),
 	}
 	daemon.slots <- struct{}{}
@@ -3460,8 +3460,8 @@ func TestTerminalAcceptanceReleasesSlotBeforeCleanup(t *testing.T) {
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:   options{clock: func() time.Time { return now }, newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
-			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
+			runLifecycle: runLifecycle{slotHeld: true},
+			prepared:     workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
 		}},
 		slots: slots,
 	}
@@ -3508,7 +3508,7 @@ func TestTerminalAcknowledgementDoesNotMaskTransitionRejection(t *testing.T) {
 				background:  context.Background(),
 				log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
 				options:     options{clock: func() time.Time { return now }, newID: ids()},
-				running:     map[state.RunKey]*runningRun{key: {slotHeld: true}},
+				running:     map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true}}},
 				slots:       slots,
 			}
 			if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
@@ -3554,8 +3554,8 @@ func TestTerminalOutboxOwnershipLossDropsOrdinaryItemsAndDeliversTerminal(t *tes
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:   options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
-			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
+			runLifecycle: runLifecycle{slotHeld: true},
+			prepared:     workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
 		}},
 		slots: slots,
 	}
@@ -3723,7 +3723,7 @@ func TestActiveTerminalCancelDoesNotTerminateProcess(t *testing.T) {
 			daemon := &daemon{
 				store:   store,
 				options: options{newID: ids()},
-				running: map[state.RunKey]*runningRun{key: {process: process, claimed: true}},
+				running: map[state.RunKey]*runningRun{key: {process: process, runLifecycle: runLifecycle{claimed: true}}},
 				log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 			}
 			if !daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}) {
@@ -3752,10 +3752,12 @@ func TestCancelDuringTerminalReservationDoesNotPublishCancellation(t *testing.T)
 		store:   store,
 		options: options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			claimed:       true,
-			process:       process,
-			cancel:        func() { cancelCalled = true },
-			terminalizing: 1,
+			runLifecycle: runLifecycle{
+				claimed:       true,
+				cancel:        func() { cancelCalled = true },
+				terminalizing: 1,
+			},
+			process: process,
 		}},
 		log: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
@@ -3792,8 +3794,8 @@ func TestTerminalCleanupRetryPreservesSucceededOutcome(t *testing.T) {
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:   options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
-			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
+			runLifecycle: runLifecycle{slotHeld: true},
+			prepared:     workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
 		}},
 		slots: slots,
 	}
@@ -3950,8 +3952,8 @@ func TestTerminalVerdictPersistsAndReleasesSlotBeforeCleanup(t *testing.T) {
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:   options{clock: func() time.Time { return now }, newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
-			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
+			runLifecycle: runLifecycle{slotHeld: true},
+			prepared:     workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
 		}},
 		slots: slots,
 	}
@@ -3989,7 +3991,7 @@ func TestCancelledTerminalOwnershipLossPersistsVerdictAndReleasesSlot(t *testing
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:     options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
+			runLifecycle: runLifecycle{slotHeld: true},
 		}},
 		slots: slots,
 	}
@@ -4054,7 +4056,7 @@ func TestOwnershipLossReleasesActiveSlotAfterProcessStops(t *testing.T) {
 		control:   &ownershipLossControl{},
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		workspace: &trackingWorkspace{cleaned: cleaned},
-		running:   map[state.RunKey]*runningRun{key: {process: process, prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}}, slotHeld: true}},
+		running:   map[state.RunKey]*runningRun{key: {process: process, prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}}, runLifecycle: runLifecycle{slotHeld: true}}},
 		slots:     slots,
 	}
 	daemon.workers.Add(1)
@@ -4600,7 +4602,7 @@ func TestTerminalTransitionEnqueueFailureRetainsJournalAndSlot(t *testing.T) {
 			return "", errors.New("disk failure")
 		}},
 		background: background,
-		running:    map[state.RunKey]*runningRun{key: {process: fakeProcess{result: execution.Result{}}, slotHeld: true}},
+		running:    map[state.RunKey]*runningRun{key: {process: fakeProcess{result: execution.Result{}}, runLifecycle: runLifecycle{slotHeld: true}}},
 		slots:      slots,
 	}
 	done := make(chan struct{})
@@ -5602,7 +5604,7 @@ func TestCancelPreemptsBlockedInputInSameSnapshot(t *testing.T) {
 		control:     &fakeControl{},
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:     options{newID: ids()},
-		running:     map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		running:     map[state.RunKey]*runningRun{key: {process: input, runLifecycle: runLifecycle{claimed: true}}},
 		slots:       make(chan struct{}, 1),
 		commandWake: make(chan struct{}, 1),
 		commands:    newCommandQueue(),
@@ -5662,7 +5664,7 @@ func TestCancelRejectsQueuedInputAfterPreemption(t *testing.T) {
 		control:     &fakeControl{},
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:     options{newID: ids()},
-		running:     map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		running:     map[state.RunKey]*runningRun{key: {process: input, runLifecycle: runLifecycle{claimed: true}}},
 		slots:       make(chan struct{}, 1),
 		commandWake: make(chan struct{}, 1),
 		commands:    newCommandQueue(),
@@ -5729,7 +5731,7 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 			},
 		},
 		leaseDuration: 120 * time.Second,
-		running:       map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		running:       map[state.RunKey]*runningRun{key: {process: input, runLifecycle: runLifecycle{claimed: true}}},
 		slots:         make(chan struct{}, 1),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -5810,7 +5812,7 @@ func TestBlockedCommandDoesNotDelayUnrelatedScheduledAssignment(t *testing.T) {
 		options:      options{newID: ids(), clock: time.Now},
 		runtimeID:    "runtime-1",
 		runtimeEpoch: 1,
-		running:      map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		running:      map[state.RunKey]*runningRun{key: {process: input, runLifecycle: runLifecycle{claimed: true}}},
 		slots:        make(chan struct{}, 2),
 		background:   ctx,
 		commandWake:  make(chan struct{}, 1),
@@ -6764,8 +6766,10 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 		running: map[state.RunKey]*runningRun{key: {
 			process:  process,
 			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
-			claimed:  true,
-			slotHeld: true,
+			runLifecycle: runLifecycle{
+				claimed:  true,
+				slotHeld: true,
+			},
 		}},
 		slots: slots,
 	}
@@ -9601,12 +9605,14 @@ func TestNativeUsageRetryExhaustionAcknowledgesOriginalCancellation(t *testing.T
 	}
 	result := harness.TaskResult{Kind: harness.ResultCancelled}
 	active := &runningRun{
-		nativeFinalResult:         &result,
-		nativeFinalUsage:          &usage,
-		nativeCancelCommandID:     "cancel-1",
-		nativeTerminalOwner:       true,
-		terminalizing:             1,
-		nativeUsageRetryExhausted: true,
+		nativeFinalResult: &result,
+		nativeFinalUsage:  &usage,
+		runLifecycle: runLifecycle{
+			nativeCancelCommandID:     "cancel-1",
+			nativeTerminalOwner:       true,
+			terminalizing:             1,
+			nativeUsageRetryExhausted: true,
+		},
 	}
 	daemon := &daemon{
 		config:  testConfig(t),
@@ -9709,7 +9715,7 @@ func TestLateCancelAfterStagedTerminalObservationCannotWin(t *testing.T) {
 	}
 	app.workspace.(*fakeWorkspace).subject = admission.Subject
 	active := &runningRun{
-		claimed:       true,
+		runLifecycle:  runLifecycle{claimed: true},
 		nativeSession: session,
 		goalSession:   &sessionKey,
 		goalAdmission: &admission,
@@ -9780,7 +9786,7 @@ func TestObservedNativeFailureWinsLateCancel(t *testing.T) {
 	}
 	app.workspace.(*fakeWorkspace).subject = admission.Subject
 	active := &runningRun{
-		claimed:       true,
+		runLifecycle:  runLifecycle{claimed: true},
 		nativeSession: session,
 		goalSession:   &sessionKey,
 		goalAdmission: &admission,
@@ -9839,13 +9845,15 @@ func TestCancelledNativeStartCloseFailureSettlesBeforeCleanupRetry(t *testing.T)
 		processIdentity: "native:71",
 	}
 	active := &runningRun{
-		starting:        true,
-		claimed:         true,
-		nativeSession:   session,
-		goalSession:     &sessionKey,
-		goalAdmission:   &admission,
-		cancelled:       true,
-		cancelCommandID: "cancel-1",
+		runLifecycle: runLifecycle{
+			starting:        true,
+			claimed:         true,
+			cancelled:       true,
+			cancelCommandID: "cancel-1",
+		},
+		nativeSession: session,
+		goalSession:   &sessionKey,
+		goalAdmission: &admission,
 	}
 	daemon := &daemon{
 		config:  testConfig(t),
@@ -9905,7 +9913,7 @@ func TestNativeStartPublicationDefersCancellationUntilSettlement(t *testing.T) {
 		handle: harness.NativeSessionHandle{ID: "native-thread-1"},
 		result: harness.TaskResult{Kind: harness.ResultCancelled},
 	}
-	active := &runningRun{starting: true, claimed: true}
+	active := &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
 	daemon := &daemon{
 		config:  testConfig(t),
 		store:   store,
@@ -10035,7 +10043,7 @@ func TestCancelResponseLossAfterTerminalObservationIsFailedNotRejected(t *testin
 		releaseFirstWaitTurn:  make(chan struct{}),
 	}}
 	app.workspace.(*fakeWorkspace).subject = admission.Subject
-	active := &runningRun{claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission, prepared: workspace.Prepared{Path: "C:\\workspace"}}
+	active := &runningRun{runLifecycle: runLifecycle{claimed: true}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission, prepared: workspace.Prepared{Path: "C:\\workspace"}}
 	app.running = map[state.RunKey]*runningRun{key: active}
 	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 
@@ -10068,11 +10076,13 @@ func TestNativeCloseRetrySuccessDoesNotReleaseObservedTerminalOwner(t *testing.T
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	session := &fakeNativeGoalSession{turnStarted: make(chan struct{})}
 	active := &runningRun{
-		nativeSession:            session,
-		nativeTerminalOwner:      true,
-		terminalizing:            1,
-		nativeCloseRetryRequired: true,
-		nativeCloseRetrying:      true,
+		nativeSession: session,
+		runLifecycle: runLifecycle{
+			nativeTerminalOwner:      true,
+			terminalizing:            1,
+			nativeCloseRetryRequired: true,
+			nativeCloseRetrying:      true,
+		},
 	}
 	app := &daemon{running: map[state.RunKey]*runningRun{key: active}}
 	app.publishNativeCloseRetrySuccess(key, active, session)

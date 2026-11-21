@@ -244,7 +244,7 @@ func TestDeterministicArtifactValidationRejectsCancelledOrExpiredRun(t *testing.
 		mutate func(*deterministicValidationFixture)
 	}{
 		{name: "cancelled", mutate: func(fixture *deterministicValidationFixture) {
-			fixture.daemon.running = map[state.RunKey]*runningRun{fixture.key: {cancelled: true}}
+			fixture.daemon.running = map[state.RunKey]*runningRun{fixture.key: {runLifecycle: runLifecycle{cancelled: true}}}
 		}},
 		{name: "stale", mutate: func(fixture *deterministicValidationFixture) {
 			fixture.daemon.running[fixture.key].stale = true
@@ -563,7 +563,7 @@ func TestStartGoalAdmissionCompletesArtifactOnlyValidationWithoutNativeLaunch(t 
 		ContentDigest: digestDeterministicArtifact(content),
 	}
 	fixture.daemon.running = map[state.RunKey]*runningRun{
-		fixture.key: {starting: true, slotHeld: true, cleanupBlocked: true},
+		fixture.key: {runLifecycle: runLifecycle{starting: true, slotHeld: true}, cleanupBlocked: true},
 	}
 	fixture.daemon.slots = make(chan struct{}, 1)
 	fixture.daemon.slots <- struct{}{}

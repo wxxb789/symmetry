@@ -4,6 +4,7 @@ package state
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 )
@@ -26,8 +27,8 @@ func acquireStoreLock(path string) (*os.File, error) {
 func releaseStoreLock(file *os.File) error {
 	unlockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 	closeErr := file.Close()
-	if unlockErr != nil || closeErr != nil {
-		return errors.New("release state directory lock")
+	if err := errors.Join(unlockErr, closeErr); err != nil {
+		return fmt.Errorf("release state directory lock: %w", err)
 	}
 	return nil
 }

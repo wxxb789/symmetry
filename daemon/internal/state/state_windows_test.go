@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -201,6 +202,27 @@ func TestWindowsRenameDoesNotRetryPermanentFailure(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("rename calls = %d, want 1 for permanent error", calls.Load())
+	}
+}
+
+func TestWindowsReleaseStoreLockJoinsUnlockCause(t *testing.T) {
+	t.Parallel()
+	errorNotLocked := syscall.Errno(158)
+	path := filepath.Join(t.TempDir(), "unlocked.lock")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile(%q) error = %v", path, err)
+	}
+
+	err = releaseStoreLock(file)
+	if err == nil {
+		t.Fatal("releaseStoreLock() on an unlocked file reported success")
+	}
+	if !errors.Is(err, errorNotLocked) {
+		t.Fatalf("releaseStoreLock() error = %v, want ERROR_NOT_LOCKED (158) in its chain", err)
+	}
+	if got := strings.Count(err.Error(), "release state directory lock"); got != 1 {
+		t.Fatalf("releaseStoreLock() error = %q, release prefix appears %d time(s), want 1", err, got)
 	}
 }
 

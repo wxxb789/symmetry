@@ -133,11 +133,9 @@ import tempfile
 # read. The module resolves from this script's own directory, so the gate is run the same
 # way from any working directory.
 import revision_scope
+from audited_paths import AUDITED_PATHS
 
 PROGRAM = "check-citation-existence"
-# The documents this gate audits: the operator runbooks, the design file the runbooks
-# point at as the canonical gate list, and the archived closures.
-AUDITED_PATHS = ("docs/runbooks", "docs/design/quality.md", "docs/archive/CLOSED-TODO.md")
 
 BACKTICKED = re.compile(r"`([^`\n]+)`")
 # The line suffix, with an optional column (``file:line:col`` is what compilers, test

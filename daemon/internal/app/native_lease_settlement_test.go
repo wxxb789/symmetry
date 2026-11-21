@@ -42,8 +42,12 @@ func TestActiveNativeLeaseExpirySettlesThroughWaiter(t *testing.T) {
 	}
 	runContext, cancelRun := context.WithCancel(context.Background())
 	active := &runningRun{
-		claimed: true, cancel: cancelRun, nativeSession: session, goalSession: &sessionKey,
-		goalAdmission: &admission, slotHeld: true, cleanupBlocked: true,
+		runLifecycle: runLifecycle{
+			claimed:  true,
+			cancel:   cancelRun,
+			slotHeld: true,
+		}, nativeSession: session, goalSession: &sessionKey,
+		goalAdmission: &admission, cleanupBlocked: true,
 	}
 	app := &daemon{
 		config: testConfig(t), store: store, log: slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -112,7 +116,7 @@ func TestObservedNativeTerminalClaimsAfterDeadlineBeforeWatchdog(t *testing.T) {
 		waitGate: waitTurnGate, finalWaitGate: finalWaitGate, turnStarted: make(chan struct{}),
 	}
 	active := &runningRun{
-		claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission,
+		runLifecycle: runLifecycle{claimed: true}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission,
 		localLeaseDeadlineAt: time.Now().Add(-time.Second), cleanupBlocked: true,
 	}
 	app := &daemon{
