@@ -1,6 +1,8 @@
 package state
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -86,13 +88,58 @@ func TestLoadJournalWrapsDecodeCause(t *testing.T) {
 	if err == nil {
 		t.Fatal("LoadJournal() accepted a corrupt journal")
 	}
-	if !strings.Contains(err.Error(), "decode run journal: ") {
+	if !strings.HasPrefix(err.Error(), "decode run journal: ") {
 		t.Fatalf("LoadJournal() error = %q, want the decode prefix plus cause", err)
 	}
-	if errors.Unwrap(err) == nil {
-		t.Fatalf("LoadJournal() error = %q, want the decoder cause in its error chain", err)
+	var typeErr *json.UnmarshalTypeError
+	if !errors.As(err, &typeErr) || typeErr.Value != "array" {
+		t.Fatalf("LoadJournal() error = %v, want the array-root *json.UnmarshalTypeError in its chain", err)
 	}
-	if err.Error() == "decode run journal" {
-		t.Fatalf("LoadJournal() error = %q, want the concrete decode cause", err)
+}
+
+// TestMarkGoalSessionUncertainReasonBudget pins the durable reason budget the
+// wrapped write causes now feed into (W307-R1: the app composes
+// "<prefix>: <cause>" and the store enforces 4096 bytes at goal_session.go:1052
+// on the write and at goal_session.go:1688 on the read). Exactly 4096 bytes is
+// accepted and loadable again; one byte more is rejected before the mutation,
+// so the journal file stays byte-identical.
+func TestMarkGoalSessionUncertainReasonBudget(t *testing.T) {
+	const limit = 4096
+	store := mustStore(t)
+	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	key := saved.Key()
+	if _, err := store.MarkGoalSessionLaunchStarted(key); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	path := store.goalSessionPath(key)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read goal session journal: %v", err)
+	}
+
+	_, err = store.MarkGoalSessionUncertain(key, strings.Repeat("r", limit+1))
+	if err == nil || err.Error() != "uncertain launch reason is invalid" {
+		t.Fatalf("MarkGoalSessionUncertain() with a %d-byte reason error = %v, want the budget rejection", limit+1, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read goal session journal: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a rejected reason changed the durable journal")
+	}
+
+	if _, err := store.MarkGoalSessionUncertain(key, strings.Repeat("r", limit)); err != nil {
+		t.Fatalf("MarkGoalSessionUncertain() with a %d-byte reason error = %v, want acceptance", limit, err)
+	}
+	loaded, err := store.LoadGoalSession(key)
+	if err != nil {
+		t.Fatalf("LoadGoalSession() error = %v", err)
+	}
+	if len(loaded.UncertainReason) != limit {
+		t.Fatalf("durable reason bytes = %d, want %d", len(loaded.UncertainReason), limit)
 	}
 }

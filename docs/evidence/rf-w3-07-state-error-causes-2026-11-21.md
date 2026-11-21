@@ -70,14 +70,22 @@ Verbatim listings with each row's condition and returned expression: Appendix B.
 
 | class | base | delivered | meaning |
 |---|---:|---:|---|
-| `row` | 57 | 29 | error value in the branch condition; the only class that can drop a cause |
-| `pred` | 197 | 197 | condition tests only calls/fields against nil; no error variable |
+| `row` | 57 | 29 | err-ish identifier in the branch condition; the only class the rule sweeps |
+| `pred` | 197 | 197 | condition tests calls/fields against nil and mentions no err-ish identifier |
 | `other-branch` | 36 | 39 | inside `for`/`switch`/`select` or a non-error `if`; no error value |
 | `no-branch` | 259 | 267 | no enclosing branch (scalar/state verdicts) |
 
-The counts move only where the split moved a return out of an error branch: `pred` is unchanged,
-`row` −28, and the difference lands in `other-branch`/`no-branch` (the size arms that now stand
-alone, and the guarded arms that gained a static sibling). The contract's drafting-time
+The counts move only where the split narrowed a branch condition: `pred` is unchanged (197), `row`
+57 → 29 (−28), `other-branch` 36 → 39 (+3) and `no-branch` 259 → 267 (+8), i.e. 11 new listing
+entries (the size arms that now stand alone, and the split predicate arms whose condition is no
+longer shared with an error test); raw total 549 → 532 = −17, which is 28 removed from `row` minus
+the 11 added entries. Statement level, of the 28 base rows that left the `row` class: 16 have no
+static error return at their site any more — the arm is now a `%w` wrap (the 16 `state.go` WRAP rows
+of §2.1 minus the two SPLIT rows `:5479`/`:6373`) — and 12 still return the same message under a
+narrowed condition (the 6 capacity sentinels + the 6 SPLIT predicate arms). Two of those 12, the
+save-capacity sentinels at base `:571`/`:592`, land on the single shared
+`validateProviderActionJournalSize` size arm (head `:600`) because the dedup collapses both loops'
+checks, which is why the listing gains 11 entries, not 12. The contract's drafting-time
 "39 static + 1 / 7 + 5" does not reproduce at this head: 39/45 differ by the counting rule (the
 independent review's same-rule sweep found 45 `state.go` rows, which this rule reproduces exactly
 at base), and `provider_action.go`'s drafting-time 7th row is the rule-excluded predicate at
@@ -125,14 +133,17 @@ Appendices A/B, so a reviewer can re-run and re-derive them.
 
 ### 2.3 SPLIT-CAPACITY — 6 rows (contract Change 2)
 
+Head cells cite the `return` statements (serialize arm / size arm), the same convention as §2.1,
+§2.2 and the rows listings in the plan and Appendix B.
+
 | base | head | serialize arm | size arm |
 |---|---|---|---|
-| `state.go:5305` | `:5304`/`:5307` | `serialize run journal: %w` | `ErrProviderActionCapacity` |
-| `provider_action.go:267` | `:267`/`:270` | `serialize provider action result: %w` | `ErrProviderActionCapacity` |
-| `provider_action.go:541` | `:559`/`:562` | `serialize provider action intents: %w` | `ErrProviderActionCapacity` |
-| `provider_action.go:571` | `:596`/`:599` | `serialize run journal: %w` | `ErrProviderActionCapacity` |
-| `provider_action.go:592` | `:605` (shared `validateProviderActionJournalSize` on the reserved copy) | `serialize run journal: %w` | `ErrProviderActionCapacity` |
-| `provider_action.go:613` | `:623`/`:626` | `serialize run journal: %w` | `ErrProviderActionCapacity` |
+| `state.go:5305` | `:5305`/`:5308` | `serialize run journal: %w` | `ErrProviderActionCapacity` |
+| `provider_action.go:267` | `:268`/`:271` | `serialize provider action result: %w` | `ErrProviderActionCapacity` |
+| `provider_action.go:541` | `:560`/`:563` | `serialize provider action intents: %w` | `ErrProviderActionCapacity` |
+| `provider_action.go:571` | `:597`/`:600` | `serialize run journal: %w` | `ErrProviderActionCapacity` |
+| `provider_action.go:592` | `:605` → `:627` (shared `validateProviderActionJournalSize` on the reserved copy; serialize arm `:624`) | `serialize run journal: %w` | `ErrProviderActionCapacity` |
+| `provider_action.go:613` | `:624`/`:627` | `serialize run journal: %w` | `ErrProviderActionCapacity` |
 
 Second verdict consequence, stated and pinned: `errors.Is(err, ErrProviderActionCapacity)` is now
 false for a serialize failure, so `daemon/internal/app/pi_provider_bridge.go:67` classifies it
@@ -142,7 +153,14 @@ false for a serialize failure, so `daemon/internal/app/pi_provider_bridge.go:67`
 ErrProviderActionCapacity`, not merely `errors.Is`), so the out-of-package `errors.Is` consumer is
 unchanged for capacity.
 
-### 2.4 Residual — the 29 delivered rows (all proven no-cause)
+### 2.4 Residual — the 29 delivered rows (excluded by the recorded counting rule)
+
+The heading states the rule's boundary, not a claim that no cause exists anywhere in the branch:
+the rule keys on an *err-ish identifier* in the condition, so call-shaped predicates whose own
+failure is dropped (`rejectCaseInsensitiveJSONTagAliases(data, rootType) != nil`,
+`protocol.RejectDuplicateJSONMembers(result) != nil`) sit in the `pred` class, and the 25 verdict
+cascades below do carry a cause from the `X.Validate()`/`parseX` call in their condition — they are
+residual because the returned message is that stage's verdict, not an operation failure.
 
 Verdict cascades (25, `state.go`) — the error value comes from a validation/derivation call over
 control state and the message is that stage's verdict: `:1241`, `:1289`, `:1422`, `:1464`,
@@ -199,10 +217,24 @@ conditions are byte-identical to base (`git diff` shows no hunk touching them).
 - Wrapped suffixes reach the durable `UncertainReason`:
   `daemon/internal/app/goal_admission.go:1410-1415` builds the reason from `cause.Error()` /
   `closeErr.Error()`; the field is written at `daemon/internal/state/goal_session.go:1086`.
-- No code parses either string: the only consumer of `UncertainReason` is the length check
-  `len(journal.UncertainReason) > 4096` at `goal_session.go:1688` (verified by listing every
+- **W307-R1 (fix round 1): the length check is not text-neutral — it can reject.** No code *parses*
+  either string (the only consumer of `UncertainReason` is the length check
+  `len(journal.UncertainReason) > 4096` at `goal_session.go:1688` — verified by listing every
   occurrence of the field: `:223` declaration, assignments/clears, `:1688`, `:1720` emptiness
-  check). `payload["error"]` is opaque to the daemon and to Control.
+  check — and `payload["error"]` is opaque to the daemon and to Control), but the write-side guard
+  `validRequiredString(reason, 4096)` at `goal_session.go:1052-1053` rejects a composed reason over
+  the budget with `uncertain launch reason is invalid` *before* the mutation. Measured arithmetic at
+  the state boundary (`state_wrap_test.go:TestMarkGoalSessionUncertainReasonBudget` for the budget
+  itself, and a scratch measurement for the composition): the abandon composition is
+  `"native Goal session did not reach a known stopped state" + ": " + cause.Error()`, the prefix is
+  55 bytes and the base cause text `write goal session journal` is 26 bytes, so the base composed
+  reason for a goal-session write failure is 83 bytes and is recorded; the head text appends
+  `": " + <inner writer cause>`, so the composed reason is `85 + N` bytes for an `N`-byte inner
+  cause and flips to rejection at `N ≥ 4012` (measured: `N = 4011` → 4096 bytes accepted, `N = 4012`
+  → 4097 bytes rejected; 4096 accepted / 4097 rejected is also pinned by the new budget test). The
+  affected compositions are the error-text-fed sites listed in the plan's fix-round note; the
+  remedy is a bounded composition in `daemon/internal/app`, which is outside this slice's strict
+  owned set (W4-01's file), so the behavior fix is recorded as unmet with the exact paths there.
 - Every prefix and every other message stays byte-identical; the two test-visible Contains
   assertions (`daemon/internal/state/goal_session_test.go:281` `decode goal session journal`,
   `daemon/internal/app/harness_test.go:3830` `write run journal`) stay green because only a
@@ -212,9 +244,12 @@ conditions are byte-identical to base (`git diff` shows no hunk touching them).
   does assert `write run journal: <cause>` and `write goal session journal: <cause>` by equality.
 - `state_wrap_test.go` pins the exact wrapped strings for the deterministic lanes:
   `write run journal: <cause>` and `write goal session journal: <cause>` (injected sentinel), the
-  decode lane as prefix + chain assertion (`errors.Unwrap != nil`, added at apply so the `%v` flip
-  at `state.go:5363` is visible — §6.2), and the serialize lanes as prefix + `errors.Unwrap != nil`
-  (the `%w` chain, since the cause text belongs to `encoding/json`).
+  decode lane as `strings.HasPrefix(err.Error(), "decode run journal: ")` plus
+  `errors.As(err, *json.UnmarshalTypeError)` with `Value == "array"` (hardened in fix round 1: the
+  earlier `strings.Contains` + `errors.Unwrap != nil` form passed under a wrong-prefix mutation and
+  could not see a wrong cause — §9 mutations), and the serialize lanes as prefix +
+  `errors.As(err, *json.SyntaxError)` (the `%w` chain and the cause identity, since the cause text
+  belongs to `encoding/json`).
 
 ## 5. Gates (all foreground, exact commands)
 
@@ -320,13 +355,14 @@ Mutation: `validateProviderActionDispatchCapacity`'s call becomes
 FAIL (exit 1)                                                        → reverted, all green
 ```
 
-Divergence from the contract text, recorded rather than smoothed over: Change 2's gate list
-expects the dispatch-use removal to redden `provider_action_test.go:479` *and* `:615`. Measured at
-this head, only `:615` reddens. `:479` builds its near-limit fixture by binary search for the
-smallest payload at which `journal + one bare intent` already exceeds `maxJournalFileBytes`, so the
-plain size check catches that case with or without the reservation; `:479` is therefore a
-size/budget assertion for the dispatch path, not a reservation assertion. Both reservation uses are
-still proven load-bearing (§6.3 + §6.4), and no test was changed to fit the claim.
+**Conductor-ratified (fix round 1, 2026-11-21): only `:615`/`:1257` are reservation-sensitive;
+`:479` is a size assertion.** Change 2's original gate list expected the dispatch-use removal to
+redden `provider_action_test.go:479` *and* `:615`; measured at this head, only `:615` reddens
+(`PASS` lines above). `:479` builds its near-limit fixture by binary search for the smallest payload
+at which `journal + one bare intent` already exceeds `maxJournalFileBytes`, so the plain size check
+catches that case with or without the reservation; `:479` is therefore a size/budget assertion for
+the dispatch path, not a reservation assertion. Both reservation uses are still proven load-bearing
+(§6.3 + §6.4), and no test was changed to fit the claim.
 
 ### 6.4 (b) reservation sensitivity — save use
 
@@ -390,18 +426,21 @@ finds nothing, so no mutation residue remains.
 **Enforced invariants, unchanged by this slice.** No external provider dispatch without a durably
 prepared journal record (`PrepareProviderAction` persists before returning `dispatch=true`); every
 run-journal and state-file write is atomic (`writeAtomic`: exclusive temp file, `Sync`, `Rename`);
-a failed write leaves the previous durable state and the caller's error now carries the concrete
-cause; the 4 MiB journal guard and the provider-only half-budget keep their exact conditions,
-limits and sentinel value; capacity verdicts still come only from size/limit arms.
+a failed write before the rename leaves the previous durable state, a failure or crash after the
+rename but before the directory sync leaves the *new* file committed with an error returned (see the
+table below), and the caller's error now carries the concrete cause; the 4 MiB journal guard and the
+provider-only half-budget keep their exact conditions, limits and sentinel value; capacity verdicts
+still come only from size/limit arms.
 
 **Changed boundaries, crash/replay/replay-status review.**
 
 | boundary | crash before commit | after commit, before acknowledgement | replay / unresolved status |
 |---|---|---|---|
-| `saveJournalLocked` write (`state.go:5314`) | previous journal remains; error carries the fsync/rename cause | not reachable: the atomic rename is the commit | `mutateJournal` recomputes from durable state; unchanged |
-| capacity guard serialize failure (`state.go:5304`; `provider_action.go:559`, `:597`, `:605`, `:624`) | no write, no dispatch, no external effect — the guard runs before both | n/a | classification changes: not `ErrProviderActionCapacity` any more, so the bridge reports `local_persistence_unknown` and calls `RecoverProviderAction`, which settles an existing unresolved record and is a no-op when the prepare never committed; the caller receives explicit unresolved status, never an unconditional retry |
+| `saveJournalLocked` write (`state.go:5315`), before the rename | previous journal remains; error carries the temp-write/fsync cause | n/a | `mutateJournal` recomputes from durable state; unchanged |
+| `saveJournalLocked` write (`state.go:5315`), after `renameStateFile` (`writeAtomic`, `state.go:5573`: rename at `:5616`) | n/a — the new journal file is already committed | `writeAtomic` returns `syncDirectory(directory)` (`:5620`; `syncDirectory` = open + `Sync`, `state_unix.go:65-72`) *after* the rename, so a directory-sync failure or a crash between the two steps surfaces as a write error with the new file committed: the caller must treat it as committed-but-unacknowledged and decide by read-back, not by the error | unchanged: `mutateJournal` recomputes from durable state, so the read-back is the truth |
+| capacity guard serialize failure (wrap returns: `state.go:5305`; `provider_action.go:268` — unreachable by construction, §7 — `:560`, `:597`, `:624`; the last also through the shared calls at `:565`/`:605`) | no write, no dispatch, no external effect — the guard runs before both | n/a | classification changes: not `ErrProviderActionCapacity` any more, so the bridge reports `local_persistence_unknown` and calls `RecoverProviderAction`, which settles an existing unresolved record and is a no-op when the prepare never committed; the caller receives explicit unresolved status, never an unconditional retry |
 | capacity guard size arm (same sites) | no write, no dispatch | n/a | unchanged: the sentinel value itself, so `pi_provider_bridge.go:67` still returns `local_action_rejected` |
-| `writeJSONWithLimit` (`state.go:5498`) | previous state file remains | n/a | unchanged atomicity; the app's `UncertainReason`/`payload["error"]` text gains the declared suffix (§4) |
+| `writeJSONWithLimit` (`state.go:5498`) | previous state file remains (same two-phase window as the row above) | n/a | unchanged atomicity; the app's `UncertainReason`/`payload["error"]` text gains the declared suffix (§4) — and the goal-session journal's own 4096-byte reason budget now interacts with that suffix (§4, W307-R1) |
 | read/decode (`state.go:5345`, `:5355`, `:5363`, `:5366`, `:5389`) | read-only | n/a | load-failure classification unchanged; only the field-diagnosability of the message changes |
 
 Fences, leases, revision/claim grants, cancel/completion ordering and provider-owned fields are
@@ -420,6 +459,92 @@ anywhere in the changed paths.
 | removed | the duplicated inline loop body in `validateJournalSaveCapacity` only | no test, type, validation, permission or acceptance condition was reduced; no `//nolint`/`credo:disable` added |
 
 Affected checks after the review and after every revert: §6.5 (all exit 0).
+
+## 9. Fix round 1 (2026-11-21) — W307-R1…W307-R6
+
+Review verdict on `fc8e95a2..fd460635`: `MUST_FIX (5)` (R1 P2 + R2–R5 P3, R6 P3 optional
+hardening). This round changed `daemon/internal/state/state_wrap_test.go` (+52/−5) and
+`daemon/internal/state/provider_action_test.go` (+3/−2) — the only two non-documentary paths
+(measured `git diff --numstat`) — plus these two records, which are updated in place. **No
+production file changed**, so §0's prod line counts, §1's before/after counts, §2's classification, §3's
+control-flow audit and §6's mutation runs still hold at this head.
+
+**Gates re-run (all foreground, sequential, no harness concurrent with a suite).**
+
+| command (cwd `daemon/`) | exit | observed |
+|---|---:|---|
+| `gofmt -l .` | 0 | no output |
+| `go vet ./...` | 0 | no output |
+| `GOOS=windows go build ./...` | 0 | — |
+| `GOOS=linux go build ./...` | 0 | — |
+| `GOOS=linux GOARCH=amd64 go vet ./internal/state/` | 0 | — |
+| `go test -count=1 ./internal/state/...` (Windows, go1.27.4) | 0 | `ok … 35.085s` |
+| WSL `Ubuntu-24.04`: `go test -count=1 ./internal/state/...` | 0 | `ok … 29.890s` (the `//go:build linux` clone/cgroup suites run) |
+| `go test -count=1 ./internal/app/ -run '^TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure$'` | 0 | `ok … 0.950s` |
+| `go test -count=1 ./internal/app/ -run 'PiProviderBridge\|DurablePiProviderBridge\|ProviderAction'` | 0 | `ok … 6.130s` |
+| `git diff --check` | 0 | clean |
+| host-path scan (`git diff origin/main...HEAD`, working tree diff and both records) | 1 | no matches (grep exit 1 = no match) |
+| sweep rebuilt from Appendix A: `-selfcheck`, rows, `-all` at base and delivered | 0 | `{"other-branch":2,"pred":1,"row":2}`; base `rows 57 (static-new 51, static-fmt-no-w 0, sentinel-return 6)` + `row 57 pred 197 other-branch 36 no-branch 259`; delivered `rows 29 (static-new 29, static-fmt-no-w 0, sentinel-return 0)` + `row 29 pred 197 other-branch 39 no-branch 267` — every number in §0/§1/§2.4 reproduces |
+| test-case count, `./internal/state` with `-v` (`=== RUN` lines): HEAD `fd460635` (scratch copy from `git archive HEAD`) vs delivered worktree | 0 / 0 | 457 → 458 (the new `TestMarkGoalSessionUncertainReasonBudget`); 390 PASS lines, 0 FAIL in the delivered run |
+
+Not re-run in this round: the full `./internal/app/` package (conductor-owned full suite) — no
+production file changed, so its behavior is untouched; the targeted oracle and the provider subset
+above re-ran green. No `-race` locally (no cgo on this host; CI race job remains the oracle).
+
+**W307-R1 — behaviour fix unmet inside the strict owned set (measured arithmetic; ready change
+set).** The suffix this slice adds reaches the app's composed `UncertainReason` and the store's
+4096-byte budget can reject a composed reason the base revision recorded. Measured at the state
+boundary with the app's exact composition (scratch measurement in a copy of the package, repo
+untouched): the abandon prefix `native Goal session did not reach a known stopped state` is 55 B,
+the base cause text `write goal session journal` is 26 B, so the base composed reason is 83 B and is
+recorded; the head text appends `": <inner writer cause>"`, the composed reason is `85 + N` B for an
+`N`-byte inner cause, and the verdict flips at `N ≥ 4012`: `N = 4011` → 4096 B accepted,
+`N = 4012` → 4097 B rejected with `uncertain launch reason is invalid`. The app compositions that can
+receive store-grown text: `goal_admission.go:889`, `:950`, `:1410-1416`, `:1468-1474`,
+`native_run.go:611`, and `goal_delivery.go:134`/`:138`/`:142` via `native_run.go:846` → store call
+`:850`. Both remedies the conductor named
+need files outside the strict owned set — the app compositions (`goal_admission.go`, `native_run.go`,
+`goal_delivery.go`, W4-01's owned files, plus an app test file) or a clamp at the store sink
+(`goal_session.go`) — so the behaviour fix is recorded **unmet with those exact paths**, with the
+ready change set: a rune-safe bound applied only to the string passed to
+`MarkGoalSessionUncertain` (never to the returned/joined error chains), budget single-sourced from
+`state`, plus an app test that drives `abandonGoalSession` with a ~4 KB writer cause and asserts the
+session reaches `uncertain` rather than the requeue path. In-set artifact added:
+`state_wrap_test.go:TestMarkGoalSessionUncertainReasonBudget` — exactly 4096 B accepted, persisted
+and loadable; 4097 B rejected before the mutation with the journal file byte-unchanged; error text
+`uncertain launch reason is invalid`. It pins the budget and the no-side-effect property; it cannot
+observe the app's composition.
+
+**W307-R6 — hardened assertions and their mutations** (scratch copies of the package, repo
+untouched, each mutation reverted):
+
+```
+mutation 1: state.go:5363 `decode %s: %w` → `wrong prefix: decode %s: %w`
+  --- FAIL: TestLoadJournalWrapsDecodeCause
+      state_wrap_test.go:91: LoadJournal() error = "wrong prefix: decode run journal: json: cannot
+      unmarshal array into Go value of type state.RunJournal", want the decode prefix plus cause
+      (the pre-fix strings.Contains form passed this mutation)
+mutation 2: state.go:5363 cause → errors.New("decoder rejected the payload")
+  --- FAIL: TestLoadJournalWrapsDecodeCause
+      state_wrap_test.go:95: LoadJournal() error = decode run journal: decoder rejected the payload,
+      want the array-root *json.UnmarshalTypeError in its chain
+      (the pre-fix errors.Unwrap != nil form passed this mutation)
+mutation 3: provider_action.go:624 cause → errors.New("journal is not encodable")
+  --- FAIL: TestProviderActionCapacitySplitSeparatesSerializationFromSize/serialize_failure_leaves_capacity/journal_size_guard
+      provider_action_test.go:1442: guard error = serialize run journal: journal is not encodable,
+      want the encoding/json syntax cause in its chain
+      (the pre-fix errors.Unwrap != nil form passed this mutation)
+```
+
+**Record corrections verified.** (R2) §1's accounting sentence is now the measured one. (R3) the
+rule-boundary wording replaces "all proven no-cause"/"only class"; `pred`'s meaning column states
+the err-ish test. (R4) both plan output blocks are the tool's exact stdout: the fenced blocks were
+re-extracted from the plan and `diff`ed against the recorded run's stdout — identical; the two
+`provider_action.go` WRAP rows name `normalizeProviderActionResult`; §2.3's head cells cite return
+statements. (R5) §8's `saveJournalLocked` row is split before/after `renameStateFile`
+(`writeAtomic` returns `syncDirectory(directory)` at `state.go:5620`), and §4's invariants sentence
+no longer claims a failed write always leaves the previous durable state. (P3) conductor
+ratification recorded in §6.3 and in the plan's mutation paragraph.
 
 ## Appendix A — sweep tool source (verbatim, stdlib-only)
 
@@ -910,9 +1035,14 @@ func classKind(rows []row, class, kind string) int {
 }
 ```
 
-## Appendix B — sweep listings (verbatim)
+## Appendix B — sweep listings (rows mode; the constant `row` class column omitted)
 
-Before (base 52bdffd2), rows mode, columns: file:line, kind, function, condition, returned expression (the tool prints a constant `row` class column first; it is omitted here because this listing is rows-mode only)
+The plan's "Before output"/"Sweep after" blocks carry this same run's full stdout, including the
+constant `row` class column and the two summary lines the tool prints after the rows. Here the
+columns are: file:line, kind, function, condition, returned expression, i.e. the stdout minus the
+class column (constant in rows mode).
+
+Before (base 52bdffd2):
 
 ```
 provider_action.go:267	sentinel-return	ValidateNewProviderActionResult	err != nil || len(persisted) > maxProviderActionResultBytes	ErrProviderActionCapacity
@@ -974,7 +1104,7 @@ state.go:6363	static-new	terminalTaskResultKind	err != nil	errors.New("completed
 state.go:6373	static-new	terminalTaskResultKind	err != nil || !validTaskResultKind(result.Kind)	errors.New("completed terminal task result kind is invalid")
 ```
 
-After (delivered tree), rows mode (same column layout; the constant `row` class column is omitted)
+After (delivered tree):
 
 ```
 provider_action.go:298	static-new	normalizeProviderActionResult	tokenErr != io.EOF	errors.New("provider action result has trailing data")

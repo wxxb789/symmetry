@@ -1437,8 +1437,9 @@ func TestProviderActionCapacitySplitSeparatesSerializationFromSize(t *testing.T)
 				if !strings.HasPrefix(err.Error(), test.prefix) {
 					t.Fatalf("guard error = %q, want prefix %q", err, test.prefix)
 				}
-				if errors.Unwrap(err) == nil {
-					t.Fatalf("guard error = %v, want the encoder cause in its chain", err)
+				var syntaxErr *json.SyntaxError
+				if !errors.As(err, &syntaxErr) {
+					t.Fatalf("guard error = %v, want the encoding/json syntax cause in its chain", err)
 				}
 			})
 		}

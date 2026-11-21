@@ -47,72 +47,74 @@ rule on a fixture with a known classification):
 ```
 cd daemon/internal/state
 sweep state.go provider_action.go           # rows (the rule above)
-sweep -predicates state.go provider_action.go   # residual no-cause predicate class
+sweep -predicates state.go provider_action.go   # the predicate class (no err-ish identifier)
 sweep -all state.go provider_action.go          # complete accounting of every static error return
 ```
 
-**Before output at the base revision** (`sweep state.go provider_action.go`):
+**Before output at the base revision** — exact stdout of `sweep state.go provider_action.go`
+(columns: `file:line`, class, kind, function, condition, returned expression; the tool prints the
+two summary lines *after* the rows, and rows mode prints the constant `row` class):
 
 ```
+provider_action.go:267	row	sentinel-return	ValidateNewProviderActionResult	err != nil || len(persisted) > maxProviderActionResultBytes	ErrProviderActionCapacity
+provider_action.go:284	row	static-new	normalizeProviderActionResult	err != nil || value.kind != providerActionJSONObject	errors.New("provider action result must be a JSON object")
+provider_action.go:288	row	static-new	normalizeProviderActionResult	tokenErr != io.EOF	errors.New("provider action result has trailing data")
+provider_action.go:290	row	static-new	normalizeProviderActionResult	tokenErr != io.EOF	errors.New("provider action result has trailing data")
+provider_action.go:358	row	static-new	decodeProviderActionJSONValue	err != nil || end != json.Delim(']')	errors.New("provider action result array is invalid")
+provider_action.go:368	row	static-new	decodeProviderActionJSONValue	err != nil || !ok	errors.New("provider action result object key is invalid")
+provider_action.go:382	row	static-new	decodeProviderActionJSONValue	err != nil || end != json.Delim('}')	errors.New("provider action result object is invalid")
+provider_action.go:541	row	sentinel-return	validateProviderActionDispatchCapacity	err != nil || len(providerData) > maxProviderActionBytes	ErrProviderActionCapacity
+provider_action.go:571	row	sentinel-return	validateJournalSaveCapacity	err != nil || len(data) > maxJournalFileBytes	ErrProviderActionCapacity
+provider_action.go:592	row	sentinel-return	validateJournalSaveCapacity	err != nil || len(reservedData) > maxJournalFileBytes	ErrProviderActionCapacity
+provider_action.go:613	row	sentinel-return	validateProviderActionJournalSize	err != nil || len(data) > maxJournalFileBytes	ErrProviderActionCapacity
+state.go:913	row	static-new	linuxCloneCleanupIntentFromJournal	err != nil	errors.New("encode Linux clone cleanup fence")
+state.go:1202	row	static-new	(*Store).Close	err != nil	errors.New("release state directory lock")
+state.go:1212	row	static-new	NewDaemonInstanceID	err != nil	errors.New("generate daemon instance ID")
+state.go:1224	row	static-new	NewMachineToken	err != nil	errors.New("generate machine token")
+state.go:1241	row	static-new	(*Store).LoadEnrollmentIntent	err != nil	errors.New("invalid enrollment intent")
+state.go:1270	row	static-new	(*Store).DeleteEnrollmentIntent	err != nil	errors.New("remove enrollment intent")
+state.go:1289	row	static-new	(*Store).LoadIdentity	err != nil	errors.New("invalid identity record")
+state.go:1422	row	static-new	(*Store).ReserveLinuxCloneIntent	err != nil || intent.RunID != key.RunID || intent.Generation != key.Generation	errors.New("Linux clone intent does not match RunKey")
+state.go:1464	row	static-new	(*Store).BindLinuxCloneSeed	err != nil || seed.BaseCommit != intent.BaseCommit	errors.New("Linux clone seed receipt does not match its intent")
+state.go:1539	row	static-new	(*Store).BindLinuxCloneReuse	err != nil || grant.RunID != key.RunID || grant.Generation != key.Generation	errors.New("Linux clone reuse grant does not match the new RunKey")
+state.go:1707	row	static-new	(*Store).AbortLinuxCloneReuseBeforeNativeStart	err != nil || grant.RunID != key.RunID || grant.Generation != key.Generation	errors.New("Linux clone reuse abort grant does not match the RunKey")
+state.go:1796	row	static-new	(*Store).RecordLinuxClonePromotion	err != nil || receipt.Validate() != nil || candidate.ResourceID != intent.ResourceID || len(candidate.Commit) != len(intent.BaseCommit) || receipt.Version != candidate.Version || receipt.Commit != candidate.Commit || receipt.TreeDigest != candidate.TreeDigest	errors.New("Linux clone promotion receipt does not match candidate intent")
+state.go:1800	row	static-new	(*Store).RecordLinuxClonePromotion	err != nil || receipt.Ref != ref	errors.New("Linux clone promotion ref does not match RunKey")
+state.go:1960	row	static-new	(*Store).BeginLinuxCloneCleanup	err != nil || !journal.LinuxCloneCleanupIntent.Equal(intent)	errors.New("Linux clone cleanup intent readback is invalid")
+state.go:2014	row	static-new	(*Store).RecordLinuxCloneTargetRemoval	err != nil || proof.Validate() != nil || proof.Disposition != authority.LinuxCloneTargetDispositionRemoved || !proof.TargetNlinkZero || !proof.Intent.Equal(expected)	errors.New("Linux clone target-removal proof does not match cleanup intent")
+state.go:2045	row	static-new	(*Store).CompleteLinuxCloneCleanup	err != nil || proof.Validate() != nil || !proof.Intent.Equal(expected)	errors.New("Linux clone cleanup proof does not match cleanup intent")
+state.go:2316	row	static-new	(*Store).DeleteJournal	err != nil	errors.New("delete run journal")
+state.go:2335	row	static-new	(*Store).listJournalsLocked	err != nil	errors.New("list run journal directory")
+state.go:2365	row	static-new	(*Store).forEachJournalLocked	err != nil	errors.New("list run journal directory")
+state.go:2386	row	static-new	(*Store).forEachJournalLocked	readErr != nil	errors.New("list run journal directory")
+state.go:2397	row	static-new	(*Store).readJournalEntryLocked	err != nil	errors.New("invalid run journal")
+state.go:2666	row	static-new	(*Store).CheckLinuxV2NativeAdmission	err != nil || !validLinuxV2AdmissionFence(key, fence) || now.IsZero()	errors.New("Linux v2 native admission RunKey, fence, or time is invalid")
+state.go:3035	row	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	err != nil || expected.CreateStarted || expected.LeafIdentity != nil || expected.Helper != nil || expected.Launcher != nil || expected.LauncherExit != nil || expected.Gate != nil || expected.HelperExit != nil || expected.AbortProof != nil || expected.PreGateStopReceipt != nil || expected.LauncherGrantPossible || expected.Mirror == nil	errors.New("Linux cgroup reservation is not a never-created state")
+state.go:3046	row	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	err != nil || !linuxCgroupReservationAbortMatches(expected, proof)	errors.New("Linux cgroup never-created tombstone is invalid")
+state.go:4860	row	static-new	(*Store).loadJournalLocked	err != nil	errors.New("invalid run journal")
+state.go:4904	row	static-new	requireLinuxCloneJournalFence	err != nil || !present || admission.Subject.Validate() != nil || admission.Subject.ResourceID != intent.ResourceID || admission.Subject.Commit != intent.BaseCommit || admission.Subject.TreeDigest != intent.BaseTreeDigest	errors.New("Linux clone intent does not match the current admitted Subject")
+state.go:5030	row	static-new	validateLinuxCloneReuseRetainedTarget	err != nil	errors.New("run journal Linux clone reuse does not match admitted Subject")
+state.go:5052	row	static-new	validateLinuxCloneIntent	err != nil	errors.New("run journal Linux clone intent does not match admitted Subject")
+state.go:5157	row	static-new	validateLinuxClonePromotion	promotion.Validate() != nil || err != nil || promotion.Ref != ref || promotion.Commit != promotionIntent.Commit || promotion.TreeDigest != promotionIntent.TreeDigest || !linuxCloneStopProven(journal)	errors.New("run journal Linux clone promotion receipt is invalid")
+state.go:5181	row	static-new	validateLinuxClonePromotionWithoutIntent	promotion.Validate() != nil || refErr != nil || promotion.Ref != legacyRef || len(promotion.Commit) != len(intent.BaseCommit) || !linuxCloneStopProven(journal) || journal.WorkspacePath != intent.Target	errors.New("run journal legacy Linux clone promotion receipt is invalid")
+state.go:5196	row	static-new	validateLinuxCloneCleanup	err != nil || !cleanupIntent.Equal(*journal.LinuxCloneCleanupIntent)	errors.New("run journal Linux clone cleanup intent is invalid")
+state.go:5294	row	static-new	requireLinuxCloneJournalFenceSubject	err != nil || !present || admission.Subject.Validate() != nil || admission.Subject.ResourceID != intent.ResourceID || admission.Subject.Commit != intent.BaseCommit || admission.Subject.TreeDigest != intent.BaseTreeDigest	errors.New("admitted Subject does not match Linux clone intent")
+state.go:5305	row	sentinel-return	(*Store).saveJournalLocked	err != nil || len(data) > maxJournalFileBytes	ErrProviderActionCapacity
+state.go:5312	row	static-new	(*Store).saveJournalLocked	err != nil	errors.New("write run journal")
+state.go:5342	row	static-new	(*Store).readJSONWithLimitAndTags	err != nil	errors.New("read " + resource)
+state.go:5352	row	static-new	decodeJSONWithLimitAndTags	err != nil	errors.New("decode " + resource)
+state.go:5360	row	static-new	decodeJSONWithLimitAndTags	err != nil	errors.New("decode " + resource)
+state.go:5364	row	static-new	decodeJSONWithLimitAndTags	err != io.EOF	errors.New("decode " + resource)
+state.go:5384	row	static-new	rejectCaseInsensitiveJSONTagAliases	err != io.EOF	errors.New("trailing JSON data")
+state.go:5479	row	static-new	(*Store).writeJSONWithLimit	err != nil || len(data) > limit	errors.New("encode " + resource)
+state.go:5486	row	static-new	(*Store).writeJSONWithLimit	err != nil	errors.New("write " + resource)
+state.go:5514	row	static-new	(*Store).removeOwnedTempsLocked	err != nil && !errors.Is(err, os.ErrNotExist)	errors.New("remove run journal temporary file")
+state.go:6061	row	static-new	validateContainmentAuthority	err != nil || journal.ContainmentAuthority.TargetPID != journal.PID || journal.ContainmentAuthority.TargetIdentity != journal.ProcessIdentity	errors.New("run journal containment authority is invalid")
+state.go:6084	row	static-new	validateContainmentHandoff	err != nil	errors.New("run journal containment handoff is invalid")
+state.go:6363	row	static-new	terminalTaskResultKind	err != nil	errors.New("completed terminal payload is invalid")
+state.go:6373	row	static-new	terminalTaskResultKind	err != nil || !validTaskResultKind(result.Kind)	errors.New("completed terminal task result kind is invalid")
 TOTAL reported 57 rows
   rows 57 (static-new 51, static-fmt-no-w 0, sentinel-return 6)
-provider_action.go:267	sentinel-return	ValidateNewProviderActionResult	ErrProviderActionCapacity
-provider_action.go:284	static-new	normalizeProviderActionResult	errors.New("provider action result must be a JSON object")
-provider_action.go:288	static-new	normalizeProviderActionResult	errors.New("provider action result has trailing data")
-provider_action.go:290	static-new	normalizeProviderActionResult	errors.New("provider action result has trailing data")
-provider_action.go:358	static-new	decodeProviderActionJSONValue	errors.New("provider action result array is invalid")
-provider_action.go:368	static-new	decodeProviderActionJSONValue	errors.New("provider action result object key is invalid")
-provider_action.go:382	static-new	decodeProviderActionJSONValue	errors.New("provider action result object is invalid")
-provider_action.go:541	sentinel-return	validateProviderActionDispatchCapacity	ErrProviderActionCapacity
-provider_action.go:571	sentinel-return	validateJournalSaveCapacity	ErrProviderActionCapacity
-provider_action.go:592	sentinel-return	validateJournalSaveCapacity	ErrProviderActionCapacity
-provider_action.go:613	sentinel-return	validateProviderActionJournalSize	ErrProviderActionCapacity
-state.go:913	static-new	linuxCloneCleanupIntentFromJournal	errors.New("encode Linux clone cleanup fence")
-state.go:1202	static-new	(*Store).Close	errors.New("release state directory lock")
-state.go:1212	static-new	NewDaemonInstanceID	errors.New("generate daemon instance ID")
-state.go:1224	static-new	NewMachineToken	errors.New("generate machine token")
-state.go:1241	static-new	(*Store).LoadEnrollmentIntent	errors.New("invalid enrollment intent")
-state.go:1270	static-new	(*Store).DeleteEnrollmentIntent	errors.New("remove enrollment intent")
-state.go:1289	static-new	(*Store).LoadIdentity	errors.New("invalid identity record")
-state.go:1422	static-new	(*Store).ReserveLinuxCloneIntent	errors.New("Linux clone intent does not match RunKey")
-state.go:1464	static-new	(*Store).BindLinuxCloneSeed	errors.New("Linux clone seed receipt does not match its intent")
-state.go:1539	static-new	(*Store).BindLinuxCloneReuse	errors.New("Linux clone reuse grant does not match the new RunKey")
-state.go:1707	static-new	(*Store).AbortLinuxCloneReuseBeforeNativeStart	errors.New("Linux clone reuse abort grant does not match the RunKey")
-state.go:1796	static-new	(*Store).RecordLinuxClonePromotion	errors.New("Linux clone promotion receipt does not match candidate intent")
-state.go:1800	static-new	(*Store).RecordLinuxClonePromotion	errors.New("Linux clone promotion ref does not match RunKey")
-state.go:1960	static-new	(*Store).BeginLinuxCloneCleanup	errors.New("Linux clone cleanup intent readback is invalid")
-state.go:2014	static-new	(*Store).RecordLinuxCloneTargetRemoval	errors.New("Linux clone target-removal proof does not match cleanup intent")
-state.go:2045	static-new	(*Store).CompleteLinuxCloneCleanup	errors.New("Linux clone cleanup proof does not match cleanup intent")
-state.go:2316	static-new	(*Store).DeleteJournal	errors.New("delete run journal")
-state.go:2335	static-new	(*Store).listJournalsLocked	errors.New("list run journal directory")
-state.go:2365	static-new	(*Store).forEachJournalLocked	errors.New("list run journal directory")
-state.go:2386	static-new	(*Store).forEachJournalLocked	errors.New("list run journal directory")
-state.go:2397	static-new	(*Store).readJournalEntryLocked	errors.New("invalid run journal")
-state.go:2666	static-new	(*Store).CheckLinuxV2NativeAdmission	errors.New("Linux v2 native admission RunKey, fence, or time is invalid")
-state.go:3035	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	errors.New("Linux cgroup reservation is not a never-created state")
-state.go:3046	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	errors.New("Linux cgroup never-created tombstone is invalid")
-state.go:4860	static-new	(*Store).loadJournalLocked	errors.New("invalid run journal")
-state.go:4904	static-new	requireLinuxCloneJournalFence	errors.New("Linux clone intent does not match the current admitted Subject")
-state.go:5030	static-new	validateLinuxCloneReuseRetainedTarget	errors.New("run journal Linux clone reuse does not match admitted Subject")
-state.go:5052	static-new	validateLinuxCloneIntent	errors.New("run journal Linux clone intent does not match admitted Subject")
-state.go:5157	static-new	validateLinuxClonePromotion	errors.New("run journal Linux clone promotion receipt is invalid")
-state.go:5181	static-new	validateLinuxClonePromotionWithoutIntent	errors.New("run journal legacy Linux clone promotion receipt is invalid")
-state.go:5196	static-new	validateLinuxCloneCleanup	errors.New("run journal Linux clone cleanup intent is invalid")
-state.go:5294	static-new	requireLinuxCloneJournalFenceSubject	errors.New("admitted Subject does not match Linux clone intent")
-state.go:5305	sentinel-return	(*Store).saveJournalLocked	ErrProviderActionCapacity
-state.go:5312	static-new	(*Store).saveJournalLocked	errors.New("write run journal")
-state.go:5342	static-new	(*Store).readJSONWithLimitAndTags	errors.New("read " + resource)
-state.go:5352	static-new	decodeJSONWithLimitAndTags	errors.New("decode " + resource)
-state.go:5360	static-new	decodeJSONWithLimitAndTags	errors.New("decode " + resource)
-state.go:5364	static-new	decodeJSONWithLimitAndTags	errors.New("decode " + resource)
-state.go:5384	static-new	rejectCaseInsensitiveJSONTagAliases	errors.New("trailing JSON data")
-state.go:5479	static-new	(*Store).writeJSONWithLimit	errors.New("encode " + resource)
-state.go:5486	static-new	(*Store).writeJSONWithLimit	errors.New("write " + resource)
-state.go:5514	static-new	(*Store).removeOwnedTempsLocked	errors.New("remove run journal temporary file")
-state.go:6061	static-new	validateContainmentAuthority	errors.New("run journal containment authority is invalid")
-state.go:6084	static-new	validateContainmentHandoff	errors.New("run journal containment handoff is invalid")
-state.go:6363	static-new	terminalTaskResultKind	errors.New("completed terminal payload is invalid")
-state.go:6373	static-new	terminalTaskResultKind	errors.New("completed terminal task result kind is invalid")
 ```
 
 Counts: **46 rows in `state.go` (45 `static-new` + 1 `sentinel-return`), 11 in `provider_action.go`
@@ -148,8 +150,8 @@ or lock operation; the message names that operation; the cause is appended as `:
 | `state.go:5486` | `store.atomicWrite(…)`/`writeAtomic` | `write <resource>` |
 | `state.go:5514` | `os.Remove` (`err != nil && !errors.Is(err, os.ErrNotExist)`) | `remove run journal temporary file` |
 | `state.go:6363` | `json.Unmarshal` | `completed terminal payload is invalid` |
-| `provider_action.go:288` | `decoder.Token` inside `providerActionJSONValue` | `provider action result has trailing data` |
-| `provider_action.go:290` | `decoder.Token` inside `providerActionJSONValue` | `provider action result has trailing data` |
+| `provider_action.go:288` | `decoder.Token` inside `normalizeProviderActionResult` | `provider action result has trailing data` |
+| `provider_action.go:290` | `decoder.Token` inside `normalizeProviderActionResult` | `provider action result has trailing data` |
 
 **SPLIT (condition shared with a predicate) — 6 rows.** The error test becomes its own arm that
 wraps; the predicate keeps the byte-identical message, so no verdict text changes.
@@ -192,7 +194,9 @@ Journal`, `authority.LinuxClonePromotionRef`) and the returned message is that s
 an operation failure: `state.go:1241`, `1289`, `1422`, `1464`, `1539`, `1707`, `1796`, `1800`,
 `1960`, `2014`, `2045`, `2397`, `2666`, `3035`, `3046`, `4860`, `4904`, `5030`, `5052`, `5157`,
 `5181`, `5196`, `5294`, `6061`, `6084`. This is the contract's residual class ("proven no-cause
-predicates (`X.Validate() != nil` cascades)"). Four of them are additionally pinned byte-exactly by
+predicates (`X.Validate() != nil` cascades)" — the contract's label; these rows do carry a cause,
+they are residual because the returned message is a stage verdict, see "Accounting" above). Four of
+them are additionally pinned byte-exactly by
 W2-09's first-error pins, and their cases *reach the error arm*, so wrapping them would break a
 pinning test (proved by reading the pin case and by running it):
 `state.go:6061`/`6084` in `TestJournalValidatorFirstErrorStringsArePinned` (containment-authority
@@ -215,11 +219,13 @@ TOTAL reported 549 rows (static returns of errors.New / fmt.Errorf-without-%w / 
   row 57  pred 197  other-branch 36  no-branch 259
 ```
 
-- `pred` (197) — the "no-cause predicate" class: static returns inside a branch that tests only
-  calls/fields/selectors against nil with no error variable in scope (`releaseProof.Validate() !=
-  nil || …`, `journal.LinuxCloneAbortProof != nil || …`,
-  `protocol.RejectDuplicateJSONMembers(result) != nil`, `if !ok`, …). Includes the drafting-time
-  `provider_action.go:278` row. Contract Change 1 declares this class residual.
+- `pred` (197) — the predicate class: static returns inside a branch that tests only
+  calls/fields/selectors against nil *and* mentions no err-ish identifier, which is the rule's
+  boundary (`releaseProof.Validate() != nil || …`, `journal.LinuxCloneAbortProof != nil || …`,
+  `protocol.RejectDuplicateJSONMembers(result) != nil`, `if !ok`, …). It is a rule class, not a
+  claim that no cause exists: a call-shaped predicate can itself be the dropped failure, e.g.
+  `state.go:5357` `rejectCaseInsensitiveJSONTagAliases(data, rootType) != nil`. Includes the
+  drafting-time `provider_action.go:278` row. Contract Change 1 declares this class residual.
 - `other-branch` (36) — static returns inside `for`/`switch`/`select` bodies or non-error `if`
   conditions (`if _, exists := seen[key]; exists`, `switch default:`, unknown-value arms), no
   error value in scope.
@@ -227,10 +233,15 @@ TOTAL reported 549 rows (static returns of errors.New / fmt.Errorf-without-%w / 
   branches whose condition has no `!= nil` test, e.g. scalar/enum predicates
   `if journal.LocalState != "running" { … }`).
 
-The `row` class is the only one whose condition can be satisfied by a non-nil error value that is
-then dropped, so it is the class Change 1 wraps; `pred`/`other-branch`/`no-branch` have no
-droppable error variable. After the change the `row` output is the residual 25-row verdict set
-(pasted in the delivered-outcome section and in the evidence record).
+The `row` class is the class Change 1 wraps: its condition tests an err-ish identifier for failure
+(the recorded counting rule above), i.e. the value it inspects is the error whose cause the message
+drops. The other classes are *excluded by that rule*, not proven cause-free: `pred` contains
+call-shaped predicates whose own failure is dropped (`rejectCaseInsensitiveJSONTagAliases(...) !=
+nil`, `protocol.RejectDuplicateJSONMembers(result) != nil`), and the 25 residual `row` rows do carry
+a cause from the `X.Validate()`/`parseX` call in their condition — they are residual because the
+returned message is that stage's verdict, not an operation failure, which is the contract's
+residual class. After the change the `row` output is that 25-row verdict set (pasted in the
+delivered-outcome section and in the evidence record).
 
 ## Exact semantics
 
@@ -318,11 +329,13 @@ class (pointer/`Validate()` predicates) and the `no-branch`/`other-branch` verdi
    `git diff --check`; host-path scan of the branch diff. No `-race` locally (no cgo).
    Never concurrently with the sweep/measurement tool.
 2. Sweep before/after (rows, predicates, all) + `-selfcheck`.
-3. Mutation checks: (a) `TestSaveJournalWrapsAtomicWriteCause` red on base, green on head, red
-   again with `%w` → `%v` (the decode lane's `errors.Unwrap` assertion catches the same flip at
-   `state.go:5363`; recorded in evidence §6.2); (b) dropping the reservation call from the dispatch
-   guard reddens `provider_action_test.go:479`/`:615`, dropping it from the save guard reddens
-   `:1257` (reservation-sensitive set as reconciled; `:528`/`:590` are budget/encoding assertions).
+3. Mutation checks — **corrected in fix round 1 to the measured, conductor-ratified set**: (a)
+   `TestSaveJournalWrapsAtomicWriteCause` red on base, green on head, red again with `%w` → `%v`
+   (after fix round 1 the decode lane's `errors.As` assertion catches the same flip at
+   `state.go:5363`; recorded in evidence §6.2 and §9); (b) dropping the reservation call from the
+   dispatch guard reddens `provider_action_test.go:615`, dropping it from the save guard reddens
+   `:1257`; `:479` is a size assertion and does not redden on the dispatch-use removal (measured;
+   conductor-ratified 2026-11-21), and `:528`/`:590` are budget/encoding assertions.
 4. Evidence record `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md`: sweep listings, the
    57-row classification table with before/after, control-flow audit, gate exit codes, mutation
    outputs, Appendix A (sweep tool source), Appendix B (rows-mode before/after listings; the
@@ -343,55 +356,63 @@ class (pointer/`Validate()` predicates) and the `no-branch`/`other-branch` verdi
 
 ## Delivered outcome (2026-11-21)
 
-Delivered tree = base `52bdffd2` plus the uncommitted changes listed at the top of this plan;
-the base worktree used for the red runs is a detached `git worktree` of the same commit.
+Delivered tree = base `52bdffd2` plus the changes listed at the top of this plan (at implementation
+time uncommitted; committed for review as `71e0deb3` and merged as `fd460635`); the base worktree
+used for the red runs is a detached `git worktree` of the same commit.
 
-**Sweep after** (`sweep state.go provider_action.go` at the delivered tree):
+**Sweep after** — exact stdout of `sweep state.go provider_action.go` at the delivered tree (same
+columns as the before block):
 
 ```
+provider_action.go:298	row	static-new	normalizeProviderActionResult	tokenErr != io.EOF	errors.New("provider action result has trailing data")
+provider_action.go:300	row	static-new	normalizeProviderActionResult	tokenErr != io.EOF	errors.New("provider action result has trailing data")
+state.go:1241	row	static-new	(*Store).LoadEnrollmentIntent	err != nil	errors.New("invalid enrollment intent")
+state.go:1289	row	static-new	(*Store).LoadIdentity	err != nil	errors.New("invalid identity record")
+state.go:1422	row	static-new	(*Store).ReserveLinuxCloneIntent	err != nil || intent.RunID != key.RunID || intent.Generation != key.Generation	errors.New("Linux clone intent does not match RunKey")
+state.go:1464	row	static-new	(*Store).BindLinuxCloneSeed	err != nil || seed.BaseCommit != intent.BaseCommit	errors.New("Linux clone seed receipt does not match its intent")
+state.go:1539	row	static-new	(*Store).BindLinuxCloneReuse	err != nil || grant.RunID != key.RunID || grant.Generation != key.Generation	errors.New("Linux clone reuse grant does not match the new RunKey")
+state.go:1707	row	static-new	(*Store).AbortLinuxCloneReuseBeforeNativeStart	err != nil || grant.RunID != key.RunID || grant.Generation != key.Generation	errors.New("Linux clone reuse abort grant does not match the RunKey")
+state.go:1796	row	static-new	(*Store).RecordLinuxClonePromotion	err != nil || receipt.Validate() != nil || candidate.ResourceID != intent.ResourceID || len(candidate.Commit) != len(intent.BaseCommit) || receipt.Version != candidate.Version || receipt.Commit != candidate.Commit || receipt.TreeDigest != candidate.TreeDigest	errors.New("Linux clone promotion receipt does not match candidate intent")
+state.go:1800	row	static-new	(*Store).RecordLinuxClonePromotion	err != nil || receipt.Ref != ref	errors.New("Linux clone promotion ref does not match RunKey")
+state.go:1960	row	static-new	(*Store).BeginLinuxCloneCleanup	err != nil || !journal.LinuxCloneCleanupIntent.Equal(intent)	errors.New("Linux clone cleanup intent readback is invalid")
+state.go:2014	row	static-new	(*Store).RecordLinuxCloneTargetRemoval	err != nil || proof.Validate() != nil || proof.Disposition != authority.LinuxCloneTargetDispositionRemoved || !proof.TargetNlinkZero || !proof.Intent.Equal(expected)	errors.New("Linux clone target-removal proof does not match cleanup intent")
+state.go:2045	row	static-new	(*Store).CompleteLinuxCloneCleanup	err != nil || proof.Validate() != nil || !proof.Intent.Equal(expected)	errors.New("Linux clone cleanup proof does not match cleanup intent")
+state.go:2397	row	static-new	(*Store).readJournalEntryLocked	err != nil	errors.New("invalid run journal")
+state.go:2666	row	static-new	(*Store).CheckLinuxV2NativeAdmission	err != nil || !validLinuxV2AdmissionFence(key, fence) || now.IsZero()	errors.New("Linux v2 native admission RunKey, fence, or time is invalid")
+state.go:3035	row	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	err != nil || expected.CreateStarted || expected.LeafIdentity != nil || expected.Helper != nil || expected.Launcher != nil || expected.LauncherExit != nil || expected.Gate != nil || expected.HelperExit != nil || expected.AbortProof != nil || expected.PreGateStopReceipt != nil || expected.LauncherGrantPossible || expected.Mirror == nil	errors.New("Linux cgroup reservation is not a never-created state")
+state.go:3046	row	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	err != nil || !linuxCgroupReservationAbortMatches(expected, proof)	errors.New("Linux cgroup never-created tombstone is invalid")
+state.go:4860	row	static-new	(*Store).loadJournalLocked	err != nil	errors.New("invalid run journal")
+state.go:4904	row	static-new	requireLinuxCloneJournalFence	err != nil || !present || admission.Subject.Validate() != nil || admission.Subject.ResourceID != intent.ResourceID || admission.Subject.Commit != intent.BaseCommit || admission.Subject.TreeDigest != intent.BaseTreeDigest	errors.New("Linux clone intent does not match the current admitted Subject")
+state.go:5030	row	static-new	validateLinuxCloneReuseRetainedTarget	err != nil	errors.New("run journal Linux clone reuse does not match admitted Subject")
+state.go:5052	row	static-new	validateLinuxCloneIntent	err != nil	errors.New("run journal Linux clone intent does not match admitted Subject")
+state.go:5157	row	static-new	validateLinuxClonePromotion	promotion.Validate() != nil || err != nil || promotion.Ref != ref || promotion.Commit != promotionIntent.Commit || promotion.TreeDigest != promotionIntent.TreeDigest || !linuxCloneStopProven(journal)	errors.New("run journal Linux clone promotion receipt is invalid")
+state.go:5181	row	static-new	validateLinuxClonePromotionWithoutIntent	promotion.Validate() != nil || refErr != nil || promotion.Ref != legacyRef || len(promotion.Commit) != len(intent.BaseCommit) || !linuxCloneStopProven(journal) || journal.WorkspacePath != intent.Target	errors.New("run journal legacy Linux clone promotion receipt is invalid")
+state.go:5196	row	static-new	validateLinuxCloneCleanup	err != nil || !cleanupIntent.Equal(*journal.LinuxCloneCleanupIntent)	errors.New("run journal Linux clone cleanup intent is invalid")
+state.go:5294	row	static-new	requireLinuxCloneJournalFenceSubject	err != nil || !present || admission.Subject.Validate() != nil || admission.Subject.ResourceID != intent.ResourceID || admission.Subject.Commit != intent.BaseCommit || admission.Subject.TreeDigest != intent.BaseTreeDigest	errors.New("admitted Subject does not match Linux clone intent")
+state.go:5370	row	static-new	decodeJSONWithLimitAndTags	err != io.EOF	errors.New("decode " + resource)
+state.go:5393	row	static-new	rejectCaseInsensitiveJSONTagAliases	err != io.EOF	errors.New("trailing JSON data")
+state.go:6073	row	static-new	validateContainmentAuthority	err != nil || journal.ContainmentAuthority.TargetPID != journal.PID || journal.ContainmentAuthority.TargetIdentity != journal.ProcessIdentity	errors.New("run journal containment authority is invalid")
+state.go:6096	row	static-new	validateContainmentHandoff	err != nil	errors.New("run journal containment handoff is invalid")
 TOTAL reported 29 rows
   rows 29 (static-new 29, static-fmt-no-w 0, sentinel-return 0)
-provider_action.go:298	static-new	normalizeProviderActionResult	errors.New("provider action result has trailing data")
-provider_action.go:300	static-new	normalizeProviderActionResult	errors.New("provider action result has trailing data")
-state.go:1241	static-new	(*Store).LoadEnrollmentIntent	errors.New("invalid enrollment intent")
-state.go:1289	static-new	(*Store).LoadIdentity	errors.New("invalid identity record")
-state.go:1422	static-new	(*Store).ReserveLinuxCloneIntent	errors.New("Linux clone intent does not match RunKey")
-state.go:1464	static-new	(*Store).BindLinuxCloneSeed	errors.New("Linux clone seed receipt does not match its intent")
-state.go:1539	static-new	(*Store).BindLinuxCloneReuse	errors.New("Linux clone reuse grant does not match the new RunKey")
-state.go:1707	static-new	(*Store).AbortLinuxCloneReuseBeforeNativeStart	errors.New("Linux clone reuse abort grant does not match the RunKey")
-state.go:1796	static-new	(*Store).RecordLinuxClonePromotion	errors.New("Linux clone promotion receipt does not match candidate intent")
-state.go:1800	static-new	(*Store).RecordLinuxClonePromotion	errors.New("Linux clone promotion ref does not match RunKey")
-state.go:1960	static-new	(*Store).BeginLinuxCloneCleanup	errors.New("Linux clone cleanup intent readback is invalid")
-state.go:2014	static-new	(*Store).RecordLinuxCloneTargetRemoval	errors.New("Linux clone target-removal proof does not match cleanup intent")
-state.go:2045	static-new	(*Store).CompleteLinuxCloneCleanup	errors.New("Linux clone cleanup proof does not match cleanup intent")
-state.go:2397	static-new	(*Store).readJournalEntryLocked	errors.New("invalid run journal")
-state.go:2666	static-new	(*Store).CheckLinuxV2NativeAdmission	errors.New("Linux v2 native admission RunKey, fence, or time is invalid")
-state.go:3035	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	errors.New("Linux cgroup reservation is not a never-created state")
-state.go:3046	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	errors.New("Linux cgroup never-created tombstone is invalid")
-state.go:4860	static-new	(*Store).loadJournalLocked	errors.New("invalid run journal")
-state.go:4904	static-new	requireLinuxCloneJournalFence	errors.New("Linux clone intent does not match the current admitted Subject")
-state.go:5030	static-new	validateLinuxCloneReuseRetainedTarget	errors.New("run journal Linux clone reuse does not match admitted Subject")
-state.go:5052	static-new	validateLinuxCloneIntent	errors.New("run journal Linux clone intent does not match admitted Subject")
-state.go:5157	static-new	validateLinuxClonePromotion	errors.New("run journal Linux clone promotion receipt is invalid")
-state.go:5181	static-new	validateLinuxClonePromotionWithoutIntent	errors.New("run journal legacy Linux clone promotion receipt is invalid")
-state.go:5196	static-new	validateLinuxCloneCleanup	errors.New("run journal Linux clone cleanup intent is invalid")
-state.go:5294	static-new	requireLinuxCloneJournalFenceSubject	errors.New("admitted Subject does not match Linux clone intent")
-state.go:5370	static-new	decodeJSONWithLimitAndTags	errors.New("decode " + resource)
-state.go:5393	static-new	rejectCaseInsensitiveJSONTagAliases	errors.New("trailing JSON data")
-state.go:6073	static-new	validateContainmentAuthority	errors.New("run journal containment authority is invalid")
-state.go:6096	static-new	validateContainmentHandoff	errors.New("run journal containment handoff is invalid")
 ```
 
 28 base rows left the row class: 26 of the 32 treated rows are wraps (20 WRAP + 6 SPLIT arms), the
 other 6 are split sentinel conflations, and 4 arms that stayed static are offsets because they now
 run only when no cause exists (2 in `provider_action.go`, 2 in `state.go`; evidence record §2.4):
-32 − 4 = 28.
+32 − 4 = 28. Statement level, of those 28: 16 have no static error return at their site any more
+(the arm is now a `%w` wrap — the 16 `state.go` WRAP rows of §2.1 minus the two SPLIT rows), and 12
+still return the same message under a narrowed condition (the 6 capacity sentinels + the 6 SPLIT
+predicate arms); two of the 12 (base `provider_action.go:571`/`:592`) land on the one shared
+`validateProviderActionJournalSize` size arm, so the listing gains 11 entries (+3
+`other-branch`, +8 `no-branch`), not 12.
 `sentinel-return` is 0. The 25 remaining `state.go` rows are the verdict cascades the contract
 declares residual. `sweep -all`: row 29 / pred 197 / other-branch 39 / no-branch 267 (base
 57 / 197 / 36 / 259). `sweep -selfcheck` exits 0.
 
 **Tests added**: `state_wrap_test.go` (`TestSaveJournalWrapsAtomicWriteCause` with the run-journal
-and goal-session lanes, `TestLoadJournalWrapsDecodeCause`) and `provider_action_test.go`
+and goal-session lanes, `TestLoadJournalWrapsDecodeCause`, and — fix round 1 —
+`TestMarkGoalSessionUncertainReasonBudget`) and `provider_action_test.go`
 `TestProviderActionCapacitySplitSeparatesSerializationFromSize` (serialize arms leave the
 sentinel; size arms return the sentinel value itself).
 
@@ -404,11 +425,12 @@ host-path scan clean.
 **Mutation checks**: (a) `TestSaveJournalWrapsAtomicWriteCause` red on base (both lanes), green
 on head, red under the `%v` flip (reverted); (b) dispatch-use removal reddens
 `provider_action_test.go:615`, save-use removal reddens `:1257` — both uses load-bearing.
-Measured divergence from Change 2's text: the dispatch-use removal does **not** redden:
-`:479` at this head. `:479` binary-searches for the payload size at which the bare candidate
-already exceeds the 4 MiB budget, so the plain size check catches it with or without the
-reservation; `:528`/`:590` are budget/encoding assertions as the contract says. Recorded as
-measured instead of fitting a test to the claim; no test was changed.
+Measured divergence from Change 2's text, **ratified by the conductor on 2026-11-21 (fix round
+1)**: the dispatch-use removal does **not** redden `:479` at this head. `:479` binary-searches for
+the payload size at which the bare candidate already exceeds the 4 MiB budget, so the plain size
+check catches it with or without the reservation; `:528`/`:590` are budget/encoding assertions as
+the contract says. The ratified reservation-sensitive set is `:615`/`:1257`; `:479` is a size
+assertion. Recorded as measured instead of fitting a test to the claim; no test was changed.
 
 **Judging artifacts**: this plan (rule, command, before output, classification table,
 control-flow audit) and `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` (verbatim
@@ -416,3 +438,69 @@ before/after sweep listings, control-flow audit, durable-text evidence, gate exi
 runs, Appendix A = sweep tool source, Appendix B = sweep listings). `docs/TODO.md` records the one
 dead-code candidate the audit surfaced (the decorative `token != nil` disjunct kept for
 control-flow preservation).
+
+## Fix round 1 (2026-11-21) — review findings W307-R1…W307-R6
+
+Review verdict on `fc8e95a2..fd460635`: `MUST_FIX (5)` (R1 P2 + R2–R5 P3, R6 P3 optional
+hardening), reconciled by the conductor's binding decision for this round. This round changed the
+two state test files and these two records only; **no production file changed**, so the before/after
+listings above and every classification in this plan and in the evidence record stay valid.
+(Line refs below resolve in the delivered tree.)
+
+- **W307-R1 (behaviour preservation, binding) — UNMET inside the strict owned set; ready fix
+  specified for authorisation.** The suffix this slice adds reaches the app's composed
+  `UncertainReason` (`daemon/internal/app/goal_admission.go:1410-1415` and `:1468-1473`, plus the
+  other error-text-fed compositions at `goal_admission.go:889`, `:950`, `native_run.go:611`, and
+  `goal_delivery.go:134`/`:138`/`:142` via `native_run.go:846` → store call `:850`) and the store's
+  budget is enforced at
+  `goal_session.go:1052-1053` (write) and `:1688` (read), so a large inner cause can push a composed
+  reason over 4096 bytes and make `MarkGoalSessionUncertain` reject, leaving the uncertain mark
+  unrecorded where the base revision recorded it. Measured at the state boundary with the app's
+  exact composition (scratch measurement, repo untouched; the budget itself is pinned by
+  `TestMarkGoalSessionUncertainReasonBudget`): prefix
+  `native Goal session did not reach a known stopped state` = 55 B, base cause text
+  `write goal session journal` = 26 B → base composed reason 83 B, recorded; head composes
+  `85 + N` B for an `N`-byte inner writer cause and flips to `uncertain launch reason is invalid` at
+  `N ≥ 4012` (`N = 4011` → 4096 B accepted; `N = 4012` → 4097 B rejected). Both remedies the
+  conductor named need files outside this slice's strict owned set — bounded composition at the app
+  sites (`daemon/internal/app/goal_admission.go`, `native_run.go`, `goal_delivery.go`, which are
+  W4-01's owned files, plus an app test file) or a clamp at the store sink
+  (`daemon/internal/state/goal_session.go`) — so, per the fix-round brief ("a finding that needs
+  files outside the owned set: record it as unmet with the exact path; do not edit there"), the
+  behaviour fix is recorded unmet with those exact paths and this ready change set: a rune-safe
+  bound (fit-based skip or `utf8`-safe truncation) applied only to the string handed to
+  `MarkGoalSessionUncertain`, never to the returned/joined error chains, with the budget
+  single-sourced from `state`; plus the app test that drives `abandonGoalSession` with a ~4 KB
+  writer cause and asserts the session reaches `uncertain` instead of the requeue path. In-set
+  artifact added: `state_wrap_test.go:TestMarkGoalSessionUncertainReasonBudget` (exactly 4096 B
+  accepted, persisted and loadable; 4097 B rejected before the mutation with the journal file
+  byte-unchanged) — it pins the budget and the no-side-effect property, not the app outcome, which a
+  state-package test cannot observe.
+- **W307-R2 — fixed** in the evidence record §1: the class arithmetic is now the measured one
+  (`row` 57 → 29, `pred` 197 → 197, `other-branch` 36 → 39, `no-branch` 259 → 267, raw total
+  549 → 532 = 28 removed − 11 added; statement level 16 arms became `%w` wraps, 12 were narrowed,
+  2 of them converging on the shared size arm).
+- **W307-R3 — fixed**: the "only class that can drop a cause" / "all proven no-cause" phrasing is
+  replaced by the rule boundary (err-ish identifier test) in the accounting section and by
+  "excluded by the recorded counting rule" in evidence §2.4, with the call-shaped `pred` counter-
+  examples and the residual rows' real causes stated.
+- **W307-R4 — fixed**: both output blocks are now the tool's exact stdout (columns `file:line`,
+  class, kind, function, condition, returned expression; summary lines after the rows — verified
+  byte-identical against the recorded run), the two `provider_action.go` WRAP rows name
+  `normalizeProviderActionResult`, and the evidence's split-capacity head cells cite the `return`
+  statements, the same convention as §2.1/§2.2 and the listings.
+- **W307-R5 — fixed**: the `saveJournalLocked` boundary row is split at the atomic rename
+  (pre-rename: previous journal remains; post-rename: `writeAtomic` still returns
+  `syncDirectory(directory)`, `state.go:5620`, so a failure there or a crash between the steps is
+  committed-but-unacknowledged and must be settled by read-back), and the same two-phase window is
+  noted for `writeJSONWithLimit`.
+- **W307-R6 — fixed (hardened)**: the decode pin anchors the prefix
+  (`strings.HasPrefix`) and the cause identity (`errors.As` → `*json.UnmarshalTypeError`,
+  `Value == "array"`); the unreachable equality assertion is gone; the provider serialize arm asserts
+  `errors.As` → `*json.SyntaxError` instead of mere chain non-emptiness. Scratch-copy mutations
+  (repo untouched, reverted): wrong prefix at `state.go:5363` → red at `state_wrap_test.go:91`; a
+  non-nil but wrong cause at `state.go:5363` → red at `:95`; a non-nil but wrong cause in
+  `validateProviderActionJournalSize` → red at `provider_action_test.go:1442`.
+- **P3 — conductor ratification recorded** (measured divergence: only `:615`/`:1257` are
+  reservation-sensitive; `:479` is a size assertion), and the mutation-check expectations in
+  "Evidence plan" item 3 were corrected to that measured set.
