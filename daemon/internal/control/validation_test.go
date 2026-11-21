@@ -76,11 +76,12 @@ func TestValidateGoalUUIDPinsRejectionMessages(t *testing.T) {
 }
 
 // TestValidateGoalShortIdentifierPinsRejectionMessages pins the exact
-// rejection message for every model_profile rejection class. The length check
+// rejection message for every control call-site rejection class, using the
+// `evidence.evidence_key` field string (validation.go:962). The length check
 // precedes the identifier scan, so an over-length value pins the length body
 // even when it also carries an invalid first rune.
 func TestValidateGoalShortIdentifierPinsRejectionMessages(t *testing.T) {
-	const field = "model_profile"
+	const field = "evidence.evidence_key"
 	length := fmt.Sprintf("%s must contain 1..128 characters", field)
 	identifier := fmt.Sprintf("%s has an invalid identifier", field)
 

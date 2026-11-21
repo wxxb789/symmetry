@@ -51,8 +51,9 @@ separate because #1 tests them separately.
    - exported `ValidateShortIdentifier(value, field string) error`, a wrapper delegating to the
      canonical `validateShortIdentifier` body (`goal_validation.go`, untouched) — **no message
      policy parameter**: the three copies pin byte-identical message pairs, so a policy would be
-     dead configuration (deviation from the A7 sentence, recorded here; the pinned strings are what
-     the clause protects).
+     dead configuration (deviation from the original A7 sentence; the conductor decision of
+     2026-11-21 amended A7 to this shape in the contract; the pinned strings are what the clause
+     protects).
 2. `daemon/internal/protocol/protocol.go` — validator region only: `validateRegistrationUUID`
    delegates to `ValidateUUID` with `CanonicalUUIDPolicy`.
 3. `daemon/internal/config/config.go` — `validateCanonicalUUID` delegates with `CanonicalUUIDPolicy`;
@@ -135,9 +136,12 @@ rejections on already-rejected bodies, which clause 3's "changing any pre-existi
 failure control forbids. The scan is recursive, so nested duplicates are rejected at every depth,
 matching `decodeStrictObject`; it runs only on the strict path, so `decodeStrictJSON`'s two callers
 (`decodeStrictObjectJSON:688`, `requestGoalWithStatus:1101`) are covered and no other decode changes.
-Correct control emits plain Jason maps (`Jason.OrderedObject` only in `request_hash.ex:35`, which
-hashes and does not encode responses) [INFERENCE: not exercised end-to-end] — record as a
-local-protocol strictness note in the PR body, per P1-1.
+Correct control's response path emits plain unordered Jason maps: `Jason.OrderedObject` appears in
+`control/` only at `request_hash.ex:35` (`OrderedObject.new()` for canonical hashing, no response
+encoding) and in the request-side strict-evidence plug (`strict_evidence_json.ex:218,225,242`,
+`Jason.decode(raw_body, objects: :ordered_objects)` with `materialize_pairs/2` rejecting a repeated
+key as `:duplicate_json_key`) — neither encodes a response body [INFERENCE: not exercised
+end-to-end] — record as a local-protocol strictness note in the PR body, per P1-1.
 
 ## Evidence plan (all gates FOREGROUND; no suite beside a deadcode run on this host)
 

@@ -1258,9 +1258,9 @@ func TestDecodeStrictObjectJSONRejectsDuplicateMembers(t *testing.T) {
 	}
 }
 
-// The tolerant legacy path (decodeJSON) rejects duplicate members alongside
-// the strict-path F-05 tightening; these rows pin that rejection so a later
-// tolerance relaxation cannot silently reopen the gap.
+// The tolerant legacy path (decodeJSON) already rejected duplicate members
+// before this change; these rows pin that rejection so a later tolerance
+// relaxation cannot silently reopen the gap.
 func TestDecodeJSONRejectsDuplicateMembers(t *testing.T) {
 	for _, test := range []struct {
 		name string
