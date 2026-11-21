@@ -176,19 +176,7 @@ func TestLinuxCloneAbortFencesLaunchAndRetiresOnlyAfterAbsenceProof(t *testing.T
 		t.Fatalf("same abort fence replay failed: %v", err)
 	}
 
-	baseRef, err := authority.LinuxCloneBaseRef(key.RunID, key.Generation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	promotionRef, err := authority.LinuxClonePromotionRef(key.RunID, key.Generation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proof := authority.LinuxCloneAbortProof{
-		Version: authority.LinuxCloneVersion, Intent: intent, SeedReceipt: &seed,
-		BaseRef: baseRef, PromotionRef: promotionRef,
-		TargetAbsent: true, SeedAbsent: true, BaseRefAbsent: true, PromotionRefAbsent: true,
-	}
+	proof := pinnedLinuxCloneAbortProof(t, intent, &seed)
 	invalidProof := proof
 	invalidProof.TargetAbsent = false
 	if _, err := store.CompleteLinuxCloneAbort(key, fence, intent, invalidProof); err == nil {
@@ -699,18 +687,7 @@ func TestDeleteJournalKeepsCandidateCloneWithoutDeliveredArtifact(t *testing.T) 
 	if _, err := store.FenceLinuxCloneBeforeCheckout(key, fence, intent); err != nil {
 		t.Fatal(err)
 	}
-	baseRef, err := authority.LinuxCloneBaseRef(key.RunID, key.Generation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	promotionRef, err := authority.LinuxClonePromotionRef(key.RunID, key.Generation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proof := authority.LinuxCloneAbortProof{
-		Version: authority.LinuxCloneVersion, Intent: intent, BaseRef: baseRef, PromotionRef: promotionRef,
-		TargetAbsent: true, SeedAbsent: true, BaseRefAbsent: true, PromotionRefAbsent: true,
-	}
+	proof := pinnedLinuxCloneAbortProof(t, intent, nil)
 	if _, err := store.CompleteLinuxCloneAbort(key, fence, intent, proof); err != nil {
 		t.Fatal(err)
 	}
@@ -736,106 +713,13 @@ func TestDeleteJournalKeepsCandidateCloneWithoutDeliveredArtifact(t *testing.T) 
 func TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks(t *testing.T) {
 	t.Parallel()
 	requireLinuxCloneAMD64(t)
-	store := mustStore(t)
-	runID := "00000000-0000-4000-8000-000000000077"
-	journal, intent := newLinuxCloneJournal(t, runID)
-	if err := store.SaveJournal(journal); err != nil {
-		t.Fatal(err)
-	}
-	key, fence := journal.Key(), journal.Fence()
-	if _, err := store.ReserveLinuxCloneIntent(key, fence, intent, nil); err != nil {
-		t.Fatal(err)
-	}
-	seed := authority.LinuxCloneSeedReceipt{
-		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
-		Digest: "sha256:" + strings.Repeat("a", 64), Size: 4096, Device: 3, Inode: 5,
-	}
-	if _, err := store.BindLinuxCloneSeed(key, fence, intent, seed); err != nil {
-		t.Fatal(err)
-	}
-	handoff, reservation := bindStateLinuxCgroupV2Handoff(t, store, key)
-	if _, err := store.CommitSupervisorHandoff(key, handoff, reservation.Gate.ObservedAt); err != nil {
-		t.Fatal(err)
-	}
-	checkout := authority.LinuxCloneCheckoutReceipt{
-		Version: authority.LinuxCloneVersion, RunID: intent.RunID, Generation: intent.Generation,
-		BindingKey: intent.BindingKey, ResourceID: intent.ResourceID, Target: intent.Target,
-		Nonce: intent.Nonce, SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit,
-		TargetDevice: 17, TargetInode: 23,
-	}
-	if _, err := store.RecordLinuxCloneCheckoutReady(key, fence, intent, checkout); err != nil {
-		t.Fatal(err)
-	}
-	owner := loadStateJournal(t, store, key).ContainmentAuthority.Clone()
-	stopReceipt := testStateLinuxCgroupV2Receipt(owner, authority.LinuxCgroupStopProofHelper, nil)
-	if _, err := store.RecordContainmentStopReceipt(key, owner.TargetPID, owner.TargetIdentity, stopReceipt); err != nil {
-		t.Fatal(err)
-	}
-	promotionRef, err := authority.LinuxClonePromotionRef(key.RunID, key.Generation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	promotionIntent := authority.LinuxClonePromotionIntent{
-		Version: authority.LinuxCloneVersion, ResourceID: intent.ResourceID,
-		Commit: strings.Repeat("e", 40), TreeDigest: "sha256:" + strings.Repeat("f", 64),
-	}
-	if _, err := store.ReserveLinuxClonePromotion(key, fence, intent, promotionIntent); err != nil {
-		t.Fatal(err)
-	}
-	promotion := authority.LinuxClonePromotionReceipt{
-		Version: promotionIntent.Version, Commit: promotionIntent.Commit,
-		TreeDigest: promotionIntent.TreeDigest, Ref: promotionRef,
-	}
-	if _, err := store.RecordLinuxClonePromotion(key, fence, intent, promotionIntent, promotion); err != nil {
-		t.Fatal(err)
-	}
-
-	// Model the already durable release tombstone; platform tests cover issuance
-	// of this proof from the opaque LinuxCgroupV2Release capability.
-	releaseProof := testStateLinuxCgroupV2ReleaseDTO(handoff, stopReceipt)
-	if err := releaseProof.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.mutateJournal(key, func(current *RunJournal) error {
-		current.ContainmentAuthority = nil
-		current.ContainmentHandoff = nil
-		current.ContainmentCgroup = nil
-		current.PID, current.ProcessIdentity, current.StartedAt = 0, "", time.Time{}
-		current.ContainmentCgroupReleaseProof = &releaseProof
-		return nil
-	}); err != nil {
-		t.Fatalf("install existing structural release tombstone fixture: %v", err)
-	}
-	candidateSubject := protocol.Subject{
-		ResourceID: promotionIntent.ResourceID, Commit: promotionIntent.Commit, TreeDigest: promotionIntent.TreeDigest,
-	}
-	evidence := linuxCloneArtifactEvidence(t, key.RunID, candidateSubject)
-	queued, err := store.QueueGoalEvidence(key, evidence)
-	if err != nil || len(queued.PendingGoalDeliveries) != 1 {
-		t.Fatalf("queue exact candidate artifact evidence: deliveries=%d err=%v", len(queued.PendingGoalDeliveries), err)
-	}
-	delivery := queued.PendingGoalDeliveries[0]
-	if _, err := store.MarkGoalDeliveryDelivered(key, delivery.Kind, delivery.DeliveryID, delivery.PayloadDigest); err != nil {
-		t.Fatal(err)
-	}
-	terminalAt := time.Date(2026, 9, 27, 3, 4, 5, 0, time.UTC)
-	transition := protocol.StateTransitionRequest{
-		TransitionID: "clone-cleanup-completed", State: "completed",
-		Payload: json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
-	}
-	if _, err := store.QueueTerminalTransitionAt(key, transition, terminalAt); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.MarkTransitionsDelivered(key, []string{transition.TransitionID}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.ResolveTerminalForCleanup(key, TerminalVerdictOwnershipLost, terminalAt.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	base := newPinnedLinuxCloneCleanupReady(t, "00000000-0000-4000-8000-000000000077", "clone-cleanup-completed")
+	store, key, fence, intent, seed := base.store, base.key, base.fence, base.intent, base.seed
 	ready := loadStateJournal(t, store, key)
-	if !ready.LinuxCloneCleanupBeginEligible(key, fence) {
-		t.Fatal("exact promoted, delivered, stopped clone was not eligible to begin cleanup")
+	if ready.LinuxCloneCheckoutReceipt == nil || !ready.LinuxCloneCheckoutReceipt.Equal(base.checkout) {
+		t.Fatalf("persisted checkout receipt = %#v, want the submitted %#v", ready.LinuxCloneCheckoutReceipt, base.checkout)
 	}
+	checkout := base.checkout
 	retainedReady := ready
 	retainedReady.RetainWorkspace = true
 	if retainedReady.LinuxCloneCleanupBeginEligible(key, fence) {
@@ -1450,9 +1334,12 @@ func requireLinuxCloneAMD64(t *testing.T) {
 	}
 }
 
-func TestLinuxCloneReuseAliasRetiresOnlyAfterStableStop(t *testing.T) {
-	t.Parallel()
-	_, intent := newLinuxCloneJournal(t, "reuse-source")
+// linuxCloneReuseGrantFixture builds the reuse grant that both the
+// alias-retirement test and the pinned reuse base consume; the grant owns its
+// source target and varies only by the source, predecessor and consumer run
+// IDs.
+func linuxCloneReuseGrantFixture(t *testing.T, intent authority.LinuxCloneIntent, runID, predecessorRunID string) (authority.LinuxCloneSeedReceipt, authority.LinuxCloneReuseGrant) {
+	t.Helper()
 	seed := authority.LinuxCloneSeedReceipt{
 		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
 		Digest: "sha256:" + strings.Repeat("d", 64), Size: 128, Device: 7, Inode: 11,
@@ -1463,18 +1350,24 @@ func TestLinuxCloneReuseAliasRetiresOnlyAfterStableStop(t *testing.T) {
 		Nonce: intent.Nonce, SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit,
 		TargetDevice: 9, TargetInode: 13,
 	}
-	reuse := authority.LinuxCloneReuseGrant{
+	return seed, authority.LinuxCloneReuseGrant{
 		Version:        authority.LinuxCloneVersion,
 		Source:         authority.LinuxCloneGrant{Intent: intent, Seed: seed},
 		SourceCheckout: checkout,
 		PredecessorStop: authority.LinuxCloneReuseStop{
-			RunID: "run-source", Generation: 1, SessionID: "00000000-0000-4000-8000-000000000090",
+			RunID: predecessorRunID, Generation: 1, SessionID: "00000000-0000-4000-8000-000000000090",
 			LocalHandleID: "00000000-0000-4000-8000-000000000088", BindingID: "00000000-0000-4000-8000-000000000089",
 			DeliveryDigest: strings.Repeat("e", 64), ReceiptID: "00000000-0000-4000-8000-000000000093",
 		},
-		RunID: "reuse-consumer", Generation: 1,
+		RunID: runID, Generation: 1,
 		WorkspaceFingerprint: "sha256:" + strings.Repeat("f", 64),
 	}
+}
+
+func TestLinuxCloneReuseAliasRetiresOnlyAfterStableStop(t *testing.T) {
+	t.Parallel()
+	_, intent := newLinuxCloneJournal(t, "reuse-source")
+	_, reuse := linuxCloneReuseGrantFixture(t, intent, "reuse-consumer", "run-source")
 	consumer := stoppedTestJournal("reuse-consumer", 1)
 	consumer.LocalState = "cleanup_pending"
 	consumer.TerminalState = "completed"
@@ -1504,4 +1397,715 @@ func TestLinuxCloneReuseAliasRetiresOnlyAfterStableStop(t *testing.T) {
 	if linuxCloneReuseAliasRetirable(consumer) {
 		t.Fatal("reuse alias without a terminal state was retirable")
 	}
+}
+
+// pinnedLinuxCloneBase is one store-backed Linux clone journal built through
+// the production mutation seam, plus the fixture values its cases mutate one at
+// a time; the reuse-grant base is the documented exception, imported through
+// the journal-path seam (see newPinnedLinuxCloneReuse). Cases may share one
+// base store: validateJournal rejects a mutation before the write, so a failed
+// case leaves the persisted journal untouched.
+// checkout is the receipt submitted to the store, kept so tests can assert the
+// persisted readback independently of the value they submit.
+type pinnedLinuxCloneBase struct {
+	store           *Store
+	key             RunKey
+	fence           protocol.Fence
+	intent          authority.LinuxCloneIntent
+	seed            authority.LinuxCloneSeedReceipt
+	checkout        authority.LinuxCloneCheckoutReceipt
+	promotionIntent authority.LinuxClonePromotionIntent
+	handoff         authority.SupervisorHandoff
+	stopReceipt     authority.StopReceipt
+}
+
+// pinnedLinuxCloneAbortProof builds the exact no-gate abort proof for one
+// persisted intent; a nil seed models the pre-seed abort shape.
+func pinnedLinuxCloneAbortProof(t *testing.T, intent authority.LinuxCloneIntent, seed *authority.LinuxCloneSeedReceipt) authority.LinuxCloneAbortProof {
+	t.Helper()
+	baseRef, err := authority.LinuxCloneBaseRef(intent.RunID, intent.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotionRef, err := authority.LinuxClonePromotionRef(intent.RunID, intent.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authority.LinuxCloneAbortProof{
+		Version: authority.LinuxCloneVersion, Intent: intent, SeedReceipt: seed,
+		BaseRef: baseRef, PromotionRef: promotionRef,
+		TargetAbsent: true, SeedAbsent: true, BaseRefAbsent: true, PromotionRefAbsent: true,
+	}
+}
+
+// newPinnedLinuxCloneBase persists a clone journal through the same production
+// mutations the sibling tests use. Stage "seed" stops after the seed receipt,
+// "running" adds the committed v2 handoff, and "promoted" adds the checkout,
+// the exact stop receipt, and the promotion intent and receipt.
+func newPinnedLinuxCloneBase(t *testing.T, runID, stage string) pinnedLinuxCloneBase {
+	t.Helper()
+	base := pinnedLinuxCloneBase{store: mustStore(t)}
+	journal, intent := newLinuxCloneJournal(t, runID)
+	if err := base.store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	base.key, base.fence, base.intent = journal.Key(), journal.Fence(), intent
+	if _, err := base.store.ReserveLinuxCloneIntent(base.key, base.fence, intent, nil); err != nil {
+		t.Fatal(err)
+	}
+	seed := authority.LinuxCloneSeedReceipt{
+		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("a", 64), Size: 2048, Device: 17, Inode: 31,
+	}
+	if _, err := base.store.BindLinuxCloneSeed(base.key, base.fence, intent, seed); err != nil {
+		t.Fatal(err)
+	}
+	base.seed = seed
+	if stage == "seed" {
+		return base
+	}
+	handoff, reservation := bindStateLinuxCgroupV2Handoff(t, base.store, base.key)
+	if _, err := base.store.CommitSupervisorHandoff(base.key, handoff, reservation.Gate.ObservedAt); err != nil {
+		t.Fatal(err)
+	}
+	base.handoff = handoff
+	if stage == "running" {
+		return base
+	}
+	if stage != "promoted" {
+		t.Fatalf("unknown pinned Linux clone stage %q", stage)
+	}
+	checkout := authority.LinuxCloneCheckoutReceipt{
+		Version: authority.LinuxCloneVersion, RunID: intent.RunID, Generation: intent.Generation,
+		BindingKey: intent.BindingKey, ResourceID: intent.ResourceID, Target: intent.Target,
+		Nonce: intent.Nonce, SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit,
+		TargetDevice: 23, TargetInode: 47,
+	}
+	if _, err := base.store.RecordLinuxCloneCheckoutReady(base.key, base.fence, intent, checkout); err != nil {
+		t.Fatal(err)
+	}
+	base.checkout = checkout
+	owner := loadStateJournal(t, base.store, base.key).ContainmentAuthority.Clone()
+	stopReceipt := testStateLinuxCgroupV2Receipt(owner, authority.LinuxCgroupStopProofHelper, nil)
+	if _, err := base.store.RecordContainmentStopReceipt(base.key, owner.TargetPID, owner.TargetIdentity, stopReceipt); err != nil {
+		t.Fatal(err)
+	}
+	base.stopReceipt = stopReceipt
+	promotionRef, err := authority.LinuxClonePromotionRef(base.key.RunID, base.key.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotionIntent := authority.LinuxClonePromotionIntent{
+		Version: authority.LinuxCloneVersion, ResourceID: intent.ResourceID,
+		Commit: strings.Repeat("e", 40), TreeDigest: "sha256:" + strings.Repeat("f", 64),
+	}
+	promotion := authority.LinuxClonePromotionReceipt{
+		Version: promotionIntent.Version, Commit: promotionIntent.Commit,
+		TreeDigest: promotionIntent.TreeDigest, Ref: promotionRef,
+	}
+	if _, err := base.store.ReserveLinuxClonePromotion(base.key, base.fence, intent, promotionIntent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := base.store.RecordLinuxClonePromotion(base.key, base.fence, intent, promotionIntent, promotion); err != nil {
+		t.Fatal(err)
+	}
+	base.promotionIntent = promotionIntent
+	return base
+}
+
+// newPinnedLinuxCloneAbortComplete persists the completed no-target abort
+// tombstone that still carries its bound seed receipt.
+func newPinnedLinuxCloneAbortComplete(t *testing.T, runID string) pinnedLinuxCloneBase {
+	t.Helper()
+	base := newPinnedLinuxCloneBase(t, runID, "seed")
+	if _, err := base.store.FenceLinuxCloneBeforeCheckout(base.key, base.fence, base.intent); err != nil {
+		t.Fatal(err)
+	}
+	proof := pinnedLinuxCloneAbortProof(t, base.intent, &base.seed)
+	if _, err := base.store.CompleteLinuxCloneAbort(base.key, base.fence, base.intent, proof); err != nil {
+		t.Fatal(err)
+	}
+	return base
+}
+
+// newPinnedLinuxCloneCleanupReady persists the promoted clone through the
+// durable release tombstone, the exact candidate-artifact delivery and the
+// terminal resolution, then requires the result to be eligible to begin normal
+// cleanup; the platform tests cover issuance of that proof from the opaque
+// LinuxCgroupV2Release capability.
+func newPinnedLinuxCloneCleanupReady(t *testing.T, runID, transitionID string) pinnedLinuxCloneBase {
+	t.Helper()
+	base := newPinnedLinuxCloneBase(t, runID, "promoted")
+	releaseProof := testStateLinuxCgroupV2ReleaseDTO(base.handoff, base.stopReceipt)
+	if err := releaseProof.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := base.store.mutateJournal(base.key, func(current *RunJournal) error {
+		current.ContainmentAuthority = nil
+		current.ContainmentHandoff = nil
+		current.ContainmentCgroup = nil
+		current.PID, current.ProcessIdentity, current.StartedAt = 0, "", time.Time{}
+		current.ContainmentCgroupReleaseProof = &releaseProof
+		return nil
+	}); err != nil {
+		t.Fatalf("install structural release tombstone fixture: %v", err)
+	}
+	candidateSubject := protocol.Subject{
+		ResourceID: base.promotionIntent.ResourceID, Commit: base.promotionIntent.Commit, TreeDigest: base.promotionIntent.TreeDigest,
+	}
+	evidence := linuxCloneArtifactEvidence(t, base.key.RunID, candidateSubject)
+	queued, err := base.store.QueueGoalEvidence(base.key, evidence)
+	if err != nil || len(queued.PendingGoalDeliveries) != 1 {
+		t.Fatalf("queue exact candidate artifact evidence: deliveries=%d err=%v", len(queued.PendingGoalDeliveries), err)
+	}
+	delivery := queued.PendingGoalDeliveries[0]
+	if _, err := base.store.MarkGoalDeliveryDelivered(base.key, delivery.Kind, delivery.DeliveryID, delivery.PayloadDigest); err != nil {
+		t.Fatal(err)
+	}
+	terminalAt := time.Date(2026, 9, 27, 3, 4, 5, 0, time.UTC)
+	transition := protocol.StateTransitionRequest{
+		TransitionID: transitionID, State: "completed",
+		Payload: json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
+	}
+	if _, err := base.store.QueueTerminalTransitionAt(base.key, transition, terminalAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := base.store.MarkTransitionsDelivered(base.key, []string{transition.TransitionID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := base.store.ResolveTerminalForCleanup(base.key, TerminalVerdictOwnershipLost, terminalAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if !loadStateJournal(t, base.store, base.key).LinuxCloneCleanupBeginEligible(base.key, base.fence) {
+		t.Fatal("exact promoted, delivered, stopped clone was not eligible to begin cleanup")
+	}
+	return base
+}
+
+// newPinnedLinuxCloneCleanup persists the cleanup-ready clone into a pending
+// normal cleanup stage.
+func newPinnedLinuxCloneCleanup(t *testing.T, runID string) pinnedLinuxCloneBase {
+	t.Helper()
+	base := newPinnedLinuxCloneCleanupReady(t, runID, "pinned-clone-cleanup-completed")
+	if _, err := base.store.BeginLinuxCloneCleanup(base.key, base.fence); err != nil {
+		t.Fatal(err)
+	}
+	return base
+}
+
+// newPinnedLinuxCloneReuse imports a reuse consumer whose grant still owns its
+// source target; the journal carries no clone evidence of its own. A reuse
+// grant can be installed only through BindLinuxCloneReuse, which additionally
+// requires a stable-stopped GoalSession for the predecessor and a stopped
+// source journal, so the fixture uses the documented recovery/import seam (a
+// journal-path write as in
+// TestLegacyPromotedLinuxCloneJournalRestartsWithoutInventingIntent) and
+// proves the base through the production loader.
+func newPinnedLinuxCloneReuse(t *testing.T, runID string) pinnedLinuxCloneBase {
+	t.Helper()
+	base := pinnedLinuxCloneBase{store: mustStore(t)}
+	_, intent := newLinuxCloneJournal(t, "pinned-reuse-source")
+	seed, reuse := linuxCloneReuseGrantFixture(t, intent, runID, "pinned-reuse-predecessor")
+	if err := reuse.Validate(); err != nil {
+		t.Fatalf("reuse grant fixture: %v", err)
+	}
+	consumer := stoppedTestJournal(runID, 1)
+	consumer.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+	consumer.Work.Input = linuxCloneAdmissionInput(t, protocol.Subject{
+		ResourceID: intent.ResourceID, Commit: intent.BaseCommit, TreeDigest: intent.BaseTreeDigest,
+	})
+	consumer.LinuxCloneReuseGrant = &reuse
+	consumer.WorkspacePath = intent.Target
+	consumer.WorkspaceBindingKey = intent.BindingKey
+	consumer.WorkspaceRecoveryRequired = true
+	consumer.RetainWorkspace = true
+	encoded, err := serializeRunJournal(consumer)
+	if err != nil {
+		t.Fatalf("serialize reuse consumer journal: %v", err)
+	}
+	if err := os.WriteFile(base.store.journalPath(consumer.Key()), encoded, 0o600); err != nil {
+		t.Fatalf("import reuse consumer journal: %v", err)
+	}
+	if _, err := base.store.LoadJournal(consumer.Key()); err != nil {
+		t.Fatalf("load reuse consumer journal: %v", err)
+	}
+	base.key, base.fence, base.intent = consumer.Key(), consumer.Fence(), intent
+	base.seed = seed
+	return base
+}
+
+// pinnedLinuxCloneCase is one first-error pin: introduce one scenario-relevant
+// inconsistency on a validated base journal and assert the validator's first
+// error string.
+type pinnedLinuxCloneCase struct {
+	name   string
+	want   string
+	mutate func(*RunJournal) error
+}
+
+// TestLinuxCloneValidatorFirstErrorStringsArePinned pins the exact first
+// validateLinuxCloneJournal error of every reachable block. Every case is
+// driven through the production persistence seam: mutateJournal loads, mutates,
+// then runs validateJournal before writing, so a rejected case returns exactly
+// the validator's first error and never touches the persisted journal. Cases
+// therefore share one seeded store per base stage. Every base is produced by
+// production mutations except the reuse-grant base, which is imported through
+// the journal-path seam because no ordinary store mutation installs a reuse
+// grant (see newPinnedLinuxCloneReuse).
+func TestLinuxCloneValidatorFirstErrorStringsArePinned(t *testing.T) {
+	t.Parallel()
+	requireLinuxCloneAMD64(t)
+
+	promoted := newPinnedLinuxCloneBase(t, "pinned-clone-promoted", "promoted")
+	running := newPinnedLinuxCloneBase(t, "pinned-clone-running", "running")
+	seedOnly := newPinnedLinuxCloneBase(t, "pinned-clone-seed", "seed")
+	abortComplete := newPinnedLinuxCloneAbortComplete(t, "pinned-clone-abort-complete")
+	// The cleanup stage parses protocol evidence, whose run_id must be a UUID
+	// and must equal the journal RunID for the delivered-artifact identity.
+	cleanup := newPinnedLinuxCloneCleanup(t, "00000000-0000-4000-8000-000000000078")
+	reuse := newPinnedLinuxCloneReuse(t, "pinned-reuse-consumer")
+
+	normalReleaseProof := testStateLinuxCgroupV2ReleaseDTO(promoted.handoff, promoted.stopReceipt)
+	if err := normalReleaseProof.Validate(); err != nil {
+		t.Fatalf("legacy normal-release fixture: %v", err)
+	}
+	preGateReleaseProof := authority.LinuxCgroupPreGateReleaseProof{
+		Version:         authority.LinuxCgroupIdentityVersion,
+		Receipt:         *pinnedJournalPreGateStopReceipt(pinnedJournalLauncherBoundCgroupReservation()),
+		LeafDisposition: authority.LinuxCgroupLeafRemoved,
+	}
+	if err := preGateReleaseProof.Validate(); err != nil {
+		t.Fatalf("pre-gate release proof fixture: %v", err)
+	}
+	promotedMismatchedAdmission := linuxCloneAdmissionInput(t, protocol.Subject{
+		ResourceID: "00000000-0000-4000-8000-000000000097",
+		Commit:     promoted.intent.BaseCommit, TreeDigest: promoted.intent.BaseTreeDigest,
+	})
+	reuseMismatchedAdmission := linuxCloneAdmissionInput(t, protocol.Subject{
+		ResourceID: "00000000-0000-4000-8000-000000000096",
+		Commit:     reuse.intent.BaseCommit, TreeDigest: reuse.intent.BaseTreeDigest,
+	})
+	runningHistoryProof := pinnedLinuxCloneAbortProof(t, running.intent, &running.seed)
+	legacyProof := pinnedLinuxCloneAbortProof(t, seedOnly.intent, &seedOnly.seed)
+	legacyProof.NormalReleaseProof = &normalReleaseProof
+
+	promotedCases := []pinnedLinuxCloneCase{
+		{
+			name: "evidence without intent",
+			want: "run journal has Linux clone evidence without an intent",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneIntent = nil
+				return nil
+			},
+		},
+		{
+			name: "intent binding mismatch",
+			want: "run journal Linux clone intent is invalid",
+			mutate: func(journal *RunJournal) error {
+				changed := journal.LinuxCloneIntent.Clone()
+				changed.BindingKey = "other-binding"
+				journal.LinuxCloneIntent = &changed
+				return nil
+			},
+		},
+		{
+			name: "intent subject mismatch",
+			want: "run journal Linux clone intent does not match admitted Subject",
+			mutate: func(journal *RunJournal) error {
+				journal.Work.Input = promotedMismatchedAdmission
+				return nil
+			},
+		},
+		{
+			name: "seed receipt mismatch",
+			want: "run journal Linux clone seed receipt is invalid",
+			mutate: func(journal *RunJournal) error {
+				changed := journal.LinuxCloneSeedReceipt.Clone()
+				changed.BaseCommit = strings.Repeat("9", 40)
+				journal.LinuxCloneSeedReceipt = &changed
+				return nil
+			},
+		},
+		{
+			name: "abort pending and complete",
+			want: "run journal Linux clone abort is both pending and complete",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneAbortPending = true
+				journal.LinuxCloneAbortProof = &authority.LinuxCloneAbortProof{}
+				return nil
+			},
+		},
+		{
+			name: "abort state invalid",
+			want: "run journal Linux clone abort state is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneAbortPending = true
+				return nil
+			},
+		},
+		{
+			name: "promotion has no checkout receipt",
+			want: "run journal Linux clone promotion has no checkout receipt",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneCheckoutReceipt = nil
+				return nil
+			},
+		},
+		{
+			name: "checkout receipt mismatch",
+			want: "run journal Linux clone checkout receipt is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneCheckoutReceipt.SeedDigest = "sha256:" + strings.Repeat("0", 64)
+				return nil
+			},
+		},
+		{
+			name: "promotion receipt has no intent",
+			want: "run journal Linux clone promotion receipt has no intent",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxClonePromotionIntent = nil
+				journal.LinuxCloneCleanupPending = true
+				return nil
+			},
+		},
+		{
+			name: "target path changed",
+			want: "run journal Linux clone target path changed",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxClonePromotionIntent = nil
+				journal.LinuxClonePromotionReceipt = nil
+				journal.WorkspacePath = ""
+				return nil
+			},
+		},
+		{
+			name: "legacy promotion receipt invalid",
+			want: "run journal legacy Linux clone promotion receipt is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxClonePromotionIntent = nil
+				journal.LinuxClonePromotionReceipt.Commit = strings.Repeat("9", 39)
+				return nil
+			},
+		},
+		{
+			name: "promotion intent mismatch",
+			want: "run journal Linux clone promotion intent is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxClonePromotionIntent.ResourceID = "00000000-0000-4000-8000-000000000098"
+				return nil
+			},
+		},
+		{
+			name: "cleanup has no promotion receipt",
+			want: "run journal Linux clone cleanup has no promotion receipt",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxClonePromotionReceipt = nil
+				journal.WorkspacePath = ""
+				return nil
+			},
+		},
+		{
+			name: "promotion receipt mismatch",
+			want: "run journal Linux clone promotion receipt is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxClonePromotionReceipt.TreeDigest = "sha256:" + strings.Repeat("0", 64)
+				return nil
+			},
+		},
+		{
+			name: "cleanup stage invalid",
+			want: "run journal Linux clone cleanup stage is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.WorkspacePath = ""
+				return nil
+			},
+		},
+	}
+
+	runningCases := []pinnedLinuxCloneCase{
+		{
+			name: "pending abort with live owner loses producer fence",
+			want: "run journal Linux clone abort lost its producer fence",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneAbortPending = true
+				return nil
+			},
+		},
+		{
+			name: "abort proof lacks no-gate history",
+			want: "run journal Linux clone abort proof lacks exact no-gate history",
+			mutate: func(journal *RunJournal) error {
+				proof := runningHistoryProof
+				journal.LinuxCloneAbortProof = &proof
+				journal.WorkspacePath = ""
+				journal.WorkspaceRecoveryRequired = false
+				return nil
+			},
+		},
+	}
+
+	seedCases := []pinnedLinuxCloneCase{
+		{
+			name: "abort conflicts with normal cleanup",
+			want: "run journal clone abort conflicts with normal cleanup",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneAbortPending = true
+				journal.LinuxCloneCleanupPending = true
+				return nil
+			},
+		},
+		{
+			name: "pending abort loses reserved target",
+			want: "run journal pending clone abort lost its reserved target",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneAbortPending = true
+				journal.WorkspacePath = ""
+				return nil
+			},
+		},
+		{
+			name: "abort proof invalid",
+			want: "run journal Linux clone abort proof is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneAbortProof = &authority.LinuxCloneAbortProof{}
+				return nil
+			},
+		},
+		{
+			name: "legacy normal-release abort unresolved",
+			want: "legacy normal-release Linux clone abort remains unresolved",
+			mutate: func(journal *RunJournal) error {
+				proof := legacyProof
+				journal.LinuxCloneAbortProof = &proof
+				journal.WorkspacePath = ""
+				journal.WorkspaceRecoveryRequired = false
+				return nil
+			},
+		},
+	}
+
+	abortCompleteCases := []pinnedLinuxCloneCase{
+		{
+			name: "abort proof lost bound seed receipt",
+			want: "run journal Linux clone abort proof lost its bound seed receipt",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneAbortProof.SeedReceipt = nil
+				return nil
+			},
+		},
+	}
+
+	cleanupCases := []pinnedLinuxCloneCase{
+		{
+			name: "cleanup intent invalid",
+			want: "run journal Linux clone cleanup intent is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneCleanupIntent.RootPath = "/"
+				return nil
+			},
+		},
+		{
+			name: "pending cleanup stage invalid",
+			want: "run journal pending Linux clone cleanup stage is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneCleanupProof = &authority.LinuxCloneCleanupProof{}
+				return nil
+			},
+		},
+		{
+			name: "pending target removal proof invalid",
+			want: "run journal pending Linux clone target-removal proof is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneTargetRemovalProof = &authority.LinuxCloneTargetRemovalProof{}
+				return nil
+			},
+		},
+		{
+			name: "cleanup proof invalid",
+			want: "run journal Linux clone cleanup proof is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneCleanupPending = false
+				return nil
+			},
+		},
+	}
+
+	reuseCases := []pinnedLinuxCloneCase{
+		{
+			name: "reuse grant invalid",
+			want: "run journal Linux clone reuse grant is invalid",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneReuseGrant.RunID = "pinned-other-run"
+				return nil
+			},
+		},
+		{
+			name: "reuse abort lacks retirement",
+			want: "run journal Linux clone reuse abort lacks retirement",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				return nil
+			},
+		},
+		{
+			name: "reuse abort follows native effect",
+			want: "run journal Linux clone reuse abort follows a native or containment effect",
+			mutate: func(journal *RunJournal) error {
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				journal.LinuxCloneReuseRetired = true
+				journal.PID = 42
+				journal.ProcessIdentity = "linux:42:start"
+				journal.StartedAt = time.Date(2026, 9, 27, 1, 1, 1, 0, time.UTC)
+				return nil
+			},
+		},
+		{
+			name: "reuse abort after pending containment",
+			want: "run journal Linux clone reuse abort follows a native or containment effect",
+			mutate: func(journal *RunJournal) error {
+				handoff := testStateSupervisorHandoffFixture(42, "windows:42:created-at")
+				journal.ContainmentHandoff = &handoff
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				journal.LinuxCloneReuseRetired = true
+				return nil
+			},
+		},
+		{
+			name: "reuse abort after cgroup reservation",
+			want: "run journal Linux clone reuse abort follows a native or containment effect",
+			mutate: func(journal *RunJournal) error {
+				cgroup := pinnedJournalAbortedCgroupReservation()
+				journal.ContainmentCgroup = &cgroup
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				journal.LinuxCloneReuseRetired = true
+				return nil
+			},
+		},
+		{
+			name: "reuse abort after cgroup release proof",
+			want: "run journal Linux clone reuse abort follows a native or containment effect",
+			mutate: func(journal *RunJournal) error {
+				proof := normalReleaseProof
+				journal.ContainmentCgroupReleaseProof = &proof
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				journal.LinuxCloneReuseRetired = true
+				return nil
+			},
+		},
+		{
+			name: "reuse abort after pre-gate release proof",
+			want: "run journal Linux clone reuse abort follows a native or containment effect",
+			mutate: func(journal *RunJournal) error {
+				proof := preGateReleaseProof
+				journal.ContainmentCgroupPreGateReleaseProof = &proof
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				journal.LinuxCloneReuseRetired = true
+				return nil
+			},
+		},
+		{
+			name: "reuse lost retained target",
+			want: "run journal Linux clone reuse lost its retained target",
+			mutate: func(journal *RunJournal) error {
+				journal.WorkspacePath = ""
+				return nil
+			},
+		},
+		{
+			name: "reuse subject mismatch",
+			want: "run journal Linux clone reuse does not match admitted Subject",
+			mutate: func(journal *RunJournal) error {
+				journal.Work.Input = reuseMismatchedAdmission
+				return nil
+			},
+		},
+	}
+
+	for _, group := range []struct {
+		name  string
+		store *Store
+		key   RunKey
+		cases []pinnedLinuxCloneCase
+	}{
+		{name: "promoted", store: promoted.store, key: promoted.key, cases: promotedCases},
+		{name: "running", store: running.store, key: running.key, cases: runningCases},
+		{name: "seed", store: seedOnly.store, key: seedOnly.key, cases: seedCases},
+		{name: "abort-complete", store: abortComplete.store, key: abortComplete.key, cases: abortCompleteCases},
+		{name: "cleanup", store: cleanup.store, key: cleanup.key, cases: cleanupCases},
+		{name: "reuse", store: reuse.store, key: reuse.key, cases: reuseCases},
+	} {
+		for _, test := range group.cases {
+			t.Run(group.name+": "+test.name, func(t *testing.T) {
+				_, err := group.store.mutateJournal(group.key, test.mutate)
+				if err == nil {
+					t.Fatal("journal mutation unexpectedly passed validateJournal")
+				}
+				if err.Error() != test.want {
+					t.Fatalf("first error = %q, want %q", err.Error(), test.want)
+				}
+			})
+		}
+	}
+}
+
+// TestLinuxCloneReuseRetiredJournalsStayLoadable pins the positive verdict of
+// the reuse-grant branch: a reuse journal retired while stably stopped, and one
+// aborted before any native start, must both save and load back cleanly. The
+// first-error group above proves only rejected mutations, so without these
+// readbacks a lost early return after the reuse branch turns every persisted
+// retired or aborted reuse journal into a load error.
+func TestLinuxCloneReuseRetiredJournalsStayLoadable(t *testing.T) {
+	t.Parallel()
+	requireLinuxCloneAMD64(t)
+
+	t.Run("retired alias", func(t *testing.T) {
+		t.Parallel()
+		base := newPinnedLinuxCloneReuse(t, "reuse-retired-consumer")
+		saved, err := base.store.mutateJournal(base.key, func(journal *RunJournal) error {
+			journal.LinuxCloneReuseRetired = true
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("save retired reuse journal: %v", err)
+		}
+		if !saved.LinuxCloneReuseRetired {
+			t.Fatal("saved reuse journal lost its retirement marker")
+		}
+		readback, err := base.store.LoadJournal(base.key)
+		if err != nil {
+			t.Fatalf("load retired reuse journal: %v", err)
+		}
+		if !readback.LinuxCloneReuseRetired || readback.LinuxCloneReuseAbortedBeforeNativeStart {
+			t.Fatalf("retired reuse readback flags: retired=%v aborted=%v",
+				readback.LinuxCloneReuseRetired, readback.LinuxCloneReuseAbortedBeforeNativeStart)
+		}
+	})
+
+	t.Run("aborted before native start", func(t *testing.T) {
+		t.Parallel()
+		base := newPinnedLinuxCloneReuse(t, "reuse-aborted-consumer")
+		current, err := base.store.LoadJournal(base.key)
+		if err != nil {
+			t.Fatalf("load reuse consumer journal: %v", err)
+		}
+		if current.LinuxCloneReuseGrant == nil {
+			t.Fatal("reuse consumer journal lost its grant")
+		}
+		aborted, err := base.store.AbortLinuxCloneReuseBeforeNativeStart(base.key, base.fence, *current.LinuxCloneReuseGrant)
+		if err != nil {
+			t.Fatalf("abort reuse journal before native start: %v", err)
+		}
+		if !aborted.LinuxCloneReuseRetired || !aborted.LinuxCloneReuseAbortedBeforeNativeStart {
+			t.Fatalf("aborted reuse flags: retired=%v aborted=%v",
+				aborted.LinuxCloneReuseRetired, aborted.LinuxCloneReuseAbortedBeforeNativeStart)
+		}
+		readback, err := base.store.LoadJournal(base.key)
+		if err != nil {
+			t.Fatalf("load aborted reuse journal: %v", err)
+		}
+		if !readback.LinuxCloneReuseRetired || !readback.LinuxCloneReuseAbortedBeforeNativeStart {
+			t.Fatalf("aborted reuse readback flags: retired=%v aborted=%v",
+				readback.LinuxCloneReuseRetired, readback.LinuxCloneReuseAbortedBeforeNativeStart)
+		}
+	})
 }
