@@ -1,5 +1,20 @@
 # Next goals for local Codex
 
+Goal [0010](0010-refactor-program.md) is the active refactor program, recorded mid-program on
+2026-11-21 under the owner's same-day mandate: a thorough refactor and quality uplift in which
+protocol/schema changes without backward compatibility, framework swaps and new packages are
+allowed when they measurably improve robustness, performance or engineering quality, or greatly
+reduce LOC, while PostgreSQL/Elixir/Go/frontend state ownership, fences, idempotency, transaction
+boundaries, credential locality, provider-owned fields and the acceptance conditions are never
+traded. It runs as one GDD slice per PR across waves W1-W5 and a tail W6, planned by the
+[program plan](../plans/2026-11-21-refactor-program-plan.md) (the synthesis snapshot at `a3039f0`)
+and by per-slice contracts kept outside the repository; its [goal file](0010-refactor-program.md)
+records the owner decisions, the per-wave status and the blocked/parked items. Unlike earlier goals
+whose contract bytes are frozen, goal 0010 is owner-authorized amendable: the conductor may amend
+it while it runs, every amendment is appended to its Amendment log rather than silently rewriting
+it, and it archives only when its Done-when closes. Recording it takes the unsuffixed 0010 that
+the closing note below reserved.
+
 Goal [0007i](archive/0007i-portal-cutover.md) completed the single real-time Portal
 cutover run on 2026-11-17 and stays in place (the 0007 lettered goals are not
 archived; only their receipts are). The
