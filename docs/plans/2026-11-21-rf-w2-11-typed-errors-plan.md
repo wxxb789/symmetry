@@ -3,8 +3,10 @@
 Contract: the GDD goal contract `goal-rf-w2-11-typed-errors.md` (2026-11-21, at the GDD state
 root) with its binding conductor decision of the same date (C1–C7, reconciled from the two
 round-2 contract reviews). Baseline for every coordinate in this plan: `origin/main` at
-`857e763b8b6c175b87e3f6413a4541d15bbb6e41` (this worktree's HEAD). Branch:
-`refactor/rf-w2-11-typed-errors`. Area: `daemon/internal/platform` only.
+`857e763b8b6c175b87e3f6413a4541d15bbb6e41` (the historical dispatch baseline and the revision
+whose C2/C3 coordinates this plan quotes; every coordinate below was re-verified to resolve at
+the reviewed head `10fed9cb`). Branch: `refactor/rf-w2-11-typed-errors`. Area:
+`daemon/internal/platform` only.
 
 The increment gives the repeated anonymous mismatch classes in the `errOr` fallbacks a typed
 identity, so `errors.Is` distinguishes "the live process/namespace/image no longer matches its
@@ -91,8 +93,12 @@ stay as they are; no name moves.
 The four near-synonym process-identity sentinels (changed/differs × creation/plain) exist
 because C3 requires every site's `Error()` text to stay byte-identical; they are documented as
 the two phrasings of the same two checks. Unifying the texts would change durable and served
-strings (`app.go:5235`, `:8618-8626`, `:7980`, `:8963`, `:8998-9003`, the supervisor helper's
-`response.Error`, the two client echoes) and is out of scope.
+strings and is out of scope. C3's sink coordinates are pre-#144 split (`app.go:5235`,
+`:8618-8626`, `:7980`, `:8963`, `:8998-9003`); after the W1-05 split those sinks are the
+persisted reasons passed to `markGoalSessionUncertain` (`goal_admission.go:889`) and
+`publishNativeCloseRetryAfterEvidence` (`goal_delivery.go:134`, `:138`, `:142`), the
+terminal-transition payloads (`native_run.go:1628`, `:2204`, `goal_delivery.go:377-382`), the
+supervisor helper's `response.Error`, and the two client echoes.
 
 ## Exact edge-case semantics
 
@@ -128,7 +134,9 @@ strings (`app.go:5235`, `:8618-8626`, `:7980`, `:8963`, `:8998-9003`, the superv
    `pidfd == -1` (`creation identity differs`), and
    `verifyLinuxOwnerAnchorStopEvidenceNamespacePin` against a real `/proc/self/ns/user` FD
    (`device or inode differs`). These fail if the site stops returning its sentinel; the
-   privileged test reports by name (it skips only when run as uid 0).
+   privileged test reports by name (it skips when the process uid or its primary gid is 0, the
+   incomplete-credentials precondition `verifyLinuxOwnerAProcess` checks before the identity
+   comparison).
 
 Mutation checks (Linux, WSL): the sentinel swap at each of the three reachable sites and one
 sentinel-message swap must turn the suite red; each mutation is reverted and the suite re-run.
@@ -160,7 +168,9 @@ host). Measurement harnesses are not part of this slice, so the sequencing rule 
 - One-off prose classes (34 sites) and the pre-existing 1188 anonymous `errors.New` sites
   elsewhere in the package.
 - Unifying the near-synonym texts (would change wire text; not authorized).
-- No `//nolint`/`credo:disable` suppression is added; `errorlint` stays clean.
+- No `//nolint`/`credo:disable` suppression is added; `errorlint` gains 0 new owned-file
+  findings (base and head each report the same 2 pre-existing owned-file findings; see the C6
+  amendment request under "Trade-offs and known limits").
 
 ## Trade-offs and known limits
 
@@ -173,8 +183,9 @@ host). Measurement harnesses are not part of this slice, so the sequencing rule 
   the sanitizer's switch deliberately rebuilds only the *outermost* `*net.OpError`/`*os.PathError`/
   `*os.SyscallError` (a nested or joined error is returned untouched), and `errors.As` cannot express
   "outermost only" without an identity check that obscures the sanitizer; a `//nolint` is forbidden by
-  the program rules. Smallest proposed amendment: read C6 as "0 *new* owned-file findings" (measured,
-  above) and defer the sanitizer's shape to a slice that owns error sanitation. `anchor_server.go:305`
+  the program rules. Smallest proposed amendment, awaiting the conductor's ruling: read C6 as
+  "0 *new* owned-file findings" (measured, above) and defer the sanitizer's shape to a slice that
+  owns error sanitation. `anchor_server.go:305`
   is safely convertible to `errors.As` (its only producer is `AcceptUnix`), but it would break this
   slice's "head = base + sentinel swaps" proof, so it is left for that follow-up too.
 - 15 exported names for 15 repeated classes is more surface than the "8–10" the finding
@@ -193,6 +204,9 @@ host). Measurement harnesses are not part of this slice, so the sequencing rule 
 - W3-02 owns the eight `writeResponse*` writers and the request validators in
   `anchor_server.go`/`anchor_wire.go`; the sentinels introduced here are stable and additive,
   so a response builder can wrap them unchanged.
+- The two pre-existing `errorlint` findings this slice leaves in place belong to a follow-up
+  error-sanitation slice: `anchor_server.go:305` (`err.(net.Error)` on the direct `AcceptUnix`
+  error) and `anchor_wire.go:346` (`sanitizeLinuxOwnerAnchorSocketError`'s type switch).
 - The sentinel table (`refactor/tools/w2-11-typed-errors/sentinel-sites.md`) is the authoritative
   class → site mapping at this revision; any later conversion of a one-off literal to a
   sentinel should extend it rather than re-derive counts.

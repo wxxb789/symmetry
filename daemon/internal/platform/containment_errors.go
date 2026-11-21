@@ -29,21 +29,28 @@ var (
 	// that phrase it as a difference from an expected identity.
 	ErrLinuxOwnerCreationIdentityDiffers = errors.New("creation identity differs")
 
-	// ErrLinuxOwnerDeviceOrInodeChanged identifies a pinned nsfs or image
-	// object whose device/inode pair changed after it was recorded.
+	// ErrLinuxOwnerDeviceOrInodeChanged identifies a pinned user-namespace
+	// (nsfs) object whose device/inode identity no longer equals the identity
+	// recorded for it.
 	ErrLinuxOwnerDeviceOrInodeChanged = errors.New("device or inode changed")
 
-	// ErrLinuxOwnerDeviceOrInodeDiffers identifies the same device/inode
-	// mismatch as ErrLinuxOwnerDeviceOrInodeChanged at the sites that phrase
-	// it as a difference from a retained pin.
+	// ErrLinuxOwnerDeviceOrInodeDiffers identifies a pinned user-namespace
+	// (nsfs) object or gate image whose device/inode pair differs from its
+	// retained recording; it is the phrasing variant of
+	// ErrLinuxOwnerDeviceOrInodeChanged used where the comparison is against a
+	// retained pin.
 	ErrLinuxOwnerDeviceOrInodeDiffers = errors.New("device or inode differs")
 
 	// ErrLinuxOwnerDirectoryOwnershipUnsafe identifies a root-controlled
 	// directory that is not owned by root or is writable by group or world.
 	ErrLinuxOwnerDirectoryOwnershipUnsafe = errors.New("directory ownership or mode is unsafe")
 
-	// ErrLinuxOwnerGateImageIdentityDiffers identifies a pinned root-owned gate
-	// image whose device/inode pair no longer matches its exact recording.
+	// ErrLinuxOwnerGateImageIdentityDiffers identifies a retained static gate
+	// image FD that cannot be confirmed as a single-linked, root-owned regular
+	// file with owner-execute permission and without group/world write
+	// permission; a failed stat reports here too. It never compares
+	// device/inode - the image device/inode check reports
+	// ErrLinuxOwnerDeviceOrInodeDiffers.
 	ErrLinuxOwnerGateImageIdentityDiffers = errors.New("root-owned image identity differs")
 
 	// ErrLinuxOwnerIdentityChanged identifies a process whose live creation

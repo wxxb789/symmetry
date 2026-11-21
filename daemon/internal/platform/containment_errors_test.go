@@ -234,13 +234,18 @@ func TestLinuxOwnerTypedMismatchSentinelTable(t *testing.T) {
 	}
 }
 
-// TestLinuxOwnerTypedMismatchReachableSites drives three of those sites through
-// production code, so a site that stops returning its sentinel fails here even
-// though the expression pins above cannot observe the site itself.
+// TestLinuxOwnerTypedMismatchReachableSites drives three converted sites
+// through production code - anchor_proc.go:307 (verifyLinuxOwnerAProcess, the
+// representative site of the "identity differs" pin row), anchor_gate.go:695
+// (openLinuxOwnerAnchorUserNamespaceFD), and anchor_run.go:202
+// (verifyLinuxOwnerAnchorStopEvidenceNamespacePin); the last two drive their
+// classes at sites the pin rows do not name. A site that stops returning its
+// sentinel fails here even though the expression pins above reproduce their
+// sites' expressions instead of observing them.
 func TestLinuxOwnerTypedMismatchReachableSites(t *testing.T) {
 	t.Run("verifyLinuxOwnerAProcess", func(t *testing.T) {
-		if os.Getuid() == 0 {
-			t.Skip("requires an unprivileged uid for the Linux owner A process check")
+		if os.Getuid() == 0 || os.Getgid() == 0 {
+			t.Skip("requires a non-zero uid and primary gid; verifyLinuxOwnerAProcess treats uid 0 or gid 0 as incomplete credentials")
 		}
 		err := verifyLinuxOwnerAProcess(os.Getpid(), "linux:v2:unrelated-identity", uint32(os.Getuid()), uint32(os.Getgid()), 0, "")
 		want := "Linux owner A process creation identity mismatch: identity differs"
