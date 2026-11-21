@@ -45,13 +45,13 @@ const (
 )
 
 const (
-	// GoalSessionLineageStateFree means that no local launch reservation remains
+	// goalSessionLineageStateFree means that no local launch reservation remains
 	// for the lineage. Every other state is a barrier for a replacement launch.
-	GoalSessionLineageStateFree      GoalSessionLineageState = "free"
-	GoalSessionLineageStateReserved  GoalSessionLineageState = "reserved"
-	GoalSessionLineageStateLaunching GoalSessionLineageState = "launching"
-	GoalSessionLineageStateAttached  GoalSessionLineageState = "attached"
-	GoalSessionLineageStateUncertain GoalSessionLineageState = "uncertain"
+	goalSessionLineageStateFree      goalSessionLineageState = "free"
+	goalSessionLineageStateReserved  goalSessionLineageState = "reserved"
+	goalSessionLineageStateLaunching goalSessionLineageState = "launching"
+	goalSessionLineageStateAttached  goalSessionLineageState = "attached"
+	goalSessionLineageStateUncertain goalSessionLineageState = "uncertain"
 )
 
 var (
@@ -89,47 +89,47 @@ type GoalSessionKey struct {
 	LocalHandleID string
 }
 
-// GoalSessionLineageKey is the identity shared by retries of one Goal task.
+// goalSessionLineageKey is the identity shared by retries of one Goal task.
 // GoalRevision, RunID and Generation are deliberately excluded: a new
 // revision or fenced run must not bypass an unresolved native launch from the
 // same Goal/WorkItem/Task lineage.
-type GoalSessionLineageKey struct {
+type goalSessionLineageKey struct {
 	GoalID     string `json:"goal_id"`
 	WorkItemID string `json:"work_item_id,omitempty"`
 	TaskID     string `json:"task_id,omitempty"`
 }
 
-// GoalSessionLineageState describes the strongest local recovery fact found
+// goalSessionLineageState describes the strongest local recovery fact found
 // for a lineage. The state is derived from durable journals, not caller input.
-type GoalSessionLineageState string
+type goalSessionLineageState string
 
-// GoalSessionLineageStatus is the durable launch barrier returned to admission
+// goalSessionLineageStatusValue is the durable launch barrier returned to admission
 // code. SessionKeys contains every currently blocking local session, sorted by
 // stable key. An empty/free status is the only result that permits a new
 // lineage launch.
-type GoalSessionLineageStatus struct {
-	Lineage     GoalSessionLineageKey
-	State       GoalSessionLineageState
+type goalSessionLineageStatusValue struct {
+	Lineage     goalSessionLineageKey
+	State       goalSessionLineageState
 	Blocking    bool
 	SessionKeys []GoalSessionKey
 }
 
 // BlocksNewLaunch reports whether a new run/generation would risk duplicating
 // an external native effect for this lineage.
-func (status GoalSessionLineageStatus) BlocksNewLaunch() bool {
+func (status goalSessionLineageStatusValue) BlocksNewLaunch() bool {
 	return status.Blocking
 }
 
 type goalSessionLineageIndex struct {
 	SchemaVersion int                       `json:"schema_version"`
-	Lineage       GoalSessionLineageKey     `json:"lineage"`
+	Lineage       goalSessionLineageKey     `json:"lineage"`
 	Dirty         bool                      `json:"dirty,omitempty"`
 	Entries       []goalSessionLineageEntry `json:"entries"`
 }
 
 type goalSessionLineageEntry struct {
 	SessionKey GoalSessionKey          `json:"session_key"`
-	State      GoalSessionLineageState `json:"state"`
+	State      goalSessionLineageState `json:"state"`
 	UpdatedAt  time.Time               `json:"updated_at"`
 }
 
@@ -198,7 +198,7 @@ type GoalSessionJournal struct {
 	ControlAttachmentReceiptID string    `json:"control_attachment_receipt_id,omitempty"`
 	// ControlAttachmentLineage preserves the first verified Control attachment
 	// while current attachment fields rotate for each resumed Run.
-	ControlAttachmentLineage *GoalSessionControlAttachmentLineage `json:"control_attachment_lineage,omitempty"`
+	ControlAttachmentLineage *goalSessionControlAttachmentLineage `json:"control_attachment_lineage,omitempty"`
 	// ResumeSourceStopCertificate is the exact available certificate consumed by
 	// the current resume Run. It makes a retry prove the same predecessor rather
 	// than treating a matching target alone as an idempotency key.
@@ -206,7 +206,7 @@ type GoalSessionJournal struct {
 	// ConsumedStopCertificates retains every predecessor stop certificate that
 	// a later rebind consumed. Delayed delivery replays may acknowledge only an
 	// exact member of this history and cannot mutate the current Run.
-	ConsumedStopCertificates *GoalSessionConsumedStopCertificateHistory `json:"consumed_stop_certificates,omitempty"`
+	ConsumedStopCertificates *goalSessionConsumedStopCertificateHistory `json:"consumed_stop_certificates,omitempty"`
 	// ResumeStartPending proves a rebind has completed but no native Start
 	// boundary has yet been crossed. It survives attach Ready/readback crashes;
 	// MarkGoalSessionResumeStartAttempted clears it immediately before Start.
@@ -225,18 +225,18 @@ type GoalSessionJournal struct {
 	UpdatedAt            time.Time                   `json:"updated_at"`
 }
 
-// GoalSessionControlAttachmentLineage is the immutable first fenced Control
+// goalSessionControlAttachmentLineage is the immutable first fenced Control
 // attachment for a retained native session. It survives resume rebinds so a
 // later Run cannot substitute a different Control session as its provenance.
-type GoalSessionControlAttachmentLineage struct {
-	Original GoalSessionControlAttachment `json:"original"`
-	Current  GoalSessionControlAttachment `json:"current"`
+type goalSessionControlAttachmentLineage struct {
+	Original goalSessionControlAttachmentRecord `json:"original"`
+	Current  goalSessionControlAttachmentRecord `json:"current"`
 }
 
-// GoalSessionControlAttachment records one immutable Control attachment
+// goalSessionControlAttachmentRecord records one immutable Control attachment
 // receipt. Original never changes; Current advances only after a new resume
 // Run's attachment has been durably persisted.
-type GoalSessionControlAttachment struct {
+type goalSessionControlAttachmentRecord struct {
 	RunID       string `json:"run_id"`
 	Generation  int64  `json:"generation"`
 	TaskID      string `json:"task_id,omitempty"`
@@ -259,10 +259,10 @@ type GoalSessionStopCertificate struct {
 	ReceiptID      string `json:"receipt_id"`
 }
 
-// GoalSessionConsumedStopCertificateHistory is append-only predecessor receipt
+// goalSessionConsumedStopCertificateHistory is append-only predecessor receipt
 // provenance. It is intentionally retained after later stop cycles because an
 // old RunJournal outbox can replay after a newer Run has completed.
-type GoalSessionConsumedStopCertificateHistory struct {
+type goalSessionConsumedStopCertificateHistory struct {
 	Certificates []GoalSessionStopCertificate `json:"certificates"`
 }
 
@@ -303,9 +303,9 @@ type GoalSessionResumeRebind struct {
 	Compatibility        GoalSessionCompatibility
 }
 
-// GoalSessionControlProjection is safe to put on the control wire. In
+// goalSessionControlProjection is safe to put on the control wire. In
 // particular it contains local_handle_id but no raw native ID or filename.
-type GoalSessionControlProjection struct {
+type goalSessionControlProjection struct {
 	GoalID                 string `json:"goal_id"`
 	GoalRevision           int64  `json:"goal_revision"`
 	WorkItemID             string `json:"work_item_id,omitempty"`
@@ -336,8 +336,8 @@ func (intent GoalSessionLaunchIntent) Key() GoalSessionKey {
 // LineageKey returns the retry identity for this Goal session intent. It does
 // not include the fenced run generation because retries across generations are
 // exactly the case the unresolved-launch barrier protects.
-func (intent GoalSessionLaunchIntent) LineageKey() GoalSessionLineageKey {
-	return GoalSessionLineageKey{GoalID: intent.GoalID, WorkItemID: intent.WorkItemID, TaskID: intent.TaskID}
+func (intent GoalSessionLaunchIntent) LineageKey() goalSessionLineageKey {
+	return goalSessionLineageKey{GoalID: intent.GoalID, WorkItemID: intent.WorkItemID, TaskID: intent.TaskID}
 }
 
 // Key returns the stable key used for the session journal filename.
@@ -346,7 +346,7 @@ func (journal GoalSessionJournal) Key() GoalSessionKey {
 }
 
 // LineageKey returns the retry identity recorded in the journal.
-func (journal GoalSessionJournal) LineageKey() GoalSessionLineageKey {
+func (journal GoalSessionJournal) LineageKey() goalSessionLineageKey {
 	return journal.GoalSessionLaunchIntent.LineageKey()
 }
 
@@ -409,8 +409,8 @@ func (journal GoalSessionJournal) HasKnownRetainedResumeNativeStop() bool {
 }
 
 // ControlProjection strips all machine-local native identity from a journal.
-func (journal GoalSessionJournal) ControlProjection() GoalSessionControlProjection {
-	return GoalSessionControlProjection{
+func (journal GoalSessionJournal) ControlProjection() goalSessionControlProjection {
+	return goalSessionControlProjection{
 		GoalID: journal.GoalID, GoalRevision: journal.GoalRevision, WorkItemID: journal.WorkItemID,
 		TaskID: journal.TaskID, RunID: journal.RunID, Generation: journal.Generation,
 		AdmissionID: journal.AdmissionID, LocalHandleID: journal.LocalHandleID,
@@ -520,7 +520,7 @@ func (store *Store) LoadGoalSessionByHandle(localHandleID string) (GoalSessionJo
 			return journal, nil
 		}
 	}
-	return GoalSessionJournal{}, &NotFoundError{Resource: "goal session journal"}
+	return GoalSessionJournal{}, &notFoundError{Resource: "goal session journal"}
 }
 
 // LoadGoalSessionByControlSessionID finds the local retained-session record
@@ -551,7 +551,7 @@ func (store *Store) LoadGoalSessionByControlSessionID(controlSessionID string) (
 		match = &candidate
 	}
 	if match == nil {
-		return GoalSessionJournal{}, &NotFoundError{Resource: "goal session journal"}
+		return GoalSessionJournal{}, &notFoundError{Resource: "goal session journal"}
 	}
 	return *match, nil
 }
@@ -573,14 +573,14 @@ func (store *Store) ListGoalSessions() ([]GoalSessionJournal, error) {
 // its first rebuild, so admission does not need to scan every session journal
 // on each retry. A dirty or missing index is rebuilt from the journals before
 // the result is returned; any rebuild uncertainty fails closed.
-func (store *Store) CheckGoalSessionLineage(lineage GoalSessionLineageKey) (GoalSessionLineageStatus, error) {
+func (store *Store) CheckGoalSessionLineage(lineage goalSessionLineageKey) (goalSessionLineageStatusValue, error) {
 	if err := validateGoalSessionLineageKey(lineage); err != nil {
-		return GoalSessionLineageStatus{}, err
+		return goalSessionLineageStatusValue{}, err
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ensureOpenLocked(); err != nil {
-		return GoalSessionLineageStatus{}, err
+		return goalSessionLineageStatusValue{}, err
 	}
 	return store.checkGoalSessionLineageLocked(lineage)
 }
@@ -589,7 +589,7 @@ func (store *Store) CheckGoalSessionLineage(lineage GoalSessionLineageKey) (Goal
 // session. It maps the indexed status to the same typed errors used by launch
 // intent persistence, while callers that need diagnostics can use
 // CheckGoalSessionLineage directly.
-func (store *Store) EnsureGoalSessionLineageAvailable(lineage GoalSessionLineageKey) error {
+func (store *Store) EnsureGoalSessionLineageAvailable(lineage goalSessionLineageKey) error {
 	status, err := store.CheckGoalSessionLineage(lineage)
 	if err != nil {
 		return err
@@ -597,7 +597,7 @@ func (store *Store) EnsureGoalSessionLineageAvailable(lineage GoalSessionLineage
 	if !status.BlocksNewLaunch() {
 		return nil
 	}
-	if status.State == GoalSessionLineageStateUncertain || status.State == GoalSessionLineageStateLaunching {
+	if status.State == goalSessionLineageStateUncertain || status.State == goalSessionLineageStateLaunching {
 		return ErrGoalSessionUncertain
 	}
 	return ErrGoalSessionConflict
@@ -741,7 +741,7 @@ func (store *Store) PersistGoalSessionControlAttachment(key GoalSessionKey, cont
 			journal.ControlAttachmentLineage = &lineage
 		} else {
 			attachment := goalSessionControlAttachment(*journal, controlSessionID, bindingID, attachmentReceiptID)
-			journal.ControlAttachmentLineage = &GoalSessionControlAttachmentLineage{
+			journal.ControlAttachmentLineage = &goalSessionControlAttachmentLineage{
 				Original: attachment,
 				Current:  attachment,
 			}
@@ -791,14 +791,14 @@ func (store *Store) RebindGoalSessionForResume(key GoalSessionKey, rebind GoalSe
 	}
 
 	previousLineage := journal.LineageKey()
-	targetLineage := GoalSessionLineageKey{GoalID: journal.GoalID, WorkItemID: journal.WorkItemID, TaskID: rebind.TaskID}
+	targetLineage := goalSessionLineageKey{GoalID: journal.GoalID, WorkItemID: journal.WorkItemID, TaskID: rebind.TaskID}
 	if targetLineage != previousLineage {
 		status, err := store.checkGoalSessionLineageLocked(targetLineage)
 		if err != nil {
 			return GoalSessionJournal{}, err
 		}
 		if status.BlocksNewLaunch() {
-			if status.State == GoalSessionLineageStateUncertain || status.State == GoalSessionLineageStateLaunching {
+			if status.State == goalSessionLineageStateUncertain || status.State == goalSessionLineageStateLaunching {
 				return GoalSessionJournal{}, ErrGoalSessionUncertain
 			}
 			return GoalSessionJournal{}, ErrGoalSessionConflict
@@ -1248,7 +1248,7 @@ func (store *Store) DeleteGoalSession(key GoalSessionKey) error {
 	}
 	if err := os.Remove(store.goalSessionPath(key)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &NotFoundError{Resource: "goal session journal"}
+			return &notFoundError{Resource: "goal session journal"}
 		}
 		return errors.New("delete goal session journal")
 	}
@@ -1320,16 +1320,16 @@ func (store *Store) saveGoalSessionJournalLocked(journal GoalSessionJournal) err
 	return store.writeJSONWithLimit(store.goalSessionPath(journal.Key()), journal, "goal session journal", maxJournalFileBytes)
 }
 
-func (store *Store) checkGoalSessionLineageLocked(lineage GoalSessionLineageKey) (GoalSessionLineageStatus, error) {
+func (store *Store) checkGoalSessionLineageLocked(lineage goalSessionLineageKey) (goalSessionLineageStatusValue, error) {
 	index, err := store.loadGoalSessionLineageIndexLocked(lineage)
 	if IsNotFound(err) || (err == nil && index.Dirty) {
 		if err := store.refreshGoalSessionLineageIndexLocked(lineage); err != nil {
-			return GoalSessionLineageStatus{}, err
+			return goalSessionLineageStatusValue{}, err
 		}
 		index, err = store.loadGoalSessionLineageIndexLocked(lineage)
 	}
 	if err != nil {
-		return GoalSessionLineageStatus{}, err
+		return goalSessionLineageStatusValue{}, err
 	}
 	return goalSessionLineageStatus(index), nil
 }
@@ -1338,7 +1338,7 @@ func (store *Store) checkGoalSessionLineageLocked(lineage GoalSessionLineageKey)
 // changing a session journal. If the process stops between the journal write
 // and index refresh, a later query will scan journals rather than trusting a
 // possibly incomplete snapshot.
-func (store *Store) beginGoalSessionLineageMutationLocked(lineage GoalSessionLineageKey) error {
+func (store *Store) beginGoalSessionLineageMutationLocked(lineage goalSessionLineageKey) error {
 	if err := validateGoalSessionLineageKey(lineage); err != nil {
 		return err
 	}
@@ -1353,7 +1353,7 @@ func (store *Store) beginGoalSessionLineageMutationLocked(lineage GoalSessionLin
 
 // refreshGoalSessionLineageIndexLocked rebuilds one index from authoritative
 // session journals and publishes it clean only after the scan completes.
-func (store *Store) refreshGoalSessionLineageIndexLocked(lineage GoalSessionLineageKey) error {
+func (store *Store) refreshGoalSessionLineageIndexLocked(lineage goalSessionLineageKey) error {
 	if err := validateGoalSessionLineageKey(lineage); err != nil {
 		return err
 	}
@@ -1363,7 +1363,7 @@ func (store *Store) refreshGoalSessionLineageIndexLocked(lineage GoalSessionLine
 	}
 	entries := make([]goalSessionLineageEntry, 0)
 	for _, journal := range journals {
-		if journal.LineageKey() != lineage || goalSessionLineageStateForJournal(journal) == GoalSessionLineageStateFree {
+		if journal.LineageKey() != lineage || goalSessionLineageStateForJournal(journal) == goalSessionLineageStateFree {
 			continue
 		}
 		entries = append(entries, goalSessionLineageEntry{
@@ -1385,7 +1385,7 @@ func (store *Store) refreshGoalSessionLineageIndexLocked(lineage GoalSessionLine
 	})
 }
 
-func (store *Store) loadGoalSessionLineageIndexLocked(lineage GoalSessionLineageKey) (goalSessionLineageIndex, error) {
+func (store *Store) loadGoalSessionLineageIndexLocked(lineage goalSessionLineageKey) (goalSessionLineageIndex, error) {
 	if err := validateGoalSessionLineageKey(lineage); err != nil {
 		return goalSessionLineageIndex{}, err
 	}
@@ -1413,8 +1413,8 @@ func (store *Store) saveGoalSessionLineageIndexLocked(index goalSessionLineageIn
 	return store.writeJSONWithLimit(store.goalSessionLineagePath(index.Lineage), index, "goal session lineage index", maxJournalFileBytes)
 }
 
-func goalSessionLineageStatus(index goalSessionLineageIndex) GoalSessionLineageStatus {
-	status := GoalSessionLineageStatus{Lineage: index.Lineage, State: GoalSessionLineageStateFree}
+func goalSessionLineageStatus(index goalSessionLineageIndex) goalSessionLineageStatusValue {
+	status := goalSessionLineageStatusValue{Lineage: index.Lineage, State: goalSessionLineageStateFree}
 	if len(index.Entries) == 0 {
 		return status
 	}
@@ -1435,36 +1435,36 @@ func goalSessionLineageStatus(index goalSessionLineageIndex) GoalSessionLineageS
 	return status
 }
 
-func goalSessionLineageStateForJournal(journal GoalSessionJournal) GoalSessionLineageState {
+func goalSessionLineageStateForJournal(journal GoalSessionJournal) goalSessionLineageState {
 	if journal.LaunchState == GoalSessionLaunchStateClosed && journal.SessionState == GoalSessionStateClosed {
-		return GoalSessionLineageStateFree
+		return goalSessionLineageStateFree
 	}
 	if journal.LaunchState == GoalSessionLaunchStateUncertain || journal.NeedsReconciliation() {
-		return GoalSessionLineageStateUncertain
+		return goalSessionLineageStateUncertain
 	}
 	switch journal.LaunchState {
 	case GoalSessionLaunchStateIntent:
-		return GoalSessionLineageStateReserved
+		return goalSessionLineageStateReserved
 	case GoalSessionLaunchStateLaunching:
-		return GoalSessionLineageStateLaunching
+		return goalSessionLineageStateLaunching
 	case GoalSessionLaunchStateAttached:
-		return GoalSessionLineageStateAttached
+		return goalSessionLineageStateAttached
 	default:
 		// validateGoalSessionJournal rejects this state. Keep the helper
 		// conservative if it is ever called before validation.
-		return GoalSessionLineageStateUncertain
+		return goalSessionLineageStateUncertain
 	}
 }
 
-func lineageStateRank(state GoalSessionLineageState) int {
+func lineageStateRank(state goalSessionLineageState) int {
 	switch state {
-	case GoalSessionLineageStateReserved:
+	case goalSessionLineageStateReserved:
 		return 1
-	case GoalSessionLineageStateAttached:
+	case goalSessionLineageStateAttached:
 		return 2
-	case GoalSessionLineageStateLaunching:
+	case goalSessionLineageStateLaunching:
 		return 3
-	case GoalSessionLineageStateUncertain:
+	case goalSessionLineageStateUncertain:
 		return 4
 	default:
 		return 0
@@ -1477,7 +1477,7 @@ func validateGoalSessionLineageIndex(index goalSessionLineageIndex) error {
 	}
 	seen := make(map[GoalSessionKey]struct{}, len(index.Entries))
 	for _, entry := range index.Entries {
-		if err := validateGoalSessionKey(entry.SessionKey); err != nil || !validGoalSessionLineageState(entry.State) || entry.State == GoalSessionLineageStateFree || entry.UpdatedAt.IsZero() {
+		if err := validateGoalSessionKey(entry.SessionKey); err != nil || !validGoalSessionLineageState(entry.State) || entry.State == goalSessionLineageStateFree || entry.UpdatedAt.IsZero() {
 			return errors.New("goal session lineage index is invalid")
 		}
 		if _, exists := seen[entry.SessionKey]; exists {
@@ -1536,7 +1536,7 @@ func (store *Store) goalSessionPath(key GoalSessionKey) string {
 	return filepath.Join(store.goalSessionsDir(), goalSessionFilePrefix+hex.EncodeToString(digest[:])+goalSessionFileSuffix)
 }
 
-func (store *Store) goalSessionLineagePath(lineage GoalSessionLineageKey) string {
+func (store *Store) goalSessionLineagePath(lineage goalSessionLineageKey) string {
 	input := lineage.GoalID + "\x00" + lineage.WorkItemID + "\x00" + lineage.TaskID
 	digest := sha256.Sum256([]byte(input))
 	return filepath.Join(store.goalSessionsDir(), goalSessionLineageFilePrefix+hex.EncodeToString(digest[:])+goalSessionLineageFileSuffix)
@@ -1548,7 +1548,7 @@ func (store *Store) ensureLocalHandleAvailableLocked(intent GoalSessionLaunchInt
 		return err
 	}
 	if status.BlocksNewLaunch() {
-		if status.State == GoalSessionLineageStateUncertain || status.State == GoalSessionLineageStateLaunching {
+		if status.State == goalSessionLineageStateUncertain || status.State == goalSessionLineageStateLaunching {
 			return ErrGoalSessionUncertain
 		}
 		return ErrGoalSessionConflict
@@ -1602,7 +1602,7 @@ func validateGoalSessionKey(key GoalSessionKey) error {
 	return nil
 }
 
-func validateGoalSessionLineageKey(lineage GoalSessionLineageKey) error {
+func validateGoalSessionLineageKey(lineage goalSessionLineageKey) error {
 	if !validRequiredString(lineage.GoalID, 4096) || len(lineage.WorkItemID) > 4096 || len(lineage.TaskID) > 4096 {
 		return errors.New("goal session lineage key is invalid")
 	}
@@ -1781,7 +1781,7 @@ func validGoalSessionStopCertificate(certificate GoalSessionStopCertificate) boo
 		validGoalSessionUUID(certificate.ReceiptID)
 }
 
-func validGoalSessionConsumedStopCertificateHistory(history GoalSessionConsumedStopCertificateHistory) bool {
+func validGoalSessionConsumedStopCertificateHistory(history goalSessionConsumedStopCertificateHistory) bool {
 	if len(history.Certificates) == 0 || len(history.Certificates) > goalSessionConsumedStopLimit {
 		return false
 	}
@@ -1802,26 +1802,26 @@ func validWorkspaceOwnerRunKey(key WorkspaceOwnerRunKey) bool {
 	return validRequiredString(key.RunID, 4096) && key.Generation > 0
 }
 
-func validGoalSessionControlAttachmentLineage(lineage GoalSessionControlAttachmentLineage) bool {
+func validGoalSessionControlAttachmentLineage(lineage goalSessionControlAttachmentLineage) bool {
 	return validGoalSessionControlAttachment(lineage.Original) && validGoalSessionControlAttachment(lineage.Current) &&
 		lineage.Original.SessionID == lineage.Current.SessionID
 }
 
-func validGoalSessionControlAttachment(attachment GoalSessionControlAttachment) bool {
+func validGoalSessionControlAttachment(attachment goalSessionControlAttachmentRecord) bool {
 	return validRequiredString(attachment.RunID, 4096) && attachment.Generation > 0 &&
 		validRequiredString(attachment.TaskID, 4096) && validRequiredString(attachment.AdmissionID, 4096) &&
 		validGoalSessionUUID(attachment.SessionID) && validGoalSessionUUID(attachment.BindingID) &&
 		validGoalSessionUUID(attachment.ReceiptID)
 }
 
-func goalSessionControlAttachment(journal GoalSessionJournal, sessionID, bindingID, receiptID string) GoalSessionControlAttachment {
-	return GoalSessionControlAttachment{
+func goalSessionControlAttachment(journal GoalSessionJournal, sessionID, bindingID, receiptID string) goalSessionControlAttachmentRecord {
+	return goalSessionControlAttachmentRecord{
 		RunID: journal.RunID, Generation: journal.Generation, TaskID: journal.TaskID, AdmissionID: journal.AdmissionID,
 		SessionID: sessionID, BindingID: bindingID, ReceiptID: receiptID,
 	}
 }
 
-func matchesGoalSessionControlAttachment(attachment GoalSessionControlAttachment, journal GoalSessionJournal) bool {
+func matchesGoalSessionControlAttachment(attachment goalSessionControlAttachmentRecord, journal GoalSessionJournal) bool {
 	return attachment.RunID == journal.RunID && attachment.Generation == journal.Generation &&
 		attachment.TaskID == journal.TaskID && attachment.AdmissionID == journal.AdmissionID &&
 		attachment.SessionID == journal.ControlSessionID && attachment.BindingID == journal.BindingID &&
@@ -1931,7 +1931,7 @@ func (journal *GoalSessionJournal) appendConsumedStopCertificate(certificate Goa
 	if !validGoalSessionStopCertificate(certificate) {
 		return errors.New("goal session consumed stop receipt is invalid")
 	}
-	history := GoalSessionConsumedStopCertificateHistory{}
+	history := goalSessionConsumedStopCertificateHistory{}
 	if journal.ConsumedStopCertificates != nil {
 		history.Certificates = append(history.Certificates, journal.ConsumedStopCertificates.Certificates...)
 	}
@@ -1948,7 +1948,7 @@ func (journal *GoalSessionJournal) appendConsumedStopCertificate(certificate Goa
 	return nil
 }
 
-func (history GoalSessionConsumedStopCertificateHistory) containsExact(certificate GoalSessionStopCertificate) bool {
+func (history goalSessionConsumedStopCertificateHistory) containsExact(certificate GoalSessionStopCertificate) bool {
 	for _, existing := range history.Certificates {
 		if existing == certificate {
 			return true
@@ -2023,9 +2023,9 @@ func validGoalSessionLaunchState(value string) bool {
 	}
 }
 
-func validGoalSessionLineageState(value GoalSessionLineageState) bool {
+func validGoalSessionLineageState(value goalSessionLineageState) bool {
 	switch value {
-	case GoalSessionLineageStateReserved, GoalSessionLineageStateLaunching, GoalSessionLineageStateAttached, GoalSessionLineageStateUncertain:
+	case goalSessionLineageStateReserved, goalSessionLineageStateLaunching, goalSessionLineageStateAttached, goalSessionLineageStateUncertain:
 		return true
 	default:
 		return false
