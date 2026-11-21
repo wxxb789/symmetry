@@ -1059,6 +1059,33 @@ instead of appended.
       `text` and whose `Is(target)` reports `target == class`, so each phrasing keeps its exact
       wire text and joins its class.
 
+## scripts/ci: install a pinned PyYAML for the lockfile differential oracle (W6-01)
+
+- [ ] The `ci.yml` `daemon` job's "Check CI gate helper scripts" step
+      (`.github/workflows/ci.yml:1482-1493` as of `6a815c0f`, which runs
+      `python3 ../scripts/ci/test-check-lockfile-registry.py` at `:1489`) must install a pinned
+      PyYAML and export `SYMMETRY_REQUIRE_PYYAML=1` for that step, so the differential cross-check
+      between `check-lockfile-registry.py`'s own YAML reader and PyYAML can never silently vanish
+      again. This is the recorded follow-up of contract `goal-rf-w3-16-scripts-defects` (refactor
+      wave 3, SC S8, branch `refactor/rf-w3-16-scripts-defects`, plan
+      `docs/plans/2026-11-21-rf-w3-16-scripts-defects-plan.md`): the suite now prints the exact
+      notice `PyYAML differential oracle skipped: module not importable` on stderr and asserts
+      that string when the module is not importable, and with `SYMMETRY_REQUIRE_PYYAML=1` set the
+      differential test fails instead of skipping. The repository still declares no Python
+      dependency and no workflow performs a `pip install`, so on a runner without PyYAML the
+      oracle stays skipped. Measured 2026-11-21 at `a7681da4` (this slice's increment commit on top
+      of `36f9a887`): portable Python 3.12.10 on the Windows host has PyYAML 6.0.3 and runs `Ran 24
+      tests`, `OK` with no skip; WSL Ubuntu-24.04 Python 3.12.3 has PyYAML 6.0.1 and is `OK`
+      likewise; `python -S` (site-packages off) and `python3 -S` print the notice and report `OK
+      (skipped=1)`; `SYMMETRY_REQUIRE_PYYAML=1
+      python -S scripts/ci/test-check-lockfile-registry.py` exits 1 with `FAILED (failures=1)` on
+      both platforms. Pin the version next to the other tool pins in `ci.yml` (the W1-01 ruff-pin
+      entry's `required-version = "==0.17.5"` handshake at `docs/TODO.md:744` is the same
+      pattern) and set the environment variable in the same step, so a lost install reddens the
+      job instead of shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157
+      owned it in wave 3 (that PR has since landed as `6a815c0f`, the revision the line numbers
+      above bind); W6-01 is its wave-6 owner.
+
 ## Daemon state: decorative trailing-data disjunct in the provider-action decoder (rf-w3-07 survey)
 
 - [ ] Revalidate and merge the redundant trailing-data arms of
