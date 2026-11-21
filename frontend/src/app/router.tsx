@@ -1,5 +1,5 @@
-import { createRootRouteWithContext, createRoute, createRouter, Link, redirect } from "@tanstack/react-router";
-import type { Router, RouterHistory } from "@tanstack/react-router";
+import { createRootRouteWithContext, createRoute, Router, Link, redirect } from "@tanstack/react-router";
+import type { RouterHistory } from "@tanstack/react-router";
 import { AttentionPage } from "../features/attention/attention";
 import { ChatPage } from "../features/chat/chat";
 import { ConnectionsPage } from "../features/connections/connections";
@@ -72,7 +72,7 @@ const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, chatRoute, 
 type AppRouter = Router<typeof routeTree>;
 
 export function createAppRouter(application: Application, history?: RouterHistory): AppRouter {
-  return createRouter({ routeTree, context: { application }, basepath: "/portal", ...(history ? { history } : {}), defaultPreload: false, scrollRestoration: true });
+  return new Router({ routeTree, context: { application }, basepath: "/portal", ...(history ? { history } : {}), defaultPreload: false, scrollRestoration: true });
 }
 
 declare module "@tanstack/react-router" {
