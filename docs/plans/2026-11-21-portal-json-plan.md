@@ -60,11 +60,13 @@ provider's verdict strings.
 
 Coverage at the baseline (the gap the contract's C2 closes): the four owned files assert
 `delivery.*.source` only for `provider` (`portal_resources_test.exs:726, :736, :745`, `:1227`;
-`portal_workflow_test.exs:1436`), `manual` (`:713`, `:868`) and `none` (`:873-874`). `"agent"` is
-asserted nowhere, and no test serves the agent branch at all: the only semantic delivery events
-appended anywhere in the four files are non-delivery kinds, so the read-model → resolver plumbing
-for `pull_request`/`ci`/`review` evidence has never been served by these files
-(`chat_test.exs:741-855` serves it through the chat outcome, asserting `generation` only). The
+`portal_workflow_test.exs:1436`; `portal_integrations_test.exs:512`), `manual` (`:713`, `:868`) and
+`none` (`:873-874`). `"agent"` is asserted nowhere, and no test in the four owned files serves the
+agent branch at all: the only semantic delivery events appended anywhere in the four files are
+non-delivery kinds, so the read-model → resolver plumbing for `pull_request`/`ci`/`review` evidence
+has never been served by these files (`chat_test.exs:741-855` serves it through the chat outcome,
+pinning `delivery.ci.generation` and the delivery-derived `pull_request_url`/`ci_status`/
+`review_status`; the member set itself and `source == "agent"` stayed unpinned). The
 W1-13 gates assert delivery member *presence* against permissive schemas
 (`additionalProperties: true`), so a dropped extra member passes them.
 
@@ -191,8 +193,8 @@ connections once several worktree suites hold pools):
    table the answer attaches.
 6. `pnpm contracts:check` (root; schema/fixture/DTO side — expected green, no `contracts/` change; it
    is not evidence for CW-8b, because it never executes `portal_json.ex`).
-7. `git diff --check`; `git diff origin/main...HEAD -- . | grep -i "users/"` empty. Full `mix test`:
-   conductor gate-runner (separate step).
+7. `git diff --check`; no host home-directory path (the profile-name check) in
+   `git diff origin/main...HEAD -- .`. Full `mix test`: conductor gate-runner (separate step).
 8. **Mutation check on the new pin** (throwaway, reverted): flip the agent branch's pass-through to a
    fixed member set (drop `:state`) and confirm the matrix test fails red before reverting — the C2
    test must be able to fail, not merely exist. Same for the getter: drop `changed_files` from
@@ -281,7 +283,8 @@ masked for UUIDs, ISO-8601 timestamps, numbers (as `0`, so the text stays decoda
 `work_item_key`, and the pagination fixture's `raw event <n>` label (110 events written under one
 `now:`, so page membership follows a tie-break that differs between two runs of the *unmodified*
 code). `.delivery` lines are the delivery member maps themselves, so the CW-8b subject is compared
-member by member and value by value, not only as part of a body.
+member by member and value by value — string values in full, numbers and identifiers as their masks
+— not only as part of a body.
 
 The C5 table per member × branch, from the 375 delivery lines of both runs (base and head identical):
 
@@ -317,7 +320,9 @@ mismatches**) and on the differential, which would have caught any *served* diff
 The differential's own sensitivity was measured the same way: with the `state` mutation applied, the
 same hook over the same four files reports body 2, member paths 2 and delivery 4 differing lines
 against the base dump (`57/59 passed`, the two new tests red), while the unmutated base-vs-head
-comparison is empty. The empty diff is therefore a sensitive measurement, not a blind one. The final
+comparison is empty. The empty diff is therefore a sensitive measurement of member sets and string
+values, not a blind one; the canonical form's masked numbers and identifiers are insensitive by
+construction and are pinned by the matrix and the agent wire case instead. The final
 `portal_json.ex` is byte-identical to the file the head dump measured
 (`sha256 c6c97f7c…9529af`), and the base revision's file is `sha256 4afea623…594b9696` at `857e763b`.
 
@@ -329,8 +334,8 @@ comparison is empty. The empty diff is therefore a sensitive measurement, not a 
 ## Apply-stage re-record (2026-11-21, rf-w2-04-portal-json apply, findings 1-3)
 
 The apply stage landed three deltas on the `i1` revision above: the `delivery/2` comment
-(finding 1 — prose only, no code path, no line-count change), the pin `the served outcome reads the
-attempt result's string-keyed members` in `portal_resources_test.exs` (finding 2 — the keyed
+(finding 1 — prose only, no code-path change; the comment grew 3 → 5 lines), the pin `the served
+outcome reads the attempt result's string-keyed members` in `portal_resources_test.exs` (finding 2 — the keyed
 getter's string spelling and key table had no committed test, which is why the one-key mutation row
 above stayed green; the pin now kills it) and the trade-off-3 sentence above (finding 3). The C3
 differential was re-run on the delivered revision with the same throwaway hook and canonical form
@@ -354,3 +359,34 @@ Pin mutation: `@evidence_keys` reduced to one key → the pin alone red (`0/1 pa
 `mix compile --warnings-as-errors`, `pnpm contracts:check` (typecheck, 35/35 fixture tests,
 21 schemas / 248 fixtures, DTOs current) and `git diff --check` are exit 0; the full `mix test` and
 the CI jobs remain with the conductor's gate-runner.
+
+## Fix-stage re-record (2026-11-21, rf-w2-04-portal-json fix r1, RV-01…RV-10)
+
+The fix stage corrected the review's false statements in place — the agent-branch `put`/`put_new`
+sentence (`portal_json.ex`, RV-02) and the getter's spelling comment (RV-03), the matrix sentence
+(RV-01), the wire-case comment (RV-04) and the pin comment (RV-05) in the test file, this plan's
+baseline inventory (RV-07), sensitivity sentences (RV-10) and apply record (RV-06), and the
+`portal_session.ex` clause range in `docs/TODO.md` (RV-09) — and closed RV-08 with the new pin
+`the served outcome reads a changed_files result through the fallback spelling`: dropping
+`changed_files` from `@evidence_keys` leaves the other 60 tests green and this case red
+(`changed_artifacts` served `[]`), reverted afterwards. `message`/`question` stay callerless dead
+entries, as recorded. RV-11 (the three schema descriptions still naming `effective_delivery/6`) is
+outside the owned set and is recorded as unmet in the fix answer, with DTO regeneration required.
+
+The C3 differential was re-run whole on the delivered revision with the same throwaway hook and
+canonical form (`<HOST-PATH>/gdd/scratch/w204-fx2-*`):
+
+| run | result | body diff | member-path diff | delivery diff | responses |
+| --- | --- | --- | --- | --- | --- |
+| base `4afea623…594b9696` vs delivered revision, same corpus | `61 passed` + `61 passed`, exit 0 | 0 | 0 | 0 | 388 (`/portal/api/**`), 399 delivery lines |
+| delivered revision, run 1 vs run 2 (stability control) | `61 passed` ×2, exit 0 | 0 | 0 | 0 | 388, 399 |
+
+The corpus grew by the new case's own reads (384 → 388 responses, 387 → 399 delivery lines) and only
+the `none` counts move — `pull_request` 100 → 104, `ci` 110 → 114, `review` 110 → 114 — while agent
+(2), manual (14 / 4 / 4) and provider (13) stand; the per-member × branch tables are identical
+(base vs delivered and run vs run). Delivered hashes: `portal_json.ex` `sha256 dfc31e3c…15e3af` and
+`portal_resources_test.exs` `sha256 15b58286…08e8a8`. Gates on the final tree: `mix format
+--check-formatted` 0, `mix compile --warnings-as-errors` 0, the four-file `mix test` 0 = `61 passed`
+(60 before the new pin), `pnpm contracts:check` 0 (typecheck, 35/35 fixture tests, 21 schemas / 248
+fixtures, DTOs current) and `git diff --check` clean; the full `mix test` and the CI jobs remain with
+the conductor's gate-runner.

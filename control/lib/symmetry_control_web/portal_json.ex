@@ -567,9 +567,10 @@ defmodule SymmetryControlWeb.PortalJSON do
   end
 
   # The agent branch serves the whole evidence map: its own `source` (the
-  # evidence's, not necessarily "agent") and every member the agent wrote, with
-  # the resolved value and the member's own field put in only where the map does
-  # not already carry them.
+  # evidence's, not necessarily "agent") and every member the agent wrote.
+  # `:value` is always replaced by the resolved value; `source`, the member's own
+  # field, `generation`, `url` and `status` are added only where the map does not
+  # already carry them.
   defp resolve_delivery(%{agent: agent} = descriptor) when is_map(agent) do
     value = Map.get(agent, descriptor.field) || descriptor.fallback
 
@@ -712,8 +713,10 @@ defmodule SymmetryControlWeb.PortalJSON do
   defp project_active?(%{status: "active"}), do: true
   defp project_active?(_project), do: false
 
-  # The evidence maps reach this getter under two spellings: the agent's result
-  # JSON carries string keys, the durable projections atom keys. One table names
+  # The getter answers the two spellings a key can arrive under: the string is
+  # the wire spelling (the attempt's result JSON, deep-stringified before it is
+  # stored and string-keyed again after the JSONB round trip), the atom arm is a
+  # legacy fallback that no producer in this revision reaches. One table names
   # both, so a new evidence field is a word here instead of another clause, and
   # the atoms are this module's own literals (never built from a served key).
   @evidence_keys ~w[summary message question findings changed_artifacts changed_files tests]a

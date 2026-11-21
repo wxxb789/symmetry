@@ -595,7 +595,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 - tolerated — no tracked work (decision note, 2026-11-21, `refactor/rf-w2-04-portal-json`): the
       portal shell's URL-state policy is written twice — the `safeReturnTo` open-redirect allowlist
       (`control/lib/symmetry_control_web/portal_session.ex:5-79`: the per-parameter regexes at
-      `:21-27`, the per-path clauses at `:58-77`) and the frontend shell router
+      `:21-27`, the per-path clauses at `:46-79`) and the frontend shell router
       (`frontend/src/app/application.ts:46` `shellPath`, `:75` `shellQuery`, used by
       `safeReturnTo/1` at `:108`). The two spellings are kept in step by the shared corpus
       `contracts/fixtures/shell-return-targets.json` (read by

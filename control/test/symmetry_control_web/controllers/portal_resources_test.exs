@@ -954,10 +954,10 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   end
 
   # The delivery member is the wire's one place where a provider-owned value, an
-  # operator's manual value and the attempt's agent evidence compete, and each
-  # precedence branch serves a *different* member set: only the provider branch
-  # carries `provider`/`recorded_at`, only the agent branch the evidence's own
-  # members, and the pull request's `status` is overridden after resolution
+  # operator's manual value and the attempt's agent evidence compete. Only the
+  # provider branch adds `provider`/`recorded_at`, only the agent branch carries
+  # the evidence map's own members; manual and none serve the same five, and the
+  # pull request's `status` is overridden after resolution
   # (`provider_pull_request_state/2`). This matrix pins the full served map —
   # exact member set and values — of every branch for every member, on the
   # projection every delivery-serving read shares (`PortalJSON.work_item/2`).
@@ -981,8 +981,9 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   # members as the *read model* writes them (not a hand-built map), travelling
   # through Jason to the response body — the evidence's `recorded_at` is a
   # `DateTime` there and an ISO 8601 string on the wire. No test in the four
-  # owned files serves a delivery from evidence today, so this case is the only
-  # wire pin of the agent branch's pass-through members.
+  # owned files serves a delivery from evidence today; repo-wide, the agent
+  # branch's pass-through members were pinned only as `delivery.ci.generation`
+  # (`chat_test.exs:847`), so this case is their first full-member wire pin.
   test "the served agent delivery carries the attempt's evidence members through the wire" do
     project = create_project("AGENTDEL")
 
@@ -1082,11 +1083,12 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   end
 
   # CW-8a's getter reads the attempt's result under two spellings, and the
-  # string one is the spelling a result JSON arrives in. No other test in the
-  # four owned suites serves a non-empty result — the getter's key table
-  # reduced to a single key left every suite green (plan, `## Evidence as run`) —
-  # so this case is the table's only committed pin: each served member below
-  # fails if its own key leaves the table.
+  # string one is the spelling a result JSON arrives in. These two cases are the
+  # only tests in the four owned suites that serve a non-empty attempt result
+  # through `PortalJSON.outcome/5` — the getter's key table reduced to a single
+  # key left every suite green (plan, `## Evidence as run`) — so they are the
+  # table's committed pins: each served member below fails if its own key leaves
+  # the table.
   test "the served outcome reads the attempt result's string-keyed members" do
     project = create_project("OUTCOME")
     runtime = enroll_adapter_runtime("outcome-result", "Outcome result runtime")
@@ -1136,6 +1138,47 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
            ]
 
     assert outcome["tests"] == [%{"name" => "portal_resources_test", "status" => "passed"}]
+  end
+
+  # The getter's fallback spelling: the outcome serves `changed_artifacts`
+  # through `list_value(result, "changed_artifacts", "changed_files")`, so a
+  # result carrying only `changed_files` exercises the fallback lookup — the
+  # case above carries the primary spelling. This is the committed pin for the
+  # table's `changed_files` entry (plan, `## Fix-stage re-record`).
+  test "the served outcome reads a changed_files result through the fallback spelling" do
+    project = create_project("CHGFILES")
+    runtime = enroll_adapter_runtime("changed-files", "Changed files runtime")
+
+    item =
+      create_work_item(project, "Changed files target", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex"
+      })
+
+    assert %{"execution" => %{"task_id" => task_id}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/run", %{
+               "action_id" => "changed-files-run"
+             })
+             |> json_response(202)
+
+    {run, fence} = claim_gate_attempt(runtime, task_id, 4_800)
+
+    transition(run, fence, "completed", 4_801, %{
+      "changed_files" => [
+        %{"path" => "control/lib/symmetry_control_web/portal_json.ex", "kind" => "file"}
+      ]
+    })
+
+    outcome =
+      api_conn()
+      |> get("/portal/api/work-items/#{item["id"]}")
+      |> json_response(200)
+      |> Map.fetch!("outcome")
+
+    assert outcome["changed_artifacts"] == [
+             %{"path" => "control/lib/symmetry_control_web/portal_json.ex", "kind" => "file"}
+           ]
   end
 
   test "work item assignment is scoped to the work item's project and resource kind" do
