@@ -271,6 +271,35 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     end
   end
 
+  test "history limits accept exactly the documented integer forms", %{conn: conn} do
+    %{task: task} = history_fixture()
+    events = "/api/v1/tasks/#{task.id}/events"
+
+    for {value, status} <- [
+          {"1", 200},
+          {"+1", 200},
+          {" 1", 400},
+          {"", 400},
+          {"0", 400},
+          {"-1", 400},
+          {"1.5", 400},
+          {"100", 200},
+          {"101", 200},
+          {"500", 200},
+          {"501", 400},
+          {"9223372036854775807", 400},
+          {"9223372036854775808", 400}
+        ] do
+      response = bearer(conn) |> get("#{events}?limit=#{URI.encode_www_form(value)}")
+
+      if status == 200 do
+        assert json_response(response, 200)
+      else
+        assert_error(response, 400, "invalid_request")
+      end
+    end
+  end
+
   test "task timeline is newest-first across generations and only accepts before cursors", %{
     conn: conn
   } do
