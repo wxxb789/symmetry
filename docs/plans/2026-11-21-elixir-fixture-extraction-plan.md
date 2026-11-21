@@ -234,3 +234,11 @@ recipe), `ERL_SCHEDULERS=4` to match CI's 4-CPU pool arithmetic.
 
 Sol (this stage) runs every gate listed above in the foreground and records real exit codes and
 counts; an independent read-only review follows in the review stage.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `control/test/support/test_fixtures.ex` by the 2026-11-22 comment-policy
+sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws9a-control-test-support"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

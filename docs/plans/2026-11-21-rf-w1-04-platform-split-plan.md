@@ -200,3 +200,11 @@ this tree:
 3. **Declarations in a file without a `types` sibling.** Options: give them their own sibling
    (unauthorised file name) or leave them in the residual by subject. Chosen: by subject, fallback
    residual, as stated in the role rules.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from this slice's files (`daemon/internal/platform/anchor_gate.go`,
+`anchor_proc.go`, `anchor_run.go`, `helper_v2_protocol.go`) by the 2026-11-22 comment-policy sweep is
+recorded in [`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws1-platform-anchor"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

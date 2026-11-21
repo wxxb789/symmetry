@@ -2457,9 +2457,8 @@ func linuxV2NativeWitnessHoldSupported(stage string) bool {
 }
 
 func linuxV2NativeWitnessAckLossSupported(stage string) bool {
-	// The ack-stage vocabulary is owned by execution; deriving membership from
-	// its single source keeps the witness request validation, the drop seam and
-	// the release acceptance from drifting apart.
+	// The ack-stage vocabulary is owned by execution: deriving membership from that single
+	// source keeps request validation, the drop seam and release acceptance from drifting.
 	return slices.Contains(execution.LinuxV2AckStages[:], stage)
 }
 

@@ -251,3 +251,11 @@ files and the plan). No `-race` locally: no cgo on this Windows host; the daemon
    this repository; the implement stage does not move them (W1-04 precedent). Repository-side
    closure is this plan file; no other document cites the new test files or the clone
    coordinates, so no citation goes stale.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `daemon/internal/platform/clone_aliasing_linux_test.go` by the 2026-11-22
+comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws2b-platform-containment"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

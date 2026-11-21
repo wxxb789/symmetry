@@ -5620,10 +5620,8 @@ func TestCancelPreemptsBlockedInputInSameSnapshot(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("cancel did not preempt blocked input")
 	}
-	// The cancel path has terminated the process, and a terminated process
-	// cannot accept more input: release the blocked write here instead of
-	// waiting out inputWriteTimeout when the input handler won the race for
-	// inputMu and the cancel receipt is queued behind it.
+	// A terminated process cannot accept more input: release the blocked write here instead of waiting
+	// out inputWriteTimeout when the input handler won the race for inputMu and the cancel receipt is queued behind it.
 	close(input.release)
 	<-completions[1].done
 	journal, err := store.LoadJournal(key)
@@ -5743,10 +5741,8 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("scheduled cancellation did not persist after input completion")
 	}
-	// The cancellation receipt is persisted while the cancel handler holds the
-	// run's input lock, which the preempted input command held until it recorded
-	// its own outcome and acknowledgement, so the durable state below is already
-	// settled when the receipt lands; no poll is needed.
+	// The cancellation receipt is persisted under the run's input lock, after the preempted input
+	// command recorded its outcome and acknowledgement: the durable state below is already settled, no poll is needed.
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -7146,13 +7142,8 @@ func TestRenewLeasesJoinsWorkersAfterShutdown(t *testing.T) {
 	cancel()
 	<-api.firstReturned
 	<-api.secondCancelled
-	// Both workers are past their cancellation point: run-1's renewal returned and
-	// run-2 is parked inside its call. A loop that joins them cannot have returned.
-	// The fence is positive -- run-1's in-flight request barrier is released by the
-	// drain loop, not by its worker -- so waiting for the count to drop replaces a
-	// fixed window; every poll also probes that the loop has not returned.
-	// The failure message reports the last sampled count, never a re-read: the
-	// count can change between the final poll and the message.
+	// run-2 is parked inside its call and run-1's barrier is released by the drain loop, not its worker:
+	// poll the count down to 1 while probing the loop has not returned; report the last sampled count, never a re-read.
 	observedRequestBarriers := 0
 	drained := awaitTestCondition(func() bool {
 		select {
@@ -7314,12 +7305,8 @@ func startupTestDaemon(t *testing.T, store *state.Store, service workspace.Servi
 // it sits far above any real scheduling delay, race instrumentation included.
 const testHangGuard = 30 * time.Second
 
-// awaitTestCondition polls condition until it holds, and reports whether it did
-// within the hang guard. It is the convention for waits whose completion has no
-// signal channel: a background worker records the state in the durable journal
-// or releases an in-flight request, and only a poll can observe it. The interval
-// only bounds discovery latency; the hang guard is the single failure bound, so
-// this is never a statement about how fast the product should be.
+// The convention for waits whose completion has no signal channel (a durable journal, a released
+// in-flight request): poll here; the interval only bounds discovery latency.
 func awaitTestCondition(condition func() bool) bool {
 	deadline := time.Now().Add(testHangGuard)
 	for {
@@ -8615,9 +8602,8 @@ func (client *shutdownRenewControl) RenewLease(ctx context.Context, runID string
 	<-ctx.Done()
 	if runID == "run-1" {
 		client.firstReturned <- struct{}{}
-		// Return a completed renewal: its in-flight request barrier is then
-		// released only by renewLeases' drain loop, which is the fence the test
-		// waits on while the other worker stays parked in this call.
+		// Return a completed renewal: its in-flight request barrier is then released only by
+		// renewLeases' drain loop, the fence the test waits on while the other worker stays parked here.
 		return protocol.LeaseHeartbeatResponse{}, nil
 	}
 	client.secondCancelled <- struct{}{}

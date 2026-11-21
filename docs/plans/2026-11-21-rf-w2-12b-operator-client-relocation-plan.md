@@ -324,3 +324,11 @@ byte-identical); the goal-envelope family (D5/W6-08); ack stages (W3); W2-13's `
   `sameJSONObject` (number spellings, `-0`, large-integer separation, nested members), so a future
   change to the retained helper now fails in `control` even though the operator cases still cover
   the moved caller.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `daemon/e2e/internal/operator/client.go` by the 2026-11-22 comment-policy
+sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws12-daemon-misc"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

@@ -288,3 +288,12 @@ Evidence (`MIX_TEST_PARTITION=w113fix`, every probe reverted before the final ru
 - `WorkspaceWorkItem.position` and `RuntimeSnapshot.active_runs`, which have no feature-code read
   site (the P2-1 amendment's bundle-derived assertion walks them like every other declared member;
   no frontend-read list pins them).
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from
+`control/test/symmetry_control_web/controllers/portal_integrations_test.exs` by the 2026-11-22
+comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws9b-control-test"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

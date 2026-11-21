@@ -176,7 +176,6 @@ class PinnedBinaryTest(unittest.TestCase):
         self.pin = {"size": self.binary.stat().st_size, "sha256": WITNESS.digest(self.binary)}
 
     def resolve(self, receipt, pin=None, configured=None, path=None):
-        """Run the pin with this host's environment patched out for the duration."""
         environment = {} if configured is None else {WITNESS.BINARY_ENVIRONMENT: configured}
         with mock.patch.dict(os.environ):
             os.environ.pop(WITNESS.BINARY_ENVIRONMENT, None)
@@ -196,8 +195,7 @@ class PinnedBinaryTest(unittest.TestCase):
         self.assertNotIn("binary", receipt.value)
 
     def test_wrong_digest_is_refused_after_recording_the_observed_identity(self):
-        # The pre-environment witness recorded the observed identity and refused afterwards;
-        # a refused run keeps that evidence instead of dropping it.
+        # A refused run keeps the observed-identity evidence instead of dropping it.
         receipt = WITNESS.Receipt("")
         pins = {"size": self.pin["size"], "sha256": "0" * 64}
         with self.assertRaisesRegex(WITNESS.WitnessError, "exact platform binary pin mismatch"):

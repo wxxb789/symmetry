@@ -24,9 +24,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// DurableSupervisorHandoffAvailable reports whether the current executable
-// can dispatch the daemon's hidden supervisor mode. Go test binaries have a
-// generated test main and must retain the local containment path instead.
+// Go test binaries have a generated test main and must retain the local containment path instead.
 func DurableSupervisorHandoffAvailable() bool {
 	if flag.CommandLine.Lookup("test.v") == nil {
 		return true
@@ -35,14 +33,12 @@ func DurableSupervisorHandoffAvailable() bool {
 	return !strings.HasSuffix(name, ".test")
 }
 
-// SupervisorHandoffAbortVerifier is supplied by the caller that still owns
-// the current daemon/store lifetime. It must return nil only after the old
-// writer is quiesced.
+// Supplied by the caller that still owns the daemon/store lifetime. Must return nil only
+// after the old writer is quiesced.
 type SupervisorHandoffAbortVerifier func() error
 
-// LinuxSupervisorStartSpec is consumed by execution's Linux launcher.  The
-// target command is serialized over a private inherited pipe; it never enters
-// helper argv or environment.
+// Consumed by execution's Linux launcher.  The target command is serialized over a private
+// inherited pipe; it never enters helper argv or environment.
 type LinuxSupervisorStartSpec struct {
 	Command       *exec.Cmd
 	HelperCommand *exec.Cmd
@@ -77,19 +73,16 @@ type linuxSupervisor struct {
 	mirrorIdentity           string
 	mirrorScanBarrierRestore func()
 	pidfd                    int
-	// mirror observes the target tree independently of the helper. It owns the
-	// duplicated pidfd and may take over only after the exact helper has exited.
+	// Owns the duplicated pidfd; mirror may take over only after the exact helper has exited.
 	mirror *processGroup
-	// finalProofPending means the mirror closed its pidfd and only the
-	// identity-bound read-only group proof remains retryable.
+	// Mirror closed its pidfd; only the identity-bound read-only group proof remains retryable.
 	finalProofPending bool
 
 	requestMu     sync.Mutex
 	stopMu        sync.Mutex
 	statusMu      sync.Mutex
 	leaseResumeMu sync.Mutex
-	// writeControlFrameForTesting places helper exit at the control-write
-	// boundary and returns the resulting real pipe error.
+	// Places helper exit at the control-write boundary and returns the resulting real pipe error.
 	writeControlFrameForTesting func(*os.File, linuxSupervisorRequest) error
 
 	committed             bool
@@ -112,9 +105,8 @@ type linuxSupervisor struct {
 	bindUnknown                 bool
 }
 
-// StartLinuxSupervisor starts the helper first.  The helper then launches the
-// ptrace-stopped target, sends its exact identity and a duplicate pidfd back,
-// and waits for prepare/bind/commit before allowing user code to run.
+// Starts the helper first; it launches the ptrace-stopped target and waits for
+// prepare/bind/commit before allowing user code to run.
 func StartLinuxSupervisor(spec LinuxSupervisorStartSpec) (*linuxSupervisor, error) {
 	if spec.Command == nil {
 		return nil, errors.New("Linux supervisor target command is required")
@@ -855,10 +847,8 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 	return nil
 }
 
-// recoverResponseLossStop replays a committed stop through the authenticated
-// recovery endpoint. The normal response pipe may have been closed after the
-// helper applied the request, so later Terminate/Close retries must retain this
-// typed recovery boundary instead of degrading to helper-exited.
+// The normal response pipe may have been closed after the helper applied the request, so later
+// Terminate/Close retries must retain this typed recovery boundary instead of degrading to helper-exited.
 func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 	if supervisor == nil {
 		return ErrLinuxSupervisorHelperExited
@@ -867,8 +857,7 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 	if value == nil {
 		return fmt.Errorf("%w: Linux supervisor authority is unavailable", ErrLinuxSupervisorStopUnproven)
 	}
-	// Keep response-loss sticky even after recovery succeeds. The daemon can
-	// now have a receipt, but the normal response pipe is permanently
+	// Keep response-loss sticky even after recovery succeeds: the normal response pipe is permanently
 	// untrustworthy and must never be used by a later lifecycle operation.
 	supervisor.requestMu.Lock()
 	supervisor.closeControlAfterResponseLossRequestLocked()
@@ -880,9 +869,8 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 			return supervisor.stopWithMirror()
 		}
 		receipt, _, source, err := stopPersistedLinuxSupervisor(*value)
-		// The helper may die while the recovery endpoint is being contacted.
-		// A receipt reconstructed from endpoint absence is not a healthy-helper
-		// stop response; re-enter the mirror takeover path for exact proof.
+		// The helper may die while the recovery endpoint is contacted. A receipt reconstructed from
+		// endpoint absence is not a healthy-helper stop response; re-enter mirror takeover for exact proof.
 		if source == linuxSupervisorStopReceiptFromAbsenceProof || channelClosedV2(supervisor.helperDone) {
 			return supervisor.stopWithMirror()
 		}
@@ -1013,9 +1001,7 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 	return nil
 }
 
-// waitForExactHelperDeath joins the exact helper waiter and then reads back its
-// persisted identity. A closed wait channel or a failed control write alone is
-// not enough to authorize mirror takeover.
+// A closed wait channel or a failed control write alone is not enough to authorize mirror takeover.
 func (supervisor *linuxSupervisor) waitForExactHelperDeath(deadline time.Time) error {
 	if supervisor == nil || supervisor.helperDone == nil {
 		return errors.New("Linux supervisor helper wait is unavailable")
@@ -1049,9 +1035,8 @@ func (supervisor *linuxSupervisor) waitForExactHelperDeath(deadline time.Time) e
 	return fmt.Errorf("exact Linux supervisor helper %d remains alive after wait", supervisor.authority.SupervisorPID)
 }
 
-// proveLinuxSupervisorGroupAbsentWithRetry tolerates only the short interval
-// in which a killed process group is still visible to getpriority. Identity,
-// namespace, permission, and all other proof failures remain fail-closed.
+// Tolerates only the short interval in which a killed process group is still visible to getpriority;
+// identity, namespace, permission, and all other proof failures remain fail-closed.
 func proveLinuxSupervisorGroupAbsentWithRetry(ctx context.Context, pid int, identity string, deadline time.Time) error {
 	if ctx == nil {
 		return fmt.Errorf("%w: nil proof context", ErrPersistedProcessGroupUnproven)
@@ -1269,9 +1254,8 @@ func (supervisor *linuxSupervisor) freezeMirrorObservation() error {
 	return supervisor.assertDurableScanStateSealed()
 }
 
-// releaseAfterHelperDeath is the only local release path. A durable receipt
-// proves the target tree stopped; the helperDone fence proves the exact helper
-// process has already exited, so no request may be sent over its dead pipes.
+// The only local release path: a durable receipt proves the target tree stopped, and the helperDone
+// fence proves the exact helper exited, so no request may be sent over its dead pipes.
 func (supervisor *linuxSupervisor) releaseAfterHelperDeath(mirror *processGroup) error {
 	if supervisor == nil || !channelClosedV2(supervisor.helperDone) {
 		return ErrLinuxSupervisorHelperExited
@@ -1395,8 +1379,7 @@ func (supervisor *linuxSupervisor) abortPreparedContainment() error {
 	supervisor.ownerWrite, supervisor.controlWrite, supervisor.responseRead, supervisor.statusRead = nil, nil, nil, nil
 	supervisor.mu.Unlock()
 	var closeErr error
-	// StartLinuxSupervisor stores the mirror-owned pidfd in supervisor too.
-	// closePreparedAbort already released that descriptor when mirror != nil.
+	// closePreparedAbort already released the mirror-owned pidfd when mirror != nil.
 	if fd >= 0 && mirror == nil {
 		closeErr = unix.Close(fd)
 	}
@@ -1423,10 +1406,8 @@ func (supervisor *linuxSupervisor) RenewLease(deadline time.Duration, sequence u
 	return supervisor.sealInitialMirrorScanForWitness(sequence)
 }
 
-// sealInitialMirrorScanForWitness lets the explicitly gated lease-armed
-// pre-resume witness record a durable mirror seal after its first lease
-// acknowledgement. Its barrier-path gate leaves post-resume scan witnesses,
-// normal launches, later renewals, and resumed targets on their existing paths.
+// Lets the explicitly gated lease-armed pre-resume witness record a durable mirror seal after its
+// first lease acknowledgement; all other launch and renewal paths are unchanged.
 func (supervisor *linuxSupervisor) sealInitialMirrorScanForWitness(sequence uint64) error {
 	injection, enabled := linuxSupervisorScanFailureInjectionFromEnv()
 	if !enabled || strings.TrimSpace(os.Getenv(linuxSupervisorLeaseArmedBarrierReachedEnv)) == "" ||
@@ -1551,10 +1532,8 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 	return response, nil
 }
 
-// markResponseTransportLostLocked detaches the normal control writer so it is
-// closed once, after the in-flight request frame has been queued. The caller
-// must hold supervisor.mu and requestMu, and must close the returned file only
-// after releasing supervisor.mu.
+// Caller must hold supervisor.mu and requestMu, and must close the returned file only after
+// releasing supervisor.mu.
 func (supervisor *linuxSupervisor) markResponseTransportLostLocked() *os.File {
 	supervisor.responseTransportLost = true
 	supervisor.responseLossPending = true
@@ -1606,12 +1585,8 @@ func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) b
 	return true
 }
 
-// waitForLinuxSupervisorReleaseResponseLossBarrier is an opt-in production
-// witness seam. It runs only after the daemon wrote a release request, the
-// explicitly injected response transport loss was observed, and both test-owned
-// marker paths are configured. The reached marker is created before automatic
-// recovery; the daemon waits for the test-owned release marker before allowing
-// recovery or clear to proceed.
+// Opt-in production witness seam: the reached marker is created before automatic recovery, and
+// recovery/clear proceeds only after the test-owned release marker appears.
 func (supervisor *linuxSupervisor) waitForLinuxSupervisorReleaseResponseLossBarrier() error {
 	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" ||
 		os.Getenv(linuxSupervisorDropResponseOnceEnv) != linuxSupervisorOpRelease {
@@ -1679,9 +1654,7 @@ func (supervisor *linuxSupervisor) waitForLinuxSupervisorReleaseResponseLossBarr
 	}
 }
 
-// StopPersistedLinuxSupervisor authenticates the helper recovery endpoint and
-// returns a fresh exact stop receipt.  Endpoint absence, helper identity
-// mismatch, and unknown responses are all unresolved outcomes.
+// Endpoint absence, helper identity mismatch, and unknown responses are all unresolved outcomes.
 func StopPersistedLinuxSupervisor(value authority.Supervisor) (authority.StopReceipt, error) {
 	receipt, _, _, err := stopPersistedLinuxSupervisor(value)
 	return receipt, err
@@ -1727,8 +1700,7 @@ func stopPersistedLinuxSupervisor(value authority.Supervisor) (authority.StopRec
 	return receipt, response.ScanSealSequence, linuxSupervisorStopReceiptFromHelper, receiptErr
 }
 
-// ReleasePersistedLinuxSupervisor releases a helper after the caller has
-// durably recorded the exact stop receipt.
+// Releases a helper after the caller has durably recorded the exact stop receipt.
 func ReleasePersistedLinuxSupervisor(value authority.Supervisor) error {
 	if err := value.Validate(); err != nil {
 		return err
@@ -1771,9 +1743,8 @@ func isLinuxSupervisorRecoveryEndpointUnreachable(err error) bool {
 	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
-// provePersistedLinuxSupervisorStop is the restart-safe local stop boundary.
-// An absent endpoint is not sufficient by itself: the exact helper, target
-// identity, and original process group must all be absent as well.
+// An absent endpoint is not sufficient by itself: the exact helper, target identity, and
+// original process group must all be absent as well.
 func provePersistedLinuxSupervisorStop(value authority.Supervisor) error {
 	if err := proveLinuxSupervisorHelperAbsent(value.SupervisorPID, value.SupervisorIdentity); err != nil {
 		return err
@@ -1788,9 +1759,8 @@ func provePersistedLinuxSupervisorStop(value authority.Supervisor) error {
 	return nil
 }
 
-// provePersistedLinuxSupervisorRelease extends the stop proof with stale
-// endpoint retirement. The endpoint is cleared only after the exact stop
-// receipt has been reconstructed and durably supplied by the caller.
+// The endpoint is cleared only after the exact stop receipt has been reconstructed and durably
+// supplied by the caller.
 func provePersistedLinuxSupervisorRelease(value authority.Supervisor) error {
 	if err := provePersistedLinuxSupervisorStop(value); err != nil {
 		return err
@@ -1849,11 +1819,8 @@ func retireLinuxSupervisorEndpoint(ownerContext string) error {
 	return nil
 }
 
-// ProvePreparedSupervisorAborted proves that a never-committed Linux
-// supervisor handoff left no live recovery endpoint, exact helper or target,
-// or original process group. A bound helper is authenticated before its secret
-// is sent. Any live object or uncertain observation remains unresolved; this
-// proof never claims that a target ran or mints a stop receipt.
+// A bound helper is authenticated before its secret is sent; any live object or uncertain
+// observation remains unresolved, and this proof never mints a stop receipt.
 func ProvePreparedSupervisorAborted(handoff authority.SupervisorHandoff, verifyOldOwnerQuiesced SupervisorHandoffAbortVerifier) (authority.SupervisorHandoffAbortProof, error) {
 	if verifyOldOwnerQuiesced == nil {
 		return authority.SupervisorHandoffAbortProof{}, errors.New("supervisor handoff abort verifier is required")

@@ -541,16 +541,6 @@ LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
 #           queueTerminalTransitionWithRetry / queueTerminalTransitionAndAcknowledgement
 #           (outbox.go:166, 246); nativeTerminalPayload (goal_delivery.go:357) returns the
 #           same three.
-#   stage -- the queueFailure stage literals and their call sites
-#           (events.go:530, app.go:1440-1666) and the process-exit retry
-#           (app.go:2011).
-#   reason -- the literals reaching stopRecoveredJournal (app.go:1188, 1222,
-#           1393; lease.go:579): lease/ownership reasons (lease.go:126-277;
-#           outbox.go:734, 834, 1110) and the protocol.ReconcileDecisionKind
-#           decisions (daemon/internal/protocol/protocol.go:560-564).
-#   outcome -- the acknowledgement outcomes (native_run.go:1566-1630,
-#           2181-2216; commands.go:696).
-#   kind -- the newIDWithRetry kinds (outbox.go:130, 191, 195; supervisory.go:85).
 # Maintenance rule: a change that adds a producer or literal for one of these
 # fields must extend the set in the same change; test-linux-v2-evidence.py
 # scans the log call sites and the known producer call sites and fails when a

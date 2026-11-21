@@ -538,10 +538,8 @@ describe("goal detail surface", () => {
     const integrationSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "c".repeat(40), tree_digest: `sha256:${"d".repeat(64)}` };
     const implementationEvidence = "99999999-9999-4999-8999-999999999999";
     const integrationEvidence = "99999999-9999-4999-8999-999999999998";
-    // `undefined`, not `null`, as the sentinel: the capture happens inside the
-    // fetched command handler, so a `= null` initializer narrows the variable to
-    // `null` for the checker and leaves everything after the guard unreachable
-    // (`never`; the earlier `payload["subject"]` element accesses masked it).
+    // `undefined`, not `null`: a `= null` initializer would narrow the variable to
+    // `null` for the checker and leave everything after the guard unreachable.
     let achievePayload: Record<string, unknown> | undefined;
     const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");

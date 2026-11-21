@@ -576,9 +576,8 @@ func (session *nativeSession) Wait(ctx context.Context) (harness.TaskResult, err
 	return harness.WaitResult(ctx, session.processDone, session.publishedResult, harness.TaskResult{})
 }
 
-// publishedResult returns the persisted result after the physical join.
-// Semantic/lifecycle failures remain in WaitTurn and the complete result,
-// including every physical Process field.
+// Returns the persisted result after the physical join; semantic/lifecycle failures
+// stay in WaitTurn and the complete result.
 func (session *nativeSession) publishedResult() (harness.TaskResult, error) {
 	session.mutex.Lock()
 	defer session.mutex.Unlock()

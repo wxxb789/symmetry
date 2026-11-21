@@ -550,3 +550,13 @@ moved). The tree-wide `resources.tsx:<line>` scan (`git grep -n "resources\.tsx:
 leaves only dated records: the measured-basis rows (`:22-23`, `:35`, `:55`, `:340`, `:376`),
 the W2-15 and served-doc-gates plans, and `docs/archive/CLOSED-TODO.md`. Production net
 `+93 → +97`; `resources.tsx` `706 → 710` L.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from this slice's files
+(`control/test/symmetry_control_web/controllers/portal_resources_test.exs`,
+`frontend/src/components/primitives.tsx`, `frontend/src/features/connections/resources.tsx`) by the
+2026-11-22 comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws9b-control-test", "ws10-frontend"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

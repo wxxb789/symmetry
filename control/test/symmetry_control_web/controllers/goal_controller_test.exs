@@ -306,14 +306,11 @@ defmodule SymmetryControlWeb.GoalControllerTest do
              amend_goal(operator, "/api/v1", operator_goal_id, initial_revision)
              |> json_response(200)
 
-    # The durable command rows carry the same actor the create did.
     assert event_actor(portal_goal_id) == "portal_operator"
     assert event_actor(operator_goal_id) == "operator"
     assert revision_actor(portal_goal_id, 2) == "portal_operator"
     assert revision_actor(operator_goal_id, 2) == "operator"
 
-    # The portal read adds the project label the surface renders; the operator
-    # API never serves that portal projection.
     portal_read = portal_conn |> get("/portal/api/goals/#{portal_goal_id}") |> json_response(200)
     assert Map.has_key?(portal_read, "project_key")
     assert Map.has_key?(portal_read, "project_name")
@@ -336,11 +333,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       |> post("/portal/api/projects/#{project.id}/goals", goal_payload())
       |> json_response(201)
 
-    # The router matches decoded path segments (`phoenix/router.ex` decodes
-    # `path_info`), so `/%70ortal/api/...` is the portal route even though
-    # `conn.request_path` keeps the encoded text. The surface follows the
-    # matched pipeline, so the projection and the durable actor are the
-    # portal's for this spelling too.
+    # Phoenix routes on the decoded `path_info`, so `/%70ortal/api/...` is the portal route
+    # while `conn.request_path` keeps the encoded text; the projection and actor follow the matched pipeline.
     read =
       portal_conn
       |> get("/%70ortal/api/goals/#{goal_id}")
@@ -399,9 +393,6 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     operator = operator_conn(conn)
     events = "/api/v1/goals/#{goal_id}/events"
 
-    # `after` is the last rendered sequence: non-negative, at most the durable
-    # bigint maximum, and only as decimal text — `Integer.parse/1` keeps the
-    # explicit `+` sign the table below accepts.
     for {value, status} <- [
           {"0", 200},
           {"+1", 200},
@@ -415,7 +406,6 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       assert_goal_parameter(operator, events, "after", value, status)
     end
 
-    # Two bare members keep the last; an array member is not a sequence.
     after_one = json_response(get(operator, "#{events}?after=1"), 200)
 
     assert json_response(get(operator, "#{events}?after=0&after=1"), 200) == after_one
@@ -427,8 +417,7 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       "invalid_request"
     )
 
-    # The event page is capped at the read model's own 100 even though the
-    # parameter itself accepts any positive integer.
+    # The event page is capped at the read model's own 100; the parameter itself accepts any positive integer.
     for {value, status} <- [
           {"1", 200},
           {"+1", 200},
@@ -445,8 +434,7 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       assert_goal_parameter(operator, events, "limit", value, status)
     end
 
-    # The attention read has no page cap, so it serves the positive forms the
-    # event read refuses for size.
+    # The attention read has no page cap: it serves the positive forms the event read refuses for size.
     for {value, status} <- [
           {"1", 200},
           {"+1", 200},
@@ -630,8 +618,6 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     })
   end
 
-  # The one goal-command envelope both helpers above send: read the goal's
-  # current version/revision on the surface under test, then post the command.
   defp goal_command(conn, prefix, goal_id, kind, payload) do
     goal = conn |> get("#{prefix}/goals/#{goal_id}") |> json_response(200)
 

@@ -18,10 +18,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// linuxOwnerTypedMismatchPin pins one typed mismatch class: the sentinel the
-// owned platform sites return, the representative site, and the full Error()
-// text that site produces when the underlying read succeeded and only the
-// mismatch predicate failed.
 type linuxOwnerTypedMismatchPin struct {
 	site          string
 	want          string
@@ -31,10 +27,6 @@ type linuxOwnerTypedMismatchPin struct {
 	transport     func(inner error) error
 }
 
-// linuxOwnerTypedMismatchPins holds one row per sentinel class, each row naming
-// one representative site from the w2-11-typed-errors site inventory: each
-// errorf reproduces its representative site's fmt.Errorf expression verbatim,
-// with err == nil.
 var linuxOwnerTypedMismatchPins = []linuxOwnerTypedMismatchPin{
 	{
 		site:          "anchor_gate.go:995 classifyUnregisteredPreReleaseGate",
@@ -218,10 +210,8 @@ var linuxOwnerTypedMismatchPins = []linuxOwnerTypedMismatchPin{
 	},
 }
 
-// TestLinuxOwnerTypedMismatchSentinelTable pins the wire-visible Error() text
-// per sentinel class and proves errors.Is identifies the class only when the
-// mismatch predicate - not a failed read - produced the error, so callers can
-// distinguish an identity change from transport loss.
+// Pins the wire-visible Error() text per class and proves errors.Is identifies
+// the class only on a mismatch, so callers can separate a change from transport loss.
 func TestLinuxOwnerTypedMismatchSentinelTable(t *testing.T) {
 	for _, pin := range linuxOwnerTypedMismatchPins {
 		t.Run(pin.site, func(t *testing.T) {
@@ -241,12 +231,6 @@ func TestLinuxOwnerTypedMismatchSentinelTable(t *testing.T) {
 	}
 }
 
-// platformSentinelTextPins pins the exact Error() text of every exported Err*
-// value the platform package declares: C7's 22 pre-existing values (7
-// supervisor, 7 helper-v2, 3 cgroup-v2, and 5 singles) plus this slice's 15
-// ErrLinuxOwner* mismatch values. The rows mirror the declarations at this
-// revision; the class table above additionally pins the wire composition at
-// representative sites.
 var platformSentinelTextPins = []struct {
 	name     string
 	sentinel error
@@ -291,10 +275,8 @@ var platformSentinelTextPins = []struct {
 	{name: "ErrLinuxOwnerThreadSnapshotDiffers", sentinel: ErrLinuxOwnerThreadSnapshotDiffers, text: "thread snapshot differs"},
 }
 
-// TestPlatformSentinelErrorTexts pins every exported platform sentinel's exact
-// Error() text: C7's 22 pre-existing Err* values and this slice's 15 new ones.
-// errors.Is identity alone cannot detect a reworded message, so a durable or
-// served string regression must fail here.
+// errors.Is identity alone cannot detect a reworded message: a durable or served
+// string regression must fail here.
 func TestPlatformSentinelErrorTexts(t *testing.T) {
 	for _, pin := range platformSentinelTextPins {
 		t.Run(pin.name, func(t *testing.T) {
@@ -308,19 +290,8 @@ func TestPlatformSentinelErrorTexts(t *testing.T) {
 	}
 }
 
-// TestLinuxOwnerTypedMismatchReachableSites drives five converted sites
-// through production code - anchor_proc.go:307 (verifyLinuxOwnerAProcess, the
-// representative site of the "identity differs" pin row), anchor_gate.go:695
-// (openLinuxOwnerAnchorUserNamespaceFD), anchor_run.go:202
-// (verifyLinuxOwnerAnchorStopEvidenceNamespacePin), anchor_proc.go:528
-// (verifyLinuxOwnerAnchorPIDFDIdentity against the process's own pidfd with a
-// stale expected identity), and anchor_gate.go:995
-// (classifyUnregisteredPreReleaseGate, the representative site of the "cgroup
-// path changed" pin row, driven with a live nested-user-namespace gate child
-// and an exited registered launcher); the middle three drive their classes at
-// sites the pin rows do not name. A site that stops returning its sentinel
-// fails here even though the expression pins above reproduce their sites'
-// expressions instead of observing them.
+// Drives five converted sites through production code, so a site that stops
+// returning its sentinel fails here, not just its reproduced fmt.Errorf pin above.
 func TestLinuxOwnerTypedMismatchReachableSites(t *testing.T) {
 	t.Run("verifyLinuxOwnerAProcess", func(t *testing.T) {
 		if os.Getuid() == 0 || os.Getgid() == 0 {
@@ -371,15 +342,8 @@ func TestLinuxOwnerTypedMismatchReachableSites(t *testing.T) {
 			t.Fatalf("verifyLinuxOwnerAnchorPIDFDIdentity = %v; want exactly %q identifying %v", err, want, ErrLinuxOwnerIdentityDiffers)
 		}
 	})
-	// classifyUnregisteredPreReleaseGate reaches its cgroup-path recheck
-	// (anchor_gate.go:993-995) only after the gate child's pidfd creation
-	// identity, Anchor ancestry, configured credentials, the run's sole
-	// registered exited launcher, and the gate user namespace's exact parent
-	// all verify. The fixture supplies each through real processes: the gate
-	// child lives in its own nested user namespace whose parent is this
-	// process's namespace, and the launcher pidfd is a killed and reaped
-	// child, so the production readiness check observes a genuinely exited
-	// registered root launcher.
+	// Reaches the cgroup-path recheck (anchor_gate.go:993-995) only with real
+	// processes: a nested-user-namespace gate child and a killed, reaped launcher.
 	t.Run("classifyUnregisteredPreReleaseGate", func(t *testing.T) {
 		if os.Getuid() == 0 || os.Getgid() == 0 {
 			t.Skip("requires a non-zero uid and primary gid; the gate credential check rejects UID/GID 0")

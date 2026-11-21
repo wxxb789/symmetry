@@ -491,3 +491,12 @@ same four `PortalJSON` callers; E4 exit 0, `106 passed` in 12.2s; E6 `pnpm contr
 (`tests 35 / pass 35 / fail 0`; no contract input changed); E7 one match (`:225`); E11 ten
 mutants as above; E12 14 issues, all `workspaces.ex` (the re-run test file: 0); E13 exit 0
 (`--base origin/main --head HEAD`: "nothing to check"); E14 clean.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from
+`control/test/symmetry_control/workspaces/work_item_eligibility_test.exs` by the 2026-11-22
+comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws9b-control-test"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

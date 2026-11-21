@@ -77,9 +77,6 @@ func (response linuxOwnerAnchorResponse) matches(grant LinuxOwnerAnchorGrant, op
 		response.OwnerUID == grant.OwnerUID && response.ManagerPath == grant.Parent.Path
 }
 
-// linuxOwnerAnchorRequestField names one presence-bearing optional request
-// field so the per-operation shape table can state its required and forbidden
-// fields declaratively.
 type linuxOwnerAnchorRequestField string
 
 const (
@@ -104,8 +101,6 @@ const (
 	linuxOwnerAnchorFieldTargetFDPresent     linuxOwnerAnchorRequestField = "target_fd_present"
 )
 
-// fieldPresent reports whether one optional request field carries a value. The
-// zero value of a field is absent, exactly as the pre-table checks treated it.
 func (request linuxOwnerAnchorRequest) fieldPresent(field linuxOwnerAnchorRequestField) bool {
 	switch field {
 	case linuxOwnerAnchorFieldGrant:
@@ -151,13 +146,10 @@ func (request linuxOwnerAnchorRequest) fieldPresent(field linuxOwnerAnchorReques
 	}
 }
 
-// linuxOwnerAnchorTimeoutClass is the deadline class one operation shares
-// between the server connection deadline and the client exchange timeout.
 type linuxOwnerAnchorTimeoutClass int
 
 const (
-	// linuxOwnerAnchorTimeoutClassRequest is the zero value, and also the class
-	// of an operation the table does not cover.
+	// linuxOwnerAnchorTimeoutClassRequest is the zero value and the fallback class for an uncovered operation.
 	linuxOwnerAnchorTimeoutClassRequest linuxOwnerAnchorTimeoutClass = iota
 	linuxOwnerAnchorTimeoutClassWait
 	linuxOwnerAnchorTimeoutClassCleanup
@@ -174,49 +166,32 @@ func (class linuxOwnerAnchorTimeoutClass) duration() time.Duration {
 	}
 }
 
-// linuxOwnerAnchorOperationShape is the declarative per-operation request
-// contract of the anchor control socket, and the single source both sides read:
-// the server enforces the field-presence sets, the received descriptor count and
-// the timeout class; the client enforces the descriptor counts it may transfer
-// and the timeout class it must use. The presence sets reproduce the pre-table
-// checks exactly, including the optional fields the base accepted on operations
-// that never inspected them.
+// linuxOwnerAnchorOperationShape is the declarative per-operation request contract of the control
+// socket and the single source both server and client read for presence, descriptor counts and timeout class.
 type linuxOwnerAnchorOperationShape struct {
 	operation string
 
-	// required and forbidden are the presence rules of the operation.
 	required  []linuxOwnerAnchorRequestField
 	forbidden []linuxOwnerAnchorRequestField
 
-	// serverRequiredFDs is the exact count of received descriptors;
-	// serverRequiredFDsWithTarget is used when TargetFDPresent is set
-	// (remove-b-clone-after-receipt's variable count).
 	serverRequiredFDs           int
 	serverRequiredFDsWithTarget int
 
-	// clientSendFDs is the count of descriptors the client transfers;
-	// clientSendFDsWithTarget is used when TargetFDPresent is set.
-	// clientCheckedFDs records whether exchange enforces the count (the three
-	// operations that check it today) and clientFDsMismatch is their error text.
 	clientSendFDs           int
 	clientSendFDsWithTarget int
 	clientCheckedFDs        bool
 	clientFDsMismatch       string
 
-	// responseFDs is the descriptor count a non-rejection response carries; it
-	// is -1 when the count depends on the status (lookup-helper-v2 carries three
-	// descriptors for attached and two for helper_exited).
+	// responseFDs is the descriptor count a non-rejection response carries; it is -1 when the count
+	// depends on the status (lookup-helper-v2: 3 for attached, 2 for helper_exited).
 	responseFDs int
 
-	// timeoutClass is the deadline class both sides use.
 	timeoutClass linuxOwnerAnchorTimeoutClass
 
 	// stoppingAnswer records whether a stopping anchor answers this operation
 	// with anchor_stopping before the per-operation shape gate runs.
 	stoppingAnswer bool
 
-	// runHelperPeer records whether the operation requires the request helper to
-	// be the exact registered run helper of the authenticated peer.
 	runHelperPeer bool
 
 	// shape carries the relational rules a presence set cannot express; it may
@@ -233,8 +208,6 @@ func (row linuxOwnerAnchorOperationShape) forbids(field linuxOwnerAnchorRequestF
 	return false
 }
 
-// presenceRejected reports whether a forbidden field is present or a required
-// field is absent.
 func (row linuxOwnerAnchorOperationShape) presenceRejected(request linuxOwnerAnchorRequest) bool {
 	for _, field := range row.forbidden {
 		if request.fieldPresent(field) {
@@ -249,9 +222,6 @@ func (row linuxOwnerAnchorOperationShape) presenceRejected(request linuxOwnerAnc
 	return false
 }
 
-// descriptorRejected reports whether the descriptor count differs from the row's
-// expectation for this request, including the TargetFDPresent-dependent count of
-// remove-b-clone-after-receipt.
 func (row linuxOwnerAnchorOperationShape) descriptorRejected(request linuxOwnerAnchorRequest, descriptors int) bool {
 	expected := row.serverRequiredFDs
 	if request.TargetFDPresent {
@@ -260,24 +230,16 @@ func (row linuxOwnerAnchorOperationShape) descriptorRejected(request linuxOwnerA
 	return descriptors != expected
 }
 
-// shapeRejected reports whether the relational rules fail; it may assume every
-// required field is present.
 func (row linuxOwnerAnchorOperationShape) shapeRejected(request linuxOwnerAnchorRequest) bool {
 	return row.shape != nil && !row.shape(request)
 }
 
-// refuses reports whether the request violates this row: a forbidden field is
-// present, a required field is absent, the received descriptor count differs, or
-// a relational rule fails.
 func (row linuxOwnerAnchorOperationShape) refuses(request linuxOwnerAnchorRequest, descriptors int) bool {
 	return row.presenceRejected(request) || row.descriptorRejected(request, descriptors) || row.shapeRejected(request)
 }
 
-// exclusiveFieldRejected reports whether the request carries one of the six
-// fields that only their owning operation group may carry. The base server
-// checked exactly these three groups (clone cleanup, gate, stop leaf) before its
-// stopping answer, so the check keeps that position ahead of the per-operation
-// shape gate.
+// exclusiveFieldRejected reports whether the request carries one of the six fields only their owning
+// operation group may carry; the check stays ahead of the per-operation shape gate.
 func (request linuxOwnerAnchorRequest) exclusiveFieldRejected(row linuxOwnerAnchorOperationShape) bool {
 	for _, field := range [...]linuxOwnerAnchorRequestField{
 		linuxOwnerAnchorFieldCloneGrant,
@@ -294,10 +256,8 @@ func (request linuxOwnerAnchorRequest) exclusiveFieldRejected(row linuxOwnerAnch
 	return false
 }
 
-// linuxOwnerAnchorRequestFDCap bounds the descriptors one request may transfer.
-// The client refuses more than this (exchange's duplicate check) and the table
-// test asserts it dominates every row's server and client descriptor counts, so
-// the limit stays single-sourced here.
+// linuxOwnerAnchorRequestFDCap bounds the descriptors one request may transfer; the client refuses
+// more and the table test asserts it dominates every row's server and client counts.
 const linuxOwnerAnchorRequestFDCap = 3
 
 func linuxOwnerAnchorRegisterProcessShape(request linuxOwnerAnchorRequest) bool {
@@ -324,7 +284,6 @@ func linuxOwnerAnchorReapRunShape(request linuxOwnerAnchorRequest) bool {
 	return request.AfterPID >= 0
 }
 
-// linuxOwnerAnchorRetireReleaseShape requires exactly one release capability.
 func linuxOwnerAnchorRetireReleaseShape(request linuxOwnerAnchorRequest) bool {
 	return (request.ReleaseProof == nil) != (request.PreGateReleaseProof == nil)
 }
@@ -340,10 +299,6 @@ func linuxOwnerAnchorRetireAbortedShape(request linuxOwnerAnchorRequest) bool {
 		request.RunKey.Generation > 0 && request.Fence.Generation == request.RunKey.Generation
 }
 
-// linuxOwnerAnchorCloneCleanupShape carries the clone-cleanup rules that depend
-// on the cleanup intent: the run key and fence digest must equal the intent's,
-// and the prior-removal proof is required for an absent target and forbidden for
-// a live one.
 func linuxOwnerAnchorCloneCleanupShape(request linuxOwnerAnchorRequest) bool {
 	if request.TargetFDPresent && request.PriorRemovalProof != nil {
 		return false
@@ -355,9 +310,6 @@ func linuxOwnerAnchorCloneCleanupShape(request linuxOwnerAnchorRequest) bool {
 		request.FenceDigest == request.Cleanup.FenceDigest
 }
 
-// linuxOwnerAnchorOperationShapes is the single source of the per-operation
-// request shape: field presence, descriptor counts, timeout class and the
-// relational predicates above.
 var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 	{
 		operation: linuxOwnerAnchorOperationIdentity,
@@ -633,9 +585,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 	},
 }
 
-// linuxOwnerAnchorOperationShapeFor returns the shape row of one operation. An
-// absent row replaces the base switch's default arm: the request is refused
-// without a response.
+// linuxOwnerAnchorOperationShapeFor returns the shape row of one operation; an absent row is refused without a response.
 func linuxOwnerAnchorOperationShapeFor(operation string) (linuxOwnerAnchorOperationShape, bool) {
 	for _, row := range linuxOwnerAnchorOperationShapes {
 		if row.operation == operation {
@@ -645,8 +595,6 @@ func linuxOwnerAnchorOperationShapeFor(operation string) (linuxOwnerAnchorOperat
 	return linuxOwnerAnchorOperationShape{}, false
 }
 
-// linuxOwnerAnchorTimeoutFor is the deadline class of one operation; an unknown
-// operation keeps the request class.
 func linuxOwnerAnchorTimeoutFor(operation string) time.Duration {
 	row, ok := linuxOwnerAnchorOperationShapeFor(operation)
 	if !ok {

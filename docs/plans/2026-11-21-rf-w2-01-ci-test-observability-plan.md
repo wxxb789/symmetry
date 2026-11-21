@@ -402,3 +402,12 @@ inventory step under `version`-shaped routing; the conductor verifies them on th
 * **Node-suite drivers are local-only today** (`test:connection-env`, `test:control-isolation`, and
   `goal-context-fixtures.test.mjs` with no script at all); the matrix records that, and W6-02 owns
   any wiring.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from this slice's files (`control/test/support/slowest_formatter.ex`,
+`scripts/ci/assert-browser-suite-coverage.py`, `scripts/ci/go-test-durations.py`) by the 2026-11-22
+comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws9a-control-test-support", "ws7b-ci-scripts"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

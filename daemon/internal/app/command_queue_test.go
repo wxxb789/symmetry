@@ -7,13 +7,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// This file exercises the command-queue module (command_queue.go) without a
-// daemon: every invariant the queue and its receipt bookkeeping own is asserted
-// at their own interface. The daemon-level behaviour oracle stays the existing
-// app tests, which drive the same invariants through the executor. Each test
-// names the red mutant recorded for it in the slice's evidence file
-// (docs/evidence/rf-w4-17a-command-queue-module-2026-11-21.md).
-
 func queuedTestCommand(runID string, generation int64, commandID string) protocol.Command {
 	return protocol.Command{CommandID: commandID, RunID: runID, Generation: generation, Kind: "provide_input"}
 }
@@ -40,8 +33,6 @@ func requireOpenDone(t *testing.T, queued *queuedCommand, context string) {
 	}
 }
 
-// Red mutant: drop the byKey existence check in enqueue (always build a new
-// entry) -> "duplicate command key created a second entry" fails.
 func TestCommandQueueDeduplicatesByCommandKey(t *testing.T) {
 	queue := newCommandQueue()
 	first, created := queue.enqueue(queuedTestCommand("run-1", 1, "input-1"))
@@ -70,8 +61,6 @@ func TestCommandQueueDeduplicatesByCommandKey(t *testing.T) {
 	}
 }
 
-// Red mutant: append the lane head instead of popping it (LIFO) -> the second
-// lane pop returns input-1 and "lane order = ..." fails.
 func TestCommandQueueLanePreservesFIFOOrderPerRun(t *testing.T) {
 	queue := newCommandQueue()
 	key := state.RunKey{RunID: "run-1", Generation: 1}
@@ -103,9 +92,6 @@ func TestCommandQueueLanePreservesFIFOOrderPerRun(t *testing.T) {
 	}
 }
 
-// Red mutant: key the lane map by the run id only (ignore the generation) ->
-// the next generation of run-a reuses the previous generation's lane and stops
-// reporting a start, so "reused the previous generation's lane" fails.
 func TestCommandQueueArrivalOrderAndLanesAreIndependentPerRun(t *testing.T) {
 	queue := newCommandQueue()
 	runA := state.RunKey{RunID: "run-a", Generation: 1}
@@ -149,8 +135,6 @@ func TestCommandQueueArrivalOrderAndLanesAreIndependentPerRun(t *testing.T) {
 	}
 }
 
-// Red mutant: leave completed entries registered in dropRun (skip the eviction)
-// -> "run-a left N registered entries" fails.
 func TestCommandQueueDropRunReleasesExactlyOneRun(t *testing.T) {
 	queue := newCommandQueue()
 	runA := state.RunKey{RunID: "run-a", Generation: 1}
@@ -161,7 +145,7 @@ func TestCommandQueueDropRunReleasesExactlyOneRun(t *testing.T) {
 	if !queue.lane(runA, a1) {
 		t.Fatal("run-a's lane append did not report a start")
 	}
-	// a2 finished with a receipt still pending: completed but registered.
+
 	queue.finish(a2.key, a2, true)
 	if !queue.current(a2) {
 		t.Fatal("an entry with a pending receipt was evicted by finish")
@@ -176,8 +160,7 @@ func TestCommandQueueDropRunReleasesExactlyOneRun(t *testing.T) {
 	if queue.current(a1) || queue.current(a2) {
 		t.Fatal("a released entry stayed current")
 	}
-	// The arrival FIFO and the lane may still hold the released pointers, and
-	// their consumers drop them through current: that is the base behavior.
+
 	if popped, ok := queue.next(); !ok || popped != a1 || queue.current(popped) {
 		t.Fatalf("arrival pop after dropRun = %p/%v, want the released entry %p marked not current", popped, ok, a1)
 	}
@@ -195,10 +178,6 @@ func TestCommandQueueDropRunReleasesExactlyOneRun(t *testing.T) {
 	}
 }
 
-// Red mutant: ignore the delivered flag in finish (always evict a receipted
-// entry) -> "entry with a pending receipt was evicted" fails.
-// Red mutant 2: drop the nil-entry guard in markDelivered -> the absent-key
-// resolution panics instead of being a no-op.
 func TestCommandQueueFinishHonoursReceiptAndDelivery(t *testing.T) {
 	queue := newCommandQueue()
 	withoutReceipt, _ := queue.enqueue(queuedTestCommand("run-1", 1, "cancel-1"))
@@ -224,9 +203,7 @@ func TestCommandQueueFinishHonoursReceiptAndDelivery(t *testing.T) {
 	if !queue.current(inflight) {
 		t.Fatal("delivered receipt evicted an entry that is still in flight")
 	}
-	// A receipt delivered while the command was still in flight is settled by
-	// its completion: the durable acknowledgement is already gone, so the
-	// dedupe entry goes with it.
+
 	deliveredFirst, _ := queue.enqueue(queuedTestCommand("run-1", 1, "input-3"))
 	queue.markDelivered(deliveredFirst.key)
 	queue.finish(deliveredFirst.key, deliveredFirst, true)
@@ -239,8 +216,7 @@ func TestCommandQueueFinishHonoursReceiptAndDelivery(t *testing.T) {
 	if !created {
 		t.Fatal("replay after eviction was treated as a duplicate")
 	}
-	// The released entry is stale while its key is re-enqueued: finishing it
-	// must not settle the live replay.
+
 	queue.finish(replay.key, inflight, false)
 	if !queue.current(replay) {
 		t.Fatal("a stale instance settled the re-enqueued command key")
@@ -256,9 +232,6 @@ func TestCommandQueueFinishHonoursReceiptAndDelivery(t *testing.T) {
 	}
 }
 
-// Red mutant: drop the `!current.completed` close-once guard in finish -> the
-// second completion closes done again and the test dies with
-// "panic: close of closed channel".
 func TestCommandQueueRepeatedFinishClosesDoneOnce(t *testing.T) {
 	queue := newCommandQueue()
 	queued, _ := queue.enqueue(queuedTestCommand("run-1", 1, "input-1"))
@@ -267,9 +240,7 @@ func TestCommandQueueRepeatedFinishClosesDoneOnce(t *testing.T) {
 	if !queue.current(queued) {
 		t.Fatal("a receipted completion was evicted before delivery")
 	}
-	// The deferred path re-enters finish for the same key while the entry is
-	// still registered: done must stay closed exactly once, and the receiptless
-	// second completion evicts the entry.
+
 	queue.finish(queued.key, nil, false)
 	requireClosedDone(t, queued, "second completion")
 	if queue.current(queued) {
@@ -277,8 +248,6 @@ func TestCommandQueueRepeatedFinishClosesDoneOnce(t *testing.T) {
 	}
 }
 
-// Red mutant: make suppress write only into the first window it visits -> the
-// second live window's "live windows were not both tombstoned" fails.
 func TestCommandQueueRequestWindowsAccountTombstones(t *testing.T) {
 	receipts := commandReceipts{}
 	key := queuedTestKey("run-1", 1, "input-1")
@@ -312,9 +281,6 @@ func TestCommandQueueRequestWindowsAccountTombstones(t *testing.T) {
 	}
 }
 
-// Red mutant: drop the byKey nil guard in enqueue (or the lanes nil guard in
-// lane) -> the assignment into the nil map panics with "assignment to entry in
-// nil map".
 func TestCommandQueueZeroValueCreatesItsMaps(t *testing.T) {
 	var queue commandQueue
 	queued, created := queue.enqueue(queuedTestCommand("run-1", 1, "input-1"))

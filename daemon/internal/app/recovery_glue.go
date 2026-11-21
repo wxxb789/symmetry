@@ -13,10 +13,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// rewriteSupervisorHandoffStopReceipt re-submits an already recorded exact
-// receipt without invoking the external observer. Recovery uses this barrier
-// before observing or releasing a helper so a prior unknown write result is
-// never upgraded by readback alone.
+// Re-submits an already recorded exact receipt without invoking the external observer:
+// recovery uses this barrier so a prior unknown write result is never upgraded by readback.
 func (daemon *daemon) rewriteSupervisorHandoffStopReceipt(key state.RunKey, expected authority.SupervisorHandoff, receipt authority.StopReceipt) error {
 	return daemon.persistSupervisorHandoffStopReceipt(key, expected, receipt, false)
 }
@@ -79,9 +77,8 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 		if !restartInputRecoveryRequired(journal) || daemon.hasRun(journal.Key()) {
 			continue
 		}
-		// Recovery may stop a persisted process or resolve a pre-authority
-		// supervisor handoff. The workspace-retention decision must be durable
-		// before either process-control action is attempted.
+		// Recovery may stop a persisted process or resolve a pre-authority supervisor handoff:
+		// the workspace-retention decision must be durable before either action is attempted.
 		if supervisoryRecoveryRequired(journal) || journal.HasProcessDetails() {
 			if journal.RetainWorkspace {
 				daemon.rememberWorkspaceRetention(journal.Key())
@@ -163,10 +160,8 @@ func recoveredGenericProcessMarker(journal state.RunJournal) bool {
 	}
 }
 
-// recoverUnclosedGoalSessions prevents a restart from silently attaching to,
-// replacing, or cleaning up around a native session whose stopped state has not
-// been proven. The Goal session journal is the durable source for this local
-// recovery decision; control-plane reattachment is deliberately out of scope.
+// Prevents a restart from silently attaching to, replacing, or cleaning up around a native
+// session whose stopped state is unproven; control-plane reattachment is deliberately out of scope.
 func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 	sessions, err := daemon.store.ListGoalSessions()
 	if err != nil {
@@ -203,9 +198,8 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 }
 
 func restartInputRecoveryRequired(journal state.RunJournal) bool {
-	// Any retained process or pre-authority handoff is a restart barrier. The
-	// daemon has no in-memory owner to reattach, so recovery must stop/retain it
-	// before reconcile or a new assignment can use the same RunKey.
+	// Any retained process or pre-authority handoff is a restart barrier: the daemon has no
+	// in-memory owner to reattach, so recovery must stop/retain it before RunKey reuse.
 	if journal.ContainmentUnproven || journal.ContainmentHandoff != nil {
 		return true
 	}
@@ -295,9 +289,8 @@ func (daemon *daemon) queueRestartInputFailure(ctx context.Context, key state.Ru
 	if !restartInputRecoveryRequired(journal) {
 		return nil
 	}
-	// The terminal outbox may have settled while physical containment remains
-	// unresolved. Preserve that terminal and leave the process marker as the
-	// retry barrier instead of attempting a second terminal transition.
+	// The terminal outbox may have settled while physical containment remains unresolved:
+	// preserve that terminal and leave the process marker as the retry barrier.
 	if durableTerminalPresent(journal) {
 		return nil
 	}
@@ -418,10 +411,8 @@ func (daemon *daemon) canTerminatePersistedProcess(journal state.RunJournal) boo
 	return daemon.options.terminatePersist != nil
 }
 
-// cancelRecoveredJournal has no in-memory owner to race against. It retains
-// artifacts before process control, records a stopped process durably, then
-// commits the cancellation and its matching command acknowledgement together.
-// A failed stop deliberately leaves the journal non-stale and uncleaned.
+// No in-memory owner to race against: retain artifacts before process control, record the
+// stopped process durably, then commit cancellation with its ack; a failed stop stays non-stale.
 func (daemon *daemon) cancelRecoveredJournal(ctx context.Context, journal state.RunJournal, commandID string) bool {
 	key := journal.Key()
 	if journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && journal.TerminalVerdict != "") {
@@ -477,9 +468,8 @@ func (daemon *daemon) cancelRecoveredJournal(ctx context.Context, journal state.
 			return false
 		}
 	} else if hasUnclosedGoalSession {
-		// The missing process marker is not proof that an uncertain native launch
-		// never escaped. Keep the lineage barrier until a bounded stop has been
-		// recorded instead of acknowledging a cancellation that may leave work.
+		// A missing process marker is not proof that an uncertain native launch never escaped:
+		// keep the lineage barrier until a bounded stop is recorded, do not acknowledge yet.
 		if daemon.log != nil {
 			daemon.log.Warn("stop_recovered_cancel_goal_session_unproven", "run_id", journal.RunID, "generation", journal.Generation)
 		}
@@ -551,9 +541,8 @@ func (daemon *daemon) resolveRecoveredGoalSessionStopped(key state.RunKey) error
 				continue
 			}
 			if hasReadyGoalSessionAttach(journal, session) {
-				// A prior attach may have committed remotely but has not yet been
-				// durably correlated locally. Keep the exact request and native
-				// handle as an attachment-replay barrier.
+				// A prior attach may have committed remotely without a durable local
+				// correlation: keep the exact request and native handle for replay.
 				continue
 			}
 		}
@@ -591,19 +580,16 @@ func retainedGoalSessionTerminalState(session state.GoalSessionJournal, journal 
 
 func retainedGoalSessionNativeStopWitness(session state.GoalSessionJournal, journal state.RunJournal) bool {
 	if session.HasKnownRetainedResumeNativeStop() {
-		// A resumed native process can be conclusively closed before the current
-		// Control attachment has been read back. This is native-stop evidence,
-		// not a release receipt: the ready attach still has to establish the
-		// exact binding before a stop delivery can make it available.
+		// A resumed native process can be conclusively closed before the current attachment is
+		// read back: native-stop evidence, not a release receipt — the ready attach still binds.
 		return true
 	}
 	if !session.HasVerifiedControlAttachment() {
 		return retainedGoalSessionAttachPendingStopped(session, journal)
 	}
 	if session.SessionState == state.GoalSessionStateAvailable {
-		// A crash may occur after the local availability write and before the
-		// stop delivery is moved to delivered history. The persisted immutable
-		// certificate is enough to prove that this session is already released.
+		// A crash may occur after the local availability write and before the stop delivery is
+		// moved to delivered history: the immutable certificate proves the session is released.
 		return session.StopCertificate != nil
 	}
 	if session.SessionState != state.GoalSessionStateUnavailable {
@@ -653,11 +639,8 @@ func hasReplayableGoalSessionAttach(journal state.RunJournal, session state.Goal
 	return false
 }
 
-// resumeGoalSessionPreStartAttachment identifies the only rebind window whose
-// absence of a Ready marker proves adapter.Start was not yet permitted. The
-// new attachment still has to be sent before Control can release the exact
-// reservation, but the predecessor stop certificate remains valid native-stop
-// evidence for this narrow recovery path.
+// The only rebind window whose absent Ready marker proves Adapter.Start was not yet permitted:
+// the predecessor stop certificate remains valid native-stop evidence for this narrow path.
 func resumeGoalSessionPreStartAttachment(session state.GoalSessionJournal, delivery state.GoalDelivery) bool {
 	if delivery.Kind != state.GoalDeliverySessionAttach || delivery.Ready || delivery.SessionAttach == nil ||
 		session.SessionMode != state.GoalSessionModeResume || !session.ResumeStartPending || session.ResumeSourceStopCertificate == nil || session.StopCertificate != nil ||
@@ -669,11 +652,8 @@ func resumeGoalSessionPreStartAttachment(session state.GoalSessionJournal, deliv
 	return !payload.ServerIssuedBinding && payload.LocalHandleID == session.LocalHandleID && payload.BindingID == session.BindingID
 }
 
-// goalSessionResumeAttachmentPending identifies a rebound retained session
-// whose new Control attachment may be reconstructed from its exact ready
-// delivery. Unlike a fresh attach, the prior Control session ID remains in the
-// journal across the rebind; the missing current attachment receipt is the
-// authority boundary that distinguishes it from an already attached session.
+// A rebound retained session whose new Control attachment may be reconstructed from its exact
+// ready delivery; unlike a fresh attach the prior Control session ID survives the rebind.
 func goalSessionResumeAttachmentPending(session state.GoalSessionJournal, journal state.RunJournal) bool {
 	if session.SessionMode != state.GoalSessionModeResume || session.ResumeSourceStopCertificate == nil || session.StopCertificate != nil ||
 		(session.SessionState != state.GoalSessionStateBusy && session.SessionState != state.GoalSessionStateUnavailable) || session.LaunchState != state.GoalSessionLaunchStateAttached ||
@@ -829,9 +809,8 @@ func (daemon *daemon) clearNativeUsageRecoveryBarrier(key state.RunKey) error {
 	return err
 }
 
-// recoverNativeUsageDelivery restores a pre-existing immutable usage body. A
-// legacy marker without one gets one explicit unknown accounting receipt before
-// terminal recovery is allowed to proceed.
+// Restores a pre-existing immutable usage body; a legacy marker without one gets one explicit
+// unknown accounting receipt before terminal recovery is allowed to proceed.
 func (daemon *daemon) recoverNativeUsageDelivery(journal state.RunJournal) (state.RunJournal, protocol.Usage, error) {
 	if usage, ok := nativeUsageRecoveryUsage(journal); ok {
 		return journal, usage, nil
@@ -863,11 +842,8 @@ func legacyGoalSessionAttachmentBarrier(session state.GoalSessionJournal, journa
 	return retiredLegacyGoalSessionAttach(journal, session)
 }
 
-// settleStaleCancellation completes a cancel that arrived after lease loss made
-// the run stale. Control moves a cancelled Run to cancelling and then rejects
-// its lease renewal, so the stale owner must still publish the cancellation
-// receipt once the exact process owner is proven stopped. Without that witness
-// the command stays unacknowledged and Control's reaper remains the fallback.
+// Completes a cancel that arrived after lease loss made the run stale: Control moves the Run to
+// cancelling and rejects renewal, so the receipt follows once the process owner is proven stopped.
 func (daemon *daemon) settleStaleCancellation(ctx context.Context, key state.RunKey) bool {
 	daemon.mu.Lock()
 	active := daemon.running[key]

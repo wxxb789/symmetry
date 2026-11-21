@@ -52,8 +52,7 @@ type clientOptions struct {
 	dialTimeout       time.Duration
 	writeTimeout      time.Duration
 	heartbeatTimeout  time.Duration
-	// connectionErrorHandler, when set, receives every retried connection
-	// failure of Run. See WithConnectionErrorHandler.
+
 	connectionErrorHandler func(error)
 }
 
@@ -68,15 +67,11 @@ func defaultClientOptions() clientOptions {
 	}
 }
 
-// Option adjusts a client's connection policy. Only this package can construct
-// one, so the option set stays known.
+// Only this package can construct an Option, so the option set stays known.
 type Option func(*clientOptions)
 
-// WithConnectionErrorHandler reports connection failures that Run retries: a
-// failed dial or a dropped connection, as that attempt's error, before the
-// retry backoff. Run's only terminal error is the caller's context error, which
-// is never reported. The handler runs on Run's goroutine, so it must not block
-// the connection loop.
+// Reports retried dial and dropped-connection failures before the retry backoff; Run's only terminal error is ctx.Err(), never reported.
+// The handler runs on Run's goroutine, so it must not block the connection loop.
 func WithConnectionErrorHandler(handler func(error)) Option {
 	return func(options *clientOptions) {
 		options.connectionErrorHandler = handler
@@ -201,10 +196,7 @@ func (client *Client) Run(ctx context.Context, hints chan<- Hint) error {
 	}
 }
 
-// reportConnectionError hands one retried connection failure to the configured
-// handler. Run's terminal contract is ctx.Err(), so a failure observed after
-// the context ended is the caller's cancellation or deadline, not a connection
-// failure, and is never reported.
+// Run's terminal contract is ctx.Err(): a failure observed after the context ended is the caller's cancellation or deadline, not a connection failure, and is never reported.
 func (client *Client) reportConnectionError(ctx context.Context, err error) {
 	if err != nil && ctx.Err() == nil && client.options.connectionErrorHandler != nil {
 		client.options.connectionErrorHandler(err)

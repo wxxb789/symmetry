@@ -13,11 +13,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// TestRunNormalizesLinuxV2NativeOwnerStateDir pins the app.Run wiring to
-// linuxpreflight.NormalizeOwnerStateDir: the linux v2 native kinds route the
-// configured StateDir through the root-working-directory normalizer before
-// config validation, its refusals surface wrapped, the normalized value is the
-// StateDir the Store is opened with, and other kinds never enter the branch.
 func TestRunNormalizesLinuxV2NativeOwnerStateDir(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -60,12 +55,6 @@ func TestRunNormalizesLinuxV2NativeOwnerStateDir(t *testing.T) {
 		})
 	}
 
-	// The normalized value must be the StateDir app.Run uses, not only a value
-	// it computed: with a complete pi adapter metadata set and no WithStore,
-	// Run opens the Store itself from daemon.config.StateDir. The relative
-	// StateDir is the absolute temporary path without its leading separator, so
-	// the normalized path is a writable temporary directory while the
-	// unnormalized path would resolve against the process working directory.
 	t.Run("pi relative path reaches the Store at the normalized absolute path", func(t *testing.T) {
 		workingDirectory := t.TempDir()
 		t.Chdir(workingDirectory)

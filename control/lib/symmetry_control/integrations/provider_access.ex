@@ -1115,12 +1115,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  # One lock-order authority for the intent contexts. The documented order
-  # (docs/design/data.md:347) is Project -> Goal -> WorkItems -> Tasks -> Runs
-  # -> sessions -> decisions/reservations; the legacy scope keeps its original
-  # Project -> Resource -> Connection -> WorkItem -> Task -> Run -> Runtime
-  # order and `FOR UPDATE` mode, and the goal scope locks the Project
-  # `FOR SHARE` (serializing with archival's `FOR UPDATE`) before the Goal.
+  # One lock-order authority: the documented order is docs/design/data.md:347; the goal
+  # scope locks the Project `FOR SHARE` (vs archival's `FOR UPDATE`) before the Goal.
   defmodule IntentContext do
     @moduledoc false
 
@@ -1132,8 +1128,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     alias SymmetryControl.Repo
     alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
 
-    # Every expected row present in the map is re-verified against its locked
-    # context row, in this order: project, work_item, task, run, runtime, resource, connection.
     @link_fields [
       project_id: :project,
       work_item_id: :work_item,
@@ -1183,8 +1177,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       })
     end
 
-    # A persisted intent names its connection; a fresh claim derives it from the
-    # resource row it just locked.
     defp lock_connection(:from_resource, resource) do
       if is_binary(resource.connection_id), do: lock_record(Connection, resource.connection_id)
     end
@@ -1227,8 +1219,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
         context.run.runtime_id == context.runtime.id
     end
 
-    # The intent-context lock primitives; other locks in this file keep their
-    # own queries.
     def lock_project_for_goal(project_id) do
       Repo.one(from project in Project, where: project.id == ^project_id, lock: "FOR SHARE")
     end
@@ -1245,8 +1235,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  # An intent whose Task carries a Goal selects the goal scope; everything else
-  # is legacy. The lock order and modes live in `IntentContext`.
   defp lock_intent_context(intent) do
     ids = intent_ids(intent)
 
@@ -1261,7 +1249,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  # Expected rows of a persisted intent: every id comes from the intent row.
   defp intent_ids(intent) do
     %{
       goal_id: nil,
@@ -1291,8 +1278,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  # Expected rows of a fresh claim: the request names the resource, the lock
-  # derives the connection from that row, and the claims name the rest.
   defp claim_ids(ids, claims, resource_id) do
     %{
       goal_id: nil,
@@ -2091,8 +2076,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     validate_goal_provider_authority!(context, intent.operation)
   end
 
-  # The pre-read selects the scope; everything below it is one claim core: the
-  # same request-hash compare, dispatch-token CAS and state outcomes.
   defp claim_dispatch(intent_id, request_hash) do
     intent = Repo.get(ProviderActionIntent, intent_id)
     goal_managed? = goal_managed_intent?(intent)
@@ -2793,8 +2776,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     )
   end
 
-  # Both primitives take their lock mode from `IntentContext`; these forwards
-  # keep the call sites outside the scope bodies unchanged.
+  # Both take their lock mode from `IntentContext` (the single lock-order authority).
   defp lock_project_for_goal(project_id), do: IntentContext.lock_project_for_goal(project_id)
 
   defp lock_record(schema, id), do: IntentContext.lock_record(schema, id)

@@ -346,3 +346,11 @@ as passed from inference.
   hosted coverage job may go red for the same shape while still uploading its report — that is
   exactly the advisory posture the contract asks for, and the job log, not the colour, is the
   evidence.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `scripts/ci/test-ci-changed-path-classifier.py` by the 2026-11-22
+comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws7a-ci-model-routing"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

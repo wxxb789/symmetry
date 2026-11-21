@@ -251,10 +251,8 @@ func TestEmitPinsPersistPiNativeEventTextAfterSinkFailure(t *testing.T) {
 	sink := &recordingHarnessSink{}
 	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, sink)
 
-	// Pin the exact persisted and logged text a failing sink produces: the
-	// adapter keeps its own "persist pi native event: %w" literal around the
-	// shared helper's result, so a wrapper added inside the helper would show
-	// up here as extra text before the sink error.
+	// The adapter keeps its own "persist pi native event: %w" literal around the shared
+	// helper's result: a wrapper added inside the helper would show up here as extra text.
 	sinkErr := errors.New("journal unavailable")
 	sink.mutex.Lock()
 	sink.err = sinkErr

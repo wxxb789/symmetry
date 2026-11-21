@@ -272,3 +272,12 @@ change (the before-state was measured the same way: `Ran 28 tests in 21.096s`, `
   corpus until #137 lands (known limit, tracked).
 * E501 wrapping is mechanical but touches long lines inside refusal messages some suites assert on;
   the string-byte rule plus the 24 suites are the guard.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `scripts/ci/omo-native-evidence.py` and
+`scripts/ci/opencode-v2-support-witness.py` by the 2026-11-22 comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws7b-ci-scripts"); those two files' only candidate rows outside their docstrings are code-style
+split lines. The sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

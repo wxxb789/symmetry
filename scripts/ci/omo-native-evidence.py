@@ -2,10 +2,7 @@
 """Characterize the pinned OmO executable directly; never promote adapter support.
 
 Run only with an authorized local fixture and relay credentials supplied by the
-operator's environment. Evidence roots are deliberately retained, including on
-failure. The pinned executable's host path comes from SYMMETRY_OMO_BINARY; the
-committed size and digest remain the authority. This is native-process evidence,
-not daemon or Control evidence.
+operator's environment. Evidence roots are deliberately retained.
 """
 
 import argparse
@@ -29,9 +26,8 @@ import time
 import urllib.parse
 import uuid
 
-# The executable's location is host-specific, so no path is committed: the operator
-# names it in BINARY_ENVIRONMENT, and the exact size and digest below stay the
-# authority. An unset variable, a missing file, or a different blob refuses the run.
+# The executable's location is host-specific, so no path is committed: the operator names it in
+# BINARY_ENVIRONMENT, and the size and digest of PINS below stay the authority.
 BINARY_ENVIRONMENT = "SYMMETRY_OMO_BINARY"
 PINS = {
     "Windows": {
@@ -989,11 +985,6 @@ def replay_without_work(
 
 
 def pinned_binary(pin, binary, receipt):
-    """Authorize the operator-named executable against the committed platform pin.
-
-    The observed identity is recorded before it is judged, so a refused run still
-    carries the size and digest of the executable that was refused.
-    """
     configured = os.environ.get(BINARY_ENVIRONMENT, "")
     require(bool(configured), BINARY_ENVIRONMENT + " must name the pinned executable")
     declared = pathlib.Path(configured).resolve()

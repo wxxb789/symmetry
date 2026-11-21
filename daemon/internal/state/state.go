@@ -39,10 +39,8 @@ const (
 	atomicTempPrefix       = ".symmetry-state-"
 )
 
-// GoalSessionUncertainReasonBytes is the durable budget for a Goal session's
-// uncertain reason. MarkGoalSessionUncertain and the goal-session read
-// validation both enforce it; callers that compose the reason from a cause
-// must bound the string they hand to the store to this budget.
+// Durable budget for a Goal session's uncertain reason, enforced on write and read:
+// callers composing the reason from a cause must bound it to this.
 const GoalSessionUncertainReasonBytes = 4096
 
 const (
@@ -1133,7 +1131,6 @@ func CommandAcknowledgementRetired(journal RunJournal) bool {
 	return journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && IsConclusiveTerminalVerdict(journal.TerminalVerdict))
 }
 
-// notFoundError distinguishes absent local durable state from malformed state.
 type notFoundError struct {
 	Resource string
 }
@@ -4983,10 +4980,6 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 	return nil
 }
 
-// validateLinuxCloneReuseBranch runs the reuse-grant branch of the clone
-// journal validator: the three reuse helpers in the base order, returning to
-// a parent that exits immediately on success (the base block's trailing
-// return nil).
 func validateLinuxCloneReuseBranch(journal RunJournal, reuse *authority.LinuxCloneReuseGrant) error {
 	if err := validateLinuxCloneReuseGrant(journal, reuse); err != nil {
 		return err

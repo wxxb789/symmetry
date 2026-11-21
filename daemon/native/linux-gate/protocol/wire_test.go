@@ -11,12 +11,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 )
 
-// Golden bytes for every portable frame whose bytes are fully determined by the
-// deterministic fixtures below and the fixed header layout. Each value was
-// captured with these fixtures from the base revision's encoders and is pinned
-// here so a layout change fails even when the round trip still holds; the
-// separate base-vs-HEAD 100-line dump uses its own fixture set and shows the
-// same frame kinds byte-identical on both sides.
 const (
 	wireTestLaunchRequestGoldenHex         = "53594d4c41303031010001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20ababababababababababababababababcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
 	wireTestLaunchResultGoldenHex          = "53594d4c413030310100020000000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2069100000e9030000ea0300006a1000000000000075f3c8f4e500000004000000000000001300000000000000a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
@@ -28,12 +22,9 @@ const (
 	wireTestBootstrapExecAttemptGoldenHex  = "53594d4c413030310300140007000000000000001300000000000000"
 	wireTestNativeExecAttemptGoldenHex     = "53594d4c41303031030017000b000000000000001700000000000000"
 	wireTestCloneBootstrapFailureGoldenHex = "53594d4c41303031030018000200000005000000"
-	// wireTestReleaseGoldenDeadlineNS is the explicit lease cutoff which makes
-	// the guarded RELEASE bytes independent of CLOCK_MONOTONIC.
+	// Fixed lease cutoff that keeps the guarded RELEASE bytes independent of CLOCK_MONOTONIC.
 	wireTestReleaseGoldenDeadlineNS = uint64(123456789)
-	// wireTestReleaseV2GoldenHex is the v2 scratch RELEASE frame. Its encoder
-	// (encodeGuardedRelease) is portable, so the pinned bytes run on every GOOS;
-	// the fd-bearing decoder and the v3 clone frame stay in wire_linux_test.go.
+	// The v2 scratch RELEASE frame; its encoder is portable, so the pinned bytes run on every GOOS.
 	wireTestReleaseV2GoldenHex = "53594d4c41303031020006000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20310000000400000015cd5b0700000000090000002f62696e2f7472756501000000090000002f62696e2f7472756501000000060000004c414e473d43010000002f"
 )
 
@@ -43,7 +34,6 @@ const (
 	wireTestCorruptMagicByte = byte(0x00)
 )
 
-// wireTestToken is the deterministic one-use token fixture.
 func wireTestToken() [32]byte {
 	var token [32]byte
 	for index := range token {
@@ -52,7 +42,6 @@ func wireTestToken() [32]byte {
 	return token
 }
 
-// wireTestAuthenticator is the deterministic launch-result authenticator.
 func wireTestAuthenticator() [32]byte {
 	var authenticator [32]byte
 	for index := range authenticator {
@@ -61,7 +50,6 @@ func wireTestAuthenticator() [32]byte {
 	return authenticator
 }
 
-// wireTestGateProductionAuth is the canonical per-run hex auth fixture.
 func wireTestGateProductionAuth() GateProductionAuth {
 	return GateProductionAuth{
 		LaunchToken: strings.Repeat("ab", authority.TokenBytes),
@@ -69,8 +57,6 @@ func wireTestGateProductionAuth() GateProductionAuth {
 	}
 }
 
-// wireTestLaunchRequestFixture returns the token, auth and the exact request
-// body the portable prepare encoder must reproduce.
 func wireTestLaunchRequestFixture(t *testing.T) ([32]byte, GateProductionAuth, LaunchRequest) {
 	t.Helper()
 	token := wireTestToken()
@@ -88,20 +74,15 @@ func wireTestLaunchRequestFixture(t *testing.T) ([32]byte, GateProductionAuth, L
 	return token, auth, request
 }
 
-// wireTestLauncherIdentity is the transient root producer identity fixture.
 func wireTestLauncherIdentity() LauncherIdentity {
 	return LauncherIdentity{PID: 4200, StartTime: 987654321012, BootID: "boot-1", Identity: "launcher:4200:start"}
 }
 
-// wireTestLauncherReady is the READY frame content of wireTestLauncherIdentity;
-// the identity's BootID is not part of the readiness frame.
 func wireTestLauncherReady() LauncherReady {
 	identity := wireTestLauncherIdentity()
 	return LauncherReady{PID: identity.PID, StartTime: identity.StartTime, Identity: identity.Identity}
 }
 
-// wireTestProcessIdentity leaves BootID empty: the launch-result frame does not
-// carry it, so only an empty BootID round-trips through %+v.
 func wireTestProcessIdentity() ProcessIdentity {
 	return ProcessIdentity{
 		PID: 4201, StartTime: 987654321013,
@@ -109,7 +90,6 @@ func wireTestProcessIdentity() ProcessIdentity {
 	}
 }
 
-// wireTestLaunchResult is the ready root-to-A result of wireTestProcessIdentity.
 func wireTestLaunchResult() LaunchResult {
 	return LaunchResult{
 		Status: LaunchStatusReady, Token: wireTestToken(),
@@ -117,8 +97,6 @@ func wireTestLaunchResult() LaunchResult {
 	}
 }
 
-// wireTestCheckoutReceipt is one valid authority receipt; its target uses the
-// slash-based path rules so the fixture is portable.
 func wireTestCheckoutReceipt() authority.LinuxCloneCheckoutReceipt {
 	return authority.LinuxCloneCheckoutReceipt{
 		Version: authority.LinuxCloneVersion, RunID: "run-1", Generation: 1,
@@ -129,8 +107,6 @@ func wireTestCheckoutReceipt() authority.LinuxCloneCheckoutReceipt {
 	}
 }
 
-// wireTestCloneCheckoutPacket rebuilds a checkout status frame directly from a
-// receipt so refusal cases can encode receipts the encoder itself refuses.
 func wireTestCloneCheckoutPacket(kind uint16, receipt authority.LinuxCloneCheckoutReceipt) []byte {
 	packet := cloneStatusFrame(kind, 12)
 	packet = appendWireUint32(packet, uint32(receipt.Version))
@@ -152,17 +128,13 @@ type wireRoundTripCase struct {
 	kind    uint16
 	version uint16
 	encode  func() ([]byte, error)
-	// decode returns the canonical form of the decoded value; a decode error is
-	// fatal for the case.
+	// Returns the canonical decoded form; a decode error is fatal for the case.
 	decode func(t *testing.T, packet []byte) string
 	want   string
-	// goldenHex pins the exact frame bytes; empty for variable-length frames
-	// which are covered by the canonical round trip only.
+	// Pins the exact frame bytes; empty for variable-length frames.
 	goldenHex string
 }
 
-// TestWireFrameRoundTrips is the single table-driven round trip over every
-// frame whose codec lives in the portable wire.go.
 func TestWireFrameRoundTrips(t *testing.T) {
 	cases := wireTestRoundTripCases(t)
 	for _, testCase := range cases {
@@ -192,11 +164,6 @@ func TestWireFrameRoundTrips(t *testing.T) {
 	}
 }
 
-// TestWireGuardedReleaseV2Encode pins the portable v2 RELEASE bytes and header
-// fields with the scratch fixture of the linux golden test. encodeGuardedRelease
-// has no fd or syscall dependency, so its layout is checked on every GOOS; the
-// fd-validating EncodeRelease wrapper and the descriptor-checking decoder stay
-// in wire_linux_test.go.
 func TestWireGuardedReleaseV2Encode(t *testing.T) {
 	command := NativeCommand{Path: "/bin/true", Args: []string{"/bin/true"}, Env: []string{"LANG=C"}, Dir: "/"}
 	packet, err := encodeGuardedRelease(wireTestToken(), command, wireTestReleaseGoldenDeadlineNS)
@@ -402,18 +369,14 @@ func wireTestRoundTripCases(t *testing.T) []wireRoundTripCase {
 	}
 }
 
-// wireRefusalCase mutates one valid frame into one refused frame.
 type wireRefusalCase struct {
 	name   string
 	mutate func(packet []byte) []byte
 	want   string
-	// wantPrefix matches a wrapped error whose inner text is not part of the
-	// wire contract (only used for json decoding errors).
+	// Matches a wrapped error whose inner text is not part of the wire contract.
 	wantPrefix bool
 }
 
-// wireTestRefusals asserts the valid frame is accepted, then that every
-// mutation is refused with its exact existing error string.
 func wireTestRefusals(t *testing.T, valid []byte, decode func(packet []byte) error, cases []wireRefusalCase) {
 	t.Helper()
 	if err := decode(valid); err != nil {
@@ -435,8 +398,6 @@ func wireTestRefusals(t *testing.T, valid []byte, decode func(packet []byte) err
 	}
 }
 
-// wireTestFixedFrameRefusals covers the five universal corruptions of a frame
-// whose decoder rejects all of them with one header error.
 func wireTestFixedFrameRefusals(want string) []wireRefusalCase {
 	return []wireRefusalCase{
 		{name: "truncated", mutate: wireTestTruncateLast(), want: want},
@@ -507,23 +468,18 @@ func wireTestAppendZero() func([]byte) []byte {
 	}
 }
 
-// wireTestAppendOversizedCloneStatus drives a checkout status frame past the
-// 64 KiB status frame bound, the size branch a one-byte append cannot reach.
 func wireTestAppendOversizedCloneStatus() func([]byte) []byte {
 	return func(packet []byte) []byte {
 		return append(wireTestCopy(packet), make([]byte, maxCloneStatusFrameSize)...)
 	}
 }
 
-// wireTestAppendOversizedLauncherReady appends one full fixed bound so the
-// decoder must refuse the frame on its size guard, not on trailing bytes.
 func wireTestAppendOversizedLauncherReady() func([]byte) []byte {
 	return func(packet []byte) []byte {
 		return append(wireTestCopy(packet), make([]byte, maxLauncherReadySize)...)
 	}
 }
 
-// TestWireLaunchRequestRefusals covers the prepare request guards.
 func TestWireLaunchRequestRefusals(t *testing.T) {
 	token, auth, request := wireTestLaunchRequestFixture(t)
 	packet, err := encodeLaunchRequest(token, auth)
@@ -555,7 +511,6 @@ func TestWireLaunchRequestRefusals(t *testing.T) {
 	}, cases)
 }
 
-// TestWireLaunchResultRefusals covers the immutable root-to-A result guards.
 func TestWireLaunchResultRefusals(t *testing.T) {
 	packet, err := EncodeLaunchResult(wireTestLaunchResult())
 	if err != nil {
@@ -586,8 +541,6 @@ func TestWireLaunchResultRefusals(t *testing.T) {
 	}, cases)
 }
 
-// TestWireLauncherReadyRefusals covers the transient producer readiness frame
-// and the fixed pre-READY failure frame.
 func TestWireLauncherReadyRefusals(t *testing.T) {
 	identity := wireTestLauncherIdentity()
 	packet, err := EncodeLauncherReady(identity)
@@ -624,10 +577,7 @@ func TestWireLauncherReadyRefusals(t *testing.T) {
 			want: "transient launcher readiness PID is invalid",
 		},
 		{
-			// The dedicated "start time is truncated" guard is unreachable: the
-			// decoder already requires len(packet) >= 29, which leaves at least
-			// thirteen bytes after the four-byte PID. A packet cut into the
-			// start time is refused by the size guard instead.
+			// The dedicated "start time is truncated" guard is unreachable; the size guard refuses this case.
 			name: "cut into the start time", mutate: wireTestCopyUpTo(23),
 			want: "transient launcher readiness magic, version, type, or size is invalid",
 		},
@@ -670,9 +620,6 @@ func TestWireLauncherReadyRefusals(t *testing.T) {
 	}, failureCases)
 }
 
-// TestWireGateFrameRefusals covers the fixed gate-to-root ready and parked
-// frames. The gate map frame is decoded by the linux-only codec, so its round
-// trip and refusals live in wire_linux_test.go.
 func TestWireGateFrameRefusals(t *testing.T) {
 	readyPacket := EncodeGateReady()
 	wireTestRefusals(t, readyPacket, func(candidate []byte) error {
@@ -685,8 +632,6 @@ func TestWireGateFrameRefusals(t *testing.T) {
 	}, wireTestFixedFrameRefusals("Linux owner fixed frame magic, version, type, or size is invalid"))
 }
 
-// TestWireCloneStatusRefusals covers the v3 same-PID exec proofs, the checkout
-// receipt frames and the fixed bootstrap failure frame.
 func TestWireCloneStatusRefusals(t *testing.T) {
 	bootstrapPacket := EncodeBootstrapExecAttempt(7, 19)
 	bootstrapCases := wireTestFixedFrameRefusals("Linux clone status frame version, type, or size is invalid")
@@ -824,8 +769,6 @@ func TestWireCloneStatusRefusals(t *testing.T) {
 	}, failureCases)
 }
 
-// wireTestAddFrameSeeds seeds one decoder with the valid packet plus its
-// truncated and oversized variants.
 func wireTestAddFrameSeeds(f *testing.F, packet []byte) {
 	f.Helper()
 	f.Add(packet)
@@ -833,8 +776,6 @@ func wireTestAddFrameSeeds(f *testing.F, packet []byte) {
 	f.Add(append(wireTestCopy(packet), 0))
 }
 
-// wireTestFuzzDecode requires every accepted candidate to decode again into the
-// same value, so acceptance cannot depend on decode order.
 func wireTestFuzzDecode[T any](t *testing.T, candidate []byte, decode func(packet []byte) (T, error)) {
 	first, err := decode(candidate)
 	if err != nil {
@@ -849,7 +790,6 @@ func wireTestFuzzDecode[T any](t *testing.T, candidate []byte, decode func(packe
 	}
 }
 
-// wireTestFuzzValidate is wireTestFuzzDecode for validation-only decoders.
 func wireTestFuzzValidate(t *testing.T, candidate []byte, validate func(packet []byte) error) {
 	if err := validate(candidate); err != nil {
 		return
@@ -859,15 +799,11 @@ func wireTestFuzzValidate(t *testing.T, candidate []byte, validate func(packet [
 	}
 }
 
-// wireTestExecProof is the decoded device/inode pair of an exec-attempt frame.
 type wireTestExecProof struct {
 	device uint64
 	inode  uint64
 }
 
-// wireTestFuzzReleaseCommand derives a deterministic pure command from fuzz
-// bytes: the first NUL-separated field is the path, the second the directory,
-// and the remaining fields alternate between argv and environment entries.
 func wireTestFuzzReleaseCommand(raw []byte) NativeCommand {
 	fields := bytes.SplitN(raw, []byte{0}, 2*maxCommandVector+2)
 	for len(fields) < 2 {
@@ -884,11 +820,6 @@ func wireTestFuzzReleaseCommand(raw []byte) NativeCommand {
 	return command
 }
 
-// FuzzEncodeGuardedRelease drives the portable guarded-RELEASE encoder with
-// NUL-separated command fields. The decoder needs the four descriptors and
-// stays linux-only, so the invariants pinned here are portable: encoding is
-// deterministic, refusals repeat the same error, and every accepted frame
-// carries the fixed header, the declared body size and a bounded length.
 func FuzzEncodeGuardedRelease(f *testing.F) {
 	f.Add([]byte("/bin/true\x00/\x00--scratch\x00LANG=C"), wireTestReleaseGoldenDeadlineNS)
 	f.Fuzz(func(t *testing.T, raw []byte, deadlineNS uint64) {

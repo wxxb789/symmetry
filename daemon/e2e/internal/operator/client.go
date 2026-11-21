@@ -1,10 +1,3 @@
-// Package operator carries the operator task-control driver for its only
-// callers — the end-to-end witnesses under daemon/e2e. Production has no
-// reachable caller for the driver, so it ships beside those callers instead of
-// staying unreachable in the machine control client. The transport, error and
-// decode substrate below is a byte-identical copy of the declarations the
-// machine client keeps; the driver's operator-exclusive response validators
-// live in validation.go and its v1 task projection in task.go.
 package operator
 
 import (
@@ -29,7 +22,6 @@ const defaultMaxResponseBytes int64 = 1 << 20
 
 var errRedirectNotAllowed = errors.New("control client does not allow redirects")
 
-// ErrorCode is a control-plane error that callers can branch on safely.
 type ErrorCode string
 
 const (
@@ -49,13 +41,11 @@ const (
 	UnexpectedHTTPStatus ErrorCode = "unexpected_http_status"
 )
 
-// APIError describes a non-success response returned by the control plane.
 type APIError struct {
 	StatusCode int
 	Code       ErrorCode
 	Message    string
-	// Details preserves the optional structured error details returned by the
-	// control plane, including per-item evidence batch conflict diagnostics.
+
 	Details                      json.RawMessage
 	EvidenceBatchConflictDetails *contracts.SymmetryEvidenceBatchConflictDetailsV1
 	RetryAfter                   time.Duration
@@ -63,9 +53,8 @@ type APIError struct {
 	detailsDecodeErr             error
 }
 
-// ResponseError marks a malformed or unexpected successful control-plane response.
-// It preserves the underlying cause for diagnostics while remaining permanent for
-// retry classification.
+// It preserves the underlying cause for diagnostics while remaining permanent
+// for retry classification.
 type ResponseError struct {
 	cause error
 }
@@ -85,23 +74,18 @@ func (err *APIError) Error() string {
 	return fmt.Sprintf("control API error: %s (HTTP %d): %s", err.Code, err.StatusCode, err.Message)
 }
 
-// IsOwnershipLost reports whether a request was rejected because its fence is stale.
 func IsOwnershipLost(err error) bool {
 	var apiError *APIError
 	return errors.As(err, &apiError) && apiError.Code == OwnershipLost
 }
 
-// IsTerminalGraceExpired reports that terminal-only delivery exceeded its
-// generation-scoped grace window.
 func IsTerminalGraceExpired(err error) bool {
 	var apiError *APIError
 	return errors.As(err, &apiError) && apiError.Code == TerminalGraceExpired
 }
 
-// Option changes construction-time HTTP transport behavior.
 type Option func(*transport)
 
-// WithMaxResponseBytes bounds every successful and error response body.
 func WithMaxResponseBytes(limit int64) Option {
 	return func(transport *transport) {
 		if limit > 0 {
@@ -116,13 +100,11 @@ type transport struct {
 	maxResponseBytes int64
 }
 
-// OperatorClient invokes task-control endpoints with an explicitly supplied operator token.
 type OperatorClient struct {
 	*transport
 	operatorToken string
 }
 
-// NewOperatorClient creates a client for task-control requests under a distinct operator credential.
 func NewOperatorClient(baseURL, operatorToken string, httpClient *http.Client, options ...Option) (*OperatorClient, error) {
 	if strings.TrimSpace(operatorToken) == "" {
 		return nil, errors.New("operator token must not be empty")
@@ -172,7 +154,6 @@ func parseBaseURL(value string) (*url.URL, error) {
 	return parsed, nil
 }
 
-// SubmitTask creates or retrieves a task under the supplied idempotency key.
 func (client *OperatorClient) SubmitTask(ctx context.Context, idempotencyKey string, request protocol.TaskSubmitRequest) (Task, error) {
 	var response Task
 	if err := client.operatorRequest(ctx, http.MethodPost, "v1/tasks", nil, idempotencyKey, request, &response); err != nil {
@@ -184,7 +165,6 @@ func (client *OperatorClient) SubmitTask(ctx context.Context, idempotencyKey str
 	return response, nil
 }
 
-// GetTask returns the current durable task state.
 func (client *OperatorClient) GetTask(ctx context.Context, taskID string) (Task, error) {
 	if err := validatePathID("task ID", taskID); err != nil {
 		return Task{}, err
@@ -199,8 +179,7 @@ func (client *OperatorClient) GetTask(ctx context.Context, taskID string) (Task,
 	return response, nil
 }
 
-// CreateTaskCommand creates or retrieves an operator command under the supplied
-// idempotency key. The returned resource may be runless for historical actions.
+// The returned resource may be runless for historical actions.
 func (client *OperatorClient) CreateTaskCommand(ctx context.Context, taskID, idempotencyKey string, request protocol.TaskCommandRequest) (protocol.TaskCommand, error) {
 	if err := validatePathID("task ID", taskID); err != nil {
 		return protocol.TaskCommand{}, err
@@ -226,8 +205,7 @@ func (client *OperatorClient) CreateTaskCommand(ctx context.Context, taskID, ide
 	return response, nil
 }
 
-// RetryDelay classifies a failed request and selects a retry delay. It does not
-// perform retries; callers retain their own retry and liveness policies.
+// It does not perform retries; callers retain their own retry and liveness policies.
 func RetryDelay(ctx context.Context, err error, fallback time.Duration) (time.Duration, bool) {
 	if err == nil || (ctx != nil && ctx.Err() != nil) || errors.Is(err, context.Canceled) {
 		return 0, false

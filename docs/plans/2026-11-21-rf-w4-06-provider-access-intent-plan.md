@@ -426,3 +426,11 @@ input (the nil-id row is unreachable, audit 9). Sites outside the collapsed fami
 | 9 | WorkItem lock | legacy: :1134/:1172 `lock_record(WorkItem, nil)` raised `ArgumentError` from Ecto's nil-comparison guard (`not_nil!/2`), no query reached Postgres; goal bodies: :1326 rolled back `:ownership_lost` for a nil id without a query | `lock_work_item/1` :1194-1197 returns nil for a non-binary id, :1171 rolls back `:ownership_lost` without the query | yes on reachable rows; the nil id is unreachable (`null: false` + `validate_required`), where base legacy raised and HEAD refuses |
 | 10 | primitives | `lock_project_for_goal/1` :2815-2817, `lock_record/2` :2819-2821, `lock_goal_revision/1` :638-643 | moved verbatim into `IntentContext` :1232-1245; the outer one-line forwards :638 (`__MODULE__.`-qualified, see the round-1 section), :2798, :2800 keep every other call site byte-identical | yes |
 | 11 | transaction boundary | every path above runs inside the caller's `Repo.transaction/1`; `Repo.rollback/1` unwinds to that boundary | the same callers, one transaction per claim/recover/finalize call, no new transaction and no lock taken outside a transaction | yes |
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `control/lib/symmetry_control/integrations/provider_access.ex` by the
+2026-11-22 comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws8-control-lib"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

@@ -249,9 +249,6 @@ jobs:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
       - run: mix deps.get
-      # Prerequisites owned elsewhere: the `:credo` dependency (refactor slice
-      # W1-02) for the Credo metric, the Hex archive for the advisory audit. Both
-      # run here, after `mix deps.get` has fetched what they read.
       - name: Measure Credo strict findings (advisory)
         if: always()
         continue-on-error: true
@@ -286,11 +283,8 @@ jobs:
           else
             echo 'note: the Credo output carried no "N mods/funs, found ..." summary line'
           fi
-          # Credo prints the same numbered list for a file over `parse_timeout`
-          # and for one it could not parse, and still prints a summary, so a slow
-          # runner would silently under-report the baseline. Say it out loud
-          # instead of letting the lowered number pass as the metric; the
-          # recorded baseline comes from a run with no skips.
+          # Credo prints the same numbered list for a file over `parse_timeout` and for one it could not
+          # parse, so the count below keeps a slow runner from silently under-reporting the baseline.
           credo_unparsed=$(grep -cE '^ +[0-9]+\) ' "$credo_log" || true)
           echo "credo_strict_unparsed_files=$credo_unparsed"
           if [ "$credo_unparsed" -ne 0 ]; then
@@ -324,12 +318,8 @@ jobs:
       # dev environment: the same sources are not compiled twice, the test-only
       # support tree is compiled too, and a warning there now fails this gate.
       - run: MIX_ENV=test mix compile --warnings-as-errors
-      # Per-test duration telemetry (refactor slice W2-01; conductor decision
-      # 2026-11-21): the owned test-support formatter prints the twenty slowest
-      # tests at suite end. `--slowest` stays out - it forces ExUnit trace mode
-      # (`max_cases: 1`, every test timeout `:infinity`) - and
-      # `ExUnit.CLIFormatter` stays listed, so the run keeps its normal output
-      # and exit status.
+      # `--slowest` stays out: it forces ExUnit trace mode (`max_cases: 1`, every test timeout
+      # `:infinity`), so `ExUnit.CLIFormatter` stays listed and the run keeps its normal output and status.
       - run: mix test --formatter ExUnit.CLIFormatter --formatter SymmetryControl.SlowestFormatter
       - name: Run provider broker end-to-end tests
         timeout-minutes: 10
@@ -869,18 +859,9 @@ jobs:
             browser/playwright-report
             /tmp/symmetry-playwright-results
 
-  # Coverage plane (refactor slice W2-17; program plan §10.5, decision D14).
-  # Each coverage job is `continue-on-error: true` and gated exactly like the
-  # heavy matrix (`needs: changes` + `run-heavy`), so a coverage failure can
-  # never gate a pull request and a documentation-only one runs none of them.
-  # They own their runners on purpose: the instrumentation must not join the
-  # existing steps, because the race step sits at its `-timeout 600s` budget and
-  # the `mix test` step is the Control job's canonical suite. Floors stay
-  # advisory here (blocking coverage belongs to W6-10/W6-12), so the uploaded
-  # report - not the exit status - is what this plane produces.
+  # Advisory: a coverage failure can never gate a pull request. Separate runners keep the
+  # instrumentation off the race step's `-timeout 600s` budget and Control's canonical `mix test`.
   coverage-control:
-    # `contracts` stages the `portal-assets` artifact below; `changes` is still
-    # the gate, and the classifier suite checks that every gated job names it.
     needs: [changes, contracts]
     if: needs.changes.outputs.run-heavy == 'true'
     continue-on-error: true
@@ -911,8 +892,6 @@ jobs:
       POSTGRES_DB: symmetry_control_test
     steps:
       - uses: actions/checkout@v4
-      # Four `:portal_assets` cases assert against the real staged bundle, so the
-      # job stages the same artifact the `control` job stages.
       - uses: actions/download-artifact@v4
         with:
           name: portal-assets
@@ -922,10 +901,8 @@ jobs:
           elixir-version: 1.20.4
           otp-version: 29.0.6
       - run: mix deps.get
-      # `test_coverage: [summary: [threshold: 0]]` in control/mix.exs keeps the
-      # task's default 90% summary threshold from exiting the run, so this
-      # step's status is the suite's own status and the report below is advisory
-      # by construction.
+      # `test_coverage: [summary: [threshold: 0]]` in control/mix.exs keeps the task's default 90%
+      # summary threshold from exiting the run, so this step's status is the suite's own (advisory).
       - name: Run the Control suite with a coverage report (advisory)
         run: mix test --cover
       - name: Upload the Control coverage report
@@ -952,27 +929,14 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
-      # The same prerequisite the daemon job establishes: the suite's private
-      # user/PID namespace fixtures need the prepared private `unshare` path.
       - name: Prepare ordinary private user and PID namespaces
         working-directory: ${{ github.workspace }}
         shell: bash
         env:
           SYMMETRY_CI_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: bash scripts/ci/prepare-private-namespace-tests.sh
-      # The same stdio-only caller boundary the daemon job establishes before Go.
-      # `-timeout` is this step's own doubled per-package budget: coverage
-      # instrumentation slows every package, and the race step keeps its
-      # `-timeout 600s` untouched. The profile path is the one the root
-      # `.gitignore` reserves (`/daemon/coverage.out`).
-      # `go test` itself sets `GOCOVERDIR` for each instrumented test binary
-      # (`cmd/go` `test.go` appends it beside `-test.gocoverdir`), so the step
-      # carries no env of its own: `internal/execution`'s cases re-exec the test
-      # binary itself (`os.Args[0]` through `minimalEnvironment()` in
-      # runner_test.go, which forwards the variable), and the helper child writes
-      # covdata into the tool's merge directory instead of printing
-      # `warning: GOCOVERDIR not set, no coverage data emitted`, which four
-      # exact-output assertions capture (run 44887419717).
+      # `-timeout` doubles the per-package budget: coverage instrumentation slows every package, and the
+      # race step keeps its `600s`. No env here: `go test` sets `GOCOVERDIR` for the exact-output cases (run 44887419717).
       - name: Run the Go suite with a coverage profile (advisory)
         shell: bash
         run: |
@@ -1003,11 +967,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The provider (`@vitest/coverage-v8`) and the coverage block - v8,
-      # `text-summary` + `lcov`, `coverage/` unless the sealed harness redirects
-      # it - are `frontend/vitest.config.ts`, landed by refactor slice W1-10. No
-      # threshold is configured, so the step's status is the suite's own and the
-      # report lands where the root `.gitignore` reserves it.
+      # No coverage threshold is configured in `frontend/vitest.config.ts`, so this step's status is the suite's own.
       - name: Run the frontend suite with a coverage report (advisory)
         run: pnpm --filter @symmetry/frontend exec vitest run --coverage
       - name: Upload the frontend coverage report
@@ -1544,15 +1504,12 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
-      # `GOOS=linux` matches this runner; the Windows half of the golangci-lint
-      # pair lives in the `daemon-windows` job, because build tags change
-      # `unused`, `gocyclo` and errcheck results and neither pass may stand in
-      # for the other.
+      # Build tags change `unused`, `gocyclo` and errcheck results, so this `GOOS=linux` pass and
+      # its `daemon-windows` twin may not stand in for each other.
       - name: Measure golangci-lint findings (GOOS=linux, advisory)
         if: always()
         continue-on-error: true
-        # Bounded: a hung analysis can only redden this advisory step, never
-        # consume the job.
+        # Bounded: a hung analysis can only redden this advisory step, never consume the job.
         timeout-minutes: 12
         run: |
           set -Eeuo pipefail
@@ -1581,10 +1538,8 @@ jobs:
             tar --extract --gzip --file "$RUNNER_TEMP/$golangci_archive" --directory "$golangci_dir"
           fi
           "$golangci_bin" --version
-          # The counts are deliberately uncapped: golangci-lint's defaults (50 per
-          # linter, 3 per identical issue) would truncate the measured debt, and
-          # this number is the ratchet baseline the burn-down slices report
-          # against. The run prints its own `N issues:` summary.
+          # The counts are deliberately uncapped: golangci-lint's defaults (50 per linter, 3 per
+          # identical issue) would truncate the measured debt that is the ratchet baseline.
           set +e
           GOOS=linux "$golangci_bin" run --config .golangci.yml \
             --max-issues-per-linter=0 --max-same-issues=0
@@ -1681,13 +1636,7 @@ jobs:
               TestOpenCodeAdapterWithoutV2OwnerFailsBeforeHealthRequest \
             -- "$(command -v go)" test -count=1 -timeout 300s -json \
               ./internal/harness/pi ./internal/harness/opencode
-      # The race pass is this job's critical path (~450 s), and without `-json`
-      # no per-test elapsed time reaches the log. The shared gate captures the
-      # event stream for the duration summary below, keeps the stdio-only caller
-      # boundary before Go, and preserves the suite's own exit status. Its named
-      # witness is a test the ordinary pass above already requires to run and
-      # pass, so the race configuration enforces one of the same names rather
-      # than inventing a new requirement.
+      # `-json` is what feeds the duration summary below; without it no per-test elapsed time reaches the log.
       - name: Run race tests with the same stdio-only caller boundary
         id: daemon_race_tests
         run: |
@@ -1697,14 +1646,8 @@ jobs:
             --assert github.com/wxxb789/symmetry/daemon/internal/harness/opencode \
               TestOpenCodeV2VerifierRejectsReleasedPeer \
             -- "$(command -v go)" test -race -count=1 -timeout 600s -json ./...
-      # Advisory until refactor slice W6-12 flips the duration thresholds to
-      # blocking (program plan section 10.5): the summarizer's exit status is the
-      # verdict and the table prints whenever the stream carries per-test
-      # outcomes - marked partial when the run itself is refused - while the job
-      # keeps its current conclusion semantics. `if: always()` keeps the table
-      # beside a red race run, which is when the attribution is needed; the
-      # outcome check keeps it from erroring when an earlier step's failure
-      # skipped the race run, so its event file never exists.
+      # Advisory: the summarizer's exit status is the verdict, and `if: always()` keeps the table beside
+      # a red race run - when the attribution is needed - instead of erroring when the run was skipped.
       - name: Summarize Go test durations
         if: always() && steps.daemon_race_tests.outcome != 'skipped'
         continue-on-error: true
@@ -1822,34 +1765,20 @@ jobs:
       # through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
 
-      # The browser-suite inventory (refactor slice W2-01): every
-      # `browser/tests/**/*.spec.mjs` and `browser/scripts/**/*.test.mjs` must be
-      # named by a workflow file outside its YAML comments (a comment is not a
-      # step and runs nothing) or listed in the `browser/README.md` manual
-      # matrix; refactor slice W6-02 owns wiring the remaining families. It runs
-      # here because the matrix lives in a Markdown file: a README-only pull
-      # request classifies documentation-only, and a `run-heavy`-gated step
-      # would never check it.
-      # Unlike the lint metrics below, this step is blocking.
+      # Runs here because the manual matrix lives in `browser/README.md`: a README-only pull request
+      # would never reach a `run-heavy`-gated step; unlike the lint metrics below, this step is blocking.
       - run: python3 scripts/ci/assert-browser-suite-coverage.py
 
-      # Prerequisite ownership: the root `pyproject.toml` (the ruff configuration,
-      # refactor slice W1-11), a preinstalled shellcheck, the pinned actionlint
-      # release. This job is the workflow's only unconditional one, so the metrics
-      # are produced for every event including documentation-only pull requests,
-      # and a failure in any other job cannot skip them. No new job is added: the
-      # changed-path classifier test gates the named jobs' routing, and `ci.yml`
-      # has one owner per wave.
+      # The workflow's only unconditional job: the advisory metrics run for every event, including
+      # documentation-only pull requests, and no other job's failure can skip them.
       - name: Measure ruff findings in scripts/ci (advisory)
         if: always()
         continue-on-error: true
         shell: bash
         run: |
           set -Eeuo pipefail
-          # The checks run under the root `pyproject.toml` (ruff selects it from
-          # the working directory); without it the metric would be measured
-          # against ruff's built-in defaults and its count would not be the
-          # ratchet baseline, so the step says so and skips.
+          # Without the root `pyproject.toml` (ruff selects it from the working directory) the count
+          # would not be the ratchet baseline, so the step skips instead of measuring ruff's defaults.
           if [ ! -f pyproject.toml ]; then
             echo "note: the repository root has no pyproject.toml yet (refactor slice W1-11 owns the ruff configuration); skipping the advisory ruff metrics"
             exit 0
@@ -1945,11 +1874,8 @@ jobs:
             exit 0
           fi
           "$actionlint_dir/actionlint" -version
-          # ShellCheck integration stays off, and so does pyflakes: shellcheck-
-          # enabled actionlint does not terminate on the Windows development host
-          # (docs/TODO.md), so the hosted shellcheck-disabled run is the verdict
-          # this workflow records, and `-pyflakes=` keeps that verdict independent
-          # of whether the runner image happens to carry pyflakes.
+          # ShellCheck integration stays off: shellcheck-enabled actionlint does not terminate on the
+          # Windows development host (docs/TODO.md); `-pyflakes=` keeps the verdict independent of the runner image.
           actionlint_log="$RUNNER_TEMP/actionlint-workflows.log"
           set +e
           "$actionlint_dir/actionlint" -shellcheck= -pyflakes= "${workflow_files[@]}" | tee "$actionlint_log"
@@ -1973,9 +1899,8 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
-      # Like its `GOOS=linux` twin in the `daemon` job. The 20-minute job budget
-      # leaves room for the pinned release download plus one analysis; the step
-      # bounds itself so a hung analysis can only redden itself.
+      # The 20-minute job budget leaves room for the pinned release download plus one analysis; the
+      # step bounds itself so a hung analysis can only redden itself.
       - name: Measure golangci-lint findings (GOOS=windows, advisory)
         if: always()
         continue-on-error: true
@@ -1983,9 +1908,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Record the tool's exit status instead of depending on the host's
-          # `$PSNativeCommandUseErrorActionPreference`: where that preference is
-          # enabled, a non-zero native exit raises before the status line prints.
+          # Record the exit status explicitly: where `$PSNativeCommandUseErrorActionPreference` is on,
+          # a non-zero native exit raises before the status line prints.
           $PSNativeCommandUseErrorActionPreference = $false
           if (-not (Test-Path '.golangci.yml')) {
             Write-Output 'note: daemon/.golangci.yml is absent; skipping the advisory golangci-lint metric'
@@ -2013,8 +1937,7 @@ jobs:
           }
           & $binary --version
           $env:GOOS = 'windows'
-          # Uncapped counts, as in the Linux step: the default caps truncate the
-          # measured debt this metric is the ratchet baseline for.
+          # Uncapped counts as in the Linux step: the defaults would truncate this ratchet baseline.
           & $binary run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0
           $status = $LASTEXITCODE
           Write-Output "golangci_lint_windows_exit_status=$status"

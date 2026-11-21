@@ -2005,13 +2005,6 @@ func testGoalSessionCompatibility() GoalSessionCompatibility {
 	}
 }
 
-// TestGoalSessionValidatorFirstErrorStringsArePinned pins the first error of
-// every decomposed validateGoalSessionJournal block (the inline
-// validateGoalSessionIntent call is outside the extracted set). The production
-// persist seam mutateGoalSession loads, mutates and validates the journal in
-// memory before it saves, so the returned error is exactly the validator's
-// first error and a rejected case can never observe a later block's string or
-// change the persisted journal.
 func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 	t.Parallel()
 	const (
@@ -2023,8 +2016,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 		localHandleUUID  = "00000000-0000-4000-8000-000000000010"
 	)
 	attemptedAt := time.Date(2026, 9, 9, 1, 0, 0, 0, time.UTC)
-	// attachedShape is the minimal attached journal that already passes the
-	// launch-attempt, launch-state, uncertainty and recovery-marker blocks.
+
 	attachedShape := func(journal *GoalSessionJournal) {
 		journal.LaunchState = GoalSessionLaunchStateAttached
 		journal.LaunchAttempted = true
@@ -2227,9 +2219,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 	}
 }
 
-// TestJournalWireShape pins the exact top-level JSON key set of the three
-// durable journal documents against literal lists: the Elixir Pi e2e harness
-// and the native-evidence CI script read these keys by literal name.
+// Pins the top-level JSON key set of the durable journal documents against literal lists: the Elixir Pi e2e harness and the native-evidence CI script read these keys by literal name.
 func TestJournalWireShape(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

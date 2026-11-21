@@ -67,10 +67,8 @@ type linuxSupervisorHello struct {
 	JobID              string `json:"job_id"`
 }
 
-// linuxSupervisorScanRequest and linuxSupervisorScanResponse use the inherited
-// full-duplex metadata socket. The socket is per launch; the redundant exact
-// owner fields reject stale, cross-launch, or fabricated observations before
-// the run-scoped Store callback is invoked.
+// Uses the inherited full-duplex metadata socket (one per launch); the redundant exact owner
+// fields reject stale, cross-launch, or fabricated observations before the Store callback.
 type linuxSupervisorScanRequest struct {
 	Version            int    `json:"version"`
 	Operation          string `json:"operation"`
@@ -110,18 +108,14 @@ type linuxSupervisorScanResponse struct {
 	Error              string `json:"error,omitempty"`
 }
 
-// linuxSupervisorRecoveryResponse extends the ordinary local response with
-// the helper's exact terminal scan-seal sequence. It is read only after the
-// recovery endpoint has authenticated the peer and full launch identity.
+// Read only after the recovery endpoint has authenticated the peer and full launch identity.
 type linuxSupervisorRecoveryResponse struct {
 	linuxSupervisorResponse
 	ScanSealSequence uint64 `json:"scan_seal_sequence,omitempty"`
 }
 
-// linuxSupervisorLeaseState owns one helper-local lease timer. The timer
-// callback latches expiry and publishes a wake-up; stop/proof remains
-// serialized by the helper loop. Generation fencing makes a stale callback
-// harmless after a newer renewal replaces the deadline.
+// One helper-local lease timer: the callback latches expiry and publishes a wake-up, stop/proof
+// stays serialized by the helper loop, and generation fencing makes a stale callback harmless.
 type linuxSupervisorLeaseState struct {
 	mu sync.Mutex
 
@@ -177,9 +171,8 @@ func (state *linuxSupervisorLeaseState) renew(deadline time.Duration, sequence u
 		state.mu.Lock()
 		if !state.stopped && state.generation == generation {
 			state.expiredGen = generation
-			// Latch expiry before publishing the wake-up. A renewal that
-			// races the timer callback must fail closed even if the helper loop
-			// has not consumed the callback notification yet.
+			// Latch expiry before publishing the wake-up: a renewal racing the timer callback must fail
+			// closed even if the helper loop has not consumed the notification yet.
 			state.stopped = true
 			state.deadlineAt = time.Time{}
 			state.timer = nil
@@ -193,9 +186,8 @@ func (state *linuxSupervisorLeaseState) renew(deadline time.Duration, sequence u
 	return false, nil
 }
 
-// takeExpiry consumes only the current generation's timer event. It latches
-// the stopped state before the external stop/proof attempt begins, so a late
-// renewal can never re-arm a lease after expiry.
+// Latches the stopped state before the external stop/proof attempt begins, so a late renewal
+// can never re-arm a lease after expiry.
 func (state *linuxSupervisorLeaseState) takeExpiry() bool {
 	if state == nil {
 		return false
@@ -239,9 +231,8 @@ func (state *linuxSupervisorLeaseState) wakeup() <-chan struct{} {
 	return state.wake
 }
 
-// latchExpiredLocked closes a lease at its monotonic deadline even when the
-// timer callback has not run yet. The wake-up lets the helper loop perform the
-// physical stop/proof after a request observes the late timer.
+// Closes a lease at its monotonic deadline even when the timer callback has not run; the
+// wake-up lets the helper loop perform the physical stop/proof.
 func (state *linuxSupervisorLeaseState) latchExpiredLocked(now time.Time) bool {
 	if state == nil || state.stopped || !state.armed || state.deadlineAt.IsZero() || now.Before(state.deadlineAt) {
 		return false
@@ -260,10 +251,8 @@ func (state *linuxSupervisorLeaseState) latchExpiredLocked(now time.Time) bool {
 	return true
 }
 
-// latchOwnerLost permanently closes the lease before the watchdog publishes
-// its wake-up. Resume/detach and owner loss therefore have one linearization
-// point: whichever acquires this lock first wins, and the other path fails
-// closed without touching ptrace state.
+// One linearization point for resume/detach and owner loss: whichever acquires this lock first
+// wins, and the other path fails closed without touching ptrace state.
 func (state *linuxSupervisorLeaseState) latchOwnerLost() {
 	if state == nil {
 		return
@@ -451,9 +440,8 @@ func receiveLinuxSupervisorFD(file *os.File) (int, error) {
 		return -1, errors.New("Linux supervisor fd transport is nil")
 	}
 	data := make([]byte, 1)
-	// Linux limits SCM_RIGHTS to 253 descriptors per message. Receive the
-	// complete bounded control payload so every unexpected descriptor can be
-	// closed before rejecting the helper response.
+	// Linux limits SCM_RIGHTS to 253 descriptors per message. Receive the complete bounded
+	// control payload so every unexpected descriptor can be closed before rejecting the helper response.
 	oob := make([]byte, unix.CmsgSpace(253*4))
 	n, oobn, flags, _, err := unix.Recvmsg(int(file.Fd()), data, oob, unix.MSG_CMSG_CLOEXEC)
 	if err != nil {
@@ -512,7 +500,6 @@ func receiveLinuxSupervisorFD(file *os.File) (int, error) {
 	return receivedFD, nil
 }
 
-// RunContainmentSupervisor is the hidden production helper entrypoint.
 func RunContainmentSupervisor(args []string) error {
 	// Keep the helper's ptrace owner on one OS thread from target launch through
 	// the later Resume/detach boundary.
@@ -554,10 +541,8 @@ func RunContainmentSupervisor(args []string) error {
 		files = append(files, file)
 	}
 	defer closeLinuxSupervisorFilesV2(files...)
-	// These descriptors belong exclusively to the helper protocol. Go's
-	// exec_linux child path intentionally preserves inherited fd >= 3 unless
-	// callers mark them close-on-exec, so never expose authority/control pipes
-	// to the target command.
+	// Go's exec_linux child path preserves inherited fd >= 3 unless marked close-on-exec, so never
+	// expose authority/control pipes to the target command.
 	for _, file := range files[:6] {
 		unix.CloseOnExec(int(file.Fd()))
 	}
@@ -768,10 +753,8 @@ func parseLinuxSupervisorFDs(args []string) (linuxSupervisorFDs, error) {
 	return parsed, nil
 }
 
-// waitForLinuxSupervisorTarget waits for target.Wait and its status publication
-// to complete. The status writer is part of waitDone so a blocked status pipe
-// cannot be mistaken for a proven stop; callers retain the recovery authority
-// when this bounded wait expires.
+// The status writer is part of waitDone so a blocked status pipe cannot be mistaken for a
+// proven stop; callers retain the recovery authority when this bounded wait expires.
 func waitForLinuxSupervisorTarget(waitDone <-chan struct{}, deadline time.Time) error {
 	if waitDone == nil {
 		return fmt.Errorf("%w: Linux supervisor target wait is unavailable", ErrLinuxSupervisorStopUnproven)
@@ -875,9 +858,8 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 			if !ownerLossProofBarrierReleased {
 				return errors.Join(ownerLossScanErr, ownerLossProofBarrierErr)
 			}
-			// The bounded stop deadline above covered signal, target wait, and
-			// same-group reaping. The witness pause must not consume the close
-			// proof's independent bounded deadline.
+			// The bounded stop deadline above covered signal, target wait, and same-group reaping; the
+			// witness pause must not consume the close proof's independent bounded deadline.
 			proofDeadline = time.Now().Add(containmentCloseDeadline)
 		}
 		var closeErr error
@@ -902,9 +884,8 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 			return ownerLossScanErr
 		}
 		if precommitAbort {
-			// The target remained exec-stopped because commit never crossed the
-			// helper. Abort is proved by exact helper/target/group absence, not by
-			// inventing a scan receipt for an execution that never became runnable.
+			// The target remained exec-stopped because commit never crossed the helper. Abort is proved by
+			// exact helper/target/group absence, not by inventing a scan receipt for an execution that never became runnable.
 			return nil
 		}
 		var scanErr error
@@ -921,33 +902,8 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		return nil
 	}
 	enterRecovery := func() error {
-		// Keep the authenticated endpoint alive whether stop succeeds now or
-		// still needs a retry through recovery.
-		//
-		// The paths that reach here are the owner watchdog publishing owner
-		// loss, the control pipe reaching EOF/a read error, or a response
-		// write failing. Latch owner loss now: the watchdog goroutine may not
-		// have published its notification yet, and the first stop must not
-		// take the live-owner branch, whose final descendant scan persists
-		// its fence over the dead owner transport. That failed persist
-		// latches sticky descendant uncertainty and refuses every recovery
-		// stop, so no stop receipt can ever be minted (CI 2026-11-21). The
-		// owner-loss branch seals descendant scans locally and never depends
-		// on owner I/O.
-		//
-		// Two entries can be reached while the owner process is still alive:
-		// the daemon closes its own control writer on response-transport loss
-		// (closeControlAfterResponseLossRequestLocked) and keeps running, and
-		// a response write can fail before any pipe I/O (a ProcessIdentity or
-		// frame-encoding error, including a frame above the 16 KiB limit).
-		// The latch makes the helper seal such a stop locally, so the owner
-		// learns the seal only from the authenticated recovery response: the
-		// restarted-daemon path records it before the receipt
-		// (RecordSupervisorRecoveryScanSeal, Completed+1), while the
-		// in-process recoverResponseLossStop consumer does not yet record it
-		// and therefore fails that stop closed into a durable
-		// containment-unproven mark (pinned by
-		// TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed).
+		// Keep the authenticated endpoint alive whether stop succeeds now or needs recovery. Latch owner
+		// loss before the first stop: the live-owner final scan would latch sticky uncertainty over dead owner I/O.
 		ownerLostLatched = true
 		_ = stop()
 		return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, watchdog.ownerLost(), stop, !committed && !resumed, group.descendantScanSealSequence, ownerRecoveryMarker, ownerLossProofResultCategory)
@@ -980,21 +936,17 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 				continue
 			}
 			if err := stop(); err != nil {
-				// Lease expiry does not prove that the owner process is dead. Keep
-				// the authenticated control channel available so the live owner can
-				// retry the physical stop; control EOF/owner loss will migrate to
-				// the recovery endpoint below.
+				// Lease expiry does not prove the owner process is dead. Keep the authenticated control channel
+				// available so the live owner can retry; EOF/owner loss migrates to the recovery endpoint.
 				continue
 			}
-			// The target is reaped and the receipt is durable. Continue serving
-			// the original pipe so the owner can release it without a channel
-			// migration race.
+			// The target is reaped and the receipt is durable. Continue serving the original pipe so the
+			// owner can release it without a channel migration race.
 			continue
 		case event := <-requestEvents:
 			if event.err != nil {
-				// Control EOF/error is itself an owner-loss boundary. The owner
-				// watchdog may publish its notification later, so never return
-				// the raw protocol error while target authority is still active.
+				// Control EOF/error is itself an owner-loss boundary: the watchdog may publish later, so never
+				// return the raw protocol error while target authority is still active.
 				return enterRecovery()
 			}
 			request := event.request
@@ -1117,10 +1069,8 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 				return enterRecovery()
 			}
 			if needsRecovery {
-				// The error response reached the live daemon. Keep servicing the
-				// original control channel so it can retry the physical proof;
-				// switch to the recovery endpoint only when that channel itself is
-				// lost or a response write fails.
+				// The error response reached the live daemon. Keep servicing the original control channel so it
+				// can retry the physical proof; migrate to recovery only when that channel is lost or a write fails.
 				continue
 			}
 			if request.Operation == linuxSupervisorOpRelease && status == "released" {

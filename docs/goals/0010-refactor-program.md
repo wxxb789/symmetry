@@ -622,6 +622,20 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
   notes in the gated rows (W3-08, W3-09, W3-14, W3-15, W4-02, W4-16, W5-01, W5-05, W5-11,
   W5-12, W6-08, W6-09, W6-10, W6-12a). The pipeline set is now empty apart from A4 (worktree;
   no PR); still open: #168, #171, #178, #179, #181, #185-#187, #189, #191 and #195.
+- **2026-11-22 — T1 status refresh: comment-policy sweep dispatched and delivered.** The owner's
+  2026-11-22 comment policy (`refactor/comment-policy.md`) was appended to every in-flight slice's
+  prompt; the program-wide sweep slice (`goal-comment-policy-sweep`, held until the pre-policy land
+  queue merged) then ran against `origin/main` `f1fe1e59`. It dispositioned the 6,074 candidate
+  comment lines the 68 program commits after `a3039f0` added on `main` across 212 files: deleted
+  2,956 · compressed 2,836 · kept 238, plus 44 classifier false positives left byte-identical. The
+  per-file table is in `docs/plans/2026-11-22-comment-policy-sweep-plan.md` (§9/§10), the per-line
+  inventory in `docs/evidence/comment-policy-sweep-2026-11-22-inventory.tsv`, the moved module intent
+  in `docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md` (each owning slice plan carries
+  a short "Comment-policy sweep" note), and the gate evidence — including per-file language-parser
+  strip-proofs, 207 files PASS — in `docs/evidence/comment-policy-sweep-2026-11-22.md`. The debt the
+  deleted comments recorded is filed under `docs/TODO.md` ("Comment-policy sweep: debt the deleted
+  comments recorded"). Delivered as an uncommitted working tree at this entry: not yet reviewed,
+  committed or merged, so no status row above moves on this entry's account.
 
 ## Known follow-ups
 

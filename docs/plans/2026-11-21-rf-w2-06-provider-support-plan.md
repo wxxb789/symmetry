@@ -200,3 +200,11 @@ connection (no authenticate call, no request).
 5. **`sync_delivery/3`'s nil clause.** Moved into `Support` rather than left duplicated in the
    providers (see trade-offs); the alternative — keeping the guard local — is a two-line
    revert that would leave the pair with one duplicated logic clause.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `control/lib/symmetry_control/integrations/providers/support.ex` by the
+2026-11-22 comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws8-control-lib"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

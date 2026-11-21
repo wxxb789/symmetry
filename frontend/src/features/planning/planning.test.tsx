@@ -463,7 +463,6 @@ describe("project planning", () => {
     await screen.findByText("Project created.");
     expect(postsOf(harness, "/portal/api/projects")).toHaveLength(1);
     expect(await screen.findByRole("heading", { level: 2, name: "Third project" })).toBeVisible();
-    // The clean close restores focus to the control that opened the editor.
     expect(invoking).toHaveFocus();
   });
 
@@ -602,7 +601,6 @@ describe("project planning", () => {
     await user.selectOptions(screen.getByLabelText("Review"), "");
     await user.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText("Work item updated.");
-    // The clean close restores focus to the control that opened the editor.
     expect(invoking).toHaveFocus();
     // An emptied control is an explicit clear: Ecto reads "" as "no change",
     // so the payload has to carry null for the value to be removed. The

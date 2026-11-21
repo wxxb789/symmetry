@@ -228,3 +228,11 @@ The notice text and the env-var name are the machine-checkable handles: the noti
   beside it): `Ran 80 tests in 1581.536s`, `OK (skipped=2)`, exit 0 — consistent with W1-11's
   1647.311 s on the same host, and a Windows-host reading, so it neither supports nor refutes the
   drafting host's 580 s or the CI step's ~146 s.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `scripts/ci/test-check-lockfile-registry.py` by the 2026-11-22
+comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws7b-ci-scripts"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

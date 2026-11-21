@@ -13,9 +13,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
-// scaffoldingProcess is the process double the shared session helpers are
-// tested against: it satisfies ProcessIdentity and every optional capability
-// ProcessForwarder can forward.
 type scaffoldingProcess struct {
 	pid       int
 	identity  string
@@ -40,13 +37,10 @@ func (process *scaffoldingProcess) LinuxV2LiveOwnerStatus(context.Context) (exec
 	return process.status, process.statusErr
 }
 
-// scaffoldingIdentity only forwards process identity, so every optional
-// capability reports unsupported.
 type scaffoldingIdentity struct{}
 
 func (scaffoldingIdentity) ProcessDetails() (int, string) { return 7, "identity-only" }
 
-// scaffoldingSink records delivered events and can fail on demand.
 type scaffoldingSink struct {
 	mutex  sync.Mutex
 	events []Event
@@ -66,9 +60,8 @@ func (sink *scaffoldingSink) delivered() []Event {
 	return append([]Event(nil), sink.events...)
 }
 
-// scaffoldingJoinProbe reports when a caller reached the point where it waits
-// on an in-flight close attempt, so the test can release the owning attempt
-// only after a joiner is provably inside the gate.
+// Reports when a caller reached the wait on an in-flight close attempt, so the test
+// releases the owner only after a joiner is provably inside the gate.
 type scaffoldingJoinProbe struct {
 	entered chan struct{}
 	block   chan struct{}
@@ -150,10 +143,8 @@ func TestProcessForwarderForwardsOptionalProcessCapabilities(t *testing.T) {
 }
 
 func TestProcessForwarderLeaseRenewalAvailableReportsTheProcessAnswer(t *testing.T) {
-	// LeaseRenewalAvailable must return the process's own answer, not merely
-	// report that the method exists: a LeaseRenewer that answers false is the
-	// common case for an uncontained process, and reporting it as renewable
-	// would let the daemon renew a lease that cannot be renewed.
+	// Must return the process's own answer, not merely that the method exists: reporting an
+	// uncontained process as renewable would let the daemon renew a lease that cannot be renewed.
 	var mutex sync.Mutex
 	process := &scaffoldingProcess{pid: 11, identity: "test:11", renewable: false}
 	var owner ProcessIdentity = process
@@ -181,8 +172,6 @@ func TestProcessForwarderReportsUnsupportedWithoutCapabilities(t *testing.T) {
 		t.Fatalf("LiveOwnerStatus() error = %v, want errors.ErrUnsupported", err)
 	}
 
-	// A nil and a typed-nil owner report no identity and no capabilities
-	// instead of invoking a method on an absent process.
 	var empty ProcessIdentity
 	emptyForwarder := NewProcessForwarder(&mutex, &empty)
 	if pid, identity := emptyForwarder.Details(); pid != 0 || identity != "" {
@@ -465,10 +454,8 @@ func TestWaitTurnBarrierKeepsSettledTurnWhenSessionEndsConcurrently(t *testing.T
 	close(settledTurn)
 	sessionContext, cancelSession := context.WithCancel(context.Background())
 	cancelSession()
-	// Both barriers are already closed, so the select between the turn channel
-	// and the session-context arm is arbitrary. The session-context arm's
-	// non-blocking re-check must still report the settled turn, so every round
-	// must return the turn error; repeating exercises both orderings.
+	// Both barriers are closed, so the select is arbitrary; every round must still return
+	// the settled turn error from the session-context arm's non-blocking re-check.
 	for round := range 128 {
 		err := WaitTurnBarrier(context.Background(), sessionContext, settledTurn, func() error { return turnErr }, func() error { return sessionErr })
 		if !errors.Is(err, turnErr) {
@@ -503,10 +490,8 @@ func TestDeliverEventStampsMissingTimeAndForwardsSinkError(t *testing.T) {
 
 	sinkErr := errors.New("journal unavailable")
 	failing := &scaffoldingSink{err: sinkErr}
-	// Identity, not errors.Is: every adapter wraps the helper's result in its
-	// own "persist <adapter> native event: %w" literal, so a wrapper added
-	// here would change every adapter's persisted sink-failure text while an
-	// errors.Is check stayed green.
+	// Identity, not errors.Is: adapters wrap this result in their own "persist <adapter>
+	// native event: %w" literal, so a wrapper here would change every persisted text.
 	if err := DeliverEvent(context.Background(), failing, event); err != sinkErr {
 		t.Fatalf("DeliverEvent() error = %v, want the sink error identity %v", err, sinkErr)
 	}

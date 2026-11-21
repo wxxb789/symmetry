@@ -258,3 +258,12 @@ exactly one definition each of `asText`, `asRecord`, `asRecords`, `safeUrl`, `se
 deliberately stay local (`presentText`, `asVersion`, `workFailureText`, `chatFailureText`) plus
 zero occurrences of the bare identifier `failureText` and zero importers of
 `features/goals/served-text.ts` (file deleted).
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from this slice's files
+(`control/test/symmetry_control_web/controllers/portal_workflow_test.exs`,
+`frontend/src/services/served.ts`) by the 2026-11-22 comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws9b-control-test", "ws10-frontend"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

@@ -1169,8 +1169,6 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     _task_id = submit_and_assign(conn)
     {run_id, _generation, fence} = claim(conn, machine_token, runtime_id)
 
-    # A fence the parser accepts reaches the Goal-scoped read, which refuses
-    # this legacy run with not_found; a fence it refuses is 400 invalid_request.
     for {value, status} <- [
           {"1", 404},
           {"+1", 404},
@@ -1188,8 +1186,6 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
       |> assert_fence_response(status)
     end
 
-    # A body fence carries only the JSON number: the decimal text a query fence
-    # accepts is refused here.
     for {value, status} <- [
           {1, 404},
           {"1", 400},
@@ -1211,7 +1207,6 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
       |> assert_fence_response(status)
     end
 
-    # A query fence accepts exactly the five fence fields, all of them present.
     for query <- [
           Map.put(fence, "unknown", "1"),
           Map.delete(fence, "lease_token"),
@@ -1225,11 +1220,6 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
       )
     end
 
-    # A query fence carrying `machine_id` fails as a `with`-clause error — an
-    # unhandled 500 in production, where an unknown key answers 400. The branch
-    # is preserved deliberately (plan CW-7 in
-    # docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md); the one-line
-    # fix increment flips this pin to the standard `invalid_request` 400.
     machine_id_query = fence |> Map.put("machine_id", machine_id) |> URI.encode_query()
 
     assert_raise WithClauseError, fn ->

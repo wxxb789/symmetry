@@ -30,10 +30,6 @@ func TestValidateCommitPathUsesUTF8RuneLength(t *testing.T) {
 	}
 }
 
-// TestValidateShortIdentifierPinsRejectionMessages pins the exact rejection
-// message for every evidence_key rejection class. The length check precedes
-// the identifier scan, so an over-length value pins the length body even when
-// it also carries an invalid first rune.
 func TestValidateShortIdentifierPinsRejectionMessages(t *testing.T) {
 	const field = "evidence_key"
 	length := fmt.Sprintf("%s must contain 1..128 characters", field)

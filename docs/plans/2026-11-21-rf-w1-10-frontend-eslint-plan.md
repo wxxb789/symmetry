@@ -308,3 +308,12 @@ mutation check for the gate itself.
   rules; the `eslint.config.js` comment and decision D1 above now record that instead of the
   earlier 19-file arithmetic. D1's choice (C) is unaffected; the ratchet table and the
   `--max-warnings 229` ceiling are unchanged.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `frontend/eslint.config.js` by the 2026-11-22 comment-policy sweep
+(strict-config baseline, measured 743 → 229 findings, the two size caps counted in the ratchet) is
+recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws10-frontend"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

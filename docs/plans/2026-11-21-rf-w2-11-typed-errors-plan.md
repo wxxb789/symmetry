@@ -293,3 +293,11 @@ host). Measurement harnesses are not part of this slice, so the sequencing rule 
   (its `git grep` command reproduces the 78 rows); any later conversion of a one-off literal to
   a sentinel should extend it in the same change rather than re-derive counts from a scratch
   tool.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from this slice's files (`daemon/internal/platform/containment_errors.go`,
+`containment_errors_linux.go`) by the 2026-11-22 comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws2b-platform-containment"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

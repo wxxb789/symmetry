@@ -1,44 +1,13 @@
 #!/usr/bin/env python3
-"""Require every browser suite to be wired into a workflow or listed as manual.
-
-Findings T4 and F4: thirteen Playwright specs and three node test files live
-under `browser/`, and six of the specs plus all three node tests are reachable
-only through local driver scripts - roughly 4,600 lines of test code with no CI
-verdict and no explicit label. This gate makes the classification total:
-
-* every `<root>/browser/tests/**/*.spec.mjs` and
-  `<root>/browser/scripts/**/*.test.mjs` must be **wired** - some
-  `.github/workflows/*.yml`/`*.yaml` names the file's
-  browser-relative (`tests/foo.spec.mjs`) or repository-relative
-  (`browser/tests/foo.spec.mjs`) path as a token outside its YAML comments (a
-  comment is not a step and runs nothing) - or **manual** - named by a
-  backticked path in the suite column of a table row of the
-  `## Manual-only suite matrix` section of `browser/README.md`. Only the first
-  cell of a table row in that one section counts, so a row's explanation may
-  mention sibling suites freely; the README's prose throughout is not consulted;
-* a file in both classes, an unclassified file, and a matrix entry with no file
-  on disk are each a failure, so wiring a spec (refactor slice W6-02) must also
-  drop its matrix row, and a rename cannot leave a stale label behind;
-* the classification table and counts print on every run.
-
-For a wired file this gate proves it is *named*, not that the naming step runs
-it: for the render family, `assert-playwright-json.py`'s executed-set assertion
-is the execution proof and is deliberately not duplicated here. `--root`
-overrides the repository root so the gate itself can be exercised against
-synthetic fixture trees.
-"""
+"""Require every browser suite to be wired into a workflow or listed as manual."""
 
 import argparse
 import pathlib
 import re
 import sys
 
-# Browser-relative suite patterns. SUITE_PATTERNS (`**` crosses directories, so
-# a nested family is discovered like a flat one) and SUITE_SHAPE (the
-# manual-matrix shape, a regex independently written over the same families and
-# file names at any depth) are two spellings of one constraint, so a new family
-# belongs in both; an entry the shape does not match is skipped by the shape
-# check in main rather than rot-checked.
+# SUITE_PATTERNS and SUITE_SHAPE spell one constraint twice, so a new suite family belongs in both;
+# an entry the shape does not match is skipped, not rot-checked.
 SUITE_PATTERNS = ("tests/**/*.spec.mjs", "scripts/**/*.test.mjs")
 SUITE_SHAPE = re.compile(r"^(?:browser/)?(?:tests/(?:[^/]+/)*[^/]+\.spec\.mjs|scripts/(?:[^/]+/)*[^/]+\.test\.mjs)$")
 WORKFLOW_PATTERNS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
@@ -68,7 +37,7 @@ def repository_root(args: argparse.Namespace) -> pathlib.Path:
 
 
 def discover_suites(root: pathlib.Path) -> list[str]:
-    """The repository-relative paths of every browser suite file."""
+
     found = set()
     for pattern in SUITE_PATTERNS:
         for path in root.joinpath("browser").glob(pattern):
@@ -78,27 +47,13 @@ def discover_suites(root: pathlib.Path) -> list[str]:
 
 
 def names_suite(token: str, suite: str) -> bool:
-    """Whether a workflow token names the suite file.
-
-    Accepts the repository-relative path (`browser/tests/foo.spec.mjs`), the
-    browser-relative path (`tests/foo.spec.mjs`, the render step's spelling) and
-    either of those at the end of a longer token (`/tmp/x/browser/tests/...`).
-    """
     browser_relative = suite[len("browser/") :]
     return any(token == candidate or token.endswith("/" + candidate) for candidate in (suite, browser_relative))
 
 
 def strip_comments(text: str) -> str:
-    """The workflow text with its YAML comments removed.
-
-    A comment is not a step and runs nothing, so it must not make a suite
-    look wired. A `#` opens a comment at the start of a line or after
-    whitespace, unless it sits inside a single- or double-quoted scalar (the
-    YAML rule, which also covers the quoted shell fragments of a `run` block);
-    shell comments are stripped the same way. The scan is textual rather than a
-    YAML parse, and an unbalanced quote earlier on a line can keep a comment
-    tail, which errs on the permissive side.
-    """
+    """The workflow text with its YAML comments removed - a textual scan, not a YAML parse,
+    so an unbalanced quote earlier on a line can keep a comment tail (permissive)."""
     kept: list[str] = []
     for line in text.splitlines():
         in_single = in_double = False
@@ -120,7 +75,7 @@ def strip_comments(text: str) -> str:
 
 
 def workflow_tokens(root: pathlib.Path) -> dict[str, list[str]]:
-    """Every path-like token of every workflow file, keyed by workflow path."""
+
     tokens: dict[str, list[str]] = {}
     for pattern in WORKFLOW_PATTERNS:
         for path in sorted(root.joinpath(".github/workflows").glob(pathlib.PurePath(pattern).name)):
@@ -132,17 +87,11 @@ def workflow_tokens(root: pathlib.Path) -> dict[str, list[str]]:
 
 
 def wired_by(suite: str, tokens: dict[str, list[str]]) -> list[str]:
-    """The sorted workflow paths whose tokens name the suite."""
+
     return sorted(source for source, values in tokens.items() if any(names_suite(token, suite) for token in values))
 
 
 def manual_entries(readme_path: pathlib.Path) -> list[str]:
-    """The backticked tokens of the manual matrix's suite column.
-
-    Only the section's rows count - the heading opens it and the next level-2
-    heading closes it - and only a row's first cell is read, so the reason and
-    driver columns can name other files without labelling them.
-    """
     entries: list[str] = []
     in_section = False
     seen_heading = False

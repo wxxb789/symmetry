@@ -344,3 +344,13 @@ slash-UNC, root-relative and `file:` URL spellings.
   classes with the shared boundary, and nothing else). No second JSON reading is added there.
 - Re-rendering the two `0008b-go-bounded-regression-strong` records or their binding files (PR
   #134 renders them); the sweep reports their status.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `scripts/ci/model-routing-record-sanitize.py` by the 2026-11-22
+comment-policy sweep — the JSON/prose reading contract, the escape grammar with its source, and the
+fail-closed property — is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws6-sanitizer"); the surviving in-file whys are the input contract, the escape grammar and the
+fail-closed direction. The sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

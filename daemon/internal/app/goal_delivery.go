@@ -14,8 +14,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// goalSessionAttachmentReadbackAPI is an optional recovery extension. Older
-// ControlAPI implementations continue to fail closed on an ambiguous attach.
+// Optional recovery extension: older ControlAPI implementations keep failing closed on an
+// ambiguous attach.
 type goalSessionAttachmentReadbackAPI interface {
 	FetchHarnessSessionAttachment(context.Context, string, protocol.Fence) (control.GoalSessionReceipt, error)
 }
@@ -36,9 +36,8 @@ func (daemon *daemon) markGoalSessionAttachDeliveryReady(key state.RunKey, local
 		return journal, nil
 	}
 
-	// A failed directory sync can follow a visible atomic rename. Read back the
-	// journal before treating the attachment as unready so we never discard a
-	// receipt that is already eligible for exact replay.
+	// A failed directory sync can follow a visible atomic rename: read the journal back before
+	// treating the attachment as unready, so no exact-replayable receipt is discarded.
 	observed, readErr := daemon.store.LoadJournal(key)
 	if readErr == nil {
 		for _, delivery := range observed.PendingGoalDeliveries {
@@ -62,9 +61,8 @@ func (daemon *daemon) discardUnreadyGoalSessionAttachDelivery(key state.RunKey, 
 	return err
 }
 
-// retryUnreadyGoalSessionAttachDeliveries clears only pre-send receipts once
-// their starter has finished. It covers a transient failure while compensating
-// a rejected Ready barrier without ever promoting an unready receipt.
+// Clears only pre-send receipts once their starter has finished: transient compensation of a
+// rejected Ready barrier that never promotes an unready receipt.
 func (daemon *daemon) retryUnreadyGoalSessionAttachDeliveries() {
 	journals, err := daemon.store.ListJournals()
 	if err != nil {
@@ -95,10 +93,8 @@ func (daemon *daemon) retryUnreadyGoalSessionAttachDeliveries() {
 	}
 }
 
-// unreadyPiResumeAttachBarrier prevents ordinary attach cleanup from deleting
-// the target receipt after a rebind may already have committed. The explicit
-// durable resume phase is the only proof that this is not an abandoned fresh
-// launch intent; recovery will promote it or compensate it in fence order.
+// Prevents ordinary attach cleanup from deleting the target receipt after a rebind may already
+// have committed: only the durable resume phase proves this is not an abandoned fresh intent.
 func (daemon *daemon) unreadyPiResumeAttachBarrier(journal state.RunJournal, delivery state.GoalDelivery) (bool, error) {
 	if delivery.SessionAttach == nil || delivery.SessionAttach.ServerIssuedBinding || delivery.SessionAttach.BindingID == "" {
 		return false, nil
@@ -145,10 +141,8 @@ func (daemon *daemon) closeNativeGoalSession(key state.RunKey, active *runningRu
 	return nil
 }
 
-// recordStoppedGoalSession turns known native termination into either a
-// permanent local close (before Control attach) or a durable retained-session
-// stop receipt. The latter is deliberately queued before terminal delivery and
-// released only by flushGoalDeliveries after Control accepts that transition.
+// Known native termination becomes a permanent local close (before Control attach) or a durable
+// retained-session stop receipt, queued before terminal delivery and released on acceptance.
 func (daemon *daemon) recordStoppedGoalSession(runKey state.RunKey, goalSession state.GoalSessionKey) error {
 	sessionJournal, err := daemon.loadGoalSession(goalSession)
 	if err != nil {
@@ -162,8 +156,7 @@ func (daemon *daemon) recordStoppedGoalSession(runKey state.RunKey, goalSession 
 		return nil
 	}
 	if sessionJournal.IsLegacyControlAttachment() {
-		// Native Close has already succeeded on this path. Old attachment
-		// journals lack the immutable receipt required to release Control, so
+		// Old attachment journals lack the immutable receipt required to release Control, so
 		// destroy only the local session instead of emitting an unverifiable stop.
 		_, err = daemon.closeGoalSession(goalSession)
 		return err
@@ -178,23 +171,19 @@ func (daemon *daemon) recordStoppedGoalSession(runKey state.RunKey, goalSession 
 			return err
 		}
 		if hasReadyGoalSessionAttach(journal, sessionJournal) {
-			// The native process is known stopped, but an attach request may have
-			// committed remotely before the daemon persisted its session mapping.
-			// Preserve the handle and exact ready request so a later replay can
-			// establish the mapping; do not close or manufacture uncertainty.
+			// The process is known stopped, but an attach request may have committed remotely
+			// before the mapping was persisted: preserve handle and ready request for a replay.
 			_, err = daemon.store.SetGoalSessionState(goalSession, state.GoalSessionStateUnavailable)
 			return err
 		}
-		// No attach receipt was durably correlated or replayable. This session
-		// was never safe to retain, so preserve permanent-close behavior.
+		// No attach receipt was durably correlated or replayable, so this session was never
+		// safe to retain: preserve permanent-close behavior.
 		_, err = daemon.closeGoalSession(goalSession)
 		return err
 	}
 	if !sessionJournal.HasVerifiedControlAttachment() {
-		// A resumed journal keeps the predecessor Control session ID while its
-		// new binding waits for attach. That old mapping is not authority to
-		// send a stop for the new binding. The caller must preserve the exact
-		// ready attach barrier until it can be read back or be quarantined.
+		// A resumed journal's predecessor Control session ID is not authority to stop the new
+		// binding: preserve the exact ready attach barrier until read back or quarantined.
 		return errGoalAttachmentPending
 	}
 	// The stop outbox is the durable stopped witness. Write it before changing
@@ -273,10 +262,8 @@ func retiredLegacyGoalSessionAttach(journal state.RunJournal, session state.Goal
 	return false
 }
 
-// ensureRetainedGoalSessionStopDelivery repairs the cross-file commit window
-// around a retained session stop. The outbox is the source of truth: when it
-// already exists, it repairs the local unavailable projection; when the
-// projection exists without it, it reconstructs the exact receipt.
+// Repairs the cross-file commit window around a retained session stop: the outbox is the
+// source of truth, and a missing receipt is reconstructed from the local projection.
 func (daemon *daemon) ensureRetainedGoalSessionStopDelivery(key state.RunKey, session state.GoalSessionJournal, journal state.RunJournal) (state.RunJournal, error) {
 	if !session.HasVerifiedControlAttachment() || session.NeedsReconciliation() {
 		return journal, nil
@@ -441,10 +428,8 @@ func nativeTerminalPayload(result harness.TaskResult, admission *protocol.Admiss
 	}
 }
 
-// flushGoalDeliveries transmits only caller-supplied typed Goal receipts. It
-// never converts raw native events or TaskResult evidence references into
-// evidence or usage. A missing receipt leaves the original immutable body in
-// the journal for an exact retry after a timeout or daemon restart.
+// Transmits only caller-supplied typed Goal receipts, never raw native events or TaskResult
+// references; a missing receipt leaves the immutable body for exact retry across a restart.
 func (daemon *daemon) flushGoalDeliveries(ctx context.Context, journal state.RunJournal) (state.RunJournal, *control.GoalSessionReceipt, error) {
 	var attachReceipt *control.GoalSessionReceipt
 	for len(journal.PendingGoalDeliveries) > 0 {
@@ -487,10 +472,8 @@ func goalDeliveryReadyForFlush(journal state.RunJournal, delivery state.GoalDeli
 		return (journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingTransitions) == 0) ||
 			state.IsConclusiveTerminalVerdict(journal.TerminalVerdict)
 	}
-	// A lease/reconcile stale transition has no daemon-originated terminal
-	// receipt. Control remains the authority and rejects this request until its
-	// reaper has made the Run terminal, so an early local attempt cannot release
-	// the session.
+	// A lease/reconcile stale transition has no daemon-originated terminal receipt: Control
+	// stays the authority until its reaper makes the Run terminal, so early release is refused.
 	return journal.LocalState == "stale" || journal.LocalState == "cleanup_pending"
 }
 
@@ -536,9 +519,8 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 			cancel()
 			return journal, nil, errors.New("legacy Goal session attach has no binding authority marker and cannot be replayed")
 		}
-		// A ready request without a verified current attachment can be the
-		// response-loss window, even when resume retains its predecessor's session
-		// ID. Read the immutable receipt before replaying its idempotent PUT.
+		// A ready request without a verified current attachment can be the response-loss input,
+		// even when resume keeps its predecessor's ID: read the immutable receipt before replay.
 		readbackAPI, readbackSupported := daemon.control.(goalSessionAttachmentReadbackAPI)
 		if session, loadErr := daemon.store.LoadGoalSessionByHandle(payload.LocalHandleID); loadErr == nil && !session.HasVerifiedControlAttachment() && readbackSupported {
 			if receipt, readErr := readbackAPI.FetchHarnessSessionAttachment(requestContext, journal.RunID, delivery.Fence); readErr == nil {
@@ -565,8 +547,8 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 			if err == nil {
 				attachReceipt = &receipt
 			} else if goalSessionAttachmentIdempotencyConflict(err) && readbackSupported {
-				// A conflicting replay may be the exact attachment whose original
-				// response was lost. Only the fenced immutable readback may resolve it.
+				// A conflicting replay may be the exact attachment whose original response was
+				// lost; only the fenced immutable readback may resolve it.
 				if receipt, readErr := readbackAPI.FetchHarnessSessionAttachment(requestContext, journal.RunID, delivery.Fence); readErr == nil {
 					attachReceipt = &receipt
 					err = nil
@@ -574,9 +556,8 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 					err = fmt.Errorf("read Goal session attachment after idempotency conflict: %w", readErr)
 				}
 			} else if readbackSupported && goalSessionAttachmentTransportUnknown(requestContext, err) {
-				// The PUT may have committed before its transport acknowledgement
-				// was lost. Resolve it once with the original fence and live request
-				// budget; a historical receipt never grants new execution authority.
+				// The PUT may have committed before its acknowledgement was lost: resolve once
+				// with the original fence and live budget — a historical receipt grants nothing.
 				if receipt, readErr := readbackAPI.FetchHarnessSessionAttachment(requestContext, journal.RunID, delivery.Fence); readErr == nil {
 					attachReceipt = &receipt
 					uncertainAttachErr = err
@@ -723,20 +704,18 @@ func definitiveGoalDeliveryRejection(kind state.GoalDeliveryKind, err error) (in
 		return apiError.StatusCode, string(apiError.Code), message, true
 	case http.StatusConflict:
 		if kind == state.GoalDeliverySessionAttach && apiError.Code == control.IdempotencyConflict {
-			// Attach idempotency conflict can mean the server committed the same
-			// attachment before a response was lost. Keep the exact request until
-			// the attachment receipt can be read back; never retire this barrier.
+			// An attach idempotency conflict can be the same attachment committed before a
+			// lost response: keep the exact request until readback; never retire this barrier.
 			return 0, "", "", false
 		}
-		// A usage-key conflict could be an earlier accepted accounting record or
-		// a changed body. Without a readback receipt it is an unknown external
-		// effect, except for the control plane's explicit idempotency conflict.
+		// A usage-key conflict could be an earlier accepted accounting record or a changed
+		// body: without a readback receipt it is an unknown external effect.
 		if kind == state.GoalDeliveryUsage && apiError.Code != control.IdempotencyConflict {
 			return 0, "", "", false
 		}
 		if kind == state.GoalDeliverySessionStopped && apiError.Code == control.StateConflict {
-			// The daemon can observe lease expiry before Control's reaper commits
-			// the terminal Run. Keep this exact receipt retryable.
+			// The daemon can observe lease expiry before Control's reaper commits the terminal
+			// Run: keep this exact receipt retryable.
 			return 0, "", "", false
 		}
 		message := apiError.Message
@@ -760,8 +739,8 @@ func goalSessionAttachmentIdempotencyConflict(err error) bool {
 }
 
 func goalSessionAttachmentTransportUnknown(ctx context.Context, err error) bool {
-	// RetryDelay also admits 429/5xx, which are definite HTTP responses rather
-	// than lost acknowledgements. A permanent response can wrap EOF as well.
+	// RetryDelay also admits 429/5xx, which are definite HTTP responses rather than lost
+	// acknowledgements, and a permanent response can wrap EOF as well.
 	var apiError *control.APIError
 	var responseError *control.ResponseError
 	if errors.As(err, &apiError) || errors.As(err, &responseError) {
@@ -770,9 +749,8 @@ func goalSessionAttachmentTransportUnknown(ctx context.Context, err error) bool 
 	if (ctx != nil && ctx.Err() != nil) || errors.Is(err, context.Canceled) {
 		return false
 	}
-	// http.Client can wrap a RoundTripper's url.Error in another url.Error.
-	// Every such layer implements net.Error even for a permanent local cause;
-	// strip them all before reusing Control's underlying transport-cause set.
+	// http.Client can wrap a RoundTripper's url.Error in another url.Error, and each layer
+	// implements net.Error even for a permanent local cause: strip them before classifying.
 	var requestError *url.Error
 	for errors.As(err, &requestError) {
 		err = requestError.Err
@@ -789,14 +767,13 @@ func goalSessionAttachmentUncertainReadbackError(attachErr, readErr error) error
 	if errors.As(readErr, &apiError) && (apiError.StatusCode == http.StatusUnauthorized || apiError.StatusCode == http.StatusForbidden || control.IsOwnershipLost(readErr)) {
 		return readErr
 	}
-	// Absence, another lost response or an invalid identity cannot disprove the
-	// original PUT commit. Keep its transport classification and exact outbox;
-	// in particular, do not retire it as a permanent GET 404 rejection.
+	// Absence, another lost response or an invalid identity cannot disprove the original PUT
+	// commit: keep its transport classification and exact outbox — not a permanent GET 404.
 	return fmt.Errorf("read Goal session attachment after uncertain transport (%v): %w", readErr, attachErr)
 }
 
-// flushLateGoalUsage drains the retained accounting ledger independently of
-// the run lifecycle. It never renews a lease, recreates a run, or starts work.
+// Drains the retained accounting ledger independently of the run lifecycle: it never renews
+// a lease, recreates a run, or starts work.
 func (daemon *daemon) flushLateGoalUsage(ctx context.Context) {
 	ledgers, err := daemon.store.ListLateGoalUsage()
 	if err != nil {
@@ -837,10 +814,8 @@ func (daemon *daemon) flushLateGoalUsage(ctx context.Context) {
 	}
 }
 
-// validateGoalDeliveryReceipt is a second deletion barrier. The production
-// client performs strict wire validation, but the daemon must still protect its
-// durable outbox if a different ControlAPI implementation returns a malformed
-// or mismatched typed receipt.
+// Second deletion barrier after the production client's strict wire validation: a different
+// ControlAPI implementation could still return a malformed or mismatched typed receipt.
 func validateGoalDeliveryReceipt(journal state.RunJournal, delivery state.GoalDelivery, attach *control.GoalSessionReceipt, stopped *control.GoalSessionStoppedReceipt, evidence *control.GoalEvidenceReceipt, usage *control.GoalUsageReceipt) error {
 	switch delivery.Kind {
 	case state.GoalDeliverySessionAttach:

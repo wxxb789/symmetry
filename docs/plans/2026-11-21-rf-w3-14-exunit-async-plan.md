@@ -349,3 +349,11 @@ All clauses of the amendment are met on the delivered tree:
   sync) and the conductor D9 re-evaluation of the migration-file `async: false` pin it waits on —
   not claimed here. W3-15 is not a wall-time lever: its contract has no wall-time clause and
   `goals_test.exs` stays `async: false` as an app-env mutator.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `control/test/support/migration_case.ex` by the 2026-11-22 comment-policy
+sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws9a-control-test-support"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

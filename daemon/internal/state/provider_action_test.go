@@ -1379,13 +1379,8 @@ func TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation
 	}
 }
 
-// TestProviderActionCapacitySplitSeparatesSerializationFromSize pins the
-// capacity split. A serialize/marshal failure leaves ErrProviderActionCapacity,
-// so the bridge cannot classify it as local_action_rejected
-// (pi_provider_bridge.go) and falls to RecoverProviderAction with
-// local_persistence_unknown instead; a genuine over-budget journal still
-// returns the ErrProviderActionCapacity value itself, so every out-of-package
-// errors.Is consumer keeps working unchanged.
+// Pins the capacity split: a serialize failure leaves ErrProviderActionCapacity (the bridge classifies it as
+// local_persistence_unknown, not local_action_rejected), while a genuine over-budget journal returns the sentinel itself.
 func TestProviderActionCapacitySplitSeparatesSerializationFromSize(t *testing.T) {
 	t.Parallel()
 	unencodable := testJournal("run-provider-serialize-capacity", 1)

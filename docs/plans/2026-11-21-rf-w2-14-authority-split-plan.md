@@ -326,3 +326,11 @@ stays as the commit-boundary belt, but no input distinguishes it from the earlie
 4. **Move-only proof by construction.** The split is produced by a rule table plus an
    AST-preserving splitter, never by hand; `--color-moved` is reported as an aid only,
    because it cannot see a body edit inside a moved block.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from this slice's files (`daemon/internal/authority/linux_clone.go`,
+`daemon/internal/authority/supervisor.go`) by the 2026-11-22 comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws4-authority"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

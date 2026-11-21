@@ -15,10 +15,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// terminalTransitionConflictError preserves the first-terminal-wins barrier
-// for callers that attempted to queue a different terminal after another
-// terminal became durable. It unwraps to errAuthoritativeTerminal so existing
-// cancellation handling can still enqueue a rejected command acknowledgement.
+// Preserves the first-terminal-wins barrier for a different terminal queued after another became
+// durable; unwraps to errAuthoritativeTerminal so cancellation can enqueue a rejected ack.
 type terminalTransitionConflictError struct {
 	expectedState string
 	actualState   string
@@ -207,9 +205,8 @@ func (daemon *daemon) queueTerminalTransitionAndAcknowledgementWithContext(ctx c
 	transition := protocol.StateTransitionRequest{TransitionID: transitionID, State: stateName, Payload: encoded}
 	acknowledgement := protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: outcome, AckID: acknowledgementID}
 	for {
-		// Queue/readback and acknowledgement removal share one lock order. Hold
-		// commandReceiptMu only across one persistence attempt so an unavailable
-		// journal writer cannot stall unrelated acknowledgement delivery.
+		// Queue/readback and acknowledgement removal share one lock order: hold commandReceiptMu
+		// across one persistence attempt only, so a stalled writer cannot block unrelated delivery.
 		daemon.commandReceiptMu.Lock()
 		var journal state.RunJournal
 		if daemon.options.queueTerminalTransitionAndAcknowledgement != nil {
@@ -396,9 +393,8 @@ func (daemon *daemon) recordOutboxFailure(ctx context.Context, journal state.Run
 		delay, retryable = fallback, true
 	}
 	if !retryable && journal.HasPendingGoalDeliveries() {
-		// Goal receipts have their own durable idempotency and must continue
-		// independently of a conclusive terminal verdict. Never convert a
-		// pending Goal delivery into a permanent local backoff.
+		// Goal receipts have their own durable idempotency and must continue independently of a
+		// conclusive terminal verdict: never convert a pending delivery into a permanent backoff.
 		delay, retryable = fallback, true
 	}
 	if !retryable && journal.LocalState == "stale" && len(journal.PendingCommandAcknowledgements) != 0 {
@@ -568,9 +564,8 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		journal = updated
 	}
 	if journal.LocalState == "stale" {
-		// A stale run must not send ordinary lifecycle traffic, but immutable Goal
-		// receipts and command acknowledgements still need final delivery or durable
-		// retirement. Otherwise cleanup can erase the only exact fenced body.
+		// A stale run sends no ordinary lifecycle traffic, but immutable Goal receipts and
+		// acknowledgements still need final delivery or retirement — cleanup can erase them.
 		updated, _, err := daemon.flushGoalDeliveries(ctx, journal)
 		if err != nil {
 			return err
@@ -679,10 +674,8 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 			}
 		}
 		if isTerminalTransition(journal.PendingTransitions[0].State) {
-			// A deterministic validator can atomically append evidence and a
-			// terminal while this loop is delivering earlier transitions. Reload
-			// and drain its immutable evidence prerequisite immediately before
-			// terminal delivery so the Control plane never observes terminal-first.
+			// A validator can atomically append evidence and a terminal while earlier transitions
+			// are being delivered: drain the evidence prerequisite before terminal delivery.
 			updated, loadErr := daemon.store.LoadJournal(key)
 			if loadErr != nil {
 				return loadErr
@@ -766,10 +759,8 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 			return err
 		}
 	}
-	// A retained-session stop receipt is intentionally blocked until the
-	// terminal transition has been acknowledged by Control. It may have been
-	// queued immediately after the native process stopped, but releasing the
-	// session earlier would let a subsequent Run overlap a terminal one.
+	// The retained-session stop receipt stays blocked until Control has acknowledged the terminal
+	// transition: releasing the session earlier would let a subsequent Run overlap a terminal one.
 	updated, _, err = daemon.flushGoalDeliveries(ctx, journal)
 	journal = updated
 	if err != nil {
@@ -951,9 +942,8 @@ func durableTerminalTransition(journal state.RunJournal) (*protocol.StateTransit
 		}
 	}
 	if isTerminalTransition(journal.TerminalState) {
-		// The original transition body is intentionally not retained after the
-		// control-plane acknowledgement. Such a terminal cannot be proven to be
-		// the caller's exact idempotent write.
+		// The original transition body is intentionally not retained after the control-plane
+		// acknowledgement: such a terminal cannot be proven to be the caller's exact write.
 		return nil, true
 	}
 	return nil, false

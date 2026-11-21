@@ -316,9 +316,6 @@ func TestMachineClientOversizedErrorResponseKeepsTypedFallback(t *testing.T) {
 	}
 }
 
-// The operator client's test rows that used to drive these machine-client
-// guards moved to daemon/e2e/internal/operator with the client, so the
-// production transport and validation keep their own cases here.
 func TestMachineClientRejectsOversizedSuccessResponse(t *testing.T) {
 	body := `{"runtimes":[{"runtime_key":"default"}],"heartbeat_interval_ms":1,"poll_interval_ms":1,"lease_duration_ms":1,"websocket_path":"/socket","padding":"` + strings.Repeat("x", 64) + `"}`
 	server := jsonServer(t, http.StatusOK, body, nil)
@@ -822,10 +819,6 @@ func claimResponseWithLeaseRemaining(replacement string, includeLeaseRemaining b
 	return string(encoded)
 }
 
-// validateProviderActionUUID was the one UUID copy without a version/variant
-// check. The tightened check must reuse the goal-machine message text, so each
-// row compares the two validators' error strings byte for byte on one field
-// name instead of pinning a new provider-action-only string.
 func TestValidateProviderActionUUIDRejectsBadVersionAndVariant(t *testing.T) {
 	const field = "provider action action_id"
 	const base = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"

@@ -428,3 +428,11 @@ Reruns on the round-2 fix revision `d556d26c04` (portable toolchain recipe,
 `MIX_TEST_PARTITION=rf-w3-03`): format exit 0; `MIX_ENV=test mix compile --warnings-as-errors
 --force` exit 0; the two e2e files 2 passed, 10 skipped, exit 0, 0 `warning:` lines. The full
 suite stays with the conductor gate-runner.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `control/test/support/served_document.ex` by the 2026-11-22 comment-policy
+sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws9a-control-test-support"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

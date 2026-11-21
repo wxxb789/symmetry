@@ -1,12 +1,5 @@
 //go:build linux && amd64
 
-// Package linuxpreflight verifies a Linux amd64 host installation of the
-// Symmetry daemon owner: the installed A/B accounts, the delegated cgroup
-// parent, the fixed Git clone/repository ownership, the systemd units, and the
-// POSIX ACLs that fence A-private state from the fixed B runtime. Every
-// verifier is read-only: none of them launches a process, mutates a journal, or
-// certifies a future run, and none of them holds daemon state — callers pass the
-// daemon configuration and the trusted root-installed owner configuration.
 package linuxpreflight
 
 import (
@@ -44,17 +37,12 @@ const (
 	linuxClonePreflightMaxDepth   = 32
 )
 
-// LinuxOwnerPreflightRuntimeBoundary documents what static installation
-// verification cannot prove. The runtime must set native HOME to B, verify the
-// A-created leaf's cgroup.kill through its pinned FD, and validate per-run Git
-// metadata before binding or entering the native gate.
+// Documents what static installation verification cannot prove: the runtime must set
+// native HOME to B, verify the leaf's cgroup.kill by pinned FD, and validate per-run Git metadata.
 const LinuxOwnerPreflightRuntimeBoundary = "read-only preflight does not launch B, certify a future cgroup leaf, or attest a future per-run Git metadata ACL"
 
-// VerifyLegacyLinuxOwnersDrained takes the daemon's exclusive Store lock and
-// verifies that every RunJournal is terminal and has no remaining process or
-// containment authority. It never stops a process, creates a receipt, mutates
-// a journal, or retires an outbox item; the old service topology must have
-// completed any v1 helper recovery first.
+// Takes the daemon's exclusive Store lock and never stops a process, creates a receipt,
+// mutates a journal, or retires an outbox item; drains only after v1 helper recovery.
 func VerifyLegacyLinuxOwnersDrained(value config.Config) (result error) {
 	if uint32(os.Geteuid()) == 0 || uint32(os.Getuid()) != uint32(os.Geteuid()) || uint32(os.Getgid()) != uint32(os.Getegid()) {
 		return errors.New("legacy Linux owner drain verification must run as the unprivileged daemon owner")
@@ -71,10 +59,8 @@ func VerifyLegacyLinuxOwnersDrained(value config.Config) (result error) {
 	return verifyDrainedLinuxStore(store, value.StateDir)
 }
 
-// VerifyLinuxOwnerInstallation performs the post-anchor, read-only host
-// preflight. The installed A/B mapping comes only from the strict root-owned
-// owner configuration; the cgroup path and socket come from the operator's
-// daemon configuration and must match the live authenticated anchor.
+// The installed A/B mapping comes only from the strict root-owned owner configuration;
+// the cgroup path and socket come from daemon config and must match the live anchor.
 func VerifyLinuxOwnerInstallation(value config.Config) (result error) {
 	if err := value.Validate(); err != nil {
 		return fmt.Errorf("validate Linux owner daemon configuration: %w", err)
@@ -104,10 +90,8 @@ func VerifyLinuxOwnerInstallation(value config.Config) (result error) {
 	if err := verifyExistingLinuxStateLayout(value.StateDir, owner.AUID, &accounts.BSubject); err != nil {
 		return fmt.Errorf("verify A-private state and B isolation: %w", err)
 	}
-	// Legacy drain is a one-time cutover check under the old topology. Normal
-	// daemon restarts must admit live v2 journals so the surviving A helper and
-	// recovery-only path can stop them. This installation check also runs from
-	// an already-running daemon holding the Store lock during native admission.
+	// Legacy drain is a one-time cutover check; normal restarts must admit live v2 journals
+	// so the surviving A helper can be stopped, and this check also runs while a daemon holds the Store lock.
 	if err := verifyInstalledLinuxOwnerAssets(owner, accounts.ASubject, accounts.BSubject); err != nil {
 		return err
 	}

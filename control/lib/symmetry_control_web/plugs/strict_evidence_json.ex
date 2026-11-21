@@ -1,11 +1,9 @@
 defmodule SymmetryControlWeb.StrictJSONDecoder do
   @moduledoc """
-  Ordered JSON decoder for the strict mutation routes.
+  Ordered JSON decoder; `StrictEvidenceJSON` installs it as the `:json` decoder for the
+  strict routes.
 
-  `SymmetryControlWeb.Plugs.StrictEvidenceJSON` installs it as the `:json`
-  decoder for the strict-scope parser options, so Plug parses every strict
-  mutation body exactly once: one ordered decode plus one
-  duplicate-check-and-materialize walk, whose result becomes `body_params`.
+  One ordered walk rejects duplicate members and yields `body_params`.
   """
 
   defmodule DuplicateJSONKeyError do
@@ -14,14 +12,7 @@ defmodule SymmetryControlWeb.StrictJSONDecoder do
 
   @type decode_error :: :malformed_json | :expected_json_object | :duplicate_json_key
 
-  @doc """
-  Decodes one strict-scope JSON body, rejecting duplicate object members.
-
-  Raises the duplicate-key error so `Plug.Parsers.JSON` wraps it in
-  `Plug.Parsers.ParseError`; the plug maps that wrapped error back to the
-  protocol envelope. Every other decode error is re-raised unchanged, so a
-  malformed body keeps the parser's own rendering.
-  """
+  @doc "Raises duplicate members so Plug wraps them in ParseError; others re-raise unchanged."
   @spec decode!(binary()) :: term()
   def decode!(body) when is_binary(body) do
     case decode_ordered(body) do
@@ -36,13 +27,7 @@ defmodule SymmetryControlWeb.StrictJSONDecoder do
     end
   end
 
-  @doc """
-  Decodes one evidence body as a top-level JSON object without duplicates.
-
-  The root shape is checked before the duplicate walk, so a non-object root
-  keeps its `:expected_json_object` error even when it contains repeated
-  members.
-  """
+  @doc "Root shape checked before the duplicate walk; non-object roots keep :expected_json_object."
   @spec decode_object(binary()) :: {:ok, map()} | {:error, decode_error()}
   def decode_object(body) when is_binary(body) do
     case decode_ordered(body) do
@@ -89,14 +74,10 @@ end
 
 defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
   @moduledoc """
-  Strict JSON handling for the control-plane mutation routes.
+  Strict JSON for the control-plane mutation routes: the machine evidence endpoint keeps
+  its raw body (deferred materialization until the controller has authenticated the claim).
 
-  The machine evidence endpoint retains its raw body so the controller can
-  defer materialization until it has authenticated and claimed run ownership.
-  Every other JSON mutation route on `/api/v1` and `/portal/api` is decoded by
-  `SymmetryControlWeb.StrictJSONDecoder`, which rejects duplicate JSON object
-  members in the same pass that produces `body_params`. Routes outside that
-  scope keep the plain JSON decoder.
+  `/api/v1` and `/portal/api` use `StrictJSONDecoder`; other routes keep the plain decoder.
   """
 
   @behaviour Plug

@@ -1334,10 +1334,6 @@ func requireLinuxCloneAMD64(t *testing.T) {
 	}
 }
 
-// linuxCloneReuseGrantFixture builds the reuse grant that both the
-// alias-retirement test and the pinned reuse base consume; the grant owns its
-// source target and varies only by the source, predecessor and consumer run
-// IDs.
 func linuxCloneReuseGrantFixture(t *testing.T, intent authority.LinuxCloneIntent, runID, predecessorRunID string) (authority.LinuxCloneSeedReceipt, authority.LinuxCloneReuseGrant) {
 	t.Helper()
 	seed := authority.LinuxCloneSeedReceipt{
@@ -1399,14 +1395,6 @@ func TestLinuxCloneReuseAliasRetiresOnlyAfterStableStop(t *testing.T) {
 	}
 }
 
-// pinnedLinuxCloneBase is one store-backed Linux clone journal built through
-// the production mutation seam, plus the fixture values its cases mutate one at
-// a time; the reuse-grant base is the documented exception, imported through
-// the journal-path seam (see newPinnedLinuxCloneReuse). Cases may share one
-// base store: validateJournal rejects a mutation before the write, so a failed
-// case leaves the persisted journal untouched.
-// checkout is the receipt submitted to the store, kept so tests can assert the
-// persisted readback independently of the value they submit.
 type pinnedLinuxCloneBase struct {
 	store           *Store
 	key             RunKey
@@ -1419,8 +1407,6 @@ type pinnedLinuxCloneBase struct {
 	stopReceipt     authority.StopReceipt
 }
 
-// pinnedLinuxCloneAbortProof builds the exact no-gate abort proof for one
-// persisted intent; a nil seed models the pre-seed abort shape.
 func pinnedLinuxCloneAbortProof(t *testing.T, intent authority.LinuxCloneIntent, seed *authority.LinuxCloneSeedReceipt) authority.LinuxCloneAbortProof {
 	t.Helper()
 	baseRef, err := authority.LinuxCloneBaseRef(intent.RunID, intent.Generation)
@@ -1438,10 +1424,6 @@ func pinnedLinuxCloneAbortProof(t *testing.T, intent authority.LinuxCloneIntent,
 	}
 }
 
-// newPinnedLinuxCloneBase persists a clone journal through the same production
-// mutations the sibling tests use. Stage "seed" stops after the seed receipt,
-// "running" adds the committed v2 handoff, and "promoted" adds the checkout,
-// the exact stop receipt, and the promotion intent and receipt.
 func newPinnedLinuxCloneBase(t *testing.T, runID, stage string) pinnedLinuxCloneBase {
 	t.Helper()
 	base := pinnedLinuxCloneBase{store: mustStore(t)}
@@ -1513,8 +1495,6 @@ func newPinnedLinuxCloneBase(t *testing.T, runID, stage string) pinnedLinuxClone
 	return base
 }
 
-// newPinnedLinuxCloneAbortComplete persists the completed no-target abort
-// tombstone that still carries its bound seed receipt.
 func newPinnedLinuxCloneAbortComplete(t *testing.T, runID string) pinnedLinuxCloneBase {
 	t.Helper()
 	base := newPinnedLinuxCloneBase(t, runID, "seed")
@@ -1528,11 +1508,6 @@ func newPinnedLinuxCloneAbortComplete(t *testing.T, runID string) pinnedLinuxClo
 	return base
 }
 
-// newPinnedLinuxCloneCleanupReady persists the promoted clone through the
-// durable release tombstone, the exact candidate-artifact delivery and the
-// terminal resolution, then requires the result to be eligible to begin normal
-// cleanup; the platform tests cover issuance of that proof from the opaque
-// LinuxCgroupV2Release capability.
 func newPinnedLinuxCloneCleanupReady(t *testing.T, runID, transitionID string) pinnedLinuxCloneBase {
 	t.Helper()
 	base := newPinnedLinuxCloneBase(t, runID, "promoted")
@@ -1582,8 +1557,6 @@ func newPinnedLinuxCloneCleanupReady(t *testing.T, runID, transitionID string) p
 	return base
 }
 
-// newPinnedLinuxCloneCleanup persists the cleanup-ready clone into a pending
-// normal cleanup stage.
 func newPinnedLinuxCloneCleanup(t *testing.T, runID string) pinnedLinuxCloneBase {
 	t.Helper()
 	base := newPinnedLinuxCloneCleanupReady(t, runID, "pinned-clone-cleanup-completed")
@@ -1593,14 +1566,6 @@ func newPinnedLinuxCloneCleanup(t *testing.T, runID string) pinnedLinuxCloneBase
 	return base
 }
 
-// newPinnedLinuxCloneReuse imports a reuse consumer whose grant still owns its
-// source target; the journal carries no clone evidence of its own. A reuse
-// grant can be installed only through BindLinuxCloneReuse, which additionally
-// requires a stable-stopped GoalSession for the predecessor and a stopped
-// source journal, so the fixture uses the documented recovery/import seam (a
-// journal-path write as in
-// TestLegacyPromotedLinuxCloneJournalRestartsWithoutInventingIntent) and
-// proves the base through the production loader.
 func newPinnedLinuxCloneReuse(t *testing.T, runID string) pinnedLinuxCloneBase {
 	t.Helper()
 	base := pinnedLinuxCloneBase{store: mustStore(t)}
@@ -1634,24 +1599,12 @@ func newPinnedLinuxCloneReuse(t *testing.T, runID string) pinnedLinuxCloneBase {
 	return base
 }
 
-// pinnedLinuxCloneCase is one first-error pin: introduce one scenario-relevant
-// inconsistency on a validated base journal and assert the validator's first
-// error string.
 type pinnedLinuxCloneCase struct {
 	name   string
 	want   string
 	mutate func(*RunJournal) error
 }
 
-// TestLinuxCloneValidatorFirstErrorStringsArePinned pins the exact first
-// validateLinuxCloneJournal error of every reachable block. Every case is
-// driven through the production persistence seam: mutateJournal loads, mutates,
-// then runs validateJournal before writing, so a rejected case returns exactly
-// the validator's first error and never touches the persisted journal. Cases
-// therefore share one seeded store per base stage. Every base is produced by
-// production mutations except the reuse-grant base, which is imported through
-// the journal-path seam because no ordinary store mutation installs a reuse
-// grant (see newPinnedLinuxCloneReuse).
 func TestLinuxCloneValidatorFirstErrorStringsArePinned(t *testing.T) {
 	t.Parallel()
 	requireLinuxCloneAMD64(t)
@@ -1660,8 +1613,7 @@ func TestLinuxCloneValidatorFirstErrorStringsArePinned(t *testing.T) {
 	running := newPinnedLinuxCloneBase(t, "pinned-clone-running", "running")
 	seedOnly := newPinnedLinuxCloneBase(t, "pinned-clone-seed", "seed")
 	abortComplete := newPinnedLinuxCloneAbortComplete(t, "pinned-clone-abort-complete")
-	// The cleanup stage parses protocol evidence, whose run_id must be a UUID
-	// and must equal the journal RunID for the delivered-artifact identity.
+
 	cleanup := newPinnedLinuxCloneCleanup(t, "00000000-0000-4000-8000-000000000078")
 	reuse := newPinnedLinuxCloneReuse(t, "pinned-reuse-consumer")
 
@@ -2048,12 +2000,6 @@ func TestLinuxCloneValidatorFirstErrorStringsArePinned(t *testing.T) {
 	}
 }
 
-// TestLinuxCloneReuseRetiredJournalsStayLoadable pins the positive verdict of
-// the reuse-grant branch: a reuse journal retired while stably stopped, and one
-// aborted before any native start, must both save and load back cleanly. The
-// first-error group above proves only rejected mutations, so without these
-// readbacks a lost early return after the reuse branch turns every persisted
-// retired or aborted reuse journal into a load error.
 func TestLinuxCloneReuseRetiredJournalsStayLoadable(t *testing.T) {
 	t.Parallel()
 	requireLinuxCloneAMD64(t)

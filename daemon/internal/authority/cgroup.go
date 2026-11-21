@@ -21,9 +21,7 @@ func equalLinuxCgroupReservationAbortProof(left, right *LinuxCgroupReservationAb
 	return left.Equal(*right)
 }
 
-// LinuxCgroupParentIdentity binds the delegated manager parent on one boot and
-// cgroup2 mount. Path is a canonical absolute cgroup path, not a host
-// filesystem path supplied for later reopening.
+// Path is a canonical absolute cgroup path, not a host filesystem path: the identity binds one boot and cgroup2 mount.
 type LinuxCgroupParentIdentity struct {
 	BootID  string `json:"boot_id"`
 	MountID uint64 `json:"mount_id"`
@@ -32,9 +30,7 @@ type LinuxCgroupParentIdentity struct {
 	Path    string `json:"path"`
 }
 
-// LinuxCgroupIdentity names one measured run leaf under the exact exclusive
-// delegated parent. Matching these fields after all live pins are lost does
-// not re-establish authority to reopen or act on the leaf.
+// Identity match after the live pins are lost does not re-establish authority to reopen or act on the leaf.
 type LinuxCgroupIdentity struct {
 	Version    int                       `json:"version"`
 	Parent     LinuxCgroupParentIdentity `json:"parent"`
@@ -43,33 +39,25 @@ type LinuxCgroupIdentity struct {
 	LeafInode  uint64                    `json:"leaf_inode"`
 }
 
-// LinuxCgroupProcessIdentity is an exact PID plus a platform-supplied stable
-// creation identity. Identity is opaque to this package and must never be
-// replaced by PID-only evidence.
+// Exact PID plus a platform-supplied creation identity: opaque to this package, never PID-only evidence.
 type LinuxCgroupProcessIdentity struct {
 	PID      int    `json:"pid"`
 	Identity string `json:"identity"`
 }
 
-// LinuxCgroupExitProof is a structural caller attestation of an exact wait and
-// reap. State validates identity and shape; it cannot observe kernel wait state.
+// Structural caller attestation of an exact wait/reap: State validates shape and identity, it cannot observe kernel wait state.
 type LinuxCgroupExitProof struct {
 	Version int                        `json:"version"`
 	Process LinuxCgroupProcessIdentity `json:"process"`
 	Witness LinuxCgroupProcessIdentity `json:"witness"`
 	Waited  bool                       `json:"waited"`
 	Reaped  bool                       `json:"reaped"`
-	// HelperExit is present only when the anchor adopted this child after the
-	// exact helper was independently waited/reaped. A normal helper-owned wait
-	// leaves it nil.
+	// Present only when the anchor adopted this child after the helper was independently waited/reaped; a helper-owned wait leaves it nil.
 	HelperExit *LinuxCgroupExitProof `json:"helper_exit,omitempty"`
 }
 
-// LinuxCgroupGateProductionResult is the authenticated root-launcher outcome
-// used only for the narrow pre-gate stop path. The platform verifies the MAC
-// against the exact per-run launch secret; State checks the version, result,
-// launcher identity, and structurally valid authenticator but does not claim
-// to observe clone3 or kernel state itself.
+// Authenticated root-launcher outcome for the narrow pre-gate stop path: the platform verifies the MAC
+// against the per-run launch secret; State checks shape and identity only, not clone3 or kernel state.
 type LinuxCgroupGateProductionResult struct {
 	Version       int                        `json:"version"`
 	LaunchToken   string                     `json:"launch_token"`
@@ -78,10 +66,8 @@ type LinuxCgroupGateProductionResult struct {
 	Authenticator string                     `json:"authenticator"`
 }
 
-// LinuxCgroupPreGateStopProof is a physical stop attestation for a reserved
-// leaf where launcher grant may have been armed but the authenticated root
-// launcher proves that no gate was produced. It is separate from a gate-bound
-// StopReceipt because no target PID or native gate existed.
+// Physical stop attestation for a reserved leaf where the launcher grant may have been armed
+// but no gate was produced; separate from a gate-bound StopReceipt (no target PID or native gate).
 type LinuxCgroupPreGateStopProof struct {
 	Version                int                             `json:"version"`
 	Kind                   string                          `json:"kind"`
@@ -98,8 +84,6 @@ type LinuxCgroupPreGateStopProof struct {
 	GateOutcome            LinuxCgroupGateProductionResult `json:"gate_outcome"`
 }
 
-// LinuxCgroupPreGateStopReceipt binds the no-gate physical stop to the exact
-// reserved run leaf, producer set and authenticated root-launcher outcome.
 type LinuxCgroupPreGateStopReceipt struct {
 	Version        int                         `json:"version"`
 	LaunchToken    string                      `json:"launch_token"`
@@ -113,18 +97,14 @@ type LinuxCgroupPreGateStopReceipt struct {
 	Proof          LinuxCgroupPreGateStopProof `json:"proof"`
 }
 
-// LinuxCgroupPreGateReleaseProof is the receipt-bound post-removal proof for
-// a PID-zero reservation. The Linux platform seals this only after a pinned
-// exact rmdir or receipt-backed absence check under the same parent pin.
+// The Linux platform seals this only after a pinned exact rmdir or a receipt-backed absence check under the same parent pin.
 type LinuxCgroupPreGateReleaseProof struct {
 	Version         int                           `json:"version"`
 	Receipt         LinuxCgroupPreGateStopReceipt `json:"receipt"`
 	LeafDisposition string                        `json:"leaf_disposition"`
 }
 
-// LinuxCgroupGateIdentity binds the trusted A gate at clone birth to the
-// measured run leaf. The booleans are platform attestations, not facts proved
-// by this package.
+// Platform attestations (not facts proved by this package) binding the trusted A gate at clone birth to the measured run leaf.
 type LinuxCgroupGateIdentity struct {
 	Process      LinuxCgroupProcessIdentity `json:"process"`
 	HostUID      uint32                     `json:"host_uid"`
@@ -135,11 +115,8 @@ type LinuxCgroupGateIdentity struct {
 	TrustedImage bool                       `json:"trusted_image"`
 }
 
-// LinuxCgroupStopProof is the bounded physical-stop attestation carried by a
-// v2 receipt. Its exact subject/producer identities are checked structurally;
-// Issuer names the helper or mirror issuing the receipt, not the kill writer.
-// That caller validates the anchor's exact kill acknowledgement and empty-leaf
-// evidence, then verifies wait/reap and producer fencing against pinned FDs.
+// Issuer names the helper or mirror that issues the receipt, not the kill writer;
+// the caller validates the anchor's kill acknowledgement, empty-leaf evidence, wait/reap and producer fencing against pinned FDs.
 type LinuxCgroupStopProof struct {
 	Version                int                        `json:"version"`
 	Kind                   string                     `json:"kind"`
@@ -156,11 +133,8 @@ type LinuxCgroupStopProof struct {
 	HelperExit             *LinuxCgroupExitProof      `json:"helper_exit,omitempty"`
 }
 
-// LinuxCgroupReservationAbortProof describes the exact no-target evidence
-// needed to abandon a reserved leaf. Removed-leaf fields are platform
-// attestations. For LeafNeverCreated with CreateStarted=false, State may issue
-// the tombstone from its exclusive durable creator fence; it is not a physical
-// stop receipt and does not claim to inspect the cgroup filesystem.
+// For LeafNeverCreated with CreateStarted=false, State may issue the tombstone from its exclusive durable
+// creator fence; it is not a physical stop receipt and does not claim to inspect the cgroup filesystem.
 type LinuxCgroupReservationAbortProof struct {
 	Version               int                         `json:"version"`
 	LaunchToken           string                      `json:"launch_token"`
@@ -239,8 +213,6 @@ func (value LinuxCgroupExitProof) ValidFor(process, witness LinuxCgroupProcessId
 	return value.Validate() == nil && value.HelperExit == nil && value.Process.Equal(process) && value.Witness.Equal(witness)
 }
 
-// ValidForOwnedDescendant accepts the normal helper wait or an anchor wait
-// only when the exact helper's preceding death/reap proof is also present.
 func (value LinuxCgroupExitProof) ValidForOwnedDescendant(process, helper, anchor LinuxCgroupProcessIdentity, helperExit *LinuxCgroupExitProof) bool {
 	if value.Validate() != nil || !value.Process.Equal(process) {
 		return false
@@ -258,8 +230,6 @@ func (value LinuxCgroupExitProof) Equal(other LinuxCgroupExitProof) bool {
 		equalLinuxCgroupExitProof(value.HelperExit, other.HelperExit)
 }
 
-// Clone returns a deep copy of the exact wait proof, including adopted-helper
-// evidence when present.
 func (value LinuxCgroupExitProof) Clone() LinuxCgroupExitProof {
 	cloned := value
 	if value.HelperExit != nil {
@@ -396,8 +366,7 @@ func (value LinuxCgroupGateIdentity) Equal(other LinuxCgroupGateIdentity) bool {
 		value.TrustedImage == other.TrustedImage
 }
 
-// Validate checks a pre-effect abort attestation. It is a caller contract,
-// not an independent kernel or cgroup-filesystem observation by State.
+// Caller contract, not an independent kernel or cgroup-filesystem observation by State.
 func (proof LinuxCgroupReservationAbortProof) Validate() error {
 	if proof.Version != LinuxCgroupAbortProofVersion || !validLowerHex(proof.LaunchToken, TokenBytes*2) ||
 		proof.Parent.Validate() != nil || !validRandomLeafName(proof.LeafName) || proof.OwnerUID == 0 ||

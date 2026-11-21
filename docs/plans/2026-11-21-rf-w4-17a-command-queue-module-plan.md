@@ -263,3 +263,11 @@ guard) is red.
   anticipates; the Windows focused run without `-race` still exercises the moved paths.
 - The evidence record carries the exact commands, exit codes and counts; anything not run is reported as
   missing, never as passed.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `daemon/internal/app/command_queue_test.go` by the 2026-11-22
+comment-policy sweep is recorded in
+[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
+("ws3b-app-tests"); the sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).
