@@ -78,7 +78,11 @@ COVERAGE_DAEMON_HEADER = "  coverage-daemon:\n    needs: changes\n    if: needs.
 # instead of only the draft-PR run. Each literal spans the step's
 # `if: always()`, the decision-7 promise that a red coverage run still uploads
 # its report, so a dropped `if: always()` reddens here too. The daemon command
-# is a two-line block scalar under the stdio-only caller boundary.
+# is a block scalar under the stdio-only caller boundary that derives its
+# package list with `go list`: `internal/execution` is excluded because its
+# helper cases re-exec the coverage-instrumented test binary and assert the
+# child's exact output, which the coverage runtime's `GOCOVERDIR` warning
+# breaks; the exclusion and the list-driven invocation are pinned with it.
 COVERAGE_UPLOADS = {
     "coverage-control": (
         "        if: always()\n"
@@ -118,8 +122,11 @@ COVERAGE_DEFAULTS = {
 COVERAGE_COMMANDS = {
     "coverage-control": ("        run: mix test --cover",),
     "coverage-daemon": (
+        "          mapfile -t packages < <(python3 ../scripts/ci/stdio-only-caller-boundary.py \\",
+        "            \"$(command -v go)\" list ./... | grep -v '/internal/execution$')",
         "          python3 ../scripts/ci/stdio-only-caller-boundary.py \\",
-        '            "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out ./...',
+        '            "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out \\',
+        '            "${packages[@]}"',
     ),
     "coverage-frontend": ("        run: pnpm --filter @symmetry/frontend exec vitest run --coverage",),
 }

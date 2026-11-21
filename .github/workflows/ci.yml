@@ -959,11 +959,23 @@ jobs:
       # instrumentation slows every package, and the race step keeps its
       # `-timeout 600s` untouched. The profile path is the one the root
       # `.gitignore` reserves (`/daemon/coverage.out`).
+      # `internal/execution` is excluded from the instrumented run: its helper
+      # cases re-exec the coverage-instrumented test binary as a child
+      # (`runner_test.go`, `minimalEnvironment`), the child prints `warning:
+      # GOCOVERDIR not set, no coverage data emitted` on exit, and four cases
+      # assert its exact output or length, so the package is deterministically
+      # red under `-coverprofile` while the same suite passes uninstrumented in
+      # the `daemon` and `daemon-windows` jobs (run 44887419717). The package's
+      # own coverage is therefore absent from the profile; the plan records the
+      # cause.
       - name: Run the Go suite with a coverage profile (advisory)
         shell: bash
         run: |
+          mapfile -t packages < <(python3 ../scripts/ci/stdio-only-caller-boundary.py \
+            "$(command -v go)" list ./... | grep -v '/internal/execution$')
           python3 ../scripts/ci/stdio-only-caller-boundary.py \
-            "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out ./...
+            "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out \
+            "${packages[@]}"
       - name: Upload the Go coverage profile
         if: always()
         uses: actions/upload-artifact@v4
