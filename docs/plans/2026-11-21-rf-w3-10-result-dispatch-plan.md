@@ -118,10 +118,10 @@ fall-through is introduced (clause 3). Two facts bound what the raised term can 
 - the exception struct differs (`CaseClauseError` vs `FunctionClauseError`); both are "no clause
   matched" errors and neither returns a settlement;
 - the reachable `kind` set is exactly the six literals: `terminal_settlement!` (`:3013-3023`) admits
-  only `task_result_matches_task?/2` kinds, which for a non-plan Task (`:8743-8756`) are
+  only `task_result_matches_task?/2` kinds, which for a non-plan Task (`:8743-8756` delivered) are
   `progress | candidate_completion | blocked | repair_required | replan_required | failed`. The only
-  other admitted kind, `"plan_proposed"`, requires `plan_task?/1` (`:8737`), and it cannot reach the
-  dispatch on either entry point: `settle_task/4` routes every plan Task to
+  other admitted kind, `"plan_proposed"`, requires `plan_task?/1` (`:8737` delivered), and it cannot
+  reach the dispatch on either entry point: `settle_task/4` routes every plan Task to
   `terminal_plan_settlement!/4` (`:2807-2810`), and `reconcile_validation_outcome/4` only re-derives a
   settlement after replaying an existing receipt whose settlement is `"awaiting_validation"`
   (`:2951`), which only R2 (`candidate_completion`, itself admitted only for a non-plan Task) can have
@@ -173,7 +173,7 @@ The LOC delta (report-only per D2) is −147 in the region and −149 for the fi
 
 ### Where a wake becomes observable
 
-The dispatch's second element is consumed by `terminal_next_wake_at/4` (`:3831` base / `:3767` HEAD),
+The dispatch's second element is consumed by `terminal_next_wake_at/4` (`:3916` base / `:3767` HEAD),
 surfaced as `"next_wake_at"` in the `settle_task/4` response (`nullable_datetime/1` →
 `DateTime.to_iso8601/1` for a `%DateTime{}`, `nil` for `nil`) and persisted to `goals.next_wake_at`
 through `append_event!` (`event_next_wake_at/3` reads `opts[:settlement_next_wake_at]`).
