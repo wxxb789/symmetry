@@ -39,12 +39,12 @@ export class ServerRefusal extends Data.TaggedError("ServerRefusal")<{
   fields: Record<string, readonly string[]> | null;
 }> {}
 
-export type ReadError = Unauthenticated | Forbidden | Conflict | Validation | Unsupported | Network | UnexpectedResponse;
-export type ApiError = ReadError | ServerRefusal;
+type ReadError = Unauthenticated | Forbidden | Conflict | Validation | Unsupported | Network | UnexpectedResponse;
+type ApiError = ReadError | ServerRefusal;
 export type Workspace = SymmetryWorkspaceReadV1;
 export type Project = Workspace["projects"][number];
 export type WorkItem = Project["work_items"][number];
-export type ConnectionsReadModel = SymmetryConnectionsReadV1;
+type ConnectionsReadModel = SymmetryConnectionsReadV1;
 export type Connection = ConnectionsReadModel["connections"][number];
 export type ConnectionProvider = ConnectionsReadModel["providers"][number];
 export type ConnectionResource = Connection["resources"][number];
@@ -56,13 +56,13 @@ export interface ConnectionDraft {
   capabilities: readonly string[];
 }
 
-export interface ConnectionUpdate {
+interface ConnectionUpdate {
   version: number;
   name?: string;
   capabilities?: readonly string[];
 }
 
-export interface ConnectionReceipt {
+interface ConnectionReceipt {
   disposition: string;
   connectionId: string;
 }
@@ -77,14 +77,14 @@ export interface ResourceDraft {
   external_ref: string | null;
 }
 
-export interface ResourceUpdate {
+interface ResourceUpdate {
   version: number;
   name: string;
   connection_id: string | null;
   external_ref: string | null;
 }
 
-export interface ResourceReceipt {
+interface ResourceReceipt {
   resourceId: string;
   provider: string | null;
   status: string;
@@ -109,7 +109,7 @@ export interface WorkItemAssignment {
  * identity and the version it re-reads from, so this receipt carries the version
  * the server accepted rather than the creation disposition of a field edit.
  */
-export interface AssignmentReceipt {
+interface AssignmentReceipt {
   workItemId: string;
   version: number;
 }
@@ -117,16 +117,13 @@ export interface AssignmentReceipt {
 export type WorkDetail = SymmetryWorkDetailReadV1;
 export type WorkTimeline = SymmetryWorkTimelineReadV1;
 export type TimelineItem = WorkTimeline["items"][number];
-export type Execution = NonNullable<WorkItem["execution"]>;
-export type ExecutionReceipt = Execution["latest_command"];
-export type WaitingInput = NonNullable<Execution["waiting"]>;
 export type Runtime = NonNullable<Workspace["runtimes"]>[number];
 
 /** The server's chat scope vocabulary, as the conversation read serves it. */
 export type ChatScope = SymmetryChatReadV1["scope"];
 
 /** The scoped conversation read's decoded projection. */
-export type ChatConversation = SymmetryChatReadV1;
+type ChatConversation = SymmetryChatReadV1;
 export type ChatConversationMessage = ChatConversation["messages"][number];
 export type ChatConversationRun = ChatConversation["runs"][number];
 
@@ -135,7 +132,7 @@ export type ChatConversationRun = ChatConversation["runs"][number];
  * only the members the server accepts for that scope: a project read never
  * carries `run_id` and a run read never carries `project_id`.
  */
-export interface ChatConversationQuery {
+interface ChatConversationQuery {
   readonly scope: ChatScope;
   readonly projectId?: string | null;
   readonly runId?: string | null;
@@ -169,7 +166,7 @@ export interface ChatMessageRequest {
 }
 
 /** The command receipt members the conversation renders. */
-export interface ChatCommandView {
+interface ChatCommandView {
   readonly command_id: string;
   readonly kind: string;
   readonly state: string;
@@ -179,7 +176,7 @@ export interface ChatCommandView {
 }
 
 /** The POST answer: the two durable messages, the target work item and the command. */
-export interface ChatMessageOutcome {
+interface ChatMessageOutcome {
   readonly disposition: MutationDisposition;
   readonly message: { readonly id: string };
   readonly reply: { readonly id: string };
@@ -193,7 +190,7 @@ export type ActionId = string & { readonly ActionId: unique symbol };
 /** The exact attempt generation a control request is aimed at. */
 export type ExecutionGeneration = number & { readonly ExecutionGeneration: unique symbol };
 
-export type MutationDisposition = "created" | "replayed";
+type MutationDisposition = "created" | "replayed";
 
 export type Attention = SymmetryAttentionReadV1;
 export type GoalAttentionEntry = Attention["goal_attention"]["entries"][number];
@@ -262,7 +259,7 @@ export interface MoveIntent {
 }
 
 /** Write receipts repeat the served projection; this surface consumes the identity. */
-export interface WriteReceipt {
+interface WriteReceipt {
   id: string;
 }
 
@@ -272,7 +269,7 @@ export interface WriteReceipt {
  * of a second one); update and move receipts carry the empty default because
  * their disposition is not part of their answer.
  */
-export interface WorkItemReceipt extends WriteReceipt {
+interface WorkItemReceipt extends WriteReceipt {
   disposition: string;
 }
 
@@ -372,7 +369,7 @@ const GoalEventsShape = Schema.Struct({
   next_after: Schema.NullOr(Schema.Number),
 });
 export type GoalEvent = typeof GoalEventShape.Type;
-export type GoalEvents = typeof GoalEventsShape.Type;
+type GoalEvents = typeof GoalEventsShape.Type;
 const runtime = ManagedRuntime.make(Layer.empty);
 
 // Control responses carry the same PortalJSON projections the read schemas
@@ -448,28 +445,28 @@ const ChatMessageResponse = Schema.Struct({
 
 type ControlCommandValue = typeof ControlCommand.Type;
 
-export type ControlExecution = typeof ControlExecution.Type;
+type ControlExecution = typeof ControlExecution.Type;
 export type ControlReceipt = ControlCommandValue;
 
-export interface StartOutcome {
+interface StartOutcome {
   disposition: MutationDisposition;
   execution: ControlExecution;
 }
 
-export interface CancelOutcome {
+interface CancelOutcome {
   disposition: MutationDisposition;
   execution: ControlExecution;
   command: ControlReceipt;
 }
 
-export interface RetryOutcome {
+interface RetryOutcome {
   disposition: MutationDisposition;
   execution: ControlExecution;
   command: ControlReceipt;
   workItemId: string;
 }
 
-export interface InputOutcome {
+interface InputOutcome {
   disposition: MutationDisposition;
   execution: ControlExecution;
   command: ControlReceipt;

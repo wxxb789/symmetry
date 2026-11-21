@@ -21,7 +21,6 @@ import sys
 import tempfile
 import unittest
 
-
 REPO = pathlib.Path(__file__).resolve().parents[2]
 AUDIT = REPO / "scripts" / "audit-no-legacy-routes.sh"
 BASH = shutil.which("bash") or "/bin/bash"
@@ -43,12 +42,8 @@ NEGATIVE_CONTROLS = (
 MISSED_PLACEMENTS = {
     "unlisted workflow file": ".github/workflows/fence-fixture.yml",
     "unlisted docs/evidence page": "docs/evidence/fence-fixture.md",
-    "glob-unmatched extension in a listed directory": (
-        "daemon/cmd/symmetry-daemon/testdata/fence-fixture.txt"
-    ),
-    "extensionless file in a listed directory": (
-        "daemon/cmd/symmetry-daemon/testdata/fence-fixture"
-    ),
+    "glob-unmatched extension in a listed directory": ("daemon/cmd/symmetry-daemon/testdata/fence-fixture.txt"),
+    "extensionless file in a listed directory": ("daemon/cmd/symmetry-daemon/testdata/fence-fixture"),
     "unlisted controller": "control/lib/symmetry_control_web/controllers/fence_fixture_controller.ex",
     "root compose.yaml": "compose.yaml",
 }

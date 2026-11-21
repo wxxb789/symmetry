@@ -52,7 +52,13 @@ import pathlib
 import sys
 
 EXCLUDED_DIRECTORIES = {
-    ".git", "__pycache__", ".tmp", "node_modules", "dist", "playwright-report", "test-results",
+    ".git",
+    "__pycache__",
+    ".tmp",
+    "node_modules",
+    "dist",
+    "playwright-report",
+    "test-results",
 }
 EXCLUDED_CACHE_NAMES = {".vite", ".vite-temp", ".vitest-cache"}
 EXCLUDED_ROOTS = {".git", "docs"}
@@ -73,9 +79,7 @@ def source_paths(root: pathlib.Path) -> list[str]:
         parts = path.relative_to(root).parts
         if not parts or parts[0] in EXCLUDED_ROOTS:
             continue
-        if any(
-            part in EXCLUDED_DIRECTORIES or part in EXCLUDED_CACHE_NAMES for part in parts[:-1]
-        ):
+        if any(part in EXCLUDED_DIRECTORIES or part in EXCLUDED_CACHE_NAMES for part in parts[:-1]):
             continue
         if path.is_file() and not path.is_symlink():
             paths.append(path.relative_to(root).as_posix())

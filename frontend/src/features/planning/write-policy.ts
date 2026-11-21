@@ -103,7 +103,7 @@ export function workItemMovePolicy(projectStatus: string | undefined, item: Work
  * `retryable` keeps the frozen intent for an explicit retry, and `authoritative`
  * closes the editor and re-reads the server's current state.
  */
-export type FailureMode = "fields" | "retryable" | "authoritative";
+type FailureMode = "fields" | "retryable" | "authoritative";
 
 export function failureMode(error: unknown): FailureMode {
   if (error instanceof ServerRefusal) {
@@ -136,7 +136,7 @@ export function refusalNotice(error: unknown): string {
   return `${error.message} (${error.code})${guidance ? ` — ${guidance}` : ""}`;
 }
 
-export interface BoardMoveRequest {
+interface BoardMoveRequest {
   intent: MoveIntent;
   announcement: string;
 }
@@ -319,9 +319,9 @@ export function workItemUpdatePayload(form: WorkItemFormState, version: number, 
   for (const key of ["description", "assignee_name", "agent_profile", "workspace", "branch", "blocker"] as const) {
     if (form[key] === "" && !(key in draft)) cleared[key] = null;
   }
-  if (deliveryEditable.pullRequest && form.pull_request_url === "" && !("pull_request_url" in draft)) cleared["pull_request_url"] = null;
-  if (deliveryEditable.ci && form.ci_status === "" && !("ci_status" in draft)) cleared["ci_status"] = null;
-  if (deliveryEditable.review && form.review_status === "" && !("review_status" in draft)) cleared["review_status"] = null;
+  if (deliveryEditable.pullRequest && form.pull_request_url === "" && !("pull_request_url" in draft)) cleared.pull_request_url = null;
+  if (deliveryEditable.ci && form.ci_status === "" && !("ci_status" in draft)) cleared.ci_status = null;
+  if (deliveryEditable.review && form.review_status === "" && !("review_status" in draft)) cleared.review_status = null;
   return { ...draft, ...cleared, version };
 }
 

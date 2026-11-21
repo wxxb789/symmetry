@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import gzip
 import hashlib
 import http.client
@@ -15,7 +16,6 @@ import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
-
 
 ARM_TTL_SECONDS = 180
 HOLD_TTL_SECONDS = 120
@@ -182,9 +182,7 @@ class HoldRegistry:
             hold.release.set()
             return True
 
-    def hold_successful_transition(
-        self, run_id: str, transition_id: str, body: bytes
-    ) -> tuple[Hold, bool] | None:
+    def hold_successful_transition(self, run_id: str, transition_id: str, body: bytes) -> tuple[Hold, bool] | None:
         try:
             value = json.loads(body)
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -231,9 +229,7 @@ class HoldRegistry:
                 hold.state = "held"
                 hold.expires_at = time.monotonic() + HOLD_TTL_SECONDS
                 return hold, True
-            if hold.state == "held" and hold.matches_transition(
-                run_id, transition_id, value, token_hash, body_hash
-            ):
+            if hold.state == "held" and hold.matches_transition(run_id, transition_id, value, token_hash, body_hash):
                 return hold, False
             return None
 
@@ -456,10 +452,8 @@ class TransitionProxyHandler(BaseHTTPRequestHandler):
             except (OSError, ValueError):
                 pass
             finally:
-                try:
+                with contextlib.suppress(OSError):
                     destination.shutdown(socket.SHUT_WR)
-                except OSError:
-                    pass
 
         client_to_control = threading.Thread(target=relay, args=(self.rfile, upstream_socket), daemon=True)
         control_to_client = threading.Thread(target=relay, args=(response.fp, self.connection), daemon=True)
@@ -520,9 +514,7 @@ class TransitionProxyHandler(BaseHTTPRequestHandler):
         ):
             observed_body = response_body
             content_encoding = ",".join(
-                value.strip().lower()
-                for name, value in response_headers
-                if name.lower() == "content-encoding"
+                value.strip().lower() for name, value in response_headers if name.lower() == "content-encoding"
             )
             if content_encoding == "gzip":
                 try:
@@ -583,7 +575,13 @@ def main() -> None:
         parser.error("invalid listen or upstream port")
     if not 0 < port <= 65535:
         parser.error("listen port must be in 1..65535")
-    if upstream.scheme != "http" or not upstream.hostname or upstream.path not in ("", "/") or upstream.query or upstream.fragment:
+    if (
+        upstream.scheme != "http"
+        or not upstream.hostname
+        or upstream.path not in ("", "/")
+        or upstream.query
+        or upstream.fragment
+    ):
         parser.error("upstream must be an HTTP origin without path, query, or fragment")
     if upstream.username or upstream.password:
         parser.error("upstream credentials are not accepted")
