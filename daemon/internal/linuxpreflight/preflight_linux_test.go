@@ -1,6 +1,6 @@
 //go:build linux && amd64
 
-package app
+package linuxpreflight
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -30,7 +31,7 @@ func TestLinuxOwnerStateDirBindingRequiresCanonicalInstalledIdentity(t *testing.
 		AUID: uint32(os.Geteuid()), AGID: uint32(os.Getegid()),
 		BUID: uint32(os.Geteuid() + 1), BGID: uint32(os.Getegid() + 1), StateDir: configured,
 	}
-	if err := verifyLinuxOwnerStateDirBinding(configured, owner); err != nil {
+	if err := VerifyOwnerStateDirBinding(configured, owner); err != nil {
 		t.Fatalf("matching independently pinned StateDir rejected: %v", err)
 	}
 
@@ -39,7 +40,7 @@ func TestLinuxOwnerStateDirBindingRequiresCanonicalInstalledIdentity(t *testing.
 		t.Fatal(err)
 	}
 	owner.StateDir = other
-	if err := verifyLinuxOwnerStateDirBinding(configured, owner); err == nil {
+	if err := VerifyOwnerStateDirBinding(configured, owner); err == nil {
 		t.Fatal("different root-installed StateDir was accepted")
 	}
 
@@ -48,7 +49,7 @@ func TestLinuxOwnerStateDirBindingRequiresCanonicalInstalledIdentity(t *testing.
 		t.Fatal(err)
 	}
 	owner.StateDir = link
-	if err := verifyLinuxOwnerStateDirBinding(link, owner); err == nil {
+	if err := VerifyOwnerStateDirBinding(link, owner); err == nil {
 		t.Fatal("symlinked root-installed StateDir was accepted")
 	}
 
@@ -56,7 +57,7 @@ func TestLinuxOwnerStateDirBindingRequiresCanonicalInstalledIdentity(t *testing.
 	if err := os.Chmod(configured, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyLinuxOwnerStateDirBinding(configured, owner); err == nil {
+	if err := VerifyOwnerStateDirBinding(configured, owner); err == nil {
 		t.Fatal("non-private state directory identity was accepted")
 	}
 }
@@ -67,9 +68,9 @@ func TestCanonicalLinuxOwnerStateDirUsesRootWorkingDirectory(t *testing.T) {
 		"var/lib/symmetry/state":    "/var/lib/symmetry/state",
 		"../var/lib/symmetry/state": "/var/lib/symmetry/state",
 	} {
-		got, err := canonicalLinuxOwnerStateDir(input)
+		got, err := NormalizeOwnerStateDir(input)
 		if err != nil || got != want {
-			t.Fatalf("canonicalLinuxOwnerStateDir(%q) = %q, %v; want %q", input, got, err, want)
+			t.Fatalf("NormalizeOwnerStateDir(%q) = %q, %v; want %q", input, got, err, want)
 		}
 	}
 }
@@ -274,8 +275,8 @@ func TestLinuxOwnerHostPrerequisiteChecksFailClosed(t *testing.T) {
 	if err := validateLinuxOwnerParentIdentity(changedParent, 1001, 1001, anchor); err == nil {
 		t.Fatal("delegated-parent identity mismatch was accepted")
 	}
-	a := linuxACLSubject{uid: 1001, gid: 1002}
-	b := linuxACLSubject{uid: 1003, gid: 1004}
+	a := ACLSubject{UID: 1001, GID: 1002}
+	b := ACLSubject{UID: 1003, GID: 1004}
 	if err := validateLinuxOwnerManagerKillMetadata(0, 0, unix.S_IFREG|0o200, 1001, a, b); err != nil {
 		t.Fatalf("root-only parent cgroup.kill metadata was rejected: %v", err)
 	}
@@ -287,10 +288,10 @@ func TestLinuxOwnerHostPrerequisiteChecksFailClosed(t *testing.T) {
 	}
 
 	wrapper := trustedLinuxAsset{uid: 0, gid: 1002, mode: 0o4750, links: 1, denyBAll: true}
-	if err := validateTrustedLinuxAssetIdentity(linuxStatIdentity{uid: 0, gid: 1002, mode: 0o4750, links: 1}, true, wrapper); err != nil {
+	if err := validateTrustedLinuxAssetIdentity(StatIdentity{UID: 0, GID: 1002, Mode: 0o4750, Links: 1}, true, wrapper); err != nil {
 		t.Fatalf("valid root wrapper metadata: %v", err)
 	}
-	if err := validateTrustedLinuxAssetIdentity(linuxStatIdentity{uid: 0, gid: 1002, mode: 0o4755, links: 1}, true, wrapper); err == nil {
+	if err := validateTrustedLinuxAssetIdentity(StatIdentity{UID: 0, GID: 1002, Mode: 0o4755, Links: 1}, true, wrapper); err == nil {
 		t.Fatal("world-executable privileged wrapper was accepted")
 	}
 }
@@ -322,6 +323,30 @@ func TestLinuxOwnerHostPreflightBlocksFallbackAndMissingDelegation(t *testing.T)
 	}
 }
 
+func TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds(t *testing.T) {
+	for configured, configuredKind := range map[string]harness.Kind{
+		config.RuntimeHarnessGeneric:    harness.KindGeneric,
+		config.RuntimeHarnessCodex:      harness.KindCodex,
+		config.RuntimeHarnessClaudeCode: harness.KindClaude,
+		config.RuntimeHarnessPi:         harness.KindPi,
+		config.RuntimeHarnessOMP:        harness.KindOMP,
+		config.RuntimeHarnessOmO:        harness.KindOmO,
+		config.RuntimeHarnessOpenCode:   harness.KindOpenCode,
+	} {
+		kind, err := configuredHarnessKind(configured)
+		if err != nil || kind != configuredKind {
+			t.Fatalf("configuredHarnessKind(%q) = (%q, %v), want %q", configured, kind, err, configuredKind)
+		}
+		wantNative := configuredKind != harness.KindGeneric
+		if got := nativeGoalHarnessKind(kind); got != wantNative {
+			t.Fatalf("nativeGoalHarnessKind(%q) = %v, want %v", kind, got, wantNative)
+		}
+	}
+	if _, err := configuredHarnessKind("warpdrive"); err == nil || err.Error() != `runtime.harness_kind "warpdrive" is unsupported` {
+		t.Fatalf("configuredHarnessKind(unsupported) = %v, want the exact unsupported-kind refusal", err)
+	}
+}
+
 func TestLinuxOwnerSystemdUnitsRequireAAndNoNewPrivilegesNo(t *testing.T) {
 	contents := []byte(`[Unit]
 Description=owner
@@ -338,8 +363,8 @@ DelegateSubgroup=manager
 		t.Fatal(err)
 	}
 	policy := linuxSystemdUnitPolicy{unit: "symmetry-owner.service", user: "symmetry", group: "symmetry", home: "/home/symmetry", delegate: "yes", delegatedSubgroup: "manager"}
-	a := linuxACLSubject{uid: 1001, gid: 1002}
-	b := linuxACLSubject{uid: 1003, gid: 1004}
+	a := ACLSubject{UID: 1001, GID: 1002}
+	b := ACLSubject{UID: 1003, GID: 1004}
 	if err := requireLinuxSystemdDirective(directives, "nonewprivileges", "no"); err != nil {
 		t.Fatalf("NoNewPrivileges=no policy: %v", err)
 	}
@@ -374,8 +399,8 @@ DelegateSubgroup=manager
 }
 
 func TestLinuxSystemdCandidateEnforcesExactOwnerAndDaemonTopology(t *testing.T) {
-	a := linuxACLSubject{uid: 1001, gid: 1002}
-	b := linuxACLSubject{uid: 1003, gid: 1004}
+	a := ACLSubject{UID: 1001, GID: 1002}
+	b := ACLSubject{UID: 1003, GID: 1004}
 	owner := linuxSystemdUnitPolicy{
 		unit: "symmetry-owner.service", user: "symmetry", group: "symmetry", home: "/home/symmetry",
 		owner: true, delegate: "yes", delegatedSubgroup: "manager",
@@ -451,8 +476,8 @@ func TestLinuxSystemdCandidatesAcceptShippedTemplates(t *testing.T) {
 		execStart:    []string{"/usr/libexec/symmetry/symmetry-daemon", "-config", "/etc/symmetry/daemon.json"},
 		execStartPre: []string{"/usr/libexec/symmetry/symmetry-daemon", "-verify-linux-owner-install", "-config", "/etc/symmetry/daemon.json"},
 	}
-	a := linuxACLSubject{uid: 1001, gid: 1002}
-	b := linuxACLSubject{uid: 1003, gid: 1004}
+	a := ACLSubject{UID: 1001, GID: 1002}
+	b := ACLSubject{UID: 1003, GID: 1004}
 	if err := validateLinuxSystemdCandidate(ownerDirectives, owner, a, b); err != nil {
 		t.Fatalf("shipped owner template violates the contract: %v", err)
 	}
@@ -534,17 +559,17 @@ func TestLinuxCloneWorkspaceACLContracts(t *testing.T) {
 }
 
 func TestLinuxCloneRequiresTrustedGitExecutableAndAOwnedHooks(t *testing.T) {
-	git := linuxStatIdentity{uid: 0, gid: 0, mode: uint32(unix.S_IFREG | 0o755), links: 1}
+	git := StatIdentity{UID: 0, GID: 0, Mode: uint32(unix.S_IFREG | 0o755), Links: 1}
 	if err := validateLinuxTrustedGitExecutableMetadata(git, true); err != nil {
 		t.Fatalf("valid root-owned Git executable: %v", err)
 	}
-	for name, changed := range map[string]linuxStatIdentity{
-		"non-root owner":  {uid: 1001, gid: 0, mode: uint32(unix.S_IFREG | 0o755), links: 1},
-		"group writable":  {uid: 0, gid: 0, mode: uint32(unix.S_IFREG | 0o775), links: 1},
-		"world writable":  {uid: 0, gid: 0, mode: uint32(unix.S_IFREG | 0o757), links: 1},
-		"not executable":  {uid: 0, gid: 0, mode: uint32(unix.S_IFREG | 0o644), links: 1},
-		"setuid":          {uid: 0, gid: 0, mode: uint32(unix.S_IFREG | 0o4755), links: 1},
-		"multiply linked": {uid: 0, gid: 0, mode: uint32(unix.S_IFREG | 0o755), links: 2},
+	for name, changed := range map[string]StatIdentity{
+		"non-root owner":  {UID: 1001, GID: 0, Mode: uint32(unix.S_IFREG | 0o755), Links: 1},
+		"group writable":  {UID: 0, GID: 0, Mode: uint32(unix.S_IFREG | 0o775), Links: 1},
+		"world writable":  {UID: 0, GID: 0, Mode: uint32(unix.S_IFREG | 0o757), Links: 1},
+		"not executable":  {UID: 0, GID: 0, Mode: uint32(unix.S_IFREG | 0o644), Links: 1},
+		"setuid":          {UID: 0, GID: 0, Mode: uint32(unix.S_IFREG | 0o4755), Links: 1},
+		"multiply linked": {UID: 0, GID: 0, Mode: uint32(unix.S_IFREG | 0o755), Links: 2},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateLinuxTrustedGitExecutableMetadata(changed, true); err == nil {
@@ -556,31 +581,31 @@ func TestLinuxCloneRequiresTrustedGitExecutableAndAOwnedHooks(t *testing.T) {
 		t.Fatal("non-regular fixed Git executable was accepted")
 	}
 
-	hook := linuxStatIdentity{uid: 1001, gid: 1002, mode: uint32(unix.S_IFREG | 0o755), links: 1}
+	hook := StatIdentity{UID: 1001, GID: 1002, Mode: uint32(unix.S_IFREG | 0o755), Links: 1}
 	if err := validateLinuxGitHookMetadata(hook, 0o755, 1001, 1002); err != nil {
 		t.Fatalf("valid A-owned hook: %v", err)
 	}
-	for name, changed := range map[string]linuxStatIdentity{
-		"B-owned":         {uid: 1003, gid: 1002, mode: uint32(unix.S_IFREG | 0o755), links: 1},
-		"multiply linked": {uid: 1001, gid: 1002, mode: uint32(unix.S_IFREG | 0o755), links: 2},
-		"world writable":  {uid: 1001, gid: 1002, mode: uint32(unix.S_IFREG | 0o757), links: 1},
+	for name, changed := range map[string]StatIdentity{
+		"B-owned":         {UID: 1003, GID: 1002, Mode: uint32(unix.S_IFREG | 0o755), Links: 1},
+		"multiply linked": {UID: 1001, GID: 1002, Mode: uint32(unix.S_IFREG | 0o755), Links: 2},
+		"world writable":  {UID: 1001, GID: 1002, Mode: uint32(unix.S_IFREG | 0o757), Links: 1},
 	} {
 		t.Run(name, func(t *testing.T) {
-			mode := os.FileMode(changed.mode & 0o7777)
+			mode := os.FileMode(changed.Mode & 0o7777)
 			if err := validateLinuxGitHookMetadata(changed, mode, 1001, 1002); err == nil {
 				t.Fatal("unsafe Git hook was accepted")
 			}
 		})
 	}
-	if err := validateLinuxGitHookMetadata(linuxStatIdentity{uid: 1001, gid: 1002, links: 2}, os.ModeDir|0o750, 1001, 1002); err != nil {
+	if err := validateLinuxGitHookMetadata(StatIdentity{UID: 1001, GID: 1002, Links: 2}, os.ModeDir|0o750, 1001, 1002); err != nil {
 		t.Fatalf("directory link counts are not single-link file identity: %v", err)
 	}
 }
 
 func TestLinuxTrustedAncestorsRequireRootOrAOwnership(t *testing.T) {
-	for name, identity := range map[string]linuxStatIdentity{
-		"root-owned mode 0555": {uid: 0, gid: 0, mode: uint32(unix.S_IFDIR | 0o555)},
-		"A-owned mode 0555":    {uid: 1001, gid: 1002, mode: uint32(unix.S_IFDIR | 0o555)},
+	for name, identity := range map[string]StatIdentity{
+		"root-owned mode 0555": {UID: 0, GID: 0, Mode: uint32(unix.S_IFDIR | 0o555)},
+		"A-owned mode 0555":    {UID: 1001, GID: 1002, Mode: uint32(unix.S_IFDIR | 0o555)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateLinuxTrustedPathAncestor(identity, true, 1001); err != nil {
@@ -588,13 +613,13 @@ func TestLinuxTrustedAncestorsRequireRootOrAOwnership(t *testing.T) {
 			}
 		})
 	}
-	for name, identity := range map[string]linuxStatIdentity{
-		"B-owned but currently read-only": {uid: 1003, gid: 1004, mode: uint32(unix.S_IFDIR | 0o555)},
-		"third-party-owned":               {uid: 1005, gid: 1006, mode: uint32(unix.S_IFDIR | 0o555)},
-		"not a directory":                 {uid: 0, gid: 0, mode: uint32(unix.S_IFREG | 0o555)},
+	for name, identity := range map[string]StatIdentity{
+		"B-owned but currently read-only": {UID: 1003, GID: 1004, Mode: uint32(unix.S_IFDIR | 0o555)},
+		"third-party-owned":               {UID: 1005, GID: 1006, Mode: uint32(unix.S_IFDIR | 0o555)},
+		"not a directory":                 {UID: 0, GID: 0, Mode: uint32(unix.S_IFREG | 0o555)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := validateLinuxTrustedPathAncestor(identity, identity.mode&unix.S_IFMT == unix.S_IFDIR, 1001); err == nil {
+			if err := validateLinuxTrustedPathAncestor(identity, identity.Mode&unix.S_IFMT == unix.S_IFDIR, 1001); err == nil {
 				t.Fatal("untrusted mutable path ancestor was accepted")
 			}
 		})
@@ -602,13 +627,13 @@ func TestLinuxTrustedAncestorsRequireRootOrAOwnership(t *testing.T) {
 }
 
 func TestLinuxSystemdAncestorsRequireRootOwnership(t *testing.T) {
-	if err := validateLinuxSystemdDirectoryIdentity(linuxStatIdentity{uid: 0, gid: 0}, true, 0o755); err != nil {
+	if err := validateLinuxSystemdDirectoryIdentity(StatIdentity{UID: 0, GID: 0}, true, 0o755); err != nil {
 		t.Fatalf("root-owned systemd ancestor rejected: %v", err)
 	}
-	for name, identity := range map[string]linuxStatIdentity{
-		"B-owned read-only": {uid: 1003, gid: 1004},
-		"A-owned":           {uid: 1001, gid: 1002},
-		"wrong root group":  {uid: 0, gid: 1004},
+	for name, identity := range map[string]StatIdentity{
+		"B-owned read-only": {UID: 1003, GID: 1004},
+		"A-owned":           {UID: 1001, GID: 1002},
+		"wrong root group":  {UID: 0, GID: 1004},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateLinuxSystemdDirectoryIdentity(identity, true, 0o555); err == nil {
@@ -616,13 +641,13 @@ func TestLinuxSystemdAncestorsRequireRootOwnership(t *testing.T) {
 			}
 		})
 	}
-	if err := validateLinuxSystemdDirectoryIdentity(linuxStatIdentity{uid: 0, gid: 0}, true, 0o775); err == nil {
+	if err := validateLinuxSystemdDirectoryIdentity(StatIdentity{UID: 0, GID: 0}, true, 0o775); err == nil {
 		t.Fatal("group-writable root systemd ancestor was accepted")
 	}
 }
 
 func TestLinuxAclWriterCheckUsesEffectiveMaskAndDedicatedGroup(t *testing.T) {
-	identity := linuxStatIdentity{uid: 1001, gid: 1002}
+	identity := StatIdentity{UID: 1001, GID: 1002}
 	trustedUIDs := []uint32{0, 1001}
 	trustedGIDs := []uint32{1002}
 	entries := []linuxACLEntry{
@@ -694,12 +719,12 @@ func TestLinuxSystemdEffectivePropertiesRequireLiveOwnerAndExactCommands(t *test
 		execStop: []string{"/usr/libexec/symmetry/symmetry-daemon", "-recover-containment-only", "-config", "/etc/symmetry/daemon.json"},
 	}
 	properties := linuxOwnerSystemdShowFixture(policy)
-	if err := validateEffectiveLinuxSystemdProperties(properties, policy, nil, linuxACLSubject{uid: 1001, gid: 1002}, linuxACLSubject{uid: 1003, gid: 1004}); err != nil {
+	if err := validateEffectiveLinuxSystemdProperties(properties, policy, nil, ACLSubject{UID: 1001, GID: 1002}, ACLSubject{UID: 1003, GID: 1004}); err != nil {
 		t.Fatalf("valid effective owner unit properties: %v", err)
 	}
 	humanized := cloneStringMap(properties)
 	humanized["TimeoutStopUSec"] = "12min 0s"
-	if err := validateEffectiveLinuxSystemdProperties(humanized, policy, nil, linuxACLSubject{uid: 1001, gid: 1002}, linuxACLSubject{uid: 1003, gid: 1004}); err != nil {
+	if err := validateEffectiveLinuxSystemdProperties(humanized, policy, nil, ACLSubject{UID: 1001, GID: 1002}, ACLSubject{UID: 1003, GID: 1004}); err != nil {
 		t.Fatalf("systemctl's exact humanized owner timeout was rejected: %v", err)
 	}
 	if duration, err := parseLinuxSystemdDurationMicroseconds("2min"); err != nil || duration != 120_000_000 {
@@ -727,7 +752,7 @@ func TestLinuxSystemdEffectivePropertiesRequireLiveOwnerAndExactCommands(t *test
 		t.Run(name, func(t *testing.T) {
 			mutated := cloneStringMap(properties)
 			mutate(mutated)
-			if err := validateEffectiveLinuxSystemdProperties(mutated, policy, nil, linuxACLSubject{uid: 1001, gid: 1002}, linuxACLSubject{uid: 1003, gid: 1004}); err == nil {
+			if err := validateEffectiveLinuxSystemdProperties(mutated, policy, nil, ACLSubject{UID: 1001, GID: 1002}, ACLSubject{UID: 1003, GID: 1004}); err == nil {
 				t.Fatal("unsafe effective systemd state was accepted")
 			}
 		})
@@ -770,11 +795,11 @@ func TestLinuxSystemdEffectivePropertiesAllowOmittedEmptyExecHooks(t *testing.T)
 	delete(properties, "PassEnvironment")
 	delete(properties, "UnsetEnvironment")
 	delete(properties, "SupplementaryGroups")
-	if err := validateEffectiveLinuxSystemdProperties(properties, policy, nil, linuxACLSubject{uid: 1001, gid: 1002}, linuxACLSubject{uid: 1003, gid: 1004}); err != nil {
+	if err := validateEffectiveLinuxSystemdProperties(properties, policy, nil, ACLSubject{UID: 1001, GID: 1002}, ACLSubject{UID: 1003, GID: 1004}); err != nil {
 		t.Fatalf("omitted empty Exec hooks were rejected: %v", err)
 	}
 	delete(properties, "ExecStart")
-	if err := validateEffectiveLinuxSystemdProperties(properties, policy, nil, linuxACLSubject{uid: 1001, gid: 1002}, linuxACLSubject{uid: 1003, gid: 1004}); err == nil {
+	if err := validateEffectiveLinuxSystemdProperties(properties, policy, nil, ACLSubject{UID: 1001, GID: 1002}, ACLSubject{UID: 1003, GID: 1004}); err == nil {
 		t.Fatal("omitted ExecStart was accepted")
 	}
 	parsed, err := parseLinuxSystemdShowExec("{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }")
@@ -824,11 +849,11 @@ func TestLinuxOwnerAclRejectsUnsafeBWriteAccess(t *testing.T) {
 		{tag: linuxACLMask, perm: 7, id: linuxACLNoID},
 		{tag: linuxACLOther, perm: 0, id: linuxACLNoID},
 	}
-	permissions, err := permissionsFromLinuxACL(unsafe, linuxStatIdentity{uid: aUID, gid: aGID}, linuxACLSubject{uid: bUID, gid: bGID})
+	permissions, err := permissionsFromLinuxACL(unsafe, StatIdentity{UID: aUID, GID: aGID}, ACLSubject{UID: bUID, GID: bGID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateEffectiveLinuxPermissions(permissions, 0, 2, linuxACLSubject{uid: bUID, gid: bGID}); err == nil {
+	if err := validateEffectiveLinuxPermissions(permissions, 0, 2, ACLSubject{UID: bUID, GID: bGID}); err == nil {
 		t.Fatal("named-user B write ACL was accepted for protected host data")
 	}
 
@@ -839,11 +864,11 @@ func TestLinuxOwnerAclRejectsUnsafeBWriteAccess(t *testing.T) {
 		{tag: linuxACLMask, perm: 5, id: linuxACLNoID},
 		{tag: linuxACLOther, perm: 0, id: linuxACLNoID},
 	}
-	permissions, err = permissionsFromLinuxACL(readOnly, linuxStatIdentity{uid: aUID, gid: aGID}, linuxACLSubject{uid: bUID, gid: bGID})
+	permissions, err = permissionsFromLinuxACL(readOnly, StatIdentity{UID: aUID, GID: aGID}, ACLSubject{UID: bUID, GID: bGID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateEffectiveLinuxPermissions(permissions, 5, 2, linuxACLSubject{uid: bUID, gid: bGID}); err != nil {
+	if err := validateEffectiveLinuxPermissions(permissions, 5, 2, ACLSubject{UID: bUID, GID: bGID}); err != nil {
 		t.Fatalf("read/search-only B ACL was rejected: %v", err)
 	}
 
@@ -854,11 +879,11 @@ func TestLinuxOwnerAclRejectsUnsafeBWriteAccess(t *testing.T) {
 		{tag: linuxACLMask, perm: 7, id: linuxACLNoID},
 		{tag: linuxACLOther, perm: 0, id: linuxACLNoID},
 	}
-	permissions, err = permissionsFromLinuxACL(otherGroup, linuxStatIdentity{uid: aUID, gid: aGID}, linuxACLSubject{uid: bUID, gid: bGID, groups: []uint32{bGID}})
+	permissions, err = permissionsFromLinuxACL(otherGroup, StatIdentity{UID: aUID, GID: aGID}, ACLSubject{UID: bUID, GID: bGID, Groups: []uint32{bGID}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateEffectiveLinuxPermissions(permissions, 5, 0, linuxACLSubject{uid: bUID, gid: bGID}); err == nil {
+	if err := validateEffectiveLinuxPermissions(permissions, 5, 0, ACLSubject{UID: bUID, GID: bGID}); err == nil {
 		t.Fatal("host supplementary group rights were assigned to the B user namespace")
 	}
 }
@@ -920,4 +945,29 @@ func testLinuxV1DrainReceipt(value authority.Supervisor) authority.StopReceipt {
 
 func configForLinuxPreflight(stateDir string) config.Config {
 	return config.Config{StateDir: stateDir}
+}
+
+// claimedStoreAt creates an exclusive Store with one claimed run, the minimum
+// journal state the drain verifiers scan. The app suite keeps its own copy of
+// this fixture (internal/app/app_test.go); the two packages no longer share
+// test helpers, and this file is the only linuxpreflight caller.
+func claimedStoreAt(t *testing.T, directory string) (*state.Store, state.RunKey) {
+	t.Helper()
+	store, err := state.New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	_, err = store.SaveClaimIntent(state.ClaimIntent{Key: key, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1, ClaimID: "claim-1", Work: protocol.Work{Goal: "g"}, WorkspaceBindingKey: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SaveClaimGrant(key, protocol.ClaimResponse{RunID: key.RunID, Generation: key.Generation, ClaimID: "claim-1", LeaseToken: "lease", LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "g"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
+		t.Fatal(err)
+	}
+	return store, key
 }
