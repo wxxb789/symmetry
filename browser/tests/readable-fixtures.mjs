@@ -288,9 +288,9 @@ export const planProposal = ({ goalId, title, repositoryId, acceptanceDescriptio
 
 // The polling fallback's cadence is five seconds, so four of them is the backstop
 // over the client's own pass and the state it renders. A maximum, never a verdict:
-// the case below decides on the pass the shell records through `readsStatus` and on
-// the state that pass served, and this guard only says when a missing pass is a
-// missing pass.
+// the cutover suite's polling-fallback case decides on the pass the shell records
+// through `readsStatus` and on the state that pass served, and this guard only says
+// when a missing pass is a missing pass.
 export const FALLBACK_READ_GUARD_MS = 20_000;
 
 // `browser.newContext` does not inherit the project's use options, so a fresh

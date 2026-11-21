@@ -18,7 +18,6 @@ import {
   planProposal
 } from "./readable-fixtures.mjs";
 
-const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
 // A second release instance started with Goal rollout off. Without it the
 // rollout-off case is explicitly skipped, never passed on the primary instance.
 const goalsOffUrl = process.env.SYMMETRY_GOALS_OFF_URL;
