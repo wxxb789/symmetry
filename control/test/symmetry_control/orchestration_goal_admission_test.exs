@@ -1,5 +1,5 @@
 defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias Oban.Job
   alias SymmetryControl.{Goals, RequestHash}
@@ -452,7 +452,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
     assert run.runtime_id == runtime.id
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     session_attrs = %{
       local_handle_id: Ecto.UUID.generate(),
@@ -670,7 +670,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "paused Goal tasks are not assigned until the Goal resumes, without blocking legacy tasks" do
     {goal_task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("goal-pause")
+    runtime = enroll_and_register_runtime("goal-pause")
 
     Repo.update_all(from(goal in Goal, where: goal.id == ^goal_id), set: [state: "paused"])
 
@@ -716,8 +716,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                now: @now
              )
 
-    disallowed = register_runtime("goal-disallowed")
-    allowed = register_runtime("goal-allowed")
+    disallowed = enroll_and_register_runtime("goal-disallowed")
+    allowed = enroll_and_register_runtime("goal-allowed")
 
     {task, goal_id} =
       insert_goal_task(
@@ -765,7 +765,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
 
     runtime =
-      register_runtime("omp-native",
+      enroll_and_register_runtime("omp-native",
         harness_kind: "omp",
         harness_version: "18.20.0",
         adapter_version: "symmetry-omp-1"
@@ -779,7 +779,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
     assert run.runtime_id == runtime.id
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     attrs = %{
       local_handle_id: Ecto.UUID.generate(),
@@ -838,8 +838,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal assignment deterministically chooses one eligible native runtime" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
-    first = register_runtime("goal-runtime-first")
-    second = register_runtime("goal-runtime-second")
+    first = enroll_and_register_runtime("goal-runtime-first")
+    second = enroll_and_register_runtime("goal-runtime-second")
     expected_runtime = Enum.min_by([first, second], & &1.id)
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
@@ -848,8 +848,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "assignment and exact claim replay use the frozen Task runtime snapshot" do
-    allowed = register_runtime("snapshot-allowed")
-    disallowed = register_runtime("snapshot-disallowed")
+    allowed = enroll_and_register_runtime("snapshot-allowed")
+    disallowed = enroll_and_register_runtime("snapshot-disallowed")
 
     {task, goal_id} =
       insert_goal_task(
@@ -882,8 +882,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "a new claim rejects an assigned runtime outside the Task snapshot" do
-    allowed = register_runtime("snapshot-new-claim-allowed")
-    disallowed = register_runtime("snapshot-new-claim-disallowed")
+    allowed = enroll_and_register_runtime("snapshot-new-claim-allowed")
+    disallowed = enroll_and_register_runtime("snapshot-new-claim-disallowed")
 
     {task, goal_id} =
       insert_goal_task(
@@ -925,9 +925,11 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
              })
 
     _mismatched =
-      register_runtime("goal-resource-mismatch", repository_resource_id: other_repository.id)
+      enroll_and_register_runtime("goal-resource-mismatch",
+        repository_resource_id: other_repository.id
+      )
 
-    matching = register_runtime("goal-resource-match")
+    matching = enroll_and_register_runtime("goal-resource-match")
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.runtime_id == matching.id
@@ -944,10 +946,11 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
           |> Map.put("hard_cost_limit_required", true)
       )
 
-    _without_hard_limit = register_runtime("strict-budget-without-hard-limit")
+    _without_hard_limit = enroll_and_register_runtime("strict-budget-without-hard-limit")
     assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
 
-    hard_limit_runtime = register_runtime("strict-budget-with-hard-limit", hard_cost_limit?: true)
+    hard_limit_runtime =
+      enroll_and_register_runtime("strict-budget-with-hard-limit", hard_cost_limit?: true)
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
@@ -1009,7 +1012,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "runtime re-registration permits a same-affinity refresh but rejects a change during a Goal run" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("active-affinity-registration")
+    runtime = enroll_and_register_runtime("active-affinity-registration")
     assert {:ok, _run} = Orchestration.assign_one(now: @now)
     item = Repo.get!(WorkItem, task.work_item_id)
 
@@ -1043,7 +1046,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "runtime re-registration rejects an affinity change while a harness session is retained" do
-    runtime = register_runtime("retained-affinity-registration", resume?: true)
+    runtime = enroll_and_register_runtime("retained-affinity-registration", resume?: true)
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: runtime)
     session = Repo.get!(HarnessSession, task.requested_session_id)
     runtime = Repo.get!(Runtime, runtime.id)
@@ -1124,7 +1127,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal claim rechecks repository affinity after assignment" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("claim-resource-affinity")
+    runtime = enroll_and_register_runtime("claim-resource-affinity")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     item = Repo.get!(WorkItem, task.work_item_id)
 
@@ -1154,9 +1157,13 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "validation assignment requires every frozen binding to allow the runtime" do
     {project, repository} = project_repository_fixture("validation-assignment")
-    first = register_runtime("validation-first", repository_resource_id: repository.id)
-    second = register_runtime("validation-second", repository_resource_id: repository.id)
-    outside = register_runtime("validation-outside", repository_resource_id: repository.id)
+    first = enroll_and_register_runtime("validation-first", repository_resource_id: repository.id)
+
+    second =
+      enroll_and_register_runtime("validation-second", repository_resource_id: repository.id)
+
+    outside =
+      enroll_and_register_runtime("validation-outside", repository_resource_id: repository.id)
 
     {task, _goal_id} =
       insert_goal_task(
@@ -1178,8 +1185,14 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "validation assignment fails closed when frozen bindings have no common runtime" do
     {project, repository} = project_repository_fixture("validation-no-common-runtime")
-    first = register_runtime("validation-empty-first", repository_resource_id: repository.id)
-    second = register_runtime("validation-empty-second", repository_resource_id: repository.id)
+
+    first =
+      enroll_and_register_runtime("validation-empty-first", repository_resource_id: repository.id)
+
+    second =
+      enroll_and_register_runtime("validation-empty-second",
+        repository_resource_id: repository.id
+      )
 
     {task, _goal_id} =
       insert_goal_task(
@@ -1204,7 +1217,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     unrestricted_item = Repo.get!(WorkItem, unrestricted_task.work_item_id)
 
     unrestricted_runtime =
-      register_runtime("validation-unrestricted",
+      enroll_and_register_runtime("validation-unrestricted",
         repository_resource_id: unrestricted_item.repository_resource_id
       )
 
@@ -1221,7 +1234,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     item = Repo.get!(WorkItem, task.work_item_id)
 
     _runtime =
-      register_runtime("validation-malformed",
+      enroll_and_register_runtime("validation-malformed",
         repository_resource_id: item.repository_resource_id
       )
 
@@ -1263,7 +1276,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     blocked_item = Repo.get!(WorkItem, blocked_task.work_item_id)
 
     _blocked_runtime =
-      register_runtime("validation-starved",
+      enroll_and_register_runtime("validation-starved",
         repository_resource_id: blocked_item.repository_resource_id
       )
 
@@ -1276,7 +1289,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     ready_item = Repo.get!(WorkItem, ready_task.work_item_id)
 
     ready_runtime =
-      register_runtime("validation-ready",
+      enroll_and_register_runtime("validation-ready",
         repository_resource_id: ready_item.repository_resource_id
       )
 
@@ -1304,7 +1317,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     ready_item = Repo.get!(WorkItem, ready_task.work_item_id)
 
     ready_runtime =
-      register_runtime("validation-page-ready",
+      enroll_and_register_runtime("validation-page-ready",
         repository_resource_id: ready_item.repository_resource_id
       )
 
@@ -1317,10 +1330,14 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {project, repository} = project_repository_fixture("validation-claim")
 
     assigned_runtime =
-      register_runtime("validation-claim-assigned", repository_resource_id: repository.id)
+      enroll_and_register_runtime("validation-claim-assigned",
+        repository_resource_id: repository.id
+      )
 
     rejected_runtime =
-      register_runtime("validation-claim-rejected", repository_resource_id: repository.id)
+      enroll_and_register_runtime("validation-claim-rejected",
+        repository_resource_id: repository.id
+      )
 
     {assigned_task, _goal_id} =
       insert_goal_task(
@@ -1346,7 +1363,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
              )
 
     replay_runtime =
-      register_runtime("validation-claim-replay", repository_resource_id: repository.id)
+      enroll_and_register_runtime("validation-claim-replay",
+        repository_resource_id: repository.id
+      )
 
     {_replay_task, _replay_goal_id} =
       insert_goal_task(
@@ -1377,7 +1396,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "direct Goal claim rejects an archived Project" do
     {project, repository} = project_repository_fixture("archived-project-claim")
-    runtime = register_runtime("archived-project-claim", repository_resource_id: repository.id)
+
+    runtime =
+      enroll_and_register_runtime("archived-project-claim", repository_resource_id: repository.id)
 
     {task, _goal_id} =
       insert_goal_task(
@@ -1409,7 +1430,11 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "exact Goal claim replay remains allowed after its Project is archived" do
     {project, repository} = project_repository_fixture("archived-project-replay")
-    runtime = register_runtime("archived-project-replay", repository_resource_id: repository.id)
+
+    runtime =
+      enroll_and_register_runtime("archived-project-replay",
+        repository_resource_id: repository.id
+      )
 
     {task, _goal_id} =
       insert_goal_task(
@@ -1441,7 +1466,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "lost claim acknowledgement replays after a runtime affinity change" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("claim-affinity-replay")
+    runtime = enroll_and_register_runtime("claim-affinity-replay")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
 
     request = %{
@@ -1472,7 +1497,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "legacy Orchestration claim entry fails closed for a Goal-owned Run" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("goal-claim-fail-closed")
+    runtime = enroll_and_register_runtime("goal-claim-fail-closed")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
 
@@ -1507,7 +1532,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                now: @now
              )
 
-    runtime = register_runtime("legacy-claim-routing-race")
+    runtime = enroll_and_register_runtime("legacy-claim-routing-race")
     run = insert_assigned_run!(legacy_task, runtime)
 
     assert {:error, :ownership_lost} =
@@ -1536,7 +1561,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   test "Goal claim rejects a Run identity change after authority routing" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
     {other_task, _other_goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("goal-claim-identity-race")
+    runtime = enroll_and_register_runtime("goal-claim-identity-race")
     run = insert_assigned_run!(task, runtime)
 
     assert {:error, :ownership_lost} =
@@ -1584,9 +1609,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "legacy pause transition facade fails closed for a Goal-owned Run" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("goal-pause-fail-closed")
+    runtime = enroll_and_register_runtime("goal-pause-fail-closed")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -1842,9 +1867,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal resume durably rejects pending controls from the superseded pause action" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("revoke-superseded-pause")
+    runtime = enroll_and_register_runtime("revoke-superseded-pause")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    _fence = claim(run, runtime)
+    _fence = goal_claim(run, runtime, @now)
 
     pause_action_id = Ecto.UUID.generate()
     insert_goal_event(goal_id, pause_action_id, 1, "pause")
@@ -1901,8 +1926,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "Goal resume assignment is pinned to its retained compatible runtime" do
-    _other = register_runtime("resume-other")
-    retained_runtime = register_runtime("resume-retained", resume?: true)
+    _other = enroll_and_register_runtime("resume-other")
+    retained_runtime = enroll_and_register_runtime("resume-retained", resume?: true)
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
     retained_session = Repo.get!(HarnessSession, task.requested_session_id)
 
@@ -1915,7 +1940,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     reserved_session = Repo.get!(HarnessSession, retained_session.id)
     assert run.harness_binding_id == reserved_session.binding_id
 
-    fence = claim(run, retained_runtime)
+    fence = goal_claim(run, retained_runtime, @now)
 
     assert {:ok, %{session: %{id: session_id, state: "busy"}}, :created} =
              Goals.attach_harness_session(
@@ -1952,7 +1977,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "OMP resume assignment requires the exact retained kind and versions" do
     retained_runtime =
-      register_runtime("omp-retained",
+      enroll_and_register_runtime("omp-retained",
         harness_kind: "omp",
         harness_version: "18.20.0",
         adapter_version: "symmetry-omp-1",
@@ -2006,7 +2031,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     refute run.harness_binding_id == retained_session.binding_id
     assert Repo.get!(HarnessSession, retained_session.id).binding_id == run.harness_binding_id
 
-    fence = claim(run, retained_runtime)
+    fence = goal_claim(run, retained_runtime, @now)
 
     assert {:ok, %{session: %{id: session_id, harness_kind: "omp"}}, :created} =
              Goals.attach_harness_session(
@@ -2030,8 +2055,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "Goal resume with no viable retained runtime remains queued without fallback" do
-    _other = register_runtime("resume-fallback")
-    retained_runtime = register_runtime("resume-unavailable", resume?: true)
+    _other = enroll_and_register_runtime("resume-fallback")
+    retained_runtime = enroll_and_register_runtime("resume-unavailable", resume?: true)
 
     {task, _goal_id} =
       insert_goal_task(
@@ -2049,7 +2074,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "Goal resume ignores a legacy session without verified binding provenance" do
-    retained_runtime = register_runtime("resume-unverified", resume?: true)
+    retained_runtime = enroll_and_register_runtime("resume-unverified", resume?: true)
 
     {task, _goal_id} =
       insert_goal_task(
@@ -2067,13 +2092,13 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "offline retained runtime does not assign a resumed Goal task or fall back" do
-    retained_runtime = register_runtime("resume-offline-retained", resume?: true)
+    retained_runtime = enroll_and_register_runtime("resume-offline-retained", resume?: true)
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
     retained_session = Repo.get!(HarnessSession, task.requested_session_id)
     item = Repo.get!(WorkItem, task.work_item_id)
 
     fallback_runtime =
-      register_runtime("resume-offline-fallback",
+      enroll_and_register_runtime("resume-offline-fallback",
         resume?: true,
         repository_resource_id: item.repository_resource_id
       )
@@ -2103,7 +2128,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     source_item = Repo.get!(WorkItem, source_task.work_item_id)
 
     unsupported_source_runtime =
-      register_runtime("handoff-source",
+      enroll_and_register_runtime("handoff-source",
         handoff?: false,
         repository_resource_id: source_item.repository_resource_id
       )
@@ -2134,7 +2159,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   test "Goal handoff remains queued when only a different machine advertises handoff" do
     {source_task, goal_id} = insert_goal_task(max_run_attempts: 2)
     source_item = Repo.get!(WorkItem, source_task.work_item_id)
-    source_runtime = register_runtime("handoff-local-source", handoff?: false)
+    source_runtime = enroll_and_register_runtime("handoff-local-source", handoff?: false)
     source_run = complete_source_run!(source_task, source_runtime)
     target_task = insert_handoff_successor!(source_task, source_run)
 
@@ -2143,7 +2168,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       set: [inserted_at: DateTime.add(@now, 1, :second)]
     )
 
-    _different_machine = register_runtime("handoff-other-machine", handoff?: true)
+    _different_machine = enroll_and_register_runtime("handoff-other-machine", handoff?: true)
 
     assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
     assert %{state: "queued", current_generation: 0} = Repo.get!(Task, target_task.id)
@@ -2197,7 +2222,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     source_item = Repo.get!(WorkItem, source_task.work_item_id)
 
     source_runtime =
-      register_runtime("handoff-claim-source",
+      enroll_and_register_runtime("handoff-claim-source",
         handoff?: true,
         repository_resource_id: source_item.repository_resource_id
       )
@@ -2206,7 +2231,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     target_task = insert_handoff_successor!(source_task, source_run)
 
     target_runtime =
-      register_runtime("handoff-claim-other-machine",
+      enroll_and_register_runtime("handoff-claim-other-machine",
         handoff?: true,
         repository_resource_id: source_item.repository_resource_id
       )
@@ -2263,7 +2288,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "retained reservation rotates the binding before dispatch and an old stop replay cannot release it" do
-    retained_runtime = register_runtime("exclusive-retained", resume?: true, capacity: 2)
+    retained_runtime =
+      enroll_and_register_runtime("exclusive-retained", resume?: true, capacity: 2)
 
     {first_task, _first_goal_id} =
       insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
@@ -2297,7 +2323,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert %{state: "queued", current_generation: 0} = Repo.get!(Task, second_task.id)
     assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^second_task.id), :count)
 
-    first_fence = claim(first_run, retained_runtime)
+    first_fence =
+      goal_claim(first_run, retained_runtime, @now)
 
     assert {:ok, %{session: first_attachment}, :created} =
              Goals.attach_harness_session(
@@ -2381,11 +2408,11 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "lease expiry keeps a retained session unavailable until a fenced stop receipt arrives" do
-    retained_runtime = register_runtime("retained-expiry", resume?: true)
+    retained_runtime = enroll_and_register_runtime("retained-expiry", resume?: true)
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
     session = Repo.get!(HarnessSession, task.requested_session_id)
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, retained_runtime)
+    fence = goal_claim(run, retained_runtime, @now)
     expired_at = DateTime.add(@now, 30, :second)
 
     assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
@@ -2424,7 +2451,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal machine retries an exact committed claim after pause but rejects a new claimant" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("lost-ack-claim")
+    runtime = enroll_and_register_runtime("lost-ack-claim")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
 
     claim_request = %{
@@ -2448,7 +2475,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal machine retries committed events and transitions but rejects changed or new writes after pause" do
     {_task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("lost-ack-authority")
+    runtime = enroll_and_register_runtime("lost-ack-authority")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
 
     claim_request = %{
@@ -2539,9 +2566,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal pause revokes nonterminal execution writes before its control worker runs" do
     {_task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("post-command-authority")
+    runtime = enroll_and_register_runtime("post-command-authority")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2606,7 +2633,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal assignment rejects a queued task whose current attempt is already consumed" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
-    _runtime = register_runtime("goal-current-attempt")
+    _runtime = enroll_and_register_runtime("goal-current-attempt")
 
     Repo.update_all(
       from(task_row in Task, where: task_row.id == ^task.id),
@@ -2618,9 +2645,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal control command rejects a superseded lifecycle action" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("stale-control")
+    runtime = enroll_and_register_runtime("stale-control")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2662,9 +2689,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal pause transition rejects a pause command superseded by resume" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("stale-pause-transition")
+    runtime = enroll_and_register_runtime("stale-pause-transition")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2705,9 +2732,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal pause transition rejects a pause command superseded by amend" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("stale-pause-amend-transition")
+    runtime = enroll_and_register_runtime("stale-pause-amend-transition")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2749,9 +2776,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal pause transition creates once and replays after Goal advancement" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("goal-pause-replay")
+    runtime = enroll_and_register_runtime("goal-pause-replay")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2815,10 +2842,10 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     on_exit(fn -> :telemetry.detach(ref) end)
 
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("goal-pause-controller")
+    runtime = enroll_and_register_runtime("goal-pause-controller")
     machine = Repo.get!(SymmetryControl.Orchestration.Machine, runtime.machine_id)
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2877,9 +2904,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal pause transition rolls back with an outer transaction" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("goal-pause-rollback")
+    runtime = enroll_and_register_runtime("goal-pause-rollback")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2922,9 +2949,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal pause transition rejects mismatched command and fence identity" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("goal-pause-identity")
+    runtime = enroll_and_register_runtime("goal-pause-identity")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -3014,9 +3041,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal pause does not create an unimplemented native pause descriptor" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("goal-pause-no-native")
+    runtime = enroll_and_register_runtime("goal-pause-no-native")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -3040,13 +3067,15 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   test "a draft planning Task assigns, claims, and emits one terminal settlement job by Subject resource" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2, purpose: "plan")
     repository_resource_id = task.input["subject"]["resource_id"]
-    runtime = register_runtime("planning-task", repository_resource_id: repository_resource_id)
+
+    runtime =
+      enroll_and_register_runtime("planning-task", repository_resource_id: repository_resource_id)
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
     assert run.runtime_id == runtime.id
 
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -3071,7 +3100,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     repository_resource_id = task.input["subject"]["resource_id"]
 
     _runtime =
-      register_runtime("planning-task-active", repository_resource_id: repository_resource_id)
+      enroll_and_register_runtime("planning-task-active",
+        repository_resource_id: repository_resource_id
+      )
 
     Repo.update_all(from(goal in Goal, where: goal.id == ^goal_id), set: [state: "active"])
 
@@ -3107,11 +3138,11 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "lease expiry consumes the admitted final run attempt and persists one settlement job" do
     {task, _goal} = insert_goal_task(max_run_attempts: 1)
-    runtime = register_runtime("expiry")
+    runtime = enroll_and_register_runtime("expiry")
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
-    _fence = claim(run, runtime)
+    _fence = goal_claim(run, runtime, @now)
 
     assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
 
@@ -3144,9 +3175,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "manual retry cannot create a run beyond the admitted attempt limit" do
     {task, _goal} = insert_goal_task(max_run_attempts: 1)
-    runtime = register_runtime("retry")
+    runtime = enroll_and_register_runtime("retry")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "failed"}} =
              Orchestration.transition(run.id, fence, "failed", %{"stage" => "test"}, uuid(1),
@@ -3173,9 +3204,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "final-attempt lease expiry retains terminal grace behind one delayed settlement job" do
     {task, _goal} = insert_goal_task(max_run_attempts: 1)
-    runtime = register_runtime("final-grace")
+    runtime = enroll_and_register_runtime("final-grace")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     expiry = DateTime.add(@now, 30, :second)
     assert %{expired_runs: 1} = Orchestration.expire(now: expiry)
@@ -3197,9 +3228,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "stale delivery after automatic retry cannot create another settlement job" do
     {task, _goal} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("stale")
+    runtime = enroll_and_register_runtime("stale")
     assert {:ok, first_run} = Orchestration.assign_one(now: @now)
-    fence = claim(first_run, runtime)
+    fence = goal_claim(first_run, runtime, @now)
 
     expiry = DateTime.add(@now, 30, :second)
     assert %{expired_runs: 1} = Orchestration.expire(now: expiry)
@@ -3226,9 +3257,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "terminal transition writes one durable job and notifies only after the committing call" do
     {task, _goal} = insert_goal_task(max_run_attempts: 2)
-    runtime = register_runtime("terminal")
+    runtime = enroll_and_register_runtime("terminal")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, uuid(3), now: @now)
@@ -3278,7 +3309,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     )
 
     assert {:ok, rolled_back_run} = Orchestration.assign_one(now: @now)
-    rolled_back_fence = claim(rolled_back_run, runtime)
+
+    rolled_back_fence =
+      goal_claim(rolled_back_run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(
@@ -3756,7 +3789,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous) end)
   end
 
-  defp register_runtime(label, opts \\ []) do
+  defp enroll_and_register_runtime(label, opts \\ []) do
     machine_token = "goal-admission-machine-#{label}-#{System.unique_integer([:positive])}"
 
     machine = enroll_machine(label, machine_token)
@@ -3946,30 +3979,6 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                "operator:test",
                now: @now
              )
-  end
-
-  defp claim(run, runtime) do
-    claim_id = Ecto.UUID.generate()
-
-    assert {:ok, claimed} =
-             Goals.claim(
-               run.id,
-               %{
-                 runtime_id: runtime.id,
-                 runtime_epoch: runtime.connection_epoch,
-                 generation: run.generation,
-                 claim_id: claim_id
-               },
-               now: @now
-             )
-
-    %{
-      runtime_id: runtime.id,
-      runtime_epoch: runtime.connection_epoch,
-      generation: run.generation,
-      claim_id: claimed.claim_id,
-      lease_token: claimed.lease_token
-    }
   end
 
   defp settlement_jobs(task_id, run_id, generation) do

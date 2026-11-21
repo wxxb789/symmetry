@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Orchestration.SchedulerTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Reconciler
@@ -9,7 +9,14 @@ defmodule SymmetryControl.Orchestration.SchedulerTest do
 
   test "reconciler expiry requeues work and scheduler creates its next generation" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+
+    runtime =
+      register_runtime(machine, @now,
+        name: "Scheduler",
+        daemon_instance_id: "00000000-0000-0000-0000-000000000201",
+        extra: %{heartbeat_interval_ms: 60_000}
+      )
+
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "scheduler-task", now: @now)
 
     assert :ok = Scheduler.drain(now: @now)
@@ -63,29 +70,4 @@ defmodule SymmetryControl.Orchestration.SchedulerTest do
 
     enrolled
   end
-
-  defp register_runtime(machine) do
-    assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(
-               machine.id,
-               "00000000-0000-0000-0000-000000000201",
-               [
-                 %{
-                   runtime_key: "default",
-                   name: "Scheduler",
-                   capacity: 1,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   capabilities: %{},
-                   heartbeat_interval_ms: 60_000
-                 }
-               ],
-               now: @now
-             )
-
-    runtime
-  end
-
-  defp task_attrs,
-    do: %{goal: "Run tests", agent_profile: "codex", workspace: "primary", input: %{}}
 end
