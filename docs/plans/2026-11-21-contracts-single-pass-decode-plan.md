@@ -39,8 +39,8 @@ at `:98` and validates that instance.
    - `DecodeSchema` decodes once (`decodeRawJSON`) and calls `validateInstance` on that instance;
    - `ValidateSchema` keeps its published raw-bytes semantics: `decodeSchemaJSON` (unchanged) +
      `validateInstance`. Public signatures and error strings are unchanged; error precedence is
-     unchanged except for the corrupt embedded-bundle row in the verdict table below, where both
-     entry points now report the decode error before the compile error;
+     unchanged except for the corrupt embedded-bundle row in the verdict table below, where only
+     `ValidateSchema`'s precedence changes;
    - `decodeSchemaJSON` increments a package-internal `decodeSchemaJSONCalls` counter (atomic) so a
      test can pin the single-pass property structurally (the traversal-count test below).
 2. `daemon/internal/contracts/schema_test.go`:
@@ -90,7 +90,7 @@ Verdicts and messages, by input class:
 | schema-invalid instance | `validate <envelope> schema: …` (jsonschema keyword path) | unchanged (same instance shape: `json.Number` + `any`) |
 | CommitPath violation | `validate <envelope> CommitPath: path does not match the schema pattern` | unchanged |
 | schema-valid but typed-DTO-illegal payload | `decode <envelope> generated DTO: …` | unchanged; reached after one `any` decode instead of two |
-| corrupt embedded bundle (unreachable in a released tree: `pnpm contracts:check` gates the bundle) | `ValidateSchema` reports the compile error before any decode error; `DecodeSchema` likewise (its first `decodeRawJSON` precedes the same compile) | both report the decode error first: `validateInstance` is the single `ensureSchemas` site and runs after the decode. Verdicts unchanged (both reject) |
+| corrupt embedded bundle (unreachable in a released tree: `pnpm contracts:check` gates the bundle) | `ValidateSchema` reports the compile error before any decode error; `DecodeSchema` already reported the decode error first | both report the decode error first: `validateInstance` is the single `ensureSchemas` site and runs after the decode. Verdicts unchanged (both reject) |
 
 Ordering is preserved because the surviving passes run in the same sequence (raw checks, then
 `ensureSchemas`, then `schema.Validate`, then the CommitPath walk, then the typed unmarshal).
