@@ -1044,6 +1044,11 @@ func TestProviderActionResultSemanticNormalizationPreservesOrderNumbersAndLitera
 	if providerActionResultsEqual(input, changedOrder) {
 		t.Fatal("providerActionResultsEqual() treated reordered object members as equal")
 	}
+
+	trailing := json.RawMessage(`{"a":1} {}`)
+	if _, err := normalizeProviderActionResult(trailing); err == nil || err.Error() != "provider action result is invalid JSON" {
+		t.Fatalf("normalizeProviderActionResult(%q) error = %v, want the multiple-value rejection", trailing, err)
+	}
 }
 
 func TestProviderActionNewCompletionRejectsSemanticallySmallRawLargeResult(t *testing.T) {

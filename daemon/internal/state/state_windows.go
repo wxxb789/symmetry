@@ -92,10 +92,14 @@ func acquireStoreLock(path string) (*os.File, error) {
 
 func releaseStoreLock(file *os.File) error {
 	var overlapped syscall.Overlapped
-	result, _, _ := procUnlockFileEx.Call(file.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
+	result, _, callErr := procUnlockFileEx.Call(file.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
 	closeErr := file.Close()
-	if result == 0 || closeErr != nil {
-		return errors.New("release state directory lock")
+	var unlockErr error
+	if result == 0 {
+		unlockErr = windowsCallError(callErr)
+	}
+	if err := errors.Join(unlockErr, closeErr); err != nil {
+		return fmt.Errorf("release state directory lock: %w", err)
 	}
 	return nil
 }
