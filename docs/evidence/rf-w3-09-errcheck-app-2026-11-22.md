@@ -4,7 +4,7 @@ Subject: contract `goal-rf-w3-09-errcheck-app.md` (GDD, 2026-11-21 + conductor d
 2026-11-21 + comment policy 2026-11-22), base revision
 `261e84a42313cf1580a06df11b6062305cdf53d5` (`refactor(state): wrap state errors with their causes
 (#200)`; W3-07 merged, #197 W4-19 merged). Deliverable: the uncommitted working tree of
-`Q:/repos/wt-w3-09-errcheck-app/symmetry` described below.
+`<HOST-PATH>/wt-w3-09-errcheck-app/symmetry` described below.
 
 Apply revision (2026-11-22, stage `apply`): simplify findings 1 and 2 applied, record corrections
 D1, D2, D3 and one measured count fix applied in place, and the gates re-run — see §8. Fix revision
@@ -184,7 +184,7 @@ post-clean runs of the unmodified/graded tree respectively.
 | package suite (Windows) | `go test -count=1 ./internal/app/...` | 0 | `ok … 119.454s` (`<run-dir>/gates/windows-app-suite.txt`) |
 | linux lane (WSL Ubuntu-24.04) | full suite in a fresh network namespace, §6.1 | 0 | `ok … 132.853s` (`<run-dir>/gates/wsl-app-suite-netns.txt`); targeted run `ok … 0.419s` (`…/wsl-targeted-netns.txt`) |
 | whitespace | `git diff --check` | 0 | clean |
-| host paths | `git diff origin/main...HEAD -- . ':(exclude)docs' \| grep -ci 'users/'` | 0 | zero in the code/docs-independent scan; without `:(exclude)docs` the count is 3 at `519b6bb9` (`evidence:187`, `evidence:249`, `plan:177` — all three the scan's own quoted text in this record and the plan, which is where the restated counts live); `grep -nE '[:][/\\]Users[/\\]\|[/]home[/]'` over the same diff → 0 hits; the only drive-path text is the `Q:/repos/wt-w3-09-errcheck-app/{symmetry,lane}` worktree references |
+| host paths | `git diff origin/main...HEAD -- . ':(exclude)docs' \| grep -ci 'users/'` | 0 | zero in the code/docs-independent scan; without `:(exclude)docs` the count is 3 at `519b6bb9` (`evidence:187`, `evidence:249`, `plan:177` — all three the scan's own quoted text in this record and the plan, which is where the restated counts live); `grep -nE '[:][/\\]Users[/\\]\|[/]home[/]'` over the same diff → 0 hits; worktree references are rendered as `<HOST-PATH>` |
 | errcheck | §5 table | 1 before / 0 after (gate-config) | acceptance 10→0 linux, 9→0 windows |
 | mutation | §4 entry | 1 (mutant) / 0 (restored) | red exactly at the driven site |
 
@@ -212,7 +212,7 @@ The lane was therefore run in a **fresh network namespace** (`sudo unshare -n`, 
 as user `accept`) whose loopback is kernel-local and unaffected by the mirrored-networking proxy:
 the full `go test -count=1 -timeout 2400s ./internal/app/...` passes there in 132.853 s with the same
 Go toolchain (go1.27.0 linux/amd64) and the same tree, which also exercises the owned
-`//go:build linux` `terminate_linux.go`. Wrapper scripts: `Q:/repos/wt-w3-09-errcheck-app/lane/`
+`//go:build linux` `terminate_linux.go`. Wrapper scripts: `<HOST-PATH>/wt-w3-09-errcheck-app/lane/`
 (`run-linux-lane.sh`, `run-linux-go-test.sh`). The CI Linux/race jobs remain the standing oracle;
 repairing the VM's shared loopback (e.g. `wsl --shutdown`) was deliberately not attempted in this
 run because it would terminate the user's other WSL sessions and processes.
