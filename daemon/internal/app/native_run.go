@@ -93,9 +93,6 @@ var defaultLinuxV2NativeOwnerFactory linuxV2NativeOwnerFactory = func(config.Con
 }
 
 type runningRun struct {
-	// runLifecycle owns the run's lifecycle state. runningRun embeds it so every
-	// existing reader keeps its field path; every assignment after construction
-	// lives in run_lifecycle.go.
 	runLifecycle
 	// inputMu serializes stdin delivery with input-related lifecycle mutations.
 	// Never wait for it while holding daemon.mu.
@@ -122,9 +119,7 @@ type runningRun struct {
 	prepared              workspace.Prepared
 	output                *agentOutput
 	startFailure          error
-	// The cleanup memo is the latched value of runLifecycle.cleanupBlocked(); it
-	// stays declared here because the predicate method carries the same name.
-	cleanupBlocked bool
+	cleanupBlocked        bool
 	// Native completion is retained locally until accounting is durably queued.
 	nativeFinalResult    *harness.TaskResult
 	nativeFinalWaitErr   error

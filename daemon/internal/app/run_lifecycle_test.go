@@ -36,7 +36,6 @@ func (lifecycleProcess) Terminate(context.Context, time.Duration) error { return
 func (lifecycleProcess) Wait() execution.Result                         { return execution.Result{} }
 func (lifecycleProcess) ProcessDetails() (int, string)                  { return 0, "" }
 
-// The module's write set: the 44 runLifecycle fields plus the cleanup memo.
 var lifecycleFieldNames = []string{
 	"starting", "claimed",
 	"nativeStartInFlight", "nativeStartTerminalObserved",
@@ -243,6 +242,38 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 				}
 				if run.nativeCancelCommandID != "command-1" || !run.nativeCancelTerminalObserved || run.nativeCancelRejected {
 					t.Fatalf("recordNativeCancelObserved lost the outcome: id=%q observed=%t rejected=%t", run.nativeCancelCommandID, run.nativeCancelTerminalObserved, run.nativeCancelRejected)
+				}
+			},
+		},
+		{
+			name: "cancellation/settle_cancelled_start_with_observed_terminal",
+			initial: func() *runningRun {
+				run := &runningRun{runLifecycle: runLifecycle{slotHeld: true, nativeStartInFlight: true}}
+				run.beginRenewal(func() {})
+				return run
+			},
+			steps: []func(*runningRun){
+				func(run *runningRun) {
+					if renewCancel := run.settleCancelledStartWithObservedTerminal("command-1"); renewCancel == nil {
+						t.Fatalf("settleCancelledStartWithObservedTerminal dropped the captured renewal handle")
+					}
+				},
+			},
+			check: func(t *testing.T, run *runningRun) {
+				if !run.nativeTerminalOwner || !run.nativeStartTerminalOwner || run.nativeTerminalOwnerClaim != 1 || run.terminalizing != 1 {
+					t.Fatalf("settleCancelledStartWithObservedTerminal did not claim settlement: owner=%t startOwner=%t claim=%d terminalizing=%d", run.nativeTerminalOwner, run.nativeStartTerminalOwner, run.nativeTerminalOwnerClaim, run.terminalizing)
+				}
+				if run.nativeStartInFlight {
+					t.Fatalf("settleCancelledStartWithObservedTerminal left the publication window open")
+				}
+				if run.nativeCancelCommandID != "command-1" || !run.nativeCancelTerminalObserved || !run.nativeCancelRejected {
+					t.Fatalf("settleCancelledStartWithObservedTerminal lost the cancel outcome: id=%q observed=%t rejected=%t", run.nativeCancelCommandID, run.nativeCancelTerminalObserved, run.nativeCancelRejected)
+				}
+				if !run.nativeUsageRenewalBlocked || run.renewCancel != nil || run.renewCancelID != 2 {
+					t.Fatalf("settleCancelledStartWithObservedTerminal left renewal open: blocked=%t handle=%v id=%d", run.nativeUsageRenewalBlocked, run.renewCancel, run.renewCancelID)
+				}
+				if !run.cleanupBlocked {
+					t.Fatalf("settleCancelledStartWithObservedTerminal did not block cleanup")
 				}
 			},
 		},
@@ -515,6 +546,31 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 			},
 		},
 		{
+			name: "usage_barrier/clear_retry_clears_the_cancel_observation",
+			initial: func() *runningRun {
+				return &runningRun{runLifecycle: runLifecycle{
+					slotHeld:                     true,
+					nativeUsageRetryInFlight:     true,
+					nativeCancelCommandID:        "command-1",
+					nativeCancelTerminalObserved: true,
+					nativeCancelRejected:         true,
+				}}
+			},
+			steps: []func(*runningRun){
+				func(run *runningRun) {
+					run.clearUsageRetryBeforePublication(false)
+				},
+			},
+			check: func(t *testing.T, run *runningRun) {
+				if run.nativeUsageRetryInFlight || !run.nativeUsageRenewalBlocked {
+					t.Fatalf("clearUsageRetryBeforePublication = (inFlight=%t renewalBlocked=%t), want (false, true)", run.nativeUsageRetryInFlight, run.nativeUsageRenewalBlocked)
+				}
+				if run.nativeCancelTerminalObserved || run.nativeCancelRejected {
+					t.Fatalf("clearUsageRetryBeforePublication kept the cancel observation: observed=%t rejected=%t", run.nativeCancelTerminalObserved, run.nativeCancelRejected)
+				}
+			},
+		},
+		{
 			name: "close_retry/require_begin_end_publish",
 			initial: func() *runningRun {
 				return &runningRun{runLifecycle: runLifecycle{slotHeld: true}, nativeSession: lifecycleTestSession, goalSession: &state.GoalSessionKey{}, goalAdmission: &protocol.Admission{}}
@@ -603,6 +659,29 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 			},
 		},
 		{
+			name: "containment/stop_resets_the_finalize_budget",
+			initial: func() *runningRun {
+				return &runningRun{runLifecycle: runLifecycle{slotHeld: true}, process: lifecycleTestProcess}
+			},
+			steps: []func(*runningRun){
+				func(run *runningRun) {
+					run.recordFinalizeAttempt()
+					run.markFinalizeExhausted()
+					if !run.recordProcessStop(lifecycleTestProcess, 71, "native:71", true) {
+						t.Fatalf("recordProcessStop did not record the stop witness")
+					}
+				},
+			},
+			check: func(t *testing.T, run *runningRun) {
+				if run.processFinalizeAttempts != 0 || run.processFinalizeExhausted {
+					t.Fatalf("recordProcessStop kept the finalize budget: attempts=%d exhausted=%t", run.processFinalizeAttempts, run.processFinalizeExhausted)
+				}
+				if run.processStopWitness != Process(lifecycleTestProcess) || run.processStopPID != 71 || run.processStopIdentity != "native:71" {
+					t.Fatalf("recordProcessStop lost the stop witness: pid=%d identity=%q witness=%v", run.processStopPID, run.processStopIdentity, run.processStopWitness)
+				}
+			},
+		},
+		{
 			name: "containment/stop_without_witness_stays_detectable",
 			initial: func() *runningRun {
 				return &runningRun{runLifecycle: runLifecycle{slotHeld: true, processExited: true, processStopWitness: lifecycleTestProcess, processStopPID: 71, processStopIdentity: "native:71"}, process: lifecycleTestProcess}
@@ -625,8 +704,6 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 		},
 	}
 
-	// Rows run inside the parent test so the step closures report through its
-	// *testing.T; each row is logged before it runs, so a failure names it.
 	for _, test := range tests {
 		t.Logf("row %s", test.name)
 		run := test.initial()
@@ -777,21 +854,11 @@ func TestRunLifecyclePhaseTable(t *testing.T) {
 	}
 }
 
-// The two construction points of a runLifecycle value in the package's
-// non-test source: the run registration in app.go and the witness constructor
-// in linux_owner_witness_linux.go. A new construction site must be added here
-// deliberately; the gate keys on the enclosing function so unrelated edits
-// above a site do not move it.
 var lifecycleConstructors = map[string]bool{
 	"app.go:startAssignment":                true,
 	"linux_owner_witness_linux.go:runFresh": true,
 }
 
-// Committed write-site gate (contract design clause 4, K1 scanner): every
-// lifecycle write in the package's non-test source resolves to this module.
-// The scanned shapes are field-selector assignment targets, whole-value
-// `runLifecycle` replacements, `&field` escapes, and `runLifecycle:`
-// composite-literal keys (restricted to the lifecycleConstructors allowlist).
 func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 	fset := token.NewFileSet()
 	modulePath := "run_lifecycle.go"
@@ -895,10 +962,6 @@ func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 	}
 }
 
-// lifecycleWriteSites reports every non-module write the syntactic scan can
-// name: selector assignment and inc/dec targets, whole-runLifecycle
-// replacements, address-of escapes of a lifecycle field or the whole value,
-// and runLifecycle composite-literal keys outside the constructor allowlist.
 func lifecycleWriteSites(path string, fset *token.FileSet, parsed *ast.File, wantWrites map[string]bool) []string {
 	var sites []string
 	add := func(pos token.Pos, message string) {
@@ -950,7 +1013,6 @@ func recordLifecycleTarget(target ast.Expr, add func(token.Pos, string), isLifec
 	}
 }
 
-// enclosingFunc names the top-level function or method that contains pos.
 func enclosingFunc(parsed *ast.File, pos token.Pos) string {
 	name := ""
 	for _, decl := range parsed.Decls {
@@ -963,8 +1025,6 @@ func enclosingFunc(parsed *ast.File, pos token.Pos) string {
 	return name
 }
 
-// funcFieldsOf returns the function-typed field names of a declared struct:
-// the captured handles the module must never invoke by itself.
 func funcFieldsOf(parsed *ast.File, typeName string) map[string]bool {
 	fields := map[string]bool{}
 	ast.Inspect(parsed, func(node ast.Node) bool {

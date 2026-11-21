@@ -18,6 +18,13 @@ row is byte-identical to the committed revision (no production file changed in t
 §5-§7's write-order, lock-site and control-flow measurements still bind the committed bytes), and
 §10's fix-round table names the gates re-run on the fix tree.
 
+The PR review (`findings/213-opus-review-1.md`, P2-1/P3-1/P3-2) re-opened the working tree on top
+of `5d0a40aa`. Review fix r1 changed comments only in `run_lifecycle.go` and `native_run.go`,
+removed the fix-round test docstrings and added three module rows in `run_lifecycle_test.go`, and
+updated this record and the plan; the identity table below carries the new hashes and §10's
+review-fix-r1 table names the gates re-run on that tree. P2-1 needs no code change: the contract's
+`## Conductor amendment (2026-11-22, PR #213 review P2-1)` waives the 1,500-line split.
+
 Subject identity (sha256 of the delivered files):
 
 The apply revision re-hashed `run_lifecycle.go`, `run_lifecycle_test.go`, `native_run.go` and this
@@ -26,9 +33,9 @@ slice's plan (the files its accepted simplify findings changed); the fix round t
 
 | file | sha256 |
 | --- | --- |
-| `daemon/internal/app/run_lifecycle.go` | `89a15f45115710dfc63381f76e48812b320c0bf12b57e4a6273b94c86f882392` |
-| `daemon/internal/app/run_lifecycle_test.go` | `293ee5ba0bc58ef8d32d0f7e1e93414320907fb1f763cd9be6da00bd003fb372` |
-| `daemon/internal/app/native_run.go` | `600a367c6f1f5c97f6dfe9719342d62f8ce178add7f3c721bb19f5c538a4a7e7` |
+| `daemon/internal/app/run_lifecycle.go` | `8618cca7689e4f323ab918d8494730750632f5776917e35afe68a0f2ba8ade71` |
+| `daemon/internal/app/run_lifecycle_test.go` | `133b5578ea71a96cfdf78362dc78ec34bdbc98d3c01dc46e97c4c53b2245712e` |
+| `daemon/internal/app/native_run.go` | `e3fbd2c7c5ba8577c9fd433b5bf79bcc1038552028abbfcf2f559e45cb9514ba` |
 | `daemon/internal/app/app.go` | `efc3c46887497a4f9c5dfda391585fe7316b26efcdb7f0243b8de947232fbfef` |
 | `daemon/internal/app/cleanup.go` | `6f54a16546ad109a5e45c825543f4773c0c773ab14450af82b0ee147b62da388` |
 | `daemon/internal/app/commands.go` | `57d2feb07937291a1863cab9fe69f1fa44dbced2a54bec84a2a2a76554040114` |
@@ -37,7 +44,7 @@ slice's plan (the files its accepted simplify findings changed); the fix round t
 | `daemon/internal/app/goal_admission.go` | `a1ebf94855bd007503704d675c939d71088e58d4a73335856f4befc03c3bff51` |
 | `daemon/internal/app/recovery_glue.go` | `d4b51969697a892865319d2ba628302914b9a57f26175fbc39bb440e85992386` |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `c131b3ef60de447ec2189003e4d205a43115ff6285d92cb570a426dcf42050d1` |
-| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | `f3ed2312eba7c6c174e1a7a00300188736174c3885e73636fb92f7af32ea4209` |
+| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | `595d77fd3e23ed29f61c3176edb37053161fa5fd4aed9b7eba3f948848a79247` |
 | `scripts/ci/omo-control-native-evidence.py` | `d55163b436a44df43817bd27623a608a5a72b782eb9445c384bdf21580159ead` |
 
 Scratch tools and raw outputs (outside the repository, host state directory):
@@ -47,13 +54,18 @@ seq-report.txt}` (per-function write and lock sequences), `…/flow/{main.go, fl
 (parser-only fixture rewrite and its proof), `…/fixture-proof.txt`, `…/lifecycle-fields.txt`,
 `…/base/` (base-revision sources), `…/mutant-M1.txt` … `mutant-M5.txt`.
 
+Review fix r1's proofs are outside the repository too, under a temporary directory
+(`<TEMP>/r1-mutants/`): the three mutant copies `run_lifecycle_{E,F,H}.go` with `overlay_{E,F,H}.json`,
+their outputs `mutant_{E,F,H}.txt`, the token-stream comparison (`tokendump.go`, the
+`tok-{old,new}-{run_lifecycle,native_run}.txt` dumps) and `head/` (the pre-fix revisions).
+
 ## 1. Deliverable shape (files, counts)
 
 | file | status | lines (base → head) | note |
 | --- | --- | ---: | --- |
-| `daemon/internal/app/run_lifecycle.go` | new | — → 585 | `runLifecycle` (44 fields), `cleanupBlocked()`, `phase()`, 63 transition/query methods |
-| `daemon/internal/app/run_lifecycle_test.go` | new | — → 1040 (816 at the apply revision) | 5 tests at the module interface, no `&daemon{}`; the committed write-site scan gate |
-| `daemon/internal/app/native_run.go` | edited | 2417 → 2232 | `runningRun` embeds `runLifecycle`; 44 declarations left; 127 write statements became transition calls; `claimNativeTerminalOwner` deleted (its body is `claimSettlementOwner`) |
+| `daemon/internal/app/run_lifecycle.go` | new | — → 555 | `runLifecycle` (44 fields), `cleanupBlocked()`, `phase()`, 63 transition/query methods |
+| `daemon/internal/app/run_lifecycle_test.go` | new | — → 1100 (816 at the apply revision) | 5 tests (24 transition rows) at the module interface, no `&daemon{}`; the committed write-site scan gate |
+| `daemon/internal/app/native_run.go` | edited | 2417 → 2227 | `runningRun` embeds `runLifecycle`; 44 declarations left; 127 write statements became transition calls; `claimNativeTerminalOwner` deleted (its body is `claimSettlementOwner`) |
 | `daemon/internal/app/app.go` | edited | 2221 → 2189 | startAssigned, releaseRun, releaseSlotOnce, scheduleTerminalSlotRelease, beginTerminal, releaseTerminalReservation, clearCancellationReservation, finishStarting, finishAttachedStart, the constructor literal |
 | `daemon/internal/app/cleanup.go` | edited | 1047 → 1039 | finalizeExitedProcess, clearCleanupBlockedAfterStop |
 | `daemon/internal/app/commands.go` | edited | 939 → 931 | dispatchQueuedCommand, handleCommand |
@@ -67,12 +79,12 @@ seq-report.txt}` (per-function write and lock sequences), `…/flow/{main.go, fl
 | `docs/evidence/rf-w4-17b-run-lifecycle-2026-11-22.md` | new | — | this record |
 | `scripts/ci/omo-control-native-evidence.py` | edited | 1812 → 1813 | `SOURCE_PATHS` gains `daemon/internal/app/run_lifecycle.go` (R9) |
 
-Line budget (contract clause 1's "no file > 1500 L"): `run_lifecycle.go` 585 and
-`run_lifecycle_test.go` 1040 are the only files this slice pushes past 400 lines; every file that
+Line budget (contract clause 1's "no file > 1500 L"): `run_lifecycle.go` 555 and
+`run_lifecycle_test.go` 1100 are the only files this slice pushes past 400 lines; every file that
 already exceeded 1500 lines at base (`native_run.go`, `app.go`, `goal_admission.go`,
 `linux_owner_recovery_linux.go`, `linux_owner_v2_linux.go`, `linux_owner_preflight_linux.go`,
 `linux_owner_witness_linux.go`, the test files) shrinks or stays equal — `native_run.go`
-2417 → 2232 as the contract requires. No file crosses 1500 lines.
+2417 → 2227 as the contract requires. No file crosses 1500 lines.
 
 Diff size (measured at the fix round, for the plan's decision D8; the apply-revision figures in
 parentheses): tracked files
@@ -90,6 +102,10 @@ estimated >1,800 lines), and clause 1's field→group map plus clause 3's write-
 the whole field set. Recorded for the conductor; if a split is still required, the plan names the
 exact row boundary (G1-G6/G10 plus the G7-G9 declarations in b-1; the declarations move plus rows
 35-43 and 48-54 in b-2).
+
+The conductor waived the rule in the contract amendment quoted in the revisions paragraph above;
+review fix r1 changes the two new files' sizes only (`run_lifecycle.go` 585 → 555,
+`run_lifecycle_test.go` 1040 → 1100; §1).
 
 ## 2. Native-evidence source mapping (arch-decision-2 R9)
 
@@ -397,6 +413,21 @@ Every mutant is red in the fix-round tree and none was left applied (`git status
 battery: only `daemon/internal/app/run_lifecycle_test.go` modified; the temp copy is
 `diff -rq`-identical to the repository afterwards).
 
+### Review-fix-r1 mutants (P3-2)
+
+The PR review's survivors E, F and H, re-run against the three new rows through `go test -overlay`
+(the overlay maps the module path to a mutant copy outside the repository, so no repository file is
+modified and there is nothing to revert). Each is red with exit 1; the same command without the
+overlay is green (`ok … 0.221s`). Raw outputs: `<TEMP>/r1-mutants/mutant_{E,F,H}.txt`.
+
+| # | test row | mutant | observed failure |
+| --- | --- | --- | --- |
+| M22 (review E) | `…TransitionSequences` (`containment/stop_resets_the_finalize_budget`) | drop `run.processFinalizeAttempts = 0` in `recordProcessStop`'s stopped branch | `run_lifecycle_test.go:677: recordProcessStop kept the finalize budget: attempts=1 exhausted=false` |
+| M23 (review F) | (`cancellation/settle_cancelled_start_with_observed_terminal`) | `recordNativeCancelObserved(commandID, true, false)` in `settleCancelledStartWithObservedTerminal` | `run_lifecycle_test.go:270: settleCancelledStartWithObservedTerminal lost the cancel outcome: id="command-1" observed=true rejected=false` |
+| M24 (review H) | (`usage_barrier/clear_retry_clears_the_cancel_observation`) | drop `run.nativeCancelTerminalObserved = false` in `clearUsageRetryBeforePublication` | `run_lifecycle_test.go:569: clearUsageRetryBeforePublication kept the cancel observation: observed=true rejected=false` |
+
+No mutant file is inside the repository and the mutant battery modified no repository file.
+
 ## 10. Gate results (exact commands, counts, exit codes)
 
 | gate | command (cwd) | result |
@@ -475,6 +506,28 @@ the cheap front-of-line gates were re-run.
 | whitespace | `git diff --check`: exit 0 |
 | host-path / DLP | `git diff c5b4a0a9 \| grep -i "us[e]rs/"` → 0; `… \| grep -P '\\[u]'` → 0 |
 
+### Review-fix-r1 re-run (PR #213 review P3-1/P3-2)
+
+Run in the repository's `daemon/` on the review-fix-r1 tree (working tree on top of `5d0a40aa`);
+the three overlay mutant runs are §9's M22-M24. The fix changed comments only in the production
+files and tests plus this record, the plan and `docs/TODO.md`.
+
+| gate | review-fix-r1 result |
+| --- | --- |
+| gofmt | `gofmt -l internal/app/`: no output, exit 0 |
+| vet | `go vet ./...`: exit 0; `GOOS=linux go vet ./...`: exit 0 |
+| builds | `go build ./...`: exit 0; `GOOS=linux go build ./...`: exit 0 |
+| focused module tests | `go test -count=1 -run 'TestRunLifecycle' ./internal/app/`: `ok … 0.273s`, exit 0; 5 tests (24 transition rows, 4 unmodelled-state cases, the 64-row truth table, the 16-row phase table, the scan gate), 0 failures |
+| full package suite (windows) | `go test -count=1 ./internal/app/...`: `ok github.com/wxxb789/symmetry/daemon/internal/app 103.460s`, exit 0 |
+| native-evidence identity (R9) | `python scripts/ci/test-omo-control-native-evidence.py` (repo root): `Ran 10 tests in 2.584s`, `OK`, exit 0 |
+| comment counts | `grep -cE '^\s*//'`: `run_lifecycle.go` 41 → 11, `run_lifecycle_test.go` 20 → 0; the survivors are the review's keep-list (hazard and return-contract lines, §P3-1) plus the inline `P0`-`P13` constant tags |
+| comment-stripped proof | scanner token streams (`tokendump.go`, comments excluded by construction) of `5d0a40aa` vs the tree: `run_lifecycle.go` 2,886 tokens identical, `native_run.go` 15,695 tokens identical; `git diff -w` over both files lists only 35 removed `//` lines and no added line |
+| mutants | §9 M22-M24: each red with exit 1 through `go test -overlay`; no repository file touched |
+| whitespace | `git diff --check`: exit 0 |
+| host-path / DLP | `git diff \| grep '^+' \| grep -ci "us[e]rs/"` → 0; the backslash-plus-`u` scan (the `\\[u]` pattern of the rows above) → 0; `git diff origin/main...HEAD \| grep '^+' \| grep -ci "us[e]rs/"` → 0 |
+| size rule (P2-1) | no code change; the contract's `## Conductor amendment (2026-11-22, PR #213 review P2-1)` waives the split and the plan's D8 boundary stays recorded |
+| comment policy (P3-1) | the two naming-collision excuse comments, the three `base`/history references, the three duplicates and the module-intent/field-grouping narration removed; the memo-rename debt the excuse comment described is recorded as a TODO bullet (`docs/TODO.md`, "Deferred review findings (PR #213)") |
+
 ## 11. Scoped simplification review (repo AGENTS.md, before completion)
 
 Reviewed the module against "remove an abstraction only when required behavior and clarity
@@ -499,8 +552,11 @@ cluster, and no field is written only by a composition that another method alrea
 
 No abstraction was removed and no code changed by this review, so no check needed repeating; the
 gate set above is the post-review state. The apply stage then applied the accepted simplify
-findings: the comment deletions S1-S6 (179 → 41 comment lines in `run_lifecycle.go`, 33 → 5 in
-`run_lifecycle_test.go`, per the binding comment policy), the three behaviour-preserving
+findings: the comment deletions S1-S6 (179 → 41 comment lines in `run_lifecycle.go`; the recorded
+33 → 5 for `run_lifecycle_test.go` was inaccurate — the fix round's docstring re-additions left 20
+lines at the PR review — so review fix r1 removed those and the remaining non-policy comments:
+final counts 11 in `run_lifecycle.go` and 0 in `run_lifecycle_test.go`, per the binding comment
+policy), the three behaviour-preserving
 compositions S7 (`finishAttachedStart` calls `finishStarting`), S8 (`markProcessExited` calls
 `takeFinalizeOwnership`) and S9 (inlined `releaseStartCancel`), the widened scan gate S10, the
 wording fix S11, and the module-test strengths S12/S13 (seeded fixtures, asserted returns). S14

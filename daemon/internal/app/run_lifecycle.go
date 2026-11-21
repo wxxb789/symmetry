@@ -10,18 +10,11 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
 )
 
-// runLifecycle owns the lifecycle state of a live runningRun and every
-// assignment to it after construction. Transitions need daemon.mu at their base
-// site and only capture cancel handles, which the caller invokes after unlocking.
 type runLifecycle struct {
-	// admission & attachment
-	starting bool
-	claimed  bool
-	// native start publication: beginNativeStart owns Adapter.Start through the
-	// returned StartTurn result.
-	nativeStartInFlight         bool
-	nativeStartTerminalObserved bool
-	// cancellation
+	starting                     bool
+	claimed                      bool
+	nativeStartInFlight          bool
+	nativeStartTerminalObserved  bool
 	cancelled                    bool
 	cancelCommandID              string
 	nativeCancelCommandID        string
@@ -29,24 +22,19 @@ type runLifecycle struct {
 	nativeCancelRejected         bool
 	nativeCancelTerminateErr     error
 	cancel                       context.CancelFunc
-	// lease loss
-	stale                   bool
-	nativeStartLeaseExpired bool
-	nativeStartLeaseReason  string
-	leaseRenewalClosed      bool
-	renewCancel             context.CancelFunc
-	renewCancelID           uint64
-	// terminal reservation
-	terminalizing  int
-	terminal       bool
-	terminalCancel context.CancelFunc
-	// native settlement ownership
-	nativeTerminalOwner         bool
-	nativeTerminalOwnerClaim    uint64
-	nativeTerminalOwnerSequence uint64
-	nativeStartTerminalOwner    bool
-	// usage accounting barrier: native completion is retained locally until
-	// accounting is durably queued.
+	stale                        bool
+	nativeStartLeaseExpired      bool
+	nativeStartLeaseReason       string
+	leaseRenewalClosed           bool
+	renewCancel                  context.CancelFunc
+	renewCancelID                uint64
+	terminalizing                int
+	terminal                     bool
+	terminalCancel               context.CancelFunc
+	nativeTerminalOwner          bool
+	nativeTerminalOwnerClaim     uint64
+	nativeTerminalOwnerSequence  uint64
+	nativeStartTerminalOwner     bool
 	nativeUsageRetryPending      bool
 	nativeUsageRetryInFlight     bool
 	nativeUsageRetryExhausted    bool
@@ -57,23 +45,18 @@ type runLifecycle struct {
 	nativeUsageRetryAttempts     int
 	nativeUsageRenewalBlocked    bool
 	nativeUsageFinalized         bool
-	// native close retry
-	nativeCloseRetryRequired bool
-	nativeCloseRetrying      bool
-	// process containment finalization
-	processExited            bool
-	processFinalizeOwner     Process
-	processFinalizeAttempts  int
-	processFinalizeExhausted bool
-	processStopWitness       Process
-	processStopPID           int
-	processStopIdentity      string
-	// slot
-	slotHeld bool
+	nativeCloseRetryRequired     bool
+	nativeCloseRetrying          bool
+	processExited                bool
+	processFinalizeOwner         Process
+	processFinalizeAttempts      int
+	processFinalizeExhausted     bool
+	processStopWitness           Process
+	processStopPID               int
+	processStopIdentity          string
+	slotHeld                     bool
 }
 
-// cleanupBlocked is the one derived predicate over the lifecycle state; the
-// memo stays on runningRun only because a field cannot share this method's name.
 func (state *runLifecycle) cleanupBlocked() bool {
 	return state.nativeTerminalOwner || state.nativeCloseRetryRequired || state.nativeCloseRetrying ||
 		state.nativeUsageRetryPending || state.nativeUsageRetryInFlight || state.nativeUsageRetryExhausted
@@ -83,13 +66,10 @@ func (run *runningRun) refreshCleanupBlocked() {
 	run.cleanupBlocked = run.runLifecycle.cleanupBlocked()
 }
 
-// markCleanupBlocked forces the memo true where the base forced it.
 func (run *runningRun) markCleanupBlocked() {
 	run.cleanupBlocked = true
 }
 
-// runPhase is the collapsed main lifecycle phase (K1 §6 P0-P13), queried by this
-// module's tests. P4b folds into phaseCancelling and stays visible in its fields.
 type runPhase string
 
 const (
@@ -108,9 +88,6 @@ const (
 	phaseRetired     runPhase = "retired"     // P13
 )
 
-// phase derives the furthest phase the state proves. The order below is the
-// documented collapse: the first matching row wins, so a terminal outcome
-// dominates an open retry, and a released slot dominates everything.
 func (run *runningRun) phase() runPhase {
 	switch {
 	case !run.slotHeld:
@@ -153,16 +130,11 @@ func (run *runningRun) finishStarting(cleanupReady bool) bool {
 	return run.terminal
 }
 
-// finishAttachedStart leaves the starting window: cancellation replays only
-// after the start owner settles, so the caller acts on terminal||cancelled.
 func (run *runningRun) finishAttachedStart() bool {
 	run.finishStarting(true)
 	return run.terminal || run.cancelled
 }
 
-// beginNativeStartPublication closes the publication window from Adapter.Start
-// through the returned StartTurn result. The caller has already checked the
-// window, cancellation, lease, terminal and reservation guards.
 func (run *runningRun) beginNativeStartPublication() {
 	run.nativeStartInFlight = true
 }
@@ -450,7 +422,6 @@ func (run *runningRun) finishUsageRetryInFlight(settlementDone bool) {
 	run.refreshCleanupBlocked()
 }
 
-// clearUsageRetryBeforePublication drops the barrier; renewal stays closed until releaseRun.
 func (run *runningRun) clearUsageRetryBeforePublication(usageRetryCompletion bool) {
 	run.nativeUsageRetryPending = false
 	if !usageRetryCompletion {
@@ -475,7 +446,6 @@ func (run *runningRun) exhaustUsageRetryForCleanup() {
 	run.markCleanupBlocked()
 }
 
-// scheduleRecoveryUsageRetry re-arms the barrier with the base's recovery attempt numbering.
 func (run *runningRun) scheduleRecoveryUsageRetry(now time.Time) {
 	run.nativeUsageRetryPending = true
 	run.nativeUsageRetryInFlight = false

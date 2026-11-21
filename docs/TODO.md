@@ -1169,3 +1169,14 @@ instead of appended.
       outside the rf-w4-19 owned set (plan
       `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
       vocabulary"), so the slice kept the copy and recorded this entry instead.
+
+## Deferred review findings (PR #213)
+
+- [ ] Rename the cleanup memo `runningRun.cleanupBlocked` and move it into `runLifecycle` under a
+      distinct name (PR #213 review r1, P3-1; plan
+      `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md`, D1). The memo is the latched value
+      of the derived `cleanupBlocked()` predicate, and a field cannot share the method's name on
+      one type, so the memo kept its base name outside the module; review fix r1 removed the
+      source comment that explained that. D1 measured option (a) at 86 test-file lines in 17 files
+      at base (42 fixture-literal keys and 44 assertion/read lines), so the rename needs that
+      mechanical rewrite plus the write-site scan's field-list update.

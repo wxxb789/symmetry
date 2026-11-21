@@ -300,8 +300,8 @@ this documented order: `retired` (`!slotHeld`, K1 P13), `terminal` (`terminal`, 
 `reserving` (`terminalizing > 0`, P6), `leaseLost` (`stale`, P5), `cancelling` (`cancelled`, P4),
 `starting` (`nativeStartInFlight`, P3), `attached` (`process != nil || nativeSession != nil`, P2),
 `claimed` (`claimed`, P1), `new` (default, P0). P4b (native cancel outcome recorded) folds into
-`cancelling` and is visible through the query fields; the collapse is documented in the module and
-pinned by one table-driven test including an illegal-state row per query method.
+`cancelling` and is visible through the query fields; the collapse is documented here and pinned by
+one table-driven test including an illegal-state row per query method.
 
 **D8 — size rule (arch-decision-2: "if the diff exceeds 1,500 lines, split into W4-17b-1
 (authority/cancel) and W4-17b-2 (post-exit barriers)").** Options: (a) deliver the split — b-1
@@ -331,7 +331,8 @@ b-2 is the declaration move plus rows 35-43, 48-54.
 1. **Locks.** No new mutex; `daemon.mu` is taken only by the daemon wrappers at their base sites in
    the base order; `eventReceiptMu`, `commandReceiptMu` and `inputMu` keep their base acquisition
    points and order. Transitions take no lock (asserted by the scan test: `run_lifecycle.go`
-   contains no `Lock(`).
+   contains no `Lock(`) and assume the caller holds `daemon.mu` at the transition's base site;
+   they only capture cancel handles for the caller to invoke at its base position.
 2. **Goroutines, channels, timers.** None added, none moved: the transitions perform no invocation
    and start nothing; every captured handle is invoked by the caller at its base position (D4).
 3. **Write order.** For every one of the 49 functions the sequence of fields written is identical
