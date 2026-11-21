@@ -249,9 +249,9 @@ assertion is deleted, renamed or weakened.
    base integrations 2-clause tail) would make `Workspaces.delete_resource/2` answer 409 for a
    malformed version argument, which contradicts the module's own `expected_version/1` verdict and
    the controller's 400 gate; requiring `%{lock_version: _}` on the record instead turns a row
-   deleted mid-transaction into 400 where both bases answer 409. One atom changes on an
-   HTTP-unreachable, typespec-violating call, and it is pinned; the missing-row verdict is pinned
-   by the two sync-delete tests.
+   deleted mid-transaction into 400 where base Integrations — the only context whose callers can
+   pass a missing row — answers 409. One atom changes on an HTTP-unreachable, typespec-violating
+   call, and it is pinned; the missing-row verdict is pinned by the two sync-delete tests.
 4. **Alias + qualified calls, no `import`.** Repo convention (`Goals.ChangesetValidators`,
    `Integrations.Providers.Support`); `import` would keep call-site text identical but hides the
    ownership of the 409/stale contract at 60 call sites.

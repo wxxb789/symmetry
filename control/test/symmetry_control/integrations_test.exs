@@ -1280,7 +1280,9 @@ defmodule SymmetryControl.IntegrationsTest do
     end)
 
     sync_task = Task.async(fn -> Integrations.sync_resource(resource.id) end)
-    assert_receive {:integration_provider_waiting, provider_pid}
+    # The send follows the sync lock transaction and provider auth, so wait 5 000 ms —
+    # the same window the stub holds :continue for.
+    assert_receive {:integration_provider_waiting, provider_pid}, 5_000
 
     assert {1, _} =
              Repo.delete_all(
