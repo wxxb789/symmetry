@@ -40,7 +40,7 @@
       # this cap and still prints a summary, which silently under-reports the
       # very count this configuration exists to record: `lib/symmetry_control/
       # goals.ex` alone is 10,810 lines and was skipped on a loaded host at
-      # 5_000 (measured 288 issues over 148 files against the recorded 528
+      # 5_000 (measured 288 issues over 148 files against the recorded 533
       # issues over 153 files). The cap is a hang guard, not a budget, so it
       # stays generous.
       parse_timeout: 30000,

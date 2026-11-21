@@ -60,9 +60,12 @@ note at exit 0.
 
 All numbers below were re-taken on the delivered revision `28562bc95d5b364374f2b6fa8ba8037f7bf1bb1b`
 plus this slice's apply-stage comment/flag edits, which move no measured subject, with the configs
-as shipped; the commands and exit codes are in "Evidence plan". The merge of `origin/main` before
-review moved three records, each called out below: the golangci counts (the merged daemon commits),
-the Credo file count (154 -> 153) and `mix hex.audit` (1 -> 0, plug 1.20.4 landed with W1-02).
+as shipped; the commands and exit codes are in "Evidence plan". The `origin/main` merges before
+review moved four records, each called out below: the golangci counts (the merged daemon commits),
+the Credo issue total (528 -> 533 — the final merge
+`913aa5cd1d1eb82ae9c346a9ec6a252d6b81b2ed` brought the portal controller test changes that add
+DuplicatedCode +4 and MaxLineLength +1), the Credo file count (154 -> 153) and `mix hex.audit`
+(1 -> 0, plug 1.20.4 landed with W1-02).
 
 **golangci-lint v2.15.0, `daemon/.golangci.yml`, uncapped**
 (`--max-issues-per-linter=0 --max-same-issues=0`):
@@ -87,15 +90,15 @@ program plan's §10.2 line "Baselines with this config: linux 253 (207 prod / 46
 burn-down slices should report against it, not against 247/170.
 
 **Credo strict, `control/.credo.exs`, Credo 1.7.19** (the version `{:credo, "~> 1.7"}` resolves
-to today): **528 issues**, 70 checks, 153 files (lib+test), split 6 warnings / 383 refactoring
-opportunities / 84 code readability / 55 software design; 423 in `lib/`, 105 in `test/`. Largest
-classes: Nesting 162, CyclomaticComplexity 149, AliasUsage 33, MaxLineLength 32, FunctionArity 29,
-DuplicatedCode 22, AliasOrder 22. Against the audits' reference points: 474 is the same scope
+to today): **533 issues**, 70 checks, 153 files (lib+test), split 6 warnings / 383 refactoring
+opportunities / 85 code readability / 59 software design; 423 in `lib/`, 110 in `test/`. Largest
+classes: Nesting 162, CyclomaticComplexity 149, AliasUsage 33, MaxLineLength 33, FunctionArity 29,
+DuplicatedCode 26, AliasOrder 22. Against the audits' reference points: 474 is the same scope
 under Credo's built-in default set (measured, no `checks:` map), and the two configured changes
-account for the whole delta — DuplicatedCode at `mass_threshold: 40` adds exactly its 22 design
+account for the whole delta — DuplicatedCode at `mass_threshold: 40` adds exactly its 26 design
 findings, and `MaxLineLength` at 98 (the formatter's length, not the generated 120) adds exactly
-its 32 readability findings. 474 − 403 = 71 is also reproduced: AliasOrder 22 + AliasUsage 33 +
-PreferImplicitTry 8 + StringSigils 0 + Apply 0 = 71, so the audit's 403-vs-474 observation is the
+its 33 readability findings. 474 − 403 = 71 is also reproduced: AliasOrder 22 + AliasUsage 33 +
+PreferImplicitTry 8 + StringSigils 5 + Apply 3 = 71, so the audit's 403-vs-474 observation is the
 five named checks' findings, while an empty `checks: %{}` map measured **474** here (Credo 1.7.19
 falls back to its built-in list instead of disabling those five). The trap is that the counted set
 shifts silently either way — a listed map replaces the built-ins, an empty map falls back to them —
@@ -108,7 +111,7 @@ over 148 files, still with a `found …` summary — a silent under-count of the
 exists to record. The shipped config raises the cap to 30,000 (a hang guard, not a budget) and the
 step additionally prints `credo_strict_unparsed_files=<n>` with a loud note whenever Credo skipped
 anything, so a lowered number can never pass as the baseline. With the cap raised, the same loaded
-host re-reproduced 528 issues / 153 files / 0 unparsed at the delivered revision; the 288 / 148
+host re-reproduced 533 issues / 153 files / 0 unparsed at the delivered revision; the 288 / 148
 sample above was taken at `a3039f0`, whose tree had one more lib/test file.
 
 **ruff 0.17.6, `scripts/ci`** (defaults; the W1-11 `pyproject.toml` will change both numbers):
@@ -129,10 +132,11 @@ the version it ran.
 plug 1.20.3 — that expected red cleared with the merge). **`pnpm audit --prod`** (pnpm 12.17.0,
 lockfile only, no install) → `No known vulnerabilities found`, exit 0.
 
-The recorded ratchet baseline for the pull request is therefore: **Credo strict 528** (1.7.19,
+The recorded ratchet baseline for the pull request is therefore: **Credo strict 533** (1.7.19,
 `control/.credo.exs`), **golangci-lint linux 1023 / windows 447** (v2.15.0, `daemon/.golangci.yml`,
-uncapped), **ruff 94 check / 50 format**, **shellcheck 10**, **actionlint 0**, **govulncheck 0**,
-**hex.audit 0**, **pnpm audit 0**.
+uncapped), **ruff 94 check / 50 format** (a defaults measurement — the shipped step prints its skip
+note, not these counts, until W1-11's root `pyproject.toml` lands), **shellcheck 10**,
+**actionlint 0**, **govulncheck 0**, **hex.audit 0**, **pnpm audit 0**.
 
 ## Out of scope
 
@@ -185,7 +189,7 @@ uncapped), **ruff 94 check / 50 format**, **shellcheck 10**, **actionlint 0**, *
    extracted count equals a local count; `parse_timeout: 30000` is the anti-under-count fix above.
    The `enabled`/`disabled` lists are explicit and the file never carries `checks: %{}`.
 6. **`max_length: 98`.** The contract's number, and the length `mix format` and the rest of the
-   tree use; it adds exactly 32 findings, visible in the baseline so the burn-down cannot mistake
+   tree use; it adds exactly 33 findings, visible in the baseline so the burn-down cannot mistake
    them for noise.
 7. **dependabot without update groups.** Each bump stays one reviewable PR; the weekly cadence and
    `open-pull-requests-limit: 5` bound the noise. One npm entry for the whole pnpm workspace
@@ -214,25 +218,28 @@ uncapped), **ruff 94 check / 50 format**, **shellcheck 10**, **actionlint 0**, *
    golangci-lint step end to end (download, digest, extract, analysis — exit 1 with `447 issues`),
    the shellcheck step (exit 1, `shellcheck_findings=10`), the ruff step's no-`pyproject.toml`
    guard branch (note, exit 0), the Credo step's no-`:credo` guard branch in the worktree (note,
-   exit 0) and its real run in the scratch copy (exit 30, `credo_strict_issue_total=528`), and the
-   Hex step (`hex_audit_advisories=1`, exit 1). The three steps that download Linux-only binaries
-   (Linux golangci-lint, actionlint, ruff's real path) cannot be executed here; for those, the
-   tool and flag shape was measured directly (see §"Measured baselines") and the digest plus
-   archive layout were verified. `pnpm audit --prod` and `govulncheck ./...` were measured
-   directly rather than through their step scripts.
+   exit 0) and its real run in the scratch copy (exit 30, `credo_strict_issue_total=533`,
+   `credo_strict_unparsed_files=0`), and the Hex step (`hex_audit_advisories=1`, exit 1). The
+   three steps that download Linux-only binaries (Linux golangci-lint, actionlint, ruff's real
+   path) cannot be executed here; for those, the tool and flag shape was measured directly (see
+   §"Measured baselines") and the digest plus archive layout were verified. `pnpm audit --prod`
+   and `govulncheck ./...` were measured directly rather than through their step scripts.
 7. `actionlint -shellcheck= -pyflakes=` over both workflows, with a mutation case (a broken `if:`)
    proving the oracle is not vacuous.
 8. `python3 scripts/ci/test-ci-changed-path-classifier.py` and the other `ci.yml`-touching
    structure suites (`test-check-record-cleanliness.py`, `test-model-routing-evaluation.py`,
-   `test-no-legacy-routes-audit.py`, `test-assert-folded-gates.py`). The last of those plants its
-   fixtures through `shutil.which("bash")`, and on this host that resolves to the WSL launcher at
-   `C:\Windows\system32\bash.exe`, which cannot read the Windows temporary paths the suite passes
-   it: with the default `PATH` every test fails with exit 127 and `No such file or directory`
-   (11 failures, exit 1 in this worktree; identically 11 failures, exit 1 on a pristine
+   `test-no-legacy-routes-audit.py`, `test-assert-folded-gates.py`).
+   `test-no-legacy-routes-audit.py` plants its fixtures through `shutil.which("bash")`, and on
+   this host that resolves to the WSL launcher at `C:\Windows\system32\bash.exe`, which cannot
+   read the Windows temporary paths the suite passes it: with the default `PATH` every test fails
+   with exit 127 and `No such file or directory` (11 failures, plus errors from the launcher in
+   some runs, exit 1 in this worktree; identically 11 failures, exit 1 on a pristine
    `git archive HEAD` tree, which is what makes it a host-resolution artifact rather than this
    increment's defect). With Git's bash (`C:\Program Files\Git\bin`) first on `PATH`, the same
    suite reports 6 tests OK, exit 0 — in this worktree (31.5 s) and on the pristine tree (27.0 s).
-   CI runs the suite on `ubuntu-latest`, where no such ambiguity exists.
+   `test-assert-folded-gates.py` invokes no bash at all (it spawns only `sys.executable`), and
+   with the default `PATH` it reports 6 tests OK, exit 0. CI runs both suites on `ubuntu-latest`,
+   where no such ambiguity exists.
 9. `git diff --check` (and a trailing-whitespace scan over the new untracked files, which
    `git diff --check` does not reach).
 10. `shellcheck --shell=bash` over every new bash `run:` block, extracted from the workflow, so the
@@ -251,11 +258,11 @@ passed from inference.
 ## Residual risks and known limits
 
 - **The advisory steps are red until their burn-downs land.** Expected reds on merge: golangci
-  (1023/447), Credo (528), ruff (94 + 50 files), shellcheck (10). Expected greens: actionlint (0),
-  govulncheck (0), pnpm audit (0), hex.audit (0 — plug 1.20.4 landed with W1-02 before review). A
-  red advisory step is the intended signal, and each step prints its count so the number, not the
-  colour, is the evidence.
-- **Pinned versions age.** The three digests and the two `go install` versions need updating with
+  (1023/447), Credo (533), shellcheck (10). Expected greens: actionlint (0), govulncheck (0),
+  pnpm audit (0), ruff (the step skips with a printed note until W1-11's root `pyproject.toml`
+  lands), hex.audit (0 — plug 1.20.4 landed with W1-02 before review). A red advisory step is the
+  intended signal, and each step prints its count so the number, not the colour, is the evidence.
+- **Pinned versions age.** The four digests and the one `go install` version need updating with
   the tools; dependabot does not cover them (it covers the manifest lockfiles).
 - **`shellcheck` is unpinned** (the image's build). The step prints `shellcheck --version`, so a
   drifting count is attributable; pinning a shellcheck release is not this slice's call.
