@@ -1095,3 +1095,22 @@ instead of appended.
       `IntentContext.goal_lock/2` (`:1152-1164`) now encodes once — but returns the claim-scope
       shape rather than the intent-context map, so the slice left it; folding it must keep the
       lock-order case `:400` and the advisory-lock case `:2092` green.
+
+## Deferred review findings (PR #195)
+
+- [ ] Drop the host path from `TestPinnedNativeTranscript`'s fixture comparison before the next OmO
+      fixture re-record (2026-11-21, PR #195, branch `fix/ci-evidence-host-paths`). PR #195 removed
+      the committed executable path from `scripts/ci/omo-native-evidence.py`: `PINS[platform]` keeps
+      only `size` and `sha256`, and the operator names the file in `SYMMETRY_OMO_BINARY`, so a
+      receipt written by the updated witness carries `binary.independentPlatformPin` **without** a
+      `path` member. The fixture consumer still requires all three: `transcriptBinary` is
+      `{Path, Size, SHA256}` (`daemon/internal/harness/omo/transcript_test.go:16-20`), embedded as
+      `IndependentPlatformPin` at `:26` and compared whole against the per-GOOS expectations at
+      `:46`/`:52`, so `:73` answers `fixture does not bind the independent <goos> executable pin`
+      for any fixture re-recorded from the new receipt. The committed fixtures
+      (`daemon/internal/harness/testdata/omo/5.1.69/{windows,linux}.json`) are unchanged and CI is
+      unaffected today. The Go change — compare the pin's size and digest, not its `path` — is
+      outside PR #195's scope, whose "Left unchanged" note treats the recorded pins as provenance.
+      Owner: whoever re-records the OmO fixture. The opt-in native acceptance run pins the same
+      host path separately (`daemon/internal/harness/omo/native_test.go:190-200`, resolved at
+      `:219`) and does not read the fixture, so a re-record does not touch it.
