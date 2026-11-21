@@ -220,15 +220,6 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
     end)
   end
 
-  defp migrate_all_up! do
-    Ecto.Migrator.run(Repo, migrations_path(), :up,
-      all: true,
-      log: false,
-      migration_lock: false,
-      dynamic_repo: Repo.get_dynamic_repo()
-    )
-  end
-
   defp insert_terminal_wait_fixture! do
     project_id = Ecto.UUID.bingenerate()
     repository_id = Ecto.UUID.bingenerate()
@@ -444,9 +435,5 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
       "allowed_actions" => [],
       "allowed_resource_ids" => []
     })
-  end
-
-  defp migrations_path do
-    Path.expand("../../../priv/repo/migrations", __DIR__)
   end
 end

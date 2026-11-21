@@ -59,7 +59,7 @@ func (manager *Manager) ReadSubjectArtifact(ctx context.Context, bindingKey stri
 	if err != nil {
 		return SubjectArtifact{}, err
 	}
-	verified, err := manager.materializeAtRepository(ctx, bindingKey, repository, subject.ResourceID, subject.Commit)
+	verified, err := manager.materializeAdmittedSubject(ctx, bindingKey, repository, subject.ResourceID, subject.Commit)
 	if err != nil {
 		return SubjectArtifact{}, err
 	}

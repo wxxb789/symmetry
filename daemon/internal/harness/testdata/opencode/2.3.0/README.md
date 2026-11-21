@@ -89,9 +89,13 @@ do not print it, persist it, or reuse the rejected inherited host value. The
 relay base URL must match the existing OpenCode configuration. Then run:
 
 ```text
-python3 scripts/ci/opencode-v2-support-witness.py --out .tmp/opencode-v2-windows-final.json
+SYMMETRY_OPENCODE_BINARY=<absolute-pinned-blob> python3 scripts/ci/opencode-v2-support-witness.py --out .tmp/opencode-v2-windows-final.json
 python3 scripts/ci/test-opencode-v2-support-witness.py
 ```
+
+`SYMMETRY_OPENCODE_BINARY` names the absolute pinned blob; no path is committed, and
+an unset variable, a missing file or a blob whose exact size or SHA-256 differs from
+the recorded pin refuses the run.
 
 The collector can exit zero after recording an upstream failure. Its exit code
 means collection completed, never that a native turn succeeded. Read the native
