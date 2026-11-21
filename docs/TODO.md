@@ -181,9 +181,17 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   run of that shape is recorded on this host — while the same binary over the same file with
   `-color -shellcheck= -pyflakes=` finished in 0.6 s at exit 0 with no findings, and the
   2026-11-15 trim record already carries a 120 s sample of the same shape
-  (`docs/evidence/ci-process-trim-2026-11-15.md:228-234`). No CI job invokes `actionlint` (a
-  repository search for the name matches `docs/` only), so this is a local-lint gap only: nothing
-  in a hosted run is skipped by it. Owner area: CI tooling.
+  (`docs/evidence/ci-process-trim-2026-11-15.md:228-234`). When this entry was written no CI job
+  invoked `actionlint` (a repository search for the name matched `docs/` only); refactor slice
+  W1-01 added the shellcheck-disabled shape to the `legacy-route-audit` job as the advisory step
+  `Measure actionlint findings for the workflows (advisory)` (pinned upstream actionlint 1.7.12,
+  `actionlint -shellcheck= -pyflakes=` over every `.github/workflows/*.yml`) beside
+  `Measure shellcheck findings in scripts/ci (advisory)`
+  (`shellcheck --severity=warning scripts/ci/*.sh`); both are `continue-on-error: true`. The
+  shellcheck-*enabled* shape still runs nowhere: not on this host (the observed non-termination
+  above) and not in CI, where the hosted step disables the integration deliberately so the
+  verdict stays the shellcheck-disabled one. This entry therefore stays open as the local-lint
+  gap it describes, with its substitute recipe unchanged. Owner area: CI tooling.
 
 ## Deferred review findings (0007h)
 

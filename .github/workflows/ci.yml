@@ -164,6 +164,25 @@ jobs:
           cache: pnpm
       - name: Check lockfile registry provenance
         run: python3 scripts/ci/check-lockfile-registry.py
+      # Advisory: never gates, prints pnpm's own advisory table and count. It
+      # resolves the locked versions against the registry, so it belongs beside
+      # the provenance check, before the install.
+      - name: Measure production dependency advisories (advisory)
+        if: always()
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          if [ ! -f pnpm-lock.yaml ]; then
+            echo "note: the repository has no pnpm-lock.yaml; skipping the advisory production-dependency audit"
+            exit 0
+          fi
+          pnpm_audit_log="$RUNNER_TEMP/pnpm-audit-prod.log"
+          set +e
+          pnpm audit --prod | tee "$pnpm_audit_log"
+          pnpm_audit_status=${PIPESTATUS[0]}
+          set -e
+          echo "pnpm_audit_prod_exit_status=$pnpm_audit_status"
+          exit "$pnpm_audit_status"
       - run: pnpm install --frozen-lockfile
       - run: pnpm contracts:check
       - run: pnpm --filter @symmetry/frontend typecheck
@@ -232,6 +251,77 @@ jobs:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
       - run: mix deps.get
+      # Advisory metrics: neither step gates (`continue-on-error: true`), each
+      # prints the tool's own count, and each skips with a printed note while its
+      # prerequisite is absent - the `:credo` dependency (owned by refactor slice
+      # W1-02) for the Credo metric, the Hex archive for the advisory audit. Both
+      # run here, after `mix deps.get` has fetched what they read.
+      - name: Measure Credo strict findings (advisory)
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          if ! grep -qE '\{:credo,' mix.exs; then
+            echo "note: control/mix.exs does not declare :credo yet (refactor slice W1-02 owns that dependency); skipping the advisory Credo metric"
+            exit 0
+          fi
+          if [ ! -f .credo.exs ]; then
+            echo "note: control/.credo.exs is absent; skipping the advisory Credo metric"
+            exit 0
+          fi
+          if [ ! -d deps/credo ]; then
+            echo "note: deps/credo is not fetched; fetching it for the advisory Credo metric"
+            if ! mix deps.get; then
+              echo "note: mix deps.get failed; skipping the advisory Credo metric"
+              exit 0
+            fi
+          fi
+          credo_log="$RUNNER_TEMP/credo-strict.log"
+          set +e
+          mix credo --strict | tee "$credo_log"
+          credo_status=${PIPESTATUS[0]}
+          set -e
+          echo "credo_strict_exit_status=$credo_status"
+          credo_summary=$(grep -E '^[0-9]+ mods/funs, found ' "$credo_log" | tail -n 1 || true)
+          if [ -n "$credo_summary" ]; then
+            echo "credo_strict_summary=$credo_summary"
+            echo "credo_strict_issue_total=$(printf '%s\n' "$credo_summary" | sed 's/^.*found //' | grep -oE '[0-9]+' | awk '{ total += $1 } END { print total + 0 }')"
+          else
+            echo 'note: the Credo output carried no "N mods/funs, found ..." summary line'
+          fi
+          # Credo skips a file that exceeds `parse_timeout` and still prints a
+          # summary, so a slow runner would silently under-report the baseline.
+          # Say it out loud instead of letting the lowered number pass as the
+          # metric; the recorded baseline comes from a run with no skips.
+          credo_unparsed=$(grep -cE '^ +[0-9]+\) ' "$credo_log" || true)
+          echo "credo_strict_unparsed_files=$credo_unparsed"
+          if [ "$credo_unparsed" -ne 0 ]; then
+            echo "note: Credo skipped $credo_unparsed source file(s) that exceeded parse_timeout; the issue total above under-reports the strict baseline"
+          fi
+          exit "$credo_status"
+      - name: Measure Hex advisories (advisory)
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          if [ ! -f mix.lock ]; then
+            echo "note: control/mix.lock is absent; skipping the advisory Hex audit"
+            exit 0
+          fi
+          if ! mix help hex.audit >/dev/null 2>&1; then
+            echo "note: the Hex archive (mix hex.audit) is not installed in this image; skipping the advisory Hex audit"
+            exit 0
+          fi
+          hex_audit_log="$RUNNER_TEMP/hex-audit.log"
+          set +e
+          mix hex.audit | tee "$hex_audit_log"
+          hex_audit_status=${PIPESTATUS[0]}
+          set -e
+          echo "hex_audit_exit_status=$hex_audit_status"
+          echo "hex_audit_advisories=$(grep -cE '^  [a-z][a-z0-9_-]* [0-9]' "$hex_audit_log" || true)"
+          exit "$hex_audit_status"
       - run: mix format --check-formatted
       # Compile the environment `mix test` compiles below instead of the default
       # dev environment: the same sources are not compiled twice, the test-only
@@ -1301,6 +1391,78 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
+      # The advisory metrics below never gate: each is
+      # `continue-on-error: true`, prints the tool's own finding count, and skips
+      # with a printed note when its prerequisite is absent. `GOOS=linux` matches
+      # this runner; the Windows half of the golangci-lint pair lives in the
+      # `daemon-windows` job, because build tags change `unused`, `gocyclo` and
+      # errcheck results and neither pass may stand in for the other.
+      - name: Measure golangci-lint findings (GOOS=linux, advisory)
+        if: always()
+        continue-on-error: true
+        # Bounded: a hung analysis can only redden this advisory step, never
+        # consume the job.
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          if [ ! -f .golangci.yml ]; then
+            echo "note: daemon/.golangci.yml is absent; skipping the advisory golangci-lint metric"
+            exit 0
+          fi
+          golangci_version='v2.15.0'
+          golangci_archive='golangci-lint-2.15.0-linux-amd64.tar.gz'
+          golangci_archive_sha256='9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea'
+          golangci_dir="$RUNNER_TEMP/golangci-lint-$golangci_version"
+          golangci_bin="$golangci_dir/golangci-lint-2.15.0-linux-amd64/golangci-lint"
+          if [ ! -x "$golangci_bin" ]; then
+            if ! curl --fail --silent --show-error --location \
+              --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
+              "https://github.com/golangci/golangci-lint/releases/download/$golangci_version/$golangci_archive" \
+              --output "$RUNNER_TEMP/$golangci_archive"; then
+              echo "note: the pinned golangci-lint $golangci_version release could not be downloaded; skipping the advisory golangci-lint metric"
+              exit 0
+            fi
+            if ! printf '%s  %s\n' "$golangci_archive_sha256" "$RUNNER_TEMP/$golangci_archive" | sha256sum --check --strict; then
+              echo "note: the downloaded golangci-lint archive does not match the pinned digest; skipping the advisory golangci-lint metric"
+              exit 0
+            fi
+            mkdir -p "$golangci_dir"
+            tar --extract --gzip --file "$RUNNER_TEMP/$golangci_archive" --directory "$golangci_dir"
+          fi
+          "$golangci_bin" --version
+          # The counts are deliberately uncapped: golangci-lint's defaults (50 per
+          # linter, 3 per identical issue) would truncate the measured debt, and
+          # this number is the ratchet baseline the burn-down slices report
+          # against. The run prints its own `N issues:` summary.
+          set +e
+          GOOS=linux "$golangci_bin" run --config .golangci.yml \
+            --max-issues-per-linter=0 --max-same-issues=0 \
+            --output.json.path="$RUNNER_TEMP/golangci-lint-linux.json"
+          golangci_status=$?
+          set -e
+          echo "golangci_lint_linux_exit_status=$golangci_status"
+          exit "$golangci_status"
+      - name: Measure govulncheck findings (advisory)
+        if: always()
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          govulncheck_version='v1.10.0'
+          if ! go install "golang.org/x/vuln/cmd/govulncheck@$govulncheck_version"; then
+            echo "note: govulncheck $govulncheck_version could not be installed (no module proxy or toolchain); skipping the advisory vulnerability scan"
+            exit 0
+          fi
+          govulncheck_bin="$(go env GOBIN)"
+          govulncheck_bin="${govulncheck_bin:-$(go env GOPATH)/bin}/govulncheck"
+          "$govulncheck_bin" -version
+          govulncheck_log="$RUNNER_TEMP/govulncheck-daemon.log"
+          set +e
+          "$govulncheck_bin" ./... | tee "$govulncheck_log"
+          govulncheck_status=${PIPESTATUS[0]}
+          set -e
+          echo "govulncheck_exit_status=$govulncheck_status"
+          echo "govulncheck_vulnerabilities=$(grep -c '^Vulnerability #' "$govulncheck_log" || true)"
+          exit "$govulncheck_status"
       - name: Prepare ordinary private user and PID namespaces
         working-directory: ${{ github.workspace }}
         shell: bash
@@ -1484,6 +1646,134 @@ jobs:
       # through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
 
+      # The advisory lint metrics below never gate: each step is
+      # `continue-on-error: true`, prints the tool's own finding count, and skips
+      # with a printed note when a prerequisite is absent (the root
+      # `pyproject.toml` the ruff configuration is owned by refactor slice W1-11,
+      # a preinstalled shellcheck, the pinned actionlint release). This job is the
+      # workflow's only unconditional one, so the metrics are produced for every
+      # event including documentation-only pull requests, and a failure in any
+      # other job cannot skip them. No new job is added: the changed-path
+      # classifier test pins the job set, and `ci.yml` has one owner per wave.
+      - name: Measure ruff findings in scripts/ci (advisory)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # The checks run under the root `pyproject.toml` (ruff selects it from
+          # the working directory); without it the metric would be measured
+          # against ruff's built-in defaults and its count would not be the
+          # ratchet baseline, so the step says so and skips.
+          if [ ! -f pyproject.toml ]; then
+            echo "note: the repository root has no pyproject.toml yet (refactor slice W1-11 owns the ruff configuration); skipping the advisory ruff metrics"
+            exit 0
+          fi
+          ruff_version='0.17.6'
+          ruff_archive='ruff-x86_64-unknown-linux-gnu.tar.gz'
+          ruff_archive_sha256='94b33791f48cd54ab35ad673a443a5c001d3e6d87effeaba9899070b700d45f3'
+          ruff_dir="$RUNNER_TEMP/ruff-$ruff_version"
+          ruff_bin="$ruff_dir/ruff-x86_64-unknown-linux-gnu/ruff"
+          if [ ! -x "$ruff_bin" ]; then
+            if ! curl --fail --silent --show-error --location \
+              --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
+              "https://github.com/astral-sh/ruff/releases/download/$ruff_version/$ruff_archive" \
+              --output "$RUNNER_TEMP/$ruff_archive"; then
+              echo "note: the pinned ruff $ruff_version release could not be downloaded; skipping the advisory ruff metrics"
+              exit 0
+            fi
+            if ! printf '%s  %s\n' "$ruff_archive_sha256" "$RUNNER_TEMP/$ruff_archive" | sha256sum --check --strict; then
+              echo "note: the downloaded ruff archive does not match the pinned digest; skipping the advisory ruff metrics"
+              exit 0
+            fi
+            mkdir -p "$ruff_dir"
+            tar --extract --gzip --file "$RUNNER_TEMP/$ruff_archive" --directory "$ruff_dir"
+          fi
+          "$ruff_bin" --version
+          echo '=== ruff check scripts/ci'
+          set +e
+          "$ruff_bin" check scripts/ci
+          ruff_check_status=$?
+          set -e
+          echo "ruff_check_exit_status=$ruff_check_status"
+          echo '=== ruff format --check scripts/ci'
+          set +e
+          "$ruff_bin" format --check scripts/ci
+          ruff_format_status=$?
+          set -e
+          echo "ruff_format_check_exit_status=$ruff_format_status"
+          test "$ruff_check_status" -eq 0 && test "$ruff_format_status" -eq 0
+      - name: Measure shellcheck findings in scripts/ci (advisory)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            echo "note: shellcheck is not installed on this runner; skipping the advisory shellcheck metric"
+            exit 0
+          fi
+          shellcheck --version
+          shopt -s nullglob
+          shellcheck_scripts=(scripts/ci/*.sh)
+          if [ "${#shellcheck_scripts[@]}" -eq 0 ]; then
+            echo "note: scripts/ci holds no *.sh file; skipping the advisory shellcheck metric"
+            exit 0
+          fi
+          shellcheck_log="$RUNNER_TEMP/shellcheck-scripts-ci.log"
+          set +e
+          shellcheck --severity=warning --format=gcc "${shellcheck_scripts[@]}" | tee "$shellcheck_log"
+          shellcheck_status=${PIPESTATUS[0]}
+          set -e
+          echo "shellcheck_exit_status=$shellcheck_status"
+          echo "shellcheck_findings=$(grep -cE ': (warning|error): ' "$shellcheck_log" || true)"
+          exit "$shellcheck_status"
+      - name: Measure actionlint findings for the workflows (advisory)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          actionlint_version='1.7.12'
+          actionlint_archive="actionlint_${actionlint_version}_linux_amd64.tar.gz"
+          actionlint_archive_sha256='8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
+          actionlint_dir="$RUNNER_TEMP/actionlint-$actionlint_version"
+          if [ ! -x "$actionlint_dir/actionlint" ]; then
+            if ! curl --fail --silent --show-error --location \
+              --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
+              "https://github.com/rhysd/actionlint/releases/download/v$actionlint_version/$actionlint_archive" \
+              --output "$RUNNER_TEMP/$actionlint_archive"; then
+              echo "note: the pinned actionlint $actionlint_version release could not be downloaded; skipping the advisory actionlint metric"
+              exit 0
+            fi
+            if ! printf '%s  %s\n' "$actionlint_archive_sha256" "$RUNNER_TEMP/$actionlint_archive" | sha256sum --check --strict; then
+              echo "note: the downloaded actionlint archive does not match the pinned digest; skipping the advisory actionlint metric"
+              exit 0
+            fi
+            mkdir -p "$actionlint_dir"
+            tar --extract --gzip --file "$RUNNER_TEMP/$actionlint_archive" --directory "$actionlint_dir"
+          fi
+          shopt -s nullglob
+          workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
+          if [ "${#workflow_files[@]}" -eq 0 ]; then
+            echo "note: .github/workflows holds no workflow file; skipping the advisory actionlint metric"
+            exit 0
+          fi
+          "$actionlint_dir/actionlint" -version
+          # ShellCheck integration stays off, and so does pyflakes: shellcheck-
+          # enabled actionlint does not terminate on the Windows development host
+          # (docs/TODO.md), so the hosted shellcheck-disabled run is the verdict
+          # this workflow records, and `-pyflakes=` keeps that verdict independent
+          # of whether the runner image happens to carry pyflakes.
+          actionlint_log="$RUNNER_TEMP/actionlint-workflows.log"
+          set +e
+          "$actionlint_dir/actionlint" -shellcheck= -pyflakes= "${workflow_files[@]}" | tee "$actionlint_log"
+          actionlint_status=${PIPESTATUS[0]}
+          set -e
+          echo "actionlint_exit_status=$actionlint_status"
+          echo "actionlint_findings=$(grep -cE '\.ya?ml:[0-9]+:[0-9]+: ' "$actionlint_log" || true)"
+          exit "$actionlint_status"
+
   daemon-windows:
     needs: changes
     if: needs.changes.outputs.run-heavy == 'true'
@@ -1498,6 +1788,54 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
+      # Advisory, like its `GOOS=linux` twin in the `daemon` job: never gates,
+      # prints the tool's own finding count, and skips with a printed note when
+      # `daemon/.golangci.yml` is absent. The 20-minute job budget leaves room
+      # for the pinned release download plus one analysis; the step bounds
+      # itself so a hung analysis can only redden itself.
+      - name: Measure golangci-lint findings (GOOS=windows, advisory)
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Record the tool's exit status instead of depending on the host's
+          # `$PSNativeCommandUseErrorActionPreference`: where that preference is
+          # enabled, a non-zero native exit raises before the status line prints.
+          $PSNativeCommandUseErrorActionPreference = $false
+          if (-not (Test-Path '.golangci.yml')) {
+            Write-Output 'note: daemon/.golangci.yml is absent; skipping the advisory golangci-lint metric'
+            exit 0
+          }
+          $version = 'v2.15.0'
+          $archive = 'golangci-lint-2.15.0-windows-amd64.zip'
+          $archiveSha256 = 'cd7ea6063c95de245e17e5246e42bdc14bb221792c429dbd239ab3a6ade6ca6a'
+          $releaseDir = Join-Path $env:RUNNER_TEMP "golangci-lint-$version"
+          $binary = Join-Path $releaseDir 'golangci-lint-2.15.0-windows-amd64\golangci-lint.exe'
+          if (-not (Test-Path $binary)) {
+            $archivePath = Join-Path $env:RUNNER_TEMP $archive
+            try {
+              Invoke-WebRequest -Uri "https://github.com/golangci/golangci-lint/releases/download/$version/$archive" -OutFile $archivePath
+            } catch {
+              Write-Output "note: the pinned golangci-lint $version release could not be downloaded; skipping the advisory golangci-lint metric"
+              exit 0
+            }
+            $actualSha256 = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualSha256 -ne $archiveSha256) {
+              Write-Output 'note: the downloaded golangci-lint archive does not match the pinned digest; skipping the advisory golangci-lint metric'
+              exit 0
+            }
+            Expand-Archive -Path $archivePath -DestinationPath $releaseDir -Force
+          }
+          & $binary --version
+          $env:GOOS = 'windows'
+          # Uncapped counts, as in the Linux step: the default caps truncate the
+          # measured debt this metric is the ratchet baseline for.
+          & $binary run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 "--output.json.path=$env:RUNNER_TEMP\golangci-lint-windows.json"
+          $status = $LASTEXITCODE
+          Write-Output "golangci_lint_windows_exit_status=$status"
+          exit $status
       # Aggregate pass over the whole daemon tree: the budget is a hang guard, not a
       # performance assertion. A loaded Windows runner timed out at 180s inside
       # internal/app (panic: test timed out after 3m0s) on a head whose content could not
