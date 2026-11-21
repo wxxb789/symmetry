@@ -7,6 +7,7 @@
  */
 
 import type { SymmetryWorkspaceReadV1, SymmetryWorkTimelineReadV1 } from "@symmetry/contracts";
+import { asRecord, asRecords, asText, safeUrl } from "../../services/served";
 
 type Text = string | null | undefined;
 
@@ -23,39 +24,6 @@ type AssigneeLike = Loosen<NonNullable<WorkItemRecord["assignee"]>>;
 type DeliveryEntryLike = Loosen<NonNullable<WorkItemRecord["delivery"]>["ci"]>;
 type DeliveryLike = Loosen<NonNullable<WorkItemRecord["delivery"]>>;
 type ExecutionLike = Loosen<NonNullable<WorkItemRecord["execution"]>>;
-
-/**
- * Free-form JSON that the wire carries inside decoded envelopes (agent payloads,
- * task result maps, evidence rows). Those values have no field contract, so
- * readers narrow them here rather than guessing DTO shapes.
- */
-export function asText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value : null;
-}
-
-export function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-export function asRecords(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.map(asRecord).filter((entry): entry is Record<string, unknown> => entry !== null) : [];
-}
-
-/**
- * Links in served payloads are untrusted text: only http(s) URLs become anchors,
- * so a tampered provider or agent payload cannot inject a script scheme.
- */
-export function safeUrl(value: unknown): string | null {
-  const raw = asText(value);
-  if (raw === null) return null;
-  try {
-    const link = new URL(raw);
-    return link.protocol === "http:" || link.protocol === "https:" ? raw : null;
-  } catch {
-    return null;
-  }
-}
 
 // The surface serves no usage or cost records for a work item, so cost is always
 // explicitly unknown and must never be rendered as a zero amount.
@@ -182,7 +150,8 @@ interface ReportedResult {
   kind: string | null;
 }
 
-export function failureText(failure: unknown): string | null {
+/** The work surface's failure policy: `reason`, then `message`, then `summary`, prefixed `Failed: `. */
+export function workFailureText(failure: unknown): string | null {
   const record = asRecord(failure);
   if (record === null) return null;
   const reason = asText(record.reason) ?? asText(record.message) ?? asText(record.summary);
@@ -207,7 +176,7 @@ export function reportedText(value: unknown): string | null {
 export function reportedResult(execution: ExecutionLike | null | undefined): ReportedResult {
   const result = asRecord(execution?.result);
   return {
-    text: reportedText(result?.summary) ?? reportedText(result?.message) ?? failureText(execution?.failure),
+    text: reportedText(result?.summary) ?? reportedText(result?.message) ?? workFailureText(execution?.failure),
     kind: result === null ? null : asText(result.kind),
   };
 }
