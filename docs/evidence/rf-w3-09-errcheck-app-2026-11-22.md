@@ -29,8 +29,8 @@ their apply-revision values):
 | file | status | change |
 |---|---|---|
 | `daemon/internal/app/goal_admission.go` | edited | the 9 abandon calls are error-checked and folded into their returns via `errors.Join` (8 capture into `abandonErr`; `:1103` binds the shared literal once as `cause`). `git diff -U0` = exactly 9 hunks / 36 changed lines (apply revision). |
-| `daemon/internal/app/terminate_linux.go` | edited | `defer process.Release()` (pre-change `:50`) → stated-reason 2-line why comment at `:50-51` + `defer func() { _ = process.Release() }()` at `:52` |
-| `daemon/internal/app/abandon_error_join_test.go` | new (67 L) | `TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn` |
+| `daemon/internal/app/terminate_linux.go` | edited | `defer process.Release()` (pre-change `:50`) → `defer func() { _ = process.Release() }()` at `:50` (no comment, per the 2026-11-22 comment policy; the released handle cannot change the stop-proof verdict) |
+| `daemon/internal/app/abandon_error_join_test.go` | new (88 L) | `TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn` |
 | `docs/plans/2026-11-22-rf-w3-09-errcheck-app-plan.md` | new | plan |
 | `docs/evidence/rf-w3-09-errcheck-app-2026-11-22.md` | new | this record |
 

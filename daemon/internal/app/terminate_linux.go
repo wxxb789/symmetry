@@ -47,8 +47,6 @@ func terminatePersistedProcessWithContext(ctx context.Context, pid int, identity
 	if err != nil {
 		return fmt.Errorf("%w: find persisted process: %w", errPersistedProcessStopUnproven, err)
 	}
-	// A released handle cannot change this helper's stop-proof verdict, so its
-	// release error is unactionable.
 	defer func() { _ = process.Release() }()
 	if err := terminatePersistedProcessGroup(ctx, process, identity); err != nil {
 		return fmt.Errorf("%w: terminate persisted process group: %w", errPersistedProcessStopUnproven, err)

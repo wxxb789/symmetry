@@ -35,8 +35,6 @@ func TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn(t *testing.T) {
 			return err
 		}
 		if strings.Contains(string(data), `"kind":"session_attach"`) && strings.Contains(string(data), `"ready":true`) {
-			// Behind the ready barrier the run journal is corrupt, so the next
-			// fence read fails and the admission abandons the native session.
 			return os.WriteFile(path, []byte("{"), 0o600)
 		}
 		return nil

@@ -1268,8 +1268,9 @@ instead of appended.
       `validateJournalSaveCapacity` (`daemon/internal/state/provider_action.go:594-606`, 4 MiB check
       at `:599`) and `saveJournalLocked` (`state.go:5305`, size check at `:5311`;
       `maxJournalFileBytes = 4<<20`). rf-w3-09 (2026-11-22, drop-errcheck slice) joined the abandon
-      result into the nine `startGoalAdmission` returns, and `daemon/internal/app/app.go:1447` passes
-      that value to `queueFailure` unchanged (read from source, not driven): a run whose pre-change
+      result into the nine `startGoalAdmission` returns, and the `goal_admission` `queueFailure`
+      call in `daemon/internal/app/app.go` passes that value through unchanged (read from source,
+      not driven): a run whose pre-change
       payload fit by fewer bytes than the joined tail can now exceed the guard and never persist its
       terminal state, where base `261e84a4` persisted the same input. Review probe at the state
       boundary: a 4,194,116-byte journal accepts the transition and a +298-byte tail returns
