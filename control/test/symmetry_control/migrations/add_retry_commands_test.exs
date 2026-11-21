@@ -9,7 +9,10 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
   @retry_version 20_260_904_030_000
 
   test "rolls back retry support when no retry history exists" do
-    with_schema(fn ->
+    load_migration_modules!()
+
+    with_schema("goal2_retry", fn ->
+      migrate_up!()
       task_id = insert_task!()
       insert_command!(task_id, "cancel", "cancel-command")
       insert_command!(task_id, "provide_input", "input-command")
@@ -31,7 +34,10 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
   end
 
   test "refuses rollback and preserves durable retry history" do
-    with_schema(fn ->
+    load_migration_modules!()
+
+    with_schema("goal2_retry", fn ->
+      migrate_up!()
       task_id = insert_task!()
       retry_id = insert_command!(task_id, "retry", "durable-retry")
 
@@ -64,15 +70,6 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
 
       assert %{rows: [[^retry_id]]} =
                Repo.query!("SELECT id FROM commands WHERE id = $1", [retry_id])
-    end)
-  end
-
-  defp with_schema(test) do
-    load_migration_modules!()
-
-    with_schema("goal2_retry", fn ->
-      migrate_up!()
-      test.()
     end)
   end
 
