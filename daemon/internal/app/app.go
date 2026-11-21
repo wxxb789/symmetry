@@ -181,8 +181,7 @@ type deadlineTimer interface {
 type systemTimer struct{ timer *time.Timer }
 
 func (timer systemTimer) Chan() <-chan time.Time { return timer.timer.C }
-
-func (timer systemTimer) Stop() { timer.timer.Stop() }
+func (timer systemTimer) Stop()                  { timer.timer.Stop() }
 
 type options struct {
 	httpClient                                 *http.Client

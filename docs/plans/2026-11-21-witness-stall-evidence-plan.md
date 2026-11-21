@@ -73,7 +73,7 @@ gains an open entry (`docs/TODO.md`), plus this plan. No Go, workflow, contract 
   (`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$`,
   ASCII digits only)
   and whose `level` is one of `DEBUG|INFO|WARN|ERROR` — the shapes the daemon's own
-  `slog.NewJSONHandler` writer (`daemon/internal/app/app.go:311`) produces on stdout
+  `slog.NewJSONHandler` writer (`daemon/internal/app/app.go:310`) produces on stdout
   (`daemon/cmd/symmetry-daemon/main.go:89`). `msg` is kept only when it is one of the message
   literals of a `daemon.log.<Level>("...")` call site under `daemon/internal/app`; `state`,
   `stage`, `reason`, `outcome`, `kind` are kept only when the value is one of the literals their

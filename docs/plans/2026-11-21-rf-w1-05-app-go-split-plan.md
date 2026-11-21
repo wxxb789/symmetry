@@ -105,12 +105,13 @@ Ambiguous placements and the decision taken (recorded as required; no silent gue
 - **Move-only.** The splitter extracts each declaration as a byte range that includes its doc
   comment cluster and re-emits those bytes unchanged; the verifier re-parses the source and every
   target and compares each declaration's extracted text one-to-one keyed by
-  `kind|receiver|name`, after removing all whitespace. Whitespace-only normalization is required
-  and bounded: `gofmt` re-aligns exactly one declaration (`systemTimer.Stop`, a one-line func whose
-  inter-column padding is a function of its neighbour), which is a formatting consequence of the
-  move, not a content change; every other declaration compares byte-identical without any
-  normalization. The strict per-declaration hash in `moves.tsv` is the whitespace-stripped SHA-256
-  of the declaration text.
+  `kind|receiver|name`. The first verification run removed all whitespace because `gofmt`
+  re-aligned exactly one declaration (`systemTimer.Stop`, a one-line func whose inter-column
+  padding is a function of its neighbour) after the splitter inserted a blank line above it — a
+  formatting consequence of the move, not a content change. The review round dropped that blank
+  line, so at the delivered revision all 475 declarations compare byte-identical without any
+  normalization (exact-byte AST comparison, evidence record section 5). The strict
+  per-declaration hash in `moves.tsv` is the whitespace-stripped SHA-256 of the declaration text.
 - **Comments.** A declaration's own doc comment moves with it: 91 of the 475 declarations carry a
   parser-attached doc comment at the base revision and all 91 still do in the targets (doc-flag
   comparison base -> targets, 0 mismatches; the byte-range extraction attaches exactly those 91
