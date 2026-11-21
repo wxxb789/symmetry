@@ -143,9 +143,11 @@ scope (`authorized_context/2` for goal, the bare `executing` intent for legacy �
 - **Refusal atoms byte-identical, at the same step.** Each `|| Repo.rollback(atom)` keeps its
   position in its sequence: resource/connection refuse `:forbidden`, every other missing row refuses
   `:ownership_lost`. `lock_goal_work_item/1`'s non-binary guard (base :1323-1326) is kept in the
-  shared work-item lock; the legacy variants never had it, but `intent.work_item_id` is in
-  `@accept_fields` (`schemas.ex:166-189`), so a persisted intent cannot carry a nil work item and
-  the guarded and unguarded forms are the same refusal on the same set of reachable rows.
+  shared work-item lock. For a nil id the legacy variants instead raised `ArgumentError` from
+  Ecto's nil-comparison guard (`Ecto.Query.Builder.not_nil!/2`, Ecto 3.14.3), where HEAD refuses
+  `:ownership_lost`. The case is unreachable: the column is `null: false` and `intent.work_item_id`
+  passes `validate_required(@accept_fields)` (`schemas.ex:166-189`), so every reachable row keeps
+  the same refusal.
 - **Selection rules unchanged.** `intent_goal_id/1` (persisted intent) and
   `locate_intent_context/1` (fresh claim) decide scope in the dispatchers, not in the builder.
 - **Claim core semantics unchanged.** `request_hash` compare position, `dispatch_changeset/2` CAS,
@@ -280,7 +282,7 @@ Postgres cap); no measurement harness runs concurrently with it.
   compared, resource/connection skipped, nil values still compared; the dropped map's extra
   `goal_id` key is never read (`@link_fields` drives the loop). No lock, branch or comparison value
   changed, so the lock-path coverage probe counts above still stand.
-- Superseding numbers for this tree: sha256
+- Superseding numbers for the hygiene bytes: sha256
   `342634d6ecfa9a8e9ba5fd5b01c6ea1022c1e8e4b5dbbeccd4d6e5bac4650990`; the file is 2,825 L; the
   file's slice diff vs `3ccc62f5` is +198/−219 (−21 net). The `031c579c…` hash, 2,828 L and −18 net
   above describe the pre-hygiene bytes.
@@ -302,14 +304,46 @@ Postgres cap); no measurement harness runs concurrently with it.
   lock path the oracles do not reach is "reported, not fixed here"). The gap stays a reported
   finding.
 
+## Review-round-1 fixes (2026-11-21)
+
+- **P3-1 (record accuracy).** The three appendix rows and the edge-case bullet that claimed the
+  legacy sites issued `WHERE id = NULL` and refused are corrected: a nil work-item id raised
+  `ArgumentError` from Ecto's nil-comparison guard on those sites (the goal guard refused), HEAD
+  refuses `:ownership_lost` in both, and the input is unreachable (`null: false`,
+  `validate_required`).
+- **P3-2 (stale comments).** The three `IntentContext` comments describing pre-refactor history now
+  state the current invariants: the link-check order, the primitives vs the file's other lock
+  queries, and the goal-vs-legacy selection rule. Comment-only, line counts unchanged.
+- **P3-3 (coordinate shift).** The builder block moved from the file top (`:26-155`) to just above
+  the dispatchers (`:1118-1246`), so the GenServer plumbing and the live `docs/TODO.md:115-117`
+  citations (`:95`, `:232`, `:238`, `:113`, `:116`, `:135`) keep their base coordinates. The first
+  reference (`lock_goal_revision/1`'s one-line forward, `:638`) reads
+  `__MODULE__.IntentContext.lock_goal_revision(goal)`: with the module below its first reference,
+  the bare nested name warns under `--warnings-as-errors`.
+- **P3-5 (PR body).** The body now carries the current hash, the W4-06 wave pointer and the
+  appendix pointer.
+- Numbers for this tree after the round: sha256
+  `9e1f5c1f2a5690e28cd03b1aca58fa3c5dce12dbd0898c1204cfbed64dafa083`; 2,825 L; the slice diff vs
+  `3ccc62f5` is +199/−220 (−21 net).
+- Gates re-run on these bytes: `format --check-formatted` 0, `MIX_ENV=test compile
+  --warnings-as-errors` 0, targeted 13 (9 passed + 4 env-gated skips), controller 79 passed, broker
+  e2e the CI way 4 passed, credo `--strict` file count 40 with the issue set identical modulo
+  coordinates.
+- **P3-4 (live tracker gap) escalated, not fixed here.** The review places the `docs/TODO.md`
+  entries for the lock-order oracle and the `lock_goal_claim_scope/1` fold-in with the conductor;
+  `docs/TODO.md` is owned for closures only, so this slice reports it instead of editing that file.
+
 ## Appendix — clause-2 judging artifact (fix stage, 2026-11-21)
 
 Clause 2 names four tables as the judging artifact and the implement-stage answer listed them
 without shipping them; this appendix is the durable copy of all four, re-derived at the fix stage
-from the shipped bytes (sha256
-`342634d6ecfa9a8e9ba5fd5b01c6ea1022c1e8e4b5dbbeccd4d6e5bac4650990`, 2,825 L) against the base
+from the shipped bytes against the base
 blob `c6b2c352`, which is also the revision clause 1's base-vs-HEAD audit is read against. It
-supersedes the answer's self-description of where the tables live. Coordinates below:
+supersedes the answer's self-description of where the tables live. The review round then moved the
+builder block to `:1118-1246` and refreshed three stale comments; the shipped-bytes hash is
+`9e1f5c1f2a5690e28cd03b1aca58fa3c5dce12dbd0898c1204cfbed64dafa083` (2,825 L) — the fix-stage
+`342634d6…` and pre-hygiene `031c579c…` (2,828 L) hashes describe the pre-review bytes — and the
+HEAD spans below are the post-move ones. Coordinates below:
 `base` = `git show c6b2c352:control/lib/symmetry_control/integrations/provider_access.ex` (2,846 L),
 `HEAD` = the shipped file.
 
@@ -318,22 +352,22 @@ supersedes the answer's self-description of where the tables live. Coordinates b
 | Base symbol (base span) | Shipped replacement (HEAD span) | Difference |
 | --- | --- | --- |
 | `lock_intent_context/1` :1123-1128 | `lock_intent_context/1` :1250-1262 | same `case intent_goal_id(intent)`, same `goal_id when is_binary` / `_legacy` branches; the Goal branch now reads `goal_project_id(goal_id)` itself and passes the persisted intent's seven ids as the expected map, and `intent_ids/1` :1265-1276 hoists the struct field reads (no queries) |
-| `lock_legacy_intent_context/1` :1130-1148 | `IntentContext.legacy_lock/1` :55-58, called from :1260 with `intent_ids/1` | same seven locks, modes, atoms and seven-key context map |
+| `lock_legacy_intent_context/1` :1130-1148 | `IntentContext.legacy_lock/1` :1147-1150, called from :1260 with `intent_ids/1` | same seven locks, modes, atoms and seven-key context map |
 | `lock_new_intent_context/2` :1150-1160 | `lock_new_intent_context/2` :1278-1292 | same `locate_intent_context(claims) \|\| Repo.rollback(:ownership_lost)` then the same `case ids` selection; `claim_ids/3` :1296-1304 builds the expected map |
-| `lock_legacy_new_intent_context/3` :1162-1186 | `IntentContext.legacy_lock/1` called at :1290 over `claim_ids/3` with `connection_id: :from_resource` | same order and atoms; the connection probe `is_binary(resource.connection_id)` moved verbatim into `lock_connection(:from_resource, _)` :96-98 |
+| `lock_legacy_new_intent_context/3` :1162-1186 | `IntentContext.legacy_lock/1` called at :1290 over `claim_ids/3` with `connection_id: :from_resource` | same order and atoms; the connection probe `is_binary(resource.connection_id)` moved verbatim into `lock_connection(:from_resource, _)` :1188-1190 |
 | `lock_goal_intent_context/2` :1190-1216 | `IntentContext.goal_lock(goal_ids, ids)` :1257 with `goal_ids = %{ids \| goal_id: goal_id, project_id: goal_project_id(goal_id)}` | same sequence and atoms; expected map = all seven intent ids |
 | `lock_goal_new_intent_context/3` :1218-1250 | `IntentContext.goal_lock(%{expected \| goal_id: goal_id}, Map.drop(expected, [:resource_id, :connection_id]))` :1284-1287 | same sequence and atoms; the expected map drops the two rows the lock derives itself (the two comparisons base's claim variant never wrote) |
-| `validate_goal_intent_context_links!/3` :1252-1264 | `IntentContext.validate_links!/3` :112-123 with the seven-key expected map | `goal_context_links?` first, then the seven comparisons in the base order via `@link_fields` :45-53 |
+| `validate_goal_intent_context_links!/3` :1252-1264 | `IntentContext.validate_links!/3` :1204-1215 with the seven-key expected map | `goal_context_links?` first, then the seven comparisons in the base order via `@link_fields` :1137-1145 |
 | `validate_goal_new_intent_context_links!/4` :1266-1276 | the same helper with the five surviving keys | the same five comparisons in the same order |
-| `goal_context_links?/2` :1278-1289 | `IntentContext.goal_context_links?/2` :125-136 | text unchanged |
-| `lock_goal_work_item/1` :1323-1326 | `IntentContext.lock_work_item/1` :102-105 plus the `\|\| Repo.rollback(:ownership_lost)` at :79 | binary id: same lock and atom; non-binary id: same atom at the same step without base's empty `id = NULL` SELECT (audit 9) |
-| `lock_project_for_goal/1` :2815-2817 | `IntentContext.lock_project_for_goal/1` :140-142 plus a one-line outer forward :2798 | text unchanged (`FOR SHARE`) |
-| `lock_record/2` :2819-2821 | `IntentContext.lock_record/2` :144-146 plus a one-line outer forward :2800 | text unchanged (`FOR UPDATE`) |
-| `lock_goal_revision/1` :638-643 | `IntentContext.lock_goal_revision/1` :148-153 plus a one-line outer forward :768 | text unchanged (unlocked read) |
+| `goal_context_links?/2` :1278-1289 | `IntentContext.goal_context_links?/2` :1217-1228 | text unchanged |
+| `lock_goal_work_item/1` :1323-1326 | `IntentContext.lock_work_item/1` :1194-1197 plus the `\|\| Repo.rollback(:ownership_lost)` at :1171 | binary id: same lock and atom; nil id: base's goal guard refused the same atom while the legacy sites raised Ecto's nil-comparison `ArgumentError`, HEAD refuses the same atom (unreachable; audit 9) |
+| `lock_project_for_goal/1` :2815-2817 | `IntentContext.lock_project_for_goal/1` :1232-1234 plus a one-line outer forward :2798 | text unchanged (`FOR SHARE`) |
+| `lock_record/2` :2819-2821 | `IntentContext.lock_record/2` :1236-1238 plus a one-line outer forward :2800 | text unchanged (`FOR UPDATE`) |
+| `lock_goal_revision/1` :638-643 | `IntentContext.lock_goal_revision/1` :1240-1245 plus a one-line outer forward :638 | text unchanged (unlocked read) |
 | `claim_dispatch/2` :2084-2092 + `claim_goal_dispatch/2` :2094-2126 + `claim_legacy_dispatch/2` :2128-2154 | one `claim_dispatch/2` :2096-2135 | one transaction; `goal_managed?` decides the context lock, the validation call and the `:execute` payload only; the state machine is shared verbatim |
 | recover `:authorized` inline block :1962-1974 | `validate_goal_dispatch!/2` :2087-2092, called from :1975 | the same four validations in the same order behind the same guard |
-| (new) `lock_scope_rows/2` :76-92 | — | the six-row body the four variants inlined; resource -> connection -> work_item -> task -> run -> runtime, all `FOR UPDATE` |
-| (new) `lock_goal_revision_row/1` :107-110 | — | the revision read plus `Map.put(context, :revision, _)`; base inlined both |
+| (new) `lock_scope_rows/2` :1168-1184 | — | the six-row body the four variants inlined; resource -> connection -> work_item -> task -> run -> runtime, all `FOR UPDATE` |
+| (new) `lock_goal_revision_row/1` :1199-1202 | — | the revision read plus `Map.put(context, :revision, _)`; base inlined both |
 | (new) `intent_ids/1` :1265-1276, `claim_ids/3` :1296-1304 | — | the two id-extraction shapes (the persisted intent's fields; the fresh claim's ids), replacing the inline field reads |
 
 ### 2. Lock order (row -> mode) per path, base vs HEAD
@@ -342,30 +376,33 @@ supersedes the answer's self-description of where the tables live. Coordinates b
 
 | Path | Base sequence | HEAD sequence | Result |
 | --- | --- | --- | --- |
-| legacy/intent | :1131-1137 Project U -> ProjectResource U -> Connection U -> WorkItem U -> Task U -> Run U -> Runtime U | `legacy_lock/1` :56 Project U -> `lock_scope_rows/2` :77-82 the other six, all U | same order, same modes |
-| legacy/claims | :1163-1175 same order; the connection comes from the locked resource row | `legacy_lock/1` :1290 over `claim_ids/3` with `connection_id: :from_resource`; `lock_connection(:from_resource, resource)` :96-98 locks `resource.connection_id`, in the same second position | same order, same modes |
-| goal/intent | :1191-1200 `goal_project_id` read (unlocked) -> Project S -> Goal U -> ProjectResource U -> Connection U -> WorkItem U (guarded, :1323-1326) -> Task U -> Run U -> Runtime U -> revision read (unlocked) | `goal_lock/2` :61 `ids.project_id` read -> :62 Project S -> :63 Goal U -> `lock_scope_rows/2` (resource, connection, work_item, task, run, runtime) -> `lock_goal_revision_row/1` :107-110 | same order, same modes |
+| legacy/intent | :1131-1137 Project U -> ProjectResource U -> Connection U -> WorkItem U -> Task U -> Run U -> Runtime U | `legacy_lock/1` :1148 Project U -> `lock_scope_rows/2` :1169-1174 the other six, all U | same order, same modes |
+| legacy/claims | :1163-1175 same order; the connection comes from the locked resource row | `legacy_lock/1` :1290 over `claim_ids/3` with `connection_id: :from_resource`; `lock_connection(:from_resource, resource)` :1188-1190 locks `resource.connection_id`, in the same second position | same order, same modes |
+| goal/intent | :1191-1200 `goal_project_id` read (unlocked) -> Project S -> Goal U -> ProjectResource U -> Connection U -> WorkItem U (guarded, :1323-1326) -> Task U -> Run U -> Runtime U -> revision read (unlocked) | `goal_lock/2` :1153 `ids.project_id` read -> :1154 Project S -> :1155 Goal U -> `lock_scope_rows/2` (resource, connection, work_item, task, run, runtime) -> `lock_goal_revision_row/1` :1199-1202 | same order, same modes |
 | goal/claims | :1219-1234 the same sequence and modes | the same `goal_lock/2` body | same order, same modes |
-| shared primitives | `lock_project_for_goal/1` :2815-2817 (literal `FOR SHARE`), `lock_record/2` :2819-2821 (literal `FOR UPDATE`), `lock_goal_revision/1` :638-643 (no lock) | the same three texts in `IntentContext` :140-153 | byte-identical |
+| shared primitives | `lock_project_for_goal/1` :2815-2817 (literal `FOR SHARE`), `lock_record/2` :2819-2821 (literal `FOR UPDATE`), `lock_goal_revision/1` :638-643 (no lock) | the same three texts in `IntentContext` :1232-1245 | byte-identical |
 
 ### 3. Refusal-atom diff (expect empty)
 
-Every emission site below keeps both its atom and its step; the diff is empty. Sites outside the
-collapsed family (accept/finalize/`mark_dispatch_unknown`/claim-scope) are byte-identical by the
-diff hunks. (`base` spans are one per variant that shared the step.)
+Every emission site below keeps both its atom and its step; the diff is empty on every reachable
+input (the nil-id row is unreachable, audit 9). Sites outside the collapsed family
+(accept/finalize/`mark_dispatch_unknown`/claim-scope) are byte-identical by the diff hunks.
+(`base` spans are one per variant that shared the step; the two goal variants emit through
+`lock_goal_work_item/1` :1323-1326, recorded once.)
 
 | Refusal and emitting step | Base sites | HEAD site | Same |
 | --- | --- | --- | --- |
-| `:ownership_lost`, missing Goal project id before the Project lock | :1191, :1219 | `goal_lock/2` :61 | yes |
-| `:ownership_lost`, Project row absent | :1131, :1163, :1192, :1220 | `legacy_lock/1` :56; `goal_lock/2` :62 | yes |
-| `:ownership_lost`, Goal row absent | :1193, :1221 | `goal_lock/2` :63 | yes |
-| `:forbidden`, ProjectResource row absent (before the connection lock) | :1132, :1164, :1194, :1222 | `lock_scope_rows/2` :77 | yes |
-| `:forbidden`, Connection row absent (persisted id) | :1133, :1195 | :78 via `lock_connection/2` :100 | yes |
-| `:forbidden`, connection not derivable from the locked resource row | :1171, :1229 | :78 via `lock_connection(:from_resource, _)` :96-98 | yes |
-| `:ownership_lost`, WorkItem row absent or non-binary id | :1134, :1172, :1230, :1326 | :79 via `lock_work_item/1` :102-105 | yes |
-| `:ownership_lost`, Task / Run / Runtime row absent | :1135-1137, :1173-1175, :1197-1199, :1231-1233 | :80-82 | yes |
-| `:ownership_lost`, revision row absent | :1200, :1234 | `lock_goal_revision_row/1` :108 | yes |
-| `:ownership_lost`, link re-verification mismatch or `goal_context_links?` false | :1263, :1275 | `validate_links!/3` :122 | yes |
+| `:ownership_lost`, missing Goal project id before the Project lock | :1191, :1219 | `goal_lock/2` :1153 | yes |
+| `:ownership_lost`, Project row absent | :1131, :1163, :1192, :1220 | `legacy_lock/1` :1148; `goal_lock/2` :1154 | yes |
+| `:ownership_lost`, Goal row absent | :1193, :1221 | `goal_lock/2` :1155 | yes |
+| `:forbidden`, ProjectResource row absent (before the connection lock) | :1132, :1164, :1194, :1222 | `lock_scope_rows/2` :1169 | yes |
+| `:forbidden`, Connection row absent (persisted id) | :1133, :1195 | :1170 via `lock_connection/2` :1192 | yes |
+| `:forbidden`, connection not derivable from the locked resource row | :1171, :1229 | :1170 via `lock_connection(:from_resource, _)` :1188-1190 | yes |
+| `:ownership_lost`, WorkItem row absent | :1134, :1172, :1230, :1326 | :1171 via `lock_work_item/1` :1194-1197 | yes |
+| `:ownership_lost`, nil WorkItem id (unreachable) | :1326 (goal guard); legacy :1134/:1172 raised Ecto's nil-comparison `ArgumentError` | :1171 via `lock_work_item/1` :1194-1197 | unreachable; base goal sites refused the same atom, base legacy sites raised instead (audit 9) |
+| `:ownership_lost`, Task / Run / Runtime row absent | :1135-1137, :1173-1175, :1197-1199, :1231-1233 | :1172-1174 | yes |
+| `:ownership_lost`, revision row absent | :1200, :1234 | `lock_goal_revision_row/1` :1200 | yes |
+| `:ownership_lost`, link re-verification mismatch or `goal_context_links?` false | :1263, :1275 | `validate_links!/3` :1214 | yes |
 | `:ownership_lost`, `locate_intent_context/1` miss | :1151 | :1279 | yes |
 | `:not_found`, intent row absent during a claim | :2097, :2130 | :2101 | yes |
 | `:idempotency_conflict`, request-hash mismatch | :2098, :2131 | :2102 | yes |
@@ -376,14 +413,14 @@ diff hunks. (`base` spans are one per variant that shared the step.)
 
 | # | Path | Base control flow | HEAD equivalent | Preserved |
 | --- | --- | --- | --- | --- |
-| 1 | legacy/intent | `lock_legacy_intent_context/1` :1130-1148: seven `\|\| Repo.rollback` short-circuits in Project -> ... -> Runtime order, no `case`, no default clause, seven-key map returned; the dispatcher decides the path from `intent_goal_id/1` | `legacy_lock/1` :55-58 (Project short-circuit) then `lock_scope_rows/2` :76-92 (six short-circuits in the same order), seven-key merged map; same dispatcher decision | yes |
-| 2 | legacy/claims | :1162-1186: `locate_intent_context \|\| Repo.rollback` first, then the same seven short-circuits; the connection is `if is_binary(resource.connection_id), do: lock_record(...), else: nil` followed by `\|\| Repo.rollback(:forbidden)` | `lock_new_intent_context/2` :1278-1292 keeps `locate \|\| rollback` then the same `case ids`; `lock_connection/2` :96-98 keeps the `is_binary` probe; `\|\| Repo.rollback(:forbidden)` at :78 | yes |
-| 3 | goal/intent | :1190-1216: `goal_project_id` read then `\|\| Repo.rollback` before any lock -> Project S -> Goal -> six rows -> revision -> nine-key map -> validator with `unless valid?, do: Repo.rollback` | dispatcher :1253-1258 reads the project id before the call; `goal_lock/2` :60-72 keeps the same statement order; `validate_links!/3` :112-123 keeps the `unless` | yes |
+| 1 | legacy/intent | `lock_legacy_intent_context/1` :1130-1148: seven `\|\| Repo.rollback` short-circuits in Project -> ... -> Runtime order, no `case`, no default clause, seven-key map returned; the dispatcher decides the path from `intent_goal_id/1` | `legacy_lock/1` :1147-1150 (Project short-circuit) then `lock_scope_rows/2` :1168-1184 (six short-circuits in the same order), seven-key merged map; same dispatcher decision | yes |
+| 2 | legacy/claims | :1162-1186: `locate_intent_context \|\| Repo.rollback` first, then the same seven short-circuits; the connection is `if is_binary(resource.connection_id), do: lock_record(...), else: nil` followed by `\|\| Repo.rollback(:forbidden)` | `lock_new_intent_context/2` :1278-1292 keeps `locate \|\| rollback` then the same `case ids`; `lock_connection/2` :1188-1190 keeps the `is_binary` probe; `\|\| Repo.rollback(:forbidden)` at :1170 | yes |
+| 3 | goal/intent | :1190-1216: `goal_project_id` read then `\|\| Repo.rollback` before any lock -> Project S -> Goal -> six rows -> revision -> nine-key map -> validator with `unless valid?, do: Repo.rollback` | dispatcher :1253-1258 reads the project id before the call; `goal_lock/2` :1152-1164 keeps the same statement order; `validate_links!/3` :1204-1215 keeps the `unless` | yes |
 | 4 | goal/claims | :1218-1250: `ids.project_id \|\| Repo.rollback` -> the same sequence; validator over the five non-tautological keys | same via `goal_lock/2` plus the `Map.drop` expected map (five keys) | yes |
-| 5 | link verification | :1252-1276 and :1278-1289: `goal_context_links?` first, then an `and` chain that short-circuits on the first false; comparison order project, work_item, task, run, runtime (resource, connection additionally on the intent source) | `validate_links!/3` :112-123 plus `@link_fields` :45-53: same first check, same order, `Enum.all?` short-circuits like the `and` chain, same `unless` | yes |
+| 5 | link verification | :1252-1276 and :1278-1289: `goal_context_links?` first, then an `and` chain that short-circuits on the first false; comparison order project, work_item, task, run, runtime (resource, connection additionally on the intent source) | `validate_links!/3` :1204-1215 plus `@link_fields` :1137-1145: same first check, same order, `Enum.all?` short-circuits like the `and` chain, same `unless` | yes |
 | 6 | claim/goal | `claim_dispatch/2` :2084-2092 selects before the transaction; `claim_goal_dispatch/2` :2094-2126: context lock -> intent row (`intent.id`) -> hash compare -> four validations -> `case` with no default clause -> `:execute` payload `authorized_context(context, executing)` | one `claim_dispatch/2` :2096-2135 with `goal_managed?` read before the transaction: `context = if goal_managed?, do: lock_intent_context(intent)`, intent row via `intent_id` (equal to `intent.id` on every reachable path), hash compare, `if goal_managed?, do: validate_goal_dispatch!`, same `case` without default, same payload | yes |
 | 7 | claim/legacy | :2128-2154: intent row -> hash compare -> `case` with no default clause -> `:execute` payload is the bare `executing` intent | same single core with `goal_managed? == false`: no context lock, no validations, bare-intent payload | yes |
 | 8 | recover `:authorized` | :1962-1974: `if goal_managed_intent?(intent) do` four validations in the base claim order `end` | `if goal_managed_intent?(intent), do: validate_goal_dispatch!(intent, context)` :1975 with the same four calls in the same order | yes |
-| 9 | WorkItem lock | legacy: :1134/:1172 `lock_record(WorkItem, non-binary)` issues `WHERE id = NULL`, gets nil, rolls back `:ownership_lost`; goal bodies: :1326 rolls back `:ownership_lost` for a non-binary id without a query | `lock_work_item/1` :102-105 returns nil for a non-binary id, :79 rolls back `:ownership_lost` without the query | yes (same atom at the same step; one empty SELECT dropped, no lock or row effect) |
-| 10 | primitives | `lock_project_for_goal/1` :2815-2817, `lock_record/2` :2819-2821, `lock_goal_revision/1` :638-643 | moved verbatim into `IntentContext` :140-153; the outer one-line forwards :768, :2798, :2800 keep every other call site byte-identical | yes |
+| 9 | WorkItem lock | legacy: :1134/:1172 `lock_record(WorkItem, nil)` raised `ArgumentError` from Ecto's nil-comparison guard (`not_nil!/2`), no query reached Postgres; goal bodies: :1326 rolled back `:ownership_lost` for a nil id without a query | `lock_work_item/1` :1194-1197 returns nil for a non-binary id, :1171 rolls back `:ownership_lost` without the query | yes on reachable rows; the nil id is unreachable (`null: false` + `validate_required`), where base legacy raised and HEAD refuses |
+| 10 | primitives | `lock_project_for_goal/1` :2815-2817, `lock_record/2` :2819-2821, `lock_goal_revision/1` :638-643 | moved verbatim into `IntentContext` :1232-1245; the outer one-line forwards :638 (`__MODULE__.`-qualified, see the round-1 section), :2798, :2800 keep every other call site byte-identical | yes |
 | 11 | transaction boundary | every path above runs inside the caller's `Repo.transaction/1`; `Repo.rollback/1` unwinds to that boundary | the same callers, one transaction per claim/recover/finalize call, no new transaction and no lock taken outside a transaction | yes |

@@ -23,136 +23,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   @default_recovery_interval_ms 5_000
   @default_dispatch_timeout_ms 60_000
 
-  # One lock-order authority for the intent contexts. The documented order
-  # (docs/design/data.md:347) is Project -> Goal -> WorkItems -> Tasks -> Runs
-  # -> sessions -> decisions/reservations; the legacy scope keeps its original
-  # Project -> Resource -> Connection -> WorkItem -> Task -> Run -> Runtime
-  # order and `FOR UPDATE` mode, and the goal scope locks the Project
-  # `FOR SHARE` (serializing with archival's `FOR UPDATE`) before the Goal.
-  defmodule IntentContext do
-    @moduledoc false
-
-    import Ecto.Query
-
-    alias SymmetryControl.Goals.{Goal, GoalRevision}
-    alias SymmetryControl.Integrations.Connection
-    alias SymmetryControl.Orchestration.{Run, Runtime, Task}
-    alias SymmetryControl.Repo
-    alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
-
-    # Every expected row present in the map is re-verified against its locked
-    # context row, in the order the two base link validators compared them.
-    @link_fields [
-      project_id: :project,
-      work_item_id: :work_item,
-      task_id: :task,
-      run_id: :run,
-      runtime_id: :runtime,
-      resource_id: :resource,
-      connection_id: :connection
-    ]
-
-    def legacy_lock(ids) do
-      project = lock_record(Project, ids.project_id) || Repo.rollback(:ownership_lost)
-      lock_scope_rows(%{project: project}, ids)
-    end
-
-    def goal_lock(ids, expected) do
-      project_id = ids.project_id || Repo.rollback(:ownership_lost)
-      project = lock_project_for_goal(project_id) || Repo.rollback(:ownership_lost)
-      goal = lock_record(Goal, ids.goal_id) || Repo.rollback(:ownership_lost)
-
-      context =
-        %{project: project, goal: goal}
-        |> lock_scope_rows(ids)
-        |> lock_goal_revision_row()
-
-      validate_links!(context, expected, project_id)
-      context
-    end
-
-    # resource -> connection -> work_item -> task -> run -> runtime: the rows
-    # both scopes lock in this order and with `FOR UPDATE`.
-    defp lock_scope_rows(locked, ids) do
-      resource = lock_record(ProjectResource, ids.resource_id) || Repo.rollback(:forbidden)
-      connection = lock_connection(ids.connection_id, resource) || Repo.rollback(:forbidden)
-      work_item = lock_work_item(ids.work_item_id) || Repo.rollback(:ownership_lost)
-      task = lock_record(Task, ids.task_id) || Repo.rollback(:ownership_lost)
-      run = lock_record(Run, ids.run_id) || Repo.rollback(:ownership_lost)
-      runtime = lock_record(Runtime, ids.runtime_id) || Repo.rollback(:ownership_lost)
-
-      Map.merge(locked, %{
-        resource: resource,
-        connection: connection,
-        work_item: work_item,
-        task: task,
-        run: run,
-        runtime: runtime
-      })
-    end
-
-    # A persisted intent names its connection; a fresh claim derives it from the
-    # resource row it just locked.
-    defp lock_connection(:from_resource, resource) do
-      if is_binary(resource.connection_id), do: lock_record(Connection, resource.connection_id)
-    end
-
-    defp lock_connection(connection_id, _resource), do: lock_record(Connection, connection_id)
-
-    defp lock_work_item(work_item_id) when is_binary(work_item_id),
-      do: lock_record(WorkItem, work_item_id)
-
-    defp lock_work_item(_work_item_id), do: nil
-
-    defp lock_goal_revision_row(%{goal: goal} = context) do
-      revision = lock_goal_revision(goal) || Repo.rollback(:ownership_lost)
-      Map.put(context, :revision, revision)
-    end
-
-    defp validate_links!(context, expected, project_id) do
-      valid? =
-        goal_context_links?(context, project_id) and
-          Enum.all?(@link_fields, fn {key, field} ->
-            case expected do
-              %{^key => id} -> Map.fetch!(context, field).id == id
-              _missing -> true
-            end
-          end)
-
-      unless valid?, do: Repo.rollback(:ownership_lost)
-    end
-
-    defp goal_context_links?(context, project_id) do
-      context.project.id == project_id and
-        context.goal.project_id == context.project.id and
-        context.resource.project_id == context.project.id and
-        context.resource.connection_id == context.connection.id and
-        context.work_item.project_id == context.project.id and
-        context.work_item.goal_id == context.goal.id and
-        context.task.goal_id == context.goal.id and
-        context.task.work_item_id == context.work_item.id and
-        context.run.task_id == context.task.id and
-        context.run.runtime_id == context.runtime.id
-    end
-
-    # The lock primitives also serve callers outside the scope bodies; they live
-    # here so every lock takes its mode from this one module.
-    def lock_project_for_goal(project_id) do
-      Repo.one(from project in Project, where: project.id == ^project_id, lock: "FOR SHARE")
-    end
-
-    def lock_record(schema, id) do
-      Repo.one(from record in schema, where: record.id == ^id, lock: "FOR UPDATE")
-    end
-
-    def lock_goal_revision(goal) do
-      Repo.one(
-        from revision in GoalRevision,
-          where: revision.goal_id == ^goal.id and revision.revision == ^goal.current_revision
-      )
-    end
-  end
-
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -765,7 +635,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp lock_goal_revision(goal), do: IntentContext.lock_goal_revision(goal)
+  defp lock_goal_revision(goal), do: __MODULE__.IntentContext.lock_goal_revision(goal)
 
   defp goal_project_id(goal_id) do
     Repo.one(from goal in Goal, where: goal.id == ^goal_id, select: goal.project_id)
@@ -1245,8 +1115,138 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  # The dispatchers keep the base goal-vs-legacy selection rule; the order and
-  # the modes of the rows they lock live in `IntentContext`.
+  # One lock-order authority for the intent contexts. The documented order
+  # (docs/design/data.md:347) is Project -> Goal -> WorkItems -> Tasks -> Runs
+  # -> sessions -> decisions/reservations; the legacy scope keeps its original
+  # Project -> Resource -> Connection -> WorkItem -> Task -> Run -> Runtime
+  # order and `FOR UPDATE` mode, and the goal scope locks the Project
+  # `FOR SHARE` (serializing with archival's `FOR UPDATE`) before the Goal.
+  defmodule IntentContext do
+    @moduledoc false
+
+    import Ecto.Query
+
+    alias SymmetryControl.Goals.{Goal, GoalRevision}
+    alias SymmetryControl.Integrations.Connection
+    alias SymmetryControl.Orchestration.{Run, Runtime, Task}
+    alias SymmetryControl.Repo
+    alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
+
+    # Every expected row present in the map is re-verified against its locked
+    # context row, in this order: project, work_item, task, run, runtime, resource, connection.
+    @link_fields [
+      project_id: :project,
+      work_item_id: :work_item,
+      task_id: :task,
+      run_id: :run,
+      runtime_id: :runtime,
+      resource_id: :resource,
+      connection_id: :connection
+    ]
+
+    def legacy_lock(ids) do
+      project = lock_record(Project, ids.project_id) || Repo.rollback(:ownership_lost)
+      lock_scope_rows(%{project: project}, ids)
+    end
+
+    def goal_lock(ids, expected) do
+      project_id = ids.project_id || Repo.rollback(:ownership_lost)
+      project = lock_project_for_goal(project_id) || Repo.rollback(:ownership_lost)
+      goal = lock_record(Goal, ids.goal_id) || Repo.rollback(:ownership_lost)
+
+      context =
+        %{project: project, goal: goal}
+        |> lock_scope_rows(ids)
+        |> lock_goal_revision_row()
+
+      validate_links!(context, expected, project_id)
+      context
+    end
+
+    # resource -> connection -> work_item -> task -> run -> runtime: the rows
+    # both scopes lock in this order and with `FOR UPDATE`.
+    defp lock_scope_rows(locked, ids) do
+      resource = lock_record(ProjectResource, ids.resource_id) || Repo.rollback(:forbidden)
+      connection = lock_connection(ids.connection_id, resource) || Repo.rollback(:forbidden)
+      work_item = lock_work_item(ids.work_item_id) || Repo.rollback(:ownership_lost)
+      task = lock_record(Task, ids.task_id) || Repo.rollback(:ownership_lost)
+      run = lock_record(Run, ids.run_id) || Repo.rollback(:ownership_lost)
+      runtime = lock_record(Runtime, ids.runtime_id) || Repo.rollback(:ownership_lost)
+
+      Map.merge(locked, %{
+        resource: resource,
+        connection: connection,
+        work_item: work_item,
+        task: task,
+        run: run,
+        runtime: runtime
+      })
+    end
+
+    # A persisted intent names its connection; a fresh claim derives it from the
+    # resource row it just locked.
+    defp lock_connection(:from_resource, resource) do
+      if is_binary(resource.connection_id), do: lock_record(Connection, resource.connection_id)
+    end
+
+    defp lock_connection(connection_id, _resource), do: lock_record(Connection, connection_id)
+
+    defp lock_work_item(work_item_id) when is_binary(work_item_id),
+      do: lock_record(WorkItem, work_item_id)
+
+    defp lock_work_item(_work_item_id), do: nil
+
+    defp lock_goal_revision_row(%{goal: goal} = context) do
+      revision = lock_goal_revision(goal) || Repo.rollback(:ownership_lost)
+      Map.put(context, :revision, revision)
+    end
+
+    defp validate_links!(context, expected, project_id) do
+      valid? =
+        goal_context_links?(context, project_id) and
+          Enum.all?(@link_fields, fn {key, field} ->
+            case expected do
+              %{^key => id} -> Map.fetch!(context, field).id == id
+              _missing -> true
+            end
+          end)
+
+      unless valid?, do: Repo.rollback(:ownership_lost)
+    end
+
+    defp goal_context_links?(context, project_id) do
+      context.project.id == project_id and
+        context.goal.project_id == context.project.id and
+        context.resource.project_id == context.project.id and
+        context.resource.connection_id == context.connection.id and
+        context.work_item.project_id == context.project.id and
+        context.work_item.goal_id == context.goal.id and
+        context.task.goal_id == context.goal.id and
+        context.task.work_item_id == context.work_item.id and
+        context.run.task_id == context.task.id and
+        context.run.runtime_id == context.runtime.id
+    end
+
+    # The intent-context lock primitives; other locks in this file keep their
+    # own queries.
+    def lock_project_for_goal(project_id) do
+      Repo.one(from project in Project, where: project.id == ^project_id, lock: "FOR SHARE")
+    end
+
+    def lock_record(schema, id) do
+      Repo.one(from record in schema, where: record.id == ^id, lock: "FOR UPDATE")
+    end
+
+    def lock_goal_revision(goal) do
+      Repo.one(
+        from revision in GoalRevision,
+          where: revision.goal_id == ^goal.id and revision.revision == ^goal.current_revision
+      )
+    end
+  end
+
+  # An intent whose Task carries a Goal selects the goal scope; everything else
+  # is legacy. The lock order and modes live in `IntentContext`.
   defp lock_intent_context(intent) do
     ids = intent_ids(intent)
 
