@@ -151,6 +151,16 @@ defmodule SymmetryControl.Workspaces.WorkItemEligibilityTest do
     assert WorkItemEligibility.retry_allowed?(work_item)
   end
 
+  test "a bound external work resource is available when its own flag allows it" do
+    work_item = work_item(false, false, :agent, :backlog, false, project(:active))
+    work_item = %{work_item | external_available: true}
+
+    assert WorkItemEligibility.start(work_item) == :ok
+    assert WorkItemEligibility.start_allowed?(work_item)
+    assert WorkItemEligibility.retry_gate(work_item) == :ok
+    assert WorkItemEligibility.retry_allowed?(work_item)
+  end
+
   defp assert_row(
          {goal, launched, assignee, status, project_status, external, start, can_start, cancel,
           can_cancel, retry, can_retry}

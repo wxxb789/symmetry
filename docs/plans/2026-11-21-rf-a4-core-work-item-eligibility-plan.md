@@ -44,7 +44,7 @@ Both served halves reach the wire through `work_item/2` (workspace read, activit
 
 | command | coordinates (HEAD) | gate |
 | --- | --- | --- |
-| `launch_work_item/3` | `workspaces.ex:316-347`; pre-transaction `:321`; in-transaction `:325-326` | `ensure_legacy_work_item/1` twice (unlocked read, then the locked re-read), `ensure_active_project/1` |
+| `launch_work_item/3` | `workspaces.ex:316-345`; pre-transaction `:321`; in-transaction `:325-326` | `ensure_legacy_work_item/1` twice (unlocked read, then the locked re-read), `ensure_active_project/1` |
 | `launch_locked_work_item/2` clause 1 | `:579-596` | the already-launched replay (`:585` `:idempotency_conflict` on a required-capability mismatch) |
 | `launch_locked_work_item/2` clause 2 | `:598-643` (check `:599-603`) | `project.status != "active" or assignee_type != "agent" or status not in ["backlog", "ready"] or not WorkItem.external_work_available?/1` → `Repo.rollback(:state_conflict)` |
 | `cancel_work_item/3` | `:349-374` (gate `:353`) | `ensure_legacy_work_item/1` only; task-state validity is `Orchestration.create_command/5`'s |
@@ -102,7 +102,7 @@ every legacy command path shares — is its caller. The name is the contract's.
 Decomposition rule applied at every call site: the verdict with the refusal atom replaces the
 predicate **at the exact place the base spelled it**, so the base's sequence survives:
 
-1. `workspaces.ex:316-347` `launch_work_item/3`: unchanged. The pre-transaction and in-transaction
+1. `workspaces.ex:316-345` `launch_work_item/3`: unchanged. The pre-transaction and in-transaction
    `ensure_legacy_work_item/1` calls now reach `cancel_gate/1`; the in-transaction
    `ensure_active_project/1` stays (it precedes the replay clause, so a launched item in an archived
    project is still refused, as at the baseline).
@@ -236,7 +236,7 @@ telemetry lock mismatch the w3-14 runner comment records). Full-suite runs go th
 | E11 red mutants | M1 drop the Goal clause from `start/1`; M2 accept any status; M3 make `start_allowed?/1` ignore the launched conjunct; M4 make `cancel_allowed?/1` constant true; M5 add the Goal term to `retry_allowed?/1`; M6 return `:ok` for a non-agent retry; M7 swap `retry_gate/1`'s project and external order (expected green — the atom class is unchanged — recorded as the unobservability claim), M8 make `retry_gate/1` refuse an archived project with `:goal_authority_required` | M1–M6, M8 red with the failing row group named; M7 green, recorded as expected |
 | E12 credo | `mix credo --strict` over the touched files | count on the touched files does not rise above base (recorded per file) |
 | E13 citation gate | `python scripts/ci/check-citation-existence.py --base origin/main --head HEAD` | exit 0; the audited corpus is untouched by this slice (no `docs/runbooks/**`, `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md` edit) except for the refreshed citations this slice writes, if any |
-| E14 whitespace / host paths | `git diff --check`; `git diff origin/main...HEAD \| grep -i "users/"` | exit 0, empty; no host profile path; no backslash-u sequence |
+| E14 whitespace / host paths | `git diff --check`; `git diff origin/main...HEAD \| grep -i "users[/]"` | exit 0, empty (the character-class spelling cannot self-match this row's own text); no host profile path; no backslash-u sequence |
 
 Transient harness files (outside the repository, or reverted before delivery): the token script and
 the differential/runner scripts under `<HOST-PATH>/gdd/scratch/rf-a4-*`; the throwaway differential
@@ -344,17 +344,17 @@ at a time, and the full suite through `<HOST-PATH>/gdd/scratch/mix-full-queue.sh
 | E3 xref cycles | `mix xref graph --format cycles --label compile-connected` | `No cycles found`, exit 0 |
 | E3 xref callers | `mix xref callers SymmetryControlWeb.PortalJSON` | head: 4 callers — `chat/read_model.ex`, `controllers/goal_controller.ex`, `controllers/portal_api_controller.ex`, `protocol.ex` (all `runtime`); the base revision measured in a throwaway worktree at `c0784952` (`Q:/repos/wt-a4-core-work-item-eligibility/wt-a4-base-xref`, removed afterwards): the same 4; no new core → web edge |
 | E4 targeted (base control) | `mix test --exclude portal_assets` over the 7 oracle files | exit 0, `102 passed` in 21.8s |
-| E4 targeted (head) | the 7 oracle files + the new test | exit 0, `105 passed` in 26.8s |
-| E5 full suite | `mix-full-queue.sh "rf-a4\|Q:/repos/wt-a4-core-work-item-eligibility/symmetry"`, then the same suite with `--formatter ExUnit.CLIFormatter --formatter SymmetryControl.ExUnitJsonFormatter` (`SYMMETRY_EXUNIT_EVENTS_FILE=<HOST-PATH>/gdd/scratch/rf-a4-full-events.ndjson`) | both `MIXQ-rf-a4 PASS rc=0` / `rc=0`, `Result: 984 passed, 21 skipped, 4 excluded --exclude portal_assets` (462.4s and 759.5s); the JSON stream reports `{"total":1009,"passed":984,"failed":0,"invalid":0,"skipped":21,"excluded":4}` and names the skips: 10 `Goals.DispatchNotificationTest` (`SYMMETRY_GOAL_DISPATCH_E2E` gate), 6 `PiControlE2ETest` (`@moduletag skip: true`), 4 `ProviderBrokerE2ETest`, 1 `GoalMachineControllerTest`; the 4 excluded are `PortalControllerTest`'s `portal_assets` cases (the queue's own rule for a branch that does not change `frontend`/`contracts`). The same stream contains the delivered module's three tests, all `passed` |
+| E4 targeted (head) | the 7 oracle files + the new test | exit 0, `106 passed` in 12.2s (fix-stage re-run with the added pin: 102 oracle tests + 4 in the new file) |
+| E5 full suite | `mix-full-queue.sh "rf-a4\|Q:/repos/wt-a4-core-work-item-eligibility/symmetry"`, then the same suite with `--formatter ExUnit.CLIFormatter --formatter SymmetryControl.ExUnitJsonFormatter` (`SYMMETRY_EXUNIT_EVENTS_FILE=<HOST-PATH>/gdd/scratch/rf-a4-full-events.ndjson`) | both `MIXQ-rf-a4 PASS rc=0` / `rc=0`, `Result: 984 passed, 21 skipped, 4 excluded --exclude portal_assets` (462.4s and 759.5s); the JSON stream reports `{"total":1009,"passed":984,"failed":0,"invalid":0,"skipped":21,"excluded":4}` and names the skips: 10 `Goals.DispatchNotificationTest` (`SYMMETRY_GOAL_DISPATCH_E2E` gate), 6 `PiControlE2ETest` (`@moduletag skip: true`), 4 `ProviderBrokerE2ETest`, 1 `GoalMachineControllerTest`; the 4 excluded are `PortalControllerTest`'s `portal_assets` cases (the queue's own rule for a branch that does not change `frontend`/`contracts`). The same stream contains the delivered module's tests (three at that revision), all `passed`; the fix stage added a fourth to that file, so the conductor's re-run of this suite is the current full-suite evidence |
 | E6 contracts | `pnpm install --frozen-lockfile` then `pnpm contracts:check` (`mise exec pnpm@12.17.0`) | exit 0 — `Generated contract DTOs are up to date`, `Validated 21 Draft 7 schemas and 248 fixtures`, `tests 35 / pass 35 / fail 0` |
 | E7 grep gate | `rg -n 'assignee_type == "agent"\|status in \["backlog", "ready"\]\|project_active\?\\(\|external_work_available\?\\(\|goal_managed\?\\(\|not goal_managed' control/lib/symmetry_control_web/portal_json.ex` | one match, `:225` `goal_managed = WorkItem.goal_managed?(work_item)` — the served member's own derivation; every gate spelling is gone |
 | E8 token compare | `python <HOST-PATH>/gdd/scratch/rf-a4-tokens.py <rev\|WORKTREE> <path> <fn…>`, plus the union over the touched functions ∪ the new module | per-function deltas below; union: base-only ∅, head-only ∅, 89 tokens both |
 | E9 control-flow audit | per-function table below | every base exit has a head equivalent with the same atom |
 | E10 differential | `RF_A4_DUMP=… mix test --exclude portal_assets test/symmetry_control/workspaces/rf_a4_differential_test.exs` (throwaway, deleted after the head run) | base run 1 = base run 2 = head, 288 lines each; `rf-a4-crosscheck.py` on both dumps: `launch=96 served=64 command=128 mismatches=0` |
-| E11 mutants | `mix test test/symmetry_control/workspaces/work_item_eligibility_test.exs` under each mutant (reverted after; module re-hashed) | M1–M6, M8, M9 red; M7 green as predicted (below) |
+| E11 mutants | `mix test test/symmetry_control/workspaces/work_item_eligibility_test.exs` under each mutant (reverted after; module re-hashed; re-run in the fix stage on the four-test file) | M1–M6, M8, M9 red; M7 green as predicted (below); the fix stage adds M10 — the pinned availability mutant (below) |
 | E12 credo | `mix credo suggest "lib/symmetry_control/workspaces.ex" "lib/symmetry_control_web/portal_json.ex" --strict --format json` | base 15 issues (all `workspaces.ex`), head 14 (all `workspaces.ex`); `portal_json.ex`, the new module and the new test: 0 |
 | E13 citation gate | `python scripts/ci/check-citation-existence.py --base c0784952 --head HEAD` | exit 0 — `no audited document added or modified between c07849521e6b and c07849521e6b` (this slice touches neither `docs/runbooks/**`, `docs/design/quality.md` nor `docs/archive/CLOSED-TODO.md`; the gate compares commits, and this tree is uncommitted, so the run is a "nothing to check" pass, not a per-citation verification — the slice's own citations were checked by hand against the head tree) |
-| E14 whitespace / paths | `git diff --check`; `git diff origin/main...HEAD \| grep -i "users/"`; host-path/backslash-u scan over the new files | clean; 0 matches; 0 matches |
+| E14 whitespace / paths | `git diff --check`; `git diff origin/main...HEAD \| grep -i "users[/]"`; host-path/backslash-u scan over the new files | clean; 0 matches (at the pre-fix tip the unguarded spelling returned this row's own pattern text twice — a disclosed benign self-match, no profile path; the character-class spelling is empty over the post-fix projection); 0 matches |
 
 ### E8 per-function token deltas
 
@@ -388,13 +388,13 @@ inventoried above, head ranges are in the head tree.
 
 | function | base exit | head equivalent | preserved |
 | --- | --- | --- | --- |
-| `launch_work_item/3` (w:316-347, unchanged text) | `validate_action_id` → else `{:error, reason}`; `valid_uuid?` false → `false -> {:error, :not_found}`; `fetch` → `{:error, :not_found}` | same | yes |
+| `launch_work_item/3` (w:316-345, unchanged text) | `validate_action_id` → else `{:error, reason}`; `valid_uuid?` false → `false -> {:error, :not_found}`; `fetch` → `{:error, :not_found}` | same | yes |
 | | pre-transaction and in-transaction `ensure_legacy_work_item` → `:goal_authority_required` | `ensure_legacy_work_item/1` delegates to `cancel_gate/1`, same atom | yes |
 | | in-transaction `ensure_active_project` → `:state_conflict` | unchanged | yes |
 | | clause 1 caps mismatch → `:idempotency_conflict` | unchanged | yes |
 | | `submit_task` / `Repo.update` / `task_snapshot` errors → `rollback(reason)` | unchanged | yes |
 | | `{:ok, {snapshot, disposition, should_wake?}}` / `{:error, reason}` | unchanged | yes |
-| `launch_locked_work_item/2` clause 2 (w:598-643 → 598-631) | `if project.status != "active" or assignee != "agent" or status not in ["backlog","ready"] or not external_work_available? -> Repo.rollback(:state_conflict)` | `start/1 |> require_ok!()`: project → `:state_conflict`; assignee/status/external → `:state_conflict`; the Goal branch → `:goal_authority_required` is **unreachable** (the in-transaction `ensure_legacy_work_item` ran first on the same locked row) | yes, atoms identical |
+| `launch_locked_work_item/2` clause 2 (w:598-643 → 595-628) | `if project.status != "active" or assignee != "agent" or status not in ["backlog","ready"] or not external_work_available? -> Repo.rollback(:state_conflict)` | `start/1 |> require_ok!()`: project → `:state_conflict`; assignee/status/external → `:state_conflict`; the Goal branch → `:goal_authority_required` is **unreachable** (the in-transaction `ensure_legacy_work_item` ran first on the same locked row) | yes, atoms identical |
 | `cancel_work_item/3` (w:349-374, unchanged text) | action-id / `fetch` errors; `ensure_legacy_work_item` → `:goal_authority_required`; missing attempt (`nil ->`) → `{:error, :state_conflict}`; command/snapshot errors | same (the Goal gate delegated) | yes |
 | `retry_work_item/3` (w:413-478) | action-id / uuid / `fetch` / pre-transaction Goal gate | unchanged | yes |
 | | in-transaction Goal gate → `:goal_authority_required` | `retry_gate/1` clause 1, same atom | yes |
@@ -402,7 +402,7 @@ inventoried above, head ranges are in the head tree.
 | | in-transaction `ensure_external_work_available` → `:state_conflict` | `retry_gate/1` clause 3, same atom | yes |
 | | inline `assignee_type != "agent"` → `:state_conflict` | `retry_gate/1` clause 4, same atom | yes |
 | | missing attempt → `:state_conflict`; `retry_task` `:replayed` / `:created` / `{:error, reason} -> rollback(reason)`; dispatch | unchanged (the missing-attempt refusal stays in the function — it is not a work-item gate input) | yes |
-| `work_item/2` (p:221-261 → 221-254) | no early return; map literal order unchanged | `can_start` value expression → `start_allowed?/1` | yes |
+| `work_item/2` (p:221-261 → 221-258) | no early return; map literal order unchanged | `can_start` value expression → `start_allowed?/1` | yes |
 | `execution/2` (p:288-313 → 285-310) | the three clauses unchanged | only the final `legacy_capabilities/2` arity | yes |
 | `execution_summary/2` (p:361-407) | the four clauses unchanged | unchanged | yes |
 | `legacy_capabilities/3` → `/2` (p:416-426 → 414-420) | `nil` clause → `nil` | `nil, _work_item` | yes |
@@ -429,34 +429,65 @@ retry jobs over `goal × project × external × assignee × attempt shape` (a go
 only for a goal-managed item — the composite foreign key refuses one on a legacy item).
 
 Results: base run 1 → 288 lines, `1 passed`, exit 0; base run 2 (stability control) → identical;
-head → identical; both diffs empty. The harness is live, not blind: it records 96 launch
-non-refusals (`ok:created` 48 + `ok:replayed` 48), 8 cancel and 1 retry non-refusals, and both
-refusal atoms. `rf-a4-crosscheck.py` re-derives every row's expected class from the base rules and
+head → identical; both diffs empty. The harness is live, not blind: its 96 launch jobs are
+2 `ok:created`, 12 `ok:replayed`, 48 `error:goal_authority_required` and 34
+`error:state_conflict`; it also records 8 cancel and 1 retry non-refusals and both refusal atoms.
+`rf-a4-crosscheck.py` re-derives every row's expected class from the base rules and
 reports `mismatches=0` for both dumps.
 
 ### E11 mutants (each applied to `work_item_eligibility.ex`, test run, then reverted; module
-re-hashed at `546efed75669…af923` afterwards)
+re-hashed at `546efed75669…af923` afterwards; re-run 2026-11-22 in the fix stage on the four-test
+file — every red/green reproduced, and M1's and M8's counts changed as below)
 
 | mutant | change | result |
 | --- | --- | --- |
-| M1 | drop the Goal clause from `start/1` | red, `2/3 passed`, row `{true, false, :human, :backlog, :archived, false}` |
+| M1 | drop the Goal clause from `start/1` | red, `3/4 passed`, row `{true, false, :human, :backlog, :archived, false}` |
 | M2 | drop the startable-status conjunct | red, row `{false, false, :agent, :in_progress, :active, true}` |
 | M3 | `start_allowed?/1` ignores the launched conjunct | red, row `{false, true, :human, :backlog, :active, false}` |
 | M4 | `cancel_allowed?/1` constant `true` | red, row `{true, false, :human, :backlog, :archived, false}` |
 | M5 | add the Goal term to `retry_allowed?/1` | red, row `{true, false, :agent, :backlog, :active, true}` |
 | M6 | `retry_gate/1` accepts a non-agent assignee | red, row `{false, false, :human, :backlog, :active, true}` |
 | M7 | swap `retry_gate/1`'s project and external clauses | green — expected: the three state conditions share `:state_conflict`, so the swap is unobservable |
-| M8 | `retry_gate/1` refuses an archived project with `:goal_authority_required` | red, `1/3 passed` (row `{false, false, :human, :backlog, :archived, false}` plus the unloaded-project pin) |
+| M8 | `retry_gate/1` refuses an archived project with `:goal_authority_required` | red, `2/4 passed` (row `{false, false, :human, :backlog, :archived, false}` plus the unloaded-project pin) |
 | M9 | check the project before the Goal gate in `start/1` | red, row `{true, false, :human, :backlog, :archived, false}` (the precedence pin) |
+| M10 (added by the fix stage for the STD-A04 pin) | every `WorkItem.external_work_available?/1` call replaced by `is_nil(external_work_item_resource_id)` — the mutant that passed all three pre-fix tests | red, `3/4 passed` — the bound-and-available pin fails; the table's rows realize only the unbound and bound-and-unavailable availability classes |
 
 ### Delivered hashes
 
 `work_item_eligibility.ex` `sha256 546efed75669…af923`; `work_item_eligibility_test.exs`
-`8bca6503b82b…`; `workspaces.ex` `4b166c05eef2…`; `portal_json.ex` `df7663bfb354…`; this plan and
+`8c5cfb0ded79…`; `workspaces.ex` `4b166c05eef2…`; `portal_json.ex` `df7663bfb354…`; this plan and
 `docs/TODO.md` as committed by the conductor. (`workspaces.ex` re-hashed 2026-11-22 in the apply
 stage: the accepted simplify finding removed the duplicated Goal-gate sentence above
 `ensure_legacy_work_item/1`, so that helper's E9 head coordinate is now `:856` (every later
 `workspaces.ex` head coordinate shifts by −2; no other one is recorded here), and the rest of the
-file is untouched. The other three delivered files are unchanged.) The
+file is untouched. The other three delivered files were unchanged then; the fix stage re-hashed
+`work_item_eligibility_test.exs` at `8c5cfb0ded79…` (the STD-A04 pin) and re-hashed the module at
+`546efed75669…af923` after the E11 re-runs, so the module, `workspaces.ex` and `portal_json.ex`
+still carry the recorded bytes.) The
 differential/probe harnesses and the base worktree are gone from the tree; `git status` shows the
-three modified tracked files and the three new files only.
+three modified tracked files, the three new files and the fix stage's edits to this plan and the
+module's test file only.
+
+### Fix stage (2026-11-22, review findings STD-A01–A04)
+
+All four findings fixed against the frozen range `e936065..2b45cc05`; no production byte changed
+(the module, `workspaces.ex` and `portal_json.ex` still hash as recorded above).
+
+- STD-A01: the E10 record above now states the dump's real launch distribution, counted from the
+  archived dumps (md5 `269f7367a5f1328263dc71a294ad7972`, 288 lines each): 2 `ok:created`, 12
+  `ok:replayed`, 48 `error:goal_authority_required`, 34 `error:state_conflict`; 8 cancel and 1
+  retry non-refusals, both refusal atoms present.
+- STD-A02: both E14 rows now spell the scan `grep -i "users[/]"`, which cannot self-match the row
+  text; the unguarded spelling had returned exactly those two rows as benign matches at the
+  pre-fix tip, and no host profile path exists in the diff.
+- STD-A03: E9 head ranges recomputed from the tip tree: `launch_work_item/3` 316-345 (base = head),
+  `launch_locked_work_item/2` clause 2 head 595-628, `work_item/2` head 221-258.
+- STD-A04: one pin added, "a bound external work resource is available when its own flag allows
+  it"; M10 above is the mutant that passed all three pre-fix tests and now fails the pin.
+
+Gates re-run in the fix stage (foreground, `<HOST-PATH>/gdd/scratch/rf-a4-mix.sh`; E5 is the
+conductor's): E1 exit 0; E2 exit 0 (no-op — library bytes unchanged); E3 `No cycles found` and the
+same four `PortalJSON` callers; E4 exit 0, `106 passed` in 12.2s; E6 `pnpm contracts:check` exit 0
+(`tests 35 / pass 35 / fail 0`; no contract input changed); E7 one match (`:225`); E11 ten
+mutants as above; E12 14 issues, all `workspaces.ex` (the re-run test file: 0); E13 exit 0
+(`--base origin/main --head HEAD`: "nothing to check"); E14 clean.
