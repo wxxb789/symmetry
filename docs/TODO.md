@@ -717,3 +717,53 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `authenticate/1` plus the auth-bearing callback arity, then delete the six provider wrappers
       and the three `Support` delegators, as a separately authorized change; `integrations.ex:690`
       already short-circuits a nil `pull_request_url`.
+
+## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
+
+- [ ] Delegate the two provider-action UUID validator copies the W2-12a unification left outside
+      its owned set, behind the message-policy primitive that review P1-1 requires (2026-11-21,
+      branch `refactor/rf-w2-13-harness-scaffolding-5a`; plan
+      `docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md` §8). The copies are
+      `validateProviderBridgeUUID` (`daemon/internal/harness/pi/provider_bridge.go:976`), whose
+      follow-up owner is W2-13, and `validGoalSessionUUID`
+      (`daemon/internal/state/goal_session.go:1988`), whose owner is W2-09. They differ in message
+      text and strength from each other and from the canonical validators: the `pi` copy returns
+      "UUID is invalid" / "UUID must use lowercase hexadecimal digits" (no version/variant check),
+      the `state` copy returns a bool and accepts only versions 1–5 and RFC 4122 variants
+      (`8`/`9`/`a`/`b`), while
+      `control.validateProviderActionUUID` and `protocol.validateUUID` use other strings. Pin
+      every current rejection string per call site before delegating, so the unification changes
+      no message; `pi/provider_bridge.go:1102-1120` stamps v5 UUIDs, so the stricter check is
+      safe for journaled action IDs.
+
+- [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
+      freeze lifts with opencode capability work (W6-04) (2026-11-21, same branch and plan, §8).
+      `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
+      case stay green), so every surface this slice consolidated elsewhere still has an
+      `opencode` copy: process forwarding with its own guards
+      (`daemon/internal/harness/opencode/adapter.go:543` ProcessDetails, `:559`
+      LinuxV2LiveOwnerStatus, `:578` LeaseRenewalAvailable, `:589` RenewLease),
+      `isNilNativeProcess` (`:421`, `reflect.Pointer`-only), the Close/join state machine
+      (`:1063`), `emit` (`:1344`, stamps `At` and calls `sink.Handle` directly instead of
+      `harness.DeliverEvent`) and `Wait` (`:975`). Consolidating them is part of opencode
+      capability work, not this increment, and must keep those CI oracles green.
+
+## pi provider-bridge close-retry timing flake under host load (PR #155 review)
+
+- [ ] Revalidate the pre-existing host-load flake in
+      `TestProviderBridgeCloseRetryClearsUnprovenAfterExecutorExits`
+      (`daemon/internal/harness/pi/provider_bridge_test.go:941`): it failed once in 26
+      executions during the PR #155 round-2 review — 1 of 3 full parallel
+      `./internal/harness/...` runs, 0 of 20 isolated `-count=20 -run` runs and 0 of 3
+      package-only `./internal/harness/pi/` runs, so reproduction needs full-suite load
+      (2026-11-21, branch `refactor/rf-w2-13-harness-scaffolding-5a`; plan
+      `docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md`). The test's first `Close`
+      runs under a 25 ms `context.WithTimeout` (`:968-969`) and must return
+      `errProviderBridgeExecutionUnproven` (`:971`); the failure is consistent with the deadline
+      winning under load before that verdict is stored, but the cause is inferred, not proven,
+      because the failure message was not captured. The flake is pre-existing: the test and
+      `pi/provider_bridge.go` are outside this PR's diff (the test file was last changed in
+      `8082317b`, #44), and the sibling
+      `TestProviderBridgeCloseReportsIgnoringExecutorAsUnproven` (`:904`) uses the same 25 ms
+      first-`Close` window (`:924`). Revalidate against a recovered failure before changing the
+      window or the assertion.
