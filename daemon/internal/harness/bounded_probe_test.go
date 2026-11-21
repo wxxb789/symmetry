@@ -116,6 +116,11 @@ func TestRunBoundedProbeRejectsSuccessAfterCallerCancellation(t *testing.T) {
 	}
 }
 
+// probeBoundSlack is the scheduling slack between the requested bound and the
+// deadline the delegate observes, so the window assertion below pins the
+// forwarded bound value itself and not only its direction.
+const probeBoundSlack = 2 * time.Second
+
 func TestRunBoundedProbePassesDelegateResultThroughUntouched(t *testing.T) {
 	ctx := context.Background()
 	limitErr := errors.New("caller-owned output limit exceeded")
@@ -130,6 +135,8 @@ func TestRunBoundedProbePassesDelegateResultThroughUntouched(t *testing.T) {
 			t.Error("delegate context carries no deadline")
 		} else if deadline.After(time.Now().Add(30 * time.Second)) {
 			t.Errorf("delegate deadline = %v, want at most the caller's 30s bound", deadline)
+		} else if deadline.Before(time.Now().Add(30*time.Second - probeBoundSlack)) {
+			t.Errorf("delegate deadline = %v, want the caller's full 30s bound, not a narrowed one", deadline)
 		}
 		// The delegate owns the output bound: a limit verdict must reach the
 		// caller unwrapped, and the shared probe must not impose one of its own.

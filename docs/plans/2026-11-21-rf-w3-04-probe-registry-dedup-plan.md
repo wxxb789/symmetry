@@ -25,6 +25,13 @@ Non-test probe sources only. Line references are at `36f9a887`.
 | `SchemaDigest` | 2 | `registry.go:79` `osCodexCommandRunner.SchemaDigest`, `codex/probe.go:104` `osCommandRunner.SchemaDigest` | 1 implementation (`harness.CodexSchemaDigest`), 2 one-line runner methods |
 | probe command runner (`BuildEnvironment` + bounded command) | 6 | `registry.go:46` `osClaudeCommandRunner.Run`, `registry.go:67` `osCodexCommandRunner.Run`, `pi/probe.go:85`, `codex/probe.go:92`, `omo/probe.go:38`, `opencode/adapter.go:69` | 1 implementation (`harness.RunProbeCommand`), 6 one-line `Run` methods |
 
+The call-site count is 13 `RunBoundedProbe` call sites: 3 in `registry.go`
+(`probeCodexExecutableWithRunner` version/help/schema) and 2 in `claude_probe.go`; 3 in
+`codex/probe.go`, 2 in `pi/probe.go`, 2 in `opencode/adapter.go` and 1 in `omo/probe.go`
+(re-verified at the fix-r1 tree). This table is the **single source** of that count: the
+implement-stage answer's count-table after-cell still reads "8 call sites", which counted only the
+subpackage subset, and is superseded by this row (fix r1, SPEC-A03).
+
 `grep -c "context.WithTimeout"` per probe file: `registry.go` 2 → 0, `pi/probe.go` 1 → 0,
 `codex/probe.go` 2 → 0, `omo/probe.go` 1 → 0, `opencode/adapter.go` 4 → 3 (the three survivors
 are session-cleanup bounds at `:647`, `:892`, `:1249` at the baseline and `:626`, `:871`, `:1228`
@@ -61,7 +68,7 @@ Consumers after the change (package-local names all kept):
 
 | File | Edit |
 | --- | --- |
-| `registry.go` | `osClaudeCommandRunner.Run` / `osCodexCommandRunner.Run` → one-line `RunProbeCommand(..., execution.RunBoundedCommand)`; `osCodexCommandRunner.SchemaDigest` → one-line `CodexSchemaDigest(..., execution.RunBoundedCommand)`; delete `runBoundedProbe`, `runBoundedSchemaProbe`, `runClaudeProbe`; the four call sites inside `probeCodexExecutableWithRunner` use `RunBoundedProbe` directly. `ClaudeCommandRunner`, `CodexCommandRunner`, the two runner types and every `probe*` entry keep their names, signatures and call graph. |
+| `registry.go` | `osClaudeCommandRunner.Run` / `osCodexCommandRunner.Run` → one-line `RunProbeCommand(..., execution.RunBoundedCommand)`; `osCodexCommandRunner.SchemaDigest` → one-line `CodexSchemaDigest(..., execution.RunBoundedCommand)`; delete `runBoundedProbe`, `runBoundedSchemaProbe`, `runClaudeProbe`; the three call sites inside `probeCodexExecutableWithRunner` (version, help, schema) use `RunBoundedProbe` directly. `ClaudeCommandRunner`, `CodexCommandRunner`, the two runner types and every `probe*` entry keep their names, signatures and call graph. |
 | `claude_probe.go` | the two `runClaudeProbe(ctx, …)` call sites become `RunBoundedProbe(ctx, claudeProbeTimeout, …)`; no other edit. |
 | `codex_probe.go` | no edit. |
 | `pi/probe.go` | delete `runProbe`; two call sites → `harness.RunBoundedProbe(ctx, probeTimeout, …)`; `osCommandRunner.Run` → one-line `RunProbeCommand(..., execution.RunBoundedCommand)` with `probeOutputLimit`. |
@@ -73,7 +80,12 @@ No existing exported symbol is renamed, removed or re-typed; `NewClaudeAdapterWi
 `NewCodexAdapterWithRunner`, `NewRegistry`, the `Registry` surface and `AvailabilityError` are
 untouched. `harness` gains no `harness/*` subpackage import (clause 3): the new file imports only
 `context`, `crypto/sha256`, `encoding/hex`, `errors`, `fmt`, `os`, `path/filepath`, `strings`,
-`time` and `internal/execution`.
+`time` and `internal/execution`. Clause 1's sentence "`harness` imports no `harness/*` subpackage"
+is a control on **new** edges, not a literal baseline statement: `claude_candidate_adapter.go:17`
+already imports `harness/claude` at the baseline and at HEAD (byte-identical import block, and
+acyclic — no file under `harness/claude` imports the root `harness` package), so a literal reading
+of the sentence is false before and after this slice while clause 3's "new import" control holds
+(fix r1, SPEC-A07).
 
 ## 3. Exact edge-case semantics
 
@@ -104,20 +116,25 @@ behaviour are unchanged: `probeOutputLimit` (pi), `probeOutputLimitBytes` (codex
 injects its own runner seam passes that seam instead of `execution.RunBoundedCommand`, so no
 probe test launches a native executable.
 
-**`CodexSchemaDigest`.** Exactly the body of the two former copies, with the command run through
-`RunProbeCommand`: nil ctx → `codex schema probe context must not be nil`; `os.MkdirTemp` failure
+**`CodexSchemaDigest`.** The body of the two former copies, with the environment build and the
+command run moved into `RunProbeCommand`: nil ctx → `codex schema probe context must not be nil`; `os.MkdirTemp` failure
 → the pre-existing context check then `create Codex schema temp directory: %w`; the temp directory
 is always removed, and a cleanup failure joins `remove Codex schema temp directory: %w` onto the
 result; a command failure → the pre-existing context check then
 `generate Codex app-server schema: %w: %s` with the trimmed output; a missing or unreadable bundle
 → `read generated Codex v2 schema: %w`; success → `"sha256:" + hex(SHA-256(bundle))` of
-`codex_app_server_protocol.v2.schemas.json`. One documented micro-difference: when
-`execution.BuildEnvironment` fails *and* the caller's context is already done, the shared order
-reports the context error where the former copy reported the environment error. Both are
-pre-command failures that cannot promote evidence, and the probe entries already prefer the
-context error in the same situation; no test reaches either arm.
+`codex_app_server_protocol.v2.schemas.json`. Two documented micro-differences, both on the only
+failure `execution.BuildEnvironment` has today (allowlist-key validation; no probe caller passes a
+key, so neither arm is reachable from a probe entry): when the caller's context is already done,
+the shared order reports the context error where the former copy reported the environment error;
+when the caller's context is live, the environment error now reaches the pre-existing
+`generate Codex app-server schema: %w: ` wrap (`bounded_probe.go:95-99`) where each former copy
+returned it bare. The error class is unchanged (`%w` keeps the unwrap chain and the probe entry
+still wraps `harness.ErrNativeUnverified`), both are pre-command failures that cannot promote
+evidence, and no test reaches either arm (fix r1, STD-A01).
 
-**Error strings kept byte-identical** (clause 3): `harness probe context must not be nil`,
+**Error strings kept byte-identical** (clause 3 — the formats and the literals below; §3's
+environment-failure arms change only which payload reaches the `generate` wrap): `harness probe context must not be nil`,
 `codex schema probe context must not be nil`, the three Codex schema directory/command/read
 strings, every `harness.ErrHarnessUnavailable` / `ErrNativeUnverified` / `ErrUnsupportedVersion`
 wrap in the four probe entries, and `OmO probe output exceeds limit`. Both subpackage
@@ -130,6 +147,81 @@ the guard is evaluated before the shared post-checks, and the shared post-checks
 guard error when the caller's context or the probe bound already ended, which is when the callers'
 own post-checks already replaced it.
 
+### 3.1 Base→HEAD control-flow audit (conductor decision 2026-11-21, lesson 32)
+
+Every extracted helper was diffed element by element, base (`0fa9b705`, identical to `36f9a887`
+under `daemon/internal/harness`) → HEAD (`da06c08d`); a line-identical move proof alone is not this
+record. Elements of a bounded probe: E1 nil-context guard, E2 pre-delegate `ctx.Err()`, E3
+`context.WithTimeout` + `defer cancel()`, E4 delegate call, E5 post-delegate caller `ctx.Err()`,
+E6 post-delegate derived-`ctx.Err()`, E7 fall-through return of the delegate's value.
+
+| Base copy | E1 | E2 | E3 | E4 | E5 | E6 | E7 | HEAD equivalent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `registry.go:257` `runBoundedProbe` | y | y | y | y | y | y | y | all seven, same order, in `RunBoundedProbe` (`bounded_probe.go:25-43`), generalised to `T` (`zero T` for `nil`) |
+| `registry.go:276` `runBoundedSchemaProbe` | y | y | y | y | y | y | y | same helper, `string` instantiation |
+| `registry.go:295` `runClaudeProbe` | delegate only (baked in `claudeProbeTimeout`) | | | | | | | both call sites call `RunBoundedProbe` with that timeout directly |
+| `pi/probe.go:69` `runProbe` | – | y | y | y | y | y | y | E2–E7 preserved; the added E1 is unreachable (`pi.Probe` guards nil first) |
+| `codex/probe.go:60` `runProbe` | – | y | y | y | y | y | y | E2–E7 preserved; added E1 unreachable (`codex.Probe` guards nil first) |
+| `codex/probe.go:76` `runSchemaProbe` | – | y | y | y | y | y | y | E2–E7 preserved (`string` instantiation) |
+| `opencode/adapter.go:53` `runProbe` | – | y | y | y | y | y | y | E2–E7 preserved; added E1 unreachable (adapter probe entry guards nil first) |
+| `omo/probe.go:89-100` anonymous closure | – | – | y | y | – | y (`bounded.Err()`, before the 64 KiB guard) | y | E3/E4/E7 in the closure; added E1, E2 and E5 — see the OmO delta row |
+
+No deleted block contains a `switch` or a `default` clause; the only `switch` in the touched region
+is the OmO platform guard (base `omo/probe.go:76-83`, HEAD `:77-84`), untouched by the diff.
+
+`SchemaDigest`, two bodies (base `registry.go:79`, `codex/probe.go:104`) → `CodexSchemaDigest`
+(`bounded_probe.go:72-119`) with the element order preserved: S1 nil-ctx guard; S2 pre-`ctx.Err()`;
+S3 `os.MkdirTemp`; S4 MkdirTemp error → context check → `create Codex schema temp directory: %w`;
+S5 `defer` cleanup join `remove Codex schema temp directory: %w`; S6 `execution.BuildEnvironment`
+(bare error); S7 bounded command through the package seam and limit; S8 post-command `ctx.Err()`;
+S9 command error → `generate Codex app-server schema: %w: %s`; S10 `ctx.Err()`; S11 `os.ReadFile`
+of `codex_app_server_protocol.v2.schemas.json`; S12 read error → post-`ctx.Err()` then `read
+generated Codex v2 schema: %w`; S13 `ctx.Err()`; S14 `sha256` → `"sha256:" + hex`. S6/S7 now run
+inside `RunProbeCommand`; both seams unchanged (root: `execution.RunBoundedCommand` with
+`codexProbeMaxOutputBytes`; codex: `runner.invokeBoundedCommand` with `probeOutputLimitBytes`).
+Delta rows for S6 failures (both unreachable today, §3): context live → S8 passes and S9 wraps the
+environment error (STD-A01); context done → S8 reports the context error (documented at
+implementation time).
+
+`Run`, six bodies (base `registry.go:46`, `registry.go:67`, `pi/probe.go:85`, `codex/probe.go:92`,
+`omo/probe.go:38`, `opencode/adapter.go:69`) → `RunProbeCommand` (`bounded_probe.go:57-64`):
+R1 `execution.BuildEnvironment()`; R2 bare error return; R3 invocation with `Program`/`Args` and
+`Env` from R1; R4 bounded command with the package limit. All four preserved in every copy; at HEAD
+R1/R2 live in `RunProbeCommand` and R3/R4 in the caller's `invoker` + `limit` argument, so each
+`Run` method still returns exactly the `execution` runner's output and error with its own limit
+(`probeOutputLimit`, `probeOutputLimitBytes`, `64*1024`, `claudeProbeMaxOutputBytes`,
+`codexProbeMaxOutputBytes`). The codex seam keeps the zero-value fallback
+(`codex/probe.go:52-57`).
+
+The 13 call sites, base → HEAD (delegate bodies, surrounding wraps and the callers' own post-checks
+are byte-identical; verified in the `-U0` diff):
+
+| Site | Base | HEAD |
+| --- | --- | --- |
+| `registry.go:402/:421/:443` → `:296/:315/:337` (`probeCodexExecutableWithRunner` version/help/schema) | `runBoundedProbe` / `runBoundedSchemaProbe` with `codexProbeTimeout` | `RunBoundedProbe` with `codexProbeTimeout` |
+| `claude_probe.go:86/:110` | `runClaudeProbe` (`claudeProbeTimeout` inside the wrapper) | `RunBoundedProbe` with `claudeProbeTimeout` |
+| `pi/probe.go:135/:155` → `:114/:134` | `runProbe` with `probeTimeout` | `RunBoundedProbe` with `probeTimeout` |
+| `codex/probe.go:219/:240/:260` → `:131/:152/:172` | `runProbe` / `runSchemaProbe` with `probeTimeout` | `RunBoundedProbe` with `probeTimeout` |
+| `opencode/adapter.go:267/:286` → `:246/:265` | `runProbe` with `probeTimeout` | `RunBoundedProbe` with `probeTimeout` |
+| `omo/probe.go:101/:113` → `:94/:106` (`run("--version")` / `run("--help")`) | closure with `context.WithTimeout(ctx, probeTimeout)` | closure calling `RunBoundedProbe` with `probeTimeout`; 64 KiB guard stays inside the delegate |
+
+Two base→HEAD deltas are recorded here rather than left implicit:
+
+- **OmO pre-invocation skip and post-check order (STD-A02).** The base closure had no
+  pre-invocation `ctx.Err()` check and checked the derived bound *before* the 64 KiB guard; at HEAD
+  a caller-cancelled context short-circuits before `runner.Run` (a fixture can observe the invoker
+  not being called where base called it), and a guard error is produced inside the delegate and
+  then replaced by E5/E6 when the caller's context or the bound already ended. The winning error is
+  unchanged in every case (bound over guard, caller over bound — the enclosing post-checks at
+  `omo/probe.go:102` / `:114` at base and `:95` / `:107` at HEAD normalize the same way in both
+  revisions), and no public error text, class or promotion outcome changes.
+- **Codex schema environment-error arm (STD-A01).** The S6 delta rows above; reachable only with an
+  allowlist key, which no probe caller passes.
+
+Recorded in this plan and restated in the fix-r1 stage evidence, per the conductor decision of
+2026-11-21 (lesson 32). The implement/simplify/apply stage answers predate that decision and carry
+no audit (SPEC-A01).
+
 ## 4. Design trade-offs
 
 - **Function seam instead of a runner struct.** A `harness.ProbeRunner` struct holding
@@ -140,8 +232,10 @@ own post-checks already replaced it.
   exactly as it is and makes the shared implementation one call.
 - **The environment build moves inside the shared helper.** All six copies built the environment
   verbatim; keeping it in `RunProbeCommand` removes the sixth duplicate and keeps the
-  `execution.BuildEnvironment` failure string (`%w` of the environment error) unchanged at every
-  call site. §3 records the one unreachable ordering corner this creates.
+  `execution.BuildEnvironment` failure string unchanged at the six `Run` call sites, which return it
+  bare as before. In the schema-digest path the failure now reaches the pre-existing `generate Codex
+  app-server schema: %w: ` wrap when the context is live, and reports the context error when it is
+  done; both arms are unreachable and recorded in §3 (fix r1, STD-A01).
 - **`CommandInvoker` as an exported function type.** Two shared functions need the same seam; the
   named type documents it once and keeps both signatures readable. It is assignable from
   `execution.RunBoundedCommand` and from a package method value with no conversion.
@@ -154,21 +248,37 @@ own post-checks already replaced it.
   `harness`, so that is an import cycle, and it would flip the root projection from
   `ErrNativeUnverified` to the host-hashing promotion path (D4).
 
-## 5. Baseline and expected delta (report-only, D2)
+## 5. Baseline and delta (report-only, D2)
 
-Measured on the final tree with `git diff --numstat` (`36f9a887` → worktree) plus `wc -l` on the
-new files: non-test sources 40 inserted / 283 deleted = **−243**, of which `registry.go` −106,
-`codex/probe.go` −88, `pi/probe.go` −21, `opencode/adapter.go` −21, `omo/probe.go` −7, and
-`claude_probe.go` two call-site lines. The new shared `bounded_probe.go` is 119 lines including
-doc comments, so the **net non-test delta is −124**. Test files: `bounded_probe_test.go` +268 (new),
-`omo/probe_test.go` +51 (new guard rows), `claude_probe_test.go` 20/3 (one test re-pointed, one
-nil-ctx entry row), `codex_probe_test.go` 17/0 (one nil-ctx entry row) — 356 inserted test lines
-and 3 rewritten. Overall `git diff --stat` (`36f9a887` → worktree over the 11 harness files, the
-new ones included): 515 insertions / 286 deletions; the new files are `bounded_probe.go` 119 lines
-and `bounded_probe_test.go` 268 lines.
-The contract's −350…−400 band is report-only
-(D2, P1-3) and the duplication table of §1 is the judged artifact: 8 bounded-probe
-implementations → 1, 2 `SchemaDigest` bodies → 1, 6 runner bodies → 1.
+Single source of the delta: `git diff --stat 0fa9b705` (baseline → fix-r1 worktree; `0fa9b705` is
+identical to `36f9a887` under `daemon/internal/harness`). Raw stat, the clause-2 judging artifact:
+
+```
+ daemon/internal/harness/bounded_probe.go           | 119 +++++++
+ daemon/internal/harness/bounded_probe_test.go      | 275 +++++++++++++++
+ daemon/internal/harness/claude_probe.go            |   4 +-
+ daemon/internal/harness/claude_probe_test.go       |  23 +-
+ daemon/internal/harness/codex/probe.go             | 114 +------
+ daemon/internal/harness/codex_probe_test.go        |  17 +
+ daemon/internal/harness/omo/probe.go               |  23 +-
+ daemon/internal/harness/omo/probe_test.go          |  51 +++
+ daemon/internal/harness/opencode/adapter.go        |  29 +-
+ daemon/internal/harness/pi/probe.go                |  29 +-
+ daemon/internal/harness/registry.go                | 124 +------
+ ...026-11-21-rf-w3-04-probe-registry-dedup-plan.md | 368 +++++++++++++++++++++
+ 12 files changed, 890 insertions(+), 286 deletions(-)
+```
+
+`git diff --numstat` over the 11 harness files: 522 insertions / 286 deletions. Non-test sources
+159 inserted / 283 deleted = **−243**, of which `registry.go` −106, `codex/probe.go` −88,
+`pi/probe.go` −21, `opencode/adapter.go` −21, `omo/probe.go` −7, `claude_probe.go` two rewritten
+call-site lines; the new shared `bounded_probe.go` is 119 lines including doc comments, so the
+**net non-test delta is −124**. Test files: `bounded_probe_test.go` 275/0 (new; 268 at implement,
+widened by the fix-r1 deadline window), `omo/probe_test.go` 51/0 (new guard rows),
+`claude_probe_test.go` 20/3 (one test re-pointed, one nil-ctx entry row), `codex_probe_test.go`
+17/0 (one nil-ctx entry row) — 363 inserted test lines and 3 rewritten. The contract's −350…−400
+band is report-only (D2, P1-3) and the duplication table of §1 is the judged artifact: 8
+bounded-probe implementations → 1, 2 `SchemaDigest` bodies → 1, 6 runner bodies → 1.
 
 ## 6. Evidence plan (all foreground, on the final tree)
 
@@ -182,16 +292,19 @@ implementations → 1, 2 `SchemaDigest` bodies → 1, 6 runner bodies → 1.
 | linux suite | `wsl -d Ubuntu-24.04 -u accept` → `cd /mnt/q/repos/wt-w3-04-probe-registry-dedup/symmetry/daemon && go test -count=1 ./internal/harness/...` (the contract names the canonical checkout path; the tree under test must be this worktree). **Recorded result on the frozen tree, run alone**: `ok` for root `harness`, `claude`, `codex`, `omo`, `probeconformance`; `FAIL` for `omp`, `opencode` and `pi`. Every failing test is loopback-dependent (`omp` `TestNativeAcceptanceCancelToolOracle` readiness handshake, `opencode/client_test.go` and `pi/provider_bridge_test.go` HTTP), and this distro cannot complete a loopback TCP connect at all: a five-line `python3` bind/listen/connect on 127.0.0.1 times out here. Pre-existence proven in the untouched `/mnt/q/repos/symmetry` checkout (`9747127f`, no slice changes): `TestClientHealthUsesExactEndpointAndBasicAuth` and `TestNativeAcceptanceCancelToolOracle` fail there identically. All clause-1 named probe suites are green on both hosts. Sidenote: the nested `wsl.exe -- bash -lc` path mangles `$?`/`PIPESTATUS` (host bash reports them correctly), so the per-package `ok`/`FAIL` lines and `&&`/`||` probes are the recorded evidence, not an echoed status. |
 | whitespace | `git diff --check` |
 | host path | `git diff origin/main...HEAD` filtered case-insensitively for a profile-directory separator (expect none) |
-| mutation (a) | flip the bound in `RunBoundedProbe` (drop `WithTimeout` / widen it) → the new timeout row must fail red |
+| mutation (a) | flip the bound in `RunBoundedProbe` (drop `WithTimeout` / widen it) → the new timeout row must fail red; narrowed (`timeout/2`) it must fail the window assertion (mutation (i)) |
 | mutation (b) | drop one context check in `RunBoundedProbe` → the new cancellation-after-success row (and, for the pre-check, the expired-context row) must fail red |
 | mutation (c) | `grep -c "context.WithTimeout"` and `grep -c "func .* Run(ctx"` per probe file before/after — reported, never a gate |
 | mutation (d) | make `CodexSchemaDigest` bypass the injected invoker → `TestOSCommandRunnerSchemaDigestUsesBoundedCommand` (`codex/probe_test.go:163`) and the new shared-seam row must fail red |
 | mutation (e) | remove the OmO 64 KiB guard → the new `omo/probe_test.go` row must fail red |
+| mutation (i) | narrow the bound in `RunBoundedProbe` (`context.WithTimeout(ctx, timeout/2)`) → `TestRunBoundedProbePassesDelegateResultThroughUntouched` must fail red on the deadline window (fix r1, STD-A03; recorded run: `delegate deadline = … m=+15.009…`) |
 
 `probeconformance` and `pi/`, `codex/`, `opencode/`, `omo/` probe suites run inside
 `./internal/harness/...`. No measurement or benchmark harness runs concurrently with the suite.
 Native acceptance suites that `t.Skip` without credentials are reported as not run with their skip
-conditions named.
+conditions named. Fix r1 (2026-11-21) re-ran this battery on the fix-r1 worktree; the exit codes and
+the test counts live in the fix-r1 `answer.md`, and this plan stays the single source of the
+duplication count (§1) and the delta numbers (§5).
 
 ## 7. Which moved strings are already asserted
 
@@ -199,7 +312,7 @@ conditions named.
 | --- | --- | --- |
 | `harness probe context must not be nil` | none directly | New root row asserts the exact text and that the delegate is not called. `claude_probe_test.go:153` is re-pointed to `RunBoundedProbe` and keeps asserting nil output + `context.DeadlineExceeded`. |
 | Codex schema strings (`create`/`remove`/`generate`/`read`) | none directly | The new root row pins the invoker routing, the invocation shape, the digest format and the nil-ctx text; `codex/probe_test.go:163` keeps pinning the codex runner's seam. |
-| `generate Codex app-server schema: %w: %s` | `codex/probe_test.go:107` (bounded command errors) | unchanged text; the codex suite stays the witness. |
+| `generate Codex app-server schema: %w: %s` | The root digest-failure row pins the `generate Codex app-server schema: ` prefix plus the error identity (`bounded_probe_test.go:265`); `codex/probe_test.go:107` `TestProbeMapsBoundedCommandErrorsToFailClosedResults` pins only the outer `Codex app-server schema probe failed` reason (`:143`). | Text unchanged. The `: %s` trimmed-output suffix is **not asserted anywhere** — recorded here, not compensated (fix r1, SPEC-A05). |
 | `harness.ErrHarnessUnavailable` / `ErrNativeUnverified` / `ErrUnsupportedVersion` wraps | `codex_probe_test.go` (7 behaviours), `claude_probe_test.go` (13), `pi/probe_test.go`, `opencode/adapter_test.go`, `omo/probe_test.go`, `probeconformance` | untouched by the diff; both suites run on Windows and under WSL. |
 | `OmO probe output exceeds limit` | none | New row in `omo/probe_test.go` (below), plus the at-limit boundary row so the `>` comparison is pinned from both sides. |
 
@@ -224,7 +337,9 @@ conditions named.
    row is added as a **new, additive test function in `omo/probe_test.go`** (no existing assertion
    is edited; `bytes` is its only new import). It is the minimal, collision-free home for a
    required clause; the owner declares it here and in the report. Rejected alternatives: a
-   tautological root row that re-implements the guard, or dropping the clause.
+   tautological root row that re-implements the guard, or dropping the clause. The strict owned set
+   is extended by exactly this one test file; the extension is declared here and carried in the
+   fix-r1 report for the conductor's ratification (SPEC-A08). It adds no production surface.
 2. **The WSL gate path.** The contract names `/mnt/q/repos/symmetry/daemon` (the canonical
    checkout). Running there would exercise `origin/main`, not this worktree, so the gate runs in
    `/mnt/q/repos/wt-w3-04-probe-registry-dedup/symmetry/daemon`; the exact path and tool versions
@@ -234,15 +349,18 @@ conditions named.
    same nil output), which keeps it a pin on the shared bound instead of on a wrapper.
 4. **Closing the increment.** Contracts, the run ledger and `answer.md` live in the GDD state tree
    and are operator-owned; this repository closes an increment with the plan file, the source and
-   tests. `docs/TODO.md` holds an open entry (line 63) that explicitly assigns the shadowed root
-   probe paths to this slice *as a deletion candidate for a later pass*; this slice keeps those
-   paths (D4) and deletes nothing, so that entry stays open unchanged and no entry closes here.
+   tests. `docs/TODO.md:64-67` holds an open entry that records the **opposite** of a deletion
+   candidate: the shadowed root probe paths are "Not dead-code at all", main-reachable through
+   `NewCodexAdapter`/`NewClaudeAdapter`, and "belong to the probe/registry dedup (W3-04), not to a
+   deletion pass"; this slice keeps those paths (D4) and deletes nothing, so that entry stays open
+   unchanged and no entry closes here (fix r1, SPEC-A06).
 
 ## 10. Files this slice writes
 
 Source: `daemon/internal/harness/bounded_probe.go` (new), `registry.go`, `claude_probe.go`,
 `pi/probe.go`, `codex/probe.go`, `omo/probe.go`, `opencode/adapter.go` (runner lines only).
-Tests: `daemon/internal/harness/bounded_probe_test.go` (new), `claude_probe_test.go` (one test
+Tests: `daemon/internal/harness/bounded_probe_test.go` (new; fix r1 widens one existing assertion
+into a deadline window, no test added or removed), `claude_probe_test.go` (one test
 re-pointed, one nil-ctx entry row), `codex_probe_test.go` (one nil-ctx entry row),
 `omo/probe_test.go` (one new guard test, §9.1).
 Docs: this plan. No `docs/TODO.md` entry opens or closes (§9.4). Nothing under `daemon/internal/app`
