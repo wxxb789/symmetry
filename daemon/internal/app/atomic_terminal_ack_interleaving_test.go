@@ -19,12 +19,14 @@ func TestAtomicTerminalAcknowledgementUnknownWriteSurvivesDeliveredTransition(t 
 	controlClient := &terminalAcknowledgementInterleavingControl{fakeControl: &fakeControl{}, acknowledgementAccepted: make(chan struct{})}
 	result := harness.TaskResult{Kind: harness.ResultFailed, Summary: "native terminal"}
 	active := &runningRun{
-		nativeFinalResult:            &result,
-		nativeCancelCommandID:        "cancel-1",
-		nativeCancelTerminalObserved: true,
-		nativeTerminalOwner:          true,
-		terminalizing:                1,
-		cleanupBlocked:               true,
+		nativeFinalResult: &result,
+		runLifecycle: runLifecycle{
+			nativeCancelCommandID:        "cancel-1",
+			nativeCancelTerminalObserved: true,
+			nativeTerminalOwner:          true,
+			terminalizing:                1,
+		},
+		cleanupBlocked: true,
 	}
 	flushDone := make(chan error, 1)
 	var app *daemon

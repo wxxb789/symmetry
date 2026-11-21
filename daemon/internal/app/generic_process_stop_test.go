@@ -33,7 +33,7 @@ func TestGenericStopErrorsRetainRecoveryBarrierAfterTerminalAcceptance(t *testin
 						t.Fatal(err)
 					}
 				}
-				active := &runningRun{process: fakeProcess{result: test.result}, cleanupBlocked: true, slotHeld: true}
+				active := &runningRun{process: fakeProcess{result: test.result}, cleanupBlocked: true, runLifecycle: runLifecycle{slotHeld: true}}
 				app := &daemon{
 					store: store, control: &fakeControl{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 					running: map[state.RunKey]*runningRun{key: active}, slots: make(chan struct{}, 1),

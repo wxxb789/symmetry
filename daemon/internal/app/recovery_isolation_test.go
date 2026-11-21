@@ -334,7 +334,7 @@ func TestStaleGenericWaitSchedulesCleanupAfterStaleStateWriteFailure(t *testing.
 	}
 
 	process := fakeProcess{result: execution.Result{}}
-	active := &runningRun{process: process, cleanupBlocked: true, slotHeld: true, stale: true}
+	active := &runningRun{process: process, cleanupBlocked: true, runLifecycle: runLifecycle{slotHeld: true, stale: true}}
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
 	app := &daemon{

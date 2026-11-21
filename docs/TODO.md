@@ -717,11 +717,12 @@ witness: stop-receipt barrier stall awaiting a diagnosable occurrence", closed 2
 `e9c457d8`) latched owner loss at every `enterRecovery` entry; the review of that fix (PR #185
 round 1) left two paths open here.
 
-- [ ] Close the same sticky-refusal class for the lease-expiry arm. `runLinuxSupervisorHelperLoop`
-      still computes `ownerLostStop` from `ownerLostLatched || channelClosedV2(watchdog.ownerLost())`
-      (`daemon/internal/platform/supervisor_linux_helper.go:838`) and the lease-expiry arm
-      (`:978-993`) calls `stop()` without `enterRecovery`; if the owner dies or wedges as the lease
-      expires and that timer arm wins the `select` before the control-EOF event, the final
+- [ ] Close the same sticky-refusal class for the lease-expiry arm. `ownerLostStop` in
+      `(*linuxSupervisorSession).runStop` is still computed from `ownerLostLatched ||
+      channelClosedV2(watchdog.ownerLost())` (`supervisor_session.go`); the lease-expiry arm of
+      `(*linuxSupervisorSession).runHelperLoop` calls `session.stop()` without `enterRecovery`. If
+      the owner dies or wedges as the lease expires and that timer arm wins the `select` before the
+      control-EOF event, the final
       descendant scan persists over the dead metadata transport, the failure latches the sticky
       `descendantScanLost` (`process_unix.go`, the final-scan block and the monitor's
       `pre_scan_ack_failure` path), and every later stop is refused exactly as in CI 44876100236.
@@ -1238,3 +1239,41 @@ instead of appended.
       surface so a follow-up owner can decide unexport/retire/wire for both together.
       `Store.EnsureGoalSessionLineageAvailable`, the same shape, was removed by PR #215 (the
       rf-w1-06 dead-code candidate above).
+
+## Deferred findings (rf-a4 core work-item eligibility, 2026-11-21)
+
+- [ ] Unify the allowed-actions predicate the Goal authority policy is read through: the two
+      spellings are `provider_operation_allowed?/2`
+      (`control/lib/symmetry_control/goals.ex:9982-9985`, `operation in
+      allowed_values(revision.authority_policy, "allowed_actions") and operation in
+      allowed_values(revision.execution_policy, "allowed_actions")`) and `goal_action_allowed?/2`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:607-609`, the same conjunction
+      through `goal_allowed_actions/1`). Out of scope for rf-a4 (2026-11-21, branch
+      `refactor/rf-a4-core-work-item-eligibility`): both files are owned by other chains — the
+      `goals.ex` region by W4-07/W5-14 and `provider_access.ex` by W4-06 (#189) — and the
+      slice's failure control forbids touching them. The unification is one predicate over
+      `(revision, operation)` with one `allowed_actions` reader, whichever chain lands last owns
+      it.
+
+- [ ] Move the chat work-item projection into core (W5-15, control half): the chat read model
+      reaches web-side code instead of the shared core verdicts —
+      `control/lib/symmetry_control/chat/read_model.ex:10,46` calls
+      `SymmetryControlWeb.PortalJSON.work_item_detail/2` and then overrides the five capability
+      members (`:51-65`: `can_cancel`, `can_retry`, `can_guide`, `can_pause`, `can_resume`, with
+      `historical: true`), and `control/lib/symmetry_control/chat.ex:19` aliases
+      `SymmetryControlWeb.Protocol` for `normalize_map/1` (`:26`, `:68`). Deferred by rf-a4
+      (2026-11-21, same branch): the slice's owned set excludes `chat/**`, and W5-15 owns the
+      inversion plus `decision.lock_version`, consuming the new
+      `SymmetryControl.Workspaces.WorkItemEligibility` for the chat override. The served chat
+      document is unchanged by rf-a4.
+
+## Deferred review findings (PR #213)
+
+- [ ] Rename the cleanup memo `runningRun.cleanupBlocked` and move it into `runLifecycle` under a
+      distinct name (PR #213 review r1, P3-1; plan
+      `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md`, D1). The memo is an independent
+      field that `markCleanupBlocked` and `clearCleanupBlock` set directly, separate from the
+      derived `cleanupBlocked()` predicate; a field cannot share the method's name on one type,
+      so the memo kept its base name outside the module. D1 measured option (a) at 86 test-file
+      lines in 17 files at base (42 fixture-literal keys and 44 assertion/read lines), so the
+      rename needs that mechanical rewrite plus the write-site scan's field-list update.

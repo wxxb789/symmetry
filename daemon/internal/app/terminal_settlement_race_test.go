@@ -111,14 +111,16 @@ func TestConclusiveTerminalFinalizesMatchingUsageOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	active := &runningRun{
-		nativeTerminalOwner:         true,
-		nativeTerminalOwnerClaim:    3,
-		nativeTerminalOwnerSequence: 3,
-		nativeUsageRetryOwnerClaim:  3,
-		nativeUsageRetryPending:     true,
-		nativeUsageRetryExhausted:   true,
-		terminalizing:               1,
-		cleanupBlocked:              true,
+		runLifecycle: runLifecycle{
+			nativeTerminalOwner:         true,
+			nativeTerminalOwnerClaim:    3,
+			nativeTerminalOwnerSequence: 3,
+			nativeUsageRetryOwnerClaim:  3,
+			nativeUsageRetryPending:     true,
+			nativeUsageRetryExhausted:   true,
+			terminalizing:               1,
+		},
+		cleanupBlocked: true,
 	}
 	app := &daemon{store: store, running: map[state.RunKey]*runningRun{key: active}, options: options{clock: time.Now}}
 	deliveryErr := &control.APIError{StatusCode: http.StatusConflict, Code: control.OwnershipLost, Message: "ownership lost"}

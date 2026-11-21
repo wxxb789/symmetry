@@ -1,35 +1,4 @@
 #!/usr/bin/env python3
-"""Prove the ci.yml changed-path classifier and the routing its outputs gate.
-
-The `changes` job in `.github/workflows/ci.yml` carries the only copy of the
-changed-path classifier: a Python program inside the `Classify changed paths`
-step's `python3 - <<'PY'` heredoc whose three outputs (`run-heavy`,
-`run-records`, `run-citations`) decide which jobs a pull request runs. Nothing
-else executes that program, so an edit to one of its predicate clauses silently
-rewires the whole job matrix.
-
-This suite extracts the program text out of the workflow and runs *that* text
-against fixture diffs in throwaway Git repositories. The fixture repositories
-exist because the program classifies exactly the changed-path set of
-`git diff --name-only --no-renames -z HEAD^1 HEAD`: only a real repository with
-a real two-commit history produces it, and only a real diff can pin the rename
-and deletion behaviour the `--no-renames` flag buys. Each fixture gets its own
-repository of exactly two commits - the fixture's base files, then the fixture's
-diff - so one case's files cannot leak into another's diff.
-
-Beyond the per-fixture outputs the suite parses the workflow's jobs (`needs:`,
-`if:`, the `changes` outputs) and pins the routing: which output gates which
-job, that `legacy-route-audit` is the one unconditional job, and that the
-`github.event_name != 'pull_request'` fold runs every job off a pull request.
-The step that carries the heredoc is parsed too - its `id: paths` and its
-pull-request-only `if:` are part of the routing, because a skipped step leaves
-every output unset - and each audited corpus entry must be named by a
-family-complete literal, so a literal naming one file under a directory entry
-cannot stand in for the directory.
-The mutation cases at the bottom sabotage in-memory copies of the workflow and
-program text - never the files themselves - to prove those assertions fail when
-a predicate clause, an output fold, or a routing changes.
-"""
 
 import ast
 import collections.abc
@@ -46,6 +15,9 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CI_DIR = ROOT / "scripts" / "ci"
+CLASSIFIER = CI_DIR / "classify-changed-paths.py"
+CORPUS_MODULE = CI_DIR / "audited_paths.py"
+CITATION_GATE = CI_DIR / "check-citation-existence.py"
 
 OUTPUT_KEYS = ("run-heavy", "run-records", "run-citations")
 EVENT_CLAUSE = "github.event_name != 'pull_request'"
@@ -127,25 +99,25 @@ COVERAGE_COMMANDS = {
     "coverage-frontend": ("        run: pnpm --filter @symmetry/frontend exec vitest run --coverage",),
 }
 
-# The audited corpus the citation gate keeps in
-# scripts/ci/check-citation-existence.py, mapped to the fixture whose diff
-# touches it: a file under a directory entry, the file itself for a file entry.
-# The corpus and this mapping are updated together - a corpus entry without a
-# fixture fails the audited-document test, which is the point.
+# Updated together with the corpus: an entry without a fixture here fails
+# test_every_audited_document_gates_only_run_citations.
 AUDITED_FIXTURES = {
     "docs/runbooks": "docs-runbooks-modified",
     "docs/design/quality.md": "quality-design-modified",
     "docs/archive/CLOSED-TODO.md": "closed-todo-modified",
 }
 
-# The citation job's own tool paths: the gate's program, its fixture suite and the
-# revision-range module both the record and the citation gate read. They are not
-# audited documents, so the audited-corpus check cannot explain the literals that
-# mention them; this mapping is that explanation, pinned by fixtures the same way.
+# A *new* path under a directory corpus entry; its fixture's pinned triple is the only
+# witness that the family derivation, not an exact match, routes the citation job.
+AUDITED_FAMILY_FIXTURES = {"docs/runbooks": "docs-runbooks-added"}
+
+# Not audited documents: these paths' run-citations literals are explained by this
+# mapping's fixtures rather than by the audited-corpus check.
 CITATION_TOOL_FIXTURES = {
     "scripts/ci/check-citation-existence.py": "citation-tool-modified",
     "scripts/ci/test-check-citation-existence.py": "citation-tests-modified",
     "scripts/ci/revision_scope.py": "revision-scope-modified",
+    "scripts/ci/audited_paths.py": "audited-paths-modified",
 }
 
 JOB_HEADER = re.compile(r"^  ([a-z][a-z0-9-]*):$")
@@ -174,6 +146,7 @@ BASE_FILES = {
     "docs/archive/CLOSED-TODO.md": "# Closed TODO\n\nBase archive text.\n",
     "docs/design/quality.md": "# Quality\n\nBase design text.\n",
     "docs/runbooks/portal.md": "# Portal\n\nBase runbook text.\n",
+    "scripts/ci/audited_paths.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
     "scripts/ci/check-citation-existence.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
     "scripts/ci/check-record-cleanliness.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
     "scripts/ci/model-routing-record-sanitize.py": (
@@ -199,9 +172,6 @@ def first_index(lines: list[str], predicate: collections.abc.Callable[[str], boo
     raise AssertionError(message)
 
 
-# -- extracting the classifier ------------------------------------------------
-
-
 def job_blocks(workflow_text: str) -> dict[str, list[str]]:
     """The workflow's jobs, keyed by name: header line through the next header."""
     lines = workflow_text.splitlines()
@@ -223,56 +193,48 @@ def job_blocks(workflow_text: str) -> dict[str, list[str]]:
     return blocks
 
 
-def extract_classifier(workflow_text: str) -> str:
-    """The classifier program, dedented out of the changes job's heredoc step."""
-    block = job_blocks(workflow_text).get("changes")
-    require(block is not None, "the workflow has no `changes:` job")
-    anchor = first_index(
-        block,
-        lambda line: line.strip() == "python3 - <<'PY'",
-        "the changes job has no `python3 - <<'PY'` classifier step",
-    )
-    terminator = (
-        anchor
-        + 1
-        + first_index(
-            block[anchor + 1 :],
-            lambda line: line.strip() == "PY",
-            "the classifier heredoc has no `PY` terminator line",
-        )
-    )
-    anchor_line = block[anchor]
-    indent = anchor_line[: len(anchor_line) - len(anchor_line.lstrip())]
-    require(bool(indent), "the classifier heredoc anchor carries no block-scalar indentation")
-    body: list[str] = []
-    for line in block[anchor + 1 : terminator]:
-        if not line.strip():
-            body.append("")
-            continue
-        require(line.startswith(indent), f"the classifier heredoc line {line!r} is outdented past its block scalar")
-        body.append(line[len(indent) :])
-    program = "\n".join(body).strip("\n") + "\n"
-    require(bool(program.strip()), "the extracted classifier program is empty")
-    return program
+def module_level_names(program_text: str, filename: str) -> set[str]:
+    names: set[str] = set()
+    for node in ast.parse(program_text, filename=filename).body:
+        targets: tuple[ast.expr, ...] = ()
+        if isinstance(node, ast.Assign):
+            targets = tuple(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            targets = (node.target,)
+        for target in targets:
+            if isinstance(target, ast.Name):
+                names.add(target.id)
+    return names
 
 
-def predicate_literals(program_text: str) -> dict[str, tuple[str, ...]]:
-    """The string constants of the program's three changed-path predicates.
+def imported_names(program_text: str, filename: str, module: str) -> set[str]:
+    names: set[str] = set()
+    for node in ast.parse(program_text, filename=filename).body:
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == module:
+            names.update(alias.name for alias in node.names)
+    return names
 
-    Parsed, never executed: the workflow text is the input, so the suite reads
-    which paths each output can depend on without importing any of it.
-    """
-    tree = ast.parse(program_text, filename="<ci.yml changes classifier>")
-    literals: dict[str, tuple[str, ...]] = {}
+
+def predicate_assignment(tree: ast.Module, output: str) -> ast.Assign | None:
     for node in tree.body:
         if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
             continue
-        output = next((key for key, name in PREDICATE_NAMES.items() if name == node.targets[0].id), None)
-        if output is None:
+        if node.targets[0].id == PREDICATE_NAMES[output]:
+            return node
+    return None
+
+
+def predicate_literals(program_text: str) -> dict[str, tuple[str, ...]]:
+    """The string constants of the program's three predicates; parsed, never executed."""
+    tree = ast.parse(program_text, filename=CLASSIFIER.name)
+    literals: dict[str, tuple[str, ...]] = {}
+    for output in OUTPUT_KEYS:
+        assignment = predicate_assignment(tree, output)
+        if assignment is None:
             continue
         literals[output] = tuple(
             child.value.decode("utf-8") if isinstance(child.value, bytes) else child.value
-            for child in ast.walk(node.value)
+            for child in ast.walk(assignment.value)
             if isinstance(child, ast.Constant) and isinstance(child.value, (str, bytes))
         )
     require(
@@ -282,26 +244,80 @@ def predicate_literals(program_text: str) -> dict[str, tuple[str, ...]]:
     return literals
 
 
+def loaded_names(node: ast.AST) -> set[str]:
+    return {child.id for child in ast.walk(node) if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)}
+
+
+def check_corpus_single_definition() -> None:
+    definers = sorted(
+        path.name
+        for path in sorted(CI_DIR.glob("*.py"))
+        if "AUDITED_PATHS" in module_level_names(path.read_text(encoding="utf-8"), path.name)
+    )
+    require(
+        definers == [CORPUS_MODULE.name],
+        f"AUDITED_PATHS must be defined exactly once under scripts/ci, in "
+        f"{CORPUS_MODULE.name}; it is assigned in {definers}",
+    )
+    for consumer in (CITATION_GATE, CLASSIFIER):
+        require(
+            "AUDITED_PATHS" in imported_names(consumer.read_text(encoding="utf-8"), consumer.name, CORPUS_MODULE.stem),
+            f"{consumer.name} must import AUDITED_PATHS from {CORPUS_MODULE.name}",
+        )
+    gate_text = CITATION_GATE.read_text(encoding="utf-8")
+    require(
+        "AUDITED_PATHS" in loaded_names(ast.parse(gate_text, filename=CITATION_GATE.name)),
+        f"{CITATION_GATE.name} imports AUDITED_PATHS but never loads it: the audited corpus "
+        "must be the pathspec the gate actually selects documents with",
+    )
+
+
+def check_run_citations_consumes_corpus(program_text: str, literals: tuple[str, ...]) -> None:
+    """A literal copy is equal today and diverges as the corpus grows; the `Name` load is the pin."""
+    assignment = predicate_assignment(ast.parse(program_text, filename=CLASSIFIER.name), "run-citations")
+    require(assignment is not None, f"the classifier assigns no {PREDICATE_NAMES['run-citations']} predicate")
+    require(
+        "AUDITED_PATHS" in loaded_names(assignment),
+        f"the {PREDICATE_NAMES['run-citations']} predicate must load AUDITED_PATHS from the shared "
+        f"corpus module {CORPUS_MODULE.name}; an inlined copy of the tuple is not the shared source",
+    )
+    for tool in CITATION_TOOL_FIXTURES:
+        require(
+            any(covers(literal, tool) for literal in literals),
+            f"the {PREDICATE_NAMES['run-citations']} predicate must still name the citation tool path {tool!r}",
+        )
+
+
 def load_audited_paths() -> tuple[str, ...]:
-    """The citation gate's audited corpus, imported from its own module."""
-    module_path = CI_DIR / "check-citation-existence.py"
-    require(module_path.is_file(), f"the citation gate {module_path} does not exist")
-    # The gate imports its sibling revision_scope from its own directory.
-    sys.path.insert(0, str(CI_DIR))
-    try:
-        spec = importlib.util.spec_from_file_location("check_citation_existence_under_test", module_path)
-        require(spec is not None and spec.loader is not None, f"cannot load {module_path}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.remove(str(CI_DIR))
+    require(CORPUS_MODULE.is_file(), f"the shared corpus module {CORPUS_MODULE} does not exist")
+    spec = importlib.util.spec_from_file_location("audited_paths_under_test", CORPUS_MODULE)
+    require(spec is not None and spec.loader is not None, f"cannot load {CORPUS_MODULE}")
+    module = importlib.util.module_from_spec(spec)
+    # The module has no imports of its own, so it needs no sys.path entry.
+    spec.loader.exec_module(module)
     audited = getattr(module, "AUDITED_PATHS", None)
-    require(isinstance(audited, tuple) and audited, "the citation gate declares no non-empty AUDITED_PATHS tuple")
+    require(isinstance(audited, tuple) and audited, f"{CORPUS_MODULE.name} declares no non-empty AUDITED_PATHS tuple")
     for entry in audited:
         require(
             isinstance(entry, str) and entry and not entry.startswith("/") and ".." not in entry.split("/"),
             f"unparsable AUDITED_PATHS entry {entry!r}",
         )
+    # Loading the gate the way a run does (its directory on sys.path) pins that the value
+    # it ends up with is the shared tuple.
+    require(CITATION_GATE.is_file(), f"the citation gate {CITATION_GATE} does not exist")
+    sys.path.insert(0, str(CI_DIR))
+    try:
+        gate_spec = importlib.util.spec_from_file_location("check_citation_existence_under_test", CITATION_GATE)
+        require(gate_spec is not None and gate_spec.loader is not None, f"cannot load {CITATION_GATE}")
+        gate = importlib.util.module_from_spec(gate_spec)
+        gate_spec.loader.exec_module(gate)
+    finally:
+        sys.path.remove(str(CI_DIR))
+    require(
+        getattr(gate, "AUDITED_PATHS", None) == audited,
+        f"{CITATION_GATE.name} must import the shared corpus {audited!r}; it holds "
+        f"{getattr(gate, 'AUDITED_PATHS', None)!r}",
+    )
     return audited
 
 
@@ -310,33 +326,30 @@ def covers(literal: str, entry: str) -> bool:
     return literal == entry or literal == entry + "/" or literal.startswith(entry + "/")
 
 
-def audited_family_literal(entry: str) -> str:
-    """The literal the classifier must use to cover the whole corpus entry.
-
-    A corpus entry that names a directory must be covered by its trailing-slash family
-    prefix, so a new file under it still gates the citation job; a file entry must be
-    named exactly.
-    """
-    return entry + "/" if (ROOT / entry).is_dir() else entry
+PATH_SHAPED = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 
 
-def check_audited_family_coverage(
-    literals: dict[str, tuple[str, ...]],
-    audited: tuple[str, ...],
-) -> None:
-    """Every corpus entry is named in run-citations by its family-complete literal.
+def path_literals(literals: tuple[str, ...]) -> tuple[str, ...]:
+    """The literals that spell a path; drops the composed `b"/"` separator of the family derivation."""
+    return tuple(literal for literal in literals if PATH_SHAPED.search(literal))
 
-    ``covers`` alone would accept a literal naming one file inside a directory entry:
-    ``docs/runbooks/portal.md`` matches the entry's prefix and would keep today's
-    fixtures green while a new runbook silently stopped gating the citation job.
-    """
-    for entry in audited:
-        expected = audited_family_literal(entry)
+
+def check_family_fixture_coverage(audited: tuple[str, ...]) -> None:
+    """Each directory entry's new-path fixture is the witness that the family, not a literal, routes it."""
+    directory_entries = sorted(entry for entry in audited if (ROOT / entry).is_dir())
+    require(
+        sorted(AUDITED_FAMILY_FIXTURES) == directory_entries,
+        f"every directory corpus entry {directory_entries} needs a new-path fixture; "
+        f"found {sorted(AUDITED_FAMILY_FIXTURES)}",
+    )
+    for entry in directory_entries:
+        fixture = FIXTURES_BY_NAME[AUDITED_FAMILY_FIXTURES[entry]]
+        require(len(fixture.paths) == 1, f"family fixture {fixture.name} must change exactly one path")
+        (added,) = fixture.paths
+        modified = FIXTURES_BY_NAME[AUDITED_FIXTURES[entry]]
         require(
-            any(literal == expected for literal in literals["run-citations"]),
-            f"the run-citations predicate must name the corpus entry {entry!r} as "
-            f"{expected!r}, so a new path under it still gates the job; a literal naming "
-            "one file under a directory entry does not cover the family",
+            added.startswith(entry + "/") and added not in modified.paths,
+            f"family fixture {fixture.name} must add a new path under {entry!r}; its diff touches {added!r}",
         )
 
 
@@ -579,25 +592,20 @@ def check_coverage_artifacts(workflow_text: str) -> None:
 
 STEP_HEADER = re.compile(r"^      - ")
 STEP_KEY = re.compile(r"^        ([a-z][a-z0-9-]*): (.+?)\s*$")
+CLASSIFIER_INVOCATION = f"run: python3 {CLASSIFIER.relative_to(ROOT).as_posix()}"
 
 
 def classifier_step_keys(workflow_text: str) -> dict[str, str]:
-    """The scalar keys of the step that carries the classifier heredoc.
-
-    The step-level condition is part of the routing, not an implementation detail: the
-    program text alone runs whatever its ``if:`` says, so with the outputs' fold
-    unchanged, a step GitHub skips on a pull request leaves every output unset and
-    silently skips every gated job.
-    """
+    """The scalar keys of the classifier step; its ``if:`` is routing, not an implementation detail."""
     block = job_blocks(workflow_text).get("changes")
     require(block is not None, "the workflow has no `changes:` job")
     anchor = first_index(
         block,
-        lambda line: line.strip() == "python3 - <<'PY'",
-        "the changes job has no `python3 - <<'PY'` classifier step",
+        lambda line: line.strip() == CLASSIFIER_INVOCATION,
+        f"the changes job has no step whose `{CLASSIFIER_INVOCATION}` runs the classifier program",
     )
     headers = [index for index in range(anchor) if STEP_HEADER.match(block[index])]
-    require(bool(headers), "the classifier heredoc step has no `- ` header line above it")
+    require(bool(headers), "the classifier step has no `- ` header line above it")
     keys: dict[str, str] = {}
     for line in block[headers[-1] : anchor]:
         match = STEP_KEY.match(line)
@@ -606,19 +614,23 @@ def classifier_step_keys(workflow_text: str) -> dict[str, str]:
     return keys
 
 
-def check_classifier_step(keys: dict[str, str]) -> None:
-    """The classifier heredoc runs on pull requests, under ``id: paths``, with bash."""
+def check_classifier_step(keys: dict[str, str], changes_block: list[str]) -> None:
     require(
         keys.get("id") == "paths",
-        "the classifier heredoc step must carry `id: paths`: the outputs' fold reads "
+        "the classifier step must carry `id: paths`: the outputs' fold reads "
         f"`steps.paths.outputs`; found {keys.get('id')!r}",
     )
     require(
         keys.get("if") == "github.event_name == 'pull_request'",
-        "the classifier heredoc step must run only on pull requests - the event whose "
+        "the classifier step must run only on pull requests - the event whose "
         f"diff (HEAD^1..HEAD) the program classifies; found {keys.get('if')!r}",
     )
     require(keys.get("shell") == "bash", f"the classifier step must pin `shell: bash`; found {keys.get('shell')!r}")
+    require(
+        not any("python3 - <<'PY'" in line for line in changes_block),
+        "the changes job must not carry the classifier program in a `python3 - <<'PY'` heredoc "
+        f"again: the step runs {CLASSIFIER.relative_to(ROOT).as_posix()}",
+    )
 
 
 # -- fixture repositories -----------------------------------------------------
@@ -679,6 +691,13 @@ FIXTURES = (
         (False, False, True),
         ("docs/runbooks/portal.md",),
         rewrite_fixture_file("docs/runbooks/portal.md", "# Portal\n\nEdited runbook text.\n"),
+    ),
+    Fixture(
+        "docs-runbooks-added",
+        "a new file under a directory corpus entry still gates the citation job",
+        (False, False, True),
+        ("docs/runbooks/new-runbook.md",),
+        rewrite_fixture_file("docs/runbooks/new-runbook.md", "# New runbook\n\nAdded runbook text.\n"),
     ),
     Fixture(
         "root-markdown-modified",
@@ -788,6 +807,13 @@ FIXTURES = (
         ("scripts/ci/test-check-citation-existence.py",),
         rewrite_fixture_file("scripts/ci/test-check-citation-existence.py", "# Stand-in bytes, edited.\n"),
     ),
+    Fixture(
+        "audited-paths-modified",
+        "a changed corpus module gates the citation job that imports it",
+        (True, False, True),
+        ("scripts/ci/audited_paths.py",),
+        rewrite_fixture_file("scripts/ci/audited_paths.py", "# Stand-in bytes, edited.\n"),
+    ),
 )
 
 FIXTURES_BY_NAME = {fixture.name: fixture for fixture in FIXTURES}
@@ -881,7 +907,7 @@ def build_fixture_repository(root: pathlib.Path, fixture: Fixture, program: path
 
 
 class ChangedPathClassifierTests(unittest.TestCase):
-    """Each expectation below is a measured run of the workflow's own classifier text."""
+    """Each expectation below is a measured run of the workflow's own classifier program."""
 
     maxDiff = None
 
@@ -891,14 +917,22 @@ class ChangedPathClassifierTests(unittest.TestCase):
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.root = pathlib.Path(cls.temporary.name)
         cls.workflow_text = WORKFLOW.read_text(encoding="utf-8")
-        cls.program_text = extract_classifier(cls.workflow_text)
+        cls.program_text = CLASSIFIER.read_text(encoding="utf-8")
         cls.model = parse_model(cls.workflow_text)
         cls.audited = load_audited_paths()
-        cls.program_file = cls.root / "classifier.py"
-        cls.program_file.write_text(cls.program_text, encoding="utf-8", newline="\n")
+        # A mutated copy runs from this directory (its own `sys.path[0]`), so the shared corpus
+        # module must be beside it or every mutation fails on the import, not on its clause.
+        (cls.root / CORPUS_MODULE.name).write_text(
+            CORPUS_MODULE.read_text(encoding="utf-8"), encoding="utf-8", newline="\n"
+        )
         cls.outputs: dict[str, dict[str, bool]] = {}
         for fixture in FIXTURES:
-            cls.outputs[fixture.name] = build_fixture_repository(cls.root, fixture, cls.program_file)
+            cls.outputs[fixture.name] = build_fixture_repository(cls.root, fixture, CLASSIFIER)
+            measured = cls.outputs[fixture.name]
+            print(
+                f"fixture {fixture.name}: " + " ".join(f"{key}={str(measured[key]).lower()}" for key in OUTPUT_KEYS),
+                flush=True,
+            )
 
     def run_program(self, program_text: str, fixture: Fixture) -> dict[str, bool]:
         """Run a mutated copy of the classifier text against one fixture's repository."""
@@ -920,7 +954,6 @@ class ChangedPathClassifierTests(unittest.TestCase):
             set(AUDITED_FIXTURES),
             "the citation gate's audited corpus changed; teach this suite the new entries",
         )
-        check_audited_family_coverage(literals, self.audited)
         for entry in self.audited:
             with self.subTest(audited=entry):
                 for output in ("run-heavy", "run-records"):
@@ -933,13 +966,22 @@ class ChangedPathClassifierTests(unittest.TestCase):
                     any(covers(path, entry) for path in fixture.paths), f"fixture {fixture.name} does not touch {entry}"
                 )
                 check_fixture_triple(self.outputs[fixture.name], fixture)
-        for literal in literals["run-citations"]:
+        for literal in path_literals(literals["run-citations"]):
             with self.subTest(literal=literal):
                 self.assertTrue(
                     any(covers(literal, entry) for entry in (*self.audited, *CITATION_TOOL_FIXTURES)),
                     f"the run-citations predicate mentions {literal}, which no audited path "
                     "or citation tool path explains",
                 )
+
+    def test_the_audited_corpus_has_one_definition_consumed_by_both_users(self) -> None:
+        check_corpus_single_definition()
+
+    def test_the_run_citations_predicate_consumes_the_shared_corpus(self) -> None:
+        check_run_citations_consumes_corpus(self.program_text, predicate_literals(self.program_text)["run-citations"])
+
+    def test_every_directory_corpus_entry_covers_a_new_path(self) -> None:
+        check_family_fixture_coverage(self.audited)
 
     def test_every_citation_tool_path_gates_only_run_citations(self) -> None:
         literals = predicate_literals(self.program_text)
@@ -971,8 +1013,8 @@ class ChangedPathClassifierTests(unittest.TestCase):
     def test_every_gated_job_gates_on_its_pinned_classifier_output(self) -> None:
         check_job_gating(self.model)
 
-    def test_the_classifier_step_runs_only_on_pull_requests(self) -> None:
-        check_classifier_step(classifier_step_keys(self.workflow_text))
+    def test_the_classifier_step_runs_the_program_only_on_pull_requests(self) -> None:
+        check_classifier_step(classifier_step_keys(self.workflow_text), job_blocks(self.workflow_text)["changes"])
 
     def test_pull_request_runs_exactly_the_jobs_its_outputs_gate(self) -> None:
         check_output_folds(self.model)
@@ -1157,13 +1199,47 @@ class ChangedPathClassifierTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             check_fixture_triple(outputs, fixture)
 
-    def test_mutation_narrowing_the_runbooks_prefix_breaks_the_family_coverage(self) -> None:
-        mutated = self.program_text.replace('path.startswith(b"docs/runbooks/")', 'path == b"docs/runbooks/portal.md"')
+    def test_mutation_making_the_corpus_family_exact_match_only_breaks_the_added_runbook_fixture(self) -> None:
+        fixture = FIXTURES_BY_NAME["docs-runbooks-added"]
+        mutated = self.program_text.replace(
+            'path == entry.encode() or path.startswith(entry.encode() + b"/")',
+            "path == entry.encode()",
+        )
         self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
-        literals = predicate_literals(mutated)
-        self.assertNotIn("docs/runbooks/", literals["run-citations"])
+        outputs = self.run_program(mutated, fixture)
+        self.assertEqual(
+            triple_of(outputs),
+            (False, False, False),
+            "an exact-match-only family must flip run-citations for a new path under a directory entry",
+        )
         with self.assertRaises(AssertionError):
-            check_audited_family_coverage(literals, self.audited)
+            check_fixture_triple(outputs, fixture)
+
+    def test_mutation_dropping_the_corpus_modules_citations_clause_breaks_its_fixture(self) -> None:
+        fixture = FIXTURES_BY_NAME["audited-paths-modified"]
+        mutated = self.program_text.replace('or path == b"scripts/ci/audited_paths.py"\n', "")
+        self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
+        outputs = self.run_program(mutated, fixture)
+        self.assertEqual(
+            triple_of(outputs),
+            (True, False, False),
+            "dropping the corpus module's clause must flip run-citations for its own fixture",
+        )
+        with self.assertRaises(AssertionError):
+            check_fixture_triple(outputs, fixture)
+
+    def test_mutation_inlining_the_corpus_literal_breaks_the_consumption_check(self) -> None:
+        fixture = FIXTURES_BY_NAME["docs-runbooks-added"]
+        copies = ", ".join(f'"{entry}"' for entry in self.audited)
+        mutated = self.program_text.replace("from audited_paths import AUDITED_PATHS\n", "").replace(
+            "for entry in AUDITED_PATHS", f"for entry in ({copies})"
+        )
+        self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
+        # The inlined copy routes the fixture exactly as the import does, so the consumption
+        # check is the pin, not a fixture triple.
+        check_fixture_triple(self.run_program(mutated, fixture), fixture)
+        with self.assertRaises(AssertionError):
+            check_run_citations_consumes_corpus(mutated, predicate_literals(mutated)["run-citations"])
 
     def test_mutation_running_the_classifier_step_off_pull_requests_breaks_the_step_check(self) -> None:
         mutated = self.workflow_text.replace(
@@ -1173,7 +1249,37 @@ class ChangedPathClassifierTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         self.assertEqual(classifier_step_keys(mutated)["if"], "github.event_name == 'push'")
         with self.assertRaises(AssertionError):
-            check_classifier_step(classifier_step_keys(mutated))
+            check_classifier_step(classifier_step_keys(mutated), job_blocks(mutated)["changes"])
+
+    def test_mutation_returning_the_classifier_to_a_heredoc_breaks_the_step_anchor(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"        {CLASSIFIER_INVOCATION}",
+            "        run: |\n          python3 - <<'PY'\n          pass\n          PY",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            classifier_step_keys(mutated)
+
+    def test_mutation_reintroducing_a_heredoc_step_in_the_changes_job_breaks_the_step_check(self) -> None:
+        heredoc_step = "      - run: |\n          python3 - <<'PY'\n          pass\n          PY\n"
+        mutated = self.workflow_text.replace(
+            "      - name: Classify changed paths\n",
+            heredoc_step + "      - name: Classify changed paths\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        self.assertEqual(classifier_step_keys(mutated)["id"], "paths")
+        with self.assertRaises(AssertionError):
+            check_classifier_step(classifier_step_keys(mutated), job_blocks(mutated)["changes"])
+
+    def test_a_heredoc_in_an_unrelated_job_stays_green(self) -> None:
+        heredoc_step = "      - run: |\n          python3 - <<'PY'\n          pass\n          PY\n"
+        mutated = self.workflow_text.replace(
+            "      - run: python3 scripts/ci/test-no-legacy-routes-audit.py\n",
+            "      - run: python3 scripts/ci/test-no-legacy-routes-audit.py\n" + heredoc_step,
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        self.assertIn("python3 - <<'PY'", mutated)
+        check_classifier_step(classifier_step_keys(mutated), job_blocks(mutated)["changes"])
 
 
 if __name__ == "__main__":
