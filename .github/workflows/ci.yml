@@ -1496,6 +1496,7 @@ jobs:
           python3 ../scripts/ci/test-model-routing-evaluation.py
           python3 ../scripts/ci/test-model-routing-omp-usage.py
           python3 ../scripts/ci/test-model-routing-record-sanitize.py
+          python3 ../scripts/ci/test-model-routing-record-sanitize-json.py
           python3 ../scripts/ci/test-check-record-cleanliness.py
           python3 ../scripts/ci/test-model-routing-source-subject.py
       # The ordinary (non-race) pass is scoped to the two packages whose named

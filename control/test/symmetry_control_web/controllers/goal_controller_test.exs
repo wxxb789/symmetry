@@ -6,6 +6,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
 
   import SymmetryControlWeb.TestConn, only: [api_conn: 0, operator_conn: 1, assert_error: 3]
 
+  import Ecto.Query
+
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
@@ -276,6 +278,208 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     )
   end
 
+  test "the Goal surface decides the durable actor and the served projection", %{conn: conn} do
+    project = create_project()
+    initial_revision = goal_payload()["initial_revision"]
+    portal_conn = api_conn()
+    operator = operator_conn(conn)
+
+    %{"goal" => %{"id" => portal_goal_id}} =
+      portal_conn
+      |> post("/portal/api/projects/#{project.id}/goals", goal_payload())
+      |> json_response(201)
+
+    %{"goal" => %{"id" => operator_goal_id}} =
+      operator
+      |> post("/api/v1/projects/#{project.id}/goals", goal_payload())
+      |> json_response(201)
+
+    assert revision_actor(portal_goal_id, 1) == "portal_operator"
+    assert revision_actor(operator_goal_id, 1) == "operator"
+
+    assert %{"event" => _} =
+             amend_goal(portal_conn, "/portal/api", portal_goal_id, initial_revision)
+             |> json_response(200)
+
+    assert %{"event" => _} =
+             amend_goal(operator, "/api/v1", operator_goal_id, initial_revision)
+             |> json_response(200)
+
+    # The durable command rows carry the same actor the create did.
+    assert event_actor(portal_goal_id) == "portal_operator"
+    assert event_actor(operator_goal_id) == "operator"
+    assert revision_actor(portal_goal_id, 2) == "portal_operator"
+    assert revision_actor(operator_goal_id, 2) == "operator"
+
+    # The portal read adds the project label the surface renders; the operator
+    # API never serves that portal projection.
+    portal_read = portal_conn |> get("/portal/api/goals/#{portal_goal_id}") |> json_response(200)
+    assert Map.has_key?(portal_read, "project_key")
+    assert Map.has_key?(portal_read, "project_name")
+
+    operator_read =
+      operator |> get("/api/v1/goals/#{operator_goal_id}") |> json_response(200)
+
+    assert Map.has_key?(operator_read, "source")
+    refute Map.has_key?(operator_read, "project_key")
+    refute Map.has_key?(operator_read, "project_name")
+  end
+
+  test "an encoded portal path keeps the portal surface the router matched" do
+    project = create_project()
+    initial_revision = goal_payload()["initial_revision"]
+    portal_conn = api_conn()
+
+    %{"goal" => %{"id" => goal_id}} =
+      portal_conn
+      |> post("/portal/api/projects/#{project.id}/goals", goal_payload())
+      |> json_response(201)
+
+    # The router matches decoded path segments (`phoenix/router.ex` decodes
+    # `path_info`), so `/%70ortal/api/...` is the portal route even though
+    # `conn.request_path` keeps the encoded text. The surface follows the
+    # matched pipeline, so the projection and the durable actor are the
+    # portal's for this spelling too.
+    read =
+      portal_conn
+      |> get("/%70ortal/api/goals/#{goal_id}")
+      |> json_response(200)
+
+    assert Map.has_key?(read, "project_key")
+    assert Map.has_key?(read, "project_name")
+
+    assert %{"event" => _} =
+             amend_goal(portal_conn, "/%70ortal/api", goal_id, initial_revision)
+             |> json_response(200)
+
+    assert revision_actor(goal_id, 2) == "portal_operator"
+    assert event_actor(goal_id) == "portal_operator"
+  end
+
+  test "no Goal route 500s on its pipeline", %{conn: conn} do
+    project = create_project()
+    initial_revision = goal_payload()["initial_revision"]
+
+    for {conn_at_surface, prefix} <- [
+          {api_conn(), "/portal/api"},
+          {operator_conn(conn), "/api/v1"}
+        ] do
+      goal_id =
+        conn_at_surface
+        |> post("#{prefix}/projects/#{project.id}/goals", goal_payload())
+        |> json_response(201)
+        |> get_in(["goal", "id"])
+
+      for path <- [
+            "/goals/#{goal_id}",
+            "/goals/#{goal_id}/events",
+            "/goals/#{goal_id}/graph"
+          ] do
+        assert json_response(get(conn_at_surface, "#{prefix}#{path}"), 200)
+      end
+
+      assert_error(
+        get(conn_at_surface, "#{prefix}/goals/#{goal_id}/contexts/#{Ecto.UUID.generate()}"),
+        404,
+        "not_found"
+      )
+
+      assert %{"event" => _} =
+               amend_goal(conn_at_surface, prefix, goal_id, initial_revision)
+               |> json_response(200)
+    end
+
+    assert %{"entries" => _} =
+             operator_conn(conn) |> get("/api/v1/attention") |> json_response(200)
+  end
+
+  test "goal integer reads accept exactly the documented forms", %{conn: conn} do
+    goal_id = create_goal(conn)
+    operator = operator_conn(conn)
+    events = "/api/v1/goals/#{goal_id}/events"
+
+    # `after` is the last rendered sequence: non-negative, at most the durable
+    # bigint maximum, and only as decimal text — `Integer.parse/1` keeps the
+    # explicit `+` sign the table below accepts.
+    for {value, status} <- [
+          {"0", 200},
+          {"+1", 200},
+          {" 1", 400},
+          {"", 400},
+          {"-1", 400},
+          {"1.5", 400},
+          {"9223372036854775807", 200},
+          {"9223372036854775808", 400}
+        ] do
+      assert_goal_parameter(operator, events, "after", value, status)
+    end
+
+    # Two bare members keep the last; an array member is not a sequence.
+    after_one = json_response(get(operator, "#{events}?after=1"), 200)
+
+    assert json_response(get(operator, "#{events}?after=0&after=1"), 200) == after_one
+    refute json_response(get(operator, "#{events}?after=0"), 200) == after_one
+
+    assert_error(
+      get(operator, "#{events}?after[]=0&after[]=1"),
+      400,
+      "invalid_request"
+    )
+
+    # The event page is capped at the read model's own 100 even though the
+    # parameter itself accepts any positive integer.
+    for {value, status} <- [
+          {"1", 200},
+          {"+1", 200},
+          {" 1", 400},
+          {"", 400},
+          {"0", 400},
+          {"-1", 400},
+          {"1.5", 400},
+          {"100", 200},
+          {"101", 400},
+          {"9223372036854775807", 400},
+          {"9223372036854775808", 400}
+        ] do
+      assert_goal_parameter(operator, events, "limit", value, status)
+    end
+
+    # The attention read has no page cap, so it serves the positive forms the
+    # event read refuses for size.
+    for {value, status} <- [
+          {"1", 200},
+          {"+1", 200},
+          {" 1", 400},
+          {"", 400},
+          {"0", 400},
+          {"-1", 400},
+          {"1.5", 400},
+          {"101", 200},
+          {"9223372036854775808", 200}
+        ] do
+      assert_goal_parameter(operator, "/api/v1/attention", "limit", value, status)
+    end
+  end
+
+  test "one validation envelope serves every refused changeset" do
+    changeset =
+      %Workspaces.Project{}
+      |> Ecto.Changeset.change(%{})
+      |> Ecto.Changeset.add_error(:key, "can't be blank")
+
+    response = Protocol.validation_error(build_conn(), changeset)
+
+    assert response.status == 422
+
+    assert %{
+             "error" => %{
+               "code" => "validation_failed",
+               "message" => "request contains invalid fields",
+               "fields" => %{"key" => ["can't be blank"]}
+             }
+           } = Jason.decode!(response.resp_body)
+  end
+
   test "Goal failures retain their protocol status and error code" do
     for {reason, status, code} <- [
           {:goal_authority_required, 403, "goal_authority_required"},
@@ -411,13 +615,26 @@ defmodule SymmetryControlWeb.GoalControllerTest do
   end
 
   defp post_goal_command(conn, goal_id, kind, payload) do
-    goal =
-      operator_conn(conn)
-      |> get("/api/v1/goals/#{goal_id}")
-      |> json_response(200)
-
     operator_conn(conn)
-    |> post("/api/v1/goals/#{goal_id}/commands", %{
+    |> goal_command("/api/v1", goal_id, kind, payload)
+    |> json_response(200)
+  end
+
+  defp create_project, do: create_context_project("Goal API project", "G")
+
+  defp amend_goal(conn, prefix, goal_id, initial_revision) do
+    goal_command(conn, prefix, goal_id, "amend", %{
+      "reason" => "Amend the contract from the surface under test",
+      "revision_contract" => Map.delete(initial_revision, "reason")
+    })
+  end
+
+  # The one goal-command envelope both helpers above send: read the goal's
+  # current version/revision on the surface under test, then post the command.
+  defp goal_command(conn, prefix, goal_id, kind, payload) do
+    goal = conn |> get("#{prefix}/goals/#{goal_id}") |> json_response(200)
+
+    post(conn, "#{prefix}/goals/#{goal_id}/commands", %{
       "schema_version" => "symmetry.goal_command.v1",
       "mutation_id" => Ecto.UUID.generate(),
       "expected_version" => goal["version"],
@@ -425,10 +642,31 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       "kind" => kind,
       "payload" => payload
     })
-    |> json_response(200)
   end
 
-  defp create_project, do: create_context_project("Goal API project", "G")
+  defp assert_goal_parameter(conn, path, key, value, status) do
+    response = get(conn, "#{path}?#{URI.encode_query(%{key => value})}")
+
+    if status == 200 do
+      assert json_response(response, 200)
+    else
+      assert_error(response, status, "invalid_request")
+    end
+  end
+
+  defp revision_actor(goal_id, revision) do
+    Repo.get_by!(SymmetryControl.Goals.GoalRevision, goal_id: goal_id, revision: revision).actor_ref
+  end
+
+  defp event_actor(goal_id) do
+    Repo.one!(
+      from(event in SymmetryControl.Goals.GoalEvent,
+        where: event.goal_id == ^goal_id,
+        order_by: [desc: event.sequence],
+        limit: 1
+      )
+    ).actor_ref
+  end
 
   defp enable_goal_rollout do
     goals_config = Application.fetch_env!(:symmetry_control, :goals)

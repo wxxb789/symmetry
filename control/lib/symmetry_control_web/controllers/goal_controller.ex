@@ -10,8 +10,6 @@ defmodule SymmetryControlWeb.GoalController do
   alias SymmetryControlWeb.PortalJSON
   alias SymmetryControlWeb.Protocol
 
-  @max_bigint 9_223_372_036_854_775_807
-
   def create(conn, _params) do
     project_id = Map.fetch!(conn.path_params, "project_id")
 
@@ -79,26 +77,21 @@ defmodule SymmetryControlWeb.GoalController do
     end
   end
 
-  defp actor_ref(conn) do
-    if String.starts_with?(conn.request_path, "/portal/") do
-      "portal_operator"
-    else
-      "operator"
-    end
-  end
+  # The pipeline-assigned surface decides the durable actor, never the request
+  # path shape: a Goal route mounted without one fails loudly instead of
+  # silently acting as the operator.
+  defp actor_ref(%{assigns: %{surface: :portal}}), do: "portal_operator"
+  defp actor_ref(%{assigns: %{surface: :operator}}), do: "operator"
 
   # The portal read adds the project label the surface renders and the durable
   # decision lock version that `resolve_decision` requires as
   # `expected_decision_version`. Every authority member (allowed_actions,
   # blockers, readiness) stays exactly what the durable projection served, and
   # the operator API projection is untouched.
-  defp portal_goal(conn, projection) do
-    if String.starts_with?(conn.request_path, "/portal/") do
-      PortalJSON.goal(projection, project(projection), decision_versions(projection))
-    else
-      projection
-    end
-  end
+  defp portal_goal(%{assigns: %{surface: :portal}}, projection),
+    do: PortalJSON.goal(projection, project(projection), decision_versions(projection))
+
+  defp portal_goal(%{assigns: %{surface: :operator}}, projection), do: projection
 
   defp project(projection), do: Repo.get(Project, projection.project_id)
 
@@ -111,17 +104,15 @@ defmodule SymmetryControlWeb.GoalController do
     |> Map.new(&{&1.id, &1.lock_version})
   end
 
-  defp body_params(conn) when is_map(conn.body_params), do: conn.body_params
-  defp body_params(_conn), do: %{}
-
   defp event_options(conn, params) when is_map(params) do
     # The router's own path params travel with the query params; every other
     # parameter must be part of the accepted event read.
     # `after` is the goal audit sequence the reader has already rendered and
     # `limit` is the served page size, capped at the read model's own maximum.
     with true <- allowed_query_params?(conn, params, ["after", "limit"]),
-         {:ok, after_sequence} <- nonnegative_integer(Map.get(params, "after")),
-         {:ok, limit} <- optional_positive_integer(Map.get(params, "limit")),
+         {:ok, after_sequence} <-
+           optional_wire_integer(Map.get(params, "after"), {0, max_integer()}),
+         {:ok, limit} <- optional_wire_integer(Map.get(params, "limit"), {1, :infinity}),
          true <- is_nil(limit) or limit <= 100 do
       {:ok, [] |> maybe_put(:after, after_sequence) |> maybe_put(:limit, limit)}
     else
@@ -134,7 +125,7 @@ defmodule SymmetryControlWeb.GoalController do
   defp attention_options(params) when is_map(params) do
     with true <- MapSet.subset?(MapSet.new(Map.keys(params)), MapSet.new(["cursor", "limit"])),
          {:ok, cursor} <- optional_text(Map.get(params, "cursor")),
-         {:ok, limit} <- optional_positive_integer(Map.get(params, "limit")) do
+         {:ok, limit} <- optional_wire_integer(Map.get(params, "limit"), {1, :infinity}) do
       {:ok, [] |> maybe_put(:cursor, cursor) |> maybe_put(:limit, limit)}
     else
       _ -> {:error, :invalid_request}
@@ -142,18 +133,4 @@ defmodule SymmetryControlWeb.GoalController do
   end
 
   defp attention_options(_params), do: {:error, :invalid_request}
-
-  defp nonnegative_integer(nil), do: {:ok, nil}
-
-  defp nonnegative_integer(value) when is_integer(value) and value >= 0 and value <= @max_bigint,
-    do: {:ok, value}
-
-  defp nonnegative_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, ""} when parsed >= 0 and parsed <= @max_bigint -> {:ok, parsed}
-      _ -> {:error, :invalid_request}
-    end
-  end
-
-  defp nonnegative_integer(_value), do: {:error, :invalid_request}
 end

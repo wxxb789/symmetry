@@ -14,7 +14,8 @@ import {
   type WorkItemAssignment,
   type Workspace,
 } from "../../services/api";
-import { asText, ownerLabel } from "./presentation";
+import { asText } from "../../services/served";
+import { ownerLabel } from "./presentation";
 
 /**
  * Assignment on `/portal/work/:workItemId`, rendered in both the desktop drawer

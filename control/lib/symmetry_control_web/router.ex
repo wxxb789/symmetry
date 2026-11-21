@@ -6,16 +6,17 @@ defmodule SymmetryControlWeb.Router do
   end
 
   pipeline :enrollment do
-    plug SymmetryControlWeb.Plugs.EnrollmentAuth
+    plug SymmetryControlWeb.Plugs.CredentialAuth, accepts: :enrollment
   end
 
   pipeline :machine do
-    plug SymmetryControlWeb.Plugs.MachineAuth
+    plug SymmetryControlWeb.Plugs.CredentialAuth, accepts: :machine
     plug SymmetryControlWeb.Plugs.PortalInvalidations
   end
 
   pipeline :operator do
-    plug SymmetryControlWeb.Plugs.OperatorAuth
+    plug :put_surface, surface: :operator
+    plug SymmetryControlWeb.Plugs.CredentialAuth, accepts: :operator
     plug SymmetryControlWeb.Plugs.PortalInvalidations
   end
 
@@ -29,6 +30,7 @@ defmodule SymmetryControlWeb.Router do
 
   pipeline :portal_api do
     plug :accepts, ["json"]
+    plug :put_surface, surface: :portal
     plug :fetch_session
     plug :protect_from_forgery
     plug :put_secure_browser_headers
@@ -102,6 +104,11 @@ defmodule SymmetryControlWeb.Router do
   end
 
   defp put_portal_no_store(conn, _options), do: put_resp_header(conn, "cache-control", "no-store")
+
+  # The authority surface a route belongs to, assigned once per pipeline: a
+  # `:portal` route serves the portal projection and acts as the portal
+  # operator, an `:operator` route the durable projection and the operator.
+  defp put_surface(conn, options), do: assign(conn, :surface, Keyword.fetch!(options, :surface))
 
   scope "/", SymmetryControlWeb do
     pipe_through :api
