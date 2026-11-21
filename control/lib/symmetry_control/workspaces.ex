@@ -13,7 +13,7 @@ defmodule SymmetryControl.Workspaces do
   alias SymmetryControl.Orchestration.{Notifier, Runtime, Scheduler, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.Schemas.VersionedChangeset
-  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
+  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem, WorkItemEligibility}
 
   @active_execution_states [
     "queued",
@@ -419,10 +419,7 @@ defmodule SymmetryControl.Workspaces do
       result =
         Repo.transaction(fn ->
           work_item = lock_work_item_with_project(work_item_id)
-          ensure_legacy_work_item(work_item) |> require_ok!()
-          ensure_active_project(work_item.project) |> require_ok!()
-          ensure_external_work_available(work_item) |> require_ok!()
-          if work_item.assignee_type != "agent", do: Repo.rollback(:state_conflict)
+          WorkItemEligibility.retry_gate(work_item) |> require_ok!()
 
           task_id = work_item.orchestration_task_id || Repo.rollback(:state_conflict)
 
@@ -596,11 +593,7 @@ defmodule SymmetryControl.Workspaces do
   end
 
   defp launch_locked_work_item(%WorkItem{project: project} = work_item, opts) do
-    if project.status != "active" or work_item.assignee_type != "agent" or
-         work_item.status not in ["backlog", "ready"] or
-         not WorkItem.external_work_available?(work_item) do
-      Repo.rollback(:state_conflict)
-    end
+    WorkItemEligibility.start(work_item) |> require_ok!()
 
     agent_profile = present(work_item.agent_profile) || project.default_agent_profile
     workspace = present(work_item.workspace) || project.default_workspace
@@ -858,19 +851,11 @@ defmodule SymmetryControl.Workspaces do
   defp ensure_active_project(%Project{status: "active"}), do: :ok
   defp ensure_active_project(%Project{}), do: {:error, :state_conflict}
 
-  defp ensure_external_work_available(work_item) do
-    if WorkItem.external_work_available?(work_item),
-      do: :ok,
-      else: {:error, :state_conflict}
-  end
-
   # Goal ownership is an all-or-nothing relational invariant. Partial rows stay
   # on the legacy path until the Goals migration has made them authoritative.
-  defp ensure_legacy_work_item(work_item) do
-    if WorkItem.goal_managed?(work_item),
-      do: {:error, :goal_authority_required},
-      else: :ok
-  end
+  # The Goal gate is `WorkItemEligibility.cancel_gate/1`, the clause every
+  # legacy command path shares.
+  defp ensure_legacy_work_item(work_item), do: WorkItemEligibility.cancel_gate(work_item)
 
   defp project_mutation_allowed(%Project{status: "active"}, _attrs), do: :ok
 
