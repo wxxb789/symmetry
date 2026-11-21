@@ -1789,8 +1789,9 @@ defmodule SymmetryControl.IntegrationsTest do
 
     # One version rule for both portal contexts: a malformed expected version is
     # `:invalid_request` (the verdict `Schemas.VersionedChangeset.expected_version/1`
-    # gives the same input, and the HTTP route rejects it before either context is
-    # reached), not a stale row. This function answered `:stale` before the shared
+    # gives the same input; the HTTP route normalizes integer strings to integers and
+    # answers 400 for unparsable values, so the context never receives a non-integer
+    # version), not a stale row. This function answered `:stale` before the shared
     # clause landed; the assertion pins the unified verdict.
     assert {:error, :invalid_request} = Integrations.delete_connection(connection.id, "1")
     assert {:error, :invalid_request} = Integrations.delete_connection(connection.id, nil)

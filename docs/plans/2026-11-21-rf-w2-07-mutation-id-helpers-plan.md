@@ -135,8 +135,14 @@ takes 20-31. Head id = `UUID(hex(sha256(prefix <> ":" <> Enum.join([p1, …, pn]
 expression because `Enum.join/2` with `":"` is exactly the base `<> ":" <>` chain, including for
 `n = 1` and for parts containing `:` or non-ASCII bytes (both are plain byte concatenation; the
 hash sees the same byte string). Empty parts stay in place (no trimming). `Integer.to_string/1`
-is applied at the same position as before, and `Enum.join/2` raises on a non-binary part where the
-base `<>` would also have raised, so no new reachable failure mode exists.
+is applied at the same position as before. `Enum.join/2` is more permissive than the base `<>`
+chain on a non-binary part: it renders through `String.Chars` (`nil` becomes an empty segment,
+atoms and integers their text) where `<>` raised `ArgumentError`, so a `nil` part would silently
+collide with `""`. No new reachable failure mode exists only because every reachable caller passes
+binaries: `settle_task` (`goals.ex:2752`) and `reconcile_validation_outcome` (`:2901`) guard
+`is_binary(run_id)`, `settle_unstarted_task` (`:3968`) guards `is_binary(reason)`, and the
+admission identities are `<>`-built before the builder runs (`automatic_candidate_identity`
+`:4656`, `external_wait_identity` `:10612`); a future caller must pass binaries itself.
 
 **Cross-family uniqueness.** Distinct prefixes keep ids distinct for identical parts; the
 evidence table asserts the six ids are pairwise distinct on one shared part vector (a formatter
@@ -148,8 +154,8 @@ that dropped the prefix would collide).
 integer. The shared version keeps the strict clause (`%{lock_version: _}, expected when
 is_integer(expected)` → `:stale`, otherwise `:invalid_request`) because `:invalid_request` is the
 verdict the same module's `expected_version/1` gives the same malformed input, and the HTTP gate
-(`PortalApiController.version_param/1`, `:535-545`, requires `is_integer(version) and version >
-0`) already answers 422 for it before either context is called.
+(`PortalApiController.version_param/1`, `:535-545`) normalizes an integer string to the integer
+and answers 400 for anything else, so a non-integer version never reaches either context.
 
 Observable delta: `Integrations.delete_connection(connection_id, expected)` with a non-integer
 `expected` returns `{:error, :invalid_request}` instead of `{:error, :stale}`. Reachability of the
@@ -191,8 +197,8 @@ checkout's tree (identical `mix.lock` md5 `99cf712f…`) at `Q:/repos/wt-w2-07-m
 | E4 targeted suites (head) | `mix test test/symmetry_control/goals_test.exs test/symmetry_control/integrations_test.exs test/symmetry_control/workspaces_test.exs test/symmetry_control/orchestration_review_test.exs` | exit 0; counts recorded |
 | E5 format + compile | `mix format --check-formatted`, `mix compile --warnings-as-errors` | exit 0, empty / 0 warnings |
 | E6 duplicate-definition census | `sh rf-w2-07-count.sh <base|head>` | measured: base `TRACKED-TOTAL 25` (6 builders + 19 helper clauses across the two contexts, worst case 3 clauses for `matches_version/2`), head `18` (6 builders + `mutation_id/2` + 11 clauses — 8 helpers — all in the shared module); UUID formatter normalized blocks 1 form × 6 copies → 1 form × 1 copy with an unchanged form-text sha256; a planted local duplicate moves the count (M5) |
-| E7 new pins | the three added tests (below) | green on head; the integrations pin is red on base for the non-integer version |
-| E8 mutation checks | M1 drop the prefix from `mutation_id/2`; M2 change `-5` to `-4`; M3 keep the old 2-clause `matches_version/2` tail in the shared module; M4 delete the `:lock_version` branch from `normalize_stale_result/1`; M5 plant a duplicate `expected_version/1` in `workspaces.ex`; M6 make `put_attr/3` always use the atom spelling; M7 accept `version == 0` in `expected_version/1` | observed: M1/M2 → E1 red (1200/1200 mismatches; M1 also `collisions=1`); M3 → both new pins red (integer versions keep E3 identical); M4 → the concurrent race test (`integrations_test.exs:97`) red, E3 canonically unchanged because a non-race stale write is pre-checked by `matches_version/2`; M5 → E6 count 1→2 and `compile --warnings-as-errors` fails on the unused function; M6 → the capture's first write raises in `Ecto.Changeset.cast`; M7 → the capture bytes differ. Each reverted, `md5sum -c` restore proof |
+| E7 new pins | the two added tests plus the frozen durable-key pins (below) | green on head; the integrations pin is red on base for the non-integer version |
+| E8 mutation checks | M1 drop the prefix from `mutation_id/2`; M2 change `-5` to `-4`; M3 keep the old 2-clause `matches_version/2` tail in the shared module; M4 delete the `:lock_version` branch from `normalize_stale_result/1`; M5 plant a duplicate `expected_version/1` in `workspaces.ex`; M6 make `put_attr/3` always use the atom spelling; M7 accept `version == 0` in `expected_version/1`; M8 swap the part order inside each of the four builders the family pins cover | observed: M1/M2 → E1 red (1200/1200 mismatches; M1 also `collisions=1`); M3 → both new pins red (integer versions keep E3 identical); M4 → the concurrent race test (`integrations_test.exs:97`) red, E3 canonically unchanged because a non-race stale write is pre-checked by `matches_version/2`; M5 → E6 count 1→2 and `compile --warnings-as-errors` fails on the unused function; M6 → the capture's first write raises in `Ecto.Changeset.cast`; M7 → the capture bytes differ; M8 → the four family pins red (`goals_test.exs:5343/5350/5599/7803`) while the settlement/late pins stay green. Each reverted, `md5sum -c` restore proof |
 | E9 whitespace | `git diff --check` | exit 0, empty |
 | E10 full suite | `mix test` (conductor gate-runner per contract; run here only if no other suite is concurrent) | exit 0; counts recorded |
 | E11 profile-path grep | `git diff origin/main...HEAD \| grep -i "users/"` | no match |
@@ -208,8 +214,12 @@ checkout's tree (identical `mix.lock` md5 `99cf712f…`) at `Q:/repos/wt-w2-07-m
 behaviour, now pinned so the shared clause cannot drift). `goals_test.exs:3667`: the settlement
 and late-validation-outcome receipts' `mutation_id`s are asserted against the frozen id expression
 (`frozen_mutation_id/2`, the delivered bytes kept independently of `Goals.mutation_id/2`) next to
-the existing inequality refutation. The first two are one request-free call each; these three are
-the only test additions, no assertion is deleted, renamed or weakened.
+the existing inequality refutation, and the same frozen expression pins the remaining four
+durable-key families at scenarios that already read those ids: the blocked admission event's own
+id and the automatic-admission key in its payload (`:5270`), the deferred event ids (`:5554`), and
+the `task_unstarted_settled` event id (`:7749`). All six families now have a standing byte pin.
+The first two are new one-call tests; the rest are assertions inside existing scenarios; no
+assertion is deleted, renamed or weakened.
 
 ## Design trade-offs
 
@@ -227,7 +237,7 @@ the only test additions, no assertion is deleted, renamed or weakened.
 3. **Strict `matches_version/2` tail.** See semantics; the alternative (keep the integrations
    `:stale` tail) would make `Workspaces.delete_resource/2` answer 409 for a malformed version
    argument, which contradicts the module's own `expected_version/1` verdict and the controller's
-   422 gate. One atom changes on an HTTP-unreachable, typespec-violating call, and it is pinned.
+   400 gate. One atom changes on an HTTP-unreachable, typespec-violating call, and it is pinned.
 4. **Alias + qualified calls, no `import`.** Repo convention (`Goals.ChangesetValidators`,
    `Integrations.Providers.Support`); `import` would keep call-site text identical but hides the
    ownership of the 409/stale contract at 60 call sites.
@@ -241,9 +251,10 @@ the only test additions, no assertion is deleted, renamed or weakened.
 - Result dispatch flattening (W3-10) and the `goals.ex` facade split (W4-07): the mutation-id
   region stops at the six builders plus `mutation_id/2`.
 - Goal schema validators (W2-05, landed as `bda93b11`) and provider access (W4-06): untouched.
-- `goals_test.exs`: only the two frozen mutation-id equalities beside the existing settlement and
-  late-validation receipt assertions (`:3667`); no other settlement/usage case is edited (W1-12
-  (#149) owns the fixture usage rewrite there).
+- `goals_test.exs`: frozen mutation-id assertions only — the settlement and late-validation
+  receipt equalities (`:3667`) and one byte freeze per remaining durable-key family at scenarios
+  that already read those ids (`:5270`, `:5554`, `:7749`); no fixture or usage case is reworked
+  (W1-12 (#149) owns the fixture usage rewrite there).
 - `fetch/2` (three copies, one unowned) and `delete_changeset/1` (unowned files), as above.
 - `chat.ex`, `integration_provider_stub.ex`, the portal controllers: no edits; the controllers are
   the *oracle* for the bodies, not part of the change.

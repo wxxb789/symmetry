@@ -5338,6 +5338,24 @@ defmodule SymmetryControl.GoalsTest do
     assert blocked_event.response["candidate_identity"] ==
              blocked_event.payload["candidate_identity"]
 
+    # Frozen durable-key bytes for the two automatic families this scenario stores (see
+    # `frozen_mutation_id/2`): the blocked event id and the admission key its payload carries.
+    assert blocked_event.id ==
+             frozen_mutation_id("automatic-admission-blocked", [
+               goal.id,
+               Integer.to_string(goal.current_revision),
+               blocked_event.payload["candidate_identity"]
+             ])
+
+    assert blocked_event.payload["admission_key"] ==
+             frozen_mutation_id("automatic-admission", [
+               goal.id,
+               Integer.to_string(goal.current_revision),
+               blocked_item.id,
+               "implement",
+               blocked_event.payload["source_identity"]
+             ])
+
     assert {:ok, projection} = Goals.fetch_goal(goal.id)
 
     blocker = Enum.find(projection.blockers, &(&1.reason == "automatic_admission_blocked"))
@@ -5576,6 +5594,17 @@ defmodule SymmetryControl.GoalsTest do
              "validation_runtime_not_allowed",
              "invalid_validation_profile"
            ]
+
+    # The deferred event id is the durable key; freeze it like the settlement pins above.
+    assert Enum.map(deferred_events, & &1.id) ==
+             Enum.map(deferred_events, fn event ->
+               frozen_mutation_id("automatic-reconciliation-deferred", [
+                 goal.id,
+                 Integer.to_string(goal.current_revision),
+                 event.payload["deferred_identity"],
+                 event.response["reason"]
+               ])
+             end)
   end
 
   test "automatic reconciliation quiesces after an unattended terminal failure" do
@@ -7759,6 +7788,20 @@ defmodule SymmetryControl.GoalsTest do
 
     assert {:ok, ^receipt} =
              Goals.settle_unstarted_task(controlled_task.id, "cancelled", now: @now)
+
+    # The receipt names the durable key only by sequence; freeze the settlement event id.
+    settlement_event =
+      Repo.one!(
+        from(event in SymmetryControl.Goals.GoalEvent,
+          where:
+            event.goal_id == ^controlled_goal.id and
+              event.kind == "task_unstarted_settled" and
+              fragment("? ->> 'task_id' = ?", event.payload, ^controlled_task.id)
+        )
+      )
+
+    assert settlement_event.id ==
+             frozen_mutation_id("unstarted-settlement", [controlled_task.id, "cancelled"])
 
     assert Repo.aggregate(from(run in Run, where: run.task_id == ^controlled_task.id), :count) ==
              0
