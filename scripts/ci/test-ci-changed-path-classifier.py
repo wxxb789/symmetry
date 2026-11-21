@@ -70,6 +70,14 @@ COVERAGE_JOBS = ("coverage-control", "coverage-daemon", "coverage-frontend")
 # The coverage-daemon job's gated header as the workflow spells it: both
 # coverage mutation tests below anchor on it, so it is spelled once here.
 COVERAGE_DAEMON_HEADER = "  coverage-daemon:\n    needs: changes\n    if: needs.changes.outputs.run-heavy == 'true'\n"
+# The coverage-daemon step's `GOCOVERDIR` env as the workflow spells it: the
+# covdata directory the step creates and `internal/execution`'s helper
+# environment builder forwards to its re-exec'd children. Without it those
+# instrumented children print the coverage runtime's "GOCOVERDIR not set"
+# warning, which exact-output assertions capture, so the artifact pin below
+# includes the env and the mutation test below anchors on it, spelled once
+# here.
+COVERAGE_DAEMON_COVER_DIR_ENV = "        env:\n          GOCOVERDIR: ${{ runner.temp }}/gocoverdir\n"
 # The upload step and the command line(s) that produce each coverage job's
 # artifact (refactor slice W2-17, contract clause 1), as the workflow spells
 # them: the routing and advisory checks pin when a coverage job runs, these
@@ -78,11 +86,9 @@ COVERAGE_DAEMON_HEADER = "  coverage-daemon:\n    needs: changes\n    if: needs.
 # instead of only the draft-PR run. Each literal spans the step's
 # `if: always()`, the decision-7 promise that a red coverage run still uploads
 # its report, so a dropped `if: always()` reddens here too. The daemon command
-# is a block scalar under the stdio-only caller boundary that derives its
-# package list with `go list`: `internal/execution` is excluded because its
-# helper cases re-exec the coverage-instrumented test binary and assert the
-# child's exact output, which the coverage runtime's `GOCOVERDIR` warning
-# breaks; the exclusion and the list-driven invocation are pinned with it.
+# is a block scalar under the stdio-only caller boundary that creates the
+# `GOCOVERDIR` covdata directory before Go runs, so the covered packages
+# include `internal/execution` like every other one.
 COVERAGE_UPLOADS = {
     "coverage-control": (
         "        if: always()\n"
@@ -122,11 +128,10 @@ COVERAGE_DEFAULTS = {
 COVERAGE_COMMANDS = {
     "coverage-control": ("        run: mix test --cover",),
     "coverage-daemon": (
-        "          mapfile -t packages < <(python3 ../scripts/ci/stdio-only-caller-boundary.py \\",
-        "            \"$(command -v go)\" list ./... | grep -v '/internal/execution$')",
+        COVERAGE_DAEMON_COVER_DIR_ENV,
+        '          mkdir -p "$GOCOVERDIR"',
         "          python3 ../scripts/ci/stdio-only-caller-boundary.py \\",
-        '            "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out \\',
-        '            "${packages[@]}"',
+        '            "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out ./...',
     ),
     "coverage-frontend": ("        run: pnpm --filter @symmetry/frontend exec vitest run --coverage",),
 }
@@ -1086,6 +1091,18 @@ class ChangedPathClassifierTests(unittest.TestCase):
         defaults = COVERAGE_DEFAULTS["coverage-daemon"]
         self.assertIn(defaults, self.workflow_text, "the mutation's anchor must be a coverage job's defaults block")
         mutated = self.workflow_text.replace(defaults, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_coverage_artifacts(mutated)
+
+    def test_mutation_dropping_the_daemon_goverdir_env_breaks_the_artifact_check(self) -> None:
+        anchor = COVERAGE_DAEMON_COVER_DIR_ENV
+        self.assertIn(
+            anchor,
+            self.workflow_text,
+            "the mutation's anchor must be the daemon coverage step's GOCOVERDIR env",
+        )
+        mutated = self.workflow_text.replace(anchor, "")
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_coverage_artifacts(mutated)
