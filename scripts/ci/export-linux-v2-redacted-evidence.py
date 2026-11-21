@@ -526,33 +526,38 @@ LEGACY_REPLAY_KEYS = LEGACY_COMMON_KEYS | {
 LEGACY_DAEMON_LOG_TAIL_BYTES = 64 << 10
 LEGACY_DAEMON_LOG_LABEL = "second"
 LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
-# The daemon's own slog.NewJSONHandler writer (daemon/internal/app/app.go:460)
+# The daemon's own slog.NewJSONHandler writer (daemon/internal/app/app.go:310)
 # emits its JSON on stdout (daemon/cmd/symmetry-daemon/main.go:89). The
 # projection publishes a text value only when it is one of the exact literals
 # the daemon code can write into that field, so a credential-shaped value in
 # one of these generic keys is dropped before publication, not masked:
 #   msg   -- every daemon.log.<Level>("...") message literal under
-#           daemon/internal/app (app.go, cleanup.go, recovery.go, supervisory.go).
+#           daemon/internal/app (the twelve files that carry daemon.log call
+#           sites: app.go, cleanup.go, commands.go, events.go, goal_admission.go,
+#           goal_delivery.go, lease.go, native_run.go, outbox.go, recovery.go,
+#           recovery_glue.go, supervisory.go).
 #   state -- the terminal transition states (daemon/internal/state/state.go
 #           isTerminalTransitionState) logged as stateName by
 #           queueTerminalTransitionWithRetry / queueTerminalTransitionAndAcknowledgement
-#           (app.go:7385, 7465); nativeTerminalPayload (app.go:8978) returns the
+#           (outbox.go:166, 246); nativeTerminalPayload (goal_delivery.go:357) returns the
 #           same three.
-#   stage -- the queueFailure stage literals (app.go:3651-3877) and the
-#           process-exit retry (app.go:7586).
-#   reason -- the literals reaching stopRecoveredJournal (app.go:2857, 2891,
-#           3604, 10375): lease/ownership reasons (app.go:9922-10073, 10918,
-#           11468, 11752) and the protocol.ReconcileDecisionKind decisions
-#           (daemon/internal/protocol/protocol.go:560-564).
-#   outcome -- the acknowledgement outcomes (app.go:7918-7982, 8940-8975, 9524).
-#   kind -- the newIDWithRetry kinds (app.go:7349, 7410, 7414; supervisory.go:85).
+#   stage -- the queueFailure stage literals and their call sites
+#           (events.go:530, app.go:1440-1666) and the process-exit retry
+#           (app.go:2011).
+#   reason -- the literals reaching stopRecoveredJournal (app.go:1188, 1222,
+#           1393; lease.go:579): lease/ownership reasons (lease.go:126-277;
+#           outbox.go:734, 834, 1110) and the protocol.ReconcileDecisionKind
+#           decisions (daemon/internal/protocol/protocol.go:560-564).
+#   outcome -- the acknowledgement outcomes (native_run.go:1566-1630,
+#           2181-2216; commands.go:696).
+#   kind -- the newIDWithRetry kinds (outbox.go:130, 191, 195; supervisory.go:85).
 # Maintenance rule: a change that adds a producer or literal for one of these
 # fields must extend the set in the same change; test-linux-v2-evidence.py
 # scans the log call sites and the known producer call sites and fails when a
 # literal is missing from its set. Values reaching these fields through a
 # variable (for example a stateName passed down a helper, or the outcome values
-# assigned from a literal at app.go:7936-7972, 8939-8969, 9549 and
-# supervisory.go:140) are covered by this rule, not by that scan.
+# assigned from a literal at native_run.go:1584-1620, 2180-2210; commands.go:721
+# and supervisory.go:140) are covered by this rule, not by that scan.
 DAEMON_LOG_TIME = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
 )
