@@ -13,8 +13,9 @@ every base line number below is valid at both revisions (base file sha256
 
 Baseline sizes: `linux_owner_v2_linux.go` **2,753 L**; `finalize` `:1417-1579` (**163 L**,
 42 decision-point occurrences); `finalizePreGate` `:2092-2232` (**141 L**, 35); retry family
-`runLinuxV2JournalMutation` `:2587` (3 L, 12 call sites), `runLinuxV2MutationRetry` `:2591`
-(11 L, 11 call sites + 1 test call), `retryLinuxV2` `:2603` (2 L, 10 call sites),
+`runLinuxV2JournalMutation` `:2587` (3 L, 13 call sites), `runLinuxV2MutationRetry` `:2591`
+(11 L, 12 production references: 8 outer call sites + 4 inside the deleted wrappers, plus 1
+test call), `retryLinuxV2` `:2603` (2 L, 10 call sites),
 `runLinuxV2ReceiptMutation` `:2605` (3 L, 1 call site), `runLinuxV2PreGateReceiptMutation`
 `:2609` (3 L, 1 call site).
 
@@ -29,14 +30,15 @@ decisions (Wave-4 draft, W4 review reconcile, lesson-32 control-flow preservatio
 | `linux_owner_v2_linux.go` | `finalize` 163 → 79 L and `finalizePreGate` 141 → 59 L; one `runClosePipeline` driver (34 L) + two step sets (`linuxV2CloseGateSteps` 10 methods, `linuxV2ClosePreGateSteps` 10 methods); `linuxV2HelperControl`, `linuxV2CloseSeams` + 3 accessors; `retryMutation` replaces the five retry names (11 L definition, 33 call sites + 1 test call) |
 | `runner.go` | `LinuxV2AckStages` added below the ten constants (`:228-246`): one exported ten-name source, no name added, removed or renamed, table bytes unchanged |
 | `linux_owner_witness_linux.go` | `linuxV2NativeWitnessAckLossSupported` `:2458-2463` derives membership from `execution.LinuxV2AckStages` with `slices.Contains`; the witness stage vocabulary `:55-75` is untouched |
-| `linux_owner_v2_finalize_pipeline_test.go` (new, 756 L) | the CI characterization tests of the close fences (12 tests: 11 fences + the pre-gate capability-claim position pin) |
+| `linux_owner_v2_finalize_pipeline_test.go` (new, 837 L) | the CI characterization tests of the close fences (13 tests, listed in §6) |
 | `linux_v2_ack_stages_test.go` (new, no build tag) | the ten-name source completeness test |
 | `linux_owner_v2_test.go` | `TestLinuxV2MutationAckLostIsNotReplayed` calls `retryMutation` (same closure, same assertions, same test name) |
+| `docs/TODO.md` | re-anchored four citations its own runner.go line insertion invalidated (`WriteInputContext` `:1380`→`:1400`, `:1410-1414`→`:1430-1434`; the PR #193 deferral entry's `:2393`→`:2413`, `:2143`/`:2146`→`:2163`/`:2166`) |
 
-Line totals: `linux_owner_v2_linux.go` 2,753 → 3,075; `runner.go` 2,756 → 2,776 (W4-03 base
-plus the 20-line source); the two test files add 756 + 22 L; against the 0fa9b705 base the
-numstat is `543 +/221 −` for `linux_owner_v2_linux.go` and `1 +/1 −` for the test call site. The
-plan row's −150…−260 dLOC is not met (net +322 L in the source file: the ten step methods carry
+Line totals: `linux_owner_v2_linux.go` 2,753 → 3,076; `runner.go` 2,756 → 2,776 (W4-03 base
+plus the 20-line source); the two test files add 837 + 22 L; against the 0fa9b705 base the
+numstat is `544 +/221 −` for `linux_owner_v2_linux.go` and `1 +/1 −` for the test call site. The
+plan row's −150…−260 dLOC is not met (net +323 L in the source file: the ten step methods carry
 their own doc comments and signatures) and is report-only per contract D2.
 
 Function sizes (delivered tree, measured with a brace-matched awk over both revisions):
@@ -112,12 +114,14 @@ attempt closure so each attempt builds its own clone.
 | `runLinuxV2JournalMutation(cb, value)` | `retryMutation(func() error { return cb(value.Clone()) })` | 13 | `429→434, 433→440, 446→455, 497→506, 636→645, 643→652, 664→675, 689→700, 725→736, 733→746, 760→773, 1342→1355, 1763→1991` |
 | `runLinuxV2ReceiptMutation(cb, handoff, receipt)` | `retryMutation(func() error { return cb(handoff.Clone(), cloneLinuxV2StopReceiptValue(receipt)) })` | 1 | `1488→1657` (gate `persistReceipt`) |
 | `runLinuxV2PreGateReceiptMutation(cb, reservation, receipt)` | `retryMutation(func() error { return cb(reservation.Clone(), receipt.Clone()) })` | 1 | `2140→2413` (pre-gate `persistReceipt`) |
-| `runLinuxV2MutationRetry` inside the deleted definitions | — | 3 | `2588, 2606, 2610` (no HEAD counterpart) |
+| `runLinuxV2MutationRetry` inside the deleted definitions | — | 4 | `2588, 2603, 2606, 2610` (no HEAD counterpart) |
 | `runLinuxV2MutationRetry` in the ack-lost oracle | `retryMutation` | 1 | `linux_owner_v2_test.go:479` (same closure, same assertions) |
 
 Clone-less sites keep no clone (base semantics); the two base names were the same policy
 (`retryLinuxV2` was a one-line forwarder), and the 33 delivered `retryMutation` call sites are
-exactly the 8 + 10 + 13 + 1 + 1 migrated sites.
+exactly the 8 + 10 + 13 + 1 + 1 migrated sites. The base `runLinuxV2MutationRetry` had 12
+production references (the 8 outer call sites plus the 4 inside the deleted definitions) and the
+one test call.
 
 `retrySupervisorHandoffReceipt`/`retrySupervisorHandoffClear` (`runner.go:2484-2504`) are
 byte-identical and were not touched.
@@ -238,11 +242,12 @@ pre-gate reconcile, which the fence test executes on the real `finalizePreGate`.
 | clear-after-receipt | `TestLinuxV2FinalizeClearFollowsDurableReceiptAndAck` | real `finalize` (receipt < ack < clear, receipt published, owner settled) |
 | release-after-clear | `TestLinuxV2FinalizeReleasesHelperOnlyAfterClear` | real `finalize` (clear < release, `helperReleased`) |
 | pre-gate clear + release | `TestLinuxV2FinalizePreGateReleasesHelperOnlyAfterClear` | real `finalizePreGate` (receipt/ack/clear/release order, all four flags) |
-| pre-gate capability-claim position | `TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear` | real `finalizePreGate` (unissued capability + failing `ClearReservationV2`: the durable clear fails before any capability claim) |
+| pre-gate capability-claim position | `TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear` | real `finalizePreGate` (unissued capability + failing `ClearReservationV2`: the durable clear fails before any capability claim; unissued capability + successful clear: the exact claim error stops the sequence after `[receipt, ack, clear]`) |
 | cached-receipt reuse | `TestLinuxV2FinalizeReusesDurableReceiptWithoutRewriting` | real `finalize` (persisted receipt: no rewrite, ack/clear/release) |
 | fresh clone per attempt | `TestLinuxV2FinalizeMutationAttemptsSeeFreshClones` | real `finalize` (first attempt mutates its clone and fails; attempt 2 asserts pristine inputs) |
 | ack-lost no-replay | `TestLinuxV2FinalizeDoesNotReplayLostReceiptAck` + `TestLinuxV2MutationAckLostIsNotReplayed` | real `finalize` (one attempt, sentinel propagated) and `retryMutation` directly |
 | failed receipt acknowledgement | `TestLinuxV2FinalizeStopsBeforeClearWhenReceiptAckFails` | real `finalize` (both attempts fail; the wrapped error preserves the helper error; no clear or release) |
+| lost release ACK + failed readback | `TestLinuxV2FinalizeJoinsLostReleaseAckRetirementReadback` | real `finalize` and `finalizePreGate` (release control error + failing anchor readback: both join wraps present in order, owner unsettled) |
 | resume from applied steps | `TestLinuxV2FinalizeResumesFromAlreadyAppliedSteps` | real `finalize` (preset `clearDone`/`helperReleased`: no repeated clear or release) |
 | D6 ten-name source | `TestLinuxV2AckStageVocabularyIsComplete` | `LinuxV2AckStages` exact ten names/strings |
 
@@ -255,8 +260,9 @@ tests instead of silently weakening them.
 
 A mutant is accepted only with the observed red output of the test that owns the fence; every
 mutant was reverted and the affected invariant re-verified afterwards (grep of the restored line,
-`gofmt -l` clean, focused suite green in §11). M9 was added and run by the apply stage under the
-same protocol (scratch-copy overlay, tree untouched).
+`gofmt -l` clean, focused suite green in §11). M9 was added and run by the apply stage; M10-M12
+were added and run by the fix pass for the whole-increment review under the same protocol
+(scratch-copy overlay over the delivered tree, tree untouched).
 
 | # | fence | mutant | test | observed |
 | --- | --- | --- | --- | --- |
@@ -270,6 +276,9 @@ same protocol (scratch-copy overlay, tree untouched).
 | M7 | fresh clone per attempt | hoist `cloneLinuxV2StopReceiptValue(steps.receipt)` above `retryMutation` in the gate `persistReceipt` | `TestLinuxV2FinalizeMutationAttemptsSeeFreshClones` | FAIL: `stop receipt attempt 2 observed a mutated receipt clone` |
 | M8 | D6 ten-name source | drop `LinuxV2AckStageJournalCleared` from `LinuxV2AckStages` | `TestLinuxV2AckStageVocabularyIsComplete` (+ the app consumer oracle) | FAIL both: `LinuxV2AckStages = [9]string{…}, want the ten live ACK-loss stages […]` and `TestLinuxV2NativeWitnessAllowsReceiptBackedLostClearAck: receipt-backed lost-clear response rejected` |
 | M9 | pre-gate capability-claim position | `linuxV2ClosePreGateSteps.claimsCapabilityAfterClear` `true` → `false` (claim before the durable clear) | `TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear` | FAIL: `finalizePreGate() error = Linux v2 pre-gate release capability differs from its receipt, want the failed durable clear before any capability claim` |
+| M10 | pre-gate capability-claim guard | pre-gate `claimRelease` drops the `issued`/`ValidFor` guard (`releaseProof, _ := steps.owner.preGateReleaseProof(…)`, no check) | `TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear` | FAIL: `finalizePreGate() error = <nil>, want the unissued capability claim to stop after the durable clear` |
+| M11 | lost-release-ACK join order (gate) | swap the two `errors.Join` operands in the gate `releaseHelper` | `TestLinuxV2FinalizeJoinsLostReleaseAckRetirementReadback` | FAIL: `close error = "read back exact anchor retirement after lost helper release ACK: …\nrelease Linux v2 helper only after opaque Store clear: …", want the release wrap before the readback wrap` |
+| M12 | lost-release-ACK readback text (pre-gate) | rename the pre-gate readback wrap `…after lost helper release ACK` → `…after lost helper release acknowledgement` | `TestLinuxV2FinalizeJoinsLostReleaseAckRetirementReadback` | FAIL: `close error = "release no-gate Linux v2 helper after durable clear: …", want both the "release no-gate Linux v2 helper after durable clear" and the "read back exact anchor pre-gate retirement after lost helper release ACK" wrap` |
 
 M8's second failure is the consumer-side proof: the app derives its witness validation from the
 single source, so a dropped name reddens an existing witness oracle, not only the new test.
@@ -316,6 +325,13 @@ Those jobs were not dispatched here (zero dispatches at the baseline; contract E
 reviewer surfaces, not acceptance oracles); the acceptance evidence is the CI-run suites and the
 mutation battery above.
 
+Coverage limit of the derivation (recorded as a reviewer surface per E8, not as a pass): reverting
+`linuxV2NativeWitnessAckLossSupported` to the deleted hard-coded ten-name switch keeps every
+suite green, because that switch accepted exactly the names the single source holds; M8's
+consumer-side red exists only while the consumer derives. The no-drift property therefore rests
+on reviewer inspection of the one derivation site (`:2458-2463`) together with the byte-identical
+literals in §8, not on an oracle that would fail a re-hardcoded consumer.
+
 ## 11. Gates (all foreground, sequential; every command with its exit code)
 
 All commands run in `daemon/` unless stated. "WSL" is
@@ -329,17 +345,22 @@ All commands run in `daemon/` unless stated. "WSL" is
 | build windows | `GOOS=windows go build ./...` | no output, exit 0 |
 | build linux | `GOOS=linux go build ./...` | no output, exit 0 |
 | build linux/arm64 | `GOOS=linux GOARCH=arm64 go build ./...` | no output, exit 0 |
-| windows execution | `go test -count=1 ./internal/execution/...` | `ok`, exit 0 (9.871 s) |
-| windows app | `go test -count=1 ./internal/app/...` | `ok`, exit 0 (116.686 s) |
-| WSL focused | `go test -count=1 -run 'TestLinuxV2\|TestRunnerStopReceipt' ./internal/execution/` | `ok`, exit 0 (0.035 s) |
-| WSL execution | `go test -count=1 ./internal/execution/` | `ok`, exit 0 (2.359 s); 117 named tests listed (13 new: 12 in the pipeline file + 1 ack-stages; plus the retargeted ack-lost oracle among them) |
+| windows execution | `go test -count=1 ./internal/execution/...` | `ok`, exit 0 (9.806 s) |
+| windows app | `go test -count=1 ./internal/app/...` | `ok`, exit 0 (219.073 s; re-run under the fix round's concurrent load) |
+| WSL focused | `go test -count=1 -run 'TestLinuxV2\|TestRunnerStopReceipt' ./internal/execution/` | `ok`, exit 0 (0.080 s) |
+| WSL execution | `go test -count=1 ./internal/execution/` | `ok`, exit 0 (2.015 s; the `-v` companion run 1.874 s); 118 top-level `--- PASS` lines (14 new: 13 in the pipeline file + 1 ack-stages; plus the retargeted ack-lost oracle among them) |
 | WSL app (full) | `go test -count=1 ./internal/app/...` | exit 1: `FAIL … 600.058s`, test-binary timeout inside `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` (pre-existing; reproduced in the untouched base worktree, §12) |
-| WSL app (witness subset) | `go test -count=1 -run 'TestLinuxV2NativeWitness' ./internal/app/` | `ok`, exit 0 (0.739 s) — the Linux-only oracle for the changed app function |
+| WSL app (witness subset) | `go test -count=1 -run 'TestLinuxV2NativeWitness' ./internal/app/` | `ok`, exit 0 (0.929 s) — the Linux-only oracle for the changed app function |
 | WSL app (full, first hang skipped) | `go test -count=1 -timeout 900s -skip '^TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart$' ./internal/app/` | exit 1: `FAIL … 900.133s`, timeout inside `TestNativeResumeAdmissionRejectsIncompatibleOrUnavailableRetainedSessionBeforeNativeStart` (admission family, unrelated to the changed code; §12) |
-| citation gate | `python scripts/ci/check-citation-existence.py --base 0fa9b705 --head HEAD` | exit 0: `no audited document added or modified between 0fa9b705cb6a and 376ff5254eac; nothing to check` (the slice adds only `docs/plans/` and `docs/evidence/`, outside the gate's audited corpus) |
+| citation gate | `python scripts/ci/check-citation-existence.py --base 0fa9b705 --head 8a229508000df2a1e6917afc1746b8e22100b89c` | exit 0: `1 changed document(s) pass the path and symbol check (453 path citation(s))` for `docs/archive/CLOSED-TODO.md`, with 3 ignore-covered notices (`:674` and `:689` cite `control/priv/static/portal…` under `.gitignore:77:/control/priv/static/portal/`, `:2404` cites the `control/deps/ecto/...` glob under `control/.gitignore:8:/deps/`). The run reads committed revisions; the fix round changes no audited document (`docs/TODO.md`, `docs/plans/` and `docs/evidence/` are outside the corpus), so the delivered child commit's run selects the same document |
 | whitespace | `git diff --check` | no output, exit 0 |
-| advisory lint (windows) | `golangci-lint run --config .golangci.yml ./internal/execution/...` (v2.15.0) | 9 issues, exit 0, byte-identical distribution to the W4-03 measurement: errcheck 2, funlen 1 (`finalizeSupervisorHandoffLocked`), gocritic 1, gocyclo 2 (`Start` 26, `closeContainmentAttempt` 41), unparam 2, unused 1 |
-| advisory lint (linux) | `GOOS=linux golangci-lint run --config .golangci.yml ./internal/execution/...` | 18 issues, exit 0; the 9 linux-only additions are gocyclo on 8 pre-existing functions (`validateLinuxV2Invocation` 53, `prepareGate` 46, `readLiveOwnerHelperStatus` 30, `stopAsMirror` 28, `promoteCloneAfterStop` 57, `finalizeNoPrepareAbort` 32, `witnessDropStatus` 26, `liveOwnerStatus` 60) plus 3 gocritic (`linux_owner_v2_linux.go:614` ifElseChain) minus the linux-absent `unused`; **no finding names any function this slice adds or rewrites**, and the two functions it decomposes no longer appear (`finalize` CC 43 → 22, `finalizePreGate` CC 36 → 17, threshold 25) |
+| advisory lint (windows) | `golangci-lint run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/execution/...` (v2.15.0) | 9 issues, exit 1 (a bare `golangci-lint` run exits 1 on any finding; the CI step records the same status as a metric under `continue-on-error: true`, `ci.yml:1395-1400`), byte-identical distribution to the W4-03 measurement: errcheck 2, funlen 1 (`finalizeSupervisorHandoffLocked`), gocritic 1, gocyclo 2 (`Start` 26, `closeContainmentAttempt` 41), unparam 2, unused 1 |
+| advisory lint (linux) | `GOOS=linux golangci-lint run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/execution/...` | 18 issues, exit 1 (advisory as above); the linux-only delta is gocyclo on 8 pre-existing functions (`validateLinuxV2Invocation` 53, `prepareGate` 46, `readLiveOwnerHelperStatus` 30, `stopAsMirror` 28, `promoteCloneAfterStop` 57, `finalizeNoPrepareAbort` 32, `witnessDropStatus` 26, `liveOwnerStatus` 60), plus 2 more gocritic than the Windows pass (3 total, incl. `linux_owner_v2_linux.go:614` ifElseChain), minus the linux-absent `unused`; **no finding names any function this slice adds or rewrites**, and the two functions it decomposes no longer appear (`finalize` CC 43 → 22, `finalizePreGate` CC 36 → 17, threshold 25) |
+
+Rows above carry the fix round's re-run numbers where a row was re-run (every row except the two
+full WSL `./internal/app/...` rows, whose environmental hang is the delivery-time record and was
+not re-attempted); no consumed artifact changes other than the pipeline test file the fix round
+extends.
 
 Acceptance-oracle note (contract E8): `linux-native-v2-acceptance` is `workflow_dispatch`-only
 with zero dispatches and the v2 witness matrix is env-gated, so neither is an acceptance oracle
@@ -378,9 +399,15 @@ runs `go test -count=1 -timeout 600s ./...` at `:1834` for the cross-platform ha
   new CI tests (they need a live helper/cgroup); the tests preset the removed-leaf capability and
   the retired anchor, which is the persisted-state branch of the same steps, and those bodies are
   byte-identical (§4, §5).
-- `docs/TODO.md` keeps a deferred rf-w2-16 finding that cites
-  `daemon/internal/execution/linux_owner_v2_linux.go:1338` and `:1360`; the cited constructs moved
-  to `:1351` (the mirror `GateExit` validation) and `:1375` (the mirror stop-evidence literal start)
-  under this slice. The entry is not closed by this change and `docs/TODO.md` is outside the
-  contract's owned set, so it was left untouched; a maintenance task should re-anchor the two
-  citations.
+- The contract's characterization-first sequencing is not recoverable from the frozen history: the
+  tests and the whole unification landed in one commit (`6471e9a4`), and the pre-gate
+  capability-claim position fence plus its one-line production change arrived in the apply commit
+  (`8d60059b`), so no commit shows the tests red before the unification. The fence sensitivity is
+  evidenced instead by the mutant battery (§7), which ran on the post-refactor tree; this is a
+  recorded deviation from the plan's "commit-1 order: tests first" statement.
+- The deferred rf-w2-16 finding in `docs/TODO.md` cited `linux_owner_v2_linux.go:1338` and
+  `:1360`; this slice's +13-line shift moved the same lines to `:1351` (the mirror `GateExit`
+  validation) and `:1373` (the `GateExit`/`LauncherExit` sealing inside the mirror
+  `LinuxCgroupStopProof` literal), so both citations were re-anchored in place. The entry stays
+  open, and `docs/TODO.md` is recorded in §1 together with the four runner.go citations the apply
+  commit re-anchored.

@@ -581,8 +581,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `:1174-1184`), every v2 removal receipt must carry such a proof
       (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
       (`daemon/internal/platform/anchor_run.go:1531`; validated at
-      `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
-      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
+      `daemon/internal/execution/linux_owner_v2_linux.go:1351` and sealed into the mirror proof
+      at `:1373`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
       `cloneLinuxOwnerHelperV2StopEvidence` (`helper_v2_stop.go:1540-1573`) instead drops every
       nested exit it copies through `cloneLinuxOwnerAnchorExitProof`
       (`anchor_server.go:44-49` nils `HelperExit`): `Proof.LauncherExit.HelperExit`,

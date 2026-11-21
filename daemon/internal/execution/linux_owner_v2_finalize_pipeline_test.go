@@ -280,6 +280,10 @@ func (harness *linuxV2CloseHarness) assertPristineReceiptInput(attempt int, hand
 type linuxV2CloseTestControl struct {
 	harness *linuxV2CloseHarness
 	ackErr  error
+
+	// releaseErr fails the release acknowledgement of either close path; the
+	// pipeline then resolves the lost response through the anchor readback.
+	releaseErr error
 }
 
 func (control *linuxV2CloseTestControl) AcknowledgeStopReceipt(context.Context, authority.StopReceipt) error {
@@ -289,7 +293,7 @@ func (control *linuxV2CloseTestControl) AcknowledgeStopReceipt(context.Context, 
 
 func (control *linuxV2CloseTestControl) ReleaseAfterClear(context.Context, authority.SupervisorHandoffReleaseProof) error {
 	control.harness.record("release")
-	return nil
+	return control.releaseErr
 }
 
 func (control *linuxV2CloseTestControl) AcknowledgePreGateStopReceipt(context.Context, authority.LinuxCgroupPreGateStopReceipt) error {
@@ -299,7 +303,7 @@ func (control *linuxV2CloseTestControl) AcknowledgePreGateStopReceipt(context.Co
 
 func (control *linuxV2CloseTestControl) ReleaseAfterPreGateClear(context.Context, authority.LinuxCgroupPreGateReleaseProof) error {
 	control.harness.record("release")
-	return nil
+	return control.releaseErr
 }
 
 // newLinuxV2CloseGateOwner builds the gate-path owner the real finalize
@@ -752,5 +756,82 @@ func TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear(t *testing.T) {
 	owner.mu.Unlock()
 	if released {
 		t.Fatal("failed pre-gate clear settled the owner")
+	}
+
+	// The claim is also pinned from the other side: with the durable clear
+	// succeeding, the unissued capability must stop the sequence on the claim
+	// error after [receipt, ack, clear] and before any release.
+	claimHarness := newLinuxV2CloseHarness(t)
+	claimOwner := newLinuxV2ClosePreGateOwner(t, claimHarness)
+	claimOwner.closeSeams.preGateReleaseSnapshot = func(platform.LinuxCgroupV2Release) (authority.LinuxCgroupPreGateReleaseProof, bool) {
+		return authority.LinuxCgroupPreGateReleaseProof{}, false
+	}
+	err = claimOwner.finalizePreGate(context.Background())
+	const unissuedClaimError = "Linux v2 pre-gate release capability differs from its receipt"
+	if err == nil || err.Error() != unissuedClaimError {
+		t.Fatalf("finalizePreGate() error = %v, want the unissued capability claim to stop after the durable clear", err)
+	}
+	if order := claimHarness.order(); !slices.Equal(order, []string{"receipt", "ack", "clear"}) {
+		t.Fatalf("pre-gate close order = %#v, want the durable clear before the capability claim and no release", order)
+	}
+	assertLinuxV2CloseUnsettled(t, "pre-gate", claimOwner)
+}
+
+func TestLinuxV2FinalizeJoinsLostReleaseAckRetirementReadback(t *testing.T) {
+	// The release acknowledgement is lost and the anchor readback that would
+	// resolve it fails too (no anchor client exists in a CI process), so the
+	// joined error must carry the release wrap first and the readback wrap
+	// second, each with its exact base text.
+	releaseErr := errors.New("helper response lost after the durable clear")
+
+	harness := newLinuxV2CloseHarness(t)
+	harness.control.releaseErr = releaseErr
+	owner := newLinuxV2CloseGateOwner(t, harness, false)
+	err := owner.finalize()
+	assertLinuxV2CloseJoin(t, err, releaseErr,
+		"release Linux v2 helper only after opaque Store clear",
+		"read back exact anchor retirement after lost helper release ACK")
+	if order := harness.order(); !slices.Equal(order, []string{"receipt", "ack", "clear", "release", "release"}) {
+		t.Fatalf("close order = %#v, want the retried release and no step after the failed readback", order)
+	}
+	assertLinuxV2CloseUnsettled(t, "gate", owner)
+
+	preGateHarness := newLinuxV2CloseHarness(t)
+	preGateHarness.control.releaseErr = releaseErr
+	preGateOwner := newLinuxV2ClosePreGateOwner(t, preGateHarness)
+	err = preGateOwner.finalizePreGate(context.Background())
+	assertLinuxV2CloseJoin(t, err, releaseErr,
+		"release no-gate Linux v2 helper after durable clear",
+		"read back exact anchor pre-gate retirement after lost helper release ACK")
+	if order := preGateHarness.order(); !slices.Equal(order, []string{"receipt", "ack", "clear", "release", "release"}) {
+		t.Fatalf("pre-gate close order = %#v, want the retried release and no step after the failed readback", order)
+	}
+	assertLinuxV2CloseUnsettled(t, "pre-gate", preGateOwner)
+}
+
+func assertLinuxV2CloseJoin(t *testing.T, err, releaseErr error, releaseText, readbackText string) {
+	t.Helper()
+	if err == nil || !errors.Is(err, releaseErr) {
+		t.Fatalf("close error = %v, want the lost release acknowledgement preserved", err)
+	}
+	message := err.Error()
+	releaseIndex := strings.Index(message, releaseText)
+	readbackIndex := strings.Index(message, readbackText)
+	if releaseIndex < 0 || readbackIndex < 0 {
+		t.Fatalf("close error = %q, want both the %q and the %q wrap", message, releaseText, readbackText)
+	}
+	if releaseIndex > readbackIndex {
+		t.Fatalf("close error = %q, want the release wrap before the readback wrap", message)
+	}
+}
+
+func assertLinuxV2CloseUnsettled(t *testing.T, path string, owner *linuxV2ProcessOwner) {
+	t.Helper()
+	owner.mu.Lock()
+	released := owner.ownerReleased
+	helperReleased := owner.helperReleased
+	owner.mu.Unlock()
+	if released || helperReleased {
+		t.Fatalf("%s owner settled after the failed release readback (released=%t helperReleased=%t)", path, released, helperReleased)
 	}
 }

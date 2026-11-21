@@ -2918,8 +2918,9 @@ func (owner *linuxV2ProcessOwner) closeAfterClear() error {
 // attempt that reports ErrLinuxV2MutationAckLost already took durable effect
 // and lost its response, so it is never replayed and recovery owns the next
 // observation; any other first failure is retried once and both attempts are
-// joined. Each attempt clones its own inputs inside callback, so a callback
-// that mutates its arguments cannot leak the mutation into the retry.
+// joined. The value-carrying sites clone their inputs inside callback, so a
+// callback that mutates its arguments there cannot leak the mutation into the
+// retry; the clone-less sites pass the same values to both attempts.
 func retryMutation(callback func() error) error {
 	first := callback()
 	if first == nil || errors.Is(first, ErrLinuxV2MutationAckLost) {

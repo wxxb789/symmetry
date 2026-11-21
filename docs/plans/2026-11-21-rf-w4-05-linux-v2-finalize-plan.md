@@ -36,7 +36,8 @@ Measured anchors at the baseline (re-measured, exact):
 | `ownerReleased` | 1575-1578 | | |
 
 Retry family (definition + call sites inside this file): `runLinuxV2JournalMutation` `:2587`
-(12 sites), `runLinuxV2MutationRetry` `:2591` (12), `retryLinuxV2` `:2603` (10),
+(13 sites), `runLinuxV2MutationRetry` `:2591` (12 production references: 8 outer call sites + 4
+inside the deleted wrappers), `retryLinuxV2` `:2603` (10),
 `runLinuxV2ReceiptMutation` `:2605` (1), `runLinuxV2PreGateReceiptMutation` `:2609` (1); one
 further call site in `linux_owner_v2_test.go:479` (the ack-lost oracle). Handler twins
 `retrySupervisorHandoffReceipt`/`retrySupervisorHandoffClear` (`runner.go:2484-2504`) stay
@@ -142,9 +143,9 @@ circuit, same join). Call-site migration:
 
 | old | new | count |
 | --- | --- | ---: |
-| `runLinuxV2MutationRetry(cb)` | `retryMutation(cb)` | 12 |
+| `runLinuxV2MutationRetry(cb)` | `retryMutation(cb)` | 8 |
 | `retryLinuxV2(cb)` | `retryMutation(cb)` | 10 |
-| `runLinuxV2JournalMutation(cb, value)` | `retryMutation(func() error { return cb(value.Clone()) })` | 12 |
+| `runLinuxV2JournalMutation(cb, value)` | `retryMutation(func() error { return cb(value.Clone()) })` | 13 |
 | `runLinuxV2ReceiptMutation(cb, handoff, receipt)` | `retryMutation(func() error { return cb(handoff.Clone(), cloneLinuxV2StopReceiptValue(receipt)) })` | 1 |
 | `runLinuxV2PreGateReceiptMutation(cb, reservation, receipt)` | `retryMutation(func() error { return cb(reservation.Clone(), receipt.Clone()) })` | 1 |
 | `runLinuxV2MutationRetry` in `linux_owner_v2_test.go:479` | `retryMutation` (same closure, same assertions) | 1 |
@@ -195,6 +196,11 @@ persisted-evidence branch of the same function.
 
 ## Characterization tests (commit-1 order: tests first, each red on its fence mutant)
 
+Delivery note: the frozen history does not show the tests red before the unification - the tests
+and the refactor landed in one commit and the pre-gate capability-claim position fence arrived at
+apply; the deviation is recorded in
+`docs/evidence/rf-w4-05-linux-v2-finalize-2026-11-21.md` §12.
+
 New file `daemon/internal/execution/linux_owner_v2_finalize_pipeline_test.go` (`//go:build linux &&
 amd64`, so it runs on the CI Linux daemon job and in WSL), plus one cross-platform test file for
 the vocabulary source, plus one retargeted call in `linux_owner_v2_test.go`. Every test calls the
@@ -207,7 +213,7 @@ real `finalize()` / `finalizePreGate()` on a hand-built `linuxV2ProcessOwner`.
 | 3 | `TestLinuxV2FinalizePromotionHopStaysBeforeClear` | promotion-hop position | move the hop after clear; move the hop before the capability claim |
 | 4 | `TestLinuxV2FinalizeClearFollowsDurableReceiptAndAck` | clear-after-receipt | clear before the receipt callback / before the ack |
 | 5 | `TestLinuxV2FinalizeReleasesHelperOnlyAfterClear` | never release before clear | release before clear |
-| 6 | `TestLinuxV2FinalizePreGateClearsBeforeRelease` | pre-gate clear + pre-gate release | release before clear; clear before ack |
+| 6 | `TestLinuxV2FinalizePreGateReleasesHelperOnlyAfterClear` | pre-gate clear + pre-gate release | release before clear; clear before ack |
 | 7 | `TestLinuxV2FinalizeMutationAttemptsSeeFreshClones` | fresh clone per attempt | hoist the clone out of the attempt closure |
 | 8 | `TestLinuxV2MutationAckLostIsNotReplayed` (existing) | ack-lost no-replay | replay after `ErrLinuxV2MutationAckLost` |
 | 9 | `TestLinuxV2AckStageVocabularyIsComplete` (new, cross-platform) | D6 ten-name source | drop one name from `LinuxV2AckStages` |
@@ -299,14 +305,16 @@ name. Recorded; the mutant run for fence 8 proves the policy is still pinned.
 - Retry family: five names (22 L, 33 call sites + 1 test call) → `retryMutation` (11 L, 33 call
   sites + 1 test call); the clone stayed inside every value-carrying attempt closure.
 - `runner.go` +20 L (one additive hunk: the ten-name source); `linux_owner_witness_linux.go`
-  −6 L net (the ten-arm switch → one derivation); `linux_owner_v2_linux.go` +322 L net
-  (543 +/221 − against the 0fa9b705 base). The plan row's −150…−260 dLOC is not met and is
+  −6 L net (the ten-arm switch → one derivation); `linux_owner_v2_linux.go` +323 L net
+  (544 +/221 − against the 0fa9b705 base). The plan row's −150…−260 dLOC is not met and is
   report-only per D2.
-- Tests: 12 new tests in `linux_owner_v2_finalize_pipeline_test.go` (the nine planned fences plus
-  the failed-acknowledgement, resume-from-applied-steps and pre-gate capability-claim position
-  cases) plus the cross-platform vocabulary test; 10 mutants (M1, M2, M3, M3b, M4, M5, M6, M7,
-  M8, M9 — M9 added at the apply stage) each observed red and reverted, including the
-  consumer-side app red for the dropped stage name.
+- Tests: 13 new tests in `linux_owner_v2_finalize_pipeline_test.go` (the seven planned
+  pipeline-file fences — rows 1-7 — plus the reused-durable-receipt, ack-lost-through-`finalize`,
+  failed-acknowledgement, resume-from-applied-steps, pre-gate capability-claim position and
+  lost-release-ACK readback cases), the retargeted ack-lost oracle and the cross-platform
+  vocabulary test; 13 mutants (M1–M12 including M3b, of which M9 was added at the apply stage and
+  M10–M12 by the fix pass for the whole-increment review) each observed red and reverted,
+  including the consumer-side app red for the dropped stage name.
 - Gates: `gofmt -l`, `go vet ./...`, three builds, Windows execution + app, WSL focused + WSL
   execution, the WSL witness subset and the citation gate all exit 0; the full WSL app suite does
   not complete on this host (nondeterministic admission/httptest HTTP-dial hangs that the
