@@ -118,6 +118,12 @@ writer map together, which the PR-gated PID-reuse case requires), and not be gro
 other-writable. A root-owned parent is refused whenever the writer is not root. Failure wraps one
 unexported sentinel so the refusal tests pin the validation and not a filesystem `EACCES`.
 
+**Conductor amendment (2026-11-22, Decision B ownership check).** Decision B's "owned by the
+non-root uid that armed the gate" is implemented as ownership by the writing uid (`stat.Uid ==
+uint32(os.Getuid())`), so a root writer also accepts a root-owned parent. Accepted as written: the
+helper requires `Getuid() == Geteuid()` and the gate env comes from that same uid, so a root
+writer gains nothing it does not already have; no root rejection is added.
+
 Both witness write funnels validate before every write:
 
 - `publishLinuxSupervisorWitnessFile` (absent-destination `Lstat`, `CreateTemp` + rename kept
@@ -125,7 +131,7 @@ Both witness write funnels validate before every write:
   marker, the hello-session witness, the owner-loss reached/result markers and the owner-recovery
   authenticated marker;
 - new `writeLinuxSupervisorScanWitnessMarker` (`os.WriteFile`, same mode/flags as base) — the
-  three scan-injection writes at `containment_supervisor_linux.go:547,611,628`.
+  three scan-injection writes at `containment_supervisor_linux.go:529,593,610`.
 
 No env-supplied absolute path reaches `os.Create`/`os.WriteFile`/`os.Rename` in the privileged
 helper unvalidated. The existing absent-destination checks stay; no new env var is added, so
@@ -148,8 +154,9 @@ report: witness evidence binds the production binary's SHA-256
   `daemon` job's `go test -race ./...`; the four PR-gated witness steps keep their assert lists.
 - Non-witness wire/persisted/error/log text: unchanged. The only new error text is on witness
   refusal paths, which did not exist before.
-- No `//nolint`/`credo:disable` added; comment policy applied (the only new comments are the
-  config struct's per-use why and the unarmed branch's owner-recovery presence-flag exception).
+- No `//nolint`/`credo:disable` added; comment policy applied (two why-notes in
+  `supervisor_linux_witness.go`, one ambient-env trap line in the new test, and the trimmed
+  two-line atomic-publish why; the history narrative and its CI run id left the source).
 
 ## Public / API shape
 
@@ -186,9 +193,9 @@ file contributes none and the new test file only its three `Test…` entry point
 
 `daemon/internal/platform/supervisor_linux_witness_test.go`:
 
-1. `TestLinuxSupervisorWitnessConfigIsReadPerUse` — gate on → config armed with values; gate off →
-   armed=false, action values empty; gate re-set → armed again. Red mutation: a `sync.Once`
-   snapshot in the parser makes the second read stale.
+1. `TestLinuxSupervisorWitnessConfigIsReadPerUse` — gate on → config carries the installed values;
+   gate off → empty config; gate re-set → values present again. Red mutation: a `sync.Once`
+   snapshot in the parser makes the later reads stale (M1).
 2. `TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate` — every hook env name set with the gate
    off: the config is unarmed, each family reader returns nothing, the injection hook leaves the
    real monitor reader installed (`skipInitial=false`, so a mutant that installs the injection
@@ -200,15 +207,17 @@ file contributes none and the new test file only its three `Test…` entry point
    parser arms via `TrimSpace` while every raw-comparing hook check stays false) with a bad scan
    mode and partial owner-loss / barrier sets, so deleting the raw gate check of the scan-failure
    validator, hello-session injection, owner-loss reader/validator, owner-recovery reader,
-   drop-response or release-barrier hook reddens at that hook's own checkpoint. Red mutation:
-   delete the parser's unarmed early return (M2/M3); the scan-injection reader trims exactly like
-   the parser, so its own check is implied by the armed rule and has no independent mutant.
+   drop-response or release-barrier hook reddens at that hook's own checkpoint (M8–M13). Red
+   mutation: delete the parser's unarmed early return (M2/M3); the scan-injection reader trims
+   exactly like the parser, so its own check is implied by the armed rule and has no independent
+   mutant.
 3. `TestLinuxSupervisorWitnessMarkerParentRefusal` — the three write funnels accept an owned private
-   directory (happy-path pin), and refuse a symlinked parent, a group/other-writable parent and a
-   root-owned parent (when the writer is not root), with no marker byte written and no directory
-   entry added to the refused symlinked or group-writable parent (validation precedes `CreateTemp`):
-   mutant "always refuse" reddens the happy path, mutant "no validation" reddens the refusals,
-   mutant "validate after `CreateTemp`" reddens the entry-count pins.
+   directory (happy-path pin), and refuse a symlinked parent, a group-writable `0o770` parent, an
+   other-writable `0o707` parent and a root-owned parent (when the writer is not root), with no
+   marker byte written and no directory entry added to the refused parents (validation precedes
+   `CreateTemp`): mutant "always refuse" reddens the happy path (M5), mutant "no validation"
+   reddens the refusals (M4), mutant "narrow the mask to `0o002`" reddens the group-writable case
+   (M6), mutant "validate after `CreateTemp`" reddens the entry-count pins (M7).
 
 ## Evidence plan (exact commands; carriers: this plan + the stage report = `answer.md`)
 
@@ -249,7 +258,7 @@ directory):
 | F6 lease-armed mirror seal `client:1430` | `!enabled` or empty lease-armed path → nil; committed/resumed/already-triggered → nil; nil mirror → wrapped error; scan request errors → wrapped errors; seal/verify errors → wrapped errors | the same expression and body; the lease path now comes from a parser read on the same short-circuit arm; `enabled` still comes from F1 | yes, all |
 | F7 drop-response hook `client:1577` | nil supervisor → false; gate ≠ "1" → false; operation ∉ {stop, release} or ≠ operation → false; already triggered / nil response transport / release without receipt → false; marker path trimmed non-empty → publish (error ignored); close reader/writer; true | nil check and gate check split into two statements in the same order; every later guard byte-identical | yes ×4 |
 | F8 release response-loss barrier `client:1619` | gate ≠ "1" or operation ≠ release → nil; not drop-triggered → nil; neither barrier name set → nil; exactly one set → error; empty after trim → error; identical cleaned paths → error; reached/release absent checks → wrapped errors; no receipt → error; publish failure → wrapped error; poll timeout/error → error; else nil | same guards and messages; the two `LookupEnv` pairs now come from the parser | yes, all |
-| F9 marker publishers | `publishLinuxSupervisorWitnessFile :242`: absent-destination `Lstat` → error; `CreateTemp`/`Write`/`Sync`/`Close`/`Rename` failures → error; success → nil. The three scan writes were bare `os.WriteFile(…, 0o600)` whose errors each site handled (pause → `return false`; seal → ignored; injection → `restore()` + `%w`-wrapped injection error with `%v` marker text) | one new guard inserted first (parent validation, decision B); everything after it byte-identical. The scan writes call `writeLinuxSupervisorScanWitnessMarker` (validation + `os.WriteFile` 0o600) with each site's error handling unchanged | yes ×5 + 3, plus the new guard |
+| F9 marker publishers | `publishLinuxSupervisorWitnessFile :219`: absent-destination `Lstat` → error; `CreateTemp`/`Write`/`Sync`/`Close`/`Rename` failures → error; success → nil. The three scan writes were bare `os.WriteFile(…, 0o600)` whose errors each site handled (pause → `return false`; seal → ignored; injection → `restore()` + `%w`-wrapped injection error with `%v` marker text) | one new guard inserted first (parent validation, decision B); everything after it byte-identical. The scan writes call `writeLinuxSupervisorScanWitnessMarker` (validation + `os.WriteFile` 0o600) with each site's error handling unchanged | yes ×5 + 3, plus the new guard |
 
 Not consolidated, by scope: the v2 selector read (`anchor_types.go:51`, `anchor_gate.go`, D3) and
 the app-side stop-receipt barrier (`internal/app/cleanup_glue.go:18-20`, out of the owned set);
@@ -285,7 +294,7 @@ not run (D3); its consumed env and artifact names are unchanged.
 | platform/cmd vet (linux) | `GOOS=linux GOARCH=amd64 go vet ./internal/platform/ ./cmd/symmetry-daemon/` | 0 | 0 diagnostics |
 | env-name set | `git grep -h -o -E 'SYMMETRY_[A-Z0-9_]+' <rev> -- '*.go' '*.yml' '*.yaml' '*.sh' '*.py' \| sort -u`, `de526861` vs `95498fdf` | 0 | 270 = 270 names, `diff` empty |
 | parser-only read grep | `grep -n 'os\.Getenv\|os\.LookupEnv' internal/platform/*.go` filtered to non-test, non-Windows | 0 (grep) | only `supervisor_linux_witness.go` (18 reads) plus the unrelated `NOTIFY_SOCKET` read in `anchor_wire.go:909` |
-| parser-per-use grep | `grep -rn 'linuxSupervisorWitnessConfigFromEnv()' internal/platform/*.go` filtered to non-test | 0 (grep) | 1 definition (`supervisor_linux_witness.go:74`) and 8 call sites — `containment_supervisor_linux.go:104,143,181,323,365` (the five family readers) and `supervisor_linux_client.go:1432,1581,1620` (mirror seal, drop-response, release barrier), i.e. every base read-site function re-reads per use (`parser-per-use-grep.txt`) |
+| parser-per-use grep | `grep -rn 'linuxSupervisorWitnessConfigFromEnv()' internal/platform/*.go` filtered to non-test | 0 (grep) | 1 definition (`supervisor_linux_witness.go:73`) and 8 call sites — `containment_supervisor_linux.go:104,143,181,315,357` (the five family readers) and `supervisor_linux_client.go:1432,1581,1620` (mirror seal, drop-response, release barrier), i.e. every base read-site function re-reads per use (`parser-per-use-grep.txt`) |
 | witness-name coverage | parser name set vs every e2e-set name in the `SYMMETRY_LINUX_SUPERVISOR_*`/`SYMMETRY_RUNNER_LEASE_ARMED_*` namespace | 0 | 3 e2e names have no platform reader and must not: `…_STOP_RECEIPT_BARRIER_{REACHED,RELEASE}_FILE` (app `cleanup_glue.go`) and `SYMMETRY_RUNNER_LEASE_ARMED_RESUME_BARRIER_RELEASE_FILE` (`execution/runner.go`) |
 | build constraints | `git diff -U0 de526861..95498fdf -- daemon .github \| grep -c '^[+-]//go:build'` | 0 | 2 hits, both `+//go:build linux` on the two new files (expected); 0 elsewhere |
 | suppressions | `git diff de526861..95498fdf -- daemon .github \| grep -c 'nolint\|credo:disable'` | 1 (no match) | 0 in code/CI; the 2 whole-range hits are this plan's own prose |
@@ -298,21 +307,36 @@ SKIP list, verbatim (identical in both WSL runs): one entry —
 No new skip is added by this slice; the contract's delegated-cgroup skip does not trigger on this
 kernel, and its named `/etc/symmetry/linux-owner.conf` skip is the same pre-existing UID/GID entry.
 
-## Mutation records (each mutant applied to this tree, run in WSL, then reverted; file hashes
-re-checked against `pristine-hashes.txt` = OK ×4)
+## Mutation records (13 mutants: M1–M5 re-verified and M6–M13 recorded at the fix HEAD)
+
+Each mutant was applied to a byte-identical scratch copy of this tree, run in WSL (`-u accept`),
+and discarded; the worktree was never mutated. All 13 reddened (exit 1); the unmutated scratch
+copy exits 0 (`TestLinuxSupervisorWitness` → `ok … 0.062s`).
 
 | mutant | edit | test | exit | observed red |
 | --- | --- | ---: | ---: | --- |
-| M1 process-lifetime cache | parser memoized behind `sync.Once` (Decision F's named failure control) | `TestLinuxSupervisorWitnessConfigIsReadPerUse` + the negative test | 1 | after the gate was cleared the stale config still reads `productionWitness:1 armed:true scanFailureMode:children_after_initial`; both tests FAIL |
-| M2 gate removed at the parser | the config's "empty while unarmed" early return deleted | `TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate` | 1 | `gate-unset witness config = {… scanFailureMode:children_after_initial …}`, want empty |
-| M3 M2 + hook gate removed | additionally the scan-failure reader's gate check deleted | same test | 1 | reddens at the same config assertion (the hook's own gate is the second layer) |
-| M4 validation removed | `validateLinuxSupervisorWitnessMarkerParent` returns nil | `TestLinuxSupervisorWitnessMarkerParentRefusal` | 1 | `publish behind a symlinked parent = <nil>, want the marker parent refusal` |
-| M5 always refuse | validation returns the sentinel for every path | same test | 1 | `owned-directory witness marker = … not a safe witness directory`, want published |
+| M1 process-lifetime cache | parser memoized behind a package-level `sync.Once` (Decision F's named failure control) | `TestLinuxSupervisorWitnessConfigIsReadPerUse` + the negative test | 1 | both FAIL: the per-use test reads the stale `productionWitness:1 scanFailureMode:children_after_initial …` config after the gate was cleared, and the negative test's first config assertion sees the same cached snapshot |
+| M2 parser early return deleted | the unarmed `return config` removed (the presence-bit clear kept) | `TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate` | 1 | `gate-unset witness config = {… scanFailureMode:children_after_initial …}, want the unarmed config with only the owner-recovery presence flag` |
+| M3 M2 + reader gate removed | additionally the scan-failure reader's gate check deleted | same test | 1 | reddens at the same config assertion (the parser layer empties first; the hook's own gate is the second layer) |
+| M4 validation removed | `validateLinuxSupervisorWitnessMarkerParent` returns nil immediately | `TestLinuxSupervisorWitnessMarkerParentRefusal` | 1 | `publish behind a symlinked parent = <nil>, want the marker parent refusal` |
+| M5 always refuse | validator returns the sentinel for every path | same test | 1 | `owned-directory witness marker = Linux supervisor witness marker parent is not a safe witness directory, want published` |
+| M6 writable mask narrowed | `&0o022` → `&0o002` (only the other-write bit refused; fix-round-1 pin) | same test | 1 | `group-writable-parent witness marker (mode 0770) = <nil>, want the marker parent refusal` |
+| M7 validation after `CreateTemp` | parent validation moved to after the temporary file exists | same test | 1 | `symlinked-parent refusals left 5 entries in the real parent, want 3 (no temporary file)` |
+| M8 scan-failure validator gate removed | raw `productionWitness != "1"` check deleted in `validateLinuxSupervisorScanFailureEnv` | negative test (whitespace phase) | 1 | `whitespace-gate scan-failure validation = unsupported Linux supervisor scan-failure mode "bogus", want nil` |
+| M9 hello-session gate removed | raw gate check deleted in `linuxSupervisorHelloSessionInjectionFromEnv` | same test | 1 | `whitespace-gate hello-session injection = ({…}, true, <nil>), want none` |
+| M10 owner-loss reader gate removed | raw gate check deleted in `linuxSupervisorOwnerLossProofBarrierFromEnv` (the validator delegates to the reader, so both checkpoints share this layer) | same test | 1 | `whitespace-gate owner-loss proof barrier = (…, false, … requires all reached, release, and result marker paths), want none` |
+| M11 owner-recovery gate removed | raw gate check deleted in `linuxSupervisorOwnerRecoveryAuthenticatedMarkerFromEnv` | same test | 1 | `gate-unset owner-recovery refusal = "…requires a non-empty absolute file path", want the base gate refusal` (the unarmed parser keeps the presence bit, so without the gate check the reader fails later instead) |
+| M12 drop-response gate removed | raw gate check deleted in `dropResponseTransportOnce` | same test | 1 | `whitespace-gate drop-response hook fired` |
+| M13 release-barrier gate removed | raw gate check deleted in `waitForLinuxSupervisorReleaseResponseLossBarrier` | same test | 1 | `whitespace-gate release response-loss barrier = Linux supervisor release response-loss barrier requires both …REACHED_FILE and …RELEASE_FILE, want nil` |
 
-M3 notes the layering the implementation chose: because the parser empties the config while the
-gate is unset, a *single* hook losing its own gate check cannot act at all — the clause's
-invariant ("no witness hook is reachable while the gate is unset") holds one layer earlier than
-the per-hook check, and the recorded red mutation is the switch itself (M2), not an inert hook.
+M3 and M8–M13 record the layering the implementation chose: because the parser empties the config
+while the gate is unset, a *single* hook losing its own gate check cannot act during the gate-unset
+phase — that invariant ("no witness hook is reachable while the gate is unset") holds one layer
+earlier than the per-hook check; the recorded gate-unset red is M2. The per-hook raw checks guard
+the whitespace-gate phase
+(`" 1 "` arms the parser via `TrimSpace` while every raw comparison stays false); M8–M13 delete one
+raw check each and redden at that hook's own whitespace checkpoint. The scan-injection *reader*
+trims exactly like the parser, so it has no independent raw-check mutant (M3 folds it into M2).
 
 ## Local e2e oracle status
 
@@ -343,9 +367,9 @@ contract's gate line allows. What is verified locally instead:
 
 ## Simplification review (repo contract)
 
-- **`armed` field.** Considered dropping it (production never reads it after the early return).
-  Kept: it names the switch the tests assert in both directions, and removing it would spread the
-  same emptiness assertion across the field list in two tests.
+- **`armed` field.** Round-1 review measured it as test-only state and the fix dropped it: the
+  parser keeps the armed decision in a local `gate` string and the tests assert the parsed
+  scan-failure values plus the injection reader's enabled result instead, same red coverage.
 - **Two marker write funnels.** Considered merging `publishLinuxSupervisorWitnessFile` and
   `writeLinuxSupervisorScanWitnessMarker`. Rejected: the publisher's absent-destination
   create-temp+rename contract is what the witness readers rely on, while the scan-fired markers are
@@ -353,11 +377,22 @@ contract's gate line allows. What is verified locally instead:
   behavior, and it is factored once.
 - **Config struct vs per-reader `os.Getenv`.** Rejected: per-reader reads are the pre-change state
   and contradict the single-switch requirement.
-- **No new abstraction beyond the module**: re-measured after the apply-stage simplify pass, the
-  net production delta is +125 lines (130-line witness module minus 10 lines removed from
-  `containment_supervisor_linux.go` plus 5 in `supervisor_linux_client.go`); the tracked diff is
-  +83/−77 (now including the shared counting-fake call-site swap in
-  `containment_supervisor_linux_test.go`) and the new test file is +230. D2 keeps dLOC report-only.
+- **No new abstraction beyond the module**: re-measured at the fix HEAD, the net production delta
+  is +116 lines (`git diff --numstat origin/main...HEAD -- daemon`:
+  witness module +129/−0, `containment_supervisor_linux.go` +54/−72,
+  `supervisor_linux_client.go` +13/−8); the modified tracked files are +68/−87 including the
+  shared counting-fake call-site swap in `containment_supervisor_linux_test.go` (+1/−7), and the
+  new test file is +325. D2 dLOC is report-only: the daemon Go delta is net +435 (production
+  +116, tests +319); see the D2 dLOC note below.
+
+## D2 dLOC (re-derived at the fix HEAD, report-only)
+
+`git diff --numstat origin/main...HEAD -- daemon`: production Go net +116
+(`supervisor_linux_witness.go` +129/−0, `containment_supervisor_linux.go` +54/−72,
+`supervisor_linux_client.go` +13/−8); tests net +319 (`supervisor_linux_witness_test.go` +325/−0,
+`containment_supervisor_linux_test.go` +1/−7); daemon Go net **+435**. Doc changes (this plan,
+`docs/TODO.md`) are excluded from the code dLOC. D2: report-only, never a gate; the program row's
+−1,000..−1,200 estimate assumed build-tag twins that decision D4 rules out.
 
 ## Dependency / rebase note
 
@@ -385,9 +420,9 @@ file. The slice's own base stays `12de9428` as dispatched.
   the three injection markers that no parser owns, and cannot be bypassed by a parse path that the
   flag later crosses.
 - **Two write funnels.** The rename-based publisher and `os.WriteFile` are kept as-is: the
-  publisher's absent-destination contract is load-bearing for the witness readers (the CI run
-  44133750246 note at `containment_supervisor_linux.go:232-241`), and the scan-fired markers are
-  written more than once by design.
+  publisher's absent-destination contract is load-bearing for the witness readers (a
+  create-then-write sequence once exposed a partial document that a witness test decoded as
+  evidence — CI run 44133750246), and the scan-fired markers are written more than once by design.
 - **Evidence carrier.** The STRICT owned set has no `docs/evidence/` file, so the record lives in
   this plan file plus the stage report, following rf-w5-09 (the most recently merged sibling) and
   rf-w2-09's precedent note. Conductor can rule otherwise.

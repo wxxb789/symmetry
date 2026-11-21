@@ -1312,8 +1312,12 @@ instead of appended.
       publish env-supplied marker paths unvalidated: the stop-receipt barrier reached marker
       (`daemon/internal/app/cleanup_glue.go:232-233` reads
       `SYMMETRY_LINUX_SUPERVISOR_STOP_RECEIPT_BARRIER_{REACHED,RELEASE}_FILE`, written at `:259`)
-      and the commit-resume barrier reached marker (`daemon/internal/execution/runner.go:1084-1085`
-      reads `SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_{REACHED,RELEASE}_FILE`, written at `:1114`).
+      and the shared resume-barrier writer (`daemon/internal/execution/runner.go:1077`
+      `waitForResumeBarrier`, publishing the reached marker at `:1114`), which serves both the
+      commit-resume family (`SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_{REACHED,RELEASE}_FILE`, caller
+      `:1012`) and the lease-armed family
+      (`SYMMETRY_RUNNER_LEASE_ARMED_RESUME_BARRIER_{REACHED,RELEASE}_FILE`, callers `:909,919` via
+      `waitForLeaseArmedResumeBarrier`).
       Both are pre-existing and outside rf-w5-01's owned set (rf-w5-01 review CR-06); the platform
       helper funnels are covered by `validateLinuxSupervisorWitnessMarkerParent`.
       owner: daemon app/execution.

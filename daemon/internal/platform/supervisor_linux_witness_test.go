@@ -21,15 +21,13 @@ func TestLinuxSupervisorWitnessConfigIsReadPerUse(t *testing.T) {
 	t.Setenv(linuxSupervisorScanFailureTriggerEnv, triggerPath)
 	t.Setenv(linuxSupervisorScanFailureFiredEnv, firedPath)
 
-	// The unarmed parser deliberately keeps the owner-recovery presence bit, so
-	// clear that name for this test: an ambient fixture export must not turn the
-	// empty-config comparison red.
+	// An ambient export of this name would keep the presence bit.
 	unsetWitnessEnvForTest(t, linuxSupervisorOwnerRecoveryAuthenticatedEnv)
 
-	armed := linuxSupervisorWitnessConfigFromEnv()
-	if !armed.armed || armed.scanFailureMode != linuxSupervisorScanFailureChildren ||
-		armed.scanFailureTriggerPath != triggerPath || armed.scanFailureFiredPath != firedPath {
-		t.Fatalf("armed witness config = %+v, want the installed gate and scan-failure markers", armed)
+	config := linuxSupervisorWitnessConfigFromEnv()
+	if config.scanFailureMode != linuxSupervisorScanFailureChildren ||
+		config.scanFailureTriggerPath != triggerPath || config.scanFailureFiredPath != firedPath {
+		t.Fatalf("armed witness config = %+v, want the installed gate and scan-failure markers", config)
 	}
 	injection, enabled := linuxSupervisorScanFailureInjectionFromEnv()
 	if !enabled || injection.triggerPath != triggerPath || injection.firedPath != firedPath {
@@ -51,7 +49,7 @@ func TestLinuxSupervisorWitnessConfigIsReadPerUse(t *testing.T) {
 		t.Fatalf("re-arm witness gate: %v", err)
 	}
 	rearmed := linuxSupervisorWitnessConfigFromEnv()
-	if !rearmed.armed || rearmed.scanFailureMode != linuxSupervisorScanFailureChildren ||
+	if rearmed.scanFailureMode != linuxSupervisorScanFailureChildren ||
 		rearmed.scanFailureFiredPath != firedPath {
 		t.Fatalf("witness config after the gate was re-armed = %+v, want the installed markers", rearmed)
 	}
@@ -158,10 +156,6 @@ func TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate(t *testing.T) {
 		}
 	}
 
-	// A gate that only trims to "1" arms the parser while every raw-comparing
-	// hook check stays false. With hostile values (a bad mode, partial marker
-	// sets) each raw-comparing hook reddens here when its own gate check is
-	// deleted, so these checkpoints do not lean on the parser alone.
 	if err := os.Setenv(linuxSupervisorProductionWitnessEnv, " 1 "); err != nil {
 		t.Fatalf("set whitespace-padded witness gate: %v", err)
 	}
@@ -239,23 +233,31 @@ func TestLinuxSupervisorWitnessMarkerParentRefusal(t *testing.T) {
 		t.Fatalf("symlinked-parent witness marker = %v, want nothing written through the link", err)
 	}
 
-	shared := filepath.Join(t.TempDir(), "shared")
-	if err := os.Mkdir(shared, 0o777); err != nil {
-		t.Fatalf("create group-writable witness parent: %v", err)
-	}
-	if err := os.Chmod(shared, 0o777); err != nil {
-		t.Fatalf("widen group-writable witness parent: %v", err)
-	}
-	sharedMarker := filepath.Join(shared, "marker")
-	sharedEntries := witnessDirectoryEntries(t, shared)
-	if err := writeLinuxSupervisorAbsentWitnessMarker(sharedMarker, "refused\n"); !errors.Is(err, errLinuxSupervisorWitnessMarkerParentUnsafe) {
-		t.Fatalf("group- or other-writable-parent witness marker = %v, want the marker parent refusal", err)
-	}
-	if got := witnessDirectoryEntries(t, shared); got != sharedEntries {
-		t.Fatalf("group-writable-parent refusal left %d entries, want %d (no temporary file)", got, sharedEntries)
-	}
-	if _, err := os.Lstat(sharedMarker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("group-writable-parent witness marker = %v, want nothing written", err)
+	for _, writable := range []struct {
+		name string
+		mode os.FileMode
+	}{
+		{name: "group-writable", mode: 0o770},
+		{name: "other-writable", mode: 0o707},
+	} {
+		shared := filepath.Join(t.TempDir(), "shared")
+		if err := os.Mkdir(shared, writable.mode); err != nil {
+			t.Fatalf("create %s witness parent: %v", writable.name, err)
+		}
+		if err := os.Chmod(shared, writable.mode); err != nil {
+			t.Fatalf("set %s witness parent mode: %v", writable.name, err)
+		}
+		sharedMarker := filepath.Join(shared, "marker")
+		sharedEntries := witnessDirectoryEntries(t, shared)
+		if err := writeLinuxSupervisorAbsentWitnessMarker(sharedMarker, "refused\n"); !errors.Is(err, errLinuxSupervisorWitnessMarkerParentUnsafe) {
+			t.Fatalf("%s-parent witness marker (mode %#o) = %v, want the marker parent refusal", writable.name, writable.mode, err)
+		}
+		if got := witnessDirectoryEntries(t, shared); got != sharedEntries {
+			t.Fatalf("%s-parent refusal left %d entries, want %d (no temporary file)", writable.name, got, sharedEntries)
+		}
+		if _, err := os.Lstat(sharedMarker); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s-parent witness marker (mode %#o) = %v, want nothing written", writable.name, writable.mode, err)
+		}
 	}
 
 	absentParentMarker := filepath.Join(t.TempDir(), "absent", "marker")
@@ -289,9 +291,6 @@ func unsetWitnessEnvForTest(t *testing.T, name string) {
 	}
 }
 
-// witnessHookHarness returns a supervisor whose structural guards pass, so the
-// drop-response and release-barrier gate checks are the only reason left for
-// them to stay inert.
 func witnessHookHarness(t *testing.T) *linuxSupervisor {
 	t.Helper()
 	responseRead, responseWrite, err := os.Pipe()

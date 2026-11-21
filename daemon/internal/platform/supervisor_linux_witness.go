@@ -38,7 +38,6 @@ var errLinuxSupervisorWitnessMarkerParentUnsafe = errors.New("Linux supervisor w
 // the app witness toggles the gate in-process, so a snapshot would go stale.
 type linuxSupervisorWitnessConfig struct {
 	productionWitness string
-	armed             bool
 
 	scanFailureMode        string
 	scanFailureTriggerPath string
@@ -72,10 +71,10 @@ type linuxSupervisorWitnessConfig struct {
 }
 
 func linuxSupervisorWitnessConfigFromEnv() linuxSupervisorWitnessConfig {
-	config := linuxSupervisorWitnessConfig{productionWitness: os.Getenv(linuxSupervisorProductionWitnessEnv)}
+	gate := os.Getenv(linuxSupervisorProductionWitnessEnv)
+	config := linuxSupervisorWitnessConfig{productionWitness: gate}
 	config.ownerRecoveryAuthenticatedPath, config.ownerRecoveryAuthenticatedSet = os.LookupEnv(linuxSupervisorOwnerRecoveryAuthenticatedEnv)
-	config.armed = strings.TrimSpace(config.productionWitness) == "1"
-	if !config.armed {
+	if strings.TrimSpace(gate) != "1" {
 		// The presence flag survives the empty config so the owner-recovery
 		// reader keeps its fail-closed "configured without the gate" error.
 		config.ownerRecoveryAuthenticatedPath = ""

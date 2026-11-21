@@ -214,16 +214,8 @@ func wrongLinuxSupervisorHelloSession(anchor LinuxProcessGroupAnchor) (int64, er
 	return session, nil
 }
 
-// publishLinuxSupervisorWitnessFile publishes a helper-side witness document as
-// one visible state change: readers poll these paths and accept the first
-// successful read, so a document must never be observable while it is
-// incomplete. The previous create-then-write sequence exposed an empty file
-// first, and the wrong-session test decoded that intermediate state as
-// `decode wrong-session helper witness: unexpected end of JSON input` (CI run
-// 44133750246). The document is assembled in a temporary file in the
-// destination directory and renamed into place; the destination must still be
-// absent, which keeps the create-with-O_EXCL contract of witness paths that
-// this package validates as absent before a run.
+// Witness readers accept the first successful read, so a document that appears
+// partially written would be decoded as evidence: publish by temp file + rename.
 func publishLinuxSupervisorWitnessFile(path string, contents []byte) error {
 	if err := validateLinuxSupervisorWitnessMarkerParent(path); err != nil {
 		return err
