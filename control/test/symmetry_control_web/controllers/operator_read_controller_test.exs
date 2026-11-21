@@ -1,12 +1,16 @@
 defmodule SymmetryControlWeb.OperatorReadControllerTest do
-  use SymmetryControlWeb.ConnCase, async: false
+  use SymmetryControlWeb.ConnCase, async: true
+
+  import SymmetryControl.TestFixtures,
+    only: [claim: 4, register_runtime: 3, task_attrs: 0, task_attrs: 1, uuid: 0]
+
+  import SymmetryControlWeb.TestConn, only: [assert_error: 3, operator_conn: 1]
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Command, RunEvent, RunTransition}
   alias SymmetryControl.Repo
   alias SymmetryControlWeb.Protocol
 
-  @operator_token "test-operator-token"
   @now ~U[2026-09-03 00:00:00.000000Z]
 
   test "operator runtime resources expose machine identity, status, capacity, and active runs", %{
@@ -15,18 +19,18 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     %{machine: machine, runtime: runtime, task: task, run: run} = runtime_fixture()
 
     assert %{"runtimes" => [snapshot]} =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/runtimes")
              |> json_response(200)
 
     assert_runtime(snapshot, machine, runtime, task, run)
 
     assert ^snapshot =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/runtimes/#{runtime.id}")
              |> json_response(200)
 
-    assert_error(bearer(conn) |> get("/api/v1/runtimes/#{uuid()}"), 404, "not_found")
+    assert_error(operator_conn(conn) |> get("/api/v1/runtimes/#{uuid()}"), 404, "not_found")
   end
 
   test "task resource includes nullable waiting context and stable latest command states", %{
@@ -45,7 +49,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              },
              "latest_command" => nil
            } =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
@@ -56,7 +60,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     pending = create_input_command(task.id, %{"branch" => "main"}, "pending")
 
     assert %{"waiting" => waiting, "latest_command" => latest} =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
@@ -83,7 +87,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              )
 
     assert %{"latest_command" => acknowledged} =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
@@ -95,28 +99,28 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert {:ok, _cancelled, applied} = Orchestration.request_cancel(queued.id, now: @now)
 
     assert %{"waiting" => nil, "latest_command" => applied_command} =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{queued.id}")
              |> json_response(200)
 
     assert_command(applied_command, applied, "applied")
-    assert_error(bearer(conn) |> get("/api/v1/tasks/#{uuid()}"), 404, "not_found")
+    assert_error(operator_conn(conn) |> get("/api/v1/tasks/#{uuid()}"), 404, "not_found")
   end
 
   test "task resource exposes queued attempt identity and an applied retry command", %{conn: conn} do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now, daemon_instance_id: uuid())
 
     assert {:ok, task, :created} =
              Orchestration.submit_task(task_attrs(), "retry-read", now: @now)
 
     assert %{"state" => "queued", "run_id" => nil, "generation" => 1} =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now, claim_id: uuid())
 
     assert {:ok, _} = Orchestration.transition(run.id, fence, "running", %{}, uuid(), now: @now)
 
@@ -147,7 +151,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              "work" => %{"goal" => "Run tests again"},
              "latest_command" => latest_command
            } =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
@@ -165,7 +169,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     event_ids = insert_events(first_run, second_run, at, 501)
 
     assert %{"events" => first_page, "next_after" => after_cursor} =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{task.id}/events")
              |> json_response(200)
 
@@ -173,7 +177,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert is_binary(after_cursor)
 
     assert %{"events" => second_page, "next_after" => nil} =
-             bearer(conn)
+             operator_conn(conn)
              |> get(
                "/api/v1/tasks/#{task.id}/events?after=#{URI.encode_www_form(after_cursor)}&limit=500"
              )
@@ -192,7 +196,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
       insert_transition(first_run, "running", DateTime.add(at, 504, :microsecond))
 
     assert %{"transitions" => first_transition_page, "next_after" => transition_after_cursor} =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{task.id}/transitions?limit=2")
              |> json_response(200)
 
@@ -204,7 +208,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert is_binary(transition_after_cursor)
 
     assert %{"transitions" => second_transition_page, "next_after" => nil} =
-             bearer(conn)
+             operator_conn(conn)
              |> get(
                "/api/v1/tasks/#{task.id}/transitions?after=#{URI.encode_www_form(transition_after_cursor)}&limit=2"
              )
@@ -236,7 +240,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
       )
 
     assert %{"commands" => first_command_page, "next_after" => command_after_cursor} =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{task.id}/commands?limit=2")
              |> json_response(200)
 
@@ -248,7 +252,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert is_binary(command_after_cursor)
 
     assert %{"commands" => second_command_page, "next_after" => nil} =
-             bearer(conn)
+             operator_conn(conn)
              |> get(
                "/api/v1/tasks/#{task.id}/commands?after=#{URI.encode_www_form(command_after_cursor)}&limit=2"
              )
@@ -268,7 +272,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
           "/api/v1/tasks/#{task.id}/events?limit=invalid",
           "/api/v1/tasks/#{task.id}/events?before=not-allowed"
         ] do
-      assert_error(bearer(conn) |> get(path), 400, "invalid_request")
+      assert_error(operator_conn(conn) |> get(path), 400, "invalid_request")
     end
   end
 
@@ -291,7 +295,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
           {"9223372036854775807", 400},
           {"9223372036854775808", 400}
         ] do
-      response = bearer(conn) |> get("#{events}?limit=#{URI.encode_www_form(value)}")
+      response = operator_conn(conn) |> get("#{events}?limit=#{URI.encode_www_form(value)}")
 
       if status == 200 do
         assert json_response(response, 200)
@@ -323,7 +327,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
       insert_command(task, second_run, "pending", DateTime.add(at, 2, :microsecond))
 
     assert %{"items" => first_page, "next_before" => before_cursor} =
-             bearer(conn)
+             operator_conn(conn)
              |> get("/api/v1/tasks/#{task.id}/timeline?limit=2")
              |> json_response(200)
 
@@ -342,7 +346,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert is_binary(before_cursor)
 
     assert %{"items" => second_page, "next_before" => nil} =
-             bearer(conn)
+             operator_conn(conn)
              |> get(
                "/api/v1/tasks/#{task.id}/timeline?before=#{URI.encode_www_form(before_cursor)}"
              )
@@ -357,7 +361,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
           "/api/v1/tasks/#{task.id}/timeline?limit=501",
           "/api/v1/tasks/#{task.id}/timeline?limit=invalid"
         ] do
-      assert_error(bearer(conn) |> get(path), 400, "invalid_request")
+      assert_error(operator_conn(conn) |> get(path), 400, "invalid_request")
     end
   end
 
@@ -375,17 +379,17 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     insert_command(task, second_run, "pending", DateTime.add(at, 4, :microsecond))
 
     %{"next_after" => event_cursor} =
-      bearer(conn)
+      operator_conn(conn)
       |> get("/api/v1/tasks/#{task.id}/events?limit=1&ignored=value")
       |> json_response(200)
 
     %{"next_after" => transition_cursor} =
-      bearer(conn)
+      operator_conn(conn)
       |> get("/api/v1/tasks/#{task.id}/transitions?limit=1")
       |> json_response(200)
 
     %{"next_before" => timeline_cursor} =
-      bearer(conn)
+      operator_conn(conn)
       |> get("/api/v1/tasks/#{task.id}/timeline?limit=1")
       |> json_response(200)
 
@@ -437,17 +441,21 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
           "/api/v1/tasks/#{task.id}/events?after=#{URI.encode_www_form(expired_cursor)}",
           "/api/v1/tasks/#{task.id}/timeline?before=#{URI.encode_www_form(transition_cursor)}"
         ] do
-      assert_error(bearer(conn) |> get(path), 400, "invalid_request")
+      assert_error(operator_conn(conn) |> get(path), 400, "invalid_request")
     end
 
     for surface <- ["timeline", "events", "transitions", "commands"] do
-      assert_error(bearer(conn) |> get("/api/v1/tasks/#{uuid()}/#{surface}"), 404, "not_found")
+      assert_error(
+        operator_conn(conn) |> get("/api/v1/tasks/#{uuid()}/#{surface}"),
+        404,
+        "not_found"
+      )
     end
   end
 
   defp runtime_fixture do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine, capacity: 2)
+    runtime = register_runtime(machine, @now, capacity: 2, daemon_instance_id: uuid())
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "runtime-read", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
     %{machine: machine, runtime: runtime, task: task, run: run}
@@ -455,10 +463,10 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
 
   defp waiting_fixture do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now, daemon_instance_id: uuid())
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "waiting-read", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now, claim_id: uuid())
 
     assert {:ok, _} = Orchestration.transition(run.id, fence, "running", %{}, uuid(), now: @now)
 
@@ -477,7 +485,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
 
   defp history_fixture do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine, capacity: 2)
+    runtime = register_runtime(machine, @now, capacity: 2, daemon_instance_id: uuid())
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "history-read", now: @now)
     {:ok, first_run} = Orchestration.assign_one(now: @now)
 
@@ -526,49 +534,6 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              )
 
     enrolled
-  end
-
-  defp register_runtime(machine, overrides \\ []) do
-    assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(
-               machine.id,
-               uuid(),
-               [
-                 %{
-                   runtime_key: "default",
-                   name: "Local Codex",
-                   capacity: Keyword.get(overrides, :capacity, 1),
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   capabilities: %{}
-                 }
-               ],
-               now: @now
-             )
-
-    runtime
-  end
-
-  defp claim(run, runtime) do
-    assert {:ok, claimed} =
-             Orchestration.claim(
-               run.id,
-               %{
-                 runtime_id: runtime.id,
-                 runtime_epoch: runtime.connection_epoch,
-                 generation: run.generation,
-                 claim_id: uuid()
-               },
-               now: @now
-             )
-
-    %{
-      runtime_id: runtime.id,
-      runtime_epoch: runtime.connection_epoch,
-      generation: run.generation,
-      claim_id: claimed.claim_id,
-      lease_token: claimed.lease_token
-    }
   end
 
   defp insert_event(run, sequence, inserted_at) do
@@ -645,13 +610,6 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     |> Repo.insert!()
   end
 
-  defp task_attrs(overrides \\ []) do
-    Map.merge(
-      %{goal: "Run tests", agent_profile: "codex", workspace: "primary", input: %{}},
-      Map.new(overrides)
-    )
-  end
-
   defp assert_runtime(snapshot, machine, runtime, task, run) do
     assert %{
              "machine_id" => machine_id,
@@ -709,11 +667,4 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert payload == SymmetryControlWeb.Protocol.normalize_map(command.payload)
     assert is_binary(issued_at)
   end
-
-  defp assert_error(conn, status, code) do
-    assert %{"error" => %{"code" => ^code}} = json_response(conn, status)
-  end
-
-  defp bearer(conn), do: put_req_header(conn, "authorization", "Bearer " <> @operator_token)
-  defp uuid, do: Ecto.UUID.generate()
 end

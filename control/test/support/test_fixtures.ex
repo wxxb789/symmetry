@@ -1,20 +1,22 @@
 defmodule SymmetryControl.TestFixtures do
   @moduledoc """
-  Data builders shared by the control suites.
+  Data builders and host-signal helpers shared by the control suites.
 
   Each builder below replaces a helper that had been copy-pasted into every
-  suite that needed it (5-11 copies per name). The values stay identical to the
+  suite that needed it (2-11 copies per name). The values stay identical to the
   copies': a knob the converted call sites set differently from the documented
   default is an explicit option, and the defaults are the deterministic fixture
   values most of those call sites rely on. Suite-specific values (the suite
   clock, the schema base, a fresh daemon or claim id) are arguments at the call
-  site, never hidden defaults.
+  site, never hidden defaults; `unix_signal/1` is the one non-builder, the flag
+  pair the e2e suites pass to `System.cmd("kill", ...)`.
   """
 
   import ExUnit.Assertions
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Workspaces
 
   @doc """
   Injects the suite's command surface: `command_opts/0` returns the suite's
@@ -66,6 +68,12 @@ defmodule SymmetryControl.TestFixtures do
 
   @task_base %{goal: "Run tests", agent_profile: "codex", workspace: "primary", input: %{}}
   @provider_task_base Map.put(@task_base, :goal, "Use provider")
+
+  @doc """
+  A fresh version-4 UUID: the converted suites' `uuid/0` one-liner, kept as a
+  name so a call site that wants a fresh id per call says so.
+  """
+  def uuid, do: Ecto.UUID.generate()
 
   @doc """
   Registers one runtime for `machine` at `now` and returns it.
@@ -159,6 +167,51 @@ defmodule SymmetryControl.TestFixtures do
     Map.merge(@provider_task_base, Map.new(overrides))
   end
 
+  @doc "The baseline subject of a repository resource."
+  def subject(repository_id) do
+    %{
+      "resource_id" => repository_id,
+      "commit" => String.duplicate("a", 40),
+      "tree_digest" => "sha256:" <> String.duplicate("4", 64)
+    }
+  end
+
+  @doc "The acceptance contract the converted suites pin: one `check` predicate."
+  def check_contract do
+    %{
+      "schema_version" => "symmetry.acceptance.v1",
+      "description" => "An independent check must pass.",
+      "predicates" => [%{"id" => "check", "kind" => "check", "validator_profile" => "test"}]
+    }
+  end
+
+  @doc """
+  The validation profile the converted web suites register: one enabled check
+  under `:test`, whose `allowed_runtime_ids` is a fresh id that admits no
+  registered runtime (call sites pass `validation_profiles(runtime_id)`).
+  """
+  def validation_profiles do
+    [
+      test: [
+        kind: :check,
+        profile_digest: "sha256:" <> String.duplicate("c", 64),
+        enabled: true,
+        allowed_runtime_ids: [Ecto.UUID.generate()]
+      ]
+    ]
+  end
+
+  @doc "Creates a repository resource for `project` and returns it."
+  def repository_fixture(project) do
+    {:ok, repository} =
+      Workspaces.create_resource(project.id, %{
+        kind: "repository",
+        name: "Repository #{System.unique_integer([:positive])}"
+      })
+
+    repository
+  end
+
   @doc """
   The canonical `symmetry.goal_command.v1` map for `goal`, with `payload`
   canonicalised for `"request_decision"` exactly as the goals suite pinned it
@@ -174,6 +227,10 @@ defmodule SymmetryControl.TestFixtures do
       payload: canonical_command_payload(kind, payload)
     }
   end
+
+  @doc "The `kill` flag for `:term`/`:kill`, shared by the two e2e suites."
+  def unix_signal(:term), do: "-TERM"
+  def unix_signal(:kill), do: "-KILL"
 
   defp canonical_command_payload("request_decision", payload) do
     case Map.get(payload, :kind, Map.get(payload, "kind")) do

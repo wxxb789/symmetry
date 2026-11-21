@@ -20,6 +20,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxpreflight"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -589,17 +590,17 @@ func TestNormalAppPiOwnerCopiesOnlyTrustedGroupBeforePreflight(t *testing.T) {
 
 func TestPiProviderShareIdentityRequiresInstalledBGroup(t *testing.T) {
 	owner := linuxgate.OwnerConfig{AUID: 60000, AGID: 60000, BUID: 60001, BGID: 60001}
-	share := linuxStatIdentity{uid: owner.AUID, gid: owner.BGID, mode: 0o2750}
-	if err := validateLinuxPiExtensionShareIdentity(true, share, owner); err != nil {
+	share := linuxpreflight.StatIdentity{UID: owner.AUID, GID: owner.BGID, Mode: 0o2750}
+	if err := linuxpreflight.ValidatePiExtensionShareIdentity(true, share, owner); err != nil {
 		t.Fatalf("correct A-owned/B-group share rejected: %v", err)
 	}
-	share.gid = owner.AGID
-	if err := validateLinuxPiExtensionShareIdentity(true, share, owner); err == nil {
+	share.GID = owner.AGID
+	if err := linuxpreflight.ValidatePiExtensionShareIdentity(true, share, owner); err == nil {
 		t.Fatal("Pi extension share with A's group was accepted")
 	}
-	share.gid = owner.BGID
-	share.mode = 0o2770
-	if err := validateLinuxPiExtensionShareIdentity(true, share, owner); err == nil {
+	share.GID = owner.BGID
+	share.Mode = 0o2770
+	if err := linuxpreflight.ValidatePiExtensionShareIdentity(true, share, owner); err == nil {
 		t.Fatal("B-writable Pi extension share was accepted")
 	}
 }

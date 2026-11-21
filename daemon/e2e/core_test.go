@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	operatorclient "github.com/wxxb789/symmetry/daemon/e2e/internal/operator"
 	"github.com/wxxb789/symmetry/daemon/internal/app"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
@@ -46,26 +47,26 @@ func TestCoreDaemonWorkflows(t *testing.T) {
 	})
 
 	success := submit(t, operator, daemon, "success", "success")
-	waitForTask(t, operator, success.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, success.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 
 	slow := submit(t, operator, daemon, "capacity-slow", "slow")
-	waitForTask(t, operator, slow.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, slow.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "running"
 	})
 	queued := submit(t, operator, daemon, "capacity-queued", "success")
 	assertTaskRemainsQueued(t, operator, queued.TaskID, 1500*time.Millisecond)
 	cancelTask(t, operator, slow.TaskID)
-	waitForTask(t, operator, slow.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, slow.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "cancelled"
 	})
-	waitForTask(t, operator, queued.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, queued.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 
 	waiting := submit(t, operator, daemon, "wait-input", "wait_twice")
-	waitingSnapshot := waitForTask(t, operator, waiting.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitingSnapshot := waitForTask(t, operator, waiting.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "waiting_for_input" && task.Waiting != nil && task.Waiting.Question != nil && *task.Waiting.Question == "Confirm the requested input before continuing."
 	})
 	waitingRunID := taskRunID(t, waitingSnapshot)
@@ -75,18 +76,18 @@ func TestCoreDaemonWorkflows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("submit input: %v", err)
 	}
-	waitForTask(t, operator, waiting.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, waiting.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed" && task.LatestCommand != nil && task.LatestCommand.State == "acknowledged" &&
 			task.LatestCommand.AcknowledgementOutcome != nil && *task.LatestCommand.AcknowledgementOutcome == "applied"
 	})
 	assertWaitingInputHistory(t, environment, waiting.TaskID, waitingRunID, waitingGeneration)
 
 	failed := submit(t, operator, daemon, "failure", "fail")
-	waitForTask(t, operator, failed.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, failed.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "failed"
 	})
 	afterFailure := submit(t, operator, daemon, "after-failure", "success")
-	waitForTask(t, operator, afterFailure.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, afterFailure.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 }
@@ -103,7 +104,7 @@ func TestJSONValuesRoundTripThroughControl(t *testing.T) {
 	})
 
 	task := submit(t, operator, daemon, "json-values", "json_values")
-	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 	assertJSONValueEvents(t, environment, task.TaskID)
@@ -121,7 +122,7 @@ func TestPollingFallbackDispatchesWithoutNotifications(t *testing.T) {
 	})
 
 	task := submit(t, operator, daemon, "poll-fallback", "success")
-	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 }
@@ -145,14 +146,14 @@ func TestTaskInputDistinguishesOmissionFromEmptyObject(t *testing.T) {
 	})
 
 	omitted := submitWithInput(t, operator, daemon, "input-omitted", nil)
-	omittedCompleted := waitForTask(t, operator, omitted.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	omittedCompleted := waitForTask(t, operator, omitted.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 	assertTaskInput(t, omittedCompleted, "null")
 	assertInputInspectionEvent(t, environment, omitted.TaskID, "input:null")
 
 	empty := submitWithInput(t, operator, daemon, "input-empty", json.RawMessage(`{}`))
-	emptyCompleted := waitForTask(t, operator, empty.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	emptyCompleted := waitForTask(t, operator, empty.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 	assertTaskInput(t, emptyCompleted, "{}")
@@ -181,7 +182,7 @@ func TestGitWorktreeCleanupRemovesOwnedArtifacts(t *testing.T) {
 	})
 
 	task := submit(t, operator, daemon, "worktree-cleanup", "success")
-	completed := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	completed := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 	key := state.RunKey{RunID: taskRunID(t, completed), Generation: taskGeneration(t, completed)}
@@ -217,7 +218,7 @@ func TestTerminalTransitionRetriesAfterLeaseExpiry(t *testing.T) {
 		t.Fatalf("marshal exit-on-file input: %v", err)
 	}
 	task := submitWithInput(t, operator, daemon, "terminal-outage", input)
-	running := waitForTask(t, operator, task.TaskID, 15*time.Second, func(task protocol.Task) bool {
+	running := waitForTask(t, operator, task.TaskID, 15*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "running"
 	})
 	key := state.RunKey{RunID: taskRunID(t, running), Generation: taskGeneration(t, running)}
@@ -245,7 +246,7 @@ func TestTerminalTransitionRetriesAfterLeaseExpiry(t *testing.T) {
 	waitForTime(t, leaseExpiresAt.Add(250*time.Millisecond), 45*time.Second)
 
 	outage.allowDelivery()
-	completed := waitForTask(t, operator, task.TaskID, 15*time.Second, func(task protocol.Task) bool {
+	completed := waitForTask(t, operator, task.TaskID, 15*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed" && taskGeneration(t, task) == key.Generation
 	})
 	if !time.Now().Before(leaseExpiresAt.Add(8 * time.Minute)) {
@@ -258,7 +259,7 @@ func TestTerminalTransitionRetriesAfterLeaseExpiry(t *testing.T) {
 
 	outage.endOutage()
 	after := submit(t, operator, daemon, "terminal-outage-after", "success")
-	waitForTask(t, operator, after.TaskID, 15*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, after.TaskID, 15*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 }
@@ -342,7 +343,7 @@ func TestStaleRuntimeEpochCannotOverwriteNewGeneration(t *testing.T) {
 			t.Fatalf("transition new generation to %s: %v", target, err)
 		}
 	}
-	waitForTask(t, operator, task.TaskID, 10*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, task.TaskID, 10*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "completed" && taskGeneration(t, task) == newAssignment.Generation
 	})
 }
@@ -371,7 +372,7 @@ func TestDaemonReregistersAfterRestart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("submit %s task: %v", name, err)
 		}
-		waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		waitForTask(t, operator, task.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 			return task.State == "completed"
 		})
 	}
@@ -415,7 +416,7 @@ func TestDaemonReconnectReclaimsExpiredRunWithNewGeneration(t *testing.T) {
 
 	firstDaemon := daemonRun{done: firstDone, profile: profile, workspace: workspace}
 	task := submit(t, operator, firstDaemon, "reconnect-slow", "slow")
-	firstRun := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	firstRun := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "running"
 	})
 	firstRunID := taskRunID(t, firstRun)
@@ -447,7 +448,7 @@ func TestDaemonReconnectReclaimsExpiredRunWithNewGeneration(t *testing.T) {
 	})
 
 	reclaimTimeout := reconnectReclaimTimeout(t, journalBefore.LeaseExpiresAt)
-	secondRun := waitForTask(t, operator, task.TaskID, reclaimTimeout, func(task protocol.Task) bool {
+	secondRun := waitForTask(t, operator, task.TaskID, reclaimTimeout, func(task operatorclient.Task) bool {
 		return task.State == "running" && taskGeneration(t, task) > firstGeneration
 	})
 	secondGeneration := taskGeneration(t, secondRun)
@@ -457,7 +458,7 @@ func TestDaemonReconnectReclaimsExpiredRunWithNewGeneration(t *testing.T) {
 	secondRunID := taskRunID(t, secondRun)
 
 	cancelTask(t, operator, task.TaskID)
-	cancelled := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	cancelled := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "cancelled" && taskGeneration(t, task) == secondGeneration
 	})
 	oldJournal, retained := waitForJournalRetiredOrRetained(t, stateDir, oldJournalKey, 10*time.Second, func() {
@@ -501,7 +502,7 @@ func TestDaemonSurvivesControlRestart(t *testing.T) {
 		waitForDaemon(t, daemon.done)
 	})
 	task := submit(t, operator, daemon, "control-restart", "slow")
-	running := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	running := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "running"
 	})
 	runningGeneration := taskGeneration(t, running)
@@ -509,7 +510,7 @@ func TestDaemonSurvivesControlRestart(t *testing.T) {
 		t.Fatalf("write restart marker: %v", err)
 	}
 	waitForControlRestart(t, environment.baseURL, 90*time.Second)
-	restored := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	restored := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "running"
 	})
 	restoredGeneration := taskGeneration(t, restored)
@@ -517,7 +518,7 @@ func TestDaemonSurvivesControlRestart(t *testing.T) {
 		t.Fatalf("task generation changed across control restart: %d -> %d", runningGeneration, restoredGeneration)
 	}
 	cancelTask(t, operator, task.TaskID)
-	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task operatorclient.Task) bool {
 		return task.State == "cancelled"
 	})
 }
@@ -587,7 +588,7 @@ func TestRealCodingAgentSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit real-agent task: %v", err)
 	}
-	waitForTask(t, operator, task.TaskID, 2*time.Minute, func(task protocol.Task) bool {
+	waitForTask(t, operator, task.TaskID, 2*time.Minute, func(task operatorclient.Task) bool {
 		return task.State == "completed"
 	})
 	contents, err := os.ReadFile(filepath.Join(workspacePath, "symmetry-smoke.txt"))
@@ -691,21 +692,21 @@ func daemonConfig(environment e2eEnvironment, name, stateDir, workspacePath, pro
 	}
 }
 
-func newOperator(t *testing.T, environment e2eEnvironment) *control.OperatorClient {
+func newOperator(t *testing.T, environment e2eEnvironment) *operatorclient.OperatorClient {
 	t.Helper()
-	client, err := control.NewOperatorClient(environment.baseURL, environment.operatorToken, localHTTPClient(5*time.Second))
+	client, err := operatorclient.NewOperatorClient(environment.baseURL, environment.operatorToken, localHTTPClient(5*time.Second))
 	if err != nil {
 		t.Fatalf("new operator client: %v", err)
 	}
 	return client
 }
 
-func submit(t *testing.T, operator *control.OperatorClient, daemon daemonRun, name, mode string) protocol.Task {
+func submit(t *testing.T, operator *operatorclient.OperatorClient, daemon daemonRun, name, mode string) operatorclient.Task {
 	t.Helper()
 	return submitWithInput(t, operator, daemon, name, json.RawMessage(fmt.Sprintf(`{"mode":%q}`, mode)))
 }
 
-func submitWithInput(t *testing.T, operator *control.OperatorClient, daemon daemonRun, name string, input json.RawMessage) protocol.Task {
+func submitWithInput(t *testing.T, operator *operatorclient.OperatorClient, daemon daemonRun, name string, input json.RawMessage) operatorclient.Task {
 	t.Helper()
 	task, err := operator.SubmitTask(context.Background(), unique(name), protocol.TaskSubmitRequest{Work: protocol.Work{
 		Goal:         name,
@@ -719,7 +720,7 @@ func submitWithInput(t *testing.T, operator *control.OperatorClient, daemon daem
 	return task
 }
 
-func assertTaskInput(t *testing.T, task protocol.Task, want string) {
+func assertTaskInput(t *testing.T, task operatorclient.Task, want string) {
 	t.Helper()
 	if task.Work == nil {
 		t.Fatalf("task %s has no work", task.TaskID)
@@ -1451,7 +1452,7 @@ func assertStoppedProcessOrRecoveryConstraint(t *testing.T, journal state.RunJou
 	}
 }
 
-func assertRetiredOldRunByControl(t *testing.T, task protocol.Task, oldKey, currentKey state.RunKey) {
+func assertRetiredOldRunByControl(t *testing.T, task operatorclient.Task, oldKey, currentKey state.RunKey) {
 	t.Helper()
 	if task.State != "cancelled" {
 		t.Fatalf("Control retirement witness state = %q, want cancelled", task.State)
@@ -1688,17 +1689,17 @@ func assertOutboxDeliveryOrder(t *testing.T, proxy *terminalOutageProxy, runID s
 	}
 }
 
-func cancelTask(t *testing.T, operator *control.OperatorClient, taskID string) {
+func cancelTask(t *testing.T, operator *operatorclient.OperatorClient, taskID string) {
 	t.Helper()
 	if _, err := operator.CreateTaskCommand(context.Background(), taskID, unique("cancel"), protocol.TaskCommandRequest{Kind: "cancel"}); err != nil {
 		t.Fatalf("cancel task: %v", err)
 	}
 }
 
-func waitForTask(t *testing.T, operator *control.OperatorClient, taskID string, timeout time.Duration, ready func(protocol.Task) bool) protocol.Task {
+func waitForTask(t *testing.T, operator *operatorclient.OperatorClient, taskID string, timeout time.Duration, ready func(operatorclient.Task) bool) operatorclient.Task {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	var last protocol.Task
+	var last operatorclient.Task
 	var lastErr error
 	for time.Now().Before(deadline) {
 		last, lastErr = operator.GetTask(context.Background(), taskID)
@@ -1708,10 +1709,10 @@ func waitForTask(t *testing.T, operator *control.OperatorClient, taskID string, 
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("task %s did not reach expected state; last state=%q run_id=%s generation=%s error=%v", taskID, last.State, optionalTaskRunID(last), optionalTaskGeneration(last), lastErr)
-	return protocol.Task{}
+	return operatorclient.Task{}
 }
 
-func taskRunID(t *testing.T, task protocol.Task) string {
+func taskRunID(t *testing.T, task operatorclient.Task) string {
 	t.Helper()
 	if task.RunID == nil || *task.RunID == "" {
 		t.Fatalf("task %s has no run_id", task.TaskID)
@@ -1719,7 +1720,7 @@ func taskRunID(t *testing.T, task protocol.Task) string {
 	return *task.RunID
 }
 
-func taskGeneration(t *testing.T, task protocol.Task) int64 {
+func taskGeneration(t *testing.T, task operatorclient.Task) int64 {
 	t.Helper()
 	if task.Generation == nil {
 		t.Fatalf("task %s has no generation", task.TaskID)
@@ -1727,21 +1728,21 @@ func taskGeneration(t *testing.T, task protocol.Task) int64 {
 	return *task.Generation
 }
 
-func optionalTaskRunID(task protocol.Task) string {
+func optionalTaskRunID(task operatorclient.Task) string {
 	if task.RunID == nil {
 		return "<nil>"
 	}
 	return *task.RunID
 }
 
-func optionalTaskGeneration(task protocol.Task) string {
+func optionalTaskGeneration(task operatorclient.Task) string {
 	if task.Generation == nil {
 		return "<nil>"
 	}
 	return fmt.Sprintf("%d", *task.Generation)
 }
 
-func getTask(t *testing.T, operator *control.OperatorClient, taskID string) protocol.Task {
+func getTask(t *testing.T, operator *operatorclient.OperatorClient, taskID string) operatorclient.Task {
 	t.Helper()
 	task, err := operator.GetTask(context.Background(), taskID)
 	if err != nil {
@@ -1750,7 +1751,7 @@ func getTask(t *testing.T, operator *control.OperatorClient, taskID string) prot
 	return task
 }
 
-func assertTaskRemainsQueued(t *testing.T, operator *control.OperatorClient, taskID string, window time.Duration) {
+func assertTaskRemainsQueued(t *testing.T, operator *operatorclient.OperatorClient, taskID string, window time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(window)
 	for {

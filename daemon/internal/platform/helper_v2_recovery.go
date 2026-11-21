@@ -487,22 +487,22 @@ func (helper *linuxOwnerHelperV2) relayCheckoutReady(
 	return nil
 }
 
-func (anchor *linuxOwnerAnchor) handleRetireHelper(connection *net.UnixConn, request linuxOwnerAnchorRequest, rights []int) {
-	if len(rights) != 0 || request.Helper == nil || request.Creator != nil || request.Process != nil || request.Role != "" ||
-		(request.ReleaseProof == nil) == (request.PreGateReleaseProof == nil) {
-		return
-	}
+func (anchor *linuxOwnerAnchor) handleRetireHelper(connection *net.UnixConn, request linuxOwnerAnchorRequest) {
 	run, exists := anchor.runs[request.Grant.RunKey]
 	if !exists || run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) {
-		anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 		return
 	}
 	if run.retired {
 		if request.ReleaseProof != nil && run.retiredRelease != nil && run.retiredRelease.Equal(*request.ReleaseProof) ||
 			request.PreGateReleaseProof != nil && run.retiredPreGateRelease != nil && run.retiredPreGateRelease.Equal(*request.PreGateReleaseProof) {
-			anchor.writeResponse(connection, request, "already_retired", &run.helper, nil)
+			response := anchor.baseResponse(request, "already_retired")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 		} else {
-			anchor.writeResponse(connection, request, "retirement_conflict", &run.helper, nil)
+			response := anchor.baseResponse(request, "retirement_conflict")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 		}
 		return
 	}
@@ -514,7 +514,7 @@ func (anchor *linuxOwnerAnchor) handleRetireHelper(connection *net.UnixConn, req
 			!proof.Receipt.Helper.Equal(run.helper) || launcher.Validate() != nil ||
 			!proof.Receipt.Launcher.Equal(launcher) || !proof.Receipt.Proof.LauncherExit.Process.Equal(launcher) ||
 			!proof.Receipt.Proof.LauncherExit.ValidForOwnedDescendant(launcher, run.helper, run.grant.Anchor, nil) {
-			anchor.writeResponse(connection, request, "release_proof_mismatch", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "release_proof_mismatch"))
 			return
 		}
 	} else {
@@ -525,13 +525,15 @@ func (anchor *linuxOwnerAnchor) handleRetireHelper(connection *net.UnixConn, req
 		}
 		if request.ReleaseProof.LauncherExit == nil || !linuxOwnerHelperV2ReleaseProofMatches(*request.ReleaseProof, run.grant, run.helper,
 			target, launcher, *request.ReleaseProof.LauncherExit) {
-			anchor.writeResponse(connection, request, "release_proof_mismatch", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "release_proof_mismatch"))
 			return
 		}
 	}
 	present, leafErr := linuxOwnerAnchorPinnedLeafPresent(run)
 	if leafErr != nil || present {
-		anchor.writeResponse(connection, request, "release_unproven", &run.helper, nil)
+		response := anchor.baseResponse(request, "release_unproven")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	run.leafRemovedObserved = true
@@ -540,16 +542,22 @@ func (anchor *linuxOwnerAnchor) handleRetireHelper(connection *net.UnixConn, req
 	defer cancel()
 	if run.helperExit == nil {
 		if err := run.waitHelper(retireContext); err != nil {
-			anchor.writeResponse(connection, request, "wait_unproven", &run.helper, nil)
+			response := anchor.baseResponse(request, "wait_unproven")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 	}
 	if err := anchor.verifyRetiredRunPhysicalState(retireContext, run); err != nil {
-		anchor.writeResponse(connection, request, "release_unproven", &run.helper, nil)
+		response := anchor.baseResponse(request, "release_unproven")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	if err := run.close(); err != nil {
-		anchor.writeResponse(connection, request, "release_unproven", &run.helper, nil)
+		response := anchor.baseResponse(request, "release_unproven")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	run.retired = true
@@ -560,7 +568,7 @@ func (anchor *linuxOwnerAnchor) handleRetireHelper(connection *net.UnixConn, req
 		proof := request.PreGateReleaseProof.Clone()
 		run.retiredPreGateRelease = &proof
 	}
-	anchor.writeResponse(connection, request, "retired", nil, nil)
+	anchor.writeResponse(connection, anchor.baseResponse(request, "retired"))
 }
 
 func (anchor *linuxOwnerAnchor) handleRetireClearedRun(connection *net.UnixConn, request linuxOwnerAnchorRequest) {
@@ -573,9 +581,13 @@ func (anchor *linuxOwnerAnchor) handleRetireClearedRun(connection *net.UnixConn,
 		exact := request.ReleaseProof != nil && run.retiredRelease != nil && run.retiredRelease.Equal(*request.ReleaseProof) ||
 			request.PreGateReleaseProof != nil && run.retiredPreGateRelease != nil && run.retiredPreGateRelease.Equal(*request.PreGateReleaseProof)
 		if exact {
-			anchor.writeResponse(connection, request, "already_retired", &run.helper, nil)
+			response := anchor.baseResponse(request, "already_retired")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 		} else {
-			anchor.writeResponse(connection, request, "retirement_conflict", &run.helper, nil)
+			response := anchor.baseResponse(request, "retirement_conflict")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 		}
 		return
 	}
@@ -587,7 +599,9 @@ func (anchor *linuxOwnerAnchor) handleRetireClearedRun(connection *net.UnixConn,
 		}
 		if request.ReleaseProof.LauncherExit == nil || !linuxOwnerHelperV2ReleaseProofMatches(*request.ReleaseProof,
 			run.grant, run.helper, target, launcher, *request.ReleaseProof.LauncherExit) {
-			anchor.writeResponse(connection, request, "release_proof_mismatch", &run.helper, nil)
+			response := anchor.baseResponse(request, "release_proof_mismatch")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 	} else {
@@ -598,13 +612,17 @@ func (anchor *linuxOwnerAnchor) handleRetireClearedRun(connection *net.UnixConn,
 			!proof.Receipt.Helper.Equal(run.helper) || launcher.Validate() != nil ||
 			!proof.Receipt.Launcher.Equal(launcher) || !proof.Receipt.Proof.LauncherExit.Process.Equal(launcher) ||
 			!proof.Receipt.Proof.LauncherExit.ValidForOwnedDescendant(launcher, run.helper, run.grant.Anchor, nil) {
-			anchor.writeResponse(connection, request, "release_proof_mismatch", &run.helper, nil)
+			response := anchor.baseResponse(request, "release_proof_mismatch")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 	}
 	present, leafErr := linuxOwnerAnchorPinnedLeafPresent(run)
 	if leafErr != nil || present {
-		anchor.writeResponse(connection, request, "release_unproven", &run.helper, nil)
+		response := anchor.baseResponse(request, "release_unproven")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	run.leafRemovedObserved = true
@@ -616,7 +634,9 @@ func (anchor *linuxOwnerAnchor) handleRetireClearedRun(connection *net.UnixConn,
 			anchorClient := &LinuxOwnerAnchorClient{socketPath: anchor.socketPath, owner: anchor.owner}
 			control, dialErr := dialLinuxOwnerHelperV2(retireContext, anchorClient, run.grant, run.helper)
 			if dialErr != nil {
-				anchor.writeResponse(connection, request, "helper_release_unresolved", &run.helper, nil)
+				response := anchor.baseResponse(request, "helper_release_unresolved")
+				response.Helper = &run.helper
+				anchor.writeResponse(connection, response)
 				return
 			}
 			if request.ReleaseProof != nil {
@@ -626,21 +646,29 @@ func (anchor *linuxOwnerAnchor) handleRetireClearedRun(connection *net.UnixConn,
 			}
 			_ = control.Close()
 			if dialErr != nil {
-				anchor.writeResponse(connection, request, "helper_release_unresolved", &run.helper, nil)
+				response := anchor.baseResponse(request, "helper_release_unresolved")
+				response.Helper = &run.helper
+				anchor.writeResponse(connection, response)
 				return
 			}
 		}
 		if err := run.waitHelper(retireContext); err != nil {
-			anchor.writeResponse(connection, request, "wait_unproven", &run.helper, nil)
+			response := anchor.baseResponse(request, "wait_unproven")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 	}
 	if err := anchor.verifyRetiredRunPhysicalState(retireContext, run); err != nil {
-		anchor.writeResponse(connection, request, "release_unproven", &run.helper, nil)
+		response := anchor.baseResponse(request, "release_unproven")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	if err := run.close(); err != nil {
-		anchor.writeResponse(connection, request, "release_unproven", &run.helper, nil)
+		response := anchor.baseResponse(request, "release_unproven")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	run.retired = true
@@ -651,7 +679,9 @@ func (anchor *linuxOwnerAnchor) handleRetireClearedRun(connection *net.UnixConn,
 		proof := request.PreGateReleaseProof.Clone()
 		run.retiredPreGateRelease = &proof
 	}
-	anchor.writeResponse(connection, request, "retired", &run.helper, nil)
+	response := anchor.baseResponse(request, "retired")
+	response.Helper = &run.helper
+	anchor.writeResponse(connection, response)
 }
 
 func (anchor *linuxOwnerAnchor) handleRetireAbortedHelper(connection *net.UnixConn, request linuxOwnerAnchorRequest) {
@@ -663,9 +693,13 @@ func (anchor *linuxOwnerAnchor) handleRetireAbortedHelper(connection *net.UnixCo
 	proof := request.AbortProof
 	if run.retired {
 		if proof != nil && run.retiredAbort != nil && run.retiredAbort.Equal(*proof) {
-			anchor.writeResponse(connection, request, "already_retired", &run.helper, nil)
+			response := anchor.baseResponse(request, "already_retired")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 		} else {
-			anchor.writeResponse(connection, request, "retirement_conflict", &run.helper, nil)
+			response := anchor.baseResponse(request, "retirement_conflict")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 		}
 		return
 	}
@@ -681,12 +715,16 @@ func (anchor *linuxOwnerAnchor) handleRetireAbortedHelper(connection *net.UnixCo
 		run.grant.Leaf.LeafName, run.grant.CreateStarted, run.grant.OwnerUID, run.grant.Anchor, proof.Mirror, helperPointer, nil) ||
 		proof.Launcher != nil || proof.Helper == nil || !proof.Helper.Equal(run.helper) || proof.HelperExit == nil ||
 		!proof.HelperExit.ValidFor(run.helper, run.grant.Anchor) {
-		anchor.writeResponse(connection, request, "abort_proof_mismatch", &run.helper, nil)
+		response := anchor.baseResponse(request, "abort_proof_mismatch")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	for _, child := range run.children {
 		if child.role == "launcher" || child.role == "gate" || child.role == "native" {
-			anchor.writeResponse(connection, request, "abort_has_producer", &run.helper, nil)
+			response := anchor.baseResponse(request, "abort_has_producer")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 	}
@@ -694,26 +732,36 @@ func (anchor *linuxOwnerAnchor) handleRetireAbortedHelper(connection *net.UnixCo
 	defer cancel()
 	if run.helperExit == nil {
 		if err := run.waitHelper(waitContext); err != nil {
-			anchor.writeResponse(connection, request, "wait_unproven", &run.helper, nil)
+			response := anchor.baseResponse(request, "wait_unproven")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 	}
 	if !run.helperExit.Equal(*proof.HelperExit) {
-		anchor.writeResponse(connection, request, "helper_exit_mismatch", &run.helper, nil)
+		response := anchor.baseResponse(request, "helper_exit_mismatch")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	if err := anchor.verifyRetiredRunPhysicalState(waitContext, run); err != nil {
-		anchor.writeResponse(connection, request, "abort_unproven", &run.helper, nil)
+		response := anchor.baseResponse(request, "abort_unproven")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	if err := run.close(); err != nil {
-		anchor.writeResponse(connection, request, "abort_unproven", &run.helper, nil)
+		response := anchor.baseResponse(request, "abort_unproven")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response)
 		return
 	}
 	run.retired = true
 	proofCopy := proof.Clone()
 	run.retiredAbort = &proofCopy
-	anchor.writeResponse(connection, request, "retired", &run.helper, nil)
+	response := anchor.baseResponse(request, "retired")
+	response.Helper = &run.helper
+	anchor.writeResponse(connection, response)
 }
 
 func (anchor *linuxOwnerAnchor) verifyRetiredRunPhysicalState(ctx context.Context, run *linuxOwnerAnchorRun) error {

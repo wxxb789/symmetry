@@ -1,9 +1,12 @@
 package control
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 func TestValidateGoalCommitPathUsesUTF8RuneLength(t *testing.T) {
@@ -127,5 +130,46 @@ func TestValidateGoalShortIdentifierPinsRejectionMessages(t *testing.T) {
 				t.Fatalf("validateGoalShortIdentifier(%q, %q) error = %q, want %q", test.value, field, got, test.want)
 			}
 		})
+	}
+}
+
+// TestSameJSONObjectPreservesNumericPrecision keeps the retained
+// sameJSONValue/sameJSONNumber declarations guarded after the operator client's
+// payload-comparison tests moved to daemon/e2e/internal/operator.
+func TestSameJSONObjectPreservesNumericPrecision(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{name: "equivalent number spellings", left: `{"value":1.0,"zero":0.0}`, right: `{"zero":-0,"value":1e0}`, want: true},
+		{name: "equivalent nested members", left: `{"items":[1,{"name":"a"}]}`, right: `{"items":[1e0,{"name":"a"}]}`, want: true},
+		{name: "distinct large integers", left: `{"value":9007199254740992}`, right: `{"value":9007199254740993}`},
+		{name: "missing nested member", left: `{"items":[1]}`, right: `{"items":[1,2]}`},
+		{name: "type mismatch", left: `{"value":1}`, right: `{"value":"1"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := sameJSONObject(json.RawMessage(test.left), json.RawMessage(test.right))
+			if got != test.want {
+				t.Fatalf("sameJSONObject(%s, %s) = %t, want %t", test.left, test.right, got, test.want)
+			}
+		})
+	}
+}
+
+// TestValidateTaskCommandResourceRejectsMismatchedExpectedTask guards the
+// expectedTaskID branch that the relocated operator caller used to exercise;
+// production callers pass an empty id and only reach the remaining checks.
+func TestValidateTaskCommandResourceRejectsMismatchedExpectedTask(t *testing.T) {
+	var command protocol.TaskCommand
+	if err := json.Unmarshal([]byte(acknowledgedCommandForGeneration(2)), &command); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTaskCommandResource("task-2", command); err == nil || !strings.Contains(err.Error(), "task_id does not match expected task") {
+		t.Fatalf("error = %v, want task_id mismatch rejection", err)
+	}
+	if err := validateTaskCommandResource("task-1", command); err != nil {
+		t.Fatalf("matching task rejected: %v", err)
 	}
 }
