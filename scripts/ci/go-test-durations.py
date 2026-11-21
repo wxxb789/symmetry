@@ -10,6 +10,10 @@ job's race pass writes `$RUNNER_TEMP/daemon-go-race.json` through
   daemon job is slow";
 * the slowest package totals are printed from the stream's package-level
   terminal events, for the same attribution;
+* the captured output of every failed test, and of every failed package no
+  named test explains, is replayed, so the diagnostics a red run needs are
+  readable in this step's log and not only inside the gate's buffered event
+  echo;
 * a test whose elapsed time exceeds `MAX_TEST_SECONDS` fails the summary, and
   the per-test p95 (nearest-rank over the tests that ran) fails it when it
   exceeds `P95_LIMIT_FACTOR` times the committed baseline below.
@@ -44,21 +48,17 @@ MAX_TEST_SECONDS = 30.0
 P95_LIMIT_FACTOR = 1.2
 
 # Committed baseline: the nearest-rank p95 of the per-test elapsed times of the
-# daemon module's full `go test -count=1 -json ./...` stream, measured from
-# `daemon/` on this host (Windows, go1.27.4) at revision 6a815c0f through this
-# same summarizer, with the per-package timeout raised to 1500s so a contended
-# host could not truncate the sample: 4,340 outcomes, 56 skips, 3 Windows-host
-# flakes outside the slow tail. The p95 index lands on the fixed 5.00s
-# probe-deadline cluster (`claudeProbeTimeout`, 23 outcomes in [4.9s, 5.2s]),
-# which is what lets a non-race proxy seed a race-stream ratchet. The CI step
-# runs the same command under `-race` with the repository's 600s cap; a
-# race-shaped stream is not obtainable on this host (both WSL environments
-# stall on loopback HTTP, recorded in the slice's plan), and the runner's own
-# race timings swing ~1.4x run to run, which is why the summary step is
+# daemon module's full `go test -race -count=1 -json ./...` stream on the
+# GitHub ubuntu runner, taken from the CI run whose daemon job first wrote the
+# stream this summarizer reads (run 44892215975): 5,062 pass/fail outcomes, 105
+# skips, 25 packages, p95 = 0.260s. The stream is the same shape the CI step
+# feeds, so the ratchet compares like with like (an earlier host-measured
+# non-race proxy landed 19x away from the runner's p95 and could not fire);
+# the runner's own timings swing run to run, which is why the summary step is
 # advisory (`continue-on-error`) and prints `p95=`, `baseline=` and `ratio=`
-# side by side. Refactor slice W6-12 re-baselines on the runner and flips the
-# thresholds to blocking.
-P95_BASELINE_SECONDS = 4.91
+# side by side. Refactor slice W6-12 flips the thresholds to blocking, and any
+# re-derivation of the band from more than one runner run is its call.
+P95_BASELINE_SECONDS = 0.26
 
 TOP_TEST_ROWS = 20
 TOP_PACKAGE_ROWS = 10
@@ -124,6 +124,29 @@ def collect_outcomes(
     return tests, packages, skipped, failed, failed_packages
 
 
+def collect_output(events: list[dict]) -> tuple[dict[tuple[str, str], list[str]], dict[str, list[str]]]:
+    """The captured output lines, keyed by test and by package.
+
+    Test-level output is keyed like the per-test map; output events without a
+    `Test` field (build failures, panics outside a test) are keyed by package.
+    """
+    test_output: dict[tuple[str, str], list[str]] = {}
+    package_output: dict[str, list[str]] = {}
+    for event in events:
+        if event.get("Action") != "output":
+            continue
+        package = event.get("Package")
+        line = event.get("Output")
+        if not isinstance(package, str) or not isinstance(line, str):
+            continue
+        test = event.get("Test")
+        if isinstance(test, str):
+            test_output.setdefault((package, test), []).append(line)
+        else:
+            package_output.setdefault(package, []).append(line)
+    return test_output, package_output
+
+
 def nearest_rank(values: list[float], fraction: float) -> float:
     """The nearest-rank percentile: the smallest value covering `fraction`."""
     ordered = sorted(values)
@@ -143,6 +166,36 @@ def print_package_table(packages: dict[str, float], note: str = "") -> None:
     print(f"Top {min(TOP_PACKAGE_ROWS, len(ordered))} slowest packages{note}:")
     for package, elapsed in ordered[:TOP_PACKAGE_ROWS]:
         print(f"  {elapsed:8.2f}s  {package}")
+
+
+def print_failure_output(
+    failed: set[tuple[str, str]],
+    unexplained: list[str],
+    test_output: dict[tuple[str, str], list[str]],
+    package_output: dict[str, list[str]],
+) -> None:
+    """Replay the captured output of failed tests and of unexplained failed packages.
+
+    The race step's own log carries the whole event stream only once the gate
+    step ends, so this step is where a red run's diagnostics get read; a failed
+    test or package that captured no output is still named.
+    """
+    for package, test in sorted(failed):
+        lines = test_output.get((package, test))
+        print(f"go_test_durations: output of failed test {package} {test}:")
+        if lines:
+            sys.stdout.write("".join(lines))
+        else:
+            print("  (the test captured no output)")
+        print(f"go_test_durations: end output of failed test {package} {test}")
+    for package in sorted(set(unexplained)):
+        lines = package_output.get(package)
+        print(f"go_test_durations: output of failed package {package}:")
+        if lines:
+            sys.stdout.write("".join(lines))
+        else:
+            print("  (the package captured no output)")
+        print(f"go_test_durations: end output of failed package {package}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -170,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
     note = f" (partial: {'; '.join(reasons)})" if reasons else ""
     print_test_table(tests, note)
     print_package_table(packages, note)
+    test_output, package_output = collect_output(events)
+    print_failure_output(failed, unexplained, test_output, package_output)
 
     if invalid:
         print(f"the Go test JSON stream carries {invalid} unparsable line(s)", file=sys.stderr)

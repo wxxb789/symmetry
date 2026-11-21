@@ -10,7 +10,8 @@ verdict and no explicit label. This gate makes the classification total:
   `<root>/browser/scripts/**/*.test.mjs` must be **wired** - some
   `.github/workflows/*.yml`/`*.yaml` names the file's
   browser-relative (`tests/foo.spec.mjs`) or repository-relative
-  (`browser/tests/foo.spec.mjs`) path as a token - or **manual** - named by a
+  (`browser/tests/foo.spec.mjs`) path as a token outside its YAML comments (a
+  comment is not a step and runs nothing) - or **manual** - named by a
   backticked path in the suite column of a table row of the
   `## Manual-only suite matrix` section of `browser/README.md`. Only the first
   cell of a table row in that one section counts, so a row's explanation may
@@ -87,6 +88,37 @@ def names_suite(token: str, suite: str) -> bool:
     return any(token == candidate or token.endswith("/" + candidate) for candidate in (suite, browser_relative))
 
 
+def strip_comments(text: str) -> str:
+    """The workflow text with its YAML comments removed.
+
+    A comment is not a step and runs nothing, so it must not make a suite
+    look wired. A `#` opens a comment at the start of a line or after
+    whitespace, unless it sits inside a single- or double-quoted scalar (the
+    YAML rule, which also covers the quoted shell fragments of a `run` block);
+    shell comments are stripped the same way. The scan is textual rather than a
+    YAML parse, and an unbalanced quote earlier on a line can keep a comment
+    tail, which errs on the permissive side.
+    """
+    kept: list[str] = []
+    for line in text.splitlines():
+        in_single = in_double = False
+        comment_at = None
+        for index, char in enumerate(line):
+            if in_single:
+                in_single = char != "'"
+            elif in_double:
+                in_double = char != '"'
+            elif char == "'":
+                in_single = True
+            elif char == '"':
+                in_double = True
+            elif char == "#" and (index == 0 or line[index - 1] in " \t"):
+                comment_at = index
+                break
+        kept.append(line if comment_at is None else line[:comment_at])
+    return "\n".join(kept)
+
+
 def workflow_tokens(root: pathlib.Path) -> dict[str, list[str]]:
     """Every path-like token of every workflow file, keyed by workflow path."""
     tokens: dict[str, list[str]] = {}
@@ -94,7 +126,8 @@ def workflow_tokens(root: pathlib.Path) -> dict[str, list[str]]:
         for path in sorted(root.joinpath(".github/workflows").glob(pathlib.PurePath(pattern).name)):
             if not path.is_file():
                 continue
-            tokens[path.relative_to(root).as_posix()] = PATH_TOKEN.findall(path.read_text(encoding="utf-8"))
+            text = strip_comments(path.read_text(encoding="utf-8"))
+            tokens[path.relative_to(root).as_posix()] = PATH_TOKEN.findall(text)
     return tokens
 
 

@@ -324,11 +324,11 @@ jobs:
       # dev environment: the same sources are not compiled twice, the test-only
       # support tree is compiled too, and a warning there now fails this gate.
       - run: MIX_ENV=test mix compile --warnings-as-errors
-      # Per-test duration telemetry (refactor slice W2-01): `--slowest 20`
-      # forwards through the `test` alias to ExUnit, which prints the twenty
-      # slowest tests after the run summary; the step still fails exactly when
-      # `mix test` fails.
-      - run: mix test --slowest 20
+      # ExUnit duration telemetry was attempted here as `mix test --slowest 20`
+      # (refactor slice W2-01) and reverted: `--slowest` forces ExUnit trace
+      # mode, which serializes the suite (`max_cases: 1`) and ignores every
+      # test timeout (`:infinity`), so it is not an output-only flag.
+      - run: mix test
       - name: Run provider broker end-to-end tests
         timeout-minutes: 10
         env:
@@ -1536,6 +1536,7 @@ jobs:
       # pass, so the race configuration enforces one of the same names rather
       # than inventing a new requirement.
       - name: Run race tests with the same stdio-only caller boundary
+        id: daemon_race_tests
         run: |
           python3 ../scripts/ci/go-test-json-gate.py \
             --events "$RUNNER_TEMP/daemon-go-race.json" \
@@ -1548,9 +1549,11 @@ jobs:
       # verdict and the table prints whenever the stream carries per-test
       # outcomes - marked partial when the run itself is refused - while the job
       # keeps its current conclusion semantics. `if: always()` keeps the table
-      # beside a red race run, which is when the attribution is needed.
+      # beside a red race run, which is when the attribution is needed; the
+      # outcome check keeps it from erroring when an earlier step's failure
+      # skipped the race run, so its event file never exists.
       - name: Summarize Go test durations
-        if: always()
+        if: always() && steps.daemon_race_tests.outcome != 'skipped'
         continue-on-error: true
         run: |
           python3 ../scripts/ci/go-test-durations.py "$RUNNER_TEMP/daemon-go-race.json"
@@ -1668,11 +1671,12 @@ jobs:
 
       # The browser-suite inventory (refactor slice W2-01): every
       # `browser/tests/**/*.spec.mjs` and `browser/scripts/**/*.test.mjs` must be
-      # named by a workflow file (a mention in a comment counts as naming) or
-      # listed in the `browser/README.md` manual matrix; refactor slice W6-02
-      # owns wiring the remaining families. It runs here because the matrix
-      # lives in a Markdown file: a README-only pull request classifies
-      # documentation-only, and a `run-heavy`-gated step would never check it.
+      # named by a workflow file outside its YAML comments (a comment is not a
+      # step and runs nothing) or listed in the `browser/README.md` manual
+      # matrix; refactor slice W6-02 owns wiring the remaining families. It runs
+      # here because the matrix lives in a Markdown file: a README-only pull
+      # request classifies documentation-only, and a `run-heavy`-gated step
+      # would never check it.
       # Unlike the lint metrics below, this step is blocking.
       - run: python3 scripts/ci/assert-browser-suite-coverage.py
 

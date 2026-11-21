@@ -13,7 +13,7 @@ and the contract's owned-file set (four files plus this plan; every other path i
 
 | File | State | Content |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | modified | `mix test` step → `mix test --slowest 20` (control job); race step emits `go test -json` through the shared gate and writes `$RUNNER_TEMP/daemon-go-race.json` (daemon job); one new advisory duration-summary step (daemon job); one new blocking inventory step (legacy-route-audit job) |
+| `.github/workflows/ci.yml` | modified | control job's `mix test` step unchanged (fix round 1 reverted `--slowest 20`: trace mode, see "The duration plane"); race step emits `go test -json` through the shared gate and writes `$RUNNER_TEMP/daemon-go-race.json` (daemon job); one new advisory duration-summary step (daemon job); one new blocking inventory step (legacy-route-audit job) |
 | `scripts/ci/go-test-durations.py` | new | `go test -json` duration summarizer: prints the top-N test table and a package table, fails a test >30 s or p95 +20 % over the committed baseline |
 | `scripts/ci/assert-browser-suite-coverage.py` | new | inventory gate: every `browser/tests/**/*.spec.mjs` / `browser/scripts/**/*.test.mjs` is named by a workflow or listed in `browser/README.md`'s manual matrix |
 | `browser/README.md` | modified | new "Manual-only suite matrix" section (machine-parsed by the gate) listing the nine suites CI does not run, why, and how to run each today |
@@ -29,22 +29,22 @@ already exist, exactly as W1-01 grew the advisory quality plane.
 
 ### ExUnit (control job)
 
-`- run: mix test` becomes `- run: mix test --slowest 20`. The control job's `test` alias
-(`control/mix.exs`: `test: ["symmetry.check_test_db", "ecto.create --quiet", "ecto.migrate --quiet", "test"]`)
-forwards CLI arguments to the real task, and `--slowest N` makes ExUnit's own CLI formatter print
-the N slowest tests after the run summary. Verified against the CI-pinned Elixir (1.20.4, the version
-`mise` holds on this host) on a synthetic two-test project; measured shape:
-
-```
-Top 20 slowest (0.1s), 84.5% of total time:
-
-  * test slow case (SlowestProbeTest) (156.6ms) [test/slowest_probe_test.exs:8]
-  * test fast case (SlowestProbeTest) (0.00ms) [test/slowest_probe_test.exs:4]
-```
-
-Pass/fail semantics are untouched: the step already fails on a red `mix test`, and `--slowest` only
-adds output. No other `mix test` invocation (provider broker e2e, the goal-receipt JSON-formatter
-run, the folded Pi E2E steps) is touched, so none of their formatter contracts move.
+**Reverted in fix round 1 (review finding P1-1); ExUnit durations are unshipped.** The step was
+`- run: mix test --slowest 20`, and the flag does print the slowest tests (probe below), but not as
+an output-only addition: `--slowest N` sets ExUnit's `:slowest`, and `ExUnit.configure/1` turns
+that into `trace: true` (`lib/ex_unit/lib/ex_unit.ex`, `put_slowest/1`), which drops `:max_cases` to
+`1` (`max_cases/1`) and makes every test timeout `:infinity` (`ExUnit.Runner.get_timeout/2`). The
+runtime probe on the pinned toolchain shows the consequence directly: an `async: true` test tagged
+`@tag timeout: 200` that sleeps 600 ms fails with `** (ExUnit.TimeoutError)` under `mix test`
+(`max_cases: 32`, exit 2) and passes under `mix test --slowest 1` (`max_cases: 1`, exit 0); the
+PR's CI log confirms trace mode (2,024 `  * test ` lines versus 0 on the main reference run). A
+pre-existing gate changing semantics is the contract's clause 3, so the step is back to
+`- run: mix test` and the ci.yml comment records why `--slowest` must not come back. Shipping
+durations without trace mode needs a custom formatter module (`mix test --formatter
+ExUnit.CLIFormatter --formatter <slowest formatter>`), a file outside this slice's owned set:
+escalated in the fix report, not implemented here. No other `mix test` invocation (provider broker
+e2e, the goal-receipt JSON-formatter run, the folded Pi E2E steps) is touched, so none of their
+formatter contracts move.
 
 ### Go (daemon job): capture
 
@@ -107,13 +107,13 @@ One pure consumer: `EVENTS.json` (the `go test -json` stream), no command execut
   >30 s"). The p95 arm fails when `p95 > P95_BASELINE_SECONDS × 1.2` (the contract's "+20 %"). Both
   arms report every crossing, not just the first.
 * **Committed baseline.** `P95_BASELINE_SECONDS` is a module constant next to the provenance
-  comment naming the exact measuring command, host class, toolchain and revision (see "Measured
-  baselines"). The CI stream is the race pass while the baseline is measured with the same
-  `-json` command on this host without `-race` (a race-shaped stream cannot be produced here: the
-  WSL environments' loopback HTTP stalls, below); the p95 falls in the fixed-deadline slow tail,
-  whose per-test durations do not scale with host or detector, which is what makes the proxy
-  usable as an advisory ratchet seed. The step prints `p95=`, `baseline=` and `ratio=` side by
-  side; W6-12 owns the move to a runner-measured baseline when the thresholds flip to blocking.
+  comment naming the exact stream it was measured from (see "Measured baselines"): the runner's own
+  race stream of CI run 44892215975, the first run whose daemon job wrote
+  `$RUNNER_TEMP/daemon-go-race.json` through the gate. Fix round 1 re-baselined it to that stream's
+  `p95 = 0.260 s` (the earlier host-measured non-race proxy, p95 4.910 s, sat ~19x above the
+  runner's p95, so the +20 % band could never fire). The step prints `p95=`, `baseline=` and
+  `ratio=` side by side; W6-12 flips the thresholds to blocking, and any re-derivation of the band
+  from more than one runner run is its call.
 * **Exit codes.** `0` both arms pass; `1` a threshold crossed (the verdict, in the step's own exit
   status); `2` usage/missing-file/malformed-stream/no-outcomes (never silently green; a refused
   stream that carries per-test outcomes still prints the tables, labelled partial).
@@ -122,19 +122,22 @@ One pure consumer: `EVENTS.json` (the `go test -json` stream), no command execut
 
 ```yaml
 - name: Summarize Go test durations
-  if: always()
+  if: always() && steps.daemon_race_tests.outcome != 'skipped'
   continue-on-error: true
   run: |
     python3 ../scripts/ci/go-test-durations.py "$RUNNER_TEMP/daemon-go-race.json"
 ```
 
 `if: always()` makes the table print even when the race suite went red — the run that needs the
-attribution most. `continue-on-error: true` follows the contract's evidence pointer (§10.5: "floors
+attribution most — and the `steps.daemon_race_tests.outcome != 'skipped'` guard (fix round 1, finding
+P3-2) keeps it from erroring over the missing event file when an earlier step's failure skipped the
+race run. `continue-on-error: true` follows the contract's evidence pointer (§10.5: "floors
 stay advisory until W6-10/W6-12") and W6-12's own row ("flip duration thresholds/ratchets to
 blocking"): the summarizer's exit status is the verdict and reddens the *step*, while the job keeps
 its current conclusion semantics, the same advisory-plane contract W1-01 shipped for golangci-lint,
 Credo, govulncheck, shellcheck and ruff. A planted 40 s test therefore fails the step with exit 1
-(fixture evidence below); W6-12 flips the step to blocking after re-baselining against a runner run.
+(fixture evidence below); W6-12 flips the step to blocking, with the runner-seeded baseline already
+in place.
 
 ## The browser-suite inventory gate
 
@@ -146,11 +149,11 @@ must be classified exactly once:
 
 * **wired** — some `.github/workflows/*.yml`/`*.yaml` contains a path token whose suffix equals the
   file's browser-relative path (`tests/foo.spec.mjs`) or repository-relative path
-  (`browser/tests/foo.spec.mjs`), at a `/` boundary. The render step's argument list
-  (`tests/workspace-shell.spec.mjs …`) matches this way, as would a future compose-family step. A
-  mention in a comment counts as naming; what proves *execution* for the wired render family is
-  `scripts/ci/assert-playwright-json.py`'s executed-set assertion, which this gate deliberately does
-  not duplicate.
+  (`browser/tests/foo.spec.mjs`), at a `/` boundary, **outside its YAML comments** (fix round 1,
+  finding P2-1: a comment is not a step and runs nothing). The render step's argument list
+  (`tests/workspace-shell.spec.mjs …`) matches this way, as would a future compose-family step.
+  What proves *execution* for the wired render family is `scripts/ci/assert-playwright-json.py`'s
+  executed-set assertion, which this gate deliberately does not duplicate.
 * **manual** — the file is named by a backticked path token in a markdown table row of the
   `## Manual-only suite matrix` section of `browser/README.md`. Only table rows in that one section
   count; the rest of the README's prose mentions spec files freely and is not consulted.
@@ -180,10 +183,11 @@ that adds a spec file neither named by a workflow nor listed in the matrix redde
 | A new job missing `needs: changes` + `run-heavy` | No new job is added; both steps grow inside existing jobs. | `git diff` of ci.yml is steps-only |
 | A gate that passes with an unlisted spec | The inventory gate fails on an unlisted spec (planted fixture, exit 1) and fails on matrix rot and double classification. | fixture runs below |
 
-Pre-existing step semantics: `mix test --slowest 20` adds output only; the race step keeps its
-command, its stdio-only boundary, its 600 s budget and its exit-status meaning, gains `-json` and
-the one already-required named assertion, and now writes the event stream next to it; the new
-summary step is `continue-on-error`, so the daemon job's conclusion cannot change because of it.
+Pre-existing step semantics: the control job's `mix test` step is back to its original command
+(fix round 1; see "The duration plane / ExUnit"); the race step keeps its command, its stdio-only
+boundary, its 600 s budget and its exit-status meaning, gains `-json` and the one already-required
+named assertion, and now writes the event stream next to it; the new summary step is
+`continue-on-error`, so the daemon job's conclusion cannot change because of it.
 
 ## Out of scope
 
@@ -192,7 +196,7 @@ summary step is `continue-on-error`, so the daemon job's conclusion cannot chang
 * **Coverage plane** (W2-17), **classifier extraction** (W3-01), **`ci.yml` program extraction**
   (W6-01): serialized owners of `ci.yml`/`test-ci-changed-path-classifier.py`.
 * **Blocking duration thresholds** (W6-12) and the slow-test burn-down itself: this slice records
-  the numbers; W6-12 flips and re-baselines.
+  the numbers and the runner-seeded baseline; W6-12 flips the thresholds to blocking.
 * **Fixing the slow tests** the table will name, and any change to `daemon/**`, `control/**` or
   `browser/tests/**`: read-only here.
 * **A committed fixture suite for the two new scripts** (`scripts/ci/test-*.py`): not in the owned
@@ -226,38 +230,37 @@ summary step is `continue-on-error`, so the daemon job's conclusion cannot chang
 9. **`--root` on the inventory gate**: the contract asks for synthetic-fixture exercise; a root
    override is the smallest seam that lets the fixture run without planting files in the tree (the
    planted-file exercise is still done for the acceptance case and then removed).
-10. **Expected advisory reds are recorded, not hidden** (W1-01 precedent): the first runner run may
-    exceed the host-measured baseline or cross 30 s on a pre-existing test; the step prints both
-    numbers and stays advisory until W6-12.
+10. **Expected advisory reds are recorded, not hidden** (W1-01 precedent): the runner's race stream
+    already carries five tests over the 30 s cap (below), so the cap arm is expected red until
+    W6-10/W6-12 adopt or burn down the threshold; the step prints the numbers and stays advisory
+    until W6-12.
 
 ## Measured baselines
 
 Recorded on this delivery host; every number below was produced by the command named with it, at
 this revision unless stated.
 
-**ExUnit `--slowest` (Elixir 1.20.4 / OTP 29, synthetic probe)**: the flag exists on the pinned
-version and prints the table quoted above (`Top 20 slowest (0.1s), 84.5% of total time:` …), exit 0.
-The probe project is throwaway (`mise`-held Elixir 1.20.4-otp-29); it exercises the flag, not the
-control suite, which needs Postgres and is CI's to run.
+**ExUnit `--slowest` (Elixir 1.20.4 / OTP 29, probe on a throwaway project; the fix-round-1
+evidence)**: the flag exists on the pinned version and prints the slowest-test table (the original
+shape, `Top 20 slowest (0.1s), 84.5% of total time:` …), but on an `async: true` test tagged
+`@tag timeout: 200` that sleeps 600 ms it also changes the verdict: `mix test` prints
+`max_cases: 32`, raises `** (ExUnit.TimeoutError)` and exits 2, while `mix test --slowest 1` prints
+`max_cases: 1`, ignores the tag timeout and exits 0. That is why `mix test` is unshipped as the
+duration reader (see "The duration plane / ExUnit"); the probe exercises the flag's semantics, not
+the control suite, which needs Postgres and is CI's to run.
 
 **Scoped plain `go test -json` stream (the existing `$RUNNER_TEMP/daemon-go-test.json` step, from CI
 run 44874926108's daemon job log)**: 529 terminal test outcomes, p95 0.00 s, max 1.51 s
 (`TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest`), 2.0 s of summed test time for a ~4 s step —
 the measurement that rules this stream out as the summarized one.
 
-**Committed baseline: the full plain `go test -count=1 -json ./...` stream on this host (Windows,
-go1.27.4, revision 6a815c0f)**, the same command CI runs minus `-race`, with the per-package
-timeout raised to 1500s: **p95 = 4.910 s** (the constant in the script). The stream is complete —
-4,340 outcomes, 56 skips, 22 packages, 3 Windows-host flakes (`internal/execution` pipe tests and
-one `harness/pi` fixture test) outside the slow tail — and the raise is what makes it complete: two
-earlier runs with the repository's 600s cap truncated `internal/app` (and once `internal/workspace`)
-into package timeouts on this contended host, and both are recorded as discarded, not silently
-averaged. The p95 is deadline-anchored rather than CPU-anchored: 23 outcomes sit inside
-[4.9 s, 5.2 s] (`claudeProbeTimeout = 5 * time.Second`, `daemon/internal/harness/registry.go:29`)
-and the p95 index lands on the cluster's lower edge — p50 0.010 s, p90 1.880 s (the 2 s attach
-deadline plateau), p95 4.910 s, p99 20.160 s, max 155.26 s, 220 outcomes ≥ 4.9 s, 23 over the 30s
-cap. The cluster's fixed waits are host- and detector-independent; the percentile only stays
-anchored while that cluster still defines it, which is the part W6-12 must re-measure on the runner.
+**Committed baseline (race stream, CI run 44892215975)**: the daemon job's race step wrote
+`$RUNNER_TEMP/daemon-go-race.json` through the gate for the first time, and the summarizer printed
+`tests=5062 skipped=105 packages=25 p95=0.260s over_30s=5`. Fix round 1 committed that
+`p95 = 0.260 s` as `P95_BASELINE_SECONDS` — the same stream shape the CI step feeds. It replaces
+the initial host-measured non-race proxy (p95 4.910 s; method recorded in the paragraphs below),
+which landed ~19x above the runner's p95, so a +20 % band anchored there could never fire. The same
+run's `over_30s=5` is the expected advisory red recorded under "Residual risks".
 
 **Why not a race-shaped stream from this host (three discarded attempts, recorded as method).**
 Two attempts ran in the `symmetry-race` (Alpine) WSL distro — the first copied only `daemon/` (the
@@ -270,14 +273,18 @@ to a test's own `httptest` server never completes (`/etc/hosts` and `getent host
 normal), an environment defect, not a code failure. A third attempt in the Ubuntu-24.04 distro
 (glibc, the runner's base, `GOMAXPROCS=4`, full tree) reproduced the same loopback failures before
 it was stopped; the host's WSL2 networking, not the distribution, is the common factor. Windows
-native runs are healthy (the first loaded full-suite run had zero test-level failures; the complete
-run's three host flakes are listed above), so the proxy baseline is measured there.
+native runs are healthy (the first loaded full-suite run had zero test-level failures), and the
+discarded proxy measurement was taken there.
 
-**The runner-side reference for W6-12** (run 44874926108's race step, logs): wall 313 s; per package
-`internal/app` 269.6 s, `platform` 52.1, `workspace` 42.3, `state` 33.0, `execution` 21.8,
-`harness/codex` 21.1, `harness` 15.6, `harness/omp` 13.0, `probeconformance` 8.0, the rest ≤ 5.3 s.
-The audit's earlier run measured `internal/app` 385.7 s on the same step — a 1.4x run-to-run swing
-on the runner itself, which is why the +20 % band stays advisory until W6-12 re-baselines there.
+**The runner-side race reference** (run 44874926108's race step, logs; run 44892215975 supplies the
+committed baseline): wall 313 s; per package `internal/app` 269.6 s, `platform` 52.1, `workspace`
+42.3, `state` 33.0, `execution` 21.8, `harness/codex` 21.1, `harness` 15.6, `harness/omp` 13.0,
+`probeconformance` 8.0, the rest ≤ 5.3 s. Run 44892215975's summarizer tables name the five
+outcomes over the 30 s cap: `TestOutputBackpressureRecoversWithOneTruncationMarker` (170.05 s,
+`internal/app`), `TestRawOutputBudgetDropsWithoutFailingSemanticEvents` (125.79 s) and three
+`internal/state` tests at 31–32 s; the audit's earlier run measured `internal/app` 385.7 s on the
+same step. That 1.4x run-to-run swing is why the +20 % band stays advisory until W6-12, which
+should widen the sample before it flips the thresholds.
 
 **Full plain `go test -count=1 -json ./...` stream (this host, Windows, go1.27.4, revision
 6a815c0f)**: 4,007 tests over 22 packages, 17,811 event lines, exit 1. This run is **not** usable as
@@ -294,13 +301,14 @@ job log): the table prints and the verdict is exit 0 (`tests=498 skipped=31 pack
 **Browser suite inventory today (real tree)**: 16 discovered suites; 7 wired (the render step's
 list); 9 manual (six specs + three node tests); gate exit 0, and exit 1 with
 `browser/tests/zz-planted-probe.spec.mjs` planted (the contract's acceptance exercise) and exit 0
-again after its removal.
+again after its removal; a workflow comment naming an unlisted spec no longer classifies it
+(fix round 1, finding P2-1; fixture below).
 
-**ExUnit, actionlint, classifier, ruff**: `mix test --slowest 20` verified on the CI-pinned Elixir
-1.20.4 through the alias shape (probe above); actionlint 1.7.12 `-shellcheck= -pyflakes=` → 0
-findings, exit 0, with a broken-`if:` mutation exiting 1; `test-ci-changed-path-classifier.py` → 18
-tests OK, exit 0; ruff 0.17.5 (the version `pyproject.toml` requires): `ruff check scripts/ci` and
-`ruff format --check scripts/ci` both exit 0, with the two new files inside that count.
+**actionlint, classifier, ruff**: actionlint 1.7.12 `-shellcheck= -pyflakes=` → 0 findings, exit 0,
+with a broken-`if:` mutation exiting 1; `test-ci-changed-path-classifier.py` → 18 tests OK, exit 0;
+ruff 0.17.5 (the version `pyproject.toml` requires): `ruff check scripts/ci` and
+`ruff format --check scripts/ci` both exit 0, with the two new files inside that count. (The ExUnit
+flag probe is recorded above, under its own heading.)
 
 **The job's own helper suites on this host**: `test-assert-folded-gates.py` → 6 tests OK, exit 0;
 `test-no-legacy-routes-audit.py` → 11 failures/4 errors, exit 1 with the default `PATH` (its
@@ -314,44 +322,51 @@ over 1,444 tracked files; the gate plumbing end to end (`go-test-json-gate.py --
 
 1. `python3 scripts/ci/test-ci-changed-path-classifier.py` — must stay green with the new steps.
 2. `scripts/ci/go-test-durations.py` on synthetic fixtures: green stream (exit 0 + table), planted
-   40 s test (exit 1, names the test), p95 over the limit (exit 1, names p95 vs baseline), malformed
-   stream (exit 2), empty stream (exit 2); then on the real full race stream (table + verdict).
+   40 s test (exit 1, names the test), p95 over the limit (exit 1, names p95 vs baseline), a failed
+   test's output replayed, an unexplained failed package (exit 2 + the package's own output),
+   malformed stream (exit 2), empty stream (exit 2); then against the runner's race stream of run
+   44892215975 (table + the committed baseline).
 3. `scripts/ci/assert-browser-suite-coverage.py` on the real tree (exit 0, 16-row table) and on
-   synthetic fixture roots: unlisted spec (exit 1), matrix rot (exit 1), wired+manual overlap
-   (exit 1), all-wired green (exit 0); plus the planted-file acceptance exercise in the real tree
-   (add an unlisted spec, run, remove it).
+   synthetic fixture roots: unlisted spec (exit 1), a comment-only mention of an unlisted spec
+   (exit 1; fix round 1), matrix rot (exit 1), wired+manual overlap (exit 1), all-wired green
+   (exit 0); plus the planted-file acceptance exercise in the real tree (add an unlisted spec, run,
+   remove it).
 4. `actionlint -shellcheck= -pyflakes= .github/workflows/*.yml` (pinned 1.7.12 shape; shellcheck
    integration off as in the CI step) — 0 findings, exit 0; plus one mutation on a scratch copy
    proving the oracle is not vacuous.
 5. `ruff check scripts/ci` + `ruff format --check scripts/ci` with the pinned ruff 0.17.6 — the two
    new files must not add findings (the advisory step measures this).
 6. `python3 -m py_compile` on both new scripts; `git diff --check`.
-7. The WSL Linux race run (`/opt/go/bin/go` 1.27.0, `-race`, same command) that produces the
-   committed baseline and validates the summarizer on a real ~4,000-outcome stream.
+7. The runner's race stream from run 44892215975's daemon job (`p95=0.260s`) — the fix-round-1
+   committed baseline; the WSL Linux race attempts are recorded above as discarded method.
 8. `python3 scripts/ci/test-no-legacy-routes-audit.py` and `test-assert-folded-gates.py` where this
    host can run them (Git's bash first on `PATH`, per W1-01's host note).
 
-Not runnable here (CI is their oracle, per the contract): the actual runner run — `mix test
---slowest 20` inside the control job, the race step's JSON capture, the summary step's table on the
-runner, and the inventory step under `version`-shaped routing; the conductor verifies them on the
-draft PR.
+Not runnable here (CI is their oracle, per the contract): the actual runner run — the control job's
+`mix test` step, the race step's JSON capture, the summary step's table on the runner, and the
+inventory step under `version`-shaped routing; the conductor verifies them on the draft PR.
 
 ## Residual risks and known limits
 
-* **The baseline is a proxy** (same command, this host, no `-race`; see "Measured baselines" for
-  why no race-shaped stream was obtainable). The p95 falls in the fixed-deadline tail (5.00 s probe
-  bounds, 2 s attach deadlines) whose per-test durations do not scale with host or detector, but the
-  runner's race stream can still land outside the +20 % band, and the runner's own run-to-run swing
-  (`internal/app` 269.6 → 385.7 s) is larger than that band. The step is advisory, prints `p95=`,
-  `baseline=` and `ratio=`, and W6-12 re-baselines on the runner when it flips to blocking.
-* **Expected advisory reds on the first runner run** (W1-01 precedent): a pre-existing test over
-  30 s under `-race` on the runner and/or a p95 over the band. Both are recorded numbers, not
-  failures of this increment; W6-12 owns the flip.
-* **The race step's log becomes JSON** (≈4–6 MB for the full suite, following the scoped ordinary
-  step's precedent) and the per-package `ok …s` lines disappear; the summary table replaces them.
-* **The inventory gate can be satisfied by a workflow comment** naming a spec; execution proof for
-  the render family stays `assert-playwright-json.py`'s job. W6-02 can tighten the wired predicate
-  to step arguments if the comment surface proves too loose.
+* **The baseline is one runner run** (run 44892215975's race stream, p95 0.260 s; fix round 1).
+  The runner's own run-to-run swing (`internal/app` 269.6 → 385.7 s across runs) is larger than the
+  +20 % band, so the p95 arm can swing across it; the step is advisory, prints `p95=`, `baseline=`
+  and `ratio=`, and W6-12 should re-derive the band from several runs when it flips the thresholds
+  to blocking.
+* **Expected advisory reds** (W1-01 precedent): run 44892215975's race stream carries five outcomes
+  over the 30 s cap (170.05 s `TestOutputBackpressureRecoversWithOneTruncationMarker`, 125.79 s
+  `TestRawOutputBudgetDropsWithoutFailingSemanticEvents`, three `internal/state` tests at 31–32 s),
+  so the cap arm is red on every current green run, and the fresh p95 band may be crossed by
+  run-to-run swing. Both are recorded numbers, not failures of this increment; W6-10/W6-12 own the
+  burn-down and the flip.
+* **The race step's log becomes JSON** (7.87 MB on run 44892215975, following the scoped ordinary
+  step's precedent) and the per-package `ok …s` lines disappear; the summary table replaces them,
+  and fix round 1 makes the summary step replay every failed test's and unexplained failed
+  package's output, so a red run's diagnostics are readable there.
+* **The inventory gate counts any non-comment workflow token** naming a spec (YAML comments are
+  stripped; fix round 1, finding P2-1); execution proof for the render family stays
+  `assert-playwright-json.py`'s job, and W6-02 can tighten the wired predicate to step arguments if
+  the remaining surface proves too loose.
 * **`browser/README.md`'s matrix is manual data**: the gate proves coverage, not truthfulness of a
   row's stated driver.
 * **Node-suite drivers are local-only today** (`test:connection-env`, `test:control-isolation`, and
