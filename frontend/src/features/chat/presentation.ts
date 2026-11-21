@@ -1,17 +1,18 @@
 /**
  * Presentation of the scoped engineering conversation.
  *
- * Every rendered value is the server's own: the intent vocabulary is the
- * server's, the scope label names the conversation read's answer rather than
- * the URL that asked for it, receipts are derived by `features/work/receipts.ts`
- * (applied only from a served acknowledgement outcome) and a served value
- * becomes an anchor only through the one safe-URL helper http(s) admits. Raw
- * execution data is never a source here: evidence rows read the read's semantic
- * timeline only.
+ * Every rendered value is the server's own: the intent vocabulary is the server's, the
+ * scope label names the conversation read's answer rather than the URL that asked for
+ * it, receipts are derived by `features/work/receipts.ts` (applied only from a served
+ * acknowledgement outcome) and a served value becomes an anchor only through the one
+ * safe-URL helper http(s) admits — `services/served.ts`; the work vocabulary stays in
+ * `features/work/presentation.ts`. Raw execution data is never a source here: evidence
+ * rows read the read's semantic timeline only.
  */
-import { asRecord, asRecords, asText, decisionRecord, executionStateLabel, safeUrl } from "../work/presentation";
+import { decisionRecord, executionStateLabel } from "../work/presentation";
 import { receiptLabel, receiptOutcome, type ReceiptCommand, type ReceiptOutcome } from "../work/receipts";
 import type { ChatConversationMessage, ChatConversationRun, ChatScope, Runtime } from "../../services/api";
+import { asRecord, asRecords, asText, safeUrl } from "../../services/served";
 import type { ChatHistoryPage, ChatIntent, ChatSendStatus } from "./scopes";
 
 /** The runtime row's adapter record as served; absent for a legacy registration. */
@@ -428,8 +429,8 @@ export function chatDecisionPacket(waiting: ChatWaitingProjection | null): ChatD
   };
 }
 
-/** The first readable failure string the served execution or outcome carries. */
-function failureText(failure: unknown): string | null {
+/** The chat surface's failure policy: `message`, then `summary`, then `error`, verbatim (no prefix). */
+function chatFailureText(failure: unknown): string | null {
   const record = asRecord(failure);
   if (record === null) return null;
   return asText(record.message) ?? asText(record.summary) ?? asText(record.error);
@@ -448,7 +449,7 @@ interface ChatFailureView {
 export function chatFailureView(state: unknown, failure: unknown, outcomeFailure: unknown): ChatFailureView | null {
   const executionState = asText(state);
   if (executionState !== "failed" && executionState !== "cancelled") return null;
-  const text = failureText(failure) ?? failureText(outcomeFailure);
+  const text = chatFailureText(failure) ?? chatFailureText(outcomeFailure);
   if (text === null) return { state: executionState, text: "The run ended without a recorded failure message." };
   return { state: executionState, text: text.length > 2000 ? `${text.slice(0, 2000)}…` : text };
 }
