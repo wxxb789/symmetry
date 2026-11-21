@@ -305,7 +305,7 @@ apply-stage tree is in §13.
 | execution package (Windows subset) | `go test -count=1 ./internal/execution/` | exit 0 — `ok … 16.455s` on the delivered revision with host headroom; `ok … 14.189s` on the immediately preceding revision. The saturated-host runs and the isolation pass are in §12. |
 | harness callers | `go test -count=1 ./internal/harness/...` | exit 0 — 8 packages `ok` (root `ok … 23.792s` in the run before the final comment edit; re-run after it: 8 `ok`, exit 0) |
 | app callers | `go test -count=1 ./internal/app/...` | exit 0 on the immediately preceding revision (`ok … 500.336s`) and on the base-overlay build (`ok … 784.920s`); the delivered-revision runs on this saturated host end on a 2-second wall-clock admission test that **fails at the base-overlay build in the same window** — full record and the interleaved pair in §12 |
-| execution package (Linux, full set) | `wsl -d Ubuntu-24.04 -u accept` → `cd /mnt/q/repos/wt-w4-03-runner-decomposition/symmetry/daemon && go test -count=1 ./internal/execution/` | exit 0 — `ok … 2.210s` |
+| execution package (Linux, full set) | `wsl -d Ubuntu-24.04 -u accept` → `cd <worktree>/daemon && go test -count=1 ./internal/execution/` | exit 0 — `ok … 2.210s` |
 | test inventory | `go test -list '^Test' ./internal/execution/` | Windows subset **85**; Linux (WSL) **104** |
 | citation gate | `python scripts/ci/check-citation-existence.py --base 0fa9b705 --head HEAD` | exit 0 — `no audited document added or modified between 0fa9b705cb6a and c9ed23b40977; nothing to check` (the slice changes no audited document; the `docs/TODO.md` re-point is outside the audited corpus) |
 | whitespace | `git diff --check` | exit 0 |
