@@ -336,7 +336,7 @@ literals in §8, not on an oracle that would fail a re-hardcoded consumer.
 
 All commands run in `daemon/` unless stated. "WSL" is
 `wsl -d Ubuntu-24.04 -u accept` at this worktree's path
-(`/mnt/q/repos/wt-w4-05-linux-v2-finalize/symmetry/daemon`, go1.27.0 linux/amd64).
+(the worktree's `daemon/` directory through the WSL drive mount, go1.27.0 linux/amd64).
 
 | gate | command | result |
 | --- | --- | --- |
@@ -383,7 +383,7 @@ runs `go test -count=1 -timeout 600s ./...` at `:1834` for the cross-platform ha
   dial (`net/http.(*Transport).startDialConnForLocked`); that single test then also times out in
   isolation; skipping it moves the timeout to
   `TestNativeResumeAdmissionRejectsIncompatibleOrUnavailableRetainedSessionBeforeNativeStart`.
-  The untouched base worktree (`Q:/repos/wt-w4-03-runner-decomposition/symmetry` at `376ff525`)
+  The untouched base worktree (the W4-03 runner-decomposition worktree at `376ff525`)
   behaves the same way: its full app suite times out at the same
   `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`, its isolated run of that test
   times out too, and its suite with that test skipped times out at a third test,
