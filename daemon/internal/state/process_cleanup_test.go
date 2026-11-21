@@ -12,6 +12,7 @@ import (
 )
 
 func TestHasProcessDetailsIncludesPartialMarkers(t *testing.T) {
+	t.Parallel()
 	for _, journal := range []RunJournal{
 		{PID: 42}, {ProcessIdentity: "identity"}, {StartedAt: time.Now().UTC()},
 	} {
@@ -25,6 +26,7 @@ func TestHasProcessDetailsIncludesPartialMarkers(t *testing.T) {
 }
 
 func TestSetProcessDetailsWithAuthorityPersistsCompletePair(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("atomic-process-authority", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -51,6 +53,7 @@ func TestSetProcessDetailsWithAuthorityPersistsCompletePair(t *testing.T) {
 }
 
 func TestSetProcessDetailsWithAuthorityPreWriteFailurePreservesOldState(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("atomic-process-authority-prewrite", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -75,6 +78,7 @@ func TestSetProcessDetailsWithAuthorityPreWriteFailurePreservesOldState(t *testi
 }
 
 func TestSetProcessDetailsWithAuthorityRetriesPostRenameUnknownOutcomeAsCompletePair(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("atomic-process-authority-postrename", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -112,6 +116,7 @@ func TestSetProcessDetailsWithAuthorityRetriesPostRenameUnknownOutcomeAsComplete
 }
 
 func TestSetProcessDetailsWithAuthorityFailsClosedForMismatchesAndCleanup(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		journal   RunJournal
@@ -184,6 +189,7 @@ func TestSetProcessDetailsWithAuthorityFailsClosedForMismatchesAndCleanup(t *tes
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			if err := store.SaveJournal(test.journal); err != nil {
 				t.Fatal(err)
@@ -207,6 +213,7 @@ func TestSetProcessDetailsWithAuthorityFailsClosedForMismatchesAndCleanup(t *tes
 }
 
 func TestSetProcessDetailsWithAuthorityPreservesValidStopReceiptOnReplay(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("atomic-process-authority-receipt", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -253,6 +260,7 @@ func testContainmentAuthority(pid int, identity string) authority.Supervisor {
 }
 
 func TestContainmentAuthorityAndStopReceiptAreDurableAndCompareCleared(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("containment-authority", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -311,6 +319,7 @@ func TestContainmentAuthorityAndStopReceiptAreDurableAndCompareCleared(t *testin
 }
 
 func TestContainmentClearUsesExactCASAndReplaysUnknownOutcome(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("containment-clear-unknown", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -380,6 +389,7 @@ func TestContainmentClearUsesExactCASAndReplaysUnknownOutcome(t *testing.T) {
 }
 
 func TestLegacyProcessMarkerHasNoImplicitContainmentAuthority(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("legacy-authority", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -395,6 +405,7 @@ func TestLegacyProcessMarkerHasNoImplicitContainmentAuthority(t *testing.T) {
 }
 
 func TestContainmentUnprovenSurvivesRestartUntilExplicitlyCleared(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("containment-unproven", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -429,8 +440,10 @@ func TestContainmentUnprovenSurvivesRestartUntilExplicitlyCleared(t *testing.T) 
 }
 
 func TestProcessMarkerBlocksCleanupAndJournalDeletion(t *testing.T) {
+	t.Parallel()
 	for _, localState := range []string{"terminal_pending", "cleanup_pending"} {
 		t.Run(localState, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("process-marker", 1)
 			journal.LocalState = localState
@@ -461,6 +474,7 @@ func TestProcessMarkerBlocksCleanupAndJournalDeletion(t *testing.T) {
 }
 
 func TestTerminalRejectionPreservesUnresolvedProcessMarker(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("rejected-process-marker", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -490,6 +504,7 @@ func TestTerminalRejectionPreservesUnresolvedProcessMarker(t *testing.T) {
 }
 
 func TestCleanupPendingRejectsNewProcessRegistration(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("cleanup-registration", 1)
 	journal.PID, journal.ProcessIdentity, journal.StartedAt = 0, "", time.Time{}
@@ -511,6 +526,7 @@ func TestCleanupPendingRejectsNewProcessRegistration(t *testing.T) {
 }
 
 func TestProcessStopPersistenceFailureRetainsCleanupBarrierAcrossRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -562,6 +578,7 @@ func TestProcessStopPersistenceFailureRetainsCleanupBarrierAcrossRestart(t *test
 }
 
 func TestSaveJournalCannotBypassProcessMarkerMutations(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name             string
 		initiallyStopped bool
@@ -573,6 +590,7 @@ func TestSaveJournalCannotBypassProcessMarkerMutations(t *testing.T) {
 		{name: "register", initiallyStopped: true, change: func(j *RunJournal) { j.PID, j.ProcessIdentity, j.StartedAt = 99, "new:99", time.Now().UTC() }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("marker-replacement", 1)
 			if test.initiallyStopped {
@@ -590,12 +608,14 @@ func TestSaveJournalCannotBypassProcessMarkerMutations(t *testing.T) {
 }
 
 func TestSaveJournalCannotBypassContainmentUnprovenMutation(t *testing.T) {
+	t.Parallel()
 	for _, initiallyUnproven := range []bool{false, true} {
 		name := "false-to-true"
 		if initiallyUnproven {
 			name = "true-to-false"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("containment-unproven-replacement", 1)
 			if err := store.SaveJournal(journal); err != nil {
@@ -624,6 +644,7 @@ func TestSaveJournalCannotBypassContainmentUnprovenMutation(t *testing.T) {
 }
 
 func TestProcessRegistrationCannotReplaceAnUnclearedOwner(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("process-registration", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -639,6 +660,7 @@ func TestProcessRegistrationCannotReplaceAnUnclearedOwner(t *testing.T) {
 }
 
 func TestCleanupLifecycleRequiresDedicatedTransition(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("cleanup-lifecycle", 1)
 	journal.LocalState = "terminal_pending"
