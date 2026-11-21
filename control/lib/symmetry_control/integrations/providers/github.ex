@@ -3,6 +3,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   @behaviour SymmetryControl.Integrations.Provider
 
   alias SymmetryControl.Integrations.ChangeAction
+  alias SymmetryControl.Integrations.Providers.Support
   alias SymmetryControl.RequestHash
 
   @api "https://api.github.com"
@@ -10,7 +11,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   @repository_pattern ~r/\A[A-Za-z0-9._-]+\z/
 
   @impl true
-  def authenticate(connection), do: auth().github_headers(connection)
+  def authenticate(connection), do: Support.auth().github_headers(connection)
 
   @impl true
   def validate_resource_reference(connection, kind, reference)
@@ -37,9 +38,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   def validate_pull_request_url(_connection, _resource, _url),
     do: {:error, :invalid_pull_request_url}
 
-  def check(connection) do
-    with {:ok, headers} <- authenticate(connection), do: check(connection, headers)
-  end
+  def check(connection), do: Support.check(__MODULE__, connection)
 
   @impl true
   def check(connection, headers) do
@@ -56,10 +55,8 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  def sync_resource(connection, resource) do
-    with {:ok, headers} <- authenticate(connection),
-         do: sync_resource(connection, resource, headers)
-  end
+  def sync_resource(connection, resource),
+    do: Support.sync_resource(__MODULE__, connection, resource)
 
   @impl true
   def sync_resource(connection, resource, headers),
@@ -91,7 +88,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
        ) do
     with {:ok, {owner, name}} <- repository_parts(repository),
          :ok <- require_account(connection, owner),
-         {:ok, body} <- get("/repos/#{segment(owner)}/#{segment(name)}", headers) do
+         {:ok, body} <- get("/repos/#{Support.segment(owner)}/#{Support.segment(name)}", headers) do
       {:ok,
        %{
          resource: %{
@@ -116,7 +113,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
          :ok <- require_account(connection, owner),
          {:ok, body} <-
            get(
-             "/repos/#{segment(owner)}/#{segment(name)}/actions/runs?per_page=1",
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/actions/runs?per_page=1",
              headers
            ) do
       runs = body["workflow_runs"] || []
@@ -286,7 +283,8 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   end
 
   defp verify_repository(owner, name, binding, headers) do
-    with {:ok, repository} <- get("/repos/#{segment(owner)}/#{segment(name)}", headers) do
+    with {:ok, repository} <-
+           get("/repos/#{Support.segment(owner)}/#{Support.segment(name)}", headers) do
       if repository_identity?(repository, binding), do: :ok, else: {:error, :forbidden}
     end
   end
@@ -306,7 +304,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
        ) do
     with {:ok, ref} <-
            get(
-             "/repos/#{segment(owner)}/#{segment(name)}/git/ref/heads/#{segment(target["source_branch"])}",
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/git/ref/heads/#{Support.segment(target["source_branch"])}",
              headers
            ) do
       if get_in(ref, ["object", "sha"]) == binding["subject"]["commit"],
@@ -326,7 +324,10 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
        ) do
     with {:ok, number} <- pull_request_number(input["pull_request_url"], owner, name),
          {:ok, pull_request} <-
-           get("/repos/#{segment(owner)}/#{segment(name)}/pulls/#{number}", headers),
+           get(
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls/#{number}",
+             headers
+           ),
          {:ok, ^number} <- pull_request_response_number(pull_request, owner, name) do
       {:ok, pull_request}
     else
@@ -345,7 +346,10 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
       })
 
     with {:ok, entries} when is_list(entries) <-
-           get("/repos/#{segment(owner)}/#{segment(name)}/pulls?#{query}", headers) do
+           get(
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls?#{query}",
+             headers
+           ) do
       case entries do
         [] -> {:ok, nil}
         [one] -> {:ok, one}
@@ -393,7 +397,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   defp mutate_bound_pull_request(owner, name, nil, binding, headers) do
     target = binding["target"]
 
-    request(:post, "/repos/#{segment(owner)}/#{segment(name)}/pulls", headers, %{
+    request(:post, "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls", headers, %{
       "head" => target["source_branch"],
       "base" => target["target_branch"],
       "title" => binding["title"],
@@ -406,7 +410,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
          {:ok, result} <-
            request(
              :patch,
-             "/repos/#{segment(owner)}/#{segment(name)}/pulls/#{number}",
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls/#{number}",
              headers,
              %{
                "title" => binding["title"],
@@ -449,7 +453,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
          {:ok, pull_request} <-
            request(
              :patch,
-             "/repos/#{segment(owner)}/#{segment(name)}/pulls/#{number}",
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls/#{number}",
              headers,
              ChangeAction.put_body(%{"title" => title}, "body", body)
            ) do
@@ -457,13 +461,8 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  def sync_delivery(_connection, _resource, %{pull_request_url: nil}),
-    do: {:ok, nil}
-
-  def sync_delivery(connection, resource, work_item) do
-    with {:ok, headers} <- authenticate(connection),
-         do: sync_delivery(connection, resource, work_item, headers)
-  end
+  def sync_delivery(connection, resource, work_item),
+    do: Support.sync_delivery(__MODULE__, connection, resource, work_item)
 
   @impl true
   def sync_delivery(_connection, _resource, %{pull_request_url: nil}, _headers),
@@ -474,7 +473,10 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
          :ok <- require_account(connection, owner),
          {:ok, number} <- pull_request_number(work_item.pull_request_url, owner, name),
          {:ok, pull_request} <-
-           get("/repos/#{segment(owner)}/#{segment(name)}/pulls/#{number}", headers),
+           get(
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls/#{number}",
+             headers
+           ),
          {:ok, reviews} <- reviews(owner, name, number, headers),
          head_sha when is_binary(head_sha) <- get_in(pull_request, ["head", "sha"]),
          {:ok, ci_status} <- ci_status(connection, owner, name, head_sha, headers) do
@@ -482,7 +484,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
         pull_request_url: pull_request["html_url"] || work_item.pull_request_url,
         pull_request_state: pull_request_state(pull_request),
         review_status: review_status(reviews, pull_request),
-        updated_at: now(),
+        updated_at: Support.now(),
         provider_data: %{
           "head_sha" => head_sha,
           "pull_request_state" => pull_request["state"]
@@ -512,7 +514,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
          {:ok, reference} <- ci_reference(work_item),
          {:ok, actions} <-
            get(
-             "/repos/#{segment(owner)}/#{segment(name)}/actions/runs?" <>
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/actions/runs?" <>
                URI.encode_query(Map.put(reference, "per_page", 100)),
              headers
            ) do
@@ -521,7 +523,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
       {:ok,
        %{
          ci_status: actions_status(runs),
-         updated_at: now(),
+         updated_at: Support.now(),
          provider_data: %{"ci_url" => runs |> List.first() |> link("html_url")}
        }}
     end
@@ -531,7 +533,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     if "ci" in connection.capabilities do
       with {:ok, actions} <-
              get(
-               "/repos/#{segment(owner)}/#{segment(name)}/actions/runs?" <>
+               "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/actions/runs?" <>
                  URI.encode_query(%{"head_sha" => head_sha, "per_page" => 100}),
                headers
              ) do
@@ -572,7 +574,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
       {:ok, actor}
     else
       with {:ok, membership} <-
-             get("/user/memberships/orgs/#{segment(account_ref)}", headers),
+             get("/user/memberships/orgs/#{Support.segment(account_ref)}", headers),
            "active" <- membership["state"],
            %{} = organization <- membership["organization"] do
         {:ok, Map.put_new(organization, "type", "Organization")}
@@ -594,7 +596,10 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
       })
 
     with {:ok, entries} <-
-           get("/repos/#{segment(owner)}/#{segment(name)}/issues?#{query}", headers) do
+           get(
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/issues?#{query}",
+             headers
+           ) do
       issues = entries |> Enum.reject(&Map.has_key?(&1, "pull_request")) |> Enum.map(&issue/1)
       acc = Enum.reverse(issues, acc)
 
@@ -609,7 +614,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
 
     with {:ok, entries} <-
            get(
-             "/repos/#{segment(owner)}/#{segment(name)}/pulls/#{number}/reviews?#{query}",
+             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls/#{number}/reviews?#{query}",
              headers
            ) do
       acc = Enum.reverse(entries, acc)
@@ -631,13 +636,13 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
       external_id: to_string(issue["number"]),
       external_url: issue["html_url"],
       external_state: issue["state"],
-      external_updated_at: required_datetime(issue["updated_at"]),
+      external_updated_at: Support.required_datetime(issue["updated_at"]),
       external_assignee_name: get_in(issue, ["assignee", "login"]),
       labels: labels,
       title: issue["title"],
       description: issue["body"],
       status: if(issue["state"] == "closed", do: "done", else: "ready"),
-      priority: priority(labels),
+      priority: Support.priority(labels),
       provider_data: %{"number" => issue["number"]}
     }
   end
@@ -672,7 +677,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   defp actions_status([]), do: "unknown"
 
   defp actions_status(runs) do
-    runs = latest_by(runs, &(&1["workflow_id"] || &1["name"]))
+    runs = Support.latest_by(runs, &(&1["workflow_id"] || &1["name"]))
 
     cond do
       Enum.any?(runs, &(&1["status"] != "completed")) ->
@@ -698,25 +703,6 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  defp latest_by(entries, key_fun) do
-    entries
-    |> Enum.with_index()
-    |> Enum.uniq_by(fn {entry, index} -> key_fun.(entry) || {:entry, index} end)
-    |> Enum.map(&elem(&1, 0))
-  end
-
-  defp priority(labels) do
-    Enum.find_value(labels, "no_priority", fn label ->
-      case String.downcase(label) do
-        "priority:urgent" -> "urgent"
-        "priority:high" -> "high"
-        "priority:medium" -> "medium"
-        "priority:low" -> "low"
-        _ -> nil
-      end
-    end)
-  end
-
   defp workflow_run_metadata(nil), do: nil
 
   defp workflow_run_metadata(run) do
@@ -736,9 +722,9 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
          "github.com" <- String.downcase(uri.host || ""),
          nil <- uri.userinfo,
          true <- uri.port in [nil, 443],
-         {:ok, [url_owner, url_name, "pull", id]} <- decoded_path_segments(uri.path),
-         true <- same_reference?(url_owner, owner),
-         true <- same_reference?(url_name, name),
+         {:ok, [url_owner, url_name, "pull", id]} <- Support.decoded_path_segments(uri.path),
+         true <- Support.same_reference?(url_owner, owner),
+         true <- Support.same_reference?(url_name, name),
          {number, ""} when number > 0 <- Integer.parse(id) do
       {:ok, number}
     else
@@ -757,7 +743,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
         "per_page" => 1
       })
 
-    case get("/repos/#{segment(owner)}/#{segment(name)}/pulls?#{query}", headers) do
+    case get("/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls?#{query}", headers) do
       {:ok, pull_requests} when is_list(pull_requests) -> {:ok, List.first(pull_requests)}
       {:ok, _invalid} -> {:error, :invalid_provider_response}
       {:error, reason} -> {:error, reason}
@@ -767,7 +753,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   defp maybe_create_pull_request(nil, owner, name, source, target, title, body, headers) do
     case request(
            :post,
-           "/repos/#{segment(owner)}/#{segment(name)}/pulls",
+           "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls",
            headers,
            ChangeAction.put_body(
              %{"head" => source, "base" => target, "title" => title},
@@ -806,7 +792,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     with {:ok, number} <- pull_request_response_number(pull_request, owner, name) do
       request(
         :patch,
-        "/repos/#{segment(owner)}/#{segment(name)}/pulls/#{number}",
+        "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls/#{number}",
         headers,
         ChangeAction.put_body(%{"title" => title}, "body", body)
       )
@@ -863,7 +849,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
        %{
          pull_request_url: url,
          pull_request_state: pull_request_state(pull_request),
-         updated_at: now(),
+         updated_at: Support.now(),
          provider_data: provider_data
        }}
     else
@@ -900,17 +886,6 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  defp decoded_path_segments(path) when is_binary(path) do
-    {:ok, path |> String.split("/", trim: true) |> Enum.map(&URI.decode/1)}
-  rescue
-    ArgumentError -> {:error, :invalid_pull_request_url}
-  end
-
-  defp decoded_path_segments(_path), do: {:error, :invalid_pull_request_url}
-
-  defp same_reference?(left, right),
-    do: String.downcase(left) == String.downcase(right)
-
   defp repository_parts(value) when is_binary(value) do
     case String.split(value, "/") do
       [owner, name] ->
@@ -946,41 +921,13 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   end
 
   defp request(method, path, headers, body \\ nil) do
-    case http().request(method, @api <> path, headers, body) do
+    case Support.http().request(method, @api <> path, headers, body) do
       {:ok, status, _headers, body} when status in 200..299 -> {:ok, body}
       {:ok, status, _headers, body} -> {:error, {:http, status, body}}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp http,
-    do:
-      Application.get_env(
-        :symmetry_control,
-        :integration_http_client,
-        SymmetryControl.Integrations.HTTP
-      )
-
-  defp auth,
-    do:
-      Application.get_env(
-        :symmetry_control,
-        :integration_auth_provider,
-        SymmetryControl.Integrations.Auth
-      )
-
-  defp segment(value), do: URI.encode(value, &URI.char_unreserved?/1)
-
-  defp required_datetime(value) when is_binary(value) do
-    case DateTime.from_iso8601(value) do
-      {:ok, parsed, _offset} -> DateTime.truncate(parsed, :microsecond)
-      _ -> nil
-    end
-  end
-
-  defp required_datetime(_value), do: nil
-
   defp link(nil, _key), do: nil
   defp link(value, key), do: value[key]
-  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end
