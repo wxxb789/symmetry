@@ -254,6 +254,39 @@ func TestClientRejectsIncompleteSuccessResponses(t *testing.T) {
 	}
 }
 
+func TestMachineClientOversizedErrorResponseKeepsTypedFallback(t *testing.T) {
+	tests := []struct {
+		name           string
+		status         int
+		retryAfter     string
+		wantCode       ErrorCode
+		wantRetryAfter time.Duration
+	}{
+		{name: "conflict", status: http.StatusConflict, wantCode: StateConflict},
+		{name: "rate limited", status: http.StatusTooManyRequests, retryAfter: "4", wantCode: RateLimited, wantRetryAfter: 4 * time.Second},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := `{"error":{"code":"ownership_lost","message":"` + strings.Repeat("x", 256) + `"}}`
+			server := jsonServer(t, test.status, body, map[string]string{"Retry-After": test.retryAfter})
+			defer server.Close()
+			client, err := NewClient(server.URL+"/api", machineToken, server.Client(), WithMaxResponseBytes(32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.Claim(context.Background(), "run-1", protocol.ClaimRequest{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"})
+			var apiError *APIError
+			if !errors.As(err, &apiError) {
+				t.Fatalf("error = %T %v, want APIError", err, err)
+			}
+			if apiError.StatusCode != test.status || apiError.Code != test.wantCode || apiError.RetryAfter != test.wantRetryAfter {
+				t.Fatalf("APIError = %#v", apiError)
+			}
+		})
+	}
+}
+
 func TestRegisterSessionAcceptsRuntimesInAnyOrder(t *testing.T) {
 	server := jsonServer(t, http.StatusOK, `{"runtimes":[{"runtime_key":"secondary","runtime_id":"runtime-2","runtime_epoch":4},{"runtime_key":"primary","runtime_id":"runtime-1","runtime_epoch":3}],"heartbeat_interval_ms":5000,"poll_interval_ms":5000,"lease_duration_ms":30000,"websocket_path":"/socket"}`, nil)
 	defer server.Close()

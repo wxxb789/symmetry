@@ -1620,9 +1620,13 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
       diff printed), and 1 deliberate apply-stage conversion: the machine-client guard in
       `client_review_test.go`, whose relocation interface could only name the relocated `Task` and
       so could never match the machine client, restored as a name-level check by the accepted
-      simplify finding (its go/printer diff printed, mutation-checked red); 297 retained
-      declarations, 295 byte-identical, 2 deliberately retargeted in
-      `supervisory_validation_test.go` and `client_review_test.go`. The removal
+      simplify finding (its go/printer diff printed, mutation-checked red); 315 retained
+      declarations across the base↔head counterparts of all six `control`/`protocol` files
+      (`client_test.go` included in the comparison), 311 byte-identical, 4 deliberately changed —
+      the two mixed-table splits `TestClientProtocolRequests` and
+      `TestClientRejectsIncompleteSuccessResponses` (operator rows re-homed) and the two retargets
+      `TestNewClientRejectsInvalidConfiguration` and
+      `TestSupervisoryCommandRequestAndDispatchPayloads`. The removal
       evidence: `deadcode -test ./cmd/...` reports every moved symbol unreachable on all three
       targets (GOOS=windows amd64, GOOS=linux amd64, GOOS=linux arm64; 140, 250 and 158 findings
       at the baseline), and the tree-wide `git grep` leaves no reference outside `daemon/e2e/**`.

@@ -66,8 +66,12 @@ Decoders (`protocol/protocol.go`): `presentFields` (`:698`) stays — `Work`, `R
 
 `TaskSubmitRequest`, `TaskCommandRequest` and `TaskCommand` stay in `protocol`: `TaskCommand` is
 production-live through the acknowledgement path, and the two request types are the wire contract of
-the operator endpoints rather than the driver's private decode. (Contract clause 1's conditional:
-recorded here, not a deviation.)
+the operator endpoints rather than the driver's private decode. They became driver-only in
+production: under `daemon/internal`/`cmd` `TaskSubmitRequest` has no reference at all outside its
+definition, and `TaskCommandRequest` is named only by the retained
+`supervisory_validation_test.go` request-leg retarget (`:38`, a literal feeding the retained
+validator); the e2e operator driver and witnesses are the callers everywhere else. (Contract
+Change's conditional: recorded here and in the fix-stage report, not a deviation.)
 
 ## Deliverable shape
 
@@ -120,7 +124,8 @@ checked, not asserted.
 **Import alias.** The five e2e files import the new package as
 `operatorclient "github.com/wxxb789/symmetry/daemon/e2e/internal/operator"`. The default qualifier
 `operator` is unusable there: those files declare local variables named `operator`
-(`e2e/core_test.go:31`, `:1058`, …) and the same functions reference the moved `Task` type
+(`e2e/core_test.go:39`, `:96`, … at the baseline; `:40`, `:97`, … in the relocated tree) and the
+same functions reference the moved `Task` type
 (`waitForTask(…, func(task protocol.Task) bool {`), which a shadowed package name cannot resolve.
 Renaming those locals would be a witness-body change; the alias is not. The relocation therefore
 reads as a single, mechanical qualifier rewrite, which the witness-diff proof checks line by line.
@@ -200,9 +205,12 @@ this host.
    base, (iv) the removed set equalling the intended 20.
    As implemented, the qualifier normalization covers the `protocol.`, `contracts.` and `control.`
    token prefixes (the third is the machine `Client` type a moved test helper must qualify), prints
-   the go/printer diff of every declaration that is not byte-identical, and reports the deliberate
-   retargets of `supervisory_validation_test.go` and `client_review_test.go` as the only retained
-   declarations whose text changed.
+   the go/printer diff of every declaration that is not byte-identical, and compares every
+   base↔head counterpart of the six `control`/`protocol` files, `client_test.go` included: of 315
+   retained declarations, 311 are byte-identical and 4 deliberately changed — the two mixed-table
+   splits (`TestClientProtocolRequests`, `TestClientRejectsIncompleteSuccessResponses`) whose
+   operator rows re-home, and the two retargets (`TestNewClientRejectsInvalidConfiguration`,
+   `TestSupervisoryCommandRequestAndDispatchPayloads`).
 4. **Witness-diff proof**: for the five e2e files, every changed line must reproduce the baseline
    line after the qualifier mapping is applied; imports may be added/removed only as the relocation
    requires. Reported as per-file counts of qualifier-only changed lines and the exact import deltas.
@@ -250,3 +258,9 @@ byte-identical); the goal-envelope family (D5/W6-08); ack stages (W3); W2-13's `
   `SYMMETRY_E2E=1` against a Control release; local evidence is compilation (`GOOS=linux go vet`)
   plus the qualifier-only diff proof. The CI `integration` job remains the acceptance oracle for the
   relocated call sites, and the `--assert` names are preserved unchanged.
+- The retained `sameJSONNumber` (head `validation.go:383`) numeric branch is unreachable from
+  production after the move: both retained call sites (head `validation.go:270`, `:408`) compare a
+  payload against the literal `{}`, so no number-bearing value reaches the comparator, and the
+  numeric-precision cases moved with `sameCommandPayload` into the e2e package. The helper stays
+  because the contract's opus P0-1 requires the retained chain byte-identical; its semantics are
+  pinned only by the moved cases, not by a retained failing arm.

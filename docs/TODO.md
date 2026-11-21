@@ -39,8 +39,10 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       relocation (branch `refactor/rf-w2-12b-operator-client-relocation`, plan
       `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`): the operator client,
       its five methods, the seven operator-exclusive task validators of
-      `daemon/internal/control/validation.go` and the v1 task decoders now live byte-for-byte in
-      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers. The closed
+      `daemon/internal/control/validation.go` and the v1 task decoders now live in
+      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers; six
+      declarations of the relocated set differ from their originals only by the sanctioned package
+      qualifiers, the rest byte-identical. The closed
       part is recorded in `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates`.
       `control.WithMaxResponseBytes` stays in `control` by that slice's binding amendment (its
       callers are the machine-client and PI-bridge tests). This residual belongs to the
