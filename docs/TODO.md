@@ -1017,7 +1017,8 @@ instead of appended.
 ## Daemon platform: anchor socket-error sanitation keeps its outermost-only type switch
 
 - [ ] Follow-up error-sanitation slice: resolve the remaining `errorlint` finding in
-      `daemon/internal/platform/anchor_wire.go:346`
+      `daemon/internal/platform/anchor_wire.go:925` (`:346` at the merge base; the coordinate
+      moved with `rf-w3-02`'s request-shape table in the same file)
       (`sanitizeLinuxOwnerAnchorSocketError`'s `switch typed := err.(type)`). The slice
       `rf-w2-11-typed-errors` fixed the other owned-file finding
       (`daemon/internal/platform/anchor_server.go:305`, the direct `AcceptUnix` error) by
@@ -1032,7 +1033,7 @@ instead of appended.
       --enable=errorlint ./internal/platform/...` (v2.15.0) on 2026-11-21: 8 findings at the
       merge base `c87c9918` (this one and `anchor_server.go:305:27`, which the slice then
       fixed, plus six outside the owned set), and 7 after the fix, of which exactly this one is
-      in the owned files (`:346:18`). The follow-up should either restructure the
+      in the owned files (`:925:18`). The follow-up should either restructure the
       sanitizer so the "outermost only" rule is explicit in a form errorlint accepts and get the
       count to zero, or record the accepted shape in the plan that owns error sanitation.
 
@@ -1053,7 +1054,8 @@ instead of appended.
       (`namespace identity differs`), `helper_v2_protocol.go:361`
       (`PID or creation identity differs`); the parent-class synonyms are
       `anchor_gate.go:380`, `:417`, `anchor_run.go:278`, `helper_v2_run.go:122`, and
-      `helper_v2_recovery.go:830`. The PR #160 review's suggested fix keeps every byte: one
+      `helper_v2_recovery.go:878` (`:830` at the merge base; the coordinate moved with
+      `rf-w3-02`'s call-site codemod in the same file). The PR #160 review's suggested fix keeps every byte: one
       exported class sentinel per semantic class, backed by an unexported
       `type linuxOwnerMismatch struct { text string; class error }` whose `Error()` returns
       `text` and whose `Is(target)` reports `target == class`, so each phrasing keeps its exact
