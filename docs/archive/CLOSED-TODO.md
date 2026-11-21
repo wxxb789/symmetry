@@ -94,6 +94,10 @@ The closed witness stop-receipt barrier stall entry that carries its own
 occurrence` section at the end of this file was moved on 2026-11-21 from branch
 `fix/witness-owner-loss-latch`.
 
+The CI Go toolchain closure appended to its own
+`## CI Go toolchain: bump past the stdlib advisories` section at the end of this file was moved on
+2026-11-22 from branch `refactor/ci-toolchain-bump`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -4376,3 +4380,44 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       seal. Plan and gate evidence:
       `docs/plans/2026-11-21-witness-owner-loss-latch-plan.md`. The 45 s harness wait and the 30 s
       daemon bound were not changed.
+
+## CI Go toolchain: bump past the stdlib advisories
+
+- [ ] Bump the CI-pinned Go toolchain past the 12 standard-library vulnerabilities the advisory
+      govulncheck step reports. `go-version: 1.27.0` is pinned in six places in
+      `.github/workflows/ci.yml` and once in `.github/workflows/linux-native-v2-acceptance.yml`;
+      hosted CI run 44862556617's `daemon` job shows `Go: go1.27.0`,
+      `govulncheck_exit_status=3`, `govulncheck_vulnerabilities=12`, every finding fixed in
+      go1.27.2-go1.27.4 (for example GO-2026-6859 `net/http@go1.27.4`, GO-2026-6809
+      `crypto/x509@go1.27.3`), while the same command on a go1.27.4 host reports none.
+      Found 2026-11-21 by refactor slice W1-01 (branch `refactor/rf-w1-01-ci-quality-plane`,
+      plan `docs/plans/2026-11-21-ci-quality-plane-plan.md`), which records the 12 as the
+      advisory baseline and leaves the pin alone: changing it alters pre-existing steps, which
+      the slice's contract (clause 3) rules out. Fix direction: raise `go-version` in every
+      workflow that sets it, re-run the advisory step and record the patched-toolchain count.
+      Owner area: CI tooling.
+
+      **Closed (2026-11-22, branch `refactor/ci-toolchain-bump`, fix commit `385070f1`, plan
+      `docs/plans/2026-11-22-ci-toolchain-bump-plan.md`):** `go-version` is `1.27.4` at all eight
+      sites - seven in `.github/workflows/ci.yml` (`:208`, `:912`, `:1060`, `:1504`, `:1933`,
+      `:2132` and the quoted `'1.27.4'` at `:2413`) and the quoted one at
+      `.github/workflows/linux-native-v2-acceptance.yml:67` - and the same two workflows took
+      `actions/checkout` 4 to 7 (16 sites), `actions/setup-go` 5 to 7 (8 sites) and
+      `actions/download-artifact` 4 to 8 (5 sites). No step, input, `if:` or `needs:` changed: each
+      intervening major's documented breaking change is analysed against this repository's usage in
+      the plan (download-artifact v5's by-ID path fix and v8's `digest-mismatch: error` default and
+      non-zipped-download handling; setup-go v6's `GOTOOLCHAIN=local` toolchain handling and
+      go.mod-based default cache key; checkout v6's separate credentials file and v7's fork-PR
+      refusal for `pull_request_target`/`workflow_run`), and no site uses the inputs, ids or triggers
+      those changes act on. The entry's "six places in `.github/workflows/ci.yml`" was one behind the
+      tree: the re-derived count at the baseline `12de9428` is seven, the `compose` job's site being
+      the seventh. Measured from `daemon/` with the `daemon` job's own scanner and counting
+      expression (`govulncheck` v1.10.0, `vuln.go.dev` snapshot 2026-11-11, `GOOS=linux
+      GOARCH=amd64`, `./...`, `grep -c '^Vulnerability #'`): at go1.27.0 exit 3 with
+      `govulncheck_vulnerabilities=12`, reproducing the hosted baseline of run 44862556617's `daemon`
+      job (GO-2026-6859 `net/http` fixed in go1.27.4, GO-2026-6809 `crypto/x509` fixed in go1.27.3,
+      the other ten fixed in go1.27.2); at go1.27.4 exit 0 with `govulncheck_vulnerabilities=0`
+      (`No vulnerabilities found.`). Hosted confirmation: PR #218 run `44959141686`, `daemon` job
+      logged `Go: go1.27.4`, `No vulnerabilities found.` and `govulncheck_vulnerabilities=0`.
+      Dependabot #168 (`actions/setup-go` 5 to 7) and #171 (`actions/checkout` 4 to 7) are
+      superseded by this change and are closed when it merges.
