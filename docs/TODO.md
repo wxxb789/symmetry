@@ -999,22 +999,6 @@ instead of appended.
       first-`Close` window (`:924`). Revalidate against a recovered failure before changing the
       window or the assertion.
 
-## CI Go toolchain: bump past the stdlib advisories
-
-- [ ] Bump the CI-pinned Go toolchain past the 12 standard-library vulnerabilities the advisory
-      govulncheck step reports. `go-version: 1.27.0` is pinned in six places in
-      `.github/workflows/ci.yml` and once in `.github/workflows/linux-native-v2-acceptance.yml`;
-      hosted CI run 44862556617's `daemon` job shows `Go: go1.27.0`,
-      `govulncheck_exit_status=3`, `govulncheck_vulnerabilities=12`, every finding fixed in
-      go1.27.2-go1.27.4 (for example GO-2026-6859 `net/http@go1.27.4`, GO-2026-6809
-      `crypto/x509@go1.27.3`), while the same command on a go1.27.4 host reports none.
-      Found 2026-11-21 by refactor slice W1-01 (branch `refactor/rf-w1-01-ci-quality-plane`,
-      plan `docs/plans/2026-11-21-ci-quality-plane-plan.md`), which records the 12 as the
-      advisory baseline and leaves the pin alone: changing it alters pre-existing steps, which
-      the slice's contract (clause 3) rules out. Fix direction: raise `go-version` in every
-      workflow that sets it, re-run the advisory step and record the patched-toolchain count.
-      Owner area: CI tooling.
-
 ## Daemon platform: anchor socket-error sanitation keeps its outermost-only type switch
 
 - [ ] Follow-up error-sanitation slice: resolve the remaining `errorlint` finding in

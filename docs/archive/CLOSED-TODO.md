@@ -89,6 +89,10 @@ The closed witness stop-receipt barrier stall entry that carries its own
 occurrence` section at the end of this file was moved on 2026-11-21 from branch
 `fix/witness-owner-loss-latch`.
 
+The CI Go toolchain closure appended to its own
+`## CI Go toolchain: bump past the stdlib advisories` section at the end of this file was moved on
+2026-11-22 from branch `refactor/ci-toolchain-bump`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -4328,3 +4332,32 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       seal. Plan and gate evidence:
       `docs/plans/2026-11-21-witness-owner-loss-latch-plan.md`. The 45 s harness wait and the 30 s
       daemon bound were not changed.
+
+## CI Go toolchain: bump past the stdlib advisories
+
+- [ ] Bump the CI-pinned Go toolchain past the 12 standard-library vulnerabilities the advisory
+      govulncheck step reports. Closed 2026-11-22 by slice `ci-toolchain-bump` (branch
+      `refactor/ci-toolchain-bump`, plan `docs/plans/2026-11-22-ci-toolchain-bump-plan.md`):
+      `go-version` is `1.27.4` at all eight sites - seven in `.github/workflows/ci.yml` (`:208`,
+      `:912`, `:1060`, `:1504`, `:1933`, `:2132` and the quoted `'1.27.4'` at `:2413`) and the quoted
+      one at `.github/workflows/linux-native-v2-acceptance.yml:67` - and the same two workflows took
+      `actions/checkout` 4 to 7 (16 sites), `actions/setup-go` 5 to 7 (8 sites) and
+      `actions/download-artifact` 4 to 8 (5 sites). No step, input, `if:` or `needs:` changed: each
+      intervening major's documented breaking change is analysed against this repository's usage in
+      the plan (download-artifact v5's by-ID path fix and v8's `digest-mismatch: error` default and
+      non-zipped-download handling; setup-go v6's `GOTOOLCHAIN=local` toolchain handling and
+      go.mod-based default cache key; checkout v6's separate credentials file and v7's fork-PR
+      refusal for `pull_request_target`/`workflow_run`), and no site uses the inputs, ids or triggers
+      those changes act on. The entry's "six places in `.github/workflows/ci.yml`" was one behind the
+      tree: the re-derived count at the baseline `12de9428` is seven, the `compose` job's site being
+      the seventh. Measured from `daemon/` with the `daemon` job's own scanner and counting
+      expression (`govulncheck` v1.10.0, `vuln.go.dev` snapshot 2026-11-11, `GOOS=linux
+      GOARCH=amd64`, `./...`, `grep -c '^Vulnerability #'`): at go1.27.0 exit 3 with
+      `govulncheck_vulnerabilities=12`, reproducing the hosted baseline of run 44862556617's `daemon`
+      job (GO-2026-6859 `net/http` fixed in go1.27.4, GO-2026-6809 `crypto/x509` fixed in go1.27.3,
+      the other ten fixed in go1.27.2); at go1.27.4 exit 0 with `govulncheck_vulnerabilities=0`
+      (`No vulnerabilities found.`). The hosted end-to-end confirmation is the PR's own CI run: its
+      `daemon` job must log `Go: go1.27.4` and `govulncheck_vulnerabilities=0` (run id
+      `<PR run id -- filled from that run>`); if the hosted count is not 0 this entry reopens and
+      records the remaining advisory IDs instead. Dependabot #168 (`actions/setup-go` 5 to 7) and
+      #171 (`actions/checkout` 4 to 7) are superseded by this change and are closed as such.
