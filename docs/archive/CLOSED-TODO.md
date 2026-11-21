@@ -73,6 +73,9 @@ section below was moved on 2026-11-21 from branch `fix/stop-descendant-recheck`.
 The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
 that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 
+The revalidated dead surfaces appended to the second `## Dead-code candidates` section below were
+moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -1526,6 +1529,80 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
   guidance" (failed before the removal with the guidance suffix rendered, passes after; before/after
   runs in `answer.md`).
 
+- [ ] Revalidate and remove two pre-existing dead surfaces found while applying the
+      provider-action-chain-removal simplify findings (2026-11-21).
+      (a) `Integrations.execute_accepted_resource_sync/2` and its catch-all
+      (`control/lib/symmetry_control/integrations.ex:554`, `:579`) have zero callers tree-wide:
+      `git grep -nw "execute_accepted_resource_sync" -- control/` matches only those two definition
+      clauses (the unanchored form also matches the `_unprojected` sibling's name), while the live
+      sibling `execute_accepted_resource_sync_unprojected/2` is called at
+      `control/lib/symmetry_control/integrations/provider_access.ex:1569`, `:1808`.
+      `record_provider_action_failure/2` (`integrations.ex:1111`) is reachable only from its two call
+      sites `:572`, `:575` inside this function and is dead with it; removing (a) must remove it too
+      (`compile --warnings-as-errors` will otherwise fail).
+      (b) The `{:provider_action_failure, code, outcome}` 3-tuple clause of `provider_failure/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:2311`) has no producer: its only
+      literal builder was the non-nil-outcome clause of `provider_action_failure_result/2`
+      (`integrations.ex:1134-1135` before the apply stage removed it), fed by the then-existing
+      `outcome` argument of `record_provider_action_failure/3`; it was unreachable once the
+      callerless projected chain was deleted. The surviving builders emit only the 4-tuple form:
+      the sole literal builder is `unprojected_provider_action_failure/1` (`integrations.ex:369`,
+      pass-through at `:364-365`), while `:514` is the clause head of
+      `project_provider_action_failure/2` matching the 4-tuple and `provider_access.ex:2315` the
+      4-tuple clause head of `provider_failure/1`.
+      Do not delete either surface here; revalidate and remove in a separate maintenance change.
+
+      **Closed (2026-11-21, branch `refactor/rf-w1-14-core-dead-surface`): dead surface; both
+      surfaces (a) and (b) are deleted.** The revalidation this entry asked for ran at the
+      implementation bytes (`a3039f0`, the branch's worktree, clean at start) before anything was
+      deleted, with both strategies. Strategy 1, whole-tree text scan with docs excluded so this
+      entry's own citation cannot manufacture a hit: the word-boundary scan for
+      `execute_accepted_resource_sync` matches only the dead function's two definition clauses
+      (the unanchored form's other hits are the live `_unprojected` sibling's name and its two call
+      sites at `provider_access.ex:1569`, `:1808`); `record_provider_action_failure` matches the two
+      call sites inside the dead function and its `defp`; the word-boundary scan for
+      `validate_adapter` matches only the deleted spec and def; and no `apply(Integrations, …)`,
+      `&Integrations.…` capture or `function_exported?(Integrations, …)` names any of the surfaces.
+      Strategy 2, revision-scoped: `git grep -nw "execute_accepted_resource_sync" a3039f0 -- control/`
+      returns the two definition clauses; `git grep -n "validate_adapter\b" a3039f0 -- .` returns the
+      two alias lines; `git grep -nE "\{:provider_action_failure, [^,[:space:]]+,
+      [^,[:space:]]+\}" a3039f0 -- .` returns only the 3-tuple clause head and this entry's prose —
+      every in-tree builder of the tuple (`unprojected_provider_action_failure/1` at
+      `integrations.ex:369` with its pass-through clause at `:364`, the
+      `project_provider_action_failure/2` clause head at `:514`, the 4-tuple clause head at
+      `provider_access.ex:2315`, and the two test literals at `integrations_test.exs:1008`, `:1751`)
+      emits the 4-tuple form. Deleted: `execute_accepted_resource_sync/2` with its catch-all,
+      `defp record_provider_action_failure/2` (its only two callers sat inside the deleted
+      function), the `validate_adapter/2` alias with its `@spec`, and the 3-tuple clause of
+      `provider_failure/1`. Every helper the dead function shared with the live path keeps a caller
+      (`provider_module/1`, `provider_call/1`, `delivery_updates/4`, `delivery_resource/2`,
+      `persist_sync/4`, `accepted_sync_result/3`, `provider_action_error/1` through
+      `mutation_failure_outcome/1`, `record_resource_failure/2,3`). No test file was edited, added or
+      deleted (`git diff --stat a3039f0..f479247 -- control/` reports only the three source files:
+      55 deletions; the unscoped `git diff --stat a3039f0..f479247` adds this increment's three docs
+      and no test path); the compiler is
+      the mechanical backstop, shown red in a real mutation run — removing the two call sites while
+      keeping the `defp` fails `MIX_ENV=test mix compile --warnings-as-errors` with exit 1 and
+      `warning: function record_provider_action_failure/2 is unused` (`integrations.ex:1084`), the
+      restored tree compiles clean. The contract's named `mix xref unreachable` gate is inert on the
+      pinned toolchain (Elixir 1.20.4, the version CI installs): it prints "The unreachable check has
+      been moved to the compiler and has no effect now" and exits 0
+      (`elixir-1.20.4/lib/mix/lib/mix/tasks/xref.ex:479-483`), so the "26 lines" figure that gate
+      recorded is not reproducible by that command; the compile-level substitute (a scratch tracer
+      compiling every `control/lib/**/*.ex` source and listing exports with zero call sites) shows
+      the F11 public surfaces leaving the zero-call list and the app-wide count dropping 517 → 514.
+      After the deletion `mix xref callers` exits 0 for each owned module
+      (`SymmetryControl.Integrations`, `SymmetryControl.Goals.ContractValidation`,
+      `SymmetryControl.Integrations.ProviderAccess`); the retained `Integrations` before/after
+      outputs are byte-identical, the other two modules have only an after-state log. Recorded gates:
+      `mix format --check-formatted` exit 0 before and after;
+      `MIX_ENV=test mix compile --warnings-as-errors` exit 0 before and after plus the red mutation above;
+      `mix test test/symmetry_control/integrations*` 89 passed exit 0;
+      `SYMMETRY_PROVIDER_BROKER_E2E=1 mix test test/symmetry_control/provider_broker_e2e_test.exs`
+      4 passed exit 0; `git diff --check` exit 0. Residual: a future producer of the 3-tuple shape
+      would now classify through the fallback `{:provider_failure, :ambiguous}`; none exists
+      in-tree at this revision. The full suite and CI are the pull request's verification.
+
 ## Deferred review findings (0007f)
 
 - [ ] Revalidate the `/portal/connections?projectId=…` session return target.
@@ -1750,6 +1827,77 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       failed once in that full-suite run (the lock-order test's `assert_receive` for the sync
       backend's blocked sample unmet after 5 s, mailbox empty) and passed in the isolated six-file
       re-run; it is a load-sensitive case this increment does not touch.
+
+*Closed the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`;
+nothing of it stays there — option (b) of its own text landed, so the workspace-read residual and the
+whole class it names are closed (schema-side included, by the P2-1 amendment recorded below).*
+
+      Recorded on branch `refactor/rf-w1-13-served-doc-gates` (2026-11-21, baseline `a3039f0`). The
+      four portal reads that had schemas and manifest fixtures but no served-response gate are now
+      gated on their real controller responses: `workspace-read` in `portal_resources_test.exs`
+      (a project with a provider-synced repository, a `ci` resource, a work-tracking row, an
+      adapter-backed runtime registered with all five `RuntimeCapabilities` members, and one work item
+      bound to the repository and the CI resource, run, claimed and transitioned to
+      `waiting_for_input` with a decision packet), `work-detail-read` and `work-timeline-read` from one
+      scenario in `portal_workflow_test.exs` (a provider-synced repository and an imported tracker row
+      serve the shared row's `external` row and provider-sourced delivery values, then the imported
+      item's attempt plus one event, the running and waiting transitions and one input command, so the
+      timeline items cover all three sources), and `connections-read` on the existing connection-read
+      test in `portal_integrations_test.exs`. Every gate calls `validate_served_document!/2` on the
+      response and asserts the members the surfaces read. The workspace pin is this item's own 66
+      frontend-read members; the detail pin adds the shared `WorkspaceWorkItem` row body (its nested
+      consumed `delivery.*.provider`/`recorded_at` and `external.provider_owned_fields` included,
+      served and pinned by this scenario itself) plus the `WorkItemTimelineItem` names and the
+      waiting decision packet; `connections-read` has no optional-but-consumed member to pin — every
+      declared member of `Connection` (12), `ConnectionResource` (17) and `ConnectionProvider` (3)
+      sits in its definition's `required` array — so its bundle comparison refuses a serving rename
+      of every member the surface reads (the projection's undeclared extra `connection_id` on
+      resource rows is read by no connections surface and is pinned by the workspace gate's
+      `WorkspaceResource` row), and the gate validates the populated response its existing
+      assertions already exercise against the bundle. Each presence assertion walks the
+      frontend-read list plus the definition's declared members, read from the contract bundle at
+      test time (PR #145 review amendment P2-1, `declared_members/2`/`gate_members/3` in both gate
+      files), so a schema-side rename of a declared member fails the assertion until the served
+      projection follows, not only the serving-side rename the pins were built for. The bundle
+      comparison alone could not have closed this: all four schemas set
+      `additionalProperties: true` and none sets it `false` (22/34/8/4 occurrences). Option (a)
+      (dropping the schema tolerance) stays a product decision and is not taken here.
+      Recorded red, exact commands. With `PortalJSON.work_item/2` serving `goal_id_renamed` for
+      `goal_id`, `portal_resources_test.exs` fails *after* its bundle comparison passed —
+      `workspace-read work row stopped serving ["goal_id"]`, exit 2 — and
+      `portal_workflow_test.exs` fails the same way (`work-detail-read work row stopped serving
+      ["goal_id"]`, the served row's keys printing `goal_id_renamed`), exit 2: failing these gates
+      needs no required-member rename, an optional consumed one is enough. With
+      `Protocol.timeline_item/2` serving `recorded_at_renamed`, the detail gate fails inside the bundle
+      comparison at `#/raw/timeline/0-3` (exit 2), and the standalone page carries the same
+      `Protocol.timeline_page/2` items at `#/timeline/0-3`, so that recorded red is the embedded
+      copy's. The timeline read's own red is recorded on the route that serves it alone (single-test
+      run, `portal_workflow_test.exs:1289`): with `PortalApiController.work_item_timeline/2` serving
+      the page without `next_before`, `validate_served_document!("work-timeline-read", …)` fails —
+      `work-timeline-read real served document failed the contract bundle: [{"Required property
+      next_before was not present.", "#"}]`, exit 2, `Result: 0/1 passed, 17 excluded` — while the
+      detail comparison ahead of it passes. A `Protocol.timeline_page/2` rename cannot be the page's
+      own artifact: every page member (`items`, `next_before`, and the item names) is also embedded,
+      and required, in the detail document, whose validator runs first. With `PortalJSON.connection/2`
+      serving `auth_type_renamed`, the connections gate fails inside the bundle comparison
+      (`Required property auth_type was not present. #/connections/0`), exit 2. All mutations are
+      reverted; `git diff` over `control/lib` and `control/test/support` is empty. The three gated
+      files score `Result: 45 passed`, exit 0, with `mix format --check-formatted` and
+      `mix compile --warnings-as-errors` green.
+      P2-1 amendment evidence, exact commands (2026-11-21, PR #145 review). The gates now derive
+      each assertion's declared-member half from the bundle at test time, so the schema-side rename
+      fails them too. In a scratch copy of this worktree (working tree applied;
+      `WorkspaceWorkItem.properties.goal_id` renamed `goal_ref` in the `workspace-read`,
+      `work-detail-read` and `chat-read` schemas inside
+      `daemon/internal/contracts/schema_bundle.json`, checked `has_goal_id` false, `has_goal_ref`
+      true, `required` unchanged), the same single-test run that is green on the pristine bundle
+      fails both gates on the presence assertion, not the bundle comparison: `workspace-read work
+      row stopped serving ["goal_ref"]` and `work-detail-read work row stopped serving
+      ["goal_ref"]`, exit 2, `Result: 0/2 passed, 28 excluded`. The serving-side probe above is
+      unchanged by the amendment: with `PortalJSON.work_item/2` serving `goal_id_renamed` again,
+      both gates fail on the presence assertion — `stopped serving ["goal_id"]`, exit 2,
+      `Result: 0/2 passed, 28 excluded`. Both mutations are reverted; the pristine three gated
+      files stay green (`Result: 45 passed`, exit 0).
 
 ## Browser acceptance under host load
 

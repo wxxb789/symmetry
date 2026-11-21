@@ -2308,10 +2308,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp provider_failure({:provider_action_failure, code, outcome})
-       when is_atom(code) and outcome in [:definite, :ambiguous],
-       do: {code, outcome}
-
   defp provider_failure({:provider_action_failure, code, outcome, message})
        when is_atom(code) and outcome in [:definite, :ambiguous] and is_binary(message),
        do: {code, outcome}
