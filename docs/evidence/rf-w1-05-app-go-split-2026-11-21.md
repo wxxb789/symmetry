@@ -1,7 +1,7 @@
 # rf-w1-05 app.go split — evidence record (2026-11-21)
 
 Subject: `daemon/internal/app/app.go` at `a3039f0d17fc7c7905b63bdf247cac5bf339b213` (12,048 lines,
-475 top-level declarations) split move-only into eleven concern siblings in the same package.
+475 top-level declarations) split move-only into ten concern sibling files in the same package.
 Contract: `goal-rf-w1-05-app-go-split.md`. Gates below ran foreground in
 `Q:/repos/wt-w1-05-app-go-split/symmetry` on 2026-11-21; no `-race` run (no cgo on this Windows
 host — CI is the race oracle).
@@ -25,14 +25,18 @@ appsplit verify origfmt/app.go <12 target files> --moves moves.tsv
   byte-identical without normalization.
 - Per-declaration table: `docs/evidence/rf-w1-05-app-go-split-move-manifest-2026-11-21.txt`
   (485 lines: 475 declarations + header), columns
-  `kind, receiver, name, original line, target file, target line, text sha256 (8 hex)`.
+  `kind, receiver, name, original line, target file, target line, text sha256 (first 8 bytes, 16 hex)`;
+  the `name` column truncates 4 multi-name blocks with `...`, so rows key by (`kind`, target file,
+  target line), unique across all 475 rows.
 - Independent coverage check (declaration byte ranges against the original file):
   476 ranges (475 declarations + the import declaration), 0 overlapping bytes, 466,563 / 467,567
-  bytes covered; the 1,004 uncovered bytes are 474 blank-line separators plus the 47-byte file
-  header (`// Package app owns the daemon control loop.` + `package app`).
+  bytes covered; the 1,004 uncovered bytes are a 58-byte file header (`// Package app owns the
+  daemon control loop.` + `package app` + the blank line) plus 476 blank-line separators
+  (470 × 2 bytes + 6 × 1 byte = 946).
 - `git diff --color-moved=dimmed-zebra` shape for the subject file:
-  `daemon/internal/app/app.go | 2 insertions(+), 9811 deletions(-)` with the ten sibling files added
-  (9,995 insertions / 9,824 deletions across 15 changed paths including the docs and this record).
+  `daemon/internal/app/app.go | 2 insertions(+), 9811 deletions(-)` with the ten sibling files added.
+  Range totals (`git diff --numstat a3039f0..0560746`): 18 changed paths, 10,782 insertions,
+  9,824 deletions — the 11 Go files plus 7 docs/script paths, this record included.
 
 ## 2. Gate results (exact commands, exit codes)
 

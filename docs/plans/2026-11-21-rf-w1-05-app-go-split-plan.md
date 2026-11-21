@@ -9,7 +9,7 @@ blocks and 3 var blocks (475 top-level declarations).
 
 ## Deliverable shape
 
-One move-only refactor: every top-level declaration of `app.go` is relocated by concern into eleven
+One move-only refactor: every top-level declaration of `app.go` is relocated by concern into ten
 new same-package siblings; `app.go` keeps the core control loop. No declaration is edited,
 renamed, split or merged; the declaration set before and after is identical (475 entries), their
 extracted bytes are identical, and the import set at package scope is identical (35 imports).
@@ -111,9 +111,12 @@ Ambiguous placements and the decision taken (recorded as required; no silent gue
   move, not a content change; every other declaration compares byte-identical without any
   normalization. The strict per-declaration hash in `moves.tsv` is the whitespace-stripped SHA-256
   of the declaration text.
-- **Comments.** A declaration's own doc comment moves with it (34 declarations gained an attached
-  comment relative to a naive AST split; the reverse - a doc comment left behind - would have been
-  a silent loss). Comments inside a declaration stay inside it. The file-level package doc comment
+- **Comments.** A declaration's own doc comment moves with it: 91 of the 475 declarations carry a
+  parser-attached doc comment at the base revision and all 91 still do in the targets (doc-flag
+  comparison base -> targets, 0 mismatches; the byte-range extraction attaches exactly those 91
+  clusters), and the comment multiset is identical across base and targets (203 groups / 583
+  comment lines, 0 added, 0 removed; the reverse - a doc comment left behind - would have been a
+  silent loss). Comments inside a declaration stay inside it. The file-level package doc comment
   (`// Package app owns the daemon control loop.`) stays on `app.go`; siblings carry none, so
   `go doc` reports exactly one package comment.
 - **Imports.** Each sibling's import block is pruned from actual identifier usage and re-grouped

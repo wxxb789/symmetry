@@ -5,7 +5,7 @@
 # whitespace removed; gofmt re-aligns exactly one one-line func (systemTimer.Stop) because alignment
 # depends on neighbouring declarations, and whitespace carries no program meaning in Go.
 # Result: 475 of 475 declarations matched (mismatch=0, extra=0); import set 35 -> 35 identical.
-# Columns: kind, receiver, name, original line, target file, target line, text sha256 (first 8 hex, whitespace-stripped).
+# Columns: kind, receiver, name, original line, target file, target line, text sha256 (first 8 bytes = 16 hex, whitespace-stripped).
 # Per-file counts: app.go=94, cleanup_glue.go=22, commands.go=42, events.go=39, goal_admission.go=29, goal_delivery.go=30, lease.go=23, native_run.go=90, outbox.go=52, probe.go=19, recovery_glue.go=35
 kind	recv	name	orig_line	target_file	target_line	text_sha256_8
 const		(linuxStopReceiptBarrierWitnessEnv,linuxStopReceiptBarrier...)	67	cleanup_glue.go	17	3426dc5dfd830b0e
