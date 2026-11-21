@@ -3524,29 +3524,47 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       separator is an escape (`\repo` is a carriage return and `epo`), so a mixed spelling —
       valid JSON, because `\r` is a grammar escape, but one no correct producer writes — renders
       the path up to the escape and leaves the escape's own spelling behind. The r2 rule closes
-      that first version's fail-open side: a raw single-backslash spelling inside a valid literal
-      decodes its separators into control characters (`{"note":"see C:\repo\tmp"}`), so the
-      decoded value carries no location — and the Windows-shaped families (drive, UNC and
-      slash-UNC, root-relative, `file:` URL) then run over the literal's recorded bytes, where a
-      span the decoded reading reads no location in is that raw spelling and renders whole, the
-      escape and the evidence line behind a *raw* spelling included. The decoded reading stays
-      primary where it reads the location: the escape behind a forward-slash spelling
-      (`//server/share/run` + the newline escape + `FAILED`) stays outside the token, so the
-      round-1 render the entry closes is untouched, a `--root` token keeps its trailing
-      structure, a match overlapping a rendered token's own text is left alone (the raw look
-      cannot bind a token's text on a re-render), the scan runs only where a literal can hold
-      such a spelling (`_RAW_SPELLING_ESCAPE`, which also keeps a long non-matching backslash
-      run from being scanned twice), and POSIX spellings are not re-read — their separators
-      carry no backslash, so the decoded reading already reads them. Two smaller boundaries
-      stay: a mixed spelling whose decoded reading reads a location keeps that reading's render,
-      so a raw separator behind it can stay literal as a fragment, and a raw spelling of a
-      `--root` renders as the Windows family's hashed token rather than `<disposable-root>`
+      that first version's fail-open side, extended by round 3's union decision: a raw
+      single-backslash spelling inside a valid literal decodes its separators into control
+      characters (`{"note":"see C:\repo\tmp"}`), so the decoded value carries no location — and
+      the Windows-shaped families (drive, UNC and slash-UNC, root-relative, `file:` URL) then
+      run over the literal's recorded bytes, where **every match contributes the parts of its
+      span that no decoded claim and no rendered token's own text covers**, and those parts are
+      unioned with the claims (overlapping or touching spans become one token) — **a raw match
+      is never discarded because a decoded span overlaps it**, which is what the review's P1
+      table found the r2 filter doing: `{"p":"C:/Users` + the newline escape + `repo"}` left
+      its segment names literal after one render and `--check --root-only` refused the tool's
+      own render (exit 1). A match with no escaped backslash pair is a raw spelling through all
+      its parts, so that shape renders whole (`C:/Users` + the newline escape + `op` + the
+      carriage-return escape + `repo`), and the escape and text behind a forward-slash spelling
+      are absorbed with it (`//server/share/run` + the newline escape + `FAILED`) —
+      over-redaction, the fail-closed direction, the consequence round 3 accepted. A match
+      carrying an escaped backslash pair is a producer mix, and the decoded reading's render
+      governs its one-escape tails: its uncovered parts with a backslash beyond their opening
+      escape character render whole (`C:` + the escaped pair + `Users` + the newline escape +
+      `op` + the carriage-return escape + `repo` renders whole), while the entry's own properly
+      escaped reproduction keeps the escape and `FAILED` outside the token and the mixed
+      spelling `C:\a\repo` keeps `\repo` outside. A raw match whose span carries no backslash
+      is left to the decoded reading (the raw look exists for the single-backslash spellings; a
+      recorded DEL byte, which only the raw tail admits, is the discriminating shape). The scan
+      no longer uses `finditer` — a location whose tail swallowed the next location's first
+      bytes was invisible to one render and found by the next, the non-idempotence the review's
+      fuzz counted — and steps one byte past each match's start, and `_align_span` snaps every
+      replacement's start to the backslash run it splits, so a token behind an odd run cannot
+      spell `\p` and the rendered literal still parses (the review's fuzz found 14 invalid
+      renders in the pre-round-3 bytes and none at the delivered bytes). `_RAW_SPELLING_ESCAPE`
+      gates the scan per literal — an odd backslash run whose last backslash begins one of the
+      escapes `n`, `r`, `t`, `f`, `b`, `u` (round 3 fixed the predicate, which saw only runs of
+      one) — and also keeps a long non-matching backslash run from being scanned twice; POSIX
+      spellings are not re-read — their separators carry no backslash, so the decoded reading
+      already reads them. A `--root` token keeps its trailing structure, and a raw spelling of
+      a `--root` renders as the Windows family's hashed token rather than `<disposable-root>`
       (the root's bytes are removed either way). All of them are pinned in the JSON module so a
       later narrowing is a deliberate decision.
       Pins live in the split suites — `scripts/ci/test-model-routing-record-sanitize.py` (55
       cases, the raw reading's pattern and CLI battery) and its sibling
-      `scripts/ci/test-model-routing-record-sanitize-json.py` (14 cases, the JSON reading; the
-      split keeps every file under the 1000-line decomposition threshold, the JSON module loads
+      `scripts/ci/test-model-routing-record-sanitize-json.py` (17 cases, the JSON reading; the
+      split keeps both tester files under the 1000-line decomposition threshold, the JSON module loads
       the raw module by path for the shared fixtures, and both run in the same `ci.yml` step and
       README gate list). JSON module: "a JSON escape after a Windows path survives the render" —
       the entry's own Windows input renders `path-sha256:26e7b5b4…` (the digest the entry records
@@ -3554,8 +3572,10 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       JSON escape after a POSIX path survives the render" (both spellings of the newline, the
       token binding the recorded path alone); "a JSON escape after every Windows family survives
       the render" (the UNC spelling with its escaped leader, the root-relative spelling, the
-      slash-UNC authority, the `file:` URL and its backslash spelling, and the escaped-backslash
-      shape `...\\n`, which decodes to two literal backslashes and stays one path); "an escaped
+      `file:` URL's backslash spelling and the escaped-backslash shape `...\\n`, which decodes to
+      two literal backslashes and stays one path, all keeping the escape outside the token, plus
+      the forward-slash slash-UNC authority and `file:` URL spellings whose whole spans the
+      union absorbs, round 3's accepted over-redaction); "an escaped
       space, NBSP and apostrophe stay inside the location" (the four truncated-render shapes and
       a space-continued NBSP location, exact one-token renders); "an escaped quote and surrogate
       pair keep the mapping" (the escaped-quote shapes, the odd-escaped-quote-count literal and
@@ -3573,14 +3593,29 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       `b` render as one whole-span token in both scopes, and the escape-followed shape renders
       the escape and the line with them); "a host path after a JSON escape is caught" (the
       round-5 reproduction over the seven host roots and six escape spellings, the four Windows
-      families and the general POSIX family behind an escape, and the boundary negatives); "the
-      fail-closed property holds for every repro shape" (twenty-seven shapes — the four truncated
+      families and the general POSIX family behind an escape, and the boundary negatives); "a
+      host path in a JSON key is rendered" (round 3's P3 pin: the N11 mutation, which left a
+      literal whose next non-space character is `:` untouched, stayed green before it — a key
+      renders like a value in a whole document and in each JSONL line); "a raw match without a
+      backslash is left to the decoded reading" (round 3's P3 pin for the raw look's
+      no-backslash filter, which the review's N13 mutation removed without a failure: a
+      Windows-shaped match carrying no backslash is bytes the decoded reading reads as written,
+      and the recorded DEL byte, which only the raw tail admits, shows the decoded reading's
+      boundary decision governing); "a wide record is rebuilt once per pass not once per match"
+      (round 3's P2 pin: the number of `_rebuild_with_groups` calls for 1,000 and 8,000 matches
+      is the same in a literal and in prose, so the count cannot grow with the matches); "the
+      fail-closed property holds for every repro shape" (thirty-three shapes — the four truncated
       renders, the space fail-open shapes, the token-prefix shape, the stray-quote document, the
       root-metacharacter root, the entry's input, the round-5 POSIX path, a surrogate pair, a
       doubled backslash, and the twelve r2 raw-Windows shapes: the five raw drive spellings, the
       escape-followed one, both UNC dialects with a raw separator, the raw root-relative and
-      `file:` URL spellings, the forward-slash spelling behind which the escape stays outside
-      the token, and a mixed literal carrying one escaped and one raw location — each: the input
+      `file:` URL spellings, the forward-slash spelling, and a mixed literal carrying one
+      escaped and one raw location — plus round 3's six: the forward-slash prefix continued by
+      raw separators (`{"p":"C:/Users` + the newline escape + `op` + the carriage-return escape
+      + `repo"}`, the review's own J1 shape), its JSONL variant, the escaped-pair prefix
+      continued by raw segments, the odd-run raw suffix (the guard fix's shape), the
+      key-carrying path, and the backslash-run split (the alignment shape, whose render is one
+      token and parses) — each: the input
       refuses `--check --root-only`, the render is a
       fixpoint, the rendered bytes pass the same check, and no decoded string carries a fragment
       of the input's host path); and the CLI cases "root-only check refuses a root after a JSON
@@ -3597,17 +3632,34 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
       every `FAIL:`/`ERROR:` case counted, subtest-keyed and method-level alike, and every number
       below measured in this round):
       - Pre-fix bytes (`git show 7a71383:scripts/ci/model-routing-record-sanitize.py`): the JSON
-        module fails 11 of its 14 cases — the Windows-escape, every-family, host-path-after-
-        escape, root-metacharacter, token-opacity, quote/surrogate, document-level,
-        decoded-control-spelling, property, CLI host-path-after-escape and CLI round-trip pins —
-        and the raw module fails its escape-arm pin, so no fix pin passes on pre-fix bytes. The
-        three cases the pre-fix bytes already satisfy: the POSIX-escape case (the POSIX side
-        never had the defect), the escaped space/NBSP/apostrophe case (the raw reading
-        over-absorbed there but did not truncate), and the round-4 CLI root-after-escape case
+        module fails 12 of its 17 cases — the Windows-escape, every-family, host-path-after-
+        escape, root-metacharacter, token-opacity, quote/surrogate, document-level, no-backslash
+        raw-match, property, CLI host-path-after-escape and CLI round-trip pins, and the
+        wide-record pin errors (no `_rebuild_with_groups` exists in those bytes) — and the raw
+        module fails its escape-arm pin, so every round-2 and round-3 fix pin is falsified by
+        the bytes it replaces or by the round-3 mutations below. The five cases the pre-fix
+        bytes already satisfy: the POSIX-escape case (the POSIX side never had the defect), the
+        escaped space/NBSP/apostrophe case (the raw reading over-absorbed there but did not
+        truncate), the raw single-backslash spelling pin (the pre-fix raw reading rendered
+        those shapes whole, which is why the r2 look was added to the decoded path), the key pin
+        (the pre-fix raw reading renders a key too), and the round-4 CLI root-after-escape case
         (its fix predates the merge base).
       - Head bytes (`bda373e`): the JSON module fails six cases (the truncated-render,
         token-opacity, root-metacharacter, decoded-control-spelling, property and CLI round-trip
         pins) — the leak shapes this round closes — and the raw module passes.
+      - Round-3 named mutations, measured against the delivered suites (each number is its
+        failing methods; the raw module passes on every one, because every mutation edits the
+        literal-only path): restoring the r2 drop-whole-match filter fails five JSON cases (the
+        entry's Windows digest, every-family, quote/surrogate, document-level and CLI
+        round-trip pins); dropping the no-backslash filter fails the no-backslash pin exactly;
+        the keys-skipped mutation (the review's N11) fails the key pin and the property corpus;
+        reverting `_RAW_SPELLING_ESCAPE` to the run-length-1 predicate fails the property corpus
+        (the odd-run shape); rendering pair-bearing parts without the further-separator filter
+        fails five cases (the entry's Windows digest, every-family, quote/surrogate,
+        document-level and CLI round-trip pins — the properly escaped shapes it absorbs);
+        taking the union over whole matches fails the same five; and dropping the span
+        alignment fails the property corpus (the split-run-boundary shape, whose rendered
+        literal stops parsing as JSON without it).
       - Named mutations: dropping the document gate (the reading is always prose) fails seven
         JSON cases; compiling the decoded reading with the raw byte classes fails three (the
         escaped space/NBSP/apostrophe case, the CLI round trip, the property); breaking the
@@ -3632,50 +3684,62 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
         round-4 CLI root-after-escape case under the mis-mapped four-hex-digit escape).
       Evidence (numbers measured on the fix worktree, not on a commit — the worktree carries the
       uncommitted change, so they are bound to the bytes: sanitizer
-      `sha256:ba6870f31f70cf42255191ee355863dd1461faa8535f9c00d8ed7a56b4e4ca92`, raw module
+      `sha256:75e01391863b428fbc0cd0bb1525d8c81931d48ab25355da826a67c97e6c0591`, raw module
       `sha256:ede54a19f5f03df684ac6479f7745ff4c16e6f05ac39160454e91e41a718c514`, JSON module
-      `sha256:b2113214fa8f4d108fb37659a896b7a9be43df9733c630692a5ad56c2b3acf08` (the raw module is
-      byte-identical to the r1 round's, which its hash shows; the r2 round changes the sanitizer
+      `sha256:1ca0ede2fd035b4d9f5eee7221ab1bfc7cad86422c1f14b7a76278d2917f70ab` (the raw module is
+      byte-identical to the r1 round's, which its hash shows; rounds 2 and 3 change the sanitizer
       and the JSON module only); a post-commit
       re-run and the slow evaluation suite are owed): `python
       scripts/ci/test-model-routing-record-sanitize.py` 55 tests OK and `python
-      scripts/ci/test-model-routing-record-sanitize-json.py` 14 tests OK (Windows, CPython
-      3.12.10); `python scripts/ci/test-check-record-cleanliness.py` 19 tests OK; `--check
+      scripts/ci/test-model-routing-record-sanitize-json.py` 17 tests OK (Windows, CPython
+      3.12.10; WSL Ubuntu-24.04 as the non-root user: 55 OK and 17 OK); `python
+      scripts/ci/test-check-record-cleanliness.py` 19 tests OK; `--check
       --root-only` over all 111 committed records under `docs/evaluations/` and
       `docs/evidence/`: 0 flagged (the earlier "2 records" figure was the pre-#134 measurement
       at `2a85cb8`; PR #134 rendered the two `0008b-go-bounded-regression-strong` records, so
       the merged tree has none) and no root-only render changes a record, so no committed record
       needed re-rendering or rebinding; in the default scope the flagged set is the same 51
-      records the head's tool flags (the documented argv/output boundary), and the r2 rule
-      changes no committed byte: every record's default-scope render is byte-identical to the
-      pre-r2 (r1) tool's render, including the two the r1 round rendered differently from the
-      pre-r1 tool — `docs/evaluations/model-routing/0008b-go-bounded-regression-mixed.json` and
-      its `.review.json`, where the decoded reading takes a quoted specimen's trailing
-      apostrophe into the token (the fail-closed direction) and where the r2 raw look finds
-      nothing to add.
-      `check-record-cleanliness.py` is a revision-range gate and cannot run before a commit, so
-      its equivalent check was run directly over this change's one changed record
-      (`docs/evaluations/model-routing/README.md`, `--check --root-only`) rc 0; the gate's own
-      suite passes above, and `check-record-cleanliness.py --base 7a71383 --head bda373e` rc 0
-      (1 changed record passes) for the merged base. `git diff --check` rc 0. Discrimination of
-      the r2 pins, measured against the pre-r2 bytes (the delivered HEAD's tool beside the r2
-      suites, a scratch copy): the JSON module fails 24 cases — the raw-spelling pin's five
-      drive shapes and the escape-followed shape in both scopes, eleven of the twelve r2
-      property-corpus shapes and the raw drive root — so every fix pin is falsified by the bytes
-      it replaces, while the two r2 guards (the forward-slash drive root's `<disposable-root>`
-      structure and the forward-slash spelling behind which the escape stays outside the token)
-      pass on both byte sets, as regression guards do. Residual cost,
-      measured rather than hidden: a `file:` URL followed by a long backslash run inside a
-      literal still grows superlinearly (about 4x per doubling; 0.55 s at 16,000 backslashes,
-      where the head's design took 5.9 s and the base tool under 3 ms), and the r2 raw look
-      does not add to it: on a `file:` plus 16,000-separator fixture the delivered bytes measure
-      1.04 s against the pre-r2 tool's 1.02 s (the scan is guarded, so the second pass over the
-      long run never runs), and
-      `test-model-routing-evaluation.py` was not run here (the conductor runs it; the whole
-      111-record sweep renders in about ten seconds in process). Reader-facing boundary:
+      records the head's tool flags (the documented argv/output boundary), and the round-3 rule
+      changes no committed byte: every record's render is byte-identical to the pre-round-3
+      head's in both scopes (and to the r1 tool's, including the two the r1 round rendered
+      differently from the pre-r1 tool — `docs/evaluations/model-routing/0008b-go-bounded-regression-mixed.json`
+      and its `.review.json`, where the decoded reading takes a quoted specimen's trailing
+      apostrophe into the token, the fail-closed direction), so no record needed re-rendering or
+      rebinding.
+      Performance, measured at the delivered bytes (minimum of five in-process runs, one module
+      per process, this host; fixtures named with each number): one JSON literal holding 2,000 /
+      8,000 space-separated escaped drive paths (`{"p":"C:` + doubled escapes + `Users` + …)
+      renders in 0.070 s / 0.282 s root-only (base 0.018 s / 0.071 s; the pre-round-3 head 4.3 s
+      at 2,000 and 115.5 s at 8,000, the quadratic this round's P2 fix removed); prose of 2,000 /
+      8,000 lines of `line <n> wrote C:` + single-backslash `temp` + single-backslash `run<n>`
+      renders in 0.055 s / 0.222 s (base 0.020 s / 0.084 s; pre-round-3 head 41.7 s at 8,000);
+      the vs-base constant factor on 1 MB of inert prose is 2.1x (0.236 s -> 0.504 s) and on a
+      1 MB inert literal 6.7x (0.121 s -> 0.813 s). The residual cost, measured rather than
+      hidden: a `file:` URL followed by a long backslash run inside a literal still grows
+      superlinearly (about 4x per doubling). On the named fixture
+      `{"out":"ok` + the newline escape + `file:` + N backslashes + `x"}`, root-only: base
+      0.001 s / 0.003 s at N = 4,000 / 16,000, the pre-r2 tool (`f261e21`) 0.035 s / 0.554 s, the
+      delivered bytes 0.169 s / 2.692 s (default scope at 16,000: 2.832 s; `--check --root-only`
+      through the CLI 3.19 s, exit 0). The r2 raw look is where the ~5x step from the pre-r2
+      tool comes from, and its guard is per literal — one escape-shaped backslash anywhere in a
+      literal lets the scan run over the whole of it — so the entry's own earlier "1.04 s
+      against 1.02 s" claim is superseded by these numbers (it held on a run with no
+      escape-shaped backslash before it, which the guard skips).
+      `test-model-routing-evaluation.py` was not run here (the conductor runs it; the 111-record
+      sweep is 21.8 s through the CLI). Reader-facing boundary:
       `docs/evaluations/model-routing/README.md`; the decision, the rejected readings, the edge
       cases and the evidence plan are in
       `docs/plans/2026-11-21-sanitizer-json-escape-plan.md`.
+      `check-record-cleanliness.py` is a revision-range gate and cannot run before a commit, so
+      its equivalent check was run directly over this change's changed record
+      (`docs/evaluations/model-routing/README.md`, `--check --root-only`) rc 0, its own suite
+      passes above, and the round-2 record's `check-record-cleanliness.py --base 7a71383 --head
+      bda373e` rc 0 (1 changed record passes) stays as the merged base's measurement;
+      `git diff --check` rc 0. Discrimination of the round-3 pins is the mutation block above
+      (the r2 round's 24-case pre-r2 measurement is superseded by the delivered suites' counts),
+      and the round-3 differential fuzz is the one the evidence plan names: no invalid render,
+      no non-idempotent render and no broken round trip at the delivered bytes, where the
+      pre-round-3 head produced 14 invalid renders in the same corpus.
 
 - [ ] Re-point the pre-#111 owner keys minted for recorded names that start with a colon. The
       current encoder escapes a recorded value that starts with `:` by prefixing one

@@ -14,6 +14,7 @@ import pathlib
 import subprocess
 import sys
 import unittest
+import unittest.mock
 
 # The sibling raw-reading module's name carries dashes, so it is loaded by path: the
 # shared fixtures (the loaded tool, the disposable root and `digest_of`) live there,
@@ -106,14 +107,12 @@ class JsonReadingTests(unittest.TestCase):
     def test_a_json_escape_after_every_windows_family_survives_the_render(self):
         # The same shape on the families the entry lists: the location is spelled with
         # its JSON-escaped separators and the escape follows the last segment. Every
-        # family stops at the decoded newline in both scopes, and the token binds
-        # exactly the location's recorded bytes - the UNC leader's escaped run
-        # included.
+        # properly escaped family stops at the decoded newline in both scopes, and the
+        # token binds exactly the location's recorded bytes - the UNC leader's escaped
+        # run included.
         cases = (
             _BS * 4 + "server" + _BS * 2 + "share" + _BS * 2 + "run",     # UNC, doubly escaped leader
             _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run",         # root-relative spelling
-            "//server/share/run",                                         # slash-UNC authority
-            "file:///C:/Users/op/run",                                    # file: URL
             "file:" + _BS * 2 + "server" + _BS * 2 + "share" + _BS * 2 + "run",
         )
         for path in cases:
@@ -123,6 +122,25 @@ class JsonReadingTests(unittest.TestCase):
                     rendered = MODULE.sanitize_text(text, [], root_only=root_only)
                     self.assertEqual(rendered, '{"p":"' + digest_of(path) + _BS + 'nFAILED"}')
                     self.assertEqual(json.loads(rendered)["p"], digest_of(path) + "\nFAILED")
+                    self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+        # A forward-slash spelling carries no escaped pair, so the raw look union
+        # absorbs its whole span: the newline escape and the word behind it go into
+        # the token with the location. That is round 3's accepted over-redaction - the
+        # fail-closed direction of the union rule - and the visible opposite of the
+        # properly escaped cases above, which keep the escape and `FAILED` outside.
+        # The guard pin that used to require the escape outside the token for the
+        # slash-UNC shape is this test's absorbed case now.
+        absorbed = (
+            "//server/share/run",              # slash-UNC authority
+            "file:///C:/Users/op/run",         # file: URL
+        )
+        for path in absorbed:
+            whole = path + _BS + "nFAILED"
+            for root_only in (True, False):
+                with self.subTest(path=path, shape="absorbed", root_only=root_only):
+                    rendered = MODULE.sanitize_text('{"p":"' + whole + '"}', [], root_only=root_only)
+                    self.assertEqual(rendered, '{"p":"' + digest_of(whole) + '"}')
+                    self.assertEqual(json.loads(rendered)["p"], digest_of(whole))
                     self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
         # A JSON-escaped backslash stays a path byte: the record's `\\\\` decodes to two
         # literal backslashes, so the segment behind the pair is part of the location
@@ -218,9 +236,13 @@ class JsonReadingTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(odd_rendered)["out"],
                          'see "' + digest_of(ESCAPED_DRIVE_RUN) + "\nFAILED")
-        # A surrogate pair is one decoded character covering its twelve recorded
-        # bytes, so a location that contains it still renders as one token binding the
-        # whole recorded spelling.
+        # A surrogate pair stays its two decoded units, each covering its own six
+        # recorded bytes: round 3 deleted the pairing step, because the pair's
+        # character and either lone unit are characters no byte class refuses and no
+        # pattern atom reads, so the pairing changed no match, no mapping and no token
+        # (the differential fuzz over generated documents carrying pairs, lone halves
+        # and mixed spellings found no output difference). A location that contains
+        # the spelling still renders as one token binding the whole recorded spelling.
         pair_path = "C:" + _BS * 2 + "Users" + _BS * 2 + "x" + _BS + "ud83d" + _BS + "ude00" \
             + _BS * 2 + "run"
         pair_rendered = MODULE.sanitize_text('{"p":"' + pair_path + '"}', [], root_only=True)
@@ -284,16 +306,20 @@ class JsonReadingTests(unittest.TestCase):
         # A later matcher must not touch bytes an earlier replacement wrote: the pre-fix
         # render took `//r` + the escape spelling up to the just-written token's own
         # `path-sha256` text into a second digest and left the first token as an
-        # orphaned `:<hex>` fragment. Every digest here binds recorded bytes alone, and
-        # the span is also where the r2 raw look could bind the token's own text on the
-        # next render (`//r\b` reads as a slash-UNC whose tail is the token): the token
-        # guard keeps the second render the same bytes as the first.
+        # orphaned `:<hex>` fragment. Every digest here binds recorded bytes alone. The
+        # raw look cannot bind a token's own text either, on this render or the next:
+        # it renders only the parts of a match no rendered token's text covers, so the
+        # `//r\b` slash-UNC prefix beside the claim is one union span with it (round 3's
+        # rule: a raw match is never dropped for overlapping a claim) and a re-render
+        # changes nothing.
         text = '{"out":"' + _BS + 'u0008//r' + _BS + 'bfile:C:/"}'
-        expected = '{"out":"' + _BS + 'u0008//r' + _BS + 'b' + digest_of("file:C:/") + '"}'
+        whole = "//r" + _BS + "bfile:C:/"
+        expected = '{"out":"' + _BS + 'u0008' + digest_of(whole) + '"}'
         for root_only in (True, False):
             with self.subTest(root_only=root_only):
                 rendered = MODULE.sanitize_text(text, [], root_only=root_only)
                 self.assertEqual(rendered, expected)
+                self.assertEqual(json.loads(rendered)["out"], "\b" + digest_of(whole))
                 self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
         # The prose shape of the same defect: the escape arm's added match (`/child`
         # behind a recorded `\n`) used to be swallowed by the root-relative matcher's
@@ -427,6 +453,45 @@ class JsonReadingTests(unittest.TestCase):
                     MODULE.sanitize_text(text, ["/srv/store"], root_only=True), text
                 )
 
+    def test_a_host_path_in_a_json_key_is_rendered(self):
+        # P3 (round 3): the reading is per literal, keys included. The review's
+        # mutation N11 - leave a literal untouched when the next non-space character is
+        # `:` - kept both suites green, so nothing pinned a key. A key renders like a
+        # value, in a whole-document record and in each JSONL line, and the rendered
+        # bytes still parse.
+        paths = (ESCAPED_DRIVE_RUN, HOST_RUNNER_WORK)
+        cases = (
+            ("document", '{"' + paths[0] + '": 1, "p": "' + paths[1] + '"}'),
+            ("jsonl", '{"' + paths[0] + '": 1}\n{"' + paths[1] + '": 2}\n'),
+        )
+        for name, text in cases:
+            expected = text.replace(paths[0], digest_of(paths[0])).replace(
+                paths[1], digest_of(paths[1]),
+            )
+            for root_only in (True, False):
+                with self.subTest(shape=name, root_only=root_only):
+                    rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                    self.assertEqual(rendered, expected)
+                    self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+                    if name == "document":
+                        self.assertEqual(json.loads(rendered), json.loads(expected))
+
+    def test_a_raw_match_without_a_backslash_is_left_to_the_decoded_reading(self):
+        # P3 (round 3): the raw look's no-backslash filter had no discriminating case
+        # (the review's mutation N13 stayed green). A Windows-shaped raw match whose
+        # span carries no backslash at all is bytes the decoded reading reads as
+        # written, so its own boundary decisions govern: the raw tail admits the
+        # recorded DEL byte while the decoded reading refuses it, so the decoded
+        # reading's token stops where it did and the match's span is not unioned. With
+        # the filter dropped, the match's uncovered part would merge with the claim and
+        # the token would swallow the DEL byte and everything behind it.
+        text = '{"p":"C:/x' + chr(0x7F) + 'y) ok' + _BS + 'nFAILED"}'
+        rendered = MODULE.sanitize_text(text, [], root_only=True)
+        self.assertEqual(
+            rendered, '{"p":"' + digest_of("C:/x") + chr(0x7F) + 'y) ok' + _BS + 'nFAILED"}',
+        )
+        self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+
     def test_the_fail_closed_property_holds_for_every_repro_shape(self):
         # The invariant, as a property over the shapes both reviews reproduced: after a
         # render no decoded string carries a host-path segment from the input, the
@@ -435,8 +500,13 @@ class JsonReadingTests(unittest.TestCase):
         # space, NBSP, U+3000 and an escaped apostrophe), the space fail-open shapes,
         # the token-prefix shape, the stray-quote document, the root-metacharacter
         # shapes, the entry's own input, the round-5 POSIX path after an escape, a
-        # surrogate pair, a doubled escaped backslash, and the r2 raw Windows spellings
-        # (drive, both UNC dialects, root-relative and `file:` URL).
+        # surrogate pair, a doubled escaped backslash, the r2 raw Windows spellings
+        # (drive, both UNC dialects, root-relative and `file:` URL), and round 3's
+        # union shapes: a forward-slash prefix continued by raw separators (whole
+        # document and JSONL), an escaped-pair prefix continued by a raw segment, an
+        # odd-run raw suffix, a key-carrying path, and the forward-slash spelling
+        # whose escape and evidence line the union absorbs (the accepted
+        # over-redaction).
         cases = (
             ("escaped-space", '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "my" + _BS + 'u0020project"}',
              [], ("Users", "project"), True),
@@ -456,7 +526,7 @@ class JsonReadingTests(unittest.TestCase):
              [], ("file:", "C:/"), True),
             ("stray-quote",
              "the 3\" bolt\n" + '{"output":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}',
-             [], ("Users", "FAILED2"), False),
+             [], ("Users", "FAILED"), False),
             ("root-metacharacter", '{"out":"/srv/store)/x' + _BS + 'n"}',
              ["/srv/store)"], ("srv", "store"), True),
             ("entry-windows", '{"output":"wrote ' + ESCAPED_DRIVE_RUN + _BS + 'nFAILED"}',
@@ -494,12 +564,44 @@ class JsonReadingTests(unittest.TestCase):
              [], ("server", "share", "FAILED"), True),
             ("slash-unc-raw-separator", '{"p":"//server' + _BS + 'tmp"}',
              [], ("server", "tmp"), True),
-            # The other side of the rule, through the same property: where the decoded
-            # reading reads the location (`//server/share/run` is spelled with forward
-            # slashes), its render governs and the raw look does not re-absorb the
-            # escape behind it.
-            ("slash-unc-escape-followed", '{"p":"//server/share/run' + _BS + 'nFAILED"}',
-             [], ("server", "share", "run"), True),
+            # The forward-slash spelling that used to be the guard pin: its raw match
+            # carries no escaped pair, so round 3's union absorbs its whole span - the
+            # escape and `FAILED` go into the token with the location, which is the
+            # accepted over-redaction (the properly escaped spellings keep the escape
+            # outside; see `test_a_json_escape_after_every_windows_family_survives_the_render`).
+            ("slash-unc-escape-absorbed", '{"p":"//server/share/run' + _BS + 'nFAILED"}',
+             [], ("server", "share", "run", "FAILED"), True),
+            # Round 3's union shapes, and the leak the review's table reproduced: a
+            # forward-slash prefix the decoded reading reads alone renders whole once
+            # the raw match is unioned instead of dropped, so the segment names behind
+            # the escape never stay literal.
+            ("slash-prefix-raw-suffix", '{"p":"C:/Users' + _BS + 'nop' + _BS + 'repo"}',
+             [], ("Users", "op", "repo"), True),
+            ("slash-prefix-raw-suffix-jsonl",
+             '{"p":"C:/Users' + _BS + 'nop' + _BS + 'repo"}\n'
+             '{"p":"C:/Users' + _BS + 'nop' + _BS + 'repo2"}\n',
+             [], ("Users", "op", "repo"), False),
+            # The escaped-pair prefix continued by raw segments: the union renders the
+            # parts past the claim's own spelling whole, so the segments render too.
+            ("escaped-prefix-raw-suffix",
+             '{"p":"C:' + _BS * 2 + "Users" + _BS + 'nop' + _BS + 'repo"}',
+             [], ("Users", "op", "repo"), True),
+            # An odd backslash run's last backslash is the escape `_RAW_SPELLING_ESCAPE`
+            # fires on (the guard used to see only runs of one), so the literal is
+            # scanned and the whole spelling renders.
+            ("odd-run-raw-suffix", '{"p":"C:' + _BS * 3 + "temp" + _BS * 2 + 'op"}',
+             [], ("temp", "op"), True),
+            # A host path in a JSON key renders like one in a value (the review's N11
+            # mutation - skipping a literal whose next non-space character is `:` -
+            # stayed green without this shape).
+            ("key-carrying", '{"' + ESCAPED_DRIVE_RUN + '":1}',
+             [], ("Users", "run"), True),
+            # A match starting right after an odd backslash run: without the span
+            # snapping the token would land behind a lone backslash and the literal
+            # would spell `\p` - no valid escape - so the render stopped parsing as
+            # JSON. The span absorbs the prefix and binds the recorded spelling whole.
+            ("split-run-boundary", '{"p":"' + _BS + 'file:///C:/x' + _BS * 2 + '"}',
+             [], ("file:", "C:/"), True),
             # The remaining Windows-shaped families whose separators the decoded reading
             # can mis-read the same way: a raw root-relative spelling and a raw `file:`
             # URL.
@@ -533,6 +635,50 @@ class JsonReadingTests(unittest.TestCase):
                     body = rendered
                 for fragment in fragments:
                     self.assertNotIn(fragment, body, f"{name}: {rendered!r}")
+
+    def test_a_wide_record_is_rebuilt_once_per_pass_not_once_per_match(self):
+        # P2 (round 3): every match rebuilt the whole text and its mapping, so a
+        # literal with thousands of paths was quadratic (2,000 paths: 4.3 s; 8,000:
+        # 115 s; a 8,000-line prose record: 41.7 s). One pass is now one rebuild, and
+        # `_rebuild_with_groups` is that one rebuild: the pin counts its calls, so the
+        # count must not grow with the number of matches. The rendered bytes are
+        # checked too, so a rebuild that skipped work would fail the count's premise.
+        # The pass machinery is shared, so the prose shape is pinned beside the
+        # literal: prose renders through the same rebuilds, one pass over the
+        # recorded text.
+        def rebuilds(text):
+            calls = []
+            original = MODULE._rebuild_with_groups
+
+            def counted(*arguments):
+                calls.append(1)
+                return original(*arguments)
+
+            with unittest.mock.patch.object(MODULE, "_rebuild_with_groups", counted):
+                rendered = MODULE.sanitize_text(text, [], root_only=True)
+            return len(calls), rendered
+
+        literal_counts = []
+        for paths in (1000, 8000):
+            content = " ".join("C:" + _BS * 2 + "Users" + _BS * 2 + ("p%d" % index)
+                               for index in range(paths))
+            calls, rendered = rebuilds('{"p":"' + content + '"}')
+            literal_counts.append(calls)
+            self.assertEqual(rendered.count("path-sha256:"), paths)
+            self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        prose_counts = []
+        for lines in (1000, 8000):
+            text = "\n".join("line %d wrote C:" % index + _BS + "temp" + _BS + ("run%d" % index)
+                             for index in range(lines))
+            calls, rendered = rebuilds(text)
+            prose_counts.append(calls)
+            self.assertEqual(rendered.count("path-sha256:"), lines)
+            self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        # 8x the matches, the same number of rebuilds: one per matching pass (the pass
+        # sequence is at most the nine families plus two matchers per `--root`).
+        self.assertEqual(literal_counts[0], literal_counts[1])
+        self.assertEqual(prose_counts[0], prose_counts[1])
+        self.assertLessEqual(max(literal_counts + prose_counts), 12)
 
     def test_cli_root_only_check_refuses_a_root_after_a_json_escape(self):
         # Opus P2 (round 4): inside a quoted record, a line's root follows an

@@ -59,15 +59,29 @@ The text is read in one of two ways, decided at the document level:
   *raw* Windows spelling is the one location the decoded reading cannot see: its
   separators are the escapes ``\\n``, ``\\t``, ``\\r``, ``\\f`` and ``\\b``,
   so ``C:\\temp`` decodes to ``C:``, a tab and ``emp``: the decoded value names
-  no location while the recorded bytes spell one. The decoded reading stays
-  primary wherever it reads a location - its own render governs, so the escape
-  and the evidence line behind a location stay outside the token - and every raw
-  match it reads no location in renders whole, merged with any decoded span it
-  overlaps into one token, so no token nests in or overlaps another. The
-  fail-closed over-approximation is the prose reading's own: a raw spelling
-  followed by an escape renders the escape and the text behind it inside the
-  token. POSIX spellings are not re-read this way: their separators carry no
-  backslash, so the decoded reading already reads them as written.
+  no location while the recorded bytes spell one. The decoded reading's spans
+  (mapped back to the literal's recorded bytes) and those raw matches are
+  unioned: every match contributes the parts of its span that no claim and no
+  rendered token's own text covers, overlapping or touching spans become one
+  token, and no raw match is discarded because a decoded span overlaps it. A
+  match whose span carries no escaped backslash pair - ``\\\\``, the spelling
+  the decoded reading itself uses for a literal separator - is a raw spelling
+  through all of its parts, so a forward-slash prefix continued by raw
+  separators renders whole, and the escape and text behind a forward-slash
+  spelling are absorbed with it (over-redaction, the fail-closed direction: the
+  prose reading's own over-approximation). A match that carries a pair is a
+  producer mix of the decoded reading's own spelling and a raw one; of its
+  uncovered parts only those carrying a backslash beyond their opening escape
+  character are raw spellings (``...\\\\a\\repo`` renders whole), while a part
+  that is one escape character and the text behind it stays outside the token
+  exactly as the decoded reading spells it - ``C:\\\\Users\\\\op\\\\run`` + the
+  newline escape + ``FAILED`` keeps the escape and ``FAILED`` outside, and the
+  pinned mixed spelling ``C:\\\\a\\repo`` keeps ``\\repo`` outside. A raw match
+  whose span carries no backslash at all is left to the decoded reading, which
+  reads those bytes as written; and every replacement is snapped to the
+  backslash runs its span splits, so the rendered bytes stay valid JSON. POSIX
+  spellings are not re-read this way: their separators carry no backslash, so
+  the decoded reading already reads them as written.
 * Anything else is **prose**, and prose keeps the base tool's raw reading,
   plus the shared leading boundary's escape arm: a matcher sees the recorded
   bytes exactly as written, so a raw Windows spelling whose separators read
@@ -93,6 +107,7 @@ shape the committed-record cleanliness gate uses.
 from __future__ import annotations
 
 import argparse
+import bisect
 import hashlib
 import json
 import pathlib
@@ -390,22 +405,25 @@ DEFAULT_PATH_PATTERNS = _RAW_READING.default
 
 
 HASHED_PATH_TOKEN_PREFIX = "path-sha256:"
-# A recorded literal's bytes can hold a raw Windows spelling only where a single
-# backslash - not one of an escaped pair - is followed by one of the escapes that hides
-# a location from the decoded reading: `\n`, `\r`, `\t`, `\f` and `\b` decode into a
-# control character, and an `u` escape's character can break a location just as well.
-# Every other backslash the JSON grammar spells is `\\`, `\/` or `\"`, which the decoded
-# reading reads as a path byte, a separator or a boundary, so a literal carrying none of
-# those escapes carries no raw spelling to look for. The guard is also what keeps a long
-# non-matching backslash run - `file:` plus thousands of separators - from being scanned
-# a second time: the UNC family's doubled-run leader is superlinear over one run, and the
-# recorded bytes are the longer of the two texts.
-_RAW_SPELLING_ESCAPE = re.compile(r"(?<!\\)\\[nrtbfu]")
-# A rendered token's own text: the `--root` token, or the hashed spelling above. A raw
-# Windows match that overlaps one is text behind a render rather than a spelling of its
-# own - binding it would write a digest over a token's own text, the
-# `path-sha256:<A>:<B>` corruption the decoded reading's inert token alphabet prevents
-# for free.
+# A recorded literal's bytes can hold a raw Windows spelling only where a backslash run
+# is odd - the grammar pairs a run's backslashes left to right, so its last backslash is
+# then a two-character escape's own backslash - and that backslash is followed by one of
+# the escapes that hides a location from the decoded reading: `\n`, `\r`, `\t`, `\f` and
+# `\b` decode into a control character, and a `\u` escape's character can break a
+# location just as well. Every other backslash the JSON grammar spells is `\\`, `\/` or
+# `\"`, which the decoded reading reads as a path byte, a separator or a boundary, so a
+# literal carrying none of those escapes carries no raw spelling to look for. The guard
+# is also what keeps a long non-matching backslash run - `file:` plus thousands of
+# separators - from being scanned a second time: the UNC family's doubled-run leader is
+# superlinear over one run, and the recorded bytes are the longer of the two texts. The
+# guard is per literal, so one escape-shaped backslash anywhere in a literal lets the
+# scan run over the whole of it.
+_RAW_SPELLING_ESCAPE = re.compile(r"(?<!\\)(?:\\\\)*\\[nrtbfu]")
+# A rendered token's own text: the `--root` token, or the hashed spelling above. The
+# raw look never renders a part that overlaps one - binding a token's own text would
+# write a digest over it, the `path-sha256:<A>:<B>` corruption the decoded reading's
+# inert token alphabet prevents for free. The bytes beside a token in the same raw
+# match are still raw spellings; they render as their own parts.
 _TOKEN_SPELLING = re.compile(
     re.escape(DISPOSABLE_ROOT_TOKEN) + r"|" + re.escape(HASHED_PATH_TOKEN_PREFIX) + r"[0-9a-f]{64}"
 )
@@ -526,9 +544,12 @@ def _decode_literal(content: str) -> tuple[str, list[tuple[int, int]]]:
     ``content`` is the literal's raw spelling between its quotes, which the
     document-level ``json.loads`` gate has already accepted, so every escape is the
     JSON grammar's own. The returned spans are ``(start, end)`` offsets into
-    ``content``: one character for a plain byte, two for a single-letter escape, six
-    for ``\\uXXXX``, and twelve for a surrogate pair, which decodes to the one
-    character both units spell - the same pairing ``json.loads`` performs.
+    ``content``: one character for a plain byte, two for a single-letter escape and
+    six for ``\\uXXXX``. A surrogate pair stays its two units, each covering its own
+    six recorded bytes: the character the pair spells (above U+FFFF) and each lone
+    unit are characters no byte class refuses and no pattern atom reads, so the
+    pairing ``json.loads`` performs would change no match, no raw mapping and no
+    token, and the map carries the spelling the literal writes.
     """
 
     characters: list[str] = []
@@ -547,16 +568,9 @@ def _decode_literal(content: str) -> tuple[str, list[tuple[int, int]]]:
             spans.append((index, index + 2))
             index += 2
             continue
-        code = int(content[index + 2:index + 6], 16)
-        width = 6
-        if 0xD800 <= code < 0xDC00 and content[index + 6:index + 8] == "\\u":
-            low = int(content[index + 8:index + 12], 16)
-            if 0xDC00 <= low < 0xE000:
-                code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
-                width = 12
-        characters.append(chr(code))
-        spans.append((index, index + width))
-        index += width
+        characters.append(chr(int(content[index + 2:index + 6], 16)))
+        spans.append((index, index + 6))
+        index += 6
     return "".join(characters), spans
 
 
@@ -582,96 +596,139 @@ def _render_passes(
     ``cells`` spells the mapping per character for the decoded reading (a decoded
     character's raw width depends on the escape that spelled it); the raw reading
     passes ``None``, because there every character is its own byte until a
-    replacement claims one, and the claimed spans below then carry the whole mapping.
+    replacement claims one.
 
-    A match that overlaps a span an earlier replacement wrote merges with it into one
-    span before rendering: the merged span renders once, from its own raw bytes, so a
-    later matcher can never bind an earlier token's text and no render leaves an
-    orphaned ``:<hex>`` fragment of one token inside or behind another. The passes run
-    in the order the caller gives - the root matchers first, then the host or default
-    path family, the base tool's one pass sequence.
+    One pass is one rebuild. The pass's matches run on the text the earlier passes
+    wrote, union with the spans those passes' replacements claim (a match that
+    overlaps a claim merges with it into one span, so a later matcher can never bind
+    an earlier token's text and no render leaves an orphaned ``:<hex>`` fragment of
+    one token inside or behind another), and `_rebuild_with_groups` then writes the
+    union back in one join of slices. Rendering k matches over a text of n characters
+    is therefore O(n + k) per pass, where the per-match rebuild was O(k*n);
+    `_rebuild_with_groups` is that one rebuild, and the wide-record pin counts its
+    calls. The passes run in the order the caller gives - the root matchers first,
+    then the host or default path family, the base tool's one pass sequence.
     """
 
     current = record
     mapped = list(cells) if cells is not None else None
-    # Each claim is ``(current start, current end, raw start, raw end)``: the current
-    # span a replacement wrote and the raw span it bound.
-    claimed: list[tuple[int, int, int, int]] = []
-    replacements: list[tuple[int, int, str]] = []
+    # Each claim is ``(current start, current end, raw start, raw end, text)``: one
+    # replacement-written span in the current text's coordinates, the raw span it
+    # binds, and the text it wrote.
+    claims: list[tuple[int, int, int, int, str]] = []
+    for pattern, is_root in passes:
+        spans = sorted(match.span() for match in pattern.finditer(current))
+        if not spans:
+            continue
+        current, mapped, claims = _rebuild_with_groups(
+            current, mapped, claims, _pass_groups(claims, spans), raw, is_root,
+        )
+    return [(raw_start, raw_end, text) for _start, _end, raw_start, raw_end, text in claims]
+
+
+def _pass_groups(
+    claims: list[tuple[int, int, int, int, str]], spans: list[tuple[int, int]]
+) -> list[list]:
+    """Union one pass's match spans with the claim spans the earlier passes wrote.
+
+    Returns ``(start, end, matched, absorbed)`` groups, sorted by start and pairwise
+    disjoint: ``matched`` is true when the group carries at least one of this pass's
+    matches and must be rendered now, and ``absorbed`` lists the indexes of the
+    claims inside the group. Overlap only - a claim no match strictly overlaps is its
+    own group and keeps its text. This union is the per-match growth the first
+    version ran, done once per pass, so a match can still never bind a replacement's
+    own text.
+    """
+
+    events = [(claim[0], claim[1], False, index) for index, claim in enumerate(claims)]
+    events += [(start, end, True, -1) for start, end in spans]
+    events.sort()
+    groups: list[list] = []
+    for start, end, matched, index in events:
+        if groups and start < groups[-1][1]:
+            groups[-1][1] = max(groups[-1][1], end)
+            groups[-1][2] = groups[-1][2] or matched
+            if not matched:
+                groups[-1][3].append(index)
+        else:
+            groups.append([start, end, matched, [] if matched else [index]])
+    return groups
+
+
+def _rebuild_with_groups(
+    current: str, mapped: list[tuple[int, int]] | None,
+    claims: list[tuple[int, int, int, int, str]], groups: list[list],
+    raw: str, is_root: bool,
+) -> tuple[str, list[tuple[int, int]] | None, list[tuple[int, int, int, int, str]]]:
+    """Write one pass's groups into ``current`` and its mapping, in one rebuild.
+
+    ``groups`` are `_pass_groups`' union: a group carrying a match renders now - one
+    token from its own raw bytes, or the root matcher's token when this is a root
+    pass and no earlier claim merged with it - while a group that is a single
+    untouched claim keeps that claim's text. Every group contributes at most one
+    slice and the text is joined once, so the cost is the text's own length and the
+    claims', never one rebuild per match. The raw offsets of an unclaimed span
+    follow the claims before it: a claim's text stands for its own raw span and need
+    not be as long as it (a digest is longer than the path it replaces), so
+    ``bisect`` over the claims replaces the per-match scan the first version ran.
+    """
+
+    starts = [claim[0] for claim in claims]
+    ends = [claim[1] for claim in claims]
+    # The cumulative difference between each claim's text length and its raw span's,
+    # so an unclaimed position maps back to raw bytes with one bisect.
+    shifts = [0]
+    for _start, _end, claim_start, claim_end, text in claims:
+        shifts.append(shifts[-1] + len(text) - (claim_end - claim_start))
 
     def raw_start_of(index: int) -> int:
         if mapped is not None:
             return mapped[index][0]
-        for start, end, raw_start, _raw_end in claimed:
-            if start <= index < end:
-                return raw_start
-        return index - sum(end - (raw_end - raw_start) - start
-                           for start, end, raw_start, raw_end in claimed if end <= index)
+        position = bisect.bisect_right(starts, index) - 1
+        if position >= 0 and ends[position] > index:
+            return claims[position][2]
+        return index - shifts[bisect.bisect_right(ends, index)]
 
-    def raw_end_of(index: int) -> int:
+    def raw_end_of(end: int) -> int:
         if mapped is not None:
-            return mapped[index][1]
-        for start, end, _raw_start, raw_end in claimed:
-            if start <= index < end:
-                return raw_end
-        return index - sum(end - (raw_end - raw_start) - start
-                           for start, end, raw_start, raw_end in claimed if end <= index) + 1
+            return mapped[end - 1][1]
+        index = end - 1
+        position = bisect.bisect_right(starts, index) - 1
+        if position >= 0 and ends[position] > index:
+            return claims[position][3]
+        return end - shifts[bisect.bisect_right(ends, index)]
 
-    def grow(start: int, end: int) -> tuple[int, int, bool]:
-        grown = False
-        while True:
-            touched = [claim for claim in claimed if claim[0] < end and start < claim[1]]
-            if not touched:
-                return start, end, grown
-            width = start, end
-            start = min([start] + [claim[0] for claim in touched])
-            end = max([end] + [claim[1] for claim in touched])
-            grown = True
-            if (start, end) == width:
-                # Every touched claim already lies inside the span.
-                return start, end, grown
-
-    for pattern, is_root in passes:
-        matched = [match.span() for match in pattern.finditer(current)]
-        if not matched:
-            continue
-        plans: list[list[int | bool]] = []
-        for start, end in matched:
-            merged: list[int | bool] = list(grow(start, end))
-            changed = True
-            while changed:
-                changed = False
-                rest: list[list[int | bool]] = []
-                for plan in plans:
-                    if plan[0] < merged[1] and merged[0] < plan[1]:
-                        merged[0] = min(merged[0], plan[0])
-                        merged[1] = max(merged[1], plan[1])
-                        merged[2] = merged[2] or plan[2]
-                        changed = True
-                    else:
-                        rest.append(plan)
-                plans = rest
-            plans.append(merged)
-        for start, end, grown in sorted(plans, key=lambda plan: plan[0], reverse=True):
+    pieces: list[str] = []
+    piece_mapped: list[tuple[int, int]] | None = [] if mapped is not None else None
+    new_claims: list[tuple[int, int, int, int, str]] = []
+    position = 0
+    written = 0
+    for start, end, matched, absorbed in groups:
+        pieces.append(current[position:start])
+        if piece_mapped is not None:
+            piece_mapped.extend(mapped[position:start])
+        written += start - position
+        if matched:
             raw_start = raw_start_of(start)
-            raw_end = raw_end_of(end - 1)
-            replacement = (DISPOSABLE_ROOT_TOKEN if is_root and not grown
-                           else _render_record_span(raw, raw_start, raw_end))
-            current = current[:start] + replacement + current[end:]
-            if mapped is not None:
-                mapped = mapped[:start] + [(raw_start, raw_end)] * len(replacement) + mapped[end:]
-            # Every claim to the right of the replaced span moves with the text.
-            shift = len(replacement) - (end - start)
-            claimed = [(claim[0] + shift, claim[1] + shift, claim[2], claim[3])
-                       if claim[0] >= end else claim
-                       for claim in claimed if not (start <= claim[0] and claim[1] <= end)]
-            claimed.append((start, start + len(replacement), raw_start, raw_end))
-            # A merged span absorbs the replacements it covered, raw bytes included:
-            # their spans lie inside the merged span's own raw range.
-            replacements = [item for item in replacements
-                            if not (raw_start <= item[0] and item[1] <= raw_end)]
-            replacements.append((raw_start, raw_end, replacement))
-    return replacements
+            raw_end = raw_end_of(end)
+            text = (DISPOSABLE_ROOT_TOKEN if is_root and not absorbed
+                    else _render_record_span(raw, raw_start, raw_end))
+            if piece_mapped is not None:
+                piece_mapped.extend([(raw_start, raw_end)] * len(text))
+        else:
+            claim = claims[absorbed[0]]
+            raw_start, raw_end = claim[2], claim[3]
+            text = current[start:end]
+            if piece_mapped is not None:
+                piece_mapped.extend(mapped[start:end])
+        new_claims.append((written, written + len(text), raw_start, raw_end, text))
+        pieces.append(text)
+        written += len(text)
+        position = end
+    pieces.append(current[position:])
+    if piece_mapped is not None:
+        piece_mapped.extend(mapped[position:])
+    return "".join(pieces), piece_mapped, new_claims
 
 
 def _apply_replacements(raw: str, replacements: list[tuple[int, int, str]]) -> str:
@@ -690,16 +747,19 @@ def _apply_replacements(raw: str, replacements: list[tuple[int, int, str]]) -> s
 
 
 def _merged_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Union every overlapping group of spans into one span, ordered by start.
+    """Union every overlapping or touching group of spans into one span, ordered by start.
 
     Every caller renders each returned span once, from its own bytes, so overlapping
     matches must merge: a span left separate would nest one token inside another or
-    split one location across two tokens.
+    split one location across two tokens. Touching spans merge for the same reason:
+    a raw match beginning where a decoded claim ends is one location's two halves,
+    and rendering only the first half would leave the second half's bytes in the
+    record; over-union is over-redaction, the fail-closed direction.
     """
 
     merged: list[list[int]] = []
     for start, end in sorted(spans):
-        if merged and start < merged[-1][1]:
+        if merged and start <= merged[-1][1]:
             merged[-1][1] = max(merged[-1][1], end)
         else:
             merged.append([start, end])
@@ -709,38 +769,120 @@ def _merged_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
 def _raw_literal_spans(content: str, claimed: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
     """The raw Windows spellings a JSON string literal's recorded bytes carry.
 
-    The decoded reading stays primary: wherever it reads a location, its own render
-    governs - the escape and the evidence line behind a location stay the recorded
-    bytes the decoded text spells (``...run\\nFAILED`` keeps the escape outside the
-    token), a ``--root`` token stays the root token it is, and a spelling the decoded
-    reading's boundaries deliberately spare (a name character glued in front) is spared.
-    ``claimed`` are exactly those spans, in the same raw offsets as ``content``.
-
+    ``claimed`` are the spans the decoded reading read a location in - its claims,
+    mapped back to the literal's raw offsets, and the spans earlier raw looks wrote.
     The Windows-shaped raw families run over the recorded bytes for the one location
     the decoded reading cannot see: a *raw* spelling, whose separators are single
     backslashes that decode into control characters, so ``C:\\temp`` reads as ``C:``,
     a tab and ``emp`` - no location - while the recorded bytes spell one. Every span
-    returned here renders whole, and no claim touches it, so no token can nest inside
-    or overlap another. A span overlapping a rendered token's own text is not a
-    spelling either: it is the tail behind a token (``//r\\bpath-sha256:<digest>``),
-    and rendering it would write a digest over the token's text.
+    returned here is unioned with the claims by the caller, which renders each
+    connected group as one token, so no token can nest inside or overlap another.
+
+    Every match contributes the parts of its span that no claim and no rendered
+    token's own text covers: the union merges a part with the claims it touches, so
+    one location renders as one token, and a rendered token's text is never bound
+    into a digest (the ``path-sha256:<A>:<B>`` corruption). A match whose span
+    carries no escaped backslash pair (``\\\\``) is the raw spelling throughout all
+    its parts, and it is never discarded for overlapping a claim: a forward-slash
+    prefix continued by raw separators renders whole, and the escape and text behind
+    a forward-slash spelling are absorbed with it (over-redaction, the fail-closed
+    direction). A match that carries a pair is the producer mix of the decoded
+    reading's own spelling and a raw one, and there the decoded reading governs: of
+    the uncovered parts, only those carrying a backslash beyond their opening escape
+    character are raw spellings and render (``...\\\\a\\repo`` renders whole); a part
+    that is one escape character and the text behind it stays outside the token,
+    exactly as the decoded reading spells it: ``C:\\\\Users\\\\op\\\\run`` + the
+    newline escape + ``FAILED`` keeps the escape and ``FAILED`` outside, and the
+    pinned mixed spelling ``C:\\\\a\\repo`` keeps ``\\repo`` outside. No pair-bearing
+    match's raw bytes are left for a later render to find, so rendering stays a
+    fixpoint.
 
     A match whose span carries no backslash at all is left to the decoded reading,
-    which reads those bytes as written: the two readings agree there, and the decoded
-    reading's boundary decisions are the governing ones.
+    which reads those bytes as written: the raw look exists for the single-backslash
+    spellings, and where the two readings' byte classes still differ outside one (a
+    recorded ``\\x7f`` the decoded reading refuses and the raw tail admits) the
+    decoded reading's boundary decision is the governing one.
     """
 
     if not _RAW_SPELLING_ESCAPE.search(content):
         return []
-    tokens = [match.span() for match in _TOKEN_SPELLING.finditer(content)]
-    return _merged_spans([
-        match.span()
-        for pattern in _RAW_READING.windows
-        for match in pattern.finditer(content)
-        if "\\" in match.group()
-        and not any(claim[0] < match.end() and match.start() < claim[1] for claim in claimed)
-        and not any(token[0] < match.end() and match.start() < token[1] for token in tokens)
-    ])
+    # The spans no part may cover: the claims the decoded reading wrote and every
+    # rendered token's own text, merged into one sorted, disjoint set.
+    covered = _merged_spans(
+        sorted((claim[0], claim[1]) for claim in claimed)
+        + [match.span() for match in _TOKEN_SPELLING.finditer(content)]
+    )
+    covered_starts = [start for start, _end in covered]
+    covered_ends = [end for _start, end in covered]
+    # Every recorded backslash, so a part's "further separator" test is a bisect.
+    backslashes = [index for index, character in enumerate(content) if character == "\\"]
+
+    def uncovered(start: int, end: int) -> list[tuple[int, int]]:
+        """The parts of ``[start, end)`` the covered spans leave, in order."""
+        parts: list[tuple[int, int]] = []
+        position = start
+        index = bisect.bisect_right(covered_ends, start)
+        while index < len(covered_starts) and covered_starts[index] < end:
+            if covered_starts[index] > position:
+                parts.append((position, covered_starts[index]))
+            position = max(position, covered_ends[index])
+            index += 1
+        if position < end:
+            parts.append((position, end))
+        return parts
+
+    def separator_after_first(part_start: int, part_end: int) -> bool:
+        index = bisect.bisect_left(backslashes, part_start + 1)
+        return index < len(backslashes) and backslashes[index] < part_end
+
+    spans: list[tuple[int, int]] = []
+    for pattern in _RAW_READING.windows:
+        start = 0
+        while True:
+            # `finditer` resumes after each match, so a location whose tail swallowed
+            # the next location's first bytes would be hidden from this render and
+            # found by the next one - the fixpoint the leak broke. Scanning again from
+            # each match's first byte plus one exposes those starts (the union renders
+            # their spans with the visible ones), and every scan runs only to its own
+            # match, so the work stays linear in the text and the overlapping spans.
+            match = pattern.search(content, start)
+            if match is None:
+                break
+            start = match.start() + 1
+            if "\\" not in match.group():
+                continue
+            if "\\\\" not in match.group():
+                spans.extend(uncovered(match.start(), match.end()))
+                continue
+            spans.extend(
+                part for part in uncovered(match.start(), match.end())
+                if separator_after_first(*part)
+            )
+    return _merged_spans(spans)
+
+
+def _align_span(raw: str, start: int, end: int) -> tuple[int, int]:
+    """Snap a literal replacement's start to the backslash run it splits, for valid JSON.
+
+    A replacement's text is the inert token alphabet, so a backslash run the span
+    splits re-pairs from the new boundary: an odd prefix in front of the token spells
+    an escape whose letter is the token's own first character (``\\p``, ``\\<``),
+    which is never a valid escape, and the literal stops parsing as JSON. The span
+    therefore absorbs the prefix whenever it is odd, so every replacement's start
+    falls on a pair boundary of the run it touches. No end needs snapping: a raw
+    family's tail is greedy over a backslash run, so a match ends at a run's end or
+    before the whole run, and a claim ends on the spelling its last character read (a
+    pair's end or a plain byte) - never inside a run at an odd offset. The deletion
+    of an end rule is measured, not assumed: 346k generated run-focused literals and
+    200k mixed generated literals produced no invalid render without it.
+    """
+
+    run_start = start
+    while run_start > 0 and raw[run_start - 1] == "\\":
+        run_start -= 1
+    if (start - run_start) % 2:
+        start = run_start
+    return start, end
 
 
 def _literal_replacements(
@@ -748,9 +890,14 @@ def _literal_replacements(
 ) -> list[tuple[int, int, str]]:
     """Union the raw look's spans with the spans the decoded reading claimed.
 
-    A replacement no raw span touches keeps its own text, so a ``--root`` token stays
-    the root token it is; a span that merged renders once from its own raw bytes, so no
-    token nests inside another and no digest binds a token's own text.
+    Overlapping or touching spans become one connected group, and each group renders
+    once: a group that is exactly one replacement keeps that replacement's own text,
+    so a ``--root`` token stays the root token it is; every other group renders from
+    its own recorded bytes, so no token nests inside another, no digest binds a
+    token's own text, and no raw span's bytes are left behind beside a claim. Every
+    span is snapped to the backslash runs it splits first (`_align_span`), because a
+    boundary inside a run would re-pair the recorded escapes and the rendered literal
+    would stop parsing as JSON.
     """
 
     texts = {(start, end): text for start, end, text in replacements}
@@ -758,7 +905,8 @@ def _literal_replacements(
         (start, end, texts[(start, end)] if (start, end) in texts
          else _render_record_span(raw, start, end))
         for start, end in _merged_spans(
-            [(start, end) for start, end, _text in replacements] + extra
+            [_align_span(raw, start, end) for start, end, _text in replacements]
+            + [_align_span(raw, start, end) for start, end in extra]
         )
     ]
 
@@ -776,9 +924,11 @@ def _render_literal(content: str, roots: list[str], root_only: bool) -> str:
 
     The literal's recorded bytes are read a second time by the Windows-shaped raw
     families (`_raw_literal_spans`), because a raw Windows spelling is the one location
-    the decoded reading cannot see: the caller merges those spans with the decoded ones
-    before rendering, so a raw spelling renders whole and a raw span overlapping a
-    decoded span is one token, never two.
+    the decoded reading cannot see: the caller unions those spans with the decoded ones
+    before rendering, so a raw spelling renders whole, a raw span overlapping a decoded
+    span is one token and never two, and a raw match is not discarded for overlapping a
+    decoded claim (the one exception, a raw match carrying an escaped backslash pair
+    beside such a claim, is `_raw_literal_spans`' own boundary).
     """
 
     decoded, cells = _decode_literal(content)
@@ -892,15 +1042,21 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     a location never splits at one, while the escape a quoted line ends with
     (``\\n``) stays a boundary and the line behind it stays outside the token. A
     match replaces the raw bytes it covered, so the digest still binds the recorded
-    spelling. The Windows families also run over the literal's recorded bytes, so a
-    *raw* spelling - whose separators are single backslashes that decode into control
-    characters, leaving the decoded reading no location to read - renders whole; a
-    span the decoded reading reads a location in keeps the decoded reading's own
-    render, so the escape and the line behind a location stay outside the token.
-    Prose keeps the base tool's raw reading, with one addition: the shared leading
-    boundary reads the character an escape ends with as a boundary, so a location
-    behind a recorded escape still renders. The module docstring names both readings
-    and the boundary each one keeps.
+    spelling. The Windows families also run over the literal's recorded bytes, and
+    the parts they read - a *raw* spelling, whose separators are single backslashes
+    that decode into control characters, leaving the decoded reading no location to
+    read - are unioned with the decoded reading's own spans, so a raw match is never
+    left behind beside a decoded claim: a forward-slash prefix continued by raw
+    separators renders whole, the escape and the text behind it included, where the
+    decoded reading read only the prefix. A raw match carrying an escaped backslash
+    pair is a producer mix, and there the decoded reading's render governs its
+    one-escape tails: a pair-bearing match's parts with a further backslash render
+    whole, while ``C:\\\\Users\\\\op\\\\run`` + the newline escape + ``FAILED``
+    keeps the escape and ``FAILED`` outside the token. Prose keeps the base tool's
+    raw reading, with one addition: the shared leading boundary reads the character
+    an escape ends with as a boundary, so a location behind a recorded escape still
+    renders. The module docstring names both readings and the boundary each one
+    keeps.
     """
 
     if _is_json_structured(text):
