@@ -959,19 +959,17 @@ jobs:
       # instrumentation slows every package, and the race step keeps its
       # `-timeout 600s` untouched. The profile path is the one the root
       # `.gitignore` reserves (`/daemon/coverage.out`).
-      # `GOCOVERDIR` is set so a coverage-instrumented helper child writes
-      # covdata instead of warning on exit: `internal/execution`'s cases re-exec
-      # the test binary itself (`os.Args[0]` through `minimalEnvironment()` in
-      # runner_test.go, which forwards the variable), and without it the child
-      # prints `warning: GOCOVERDIR not set, no coverage data emitted`, which
-      # four exact-output assertions capture (run 44887419717). The directory is
-      # created before Go runs.
+      # `go test` itself sets `GOCOVERDIR` for each instrumented test binary
+      # (`cmd/go` `test.go` appends it beside `-test.gocoverdir`), so the step
+      # carries no env of its own: `internal/execution`'s cases re-exec the test
+      # binary itself (`os.Args[0]` through `minimalEnvironment()` in
+      # runner_test.go, which forwards the variable), and the helper child writes
+      # covdata into the tool's merge directory instead of printing
+      # `warning: GOCOVERDIR not set, no coverage data emitted`, which four
+      # exact-output assertions capture (run 44887419717).
       - name: Run the Go suite with a coverage profile (advisory)
         shell: bash
-        env:
-          GOCOVERDIR: ${{ runner.temp }}/gocoverdir
         run: |
-          mkdir -p "$GOCOVERDIR"
           python3 ../scripts/ci/stdio-only-caller-boundary.py \
             "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out ./...
       - name: Upload the Go coverage profile

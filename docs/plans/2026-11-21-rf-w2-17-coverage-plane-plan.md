@@ -39,7 +39,7 @@ request (contract D14: artifacts advisory here; floors blocking at W6-10/W6-12).
 | Job | `needs` | Command | Artifact | Report path |
 | --- | --- | --- | --- | --- |
 | `coverage-control` | `[changes, contracts]` | `mix test --cover` | `control-coverage` | `control/cover/` |
-| `coverage-daemon` | `[changes]` | `go test -count=1 -timeout 1200s -coverprofile=coverage.out ./...` under the stdio-only boundary, with `GOCOVERDIR` set on the step and forwarded to helper children (residual risks) | `daemon-coverage` | `daemon/coverage.out` |
+| `coverage-daemon` | `[changes]` | `go test -count=1 -timeout 1200s -coverprofile=coverage.out ./...` under the stdio-only boundary; `go test` sets `GOCOVERDIR` for each instrumented test binary itself, and the helper environment builder forwards it (residual risks) | `daemon-coverage` | `daemon/coverage.out` |
 | `coverage-frontend` | `[changes]` | `pnpm --filter @symmetry/frontend exec vitest run --coverage` | `frontend-coverage` | `frontend/coverage/` |
 
 Each report path is the path the root `.gitignore` already reserves (`/control/cover/` `:46`,
@@ -71,11 +71,13 @@ block is the order of the deliverable table.
   `scripts/ci/prepare-private-namespace-tests.sh` (the suite's private user/PID namespace fixtures
   need the prepared private `unshare` path), and it runs the tests through
   `scripts/ci/stdio-only-caller-boundary.py`, the single implementation of the descriptor boundary
-  the daemon job establishes before Go. The step sets `GOCOVERDIR` to a directory it creates first,
-  and `internal/execution`'s helper environment builder (`minimalEnvironment()` in `runner_test.go`)
-  forwards it to the re-exec'd helper children, so an instrumented child writes covdata instead of
-  printing the coverage runtime's "GOCOVERDIR not set" warning (run `44887419717`; residual risks
-  below) — no package is excluded from the profile. The `-timeout` is this step's own budget
+  the daemon job establishes before Go. `go test` sets `GOCOVERDIR` for each instrumented test
+  binary itself (`cmd/go` `test.go` appends it beside `-test.gocoverdir`), and `internal/execution`'s
+  helper environment builder (`minimalEnvironment()` in `runner_test.go`) forwards it to the
+  re-exec'd helper children, so an instrumented child writes covdata instead of printing the
+  coverage runtime's "GOCOVERDIR not set" warning (run `44887419717`; residual risks below) — no
+  package is excluded from the profile and the step carries no env of its own. The `-timeout` is
+  this step's own budget
   (1200 s, twice the default 600 s) because coverage instrumentation slows every package; the race
   step keeps its `-timeout 600s` untouched.
 - **`coverage-frontend` mirrors the `contracts` job's frontend toolchain**: `pnpm/action-setup` at
@@ -142,15 +144,16 @@ message. This change adds:
   them, a code fixture must run all three).
 - `test_mutation_regating_a_coverage_job_off_the_heavy_output_breaks_its_routing`,
   `test_mutation_dropping_a_coverage_jobs_advisory_flag_breaks_the_advisory_check`,
-  `test_mutation_dropping_a_coverage_uploads_always_flag_breaks_the_artifact_check`,
-  `test_mutation_dropping_a_coverage_jobs_working_directory_breaks_the_artifact_check` and
-  `test_mutation_dropping_the_daemon_goverdir_env_breaks_the_artifact_check`, which re-gate
-  `coverage-daemon` on `run-citations`, strip its advisory line, strip its upload's `if: always()`,
-  delete its `defaults.run` block and strip its `GOCOVERDIR` env in in-memory copies, asserting the
-  matching check reddens — the suite's own style of proving an assertion is not vacuous.
+  `test_mutation_dropping_a_coverage_uploads_always_flag_breaks_the_artifact_check` and
+  `test_mutation_dropping_a_coverage_jobs_working_directory_breaks_the_artifact_check`, which
+  re-gate `coverage-daemon` on `run-citations`, strip its advisory line, strip its upload's
+  `if: always()` and delete its `defaults.run` block in in-memory copies, asserting the matching
+  check reddens — the suite's own style of proving an assertion is not vacuous.
 
-No existing assertion is weakened, renamed or deleted; the added pins are additive and use the
-suite's existing parsers (`job_blocks`, `parse_model`, `ran_jobs`, `require`).
+No pre-existing assertion is weakened, renamed or deleted; the added pins are additive and use the
+suite's existing parsers (`job_blocks`, `parse_model`, `ran_jobs`, `require`). Review round 2
+removed the case that pinned the step-level `GOCOVERDIR` env: `go test` overrides that variable for
+the test binary, so the pin guarded dead config, not the helper forwarding.
 
 ## Contract clauses and where each one is answered
 
@@ -220,9 +223,9 @@ Contract gates, all foreground and serialized (never a measurement harness besid
 
 | Check | Command | Exit | Result |
 | --- | --- | ---: | --- |
-| classifier suite | `python3 scripts/ci/test-ci-changed-path-classifier.py` | 0 | 24 tests OK, 31.2 s (review-round-2 re-run, now including `test_mutation_dropping_the_daemon_goverdir_env_breaks_the_artifact_check`; 18 tests before this slice, +6 across the implement stage and the two review rounds) |
+| classifier suite | `python3 scripts/ci/test-ci-changed-path-classifier.py` | 0 | 23 tests OK (36.8 s and 57.4 s on two round-2 fix re-runs; host load varies. 18 tests before this slice, +5 — the round-2 case pinning the step-level `GOCOVERDIR` env is deleted with the dead env it guarded) |
 | workflow shape | `actionlint -color -shellcheck= -pyflakes= .github/workflows/ci.yml` (1.7.12) | 0 | 0 findings |
-| new run blocks | `shellcheck --shell=bash --severity=style` over the six `run:` blocks extracted from the coverage plane | 0 | 0 findings |
+| new run blocks | `shellcheck --shell=bash --severity=style` over the six `run:` blocks extracted from the coverage plane (re-run on the daemon block after the step env and `mkdir` were removed) | 0 | 0 findings |
 | frontend coverage command | `pnpm --filter @symmetry/frontend exec vitest run --coverage` (pnpm 12.17.0; node 26.13.1 locally, CI pins node 24) | 0 | 20 files / 509 tests passed in 77.4 s; statements 90.85 % (3328/3663), branches 83.46 % (3322/3980), functions 90.22 % (1024/1135), lines 93.98 % (2750/2926); `frontend/coverage/` written |
 | Go `-coverprofile` shape | `go test -count=1 -timeout 300s -coverprofile=coverage.out ./internal/authority/... ./internal/contracts/...` | 0 | one merged `mode: set` profile written at the invocation directory; `go tool cover -func` reads it back (total 77.8 %); profile path is the gitignored `daemon/coverage.out` |
 | Control coverage command | `mix test --cover` (portable Elixir 1.20.4/OTP 29.0.6, local PostgreSQL, staged portal bundle) | 2² | 966/967 passed, 21 skipped, 1 failed in 538.1 s; report generated at `control/cover/` (117 module HTML pages); **no** "Coverage test failed, threshold not met" line |
@@ -230,17 +233,16 @@ Contract gates, all foreground and serialized (never a measurement harness besid
 | legacy-route audit | `bash scripts/audit-no-legacy-routes.sh` | 0 | 1444 tracked files audited, 0 matches |
 | legacy-route suite | `python3 scripts/ci/test-no-legacy-routes-audit.py` with Git's bash first on `PATH` | 0 | 6 tests OK, 141.7 s; with the default `PATH` the suite's `shutil.which("bash")` resolves the WSL launcher and 11 cases fail with exit 127 — the host artifact W1-01 recorded |
 | record hygiene | `python3 scripts/ci/test-check-record-cleanliness.py` | 0 | 19 tests OK, 94.6 s |
-| suite hygiene (ruff) | `ruff check scripts/ci` and `ruff format --check scripts/ci` (0.17.5, the pinned `required-version`) | 0 | all checks passed; 49 files already formatted (the first cut of the mutation anchor was not format-stable and was reshaped by hand to the formatter's output) |
+| suite hygiene (ruff) | `ruff check scripts/ci` and `ruff format --check scripts/ci` (0.17.5, the pinned `required-version`; re-run on the review-round-2 fix) | 0 | all checks passed; 49 files already formatted |
 | diff hygiene | `git diff --check` | 0 | 0 whitespace errors; 0 trailing-whitespace lines across the changed files |
-| pre-existing steps | `git diff -U0 -- .github/workflows/ci.yml \| grep -c "^-[^-]"` | 1¹ | 0 deleted lines: the workflow diff is 152 added lines at the review-round-2 revision (142 at the implement stage, 154 at review round 1), nothing removed or re-indented |
+| pre-existing steps | `git diff -U0 -- .github/workflows/ci.yml \| grep -c "^-[^-]"` | 1¹ | 0 deleted lines: the workflow diff is 147 added lines at the review-round-2 fix revision (142 at the implement stage, 154 at review round 1, 152 at the first round-2 revision), nothing removed or re-indented |
 | host-path scan | working-tree diff against `origin/main` plus the new plan file | 1¹ | no user-profile path in either |
 | instrumented helper failure (round 1) | `go test -count=1 -coverprofile=<scratch>/exec.out -run '<the four cases>' ./internal/execution/` (go1.27.4 windows/amd64) | 1 | the same four failures as run `44887419717`; the child-output assertions carry `warning: GOCOVERDIR not set, no coverage data emitted` |
 | uninstrumented control (round 1) | the identical command without `-coverprofile` | 0 | the four cases pass (`ok … internal/execution`, 4.9 s) — the package's ordinary shape is not the cause |
-| forwarded-child covdata (round 2) | `GOCOVERDIR=<scratch>/gcd-h ./execution.test -test.run '<the four cases>' -test.v -test.parallel 1` — the instrumented test binary, with the step's variable forwarded by the helper builder | 0 | the four previously failing cases PASS and `<scratch>/gcd-h` receives four `covcounters.*` plus `covmeta.*` — an instrumented child writes covdata instead of the warning |
-| step-shaped instrumented run (round 2) | `GOCOVERDIR=<scratch>/gcd-g go test -parallel 1 -count=1 -cover -coverprofile=<scratch>/ex-g.out ./internal/execution/` | 0 | `ok … internal/execution 12.7 s`, `coverage: 50.5% of statements`; at default parallelism the Windows local run can hit the coverage runtime's covmeta rename race between concurrent children sharing one `GOCOVERDIR` ("coverage meta-data emit failed … Access is denied") — a Windows-only shape, since Linux replaces atomically; the hosted job is Linux and its re-run is the oracle |
+| forwarded-child covdata (round 2) | `GOCOVERDIR=<scratch>/gcd-h ./execution.test -test.run '<the four cases>' -test.v -test.parallel 1` — the instrumented test binary driven directly, with `GOCOVERDIR` set as `go test` sets it for its children and forwarded by the helper builder | 0 | the four previously failing cases PASS and `<scratch>/gcd-h` receives four `covcounters.*` plus `covmeta.*` — an instrumented child writes covdata instead of the warning |
+| step-shaped instrumented run (round 2) | `GOCOVERDIR=<scratch>/gcd-g go test -parallel 1 -count=1 -cover -coverprofile=<scratch>/ex-g.out ./internal/execution/` | 0 | `ok … internal/execution 12.7 s`, `coverage: 50.5% of statements`; the exported variable does not reach the test binary (`go test` appends its own `GOCOVERDIR` last and Go's environment dedup keeps the last value), so the row shows the step's command shape green, not an env effect. At default parallelism the Windows local run can hit the coverage runtime's covmeta rename race between concurrent children sharing the tool's `GOCOVERDIR` ("coverage meta-data emit failed … Access is denied") — a Windows-only shape, since Linux's rename replaces atomically; the hosted job is Linux and its re-run is the oracle |
 | uninstrumented package (round 2) | `go test -count=1 ./internal/execution/...` | 0 | `ok … internal/execution 11.5 s` |
-| daemon command pin mutation (round 2) | in-memory workflow copy without the step's `GOCOVERDIR` env fed to `check_coverage_artifacts`, committed as `test_mutation_dropping_the_daemon_goverdir_env_breaks_the_artifact_check` | 0 | the mutated check raises on the daemon command pin; the unmutated text passes — the pin is not vacuous |
-| workflow shape (round 2) | `actionlint -color -shellcheck= -pyflakes= .github/workflows/ci.yml` (1.7.12) plus `shellcheck --shell=bash --severity=style` over the changed `run:` block | 0 | 0 findings |
+| workflow shape (round 2 fix) | `actionlint -color -shellcheck= -pyflakes= .github/workflows/ci.yml` (1.7.12) plus `shellcheck --shell=bash --severity=style` over the changed `run:` block | 0 | 0 findings |
 | legacy-route audit (round 2) | `scripts/audit-no-legacy-routes.sh` under Git for Windows bash | 0 | 1458 tracked files audited, 4 intentional exclusions, 0 matches |
 
 ¹ `grep` exits 1 for "no line selected", which is the passing state of both scans; the two
@@ -256,8 +258,7 @@ mutation row above is the only run that produced it.
 
 Not runnable on this host (the hosted run is their oracle, per the contract): `coverage-daemon`'s
 full suite (Linux-only fixtures, and `prepare-private-namespace-tests.sh` refuses any host that is
-not a disposable GitHub-hosted runner), the artifact uploads, and the Linux resolution of the
-step's `GOCOVERDIR` (on Windows the go tool's own appended value wins for the test binary). Run
+not a disposable GitHub-hosted runner) and the artifact uploads. Run
 `44887419717` is that oracle's first observation: all three artifacts uploaded, `coverage-control`
 and `coverage-frontend` passed, `coverage-daemon` failed on the deterministic instrumented-helper
 shape recorded under residual risks; the round-2 rows above carry the local forwarding evidence,
@@ -307,17 +308,20 @@ as passed from inference.
   `helperInvocation`/`minimalEnvironment`), the coverage-instrumented child had no `GOCOVERDIR`, and
   the coverage runtime printed `warning: GOCOVERDIR not set, no coverage data emitted` on its exit.
   Review round 1 excluded the package; the contract's review-round-1 Conductor decision (2026-11-21)
-  rejected that and ratified the helper-environment fix: the step sets `GOCOVERDIR` (and creates it
-  first) and `minimalEnvironment()` forwards it, so an instrumented child writes covdata instead of
-  warning and no package leaves the profile. The four assertions are unchanged, and the forwarded
-  variable is the only helper-environment difference (it is unset in ordinary runs, so the child
-  environment stays minimal there). On the Linux runner the step's value wins for the test binary
-  (first mention in the environment) and the children's files land in the step's directory, not the
-  go tool's merge directory — the profile still carries the test binary's counters, so the package
-  is measured. On Windows the go tool's appended value wins for the test binary, and concurrent
-  children sharing one directory can hit the coverage runtime's covmeta rename race (`Access is
-  denied`); the round-2 local runs therefore serialize or drive the test binary directly, and the
-  hosted Linux re-run is the oracle for the job's conclusion.
+  rejected that and ratified the helper-environment fix: with coverage on, `go test` passes
+  `-test.gocoverdir=<objdir>/gocoverdir` and appends `GOCOVERDIR=<objdir>/gocoverdir` to the
+  instrumented test binary's environment (`cmd/go` `test.go`), and `minimalEnvironment()` forwards
+  that value to the re-exec'd helper children, so an instrumented child writes covdata into the
+  tool's merge directory instead of warning and no package leaves the profile. The step carries no
+  `GOCOVERDIR` env of its own: the tool's appended value is the environment's last occurrence and
+  Go's environment deduplication keeps the last value, so a step-level value never reaches the test
+  binary (review round 2 deleted the env and its `mkdir` as the no-ops they were). The four
+  assertions are unchanged, and the forwarded variable is the only helper-environment difference
+  (it is unset in ordinary runs, so the child environment stays minimal there). Concurrent
+  instrumented children share the tool's merge directory; on Windows the coverage runtime's covmeta
+  rename can then fail (`Access is denied` — on Linux the rename replaces atomically), so the
+  round-2 local runs serialize or drive the test binary directly, and the hosted Linux re-run is
+  the oracle for the job's conclusion.
 - **Coverage instrumentation cost is measured once.** Run `44887419717` measured the hosted jobs:
   `coverage-control` 2m32s (pass), `coverage-frontend` 47s (pass), `coverage-daemon` 2m05s (fail,
   so its post-fix cost is still open). The program plan records ~102 s for the plain Control suite
