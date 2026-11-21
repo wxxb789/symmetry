@@ -62,7 +62,7 @@ jobs:
           token="ci-linux-v2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(openssl rand -hex 32)"
           echo "::add-mask::$token"
           printf 'SYMMETRY_OPERATOR_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.27.0'
           cache-dependency-path: daemon/go.sum
