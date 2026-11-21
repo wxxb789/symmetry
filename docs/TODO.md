@@ -913,6 +913,21 @@ instead of appended.
       and the three `Support` delegators, as a separately authorized change; `integrations.ex:690`
       already short-circuits a nil `pull_request_url`.
 
+## Deferred review findings (PR #198)
+
+- [ ] Cover the linux-gate wire validations no test kills (2026-11-21, branch
+      `refactor/rf-w4-20-linux-gate-protocol-split`; found by the Opus review of PR #198, which is a
+      pure move and kept them byte-identical). Single-point mutants of
+      `daemon/native/linux-gate/protocol/wire.go` survive the whole package suite at base and HEAD
+      for: `DecodeLaunchResult`'s `OwnerPID <= 1` and `UserNSInode == 0` checks, `readWireString`'s
+      NUL check and `maxCommandString` bound, the receipt generation upper bound and minimum length,
+      and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
+      be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
+      per check in a separate maintenance slice.
+- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1490` pins
+      `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
+      HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
+
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
 - [ ] Delegate the two provider-action UUID validator copies the W2-12a unification left outside
