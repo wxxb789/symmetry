@@ -564,6 +564,15 @@ Implemented files and lines (this round's tree):
 | `daemon/internal/app/native_run.go:850` | `publishNativeCloseRetryAfterEvidence` bounds the handoff shared with `goal_delivery.go:134`/`:138`/`:142` |
 | `daemon/internal/app/goal_delivery_test.go:640-678` | `TestAbandonGoalSessionBoundsOversizedUncertainReason` |
 
+**Superseded in fix round 3 (PR #200 review, §11):** the helper row's `:1308-1327` span and its
+`utf8.DecodeLastRuneInString` walk description, the `:1443`/`:1498` call-site refs (delivered:
+`:1437`/`:1492`), and the `goal_delivery_test.go:640-678` test span describe fix round 2's bytes
+only. The delivered helper spans `goal_admission.go:1307-1321` and normalizes the over-budget
+prefix with `strings.ToValidUTF8`; the delivered tests are `goal_delivery_test.go:640-714`
+(`TestBoundedGoalSessionUncertainReason`) and `:716-774`
+(`TestAbandonGoalSessionBoundsOversizedUncertainReason`). The "Rune-boundary arithmetic"
+paragraph below is likewise fix-round-2 history.
+
 The bound applies only to the string handed to `MarkGoalSessionUncertain`; every returned/joined
 error chain, every message prefix and every verdict is unchanged, and the store-side enforcement is
 the same check with the same value (now the constant). The helper is a no-op for reasons within
@@ -575,6 +584,8 @@ budget (it returns the input string unchanged), so every shorter composed reason
 19 B. A byte cut at 4,096 lands one byte inside an `é` (the kept prefix ends on its lead byte), so
 the boundary walk yields 4,095 bytes and `utf8.ValidString` holds; a naive byte cut would store a
 partial rune, which the store's JSON round-trip would corrupt and this round's test would catch.
+(Superseded in fix round 3: the delivered bound normalizes the whole over-budget prefix with
+`strings.ToValidUTF8` instead of walking back from the cut — see §11.)
 
 **Red run — bound disabled** (temporarily: `boundedGoalSessionUncertainReason` reduced to `return
 reason`, its now-unused `unicode/utf8` import removed; repo restored immediately after and the green
@@ -660,6 +671,44 @@ $ cd <worktree root> && git diff --check
 `python scripts/ci/check-record-cleanliness.py --base $(git merge-base HEAD origin/main) --head HEAD`
 on the committed head exits 0 (raw output and exit code are recorded in the fix-round findings file
 `w3-07-fix-r2.md`, which lives outside this repository's records).
+
+## 11. Fix round 3 (2026-11-21) — review #200 fix record (docs-only round)
+
+PR #200 review round 2 (`200-opus-review-2.md`) verified the P2-1 fix on `f150ed2a` (parent
+`848dee6c`) and raised one P3: §10 above still describes fix round 2's helper bytes and test spans.
+This section records the delivered bytes; this round changes records only, and the line refs here
+resolve at the fix-round-3 head.
+
+- **Helper change** (`daemon/internal/app/goal_admission.go:1307-1321`): the over-budget branch
+  returns `strings.ToValidUTF8(reason[:state.GoalSessionUncertainReasonBytes], "")`, dropping every
+  invalid or partial-rune byte in the bounded prefix, so the result is valid UTF-8 and cannot
+  lengthen in the store's JSON round trip (an invalid byte becomes U+FFFD, 3 bytes, and could push
+  the reloaded reason past the read validation at `goal_session.go:1688`). The
+  `utf8.DecodeLastRuneInString` tail-only walk and the `unicode/utf8` import are removed; the
+  within-budget branch is unchanged (byte-identical), which is the W307-R1 decision's boundary.
+- **Tests** (`daemon/internal/app/goal_delivery_test.go`): `TestBoundedGoalSessionUncertainReason`
+  (`:640-714`) is a 10-case table with exact string equality (within-budget identity; within-budget
+  invalid byte untouched; exact-budget identity ending with a genuine U+FFFD; budget+1 ASCII; cuts
+  inside 2-/3-/4-byte runes; interior invalid byte; interior invalid run; invalid bytes past the
+  cut), and every over-budget case also asserts `utf8.ValidString`. The extended
+  `TestAbandonGoalSessionBoundsOversizedUncertainReason` (`:716-774`) tables the multibyte cause
+  and an interior-`\xff` cause, and asserts the session is durably `uncertain` **and**
+  `LoadGoalSession` reads the reason back.
+- **Red/green** (transcripts in `200-fix-r1.md` §2): against the `848dee6c` tail-only helper the
+  new cases fail — table cases at `goal_delivery_test.go:707` (exact-equality, the interior
+  invalid byte survived) and the abandon interior case at `:751` (`LoadGoalSession() error =
+  invalid goal session journal`) — exit 1; with the `ToValidUTF8` bound both pass, exit 0. Review
+  round 2 re-ran the round-1 reproduction on the delivered head: bounded len 4,095, mark accepted,
+  load succeeds, session `uncertain`.
+- **Deferred store-side hazard** (`docs/TODO.md`, "Deferred review findings (PR #200)"): a
+  within-budget reason containing invalid UTF-8 still passes the length-only write check and can
+  expand past 4,096 bytes in the JSON round trip, making the journal unreadable; owner: state
+  store; base `52bdffd2` has the same issue, and the W307-R1 decision forbids changing the sink in
+  this slice.
+- **Gates for the unchanged code bytes** (fix-round-3 head): `gofmt -l internal/app internal/state`
+  0 · `go vet ./internal/app/ ./internal/state/` (windows) 0 · `GOOS=linux go vet
+  ./internal/app/ ./internal/state/` 0 · targeted app subset 13/13 PASS, exit 0 ·
+  `git diff --check` 0 · `check-record-cleanliness.py` on the committed head 0.
 
 ## Appendix A — sweep tool source (verbatim, stdlib-only)
 

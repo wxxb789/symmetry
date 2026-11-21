@@ -516,6 +516,13 @@ resolve in this round's tree:
 | `daemon/internal/app/goal_delivery_test.go:640-678` | `TestAbandonGoalSessionBoundsOversizedUncertainReason` |
 | `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §10 | fix-round evidence: red/green runs, commands, exit codes |
 
+**Superseded in fix round 3 (PR #200 review):** the helper row's `:1308-1327` span and "rune-safe
+truncation" description, the `:890,:951,:1443,:1498` call-site refs (delivered:
+`:889,:950,:1437,:1492`), and the `:640-678` test span describe round 2's bytes only; the
+delivered helper (`:1307-1321`) normalizes the over-budget prefix with `strings.ToValidUTF8`, and
+the delivered tests are `goal_delivery_test.go:640-714` and `:716-774`. The green bullet's "only
+the rune-boundary walk…" sentence is likewise round-2 history. See "Fix round 3" below.
+
 Only the reason string handed to the store is bounded; every returned/joined error chain is
 unchanged, no message prefix or verdict changed, and the store-side check is the same check with the
 same value (now the constant). Round-2 runs:
@@ -528,9 +535,35 @@ same value (now the constant). Round-2 runs:
 - **Green with it**: same command with the bound in place → `PASS`, exit 0; the durable reason is
   4,095 B and valid UTF-8, and keeps the composed prefix and the writer-cause head. The budget cut
   lands mid-rune at 4,096 B, so only the rune-boundary walk keeps the stored text valid for the
-  store's JSON round-trip.
+  store's JSON round-trip. (Superseded in fix round 3: the delivered bound normalizes the whole
+  over-budget prefix with `strings.ToValidUTF8` — see below.)
 - **Gates**: `gofmt -l internal/app internal/state` 0 · `go vet ./...` (windows) 0 ·
   `GOOS=linux go vet ./...` 0 · `go test -count=1 ./internal/state/` (windows) 0 · WSL
   `Ubuntu-24.04` `go test -count=1 ./internal/state/...` 0 · app subset (`TestAbandonGoalSession*`
   plus the close/abort/lease composition tests and the slice's app oracle) 0 · `git diff --check` 0 ·
   `check-record-cleanliness.py` on the committed head 0.
+
+## Fix round 3 (2026-11-21) — review #200 fix record (docs only)
+
+PR #200 review round 2 (`200-opus-review-2.md`) verified the P2-1 fix on `f150ed2a` (parent
+`848dee6c`) and asked for the slice's records to stop describing fix round 2's superseded tail-only
+walk. This section records the delivered bytes; no code changed this round, and the line refs below
+resolve at the fix-round-3 head.
+
+| file:line | change |
+|---|---|
+| `daemon/internal/app/goal_admission.go:1307-1321` | over-budget branch: `strings.ToValidUTF8(reason[:state.GoalSessionUncertainReasonBytes], "")`; the `DecodeLastRuneInString` walk and the `unicode/utf8` import are removed; the within-budget branch stays byte-identical |
+| `daemon/internal/app/goal_delivery_test.go:640-714` | `TestBoundedGoalSessionUncertainReason` — 10-case table, exact string equality, `utf8.ValidString` on every over-budget case |
+| `daemon/internal/app/goal_delivery_test.go:716-774` | `TestAbandonGoalSessionBoundsOversizedUncertainReason` — two cases; the interior-`\xff` case asserts `LoadGoalSession` succeeds afterwards |
+| `docs/TODO.md` "Deferred review findings (PR #200)" | deferred store-side hazard: within-budget invalid UTF-8 can expand past the budget in the JSON round trip (`goal_session.go:1052` write vs `:1688` read); owner: state store; base `52bdffd2` affected |
+| `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §11 | the same fix-round record with the red/green transcripts |
+
+Red/green: against the `848dee6c` tail-only helper the new tests fail — table cases at
+`goal_delivery_test.go:707` (exact-equality) and the abandon interior case at `:751`
+(`LoadGoalSession() error = invalid goal session journal`) — exit 1; with the bound both pass, exit
+0 (`200-fix-r1.md` §2 carries the transcripts; review round 2 re-ran the reproduction on the
+delivered head: bounded len 4,095, mark accepted, load succeeds, session `uncertain`). Gates for
+the unchanged code bytes: `gofmt -l internal/app internal/state` 0 · `go vet ./internal/app/
+./internal/state/` (windows) 0 · `GOOS=linux go vet ./internal/app/ ./internal/state/` 0 · targeted
+app subset 13/13 PASS, exit 0 · `git diff --check` 0 · `check-record-cleanliness.py` on the
+committed head 0.
