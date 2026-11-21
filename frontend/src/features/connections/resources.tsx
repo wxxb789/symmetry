@@ -13,6 +13,7 @@ import {
   type ResourceDraft,
   type Workspace,
 } from "../../services/api";
+import { safeUrl } from "../../services/served";
 
 // This module owns the project-resource surface on `/portal/connections` and
 // the display primitives both surfaces on that page share (status badges, field
@@ -67,7 +68,8 @@ export function FieldErrors({ error, field }: { error: unknown; field: string })
 
 export const refusalNotice = (error: unknown) => sharedRefusalNotice(error, refusalGuidance);
 
-const asText = (value: unknown): string | null => typeof value === "string" && value !== "" ? value : null;
+// Declared policy: a served member is present when non-empty (no trim); the shared `asText` trims that case away.
+const presentText = (value: unknown): string | null => typeof value === "string" && value !== "" ? value : null;
 const asVersion = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? value : 0;
 
 // The served rows this surface reads, typed from the generated workspace-read
@@ -99,20 +101,20 @@ interface RegisteredRuntime { id: string; name: string; profile: string | null; 
 
 function decodeResources(resources: readonly ServedResourceRow[] | undefined): ResourceRow[] {
   return (resources ?? []).flatMap((resource) => {
-    const id = asText(resource.id);
+    const id = presentText(resource.id);
     if (id === null) return [];
     return [{
       id,
-      kind: asText(resource.kind) ?? "",
-      name: asText(resource.name) ?? id,
-      connectionId: asText(resource.connection_id),
-      provider: asText(resource.provider),
-      externalRef: asText(resource.external_ref),
-      url: asText(resource.url),
-      status: asText(resource.status) ?? "unknown",
-      syncStatus: asText(resource.sync_status) ?? "unknown",
-      statusMessage: asText(resource.status_message),
-      lastSyncedAt: asText(resource.last_synced_at),
+      kind: presentText(resource.kind) ?? "",
+      name: presentText(resource.name) ?? id,
+      connectionId: presentText(resource.connection_id),
+      provider: presentText(resource.provider),
+      externalRef: presentText(resource.external_ref),
+      url: presentText(resource.url),
+      status: presentText(resource.status) ?? "unknown",
+      syncStatus: presentText(resource.sync_status) ?? "unknown",
+      statusMessage: presentText(resource.status_message),
+      lastSyncedAt: presentText(resource.last_synced_at),
       version: asVersion(resource.version),
     }];
   });
@@ -120,13 +122,13 @@ function decodeResources(resources: readonly ServedResourceRow[] | undefined): R
 
 function decodeProjects(workspace: Workspace | undefined): ProjectRow[] {
   return (workspace?.projects ?? []).flatMap((project) => {
-    const id = asText(project.id);
+    const id = presentText(project.id);
     if (id === null) return [];
     return [{
       id,
-      key: asText(project.key) ?? "",
-      name: asText(project.name) ?? id,
-      status: asText(project.status) ?? "unknown",
+      key: presentText(project.key) ?? "",
+      name: presentText(project.name) ?? id,
+      status: presentText(project.status) ?? "unknown",
       resources: decodeResources(project.resources),
     }];
   });
@@ -134,10 +136,10 @@ function decodeProjects(workspace: Workspace | undefined): ProjectRow[] {
 
 function decodeRuntimes(workspace: Workspace | undefined): RegisteredRuntime[] {
   return (workspace?.registered_runtimes ?? []).flatMap((runtime) => {
-    const id = asText(runtime.runtime_id);
-    const name = asText(runtime.runtime_name);
+    const id = presentText(runtime.runtime_id);
+    const name = presentText(runtime.runtime_name);
     if (id === null || name === null) return [];
-    return [{ id, name, profile: asText(runtime.agent_profile), workspace: asText(runtime.workspace) }];
+    return [{ id, name, profile: presentText(runtime.agent_profile), workspace: presentText(runtime.workspace) }];
   });
 }
 
@@ -164,15 +166,6 @@ function referenceOptions(kind: string, runtimes: readonly RegisteredRuntime[]):
 
 const resourceSubject = (resourceId: string) => `resource:${resourceId}`;
 const projectSubject = (projectId: string) => `project:${projectId}`;
-
-const safeUrl = (value: string): string | null => {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? value : null;
-  } catch {
-    return null;
-  }
-};
 
 interface DialogFrameProps {
   title: string;
@@ -218,7 +211,7 @@ interface ResourceRowProps {
 
 function ResourceRowItem({ row, connections, locked, syncPending, onSync, onUpdate, onUnbind }: ResourceRowProps) {
   const connection = connections.find((candidate) => candidate.id === row.connectionId);
-  const url = row.url === null ? null : safeUrl(row.url);
+  const url = safeUrl(row.url);
   return <li className="resource-row">
     <div className="resource-main">
       <div className="resource-title">

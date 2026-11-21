@@ -5,9 +5,9 @@ import { useRef, useState } from "react";
 import { goalEventsOptions, goalOptions, sessionOptions, workspaceOptions } from "../../app/application";
 import { useRealtimeEpoch } from "../../app/realtime";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
-import { servedMember, servedText } from "./served-text";
 import { errorMessage, Network, ownValue, postGoalCommand, UnexpectedResponse, type GoalDecision, type GoalEvent, type GoalGraph, type GoalProjection, type GoalWorkItem, type Workspace } from "../../services/api";
 import { commandEnvelope, MutationRefused, newMutationId, planApprovalCommand, type CommandKind, type GoalCommandEnvelope } from "../../services/commands";
+import { servedMember, servedText } from "../../services/served";
 
 type ActionPayload = Record<string, unknown>;
 

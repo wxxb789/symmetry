@@ -66,7 +66,7 @@ type preAuthorityWitnessReport struct {
 	Error              string `json:"error,omitempty"`
 }
 
-func runPreAuthorityWitness(arguments []string) error {
+func runPreAuthorityWitness(arguments []string) (err error) {
 	options, err := parsePreAuthorityWitnessOptions(arguments)
 	if err != nil {
 		return err
@@ -76,7 +76,11 @@ func runPreAuthorityWitness(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() {
+		if closeErr := store.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 
 	switch options.mode {
 	case "start":
@@ -180,7 +184,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 			if loadErr != nil {
 				return loadErr
 			}
-			writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "prepare", "reached", journal, nil))
+			if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "prepare", "reached", journal, nil)); err != nil {
+				return err
+			}
 			crashPreAuthorityWitness(options, "prepare", journal)
 			return nil
 		},
@@ -192,7 +198,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 			if loadErr != nil {
 				return loadErr
 			}
-			writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "bind", "reached", journal, nil))
+			if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "bind", "reached", journal, nil)); err != nil {
+				return err
+			}
 			crashPreAuthorityWitness(options, "bind", journal)
 			return nil
 		},
@@ -226,7 +234,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 	if err != nil {
 		return err
 	}
-	writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "commit", "reached", committed, nil))
+	if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "commit", "reached", committed, nil)); err != nil {
+		return err
+	}
 	crashPreAuthorityWitness(options, "commit", committed)
 
 	renewer, ok := containment.(platform.ContainmentLeaseRenewer)
@@ -244,7 +254,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 	if err != nil {
 		return err
 	}
-	writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "lease", "reached", journal, nil))
+	if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "lease", "reached", journal, nil)); err != nil {
+		return err
+	}
 	crashPreAuthorityWitness(options, "lease", journal)
 
 	if err := process.Resume(); err != nil {
@@ -257,7 +269,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 	if err != nil {
 		return err
 	}
-	writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "resume", "reached", journal, nil))
+	if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "resume", "reached", journal, nil)); err != nil {
+		return err
+	}
 	crashPreAuthorityWitness(options, "resume", journal)
 
 	if err := containment.Close(); err != nil {
@@ -275,7 +289,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 	if err != nil {
 		return err
 	}
-	writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "stop", "reached", journal, nil))
+	if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "stop", "reached", journal, nil)); err != nil {
+		return err
+	}
 	crashPreAuthorityWitness(options, "stop", journal)
 
 	if _, err := store.RecordContainmentStopReceipt(key, journal.PID, journal.ProcessIdentity, receipt); err != nil {
@@ -285,7 +301,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 	if err != nil {
 		return err
 	}
-	writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "receipt", "reached", journal, nil))
+	if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "receipt", "reached", journal, nil)); err != nil {
+		return err
+	}
 	crashPreAuthorityWitness(options, "receipt", journal)
 
 	releaser, ok := containment.(platform.ContainmentStopReceiptReleaser)
@@ -299,7 +317,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 	if err != nil {
 		return err
 	}
-	writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "release", "reached", journal, nil))
+	if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "release", "reached", journal, nil)); err != nil {
+		return err
+	}
 	crashPreAuthorityWitness(options, "release", journal)
 
 	cleared, err := store.ClearProcessDetails(key, journal.PID, journal.ProcessIdentity)
@@ -308,7 +328,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 	}
 	clearReport := witnessReportFromJournal(options.mode, "clear", "reached", cleared, nil)
 	setPreAuthorityWitnessJobEvidence(&clearReport, journal)
-	writePreAuthorityWitnessReport(options, clearReport)
+	if err := writePreAuthorityWitnessReport(options, clearReport); err != nil {
+		return err
+	}
 	// Keep the cleared journal as the state witness, but retain the exact
 	// process binding needed to verify that clear did not leave a live target or
 	// supervisor behind.
@@ -316,7 +338,9 @@ func runPreAuthorityWitnessStart(store *state.Store, key state.RunKey, options p
 	if err := process.Close(); err != nil {
 		return err
 	}
-	writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "complete", "completed", cleared, nil))
+	if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "complete", "completed", cleared, nil)); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -336,7 +360,9 @@ func runPreAuthorityWitnessRecovery(store *state.Store, key state.RunKey, option
 			if err != nil {
 				return err
 			}
-			writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover-abort", "recovered", cleared, nil))
+			if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover-abort", "recovered", cleared, nil)); err != nil {
+				return err
+			}
 			return nil
 		}
 		receipt, err := platform.RecoverPreparedSupervisor(handoff)
@@ -352,7 +378,9 @@ func runPreAuthorityWitnessRecovery(store *state.Store, key state.RunKey, option
 			if clearErr != nil {
 				return errors.Join(err, clearErr)
 			}
-			writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover-abort", "recovered", cleared, nil))
+			if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover-abort", "recovered", cleared, nil)); err != nil {
+				return err
+			}
 			return nil
 		}
 		if _, err := store.RecordSupervisorHandoffStopReceipt(key, handoff, receipt); err != nil {
@@ -374,7 +402,9 @@ func runPreAuthorityWitnessRecovery(store *state.Store, key state.RunKey, option
 		if err != nil {
 			return err
 		}
-		writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover-release", "recovered", cleared, nil))
+		if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover-release", "recovered", cleared, nil)); err != nil {
+			return err
+		}
 		return nil
 	}
 	if journal.ContainmentAuthority != nil {
@@ -400,10 +430,14 @@ func runPreAuthorityWitnessRecovery(store *state.Store, key state.RunKey, option
 		if err != nil {
 			return err
 		}
-		writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover-clear", "recovered", cleared, nil))
+		if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover-clear", "recovered", cleared, nil)); err != nil {
+			return err
+		}
 		return nil
 	}
-	writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover", "already-clear", journal, nil))
+	if err := writePreAuthorityWitnessReport(options, witnessReportFromJournal(options.mode, "recover", "already-clear", journal, nil)); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -476,31 +510,35 @@ func witnessReportFromJournal(mode, stage, status string, journal state.RunJourn
 	return report
 }
 
-func writePreAuthorityWitnessReport(options preAuthorityWitnessOptions, report preAuthorityWitnessReport) {
+func writePreAuthorityWitnessReport(options preAuthorityWitnessOptions, report preAuthorityWitnessReport) error {
 	if options.resultFile == "" {
-		return
+		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(options.resultFile), 0o700); err != nil {
-		return
+	resultDirectory := filepath.Dir(options.resultFile)
+	if err := os.MkdirAll(resultDirectory, 0o700); err != nil {
+		return fmt.Errorf("prepare pre-authority witness result directory: %w", err)
 	}
 	contents, err := json.Marshal(report)
 	if err != nil {
-		return
+		return fmt.Errorf("encode pre-authority witness report: %w", err)
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(options.resultFile), ".preauthority-report-")
+	temporary, err := os.CreateTemp(resultDirectory, ".preauthority-report-")
 	if err != nil {
-		return
+		return fmt.Errorf("create pre-authority witness report temporary file: %w", err)
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 	if _, err := temporary.Write(contents); err != nil {
 		_ = temporary.Close()
-		return
+		return fmt.Errorf("write pre-authority witness report: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
-		return
+		return fmt.Errorf("close pre-authority witness report: %w", err)
 	}
-	_ = os.Rename(temporaryPath, options.resultFile)
+	if err := os.Rename(temporaryPath, options.resultFile); err != nil {
+		return fmt.Errorf("publish pre-authority witness report: %w", err)
+	}
+	return nil
 }
 
 func crashPreAuthorityWitness(options preAuthorityWitnessOptions, stage string, journal state.RunJournal) {
@@ -515,7 +553,9 @@ func crashPreAuthorityWitnessWithEvidence(options preAuthorityWitnessOptions, st
 	if processEvidence != nil {
 		setPreAuthorityWitnessProcessEvidence(&report, *processEvidence)
 	}
-	writePreAuthorityWitnessReport(options, report)
+	if err := writePreAuthorityWitnessReport(options, report); err != nil {
+		fmt.Fprintf(os.Stderr, "write pre-authority witness crash report: %v\n", err)
+	}
 	os.Exit(137)
 }
 

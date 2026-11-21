@@ -7,6 +7,7 @@ import { useSessionToken } from "../../app/session";
 import { workDetailOptions, workspaceOptions } from "../../app/application";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
 import { errorMessage, type Api, type Project, type WorkDetail } from "../../services/api";
+import { asText, safeUrl } from "../../services/served";
 import { workSearch, type WorkSearch } from "../projects/filters";
 import { OwnershipChip, ProjectWorkSurface, type WorkSurfaceNavigation } from "../projects/work-surface";
 import { WorkItemEditor } from "../planning/editors";
@@ -16,7 +17,6 @@ import { WorkControlSurface, WorkControls, WorkReceipts, WorkWaitingInput } from
 import { WorkHistory } from "./history";
 import {
   acceptanceLabel,
-  asText,
   ciLabel,
   costHint,
   costLabel,
@@ -25,7 +25,6 @@ import {
   deliveryRows,
   evidenceRows,
   executionStateLabel,
-  failureText,
   hasDecisionPacket,
   nextActionLabel,
   noAcceptedEvidence,
@@ -37,8 +36,8 @@ import {
   reportedResult,
   reportedText,
   resultKindLabel,
-  safeUrl,
   timestamp,
+  workFailureText,
   type EvidenceAttribution,
   type EvidenceRow,
 } from "./presentation";
@@ -302,7 +301,7 @@ function WorkDetailSections({ detail, api }: { detail: WorkDetail; api: Api }) {
   const decision = decisionView(execution?.waiting, asText(outcome.blocker));
   const nextAction = nextActionLabel(execution?.result);
   const summary = reportedText(outcome.summary) ?? reported.text;
-  const reportedFailure = failureText(execution?.failure);
+  const reportedFailure = workFailureText(execution?.failure);
   const findings = evidenceRows(outcome.findings);
   const artifacts = evidenceRows(outcome.changed_artifacts);
   const checks = evidenceRows(outcome.tests);
