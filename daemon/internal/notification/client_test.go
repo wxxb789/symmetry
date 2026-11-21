@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -425,6 +427,153 @@ func TestNewRejectsUnsafeInputs(t *testing.T) {
 	}
 }
 
+// TestRunReportsDialAndConnectionFailuresToTheHandler pins the two failure
+// classes the handler exists for: the rejected handshake of the first attempt
+// and the failure of a connection that had joined on the second. The third
+// attempt is kept alive so the caller's cancellation is the only error left,
+// which must not be reported.
+func TestRunReportsDialAndConnectionFailuresToTheHandler(t *testing.T) {
+	reported := make(chan error, 8)
+	var attempts atomic.Int32
+	joined := make(chan struct{})
+	healthy := make(chan struct{})
+	var healthyOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch attempt := attempts.Add(1); attempt {
+		case 1:
+			http.Error(writer, "control plane is not ready", http.StatusServiceUnavailable)
+		default:
+			conn, err := websocket.Accept(writer, request, nil)
+			if err != nil {
+				t.Errorf("accept WebSocket: %v", err)
+				return
+			}
+			defer conn.CloseNow()
+			ctx := request.Context()
+			join := readChannelFrame(t, ctx, conn)
+			writeChannelFrame(t, ctx, conn, channelFrame{JoinRef: join.JoinRef, Ref: join.Ref, Topic: join.Topic, Event: "phx_reply", Payload: json.RawMessage(`{"status":"ok"}`)})
+			if attempt == 2 {
+				// A joined connection that never answers a heartbeat is the
+				// dropped-connection failure under test.
+				close(joined)
+				<-ctx.Done()
+				return
+			}
+			// The third attempt stays live: every heartbeat is answered, so the
+			// only error left for the client is the caller's cancellation.
+			for {
+				frame, err := readChannelFrameQuietly(ctx, conn)
+				if err != nil {
+					return
+				}
+				reply, err := json.Marshal([]any{nil, frame.Ref, "phoenix", "phx_reply", json.RawMessage(`{"status":"ok"}`)})
+				if err != nil {
+					t.Errorf("encode heartbeat reply: %v", err)
+					return
+				}
+				if err := conn.Write(ctx, websocket.MessageText, reply); err != nil {
+					return
+				}
+				healthyOnce.Do(func() { close(healthy) })
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, testOptions{
+		heartbeatInterval:      time.Millisecond,
+		heartbeatTimeout:       20 * time.Millisecond,
+		reconnectInitial:       20 * time.Millisecond,
+		reconnectMaximum:       20 * time.Millisecond,
+		connectionErrorHandler: func(err error) { reported <- err },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := runClient(client, ctx, make(chan Hint, 4))
+
+	dialFailure := awaitConnectionError(t, reported)
+	select {
+	case <-joined:
+	case <-time.After(testHangGuard):
+		t.Fatal("client did not reconnect after the failed dial")
+	}
+	// Only an established connection can fail from here on, so the next report
+	// is the runConnection failure.
+	connectionFailure := awaitConnectionError(t, reported)
+	if strings.Contains(dialFailure.Error(), "heartbeat") {
+		t.Errorf("failed dial reported as a connection failure: %v", dialFailure)
+	}
+	if !strings.Contains(connectionFailure.Error(), "heartbeat reply timed out") {
+		t.Errorf("dropped connection error = %v, want the heartbeat timeout", connectionFailure)
+	}
+	select {
+	case <-healthy:
+	case <-time.After(testHangGuard):
+		t.Fatal("client did not reach a live connection")
+	}
+
+	cancel()
+	if err := waitForRun(t, done); !errors.Is(err, context.Canceled) {
+		t.Errorf("Run error = %v, want context.Canceled", err)
+	}
+	for {
+		select {
+		case err := <-reported:
+			t.Errorf("handler reported a connection failure after the caller cancelled: %v", err)
+		default:
+			return
+		}
+	}
+}
+
+// TestConnectionErrorHandlerOptionReportsFailedDial pins the exported option:
+// newTestClient builds clientOptions directly, so without this test the seam
+// production will use would be unpinned.
+func TestConnectionErrorHandlerOptionReportsFailedDial(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "control plane is not ready", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	reported := make(chan error, 16)
+	client, err := New(server.URL, "/socket/websocket?vsn=2.0.0", "machine-1", "machine-token", http.DefaultClient,
+		WithConnectionErrorHandler(func(err error) { reported <- err }))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := runClient(client, ctx, make(chan Hint, 4))
+	select {
+	case err := <-reported:
+		if err == nil {
+			t.Error("handler received a nil connection error")
+		}
+	case <-time.After(testHangGuard):
+		t.Fatal("handler did not receive the failed dial")
+	}
+	cancel()
+	if err := waitForRun(t, done); !errors.Is(err, context.Canceled) {
+		t.Errorf("Run error = %v, want context.Canceled", err)
+	}
+}
+
+// awaitConnectionError receives the next connection failure the handler
+// reported, or fails the test when none arrives.
+func awaitConnectionError(t *testing.T, reported <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-reported:
+		if err == nil {
+			t.Fatal("handler received a nil connection error")
+		}
+		return err
+	case <-time.After(testHangGuard):
+		t.Fatal("handler did not report the retried connection failure")
+		return nil
+	}
+}
+
 type testOptions struct {
 	heartbeatInterval time.Duration
 	reconnectInitial  time.Duration
@@ -432,6 +581,9 @@ type testOptions struct {
 	dialTimeout       time.Duration
 	writeTimeout      time.Duration
 	heartbeatTimeout  time.Duration
+	// connectionErrorHandler lets a test observe the retried connection
+	// failures of a client built with the fast test schedule.
+	connectionErrorHandler func(error)
 }
 
 func newTestClient(t *testing.T, baseURL string, options testOptions) *Client {
@@ -446,12 +598,13 @@ func newTestClient(t *testing.T, baseURL string, options testOptions) *Client {
 		options.heartbeatTimeout = time.Second
 	}
 	client, err := newClient(baseURL, "/socket/websocket?vsn=2.0.0", "machine-1", "machine-token", http.DefaultClient, clientOptions{
-		heartbeatInterval: options.heartbeatInterval,
-		reconnectInitial:  options.reconnectInitial,
-		reconnectMaximum:  options.reconnectMaximum,
-		dialTimeout:       options.dialTimeout,
-		writeTimeout:      options.writeTimeout,
-		heartbeatTimeout:  options.heartbeatTimeout,
+		heartbeatInterval:      options.heartbeatInterval,
+		reconnectInitial:       options.reconnectInitial,
+		reconnectMaximum:       options.reconnectMaximum,
+		dialTimeout:            options.dialTimeout,
+		writeTimeout:           options.writeTimeout,
+		heartbeatTimeout:       options.heartbeatTimeout,
+		connectionErrorHandler: options.connectionErrorHandler,
 	})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
@@ -499,23 +652,34 @@ type channelFrame struct {
 
 func readChannelFrame(t *testing.T, ctx context.Context, conn *websocket.Conn) channelFrame {
 	t.Helper()
+	frame, err := readChannelFrameQuietly(ctx, conn)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return frame
+}
+
+// readChannelFrameQuietly reads one Phoenix frame and returns the read or
+// decode error instead of failing the test, so a server-side loop can end
+// quietly when the client closes the connection.
+func readChannelFrameQuietly(ctx context.Context, conn *websocket.Conn) (channelFrame, error) {
 	messageType, value, err := conn.Read(ctx)
 	if err != nil {
-		t.Fatalf("read WebSocket message: %v", err)
+		return channelFrame{}, fmt.Errorf("read WebSocket message: %w", err)
 	}
 	if messageType != websocket.MessageText {
-		t.Fatalf("message type = %v, want text", messageType)
+		return channelFrame{}, fmt.Errorf("message type = %v, want text", messageType)
 	}
 	var values []json.RawMessage
 	if err := json.Unmarshal(value, &values); err != nil || len(values) != 5 {
-		t.Fatalf("decode Phoenix frame %q: %v", value, err)
+		return channelFrame{}, fmt.Errorf("decode Phoenix frame %q: %w", value, err)
 	}
 	frame := channelFrame{Payload: values[4]}
 	json.Unmarshal(values[0], &frame.JoinRef)
 	json.Unmarshal(values[1], &frame.Ref)
 	json.Unmarshal(values[2], &frame.Topic)
 	json.Unmarshal(values[3], &frame.Event)
-	return frame
+	return frame, nil
 }
 
 func writeChannelFrame(t *testing.T, ctx context.Context, conn *websocket.Conn, frame channelFrame) {

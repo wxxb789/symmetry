@@ -80,15 +80,30 @@ func autonomousSettings(input json.RawMessage, getenv func(string) string) (auto
 	return config, nil
 }
 
-func runAutonomous(reader *bufio.Reader, output io.Writer, envelope protocol.AgentInputRecord) error {
+// readerJoinTimeout bounds how long the end of a run waits for the input reader
+// goroutine to observe the closed input. Closing the read side unblocks a
+// parked read only through the Go runtime's poller (io.Pipe and pipes this
+// process created); an inherited stdio pipe is not polled, so on this host a
+// parked read stayed blocked after the close on Linux and returned in 0 ms on
+// Windows. The join is therefore bounded: it never delays the agent by more
+// than this and never turns an unblockable carrier into a hang.
+const readerJoinTimeout = 50 * time.Millisecond
+
+// runAutonomous runs the autonomous fixture mode. reader must be the buffered
+// reader that consumed the initial input record, so the record's read-ahead
+// bytes are not lost; input is the stream behind it and is closed on return
+// when it is an io.Closer, so the reader goroutine cannot outlive the run
+// parked in readLine.
+func runAutonomous(reader *bufio.Reader, input io.Reader, output io.Writer, envelope protocol.AgentInputRecord) error {
 	config, err := autonomousSettings(envelope.Input, os.Getenv)
 	if err != nil {
 		return err
 	}
 	inputs := make(chan autonomousInput, 64)
 	done := make(chan struct{})
-	defer close(done)
+	readerDone := make(chan struct{})
 	go func() {
+		defer close(readerDone)
 		defer close(inputs)
 		for {
 			line, err := readLine(reader)
@@ -100,6 +115,20 @@ func runAutonomous(reader *bufio.Reader, output io.Writer, envelope protocol.Age
 			if err != nil {
 				return
 			}
+		}
+	}()
+	defer func() {
+		// done first: a reader between records leaves through its send select
+		// instead of blocking on a channel nobody reads any more.
+		close(done)
+		closer, ok := input.(io.Closer)
+		if !ok {
+			return
+		}
+		_ = closer.Close()
+		select {
+		case <-readerDone:
+		case <-time.After(readerJoinTimeout):
 		}
 	}()
 	return executeAutonomous(config, envelope.Goal, ".", inputs, output, time.Sleep)

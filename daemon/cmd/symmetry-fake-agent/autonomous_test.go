@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
+	"go.uber.org/goleak"
 )
 
 func TestAutonomousSettings(t *testing.T) {
@@ -191,6 +196,70 @@ func TestAutonomousOutputFailureStopsExecution(t *testing.T) {
 	err := executeAutonomous(autonomousConfig{Steps: 1}, "goal", t.TempDir(), nil, autonomousOutputFunc(func([]byte) (int, error) { return 0, want }), func(time.Duration) { t.Fatal("operation started after output failure") })
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
+// verifyNoLeakedGoroutines marks the test failed when a goroutine it started is
+// still running after the test's own cleanups, so call it first in a test: its
+// cleanup then runs last. The baseline snapshot keeps a failure attributable:
+// goleak's VerifyNone scans every goroutine in the process, so without it a
+// goroutine stranded by another test in this package would blame this one. Not
+// for tests that call t.Parallel: VerifyNone cannot associate goroutines with a
+// specific test.
+func verifyNoLeakedGoroutines(tb testing.TB) {
+	tb.Helper()
+	baseline := goleak.IgnoreCurrent()
+	tb.Cleanup(func() {
+		goleak.VerifyNone(tb, baseline)
+	})
+}
+
+// TestAutonomousReturnReleasesItsInputReader pins the exit path of an
+// autonomous run: the run finishes while the pipe's read side is still open and
+// the reader goroutine is parked in readLine, and returning closes the input
+// and joins that goroutine. The decision record only reaches the run through
+// the reader goroutine, so a reader that drops an already-read record leaves
+// the run blocked in boundary and this test times out instead of finishing.
+func TestAutonomousReturnReleasesItsInputReader(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
+	// The run writes progress.md and result.json into the working directory.
+	t.Chdir(t.TempDir())
+
+	input, writer := io.Pipe()
+	// The write end is deliberately left open: only the run may release its
+	// reader goroutine, so a run that leaves it parked is still visible to the
+	// leak check at the end of this test instead of being unblocked here.
+	var output bytes.Buffer
+	decision := `{"type":"provide_input","goal":"goal","input":{"option_id":"staged"}}` + "\n"
+	writerHook := autonomousOutputFunc(func(data []byte) (int, error) {
+		if bytes.Contains(data, []byte(`"type":"waiting_for_input"`)) {
+			if _, err := writer.Write([]byte(decision)); err != nil {
+				return 0, err
+			}
+		}
+		return output.Write(data)
+	})
+	envelope := protocol.AgentInputRecord{
+		Type:  protocol.AgentInputRecordTaskInput,
+		Goal:  "goal",
+		Input: json.RawMessage(`{"steps":1,"step_ms":0,"decision_at":1}`),
+	}
+	runDone := make(chan error, 1)
+	go func() { runDone <- runAutonomous(bufio.NewReader(input), input, writerHook, envelope) }()
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("runAutonomous: %v", err)
+		}
+	case <-time.After(testHangGuard):
+		t.Fatal("runAutonomous did not return after the decision was answered")
+	}
+	if _, err := writer.Write([]byte("late\n")); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("write after return = %v, want io.ErrClosedPipe: the input was not closed", err)
+	}
+	if !strings.Contains(output.String(), `"type":"summary"`) {
+		t.Fatalf("run did not finish: %s", output.String())
 	}
 }
 
