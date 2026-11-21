@@ -2456,16 +2456,10 @@ func linuxV2NativeWitnessHoldSupported(stage string) bool {
 }
 
 func linuxV2NativeWitnessAckLossSupported(stage string) bool {
-	switch stage {
-	case execution.LinuxV2AckStageHelperBound, execution.LinuxV2AckStageLauncherBound,
-		execution.LinuxV2AckStageGateBound, execution.LinuxV2AckStageHandoffPrepared,
-		execution.LinuxV2AckStageHandoffCommitted, execution.LinuxV2AckStageLeaseArmed,
-		execution.LinuxV2AckStageCheckoutReady, execution.LinuxV2AckStageStopReceiptDurable,
-		execution.LinuxV2AckStageNativeRelease, execution.LinuxV2AckStageJournalCleared:
-		return true
-	default:
-		return false
-	}
+	// The ack-stage vocabulary is owned by execution; deriving membership from
+	// its single source keeps the witness request validation, the drop seam and
+	// the release acceptance from drifting apart.
+	return slices.Contains(execution.LinuxV2AckStages[:], stage)
 }
 
 func linuxV2NativeWitnessHelperDropSupported(operation string) bool {
