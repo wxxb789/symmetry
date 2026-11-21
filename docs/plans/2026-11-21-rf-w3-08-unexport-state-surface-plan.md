@@ -8,8 +8,8 @@ ahead of this slice; W2-09 is merged into that ancestry as PR #165, `52bdffd2`).
 one commit ahead at `d324f601` (a `pnpm/action-setup` dependabot bump) and touches no owned file.
 Every `<file>:<line>` below resolves at the diff base revision.
 
-Revisions (2026-11-22): the SHA above and `d324f601` are the drafting-time stacked base and the
-then-current `origin/main`; both are unreachable from origin after the #200 rebase, and the slice
+Revisions (2026-11-22): the SHA above is the drafting-time stacked base, unreachable from origin
+after the #200 rebase (`d324f601`, the then-current `origin/main`, is an ancestor of main); the slice
 was then split onto `origin/main` `0132bd2b` (#203), the split-out W3-07-domain half landing as
 PR #215 — the evidence record's §10 and §11 record the rebase, the split and the delivered head's
 gates. The rename map, the collision guard and the line

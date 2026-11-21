@@ -11,10 +11,11 @@ Delivered tree: the base commit plus the uncommitted working-tree changes listed
 2026-11-21 (Windows/amd64, go1.27.4); exit codes and outputs are verbatim.
 
 Revisions (2026-11-22). §0–§9 are stage captures: `6d10da97` (stacked base),
-`50619a34`/`2b10bdf2`/`0c28fd62` (implement/apply/fix commits), `1627fac7`/`aa43c2f2` (reviewed
-heads) and `d324f601` (drafting-time `origin/main`) are pre-rebase objects, unreachable from any
-origin branch after the rebase recorded in §10; the delivered head is the split commit on
-`origin/main` `0132bd2b` recorded in §11. §8 and §9 are pre-split stage records whose
+`50619a34`/`2b10bdf2`/`0c28fd62` (implement/apply/fix commits) and `1627fac7`/`aa43c2f2` (reviewed
+heads) are pre-rebase objects, unreachable from any origin branch after the rebase recorded in
+§10 (`d324f601`, the drafting-time `origin/main`, is an ancestor of main); the delivered head
+is the split commit on `origin/main` `0132bd2b` recorded in §11. §8 and §9 are pre-split stage
+records whose
 W3-07-domain code rows (everything but the renames, the constructor move and this goal's own
 records) moved to the W3-07 follow-up branch in round 2 — §11 names the split and the follow-up.
 
