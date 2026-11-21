@@ -35,8 +35,8 @@ appsplit verify origfmt/app.go <12 target files> --moves moves.tsv
   (470 × 2 bytes + 6 × 1 byte = 946).
 - `git diff --color-moved=dimmed-zebra` shape for the subject file:
   `daemon/internal/app/app.go | 2 insertions(+), 9811 deletions(-)` with the ten sibling files added.
-  Range totals (`git diff --numstat a3039f0..0560746`): 18 changed paths, 10,782 insertions,
-  9,824 deletions — the 11 Go files plus 7 docs/script paths, this record included.
+  Range totals (`git diff --numstat a3039f0` over the delivered tree): 18 changed paths, 10,807
+  insertions, 9,833 deletions — the 11 Go files plus 7 docs/script paths, this record included.
 
 ## 2. Gate results (exact commands, exit codes)
 
@@ -49,11 +49,11 @@ appsplit verify origfmt/app.go <12 target files> --moves moves.tsv
 | build linux/arm64 | `GOOS=linux GOARCH=arm64 go build ./...` | exit 0 |
 | build darwin/arm64 | `GOOS=darwin GOARCH=arm64 go build ./...` | exit 0 |
 | package tests (pre-doc-edits run) | `go test -count=1 ./internal/app/...` | `ok github.com/wxxb789/symmetry/daemon/internal/app 235.635s`, exit 0 |
-| package tests (final tree) | `go test -count=1 ./internal/app/...` | `ok github.com/wxxb789/symmetry/daemon/internal/app 390.465s`, exit 0 |
+| package tests (final tree) | `go test -count=1 ./internal/app/...` | `ok github.com/wxxb789/symmetry/daemon/internal/app 239.075s`, exit 0 |
 | whitespace | `git diff --check` | exit 0 (only `core.autocrlf` advisories) |
 | move proof | `appsplit verify … --moves moves.tsv` | exit 0, 475/475 |
-| citation gate | `python3 scripts/ci/check-citation-existence.py --base <changed range> --head HEAD` | exit 0 |
-| exporter unit tests | `python3 scripts/ci/test-linux-v2-evidence.py` (`scripts/ci/`) | 36 tests, 55 failures + 5 errors — **identical** on the unmodified base revision (63.9 s base vs 105.3 s working tree); the failures are the Windows-host `os.getuid` limitation, not a regression (only three comment lines changed in that script) |
+| citation gate | `python3 scripts/ci/check-citation-existence.py --base a3039f0d17fc --head 3b73fdfeff` | `no audited document added or modified between a3039f0d17fc and 3b73fdfeffef; nothing to check`, exit 0 |
+| exporter unit tests | `python3 scripts/ci/test-linux-v2-evidence.py` (`scripts/ci/`) | 36 tests, 55 failures + 5 errors — **identical** on the unmodified base revision (63.9 s base vs 105.3 s working tree); the failures are the Windows-host `os.getuid` limitation, not a regression (that script's diff is comment-only: 18 comment lines added, 13 removed, 0 code lines) |
 
 Gates added by the binding review amendments: `GOOS=linux GOARCH=arm64` and `GOOS=darwin`
 builds (both exit 0), AST declaration-set comparison (above), and the docs-citation update
@@ -96,15 +96,19 @@ verification run.
 | `docs/TODO.md` | `daemon/internal/app/app.go:2148-2159`, `:2227`, `:2258`, `:2242`/`:2245`, `:71` | `daemon/internal/app/cleanup_glue.go:118-143`, `:285`, `:203`, `:234`, `:218`/`:221`, `:21` |
 | `docs/plans/2026-11-21-witness-stall-evidence-plan.md` | `app.go:2148-2159`, `app.go:460` | `cleanup_glue.go:118-143`, `app.go:311` |
 | `scripts/ci/export-linux-v2-redacted-evidence.py` (comment block) | `app.go:460`, `app.go:7385, 7465`, `app.go:8978`, `app.go:3651-3877`, `app.go:7586` | `app.go:311`, `outbox.go:124, 186`, `goal_delivery.go:357`, `events.go:530` + `app.go:1441-1667`, `app.go:2012` |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` (comment block, finish pass) | `app.go:2857, 2891, 3604, 10375`; `app.go:9922-10073, 10918, 11468, 11752`; `app.go:7918-7982, 8940-8975, 9524`; `app.go:7349, 7410, 7414`; `app.go:7936-7972, 8939-8969, 9549`; the four-file `daemon.log` call-site enumeration | `app.go:1189, 1223, 1394` and `lease.go:579`; `lease.go:126-277` and `outbox.go:734, 834, 1110`; `native_run.go:1566-1630, 2181-2216` and `commands.go:696`; `outbox.go:130, 191, 195`; `native_run.go:1584-1620, 2180-2210` and `commands.go:721`; the twelve call-site files |
 
 Not re-pointed by decision: `docs/goals/archive/**` and `docs/evidence/**` historical records keep
 the revision they were written against (a dated evidence record cites that revision by design;
 `goal-0006b-resumed-test-review-2026-09-29.md` even carries the pre-move SHA-256 of `app.go`).
 `docs/archive/CLOSED-TODO.md` citations (`app.go:2207` twice) stay for the same reason — the archive
 records a repair made against the pre-split tree. The CI citation gate audits only runbooks,
-`docs/design/quality.md` and `docs/archive/CLOSED-TODO.md` modified within the compared range; a
-local probe worktree run of that script over the changed range reported
-`2 changed document(s) pass the path and symbol check`, exit 0.
+`docs/design/quality.md` and `docs/archive/CLOSED-TODO.md` modified within the compared range; none
+of those paths changed in this range, so running the gate over the changed range reports
+`no audited document added or modified between a3039f0d17fc and 3b73fdfeffef; nothing to check`,
+exit 0 — the re-pointed citations above are outside every gate and were verified against the
+delivered files instead (each finish-pass line range in section 4 is byte-identical to its cited
+base-revision range).
 
 ## 5. Residual risks and known limits
 

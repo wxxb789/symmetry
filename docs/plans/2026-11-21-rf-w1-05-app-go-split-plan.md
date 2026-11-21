@@ -1,6 +1,6 @@
 # rf-w1-05-app-go-split plan — move-only split of `daemon/internal/app/app.go` into concern files
 
-Contract: `C:/Users/lhan/.local/state/gdd/contracts/goal-rf-w1-05-app-go-split.md` (GDD, 2026-11-21),
+Contract: the goal's GDD contract file (`goal-rf-w1-05-app-go-split.md`, GDD, 2026-11-21),
 including both binding review amendments (`plan-review-ds-1.md` P2-4/A8, `plan-review-opus-1.md` P2-1
 and its "update docs citations" clause). Base revision `a3039f0d17fc7c7905b63bdf247cac5bf339b213`;
 all `app.go:<line>` citations below resolve at that revision. The subject file is
@@ -16,7 +16,7 @@ extracted bytes are identical, and the import set at package scope is identical 
 
 | file | lines | decls | composition |
 |---|---:|---:|---|
-| `app.go` | 2239 | 94 | 73 funcs, 18 types, 2 const, 1 var (incl. the import declaration) |
+| `app.go` | 2239 | 94 | 73 funcs, 18 types, 2 const, 1 var |
 | `native_run.go` | 2417 | 90 | 79 funcs, 9 types, 1 const, 1 var |
 | `goal_admission.go` | 1584 | 29 | 27 funcs, 2 types |
 | `outbox.go` | 1175 | 52 | 48 funcs, 4 types |
@@ -126,10 +126,11 @@ Ambiguous placements and the decision taken (recorded as required; no silent gue
 - **Build constraints.** `app.go` has no build tag, so no sibling may carry one, and none does.
   The contract's amendment (A8) is satisfied vacuously for this slice and is proved by the four
   build targets below; the platform-tagged siblings belong to W1-04.
-- **No exported-symbol change.** No declaration is exported differently: the exported symbol set
-  is the same 21 distinct exported names (10 exported functions, incl. `Run` and the `With*`
-  constructors; 11 exported types; the `Error`/`Unwrap` methods of exported error types; no
-  exported receiver type other than those error types); only their file changed.
+- **No exported-symbol change.** No declaration is exported differently: the declaration set
+  carries the same 17 distinct exported names (10 exported functions, incl. `Run` and the `With*`
+  constructors; 7 exported types: `ControlAPI`, `EnrollmentAPI`, `NotificationClient`, `Options`,
+  `Process`, `ProcessFinalizer`, `StartProcess`); the `Error`/`Unwrap` methods sit on five
+  unexported error types, and no receiver type is exported; only their file changed.
 
 ## Evidence plan (how merge-only is proved)
 
