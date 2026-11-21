@@ -48,10 +48,10 @@ jobs:
       SYMMETRY_REAPER_INTERVAL_MS: "500"
       SYMMETRY_CONTRACTS_DIR: ${{ github.workspace }}/contracts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: portal-assets
           path: control/priv/static/portal
@@ -62,9 +62,9 @@ jobs:
           token="ci-linux-v2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(openssl rand -hex 32)"
           echo "::add-mask::$token"
           printf 'SYMMETRY_OPERATOR_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.4'
           cache-dependency-path: daemon/go.sum
       - uses: erlef/setup-beam@v1
         with:
@@ -159,7 +159,7 @@ jobs:
   contracts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 12.17.0
