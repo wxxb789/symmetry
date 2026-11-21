@@ -23,7 +23,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
       `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
       (`daemon/internal/state/goal_session.go:1044`), `Store.EnsureGoalSessionLineageAvailable`
-      (`:592`) and `Store.FailUnresolvedProvideInput` (`daemon/internal/state/state.go:4175`) are
+      (`:592`) and `Store.FailUnresolvedProvideInput` (`daemon/internal/state/state.go:4238`) are
       unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
       alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matches only each
       definition plus its doc comment — no call site, no test, no doc citation anywhere; this
@@ -183,42 +183,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       unchanged, no line above them in that file was edited.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
-
-- [ ] Stop the Windows-family path tail from absorbing a JSON escape that follows the path.
-      `_WINDOWS_TAIL` (`scripts/ci/model-routing-record-sanitize.py:110`) admits a bare backslash
-      as a path byte — deliberate, per its comment at `:104-107`, because in raw recorded text the
-      backslash is the separator — and the four Windows-family patterns listed here end in it (or
-      in its require-a-byte variant `_WINDOWS_TAIL_PLUS` `:115`): `_DRIVE_PATH` `:133-135`,
-      `_UNC_PATH` `:142-145` (`_PLUS`), `_SLASH_UNC_PATH` `:167-169` (`_PLUS`),
-      `_FILE_URL_PATH` `:204-212`
-      (the root-relative `_ROOT_RELATIVE_PATH` `:191-194` and the file-URL host-root arm `:209` do
-      not), so a recorded `\n` escape that follows a Windows path is consumed into the rendered
-      token together with the text behind it. The POSIX family already fixed exactly this
-      shape (`_POSIX_BYTE` `:122`, whose comment at `:116-121` names the failure — "consuming it would
-      swallow a JSON escape sequence together with the text behind it" — and
-      `scripts/ci/test-model-routing-record-sanitize.py:282-295`,
-      `test_a_json_escape_after_a_path_survives_the_render`, STD-A07); the Windows family has no
-      such case. Reproduced at `978abba` with the tool on two scratch inputs of one shape (a JSON
-      string recording a path, then the two-character `\n` escape, then the word `FAILED`; the
-      Windows input's path is drive-rooted and carries the JSON-escaped doubled separators). The
-      inputs, one JSONL line each, are built in Python with `BS = chr(0x5C)`: Windows
-      `'{"output":"wrote C:' + BS*2 + 'Users' + BS*2 + 'op' + BS*2 + 'run' + BS + 'nFAILED"}'`,
-      POSIX `'{"output":"wrote /' + 'tmp/run' + BS + 'nFAILED"}'`. The Windows input renders to a
-      single token whose digest is
-      `path-sha256:a3a19f2b70d9c277fa8b2ef0f62c217841c3f41ed7e6a78b689045338e4ad1e5`, and that
-      digest is the recomputed sha256 of the raw span the token bound — the path text *plus* the
-      escape *plus* `FAILED` — where a path-only render of the same input would carry
-      `26e7b5b4…` (the sha256 of the path text alone); the POSIX input of the same shape keeps the
-      escape and the word outside its token (`…path-sha256:91525b09…` followed by the escape and
-      `FAILED`). Consequence in a record: an evidence line behind the escape disappears from the
-      rendered bytes while the record stays valid JSON — the loss STD-A07 fixed on the POSIX side.
-      Fix direction: the POSIX rule is not directly portable (a raw Windows spelling uses one
-      backslash per separator, so a separator run can be shaped exactly like a JSON escape —
-      `\run` starts with `\r`), so the reading must be decided — either a JSON-aware pass that
-      respects string escapes (the tool's input is recorded JSON text), or a tail that stops
-      before an escape-shaped backslash run once at least one separator has been consumed — and
-      both the escaped-escape case and the raw single-backslash spelling must be pinned in the
-      tester. Suggested owner area: `scripts/ci` record tooling.
 
 - Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
   workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
@@ -713,6 +677,52 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (plan CW-7 in `docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md`). Found by the
       adversarial review of PR #163 (P3-1).
 
+## Deferred review findings (PR #137)
+
+- [ ] Close the default-scope non-fixpoint the round-4 review of PR #137 found on
+      U+002F-escape plus escaped-backslash literals, disclosed rather than fixed in that PR's
+      round 5: re-rendering a literal whose decoded text puts a separator directly in front of a
+      rendered token reads the separator and the token's text as a POSIX path and binds the
+      token's own text into a new digest. Input (Python, `BS = chr(0x5C)`):
+      `'{"k":"' + BS + 'u002F' + BS*2 + 'opx' + BS*2 + BS + 'u002faop"}'` renders to the escape
+      plus `path-sha256:ef6452<...>` on the first render and to `path-sha256:50df1a<...>` plus
+      `:` plus the first token's own hex on the second; the first render's claim starts at the
+      escaped backslash run, so the decoded `/` the escape spells stays outside it. Neither
+      render leaks a host byte, and the `record-cleanliness` gate runs `--check --root-only`
+      (a fixpoint over the committed corpus), so both effects fail closed; the boundary is
+      disclosed in the sanitizer's docstrings and `docs/evaluations/model-routing/README.md`
+      (Explicit local limits). Fix direction: a token-text guard on the POSIX families' leading
+      positions (the raw look already keeps rendered token text out of its digests) or extending
+      a claim to the separator a raw match's start left outside it - whichever closes the shape
+      without narrowing a real path out of the patterns, pinned by a second-render fixpoint test.
+- [ ] Close the second disclosed non-fixpoint the round-5 review of PR #137 found: a record
+      that already spells a rendered token can bind that token's own text on a later render, in
+      either scope, because a separator run directly in front of the token is a location's start
+      and the union binds the token text the match covers. Shape (Python, `BS = chr(0x5C)`):
+      `'{"k":"//<disposable-root>' + BS + 'n<disposable-root>' + BS*2 + '"}'` renders to
+      `//<disposable-root>` plus the newline escape plus `<disposable-root>` plus
+      `path-sha256:b11b4c<...>` and re-renders to `path-sha256:a2c233<...>` plus
+      `<disposable-root>` plus `path-sha256:a80e51<...>` plus the rest. The input carries no host
+      byte, so the render over-redacts a token rather than leaking; the boundary is disclosed in
+      the sanitizer's docstrings and `docs/evaluations/model-routing/README.md` (Explicit local
+      limits). The round-6 review found two further residual shapes of the same fail-closed
+      kind, confined to a `--root` render on a record that carries no token text of its own. In
+      one a `file:` scheme, a control escape and then the root
+      (`'{"k":"file:' + BS + 'r' + root + BS + 'n"}'`, where `root` is the synthetic drive-root
+      spelling `'C:' + BS*2 + 'W'`) render as `file:` + the escape + `<disposable-root>` + the
+      newline escape. In the other a space-continued chunk reaches the root
+      (`'{"k":"store' + root + 'x/ ' + root + BS + 'n"}'`). Both are the fail-closed direction:
+      nothing leaks (the residue is scheme text, an escape or a name glued to a word), the
+      gate's `--check --root-only` refuses that first render (exit 1), and a second render
+      converges - the third render is byte-identical - and passes the gate. Masked spellings
+      only: `root` is synthetic and no digest is reproduced. Fix direction: the raw look's
+      token-text filter keeps that text out of its own
+      digests, but a separator run in front of a token is still a location's start; closing the
+      shape must not narrow a real path out of the patterns, pinned by a second-render fixpoint
+      test. The same closing options cover the two `--root` residue shapes: an anchored match
+      that crosses a claim (starts before it, ends after it), under the same no-narrowing rule
+      and the same second-render pin.
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
@@ -767,6 +777,103 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       be projected (a Go panic dump therefore appears only as a count). The 45 s harness wait and the
       30 s daemon bound are declared bounds, not the defect: no timeout changes until an occurrence
       has been diagnosed from that tail.
+
+## Daemon: state validator dead branches, a nil-deref panic and the `validGoalSessionUUID` follow-up (rf-w2-09 survey)
+
+- [ ] Consolidate `validGoalSessionUUID` (`daemon/internal/state/goal_session.go:2044`) into the
+      exported wire-primitive validator family. It is a hand-rolled 36-character UUID check that
+      stays local to `internal/state`; the W2-12a strict-decode/wire-primitive slice (program plan §5
+      W2-12, "one validator family, exported/delegated; fix `validateProviderActionUUID`
+      (version/variant)") owns that consolidation, so refactor slice rf-w2-09 (contract clause C7)
+      left it unedited while decomposing the four validators around it. Reproduction:
+      `git grep -n validGoalSessionUUID` matches the definition and call sites inside
+      `goal_session.go` only; neither `authority` nor `protocol` exposes a UUID validator to delegate
+      to yet. W2-12a also owns the `validateProviderActionUUID` version/variant bug named by the same
+      row.
+
+- [ ] Revalidate and remove six unreachable validation conditions (found 2026-11-21, branch
+      `refactor/rf-w2-09-state-validators`; rf-w2-09 is move-only under contract clause C5, so every
+      condition below was relocated byte-identically and is recorded here instead of being fixed in
+      that slice). Reachability was probed by mutating one condition at a time against the rf-w2-09
+      pin fixtures (probe code not committed); the affected strings are listed in
+      `docs/evidence/rf-w2-09-state-validators-2026-11-21.md` §5.
+      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`state.go:6120`) and
+      `v2 cgroup reservation cannot accompany a v1 handoff` (`state.go:6123`): the authority and
+      handoff blocks (`validateContainmentAuthority`, `validateContainmentHandoff`) already return
+      `v1 … cannot use a v2 cgroup reservation` whenever a non-v2 owner is combined with a cgroup
+      reservation, so the later checks can never fire.
+      (b) `Linux cgroup reservation cannot have both abort and physical-stop proof` (`state.go:259`)
+      and `Linux cgroup aborted reservation lost producer-exit evidence` (`state.go:263`):
+      `linuxCgroupReservationAbortMatches` (`state.go:5885`) returns false for every proof that
+      carries a pre-gate receipt or lacks producer-exit parity, so the earlier abort-proof error
+      fires first. Probes: aborted reservation + pre-gate receipt → `Linux cgroup reservation abort
+      proof is invalid`; aborted reservation + helper exit proof → `Linux cgroup helper exit proof
+      is invalid`.
+      (c) `Linux cgroup reservation has effects before creation intent` (`state.go:272`): with
+      `CreateStarted == false` every listed effect is shadowed by an earlier block
+      (leaf→leaf identity, helper→helper identity, launcher→launcher identity,
+      launcher exit→launcher exit proof, gate→gate identity, helper exit→helper exit proof,
+      abort with a disposition other than `neverCreated`→abort proof). Probe: unstarted reservation
+      + leaf identity → `Linux cgroup reservation leaf identity is invalid`.
+      (d) `unresolved input command has an acknowledgement` (`state.go:6261`): it needs `pending`
+      with `intent.Outcome == ""`, but `pending` compares against `acknowledgement.Outcome` and
+      `validAcknowledgement` (`state.go:6427`) requires a non-blank `Outcome`, so an empty-outcome
+      acknowledgement is rejected earlier with `run journal is invalid`. Probe: empty-outcome
+      acknowledgement → `run journal is invalid`; an applied acknowledgement leaves the fixture
+      valid.
+      Fix direction: delete each condition (and its now-dead operand list) only after re-running
+      these probes, since two of them (b, c) also decide which earlier block owns the first-error
+      string; keep the surrounding block's other conditions.
+
+- [ ] Revalidate and remove seven shadowed operands inside reachable validation conditions (found
+      2026-11-21 by the rf-w2-09 fix review's operand-isolation sweep, branch
+      `refactor/rf-w2-09-state-validators`). Each operand sits in a condition that does fire, but an
+      earlier block or an earlier operand of the same condition already covers every journal that
+      could satisfy it, so deleting it changes no verdict — a pin case cannot isolate it. Recorded
+      instead of edited for the same move-only reason as the entry above.
+      (a) `journal.ContainmentCgroup != nil` in `validateContainmentScans` (`state.go:6132`): a
+      journal carrying both a cgroup reservation and containment scans is rejected earlier by
+      `validateContainmentCgroup` (`state.go:6103` `journal.ContainmentScans != nil`).
+      (b) `handoff.SupervisorPID <= 0` in `validateContainmentScans` (`state.go:6141`): the earlier
+      scan block rejects `scans.SupervisorPID <= 0`, and `scans.matchesHandoff` equates the two
+      supervisor PIDs, so a non-positive handoff supervisor PID can never be the deciding operand.
+      (c) `journal.ContainmentAuthority != nil` in `validateContainmentHandoff` (`state.go:6080`):
+      a valid authority always carries `TargetPID > 0` (`state.go:6059`) equal to the journal PID,
+      so `journal.HasProcessDetails()` is already true in the same condition whenever the authority
+      operand could matter.
+      (d) `journal.ContainmentAuthority != nil` in the aborted / pre-gate cgroup preconditions
+      (`state.go:6106`, `state.go:6110`): `validateContainmentAuthority` rejects a v1 authority
+      beside a cgroup reservation, and a v2 authority whose cgroup carries an abort or pre-gate
+      proof fails `linuxCgroupReservationMatchesAuthority` (it requires both to be nil), so the
+      authority block always errors first.
+      (e) `journal.ContainmentHandoff != nil` in the same two preconditions (`state.go:6107`,
+      `state.go:6111`): a v2 handoff passes only when its cgroup matches it with a gate, a bound
+      launcher grant and no pre-gate receipt, while an aborted cgroup must have no gate and no
+      launcher grant (`linuxCgroupReservationAbortMatches`) and a pre-gate receipt requires no abort
+      proof; a v1 handoff beside any cgroup always errors in the handoff block.
+      Fix direction: re-run each argument as a probe before deleting; keep the surrounding
+      condition's live operands.
+
+- [ ] Fix the nil-pointer panic in `validateLinuxCloneCheckout`
+      (`daemon/internal/state/state.go:5113`). It dereferences `*seed`
+      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5124`) although
+      `journal.LinuxCloneSeedReceipt` is only tested as `seed != nil && …` earlier in the same
+      validator, so a journal carrying `linux_clone_checkout_receipt` without
+      `linux_clone_seed_receipt` panics instead of failing validation. Verified 2026-11-21 with a
+      temporary probe test on WSL (`PANIC_RECOVERED: runtime error: invalid memory address or nil
+      pointer dereference`; probe removed afterwards). Because `readJournalEntryLocked` wraps
+      `validateJournal`, a hand-crafted journal file can panic a `ListJournals`/`LoadJournal`
+      caller. Fix direction: give the checkout stage its own requirement that a seed receipt exists
+      (with its own first-error string) or make `linuxCloneCheckoutMatches` take pointers; both
+      change a validation verdict, so they need their own regression test and cannot be folded into
+      a move-only slice. Do not "fix" it by reordering existing conditions: that relocates
+      first-error strings.
+
+Decision note: rf-w2-09 left `validateJournalLeaseTerminalAndGrantInvariants`
+(`state.go:6184`) at cyclomatic complexity 25 and `validateJournalKeyScalarsAndProcessDetails`
+(`state.go:6036`) and `validateContainmentScans` (`state.go:6129`) at 24, against the wave's ≤25
+acceptance. The next condition added to any of those three blocks must be split into a new helper
+instead of appended.
 
 ## Daemon: `writeInputBounded` can strand its writer goroutine (audit F15)
 
