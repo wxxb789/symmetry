@@ -1066,3 +1066,30 @@ instead of appended.
       (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
       test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
       W4-12/W4-13 test work.
+
+## Deferred findings (rf-a4 core work-item eligibility, 2026-11-21)
+
+- [ ] Unify the allowed-actions predicate the Goal authority policy is read through: the two
+      spellings are `provider_operation_allowed?/2`
+      (`control/lib/symmetry_control/goals.ex:9982-9985`, `operation in
+      allowed_values(revision.authority_policy, "allowed_actions") and operation in
+      allowed_values(revision.execution_policy, "allowed_actions")`) and `goal_action_allowed?/2`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:607-609`, the same conjunction
+      through `goal_allowed_actions/1`). Out of scope for rf-a4 (2026-11-21, branch
+      `refactor/rf-a4-core-work-item-eligibility`): both files are owned by other chains — the
+      `goals.ex` region by W4-07/W5-14 and `provider_access.ex` by W4-06 (#189) — and the
+      slice's failure control forbids touching them. The unification is one predicate over
+      `(revision, operation)` with one `allowed_actions` reader, whichever chain lands last owns
+      it.
+
+- [ ] Move the chat work-item projection into core (W5-15, control half): the chat read model
+      reaches web-side code instead of the shared core verdicts —
+      `control/lib/symmetry_control/chat/read_model.ex:10,46` calls
+      `SymmetryControlWeb.PortalJSON.work_item_detail/2` and then overrides the five capability
+      members (`:51-65`: `can_cancel`, `can_retry`, `can_guide`, `can_pause`, `can_resume`, with
+      `historical: true`), and `control/lib/symmetry_control/chat.ex:19` aliases
+      `SymmetryControlWeb.Protocol` for `normalize_map/1` (`:26`, `:68`). Deferred by rf-a4
+      (2026-11-21, same branch): the slice's owned set excludes `chat/**`, and W5-15 owns the
+      inversion plus `decision.lock_version`, consuming the new
+      `SymmetryControl.Workspaces.WorkItemEligibility` for the chat override. The served chat
+      document is unchanged by rf-a4.
