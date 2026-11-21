@@ -7,10 +7,11 @@
 # with the two contract changes below and the recorded deviations, each with
 # its inline reason. The `checks:` map decides the counted set: an empty
 # `checks: %{}` falls back to Credo's built-in defaults, so the metric shifts
-# silently (measured 474 issues with `%{}` at 1.7.19; the earlier audit's 403
-# came from a Credo that dropped AliasOrder, AliasUsage, PreferImplicitTry,
-# StringSigils and Apply, whose 71 findings are that difference). Keep the
-# `enabled`/`disabled` lists explicit; never replace them with `%{}`.
+# silently (measured 459 issues with `%{}` at 1.7.19 at the delivered revision;
+# the earlier audit's 403 came from a Credo that dropped AliasOrder, AliasUsage,
+# PreferImplicitTry, StringSigils and Apply, whose findings at the delivered
+# revision sum to 67). Keep the `enabled`/`disabled` lists explicit; never
+# replace them with `%{}`.
 #
 #   * `Credo.Check.Design.DuplicatedCode` is enabled at `mass_threshold: 40`
 #     (it is opt-in in the generated config, which carries it under
@@ -40,7 +41,7 @@
       # this cap and still prints a summary, which silently under-reports the
       # very count this configuration exists to record: `lib/symmetry_control/
       # goals.ex` alone is 10,810 lines and was skipped on a loaded host at
-      # 5_000 (measured 288 issues over 148 files against the recorded 533
+      # 5_000 (measured 288 issues over 148 files against the recorded 516
       # issues over 153 files). The cap is a hang guard, not a budget, so it
       # stays generous.
       parse_timeout: 30000,
