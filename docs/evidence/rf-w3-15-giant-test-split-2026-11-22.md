@@ -13,8 +13,9 @@ verification stage.
 Scratch tooling (state dir, `gdd/refactor/scratch/`, read-only on the repo except for the patch
 files it emits): `w3-15-measure.py` (unit spans: Go `^func `..`^}`, ExUnit `test "…"` blocks,
 md5 `2543dea4684c323ba7edfc3b096af42e`), `w3-15-generate.py` (base→delivered transformation +
-`apply_patch`-format patches, `ccd57d71b5b2e6704fac2bbc7169ab31`), `w3-15-verify.py` (27 move-only /
-structure checks, `6003dfa41d3735a0e6dec1150c09b8fb`), `w3-15-capture-go.sh` /
+`apply_patch`-format patches, md5 `e295b2951b9f21fad20880203ec787ba` — F1 adjustment, §10),
+`w3-15-verify.py` (25 printed move-only / structure checks, md5
+`c56ec7831a0a5815b0e07f89aee77959` — same adjustment), `w3-15-capture-go.sh` /
 `w3-15-capture-ex.sh` (name-set captures), `w3-15-mix.sh` (portable Elixir 1.20.4 / OTP 29.0.6,
 `MIX_ENV=test`, `MIX_TEST_PARTITION=rf-w3-15`, local PostgreSQL `127.0.0.1:5432`).
 
@@ -22,14 +23,17 @@ structure checks, `6003dfa41d3735a0e6dec1150c09b8fb`), `w3-15-capture-go.sh` /
 
 | file | diff | change |
 | --- | --- | --- |
-| `daemon/internal/app/app_test.go` | +156/−122 | the 5 single-use fixture constructs of `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` become file-level helpers (`claimAdmissionControlClient` 61 L, `claimAdmissionDaemon` 27 L, `startClaimAdmissionRun` 11 L, `assertClaimAdmissionNoEffects` 15 L, `claimAdmissionProviderAccess` 9 L); 4+5+3+2 call sites renamed; scenario bodies verbatim |
-| `daemon/internal/state/state_test.go` | +442/−437 | the 48-case table of `TestJournalValidatorFirstErrorStringsArePinned`/`validateJournal` becomes `type pinnedJournalMutationCase` + 3 scenario-family funcs (ownership 204 L / scan+release 92 L / record 135 L) joined by `slices.Concat` in the original case order; `"slices"` import; two pinned message consts hoisted |
-| `control/test/symmetry_control/goals_test.exs` | +382/−329 | the 328-L test body becomes 4 same-file `defp` phases (86/79/147/66 L) called from the same `test "…"` block in the original order |
+| `daemon/internal/app/app_test.go` | +142/−135 | the 5 single-use fixture constructs of `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` become file-level helpers (`claimAdmissionControlClient` 61 L, `claimAdmissionDaemon` 26 L, `startClaimAdmissionRun` 11 L, `assertClaimAdmissionNoEffects` 15 L, `claimAdmissionProviderAccess` 9 L); 4+5+3+2 call sites renamed; scenario bodies verbatim |
+| `daemon/internal/state/state_test.go` | +450/−429 | the 48-case table of `TestJournalValidatorFirstErrorStringsArePinned`/`validateJournal` becomes `type pinnedJournalMutationCase` + 3 scenario-family funcs (ownership 204 L / scan+release 92 L / record 135 L) joined by `slices.Concat` in the original case order; `"slices"` import; two pinned message consts hoisted |
+| `control/test/symmetry_control/goals_test.exs` | +386/−325 | the 328-L test body becomes 4 same-file `defp` phases (86/79/147/66 L) called from the same `test "…"` block in the original order |
 | `docs/plans/2026-11-22-rf-w3-15-giant-test-split-plan.md` | new, 267 L | plan (owned set) |
 | `docs/evidence/rf-w3-15-giant-test-split-2026-11-22.md` | new | this record |
 
-`git diff --stat`: 3 files changed, 979 insertions(+), 889 deletions(-) (the plan row's `dLOC ≈0`
-is report-only, conductor D2). The six unedited owned files are byte-identical to the base:
+Per-file counts are `git diff --numstat 6d428d8f -- <file>` against the delivered worktree
+(additions/deletions; stable across `--minimal`/`--histogram`/`--patience`/`--no-indent-heuristic`);
+`git diff --stat` on the same range: 3 files changed, 978 insertions(+), 889 deletions(-) (the plan
+row's `dLOC ≈0` is report-only, conductor D2). The six unedited owned files are byte-identical to
+the base:
 `git diff --exit-code -- daemon/internal/harness/codex/adapter_test.go
 daemon/internal/harness/opencode/adapter_native_work_test.go
 daemon/internal/state/linux_cgroup_v2_test.go
@@ -44,7 +48,7 @@ Before = base `6d428d8f`; after = delivered tree; same tool both sides.
 
 | owned file | before (max unit) | after (max unit) | action |
 | --- | --- | --- | --- |
-| `internal/app/app_test.go` | **321 @777** | **201 @777** (helpers 61/27/11/15/9; next 177 @6283 untouched) | split |
+| `internal/app/app_test.go` | **321 @777** | **201 @777** (helpers 61/26/11/15/9; next 177 @6282 untouched) | split |
 | `internal/state/state_test.go` | **595 @2457** | **204 @2637** (ownership; record 135, test func 171, scan 92; next 79 @1470 untouched) | split |
 | `control/…/goals_test.exs` | **328 @2468** | **8** (the test block; new defps 86/79/147/66; next 207 @3173 untouched) | split |
 | `internal/harness/codex/adapter_test.go` | 76 @28 | 76 @28, unedited | measured-closed |
@@ -55,8 +59,9 @@ Before = base `6d428d8f`; after = delivered tree; same tool both sides.
 | `pi_control_e2e_test.exs` | 504 @1610, 339 @1266, 338 @702 | unchanged, unedited | D3 measured-only |
 
 Repo-wide units >300 L: **17 at base → 14 delivered**; the three removed are exactly the split
-targets. The remaining 14 = the 3 D3 measured-only pi-control blocks + the e2e witness test/helper +
-the 9 out-of-scope units the contract's P1-3 lists (`e2e/production_linux_containment_witness_test.go`
+targets. The remaining 14 = the 4 D3 measured-only units (the e2e witness test 879 + the three
+pi-control blocks 504/339/338) + the 10 out-of-scope units the contract's P1-3 lists
+(`e2e/production_linux_containment_witness_test.go`
 632/329, `…containment_negative_witness_test.go` 507, `harness/omo/native_test.go` 469,
 `native/linux-gate/protocol/launcher_integration_linux_test.go` 443,
 `internal/state/linux_clone_journal_test.go` 395/336,
@@ -66,13 +71,13 @@ the 9 out-of-scope units the contract's P1-3 lists (`e2e/production_linux_contai
 
 ## 3. Move-only / structure proof
 
-`python gdd/…/w3-15-verify.py <repo> HEAD <candidates> --applied` → **ALL CHECKS PASS** (27 checks,
-base = `git show HEAD:<file>`):
+`python gdd/…/w3-15-verify.py <repo> 6d428d8f <candidates> --applied` → **ALL CHECKS PASS** (25
+printed checks; base = `git show 6d428d8f:<file>`; re-run at the apply revision after F1 — §10):
 
 - `app.prefix-identical`, `app.unit-top-level 201 L`, `app.call-site-renames
   {newClient 4, newDaemon 5, start 3, assertNoEffects 2}`, `app.test-body-identical-after-move`,
   `app.helper-move[newClient|newDaemon|start|assertNoEffects|providerAccess]` (whitespace-stripped
-  body equality with the base closures).
+  body equality with the base closures; `newDaemon` excepts the one blank line F1 removed — §10).
 - `state.entry-count 48`, `state.moved-entry-count 48`,
   `state.entries-byte-identical-modulo-indent` (each moved entry equals its base text after exactly
   one tab is removed), `state.case-order-preserved` (index-by-index `name:` equality),
@@ -84,10 +89,11 @@ base = `git show HEAD:<file>`):
   `goals.block-size 8 L`, `goals.test-name-set-identical 147 vs 147`, `goals.tag-set-identical`.
 
 Reproducibility: `w3-15-generate.py` regenerates all three delivered files from the base
-byte-identically (`cmp` OK for each; the generated candidates under `gdd/…/w3-15-runs/candidates/`
-equal the delivered tree). The bulk moves were applied with the harness patch tool from the
-generated `apply_patch`-format patches (recorded under `…/candidates/patches/`), each followed by
-`cmp` against the candidate.
+byte-identically (`cmp` OK for each against the apply-stage worktree; the F1 blank-line
+normalization is part of the generator — §10; the generated candidates under
+`gdd/…/w3-15-runs/candidates/` equal the delivered tree). The bulk moves were applied with the
+harness patch tool from the generated `apply_patch`-format patches (recorded under
+`…/candidates/patches/`), each followed by `cmp` against the candidate.
 
 ## 4. Adjustments forced by the compiler/formatter (all recorded)
 
@@ -159,7 +165,7 @@ intersect the edited files' test-name sets empty (they live in `e2e/*`, `harness
 in the unedited `pi_control_e2e_test.exs` — the D3 selection run (§7) shows all five still selected
 under `--only pi_control_e2e_native_positive`.
 
-## 7. Gates (real commands, exit codes, observed counts)
+## 7. Gates (real commands, exit codes, observed counts — implement revision; apply-stage re-runs in §10)
 
 | command | exit | observed |
 | --- | --- | --- |
@@ -232,8 +238,50 @@ probe restore, not a new state):
   (why the cases call the exported validator — outside the touched hunks) and the 2-line
   `launchToken` fixture note (a magic literal with its role). No comment was added; the touched
   hunks carry no banners/step labels.
-- The plan row's `dLOC ≈0` is report-only (D2); this slice's diffstat is +979/−889 (test text
+- The plan row's `dLOC ≈0` is report-only (D2); this slice's diffstat is +978/−889 (test text
   re-indentation dominates).
 - `linux_clone_journal_test.go` (395/336 L) is W2-09's file and is explicitly out of scope; the
   contract's P1-2 prediction for `state_test.go` (595 L at the rebased head) materialised and was
   split here.
+
+## 10. Apply stage (2026-11-22 — accepted simplify finding F1)
+
+F1 deleted the stray blank line at `app_test.go:1066` (between the returned `&daemon{}` literal and
+`claimAdmissionDaemon`'s closing brace; the base closure carried the same line, so the move had
+preserved it). Nothing else in the tree changed: no test, assertion, name, tag or count was touched.
+
+- Re-derived at the apply revision (worktree): per-file `git diff --numstat 6d428d8f -- <file>` →
+  app `142/135`, state `450/429`, goals `386/325`; `git diff --stat` total `978/889`;
+  `claimAdmissionDaemon` helper `27 → 26 L`; app next-max coordinate `177 @6283 → 177 @6282`.
+  Repo-wide sweep unchanged at 14 delivered (>300 L; `gdd/…/w3-15-runs/units-apply.txt`).
+- Proof re-runs: `w3-15-verify.py` → **ALL CHECKS PASS** (25 printed checks; the
+  `app.helper-move[newDaemon]` comparison encodes the accepted one-blank-line delta);
+  `w3-15-generate.py` (same normalization added) regenerates all three candidates `cmp`-identical
+  to the worktree. Script md5s: verify `c56ec7831a0a5815b0e07f89aee77959`, generate
+  `e295b2951b9f21fad20880203ec787ba` (measure unchanged `2543dea4684c323ba7edfc3b096af42e`).
+- Mutation probe re-run (§8, app leg only — F1's file): leg A (`got != 1 → != 2`) exit 1 with
+  `app_test.go:821: control requests = 1, want claim only` (both table subtests); leg B (flip plus
+  the 3-line covering `if got := len(requests)` block deleted) exit 0 (`ok … 0.635s`); restored
+  `cmp`-identical to the pre-probe copy (`gdd/…/w3-15-runs/probes/app_test.go.apply-pre-mutation`,
+  `md5 17060c6e41b278690dc4f94d7f59892a`) and the focused run green (`ok … 0.584s`). The
+  state/goals probe legs were not re-run: those files' bytes are unchanged by the apply stage.
+- Gates re-run at the apply revision (all foreground, serial; logs under `gdd/…/w3-15-runs/apply/`):
+  `gofmt -l .` 0 (no output); `go vet ./...` 0; `go test -count=1 ./internal/app/
+  ./internal/harness/codex/ ./internal/harness/opencode/ ./internal/state/` 0 (`ok` app 126.6s,
+  codex 13.0s, opencode 0.37s, state 5.08s); app name-set re-capture (`go test -json -count=1
+  ./internal/app/`) 0 → 1173 names, `comm -23`/`-13` 0/0 vs the implement capture and 0 lost vs the
+  base capture, actions `run 1173 / pass 1172 / skip 1` identical to the recorded capture; WSL
+  `Ubuntu-24.04` `go test -count=1 ./internal/state/` 0 (`ok … 11.839s`); `mix format
+  --check-formatted` 0; `MIX_ENV=test mix compile --warnings-as-errors` 0 (forced clean rebuild:
+  `Compiling 90 files (.ex)`, `Generated symmetry_control app`); `mix test
+  test/symmetry_control/goals_test.exs` 0 → `147 passed` (51.5s; 147 event rows, `comm` 0/0 vs the
+  implement capture, states `147 passed`, `suite_finished` counts identical); `mix test
+  test/symmetry_control/migrations/goal_0006_migration_test.exs` 0 → `60 passed` (102.9s); the D3
+  selection run (`--only pi_control_e2e_native_positive --include skip:…`,
+  `SYMMETRY_PI_CONTROL_E2E=1`) exit 2 — identical to the recorded measurement (`0/5 passed, 3
+  excluded`, all five red at the `SYMMETRY_PI_CONTROL_E2E_EXECUTABLE must name the real Pi 1.5.2
+  executable` prerequisite; file unedited); `git diff --check` 0; `git diff --exit-code` on the six
+  unedited owned files 0.
+- Host-path scan at the apply revision: the working diff adds no host path and no profile-name text;
+  the only pattern matches are the two pre-existing quoted scan texts (evidence §7, plan
+  evidence-plan item 7) — no host path is written.

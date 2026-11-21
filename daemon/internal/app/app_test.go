@@ -1063,7 +1063,6 @@ func claimAdmissionDaemon(t *testing.T, now time.Time, store *state.Store, clien
 		running:      make(map[state.RunKey]*runningRun),
 		slots:        make(chan struct{}, 1),
 	}
-
 }
 
 func startClaimAdmissionRun(t *testing.T, daemon *daemon, work protocol.Work) state.RunJournal {

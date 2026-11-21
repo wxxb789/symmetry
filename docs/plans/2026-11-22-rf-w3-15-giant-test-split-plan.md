@@ -33,7 +33,7 @@ predicted "502 L at `:2457`" from the branch snapshot; the merged text is 595 L)
 is a real split target at the dispatch head.
 
 Repo-wide sweep at HEAD: **17 units >300 L** (test files only). The three split targets above; the
-three D3 measured-only units above; the remaining **11 are outside the owned set** and stay
+four D3 measured-only units above; the remaining **10 are outside the owned set** and stay
 out-of-scope/measured (contract P1-3):
 `e2e/production_linux_containment_witness_test.go:512` 632 and `:2296` 329,
 `e2e/production_linux_containment_negative_witness_test.go:467` 507,
@@ -69,11 +69,11 @@ stay byte-identical.
 | --- | --- | --- |
 | `newClient := func(t, template)` :779 | `claimAdmissionControlClient` | `(t *testing.T, now time.Time, template protocol.ClaimResponse) (*control.Client, <-chan string, <-chan protocol.StateTransitionRequest)` |
 | `newDaemon := func(t, store, client, stateDirectory, workspaceService, startCalls)` :840 | `claimAdmissionDaemon` | same args `+ now time.Time` (the closure captured `now` for its clocks) |
-| `start := func(t, daemon, work)` :867 | `startClaimAdmissionRun` | `(t, app *daemon, work protocol.Work) state.RunJournal` |
+| `start := func(t, daemon, work)` :867 | `startClaimAdmissionRun` | `(t, daemon *daemon, work protocol.Work) state.RunJournal` |
 | `assertNoEffects := func(...)` :878 | `assertClaimAdmissionNoEffects` | `(t, store *state.Store, journal state.RunJournal, workspaceService *countingWorkspace, startCalls int, stateDirectory string)` |
 | `providerAccess := &protocol.ProviderAccess{…}` :893 | `claimAdmissionProviderAccess` | `() *protocol.ProviderAccess` |
 
-All five names verified free in package `app` (`git grep -w -c` = 0). Call-site edits: `newClient` 5×,
+All five names verified free in package `app` (`git grep -w -c` = 0). Call-site edits: `newClient` 4×,
 `newDaemon` 5× (incl. `restarted :=`), `start` 3×, `assertNoEffects` 2×; `providerAccess` keeps its
 local name, rebound in the test as `providerAccess := claimAdmissionProviderAccess()`. Extracted
 bodies keep `t.Helper()` and their statements in order; the only textual change besides the move is
