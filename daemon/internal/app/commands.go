@@ -79,9 +79,9 @@ func (daemon *daemon) dispatchQueuedCommand(ctx context.Context, queued *queuedC
 				// A terminal owner reserved this run: a local cancelled flag could make it
 				// fail its own durable write; the command stays replayable until then.
 			} else {
-				active.cancelled = true
+				active.markCancelled()
 				if !active.claimed {
-					active.cancelCommandID = queued.command.CommandID
+					active.setCancelCommandID(queued.command.CommandID)
 					daemon.mu.Unlock()
 					return
 				}
@@ -363,9 +363,7 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		}
 		if active.terminal || active.terminalizing > 0 {
 			if active.nativeTerminalOwner && active.nativeStartTerminalObserved && !active.stale {
-				active.nativeCancelCommandID = command.CommandID
-				active.nativeCancelTerminalObserved = true
-				active.nativeCancelRejected = true
+				active.recordNativeCancelObserved(command.CommandID, true, true)
 			}
 			daemon.mu.Unlock()
 			daemon.clearCancellationReservation(key, command.CommandID)
@@ -384,8 +382,7 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 				daemon.mu.Unlock()
 				return false
 			}
-			active.cancelled = true
-			active.cancelCommandID = command.CommandID
+			active.requestCancel(command.CommandID)
 			cancel := active.cancel
 			daemon.mu.Unlock()
 			if cancel != nil {
@@ -397,19 +394,17 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			// Lease loss already stopped this owner: remember the cancel for the exact
 			// process-exit witness; never acknowledge before that physical stop is proven.
 			if active.cancelCommandID == "" {
-				active.cancelCommandID = command.CommandID
+				active.setCancelCommandID(command.CommandID)
 			}
 			daemon.mu.Unlock()
 			return daemon.settleStaleCancellation(ctx, key)
 		}
 		if !active.claimed {
-			active.cancelled = true
-			active.cancelCommandID = command.CommandID
+			active.requestCancel(command.CommandID)
 			daemon.mu.Unlock()
 			return false
 		}
-		active.cancelled = true
-		active.cancelCommandID = command.CommandID
+		active.requestCancel(command.CommandID)
 		process := active.process
 		nativeSession := active.nativeSession
 		nativePrepared := active.prepared
@@ -424,16 +419,14 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		nativeTerminalOwnerClaim := uint64(0)
 		var renewCancel context.CancelFunc
 		if nativeTerminalReserved {
-			nativeTerminalOwnerClaim = claimNativeTerminalOwner(active, false)
+			nativeTerminalOwnerClaim = active.claimSettlementOwner(false)
 			if active.goalAdmission != nil {
 				admissionCopy := *active.goalAdmission
 				active.nativeFinalAdmission = &admissionCopy
 			}
-			renewCancel = active.renewCancel
-			active.renewCancel = nil
-			active.renewCancelID++
+			renewCancel = active.invalidateRenewal()
 		} else if terminalReserved {
-			active.terminalizing++
+			active.beginTerminalReservation()
 		}
 		daemon.mu.Unlock()
 		if renewCancel != nil {
@@ -543,15 +536,14 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			}
 			daemon.mu.Lock()
 			if daemon.running[key] == active {
-				active.nativeCancelCommandID = command.CommandID
-				active.nativeCancelTerminalObserved = terminalObserved
-				active.nativeCancelRejected = terminalObserved && cancelExplicitlyRejected && !waitTurnObservedFailure && (nativeWaitTurnErr == nil || finalResultKnown)
-				if active.nativeCancelRejected {
-					active.nativeCancelTerminateErr = nil
+				rejected := terminalObserved && cancelExplicitlyRejected && !waitTurnObservedFailure && (nativeWaitTurnErr == nil || finalResultKnown)
+				active.recordNativeCancelObserved(command.CommandID, terminalObserved, rejected)
+				if rejected {
+					active.recordNativeCancelTerminateErr(nil)
 				} else if terminalObserved {
-					active.nativeCancelTerminateErr = controlFailure
+					active.recordNativeCancelTerminateErr(controlFailure)
 				} else {
-					active.nativeCancelTerminateErr = terminateErr
+					active.recordNativeCancelTerminateErr(terminateErr)
 				}
 			}
 			daemon.mu.Unlock()

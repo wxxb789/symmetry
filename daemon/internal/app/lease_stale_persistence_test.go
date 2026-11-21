@@ -18,7 +18,7 @@ func TestStartAssignedStalePersistenceFailureRetainsOwnerUntilRetry(t *testing.T
 	store, key := claimedStore(t)
 	defer store.Close()
 
-	active := &runningRun{starting: true, stale: true, slotHeld: true, cleanupBlocked: true}
+	active := &runningRun{runLifecycle: runLifecycle{starting: true, stale: true, slotHeld: true}, cleanupBlocked: true}
 	daemon := &daemon{
 		store:       store,
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -69,7 +69,7 @@ func TestTerminateForLeaseResolvesUnknownStaleWriteByReadback(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 
-	active := &runningRun{stale: true, slotHeld: true, cleanupBlocked: true}
+	active := &runningRun{runLifecycle: runLifecycle{stale: true, slotHeld: true}, cleanupBlocked: true}
 	daemon := &daemon{
 		store:       store,
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -110,7 +110,7 @@ func TestTerminateForLeaseNativeStartStalePersistenceFailureRetainsRecoveryOwner
 	store, key := claimedStore(t)
 	defer store.Close()
 
-	active := &runningRun{nativeStartInFlight: true, slotHeld: true, cleanupBlocked: true}
+	active := &runningRun{runLifecycle: runLifecycle{nativeStartInFlight: true, slotHeld: true}, cleanupBlocked: true}
 	daemon := &daemon{
 		store:       store,
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -147,12 +147,14 @@ func TestStartAssignedStaleCleanupKeepsNativeRecoveryOwner(t *testing.T) {
 	defer store.Close()
 
 	active := &runningRun{
-		starting:            true,
-		stale:               true,
-		nativeSession:       &closeFailureGoalSession{},
-		slotHeld:            true,
-		cleanupBlocked:      true,
-		nativeStartInFlight: false,
+		runLifecycle: runLifecycle{
+			starting:            true,
+			stale:               true,
+			slotHeld:            true,
+			nativeStartInFlight: false,
+		},
+		nativeSession:  &closeFailureGoalSession{},
+		cleanupBlocked: true,
 	}
 	daemon := &daemon{
 		store:       store,
@@ -281,7 +283,7 @@ func TestStaleCancelSettlesAfterProvenProcessStop(t *testing.T) {
 				t.Fatal(err)
 			}
 			process := newBlockingProcess()
-			active := &runningRun{process: process, claimed: true, slotHeld: true, cleanupBlocked: true}
+			active := &runningRun{process: process, runLifecycle: runLifecycle{claimed: true, slotHeld: true}, cleanupBlocked: true}
 			slots := make(chan struct{}, 1)
 			slots <- struct{}{}
 			daemon := &daemon{
@@ -333,7 +335,7 @@ func TestStaleCancelWithoutStopWitnessStaysUnacknowledged(t *testing.T) {
 		t.Fatal(err)
 	}
 	process := &failingTerminateProcess{}
-	active := &runningRun{process: process, claimed: true, slotHeld: true, cleanupBlocked: true}
+	active := &runningRun{process: process, runLifecycle: runLifecycle{claimed: true, slotHeld: true}, cleanupBlocked: true}
 	daemon := &daemon{
 		store:       store,
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
