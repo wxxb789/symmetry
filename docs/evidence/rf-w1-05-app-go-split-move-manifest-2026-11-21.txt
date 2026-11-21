@@ -1,0 +1,487 @@
+# rf-w1-05-app-go-split move manifest
+# Source: daemon/internal/app/app.go at a3039f0d17fc7c7905b63bdf247cac5bf339b213 (12,048 lines).
+# Produced by: appsplit verify (go/ast byte-range extraction of each top-level declaration with its
+# doc-comment cluster, on both revisions) -- comparison carrier: extracted declaration text with all
+# whitespace removed. Review round: the first run's single gofmt realignment (systemTimer.Stop,
+# caused by a splitter-inserted blank line above a one-line func) was removed, and the exact-byte
+# AST comparison re-run reports all 475 declarations byte-identical; target line numbers below are
+# for the delivered revision (evidence record section 5).
+# Result: 475 of 475 declarations matched (mismatch=0, extra=0); import set 35 -> 35 identical.
+# Columns: kind, receiver, name, original line, target file, target line, text sha256 (first 8 bytes = 16 hex, whitespace-stripped).
+# Per-file counts: app.go=94, cleanup_glue.go=22, commands.go=42, events.go=39, goal_admission.go=29, goal_delivery.go=30, lease.go=23, native_run.go=90, outbox.go=52, probe.go=19, recovery_glue.go=35
+kind	recv	name	orig_line	target_file	target_line	text_sha256_8
+const		(linuxStopReceiptBarrierWitnessEnv,linuxStopReceiptBarrier...)	67	cleanup_glue.go	17	3426dc5dfd830b0e
+const		(minimumInterval,maximumInterval,reconcileRetryMax,leaseSa...)	43	app.go	30	2684e19b25249dc0
+const		(redactedProviderToken,maxProviderRedactorPendingBytes,max...)	6766	events.go	20	df8caac02bbeec5d
+const		controlUTCTimestampLayout	65	app.go	52	3e08ce57516d6c03
+const		nativeGoalUsageKey	6444	native_run.go	1010	df69461c14410517
+const		unavailableNativeMetadataVersion	1236	probe.go	173	0a2bfa283a339ae0
+func	agentOutput	flush	6804	events.go	58	9785f5225cd47a6c
+func	agentOutput	handle	6789	events.go	43	e403b3a4b945010a
+func	daemon	abandonGoalSession	6076	goal_admission.go	1354	ddebda198d67c399
+func	daemon	abandonGoalSessionUncertain	6152	goal_admission.go	1430	a34957aaa6bec714
+func	daemon	abortGoalSessionLaunchBeforeNativeStart	5695	goal_admission.go	1294	fb1f22800aa50fb2
+func	daemon	abortLinuxCloneReuseBeforeNativeStart	1640	native_run.go	280	9834d931c90ccc7a
+func	daemon	acknowledgeExpiredNativeStartCancellation	5809	native_run.go	694	496e7edef310ca7c
+func	daemon	acknowledgeExpiredNativeStartCancellationCommand	5822	commands.go	375	537c42dbc83823f3
+func	daemon	acquireLinuxV2LaunchPhase	1663	app.go	760	4ed1deb7bc37aa31
+func	daemon	activeNativeSessionKey	6227	goal_admission.go	1505	71938e8c02455c3e
+func	daemon	activeRuns	11819	app.go	2206	0ca5aa843c79d299
+func	daemon	attachNativeSession	5603	goal_admission.go	1238	d90da0236169a89f
+func	daemon	attachPartialNativeSession	5572	goal_admission.go	1226	8a96b20d90345ee7
+func	daemon	attachResumedNativeSession	4584	goal_admission.go	238	29335adc523614e1
+func	daemon	beginCommandRequest	3453	commands.go	336	a2849c80c6da7931
+func	daemon	beginNativeStart	4164	native_run.go	406	a61a5123aa74151c
+func	daemon	beginTerminal	4060	app.go	1849	14281109e305b426
+func	daemon	bindLinuxCloneReuse	1630	native_run.go	270	a464bc9e8f64358b
+func	daemon	bindSupervisorHandoffCallback	2363	cleanup_glue.go	339	904a4ddda51c1773
+func	daemon	canTerminatePersistedProcess	3048	recovery_glue.go	414	ff109b7cf1e729f6
+func	daemon	cancelRecoveredJournal	3055	recovery_glue.go	421	e4efdd8ce3bfff44
+func	daemon	checkLinuxV2NativeAdmission	1624	native_run.go	264	83d5858ce05712c8
+func	daemon	checkLinuxV2NativeAdmissionBeforeClaim	1618	native_run.go	258	eca0746d579798d5
+func	daemon	checkLinuxV2TargetAdmission	1815	app.go	844	33508e0f704a87cc
+func	daemon	claimLocalLeaseDeadline	1737	lease.go	78	db14dd6123276e42
+func	daemon	claimWithRetry	11957	commands.go	918	627a1377a41f2b56
+func	daemon	claimWithRetryUntil	11965	commands.go	926	7ad4321b36a98392
+func	daemon	claimWithRetryWait	11961	commands.go	922	8cae746f8bdf19a9
+func	daemon	clearCancellationReservation	9677	app.go	2070	3651b495952f4006
+func	daemon	clearCompletedCommandReceipts	3974	app.go	1763	cff64db11d4b3ff4
+func	daemon	clearContainmentUnprovenCallback	2124	cleanup_glue.go	100	0c1fc1c72b923268
+func	daemon	clearNativeProcessDetailsExact	8854	native_run.go	2111	897743cdd1a48a2a
+func	daemon	clearNativeSessionByValue	5622	goal_admission.go	1257	f048b1f8960abaa7
+func	daemon	clearNativeUsageRecoveryBarrier	8482	recovery_glue.go	819	ff9a8232c442c3c5
+func	daemon	clearOutboxRetry	10559	outbox.go	453	d4c01ed88d010d12
+func	daemon	clearPersistedProcessDetails	7634	cleanup_glue.go	423	d9d867f1d757d6dc
+func	daemon	clearSupervisorHandoffAfterAbortCallback	2465	cleanup_glue.go	405	694874cb16775b67
+func	daemon	clearSupervisorHandoffCallback	2447	cleanup_glue.go	387	9bce65f8e5c27241
+func	daemon	close	1528	app.go	723	54fb318e22570b59
+func	daemon	closeGoalSession	8913	goal_admission.go	1578	43c2d96f8bf1604e
+func	daemon	closeNativeGoalSession	8603	goal_delivery.go	119	ec3913e20fc6334c
+func	daemon	commandAcknowledgementRetired	9868	commands.go	880	dfc29f072525b0b7
+func	daemon	commandRunSnapshot	9620	commands.go	792	f703a19344375c95
+func	daemon	commandSignal	1079	commands.go	224	8f4cea1bf8224c78
+func	daemon	commitSupervisorHandoffCallback	2381	cleanup_glue.go	357	a6247c1fa4797947
+func	daemon	compensatePreNativeGoalLaunchFailure	5736	native_run.go	630	4fa039a1673ac4da
+func	daemon	completeNativeRunAfterUsage	7821	native_run.go	1469	80f1986256285b92
+func	daemon	completeNativeRunAfterUsageOwned	7831	native_run.go	1479	7306d9e42b52e30d
+func	daemon	completeProvideInputWithRetry	9879	commands.go	891	84890c9a2de392da
+func	daemon	confirmLinuxV2LiveRelease	1968	app.go	997	5983b437afff8887
+func	daemon	controlContext	2512	app.go	1107	0c7d433cbf8c49c2
+func	daemon	deferNativeUsageRetry	8049	native_run.go	1697	83967d85d31090f5
+func	daemon	deliverAcknowledgement	11511	outbox.go	877	2a00e09c5b9db633
+func	daemon	deliverAppliedInputAcknowledgement	11497	outbox.go	863	7b62585f209e7790
+func	daemon	deliverEvents	11447	outbox.go	813	cf84f2d2283fdff8
+func	daemon	deliverEventsBeforeAppliedInputAcknowledgement	11426	outbox.go	792	508bc7a254e093c4
+func	daemon	deliverGoalDelivery	11029	goal_delivery.go	497	8f4edee04f73d18a
+func	daemon	deliverPendingEvents	11440	outbox.go	806	4c6305e2901a4e95
+func	daemon	discardUnreadyGoalSessionAttachDelivery	5686	goal_delivery.go	56	445dd08c1676b66f
+func	daemon	dispatchQueuedCommand	946	commands.go	91	095d9b7a5b6303d2
+func	daemon	drainRestartInputOutbox	2709	recovery_glue.go	223	02ac096eec005670
+func	daemon	enqueueCommand	894	commands.go	39	eca987f5a302088a
+func	daemon	enqueueCommandLocked	907	commands.go	52	009c3f804cb44ced
+func	daemon	enqueueSnapshotCommands	3406	commands.go	289	b61d137737695ad6
+func	daemon	enqueueSnapshotCommandsForRequest	3410	commands.go	293	9600a849487f01f7
+func	daemon	ensureHarnessProbe	1085	probe.go	22	9999a4b159770e13
+func	daemon	ensureRetainedGoalSessionStopDelivery	8773	goal_delivery.go	276	2683b4ebc7c1aa67
+func	daemon	executeQueuedCommand	1026	commands.go	171	a55796a327b7d1be
+func	daemon	exhaustNativeUsageRetry	8208	native_run.go	1856	86dba490aa560671
+func	daemon	exhaustNativeUsageRetryOwned	8233	native_run.go	1881	2f561338d76b31a3
+func	daemon	failedStartFinalizationContext	2529	app.go	1124	e6ca5fecbf035bec
+func	daemon	finalizeConclusiveNativeTerminalOwner	4269	native_run.go	511	a0906ee2f7cad365
+func	daemon	finishAttachedStart	10665	app.go	2159	ee98e5ac7f592526
+func	daemon	finishCommandRequest	3467	commands.go	350	7965aa1189bfc340
+func	daemon	finishDeferredCommand	1059	commands.go	204	c300be04096d1d7d
+func	daemon	finishNativeStartPublication	4206	native_run.go	448	c788283872d2dcc7
+func	daemon	finishQueuedCommand	1053	commands.go	198	65646fd4bc2fcc8d
+func	daemon	finishQueuedCommandLocked	1067	commands.go	212	724965c28f97a721
+func	daemon	finishStarting	10651	app.go	2145	434b7ffec03c6501
+func	daemon	flushAll	10383	outbox.go	277	0660e7e7d18c7e71
+func	daemon	flushGoalDeliveries	10976	goal_delivery.go	444	c3d4de0b60ccb03e
+func	daemon	flushLateGoalUsage	11330	goal_delivery.go	798	5526481177e4d97e
+func	daemon	flushPendingNativeUsage	8105	native_run.go	1753	9ae3cc43eb2f18cf
+func	daemon	flushRun	10722	outbox.go	538	55d87ebdd88c54ec
+func	daemon	handleAcknowledgementDeliveryError	11748	outbox.go	1106	c9d2fb72c7c49f89
+func	daemon	handleCommand	9214	commands.go	386	651ec96e02c82302
+func	daemon	handleOrdinaryDeliveryError	11804	outbox.go	1162	132d402e7b80b26a
+func	daemon	handleSnapshot	3347	commands.go	230	f2d7b514cf29fb78
+func	daemon	handleTerminalDeliveryError	11714	outbox.go	1072	7fb3c18462805943
+func	daemon	hasRun	11846	app.go	2233	2f27deca76315acb
+func	daemon	heartbeat	2802	app.go	1133	c194db55fc1f9223
+func	daemon	initialize	1346	app.go	541	b6c3d5669f99764e
+func	daemon	interval	2032	app.go	1061	bad9baa3f07fd69f
+func	daemon	isCancelled	4290	app.go	1881	c50f9b4a5ec5278e
+func	daemon	isStale	4297	app.go	1888	faf64d15ddc18b69
+func	daemon	isStarting	10644	app.go	2138	1eb83250e6000449
+func	daemon	isTerminal	4314	app.go	1895	cdb9e5699c89e7b4
+func	daemon	linuxV2ClaimLeaseRemaining	1724	lease.go	65	3df540d3dce0fee5
+func	daemon	linuxV2LaunchPhasePendingFor	1653	app.go	750	3ad02b6602bb15fc
+func	daemon	linuxV2LiveOwnerFences	1846	app.go	875	2e7b55159c8bf819
+func	daemon	liveNativeUsageSettlementOwns	10712	native_run.go	2367	db0fc76f1d347b10
+func	daemon	loadGoalSession	8905	goal_admission.go	1570	de05e84dd44a42f2
+func	daemon	loadOrCreateEnrollmentIntent	1497	app.go	692	a54861f948619f75
+func	daemon	localLeaseDeadline	10135	lease.go	339	ab6e1c72d09aba52
+func	daemon	localNow	2483	app.go	1078	ef0580fe285eb7bf
+func	daemon	lockNativeSessionClose	6207	goal_admission.go	1485	dc2f714e9a5891d6
+func	daemon	markCommandAcknowledgementDelivered	11766	outbox.go	1124	c2d97a54da53391d
+func	daemon	markContainmentUnprovenCallback	2106	cleanup_glue.go	82	4fffb4fd4962f02e
+func	daemon	markGoalSessionAttachDeliveryReady	5659	goal_delivery.go	29	3956c5ca3ec16e42
+func	daemon	markGoalSessionUncertain	5777	goal_admission.go	1307	0f68862fb7f3d4e3
+func	daemon	markRunning	3897	app.go	1686	aae92a43ed48716b
+func	daemon	nativeStartLeaseExpired	4304	lease.go	92	70f0cf5466b8a588
+func	daemon	nativeStartTerminalOwnerClaim	4242	native_run.go	484	15c8c35434259de0
+func	daemon	newIDWithRetry	9796	outbox.go	258	89e9dba4cd2d27c9
+func	daemon	nextLaneCommand	1012	commands.go	157	b0bca6d8060a9bc6
+func	daemon	nextQueuedCommand	1041	commands.go	186	ce26a4a2fce93e27
+func	daemon	noteNativeUsageRetryFailure	8175	native_run.go	1823	7ab2767f1c4298a8
+func	daemon	now	2042	app.go	1071	674d6cfd9a2915ac
+func	daemon	observeContainmentStop	2163	cleanup_glue.go	139	8f476b312bae721e
+func	daemon	observeControlClock	2935	app.go	1257	00327e6ec26b1565
+func	daemon	outboxDue	10462	outbox.go	356	796e91db817551ab
+func	daemon	outboxSignal	862	outbox.go	71	4e01b0799dd902c6
+func	daemon	ownsRunningProcess	7595	app.go	2020	d206c3ab989e2c86
+func	daemon	persistContainmentStopReceiptCallback	2142	cleanup_glue.go	118	8614b3785a046d49
+func	daemon	persistProcessAuthorityCallback	2049	cleanup_glue.go	25	15d355a90560ba5f
+func	daemon	persistProcessMarker	2067	cleanup_glue.go	43	d0de86e6f24f5ca6
+func	daemon	persistStaleAndEnqueueCleanup	3911	app.go	1700	0eb78d64ab3c6454
+func	daemon	persistSupervisorHandoffStopReceipt	2419	recovery_glue.go	24	88e93a14bf7cd2bd
+func	daemon	persistWorkspacePath	10681	app.go	2175	46eb2f7f5d8a3531
+func	daemon	prepareLinuxV2NativeOwner	1571	native_run.go	211	4cc917b798b05125
+func	daemon	prepareNativeGoalUsage	6454	native_run.go	1020	438e1627befd6812
+func	daemon	prepareNativeGoalUsageWithSnapshot	6465	native_run.go	1031	baef62585728bf2e
+func	daemon	prepareNativeUnknownGoalUsage	6458	native_run.go	1024	c7eb7c1c0f2b148d
+func	daemon	prepareSupervisorHandoffCallback	2341	cleanup_glue.go	317	db0470ef55e13128
+func	daemon	processDetailsAlreadyRecorded	4332	native_run.go	543	45ffae72d5e1cce6
+func	daemon	pruneOutboxRetries	10565	outbox.go	459	2492316b99542479
+func	daemon	publishNativeCloseRetryAfterEvidence	6064	native_run.go	846	5c7781e3a9cfc23b
+func	daemon	publishNativeCloseRetrySuccess	6048	native_run.go	830	bab1c6a61e08bf04
+func	daemon	publishNativeStartResult	4185	native_run.go	427	f350e40521c81855
+func	daemon	quarantineLegacyGoalSessionAttach	8729	goal_delivery.go	245	4ee1218876cd7839
+func	daemon	queueCancellationReceipt	9746	app.go	2118	36cb3f87f75f2309
+func	daemon	queueCancelledTerminalAndAcknowledgement	7397	outbox.go	178	8481447336b192d8
+func	daemon	queueCancelledTerminalAndAcknowledgementWithContext	7401	outbox.go	182	e3a375fb4b651379
+func	daemon	queueCommandAcknowledgement	9815	commands.go	827	44facbef01dbedbd
+func	daemon	queueCommandAcknowledgementWithContext	9819	commands.go	831	990d13e4270e02c0
+func	daemon	queueEvent	7190	events.go	444	a1157aca96e70c0a
+func	daemon	queueFailure	7310	events.go	530	441d3efcbe584b81
+func	daemon	queueNativeEvent	6312	native_run.go	878	90dd578ee9721ae3
+func	daemon	queueNativeGoalUsage	6446	native_run.go	1012	f7c738299d09e1ca
+func	daemon	queueNativeGoalUsageRecord	6617	native_run.go	1183	601e40c593aaae08
+func	daemon	queueNativeGoalUsageSettlement	6629	native_run.go	1195	bf2b720ac449a8f2
+func	daemon	queueNativeUnknownUsageRecovery	6592	native_run.go	1158	0b8ea73aa1e471b4
+func	daemon	queueNativeUsageRecoveryTerminal	8406	recovery_glue.go	743	af25032a83acc973
+func	daemon	queueOutput	6999	events.go	253	793309dd1a10b90c
+func	daemon	queueOutputTruncatedMarker	11486	outbox.go	852	c941a61c79e94d3c
+func	daemon	queueRawEvent	7156	events.go	410	680b3ff1d41c2276
+func	daemon	queueRestartInputFailure	2770	recovery_glue.go	284	476675b7ea7254cd
+func	daemon	queueTerminalTransition	7322	outbox.go	103	175c4e3aa03d81b6
+func	daemon	queueTerminalTransitionAndAcknowledgementWithContext	7405	outbox.go	186	13123dc4142bf779
+func	daemon	queueTerminalTransitionWithRetry	7343	outbox.go	124	612b076b221f4922
+func	daemon	queueTransition	7294	events.go	514	0e1be0310cd2b053
+func	daemon	queueWaitingForInput	7274	events.go	494	1c1ccf61c465e8dd
+func	daemon	reconcile	2830	app.go	1161	7a183f96adf4d281
+func	daemon	recordGenericProcessExit	7601	native_run.go	1291	50e20273c4e2aba2
+func	daemon	recordOutboxFailure	10479	outbox.go	373	a70671c44a2e0591
+func	daemon	recordStoppedGoalSession	8632	goal_delivery.go	148	1608f1cbdd8b0fb8
+func	daemon	recordSupervisorHandoffStopReceiptCallback	2405	cleanup_glue.go	381	7b622113c89d1137
+func	daemon	recoverNativeGoalSessionForResume	4471	goal_admission.go	125	050844e79573f786
+func	daemon	recoverNativeUsageDelivery	8495	recovery_glue.go	832	d2f89e939aefd0f9
+func	daemon	recoverUnclosedGoalSessions	2652	recovery_glue.go	166	197c3c427c629b0f
+func	daemon	recoverUnresolvedInputIntents	2538	recovery_glue.go	52	c359eeb3208ee572
+func	daemon	recoveredGoalSessionRequiresStop	3145	recovery_glue.go	511	500727f9bcb70227
+func	daemon	rejectCancellationIfTerminalDurable	9688	app.go	2081	ee22ed34482e451e
+func	daemon	releaseCommandReceiptsLocked	3982	app.go	1771	e4426eb0fa4a7d3e
+func	daemon	releaseNativeTerminalOwner	4251	native_run.go	493	e64409d7ca844133
+func	daemon	releaseRun	3931	app.go	1720	ddc036a19d53f424
+func	daemon	releaseSlotOnce	3994	app.go	1783	584fb8322100c63b
+func	daemon	releaseTerminalReservation	9630	app.go	2033	3ba80c53b89740fd
+func	daemon	releaseTerminalSlotAt	4049	app.go	1838	ea73d44d33cf563b
+func	daemon	reloadCancellationBeforeSideEffect	9648	app.go	2041	70661154396e94a6
+func	daemon	reloadRecoveredStopBeforeSideEffect	9727	app.go	2099	e37740427f9bb123
+func	daemon	remainingLeaseDeadline	10167	lease.go	371	22de56c8b68b4d66
+func	daemon	rememberNativeFinalUsage	8524	native_run.go	2032	f80f94523da6e7e6
+func	daemon	renewLease	10217	lease.go	421	94a713f3d5b8dfa9
+func	daemon	renewLeaseWithTiming	10222	lease.go	426	c3d79f53cc08256b
+func	daemon	renewLeaseWithTimingAndStart	10227	lease.go	431	4edd4f69aa1dae6d
+func	daemon	renewLeases	9898	lease.go	102	5338d930936fb610
+func	daemon	renewLocalLease	10088	lease.go	292	f360173182c42de2
+func	daemon	renewLocalLeaseDuration	10095	lease.go	299	94c4628c8cafed6f
+func	daemon	renewalEligible	10273	lease.go	477	afea362775ecd2b0
+func	daemon	renewalStillEligible	10287	lease.go	491	6ec63beb9da2cffb
+func	daemon	renewalThreshold	10156	lease.go	360	0182dce4454857e7
+func	daemon	replayOrRejectCancellationAcknowledgement	9716	app.go	2088	629f742b1a84e03d
+func	daemon	requireNativeSessionCloseRetry	5638	goal_admission.go	1273	6a85f7d162097520
+func	daemon	reserveNativeObservedTerminalClaim	4138	native_run.go	380	064ead4d7b85c6b3
+func	daemon	reserveNativeTerminalClaim	4118	native_run.go	360	2f2d4858d4861c7f
+func	daemon	resolveCancelledNativeStartAbortFailure	5704	native_run.go	602	ba8360faf635650e
+func	daemon	resolveRecoveredGoalSessionStopped	3158	recovery_glue.go	524	9b492d1f3a5d8395
+func	daemon	resolveTerminal	11705	outbox.go	1063	0bc8b7898bc03ccb
+func	daemon	retainUnknownGoalLaunchWorkspace	6241	native_run.go	858	70d3948799c417c3
+func	daemon	retainUnknownGoalLaunchWorkspaceChecked	6249	native_run.go	866	e7f72bc5d4990f63
+func	daemon	retireAcceptedTerminalAcknowledgement	11755	outbox.go	1113	9bdb18dac4009dff
+func	daemon	retireOrdinaryTerminalOutbox	11675	outbox.go	1033	4be20304ecbb4793
+func	daemon	retryBlockedNativeSessionCloses	6016	goal_admission.go	1322	0af0736b40cc3bf0
+func	daemon	retryNativeUsageRecoveryPersistence	8376	recovery_glue.go	713	a672f7e9ac490acf
+func	daemon	retryUnreadyGoalSessionAttachDeliveries	5956	goal_delivery.go	65	5cb4ccba94d0ce2f
+func	daemon	rewriteSupervisorHandoffStopReceipt	2411	recovery_glue.go	16	f0a7f73ee85f7c91
+func	daemon	rootContext	2516	app.go	1111	b06b527c1378aba9
+func	daemon	run	670	app.go	377	1231493a4a639f23
+func	daemon	runCommandExecutor	928	commands.go	73	da5ae083a9bfe3c8
+func	daemon	runCommandLane	1001	commands.go	146	61da3230503d82b0
+func	daemon	runLiveness	834	lease.go	52	68518e14b971d4dd
+func	daemon	runOutbox	847	outbox.go	56	50c12c111fbf7933
+func	daemon	runningRun	9638	native_run.go	2361	180cdf48fdf629b1
+func	daemon	scheduleSnapshot	3360	commands.go	243	a0df56eda449fd32
+func	daemon	scheduleSnapshotForRequest	3364	commands.go	247	666d7fb02b9a31c6
+func	daemon	scheduleTerminalSlotRelease	4013	app.go	1802	4fcbd3871d838381
+func	daemon	setLocalLeaseDeadline	10145	lease.go	349	9ed411fc239213f9
+func	daemon	settleCancelledNativeStart	5833	native_run.go	707	811709297d1a5128
+func	daemon	settleCancelledResumeBeforeNativeStart	5786	native_run.go	671	fce426bd197bf06b
+func	daemon	settleStaleCancellation	9766	recovery_glue.go	866	808412d3581dfa0e
+func	daemon	signalOutbox	871	outbox.go	80	67dda6b54a545bb1
+func	daemon	signalOutboxFor	884	outbox.go	93	f58fe88072456514
+func	daemon	startAssigned	3536	app.go	1325	3c463d755e42fdc9
+func	daemon	startAssignment	3492	app.go	1281	85330b1f578f56e5
+func	daemon	startBackground	772	app.go	479	c62a29bff5e1f926
+func	daemon	startGoalAdmission	4605	goal_admission.go	259	34feac051f46483a
+func	daemon	stopAll	11852	native_run.go	2377	e77b729f41b533d1
+func	daemon	stopBackground	824	app.go	531	919abce0c585c548
+func	daemon	stopRecoveredJournal	2973	recovery_glue.go	339	9c46462ba87b0e6e
+func	daemon	sync	2816	app.go	1147	9e08484a8b74d443
+func	daemon	terminateForLease	10295	lease.go	499	2ae317a35d33d88d
+func	daemon	terminateProcessBounded	11873	native_run.go	2398	fcea6551e5044cdc
+func	daemon	timer	2502	app.go	1097	91ef095bc3df5a21
+func	daemon	transferNativeStartTerminal	4214	native_run.go	456	73c1669d43512b08
+func	daemon	unreadyPiResumeAttachBarrier	5989	goal_delivery.go	98	5fc2ddee70d02ef2
+func	daemon	validateClaimLeaseForStart	10175	lease.go	379	6182f8215cf9ceca
+func	daemon	verifyDurableContainmentStopReceipt	2309	cleanup_glue.go	285	b13cf1fcf857bbc2
+func	daemon	verifyNativeTaskResultSubject	9088	native_run.go	2242	41a9e672dfd9b6a6
+func	daemon	waitForNativeRun	7713	native_run.go	1361	a61318ac96c7e041
+func	daemon	waitForRun	7477	app.go	1902	68325549c4272bf4
+func	daemon	waitForRunResultWithContext	7485	app.go	1910	2b6a51fea2d23952
+func	daemon	waitForRunWithContext	7481	app.go	1906	2fa7db9fe40ec7d1
+func	daemon	warnOutputDropOnce	7177	events.go	431	ca58068d64cc0bd4
+func	daemon	watchFailedStartProcess	7676	native_run.go	1324	103989ba75c631c7
+func	daemon	withLinuxV2EffectReadyTarget	1751	app.go	821	f244f1e6f725ca38
+func	daemon	withLinuxV2NativeAdmission	1774	native_run.go	293	d074fffd92220586
+func	daemon	writeInputBounded	7240	native_run.go	1257	d816bcd59368dc34
+func	goalDeliveryRejectedError	Error	541	goal_delivery.go	25	1ecafea67f201ccf
+func	goalDeliveryRejectedError	Unwrap	542	goal_delivery.go	27	6fa08b49c6d0e1cc
+func	jsonlParser	flush	11933	events.go	581	4edb0fdbbb70a77a
+func	jsonlParser	push	11904	events.go	552	cc665166a4416e84
+func	outboxFailure	Error	544	outbox.go	52	db60dfa6da78dc62
+func	outboxFailure	Unwrap	545	outbox.go	54	03b8e8340bc108e6
+func	streamingTokenRedactor	drain	6935	events.go	189	fd2d11ebcd703ad1
+func	streamingTokenRedactor	flush	6899	events.go	153	cefd61a15b2d8d65
+func	streamingTokenRedactor	overLimit	6953	events.go	207	6598ba63c56939ce
+func	streamingTokenRedactor	push	6875	events.go	129	1e0b3b6bdce990f2
+func	streamingTokenRedactor	redactOldestCandidate	6957	events.go	211	1a31d55820611b4e
+func	streamingTokenRedactor	resolve	6914	events.go	168	da083a6411b8ab1d
+func	systemTimer	Chan	333	app.go	183	4495ce8fb0177326
+func	systemTimer	Stop	334	app.go	184	aad121e2534a3f46
+func	taskResultReasonError	Error	134	native_run.go	34	f87466ab07ce7af7
+func	taskResultReasonError	Unwrap	135	native_run.go	36	beb2b95c2e68e9b0
+func	terminalTransitionConflictError	Error	118	outbox.go	27	f1e9d99a1ed48690
+func	terminalTransitionConflictError	Unwrap	125	outbox.go	34	1a0fde7a6abb4671
+func		RecoverContainmentOnly	307	app.go	157	302f26177f02f615
+func		Run	421	app.go	271	cbe50225e5520daa
+func		WithControl	393	app.go	243	7f9e4ce4e9a7be71
+func		WithEnrollment	396	app.go	246	dcf4ba7d7d905cec
+func		WithHTTPClient	385	app.go	235	3ed0d02b5a5ebd85
+func		WithLogWriter	416	app.go	266	3fe51c882b861f5a
+func		WithNotificationClient	411	app.go	261	5e91149a55d0bf60
+func		WithStartProcess	406	app.go	256	e07d4d5923495dc0
+func		WithStore	390	app.go	240	06dae2111adb71dc
+func		WithWorkspace	401	app.go	251	992b323e6241e308
+func		acknowledgementWithJournalFence	11668	outbox.go	1026	b6826c57789994c7
+func		activeRunAcceptsCommand	9644	commands.go	802	1b0eb7bc5738f976
+func		activeRunCanRenew	10282	lease.go	486	cf2af0f827f981bd
+func		activeRunState	11834	app.go	2221	f273cfb31438416c
+func		admissionHandoffSourceRunID	6298	goal_admission.go	1556	cdfb32788d7af85e
+func		admissionLaunchFailure	4380	goal_admission.go	34	bc1726369b6ab521
+func		admissionWorkItemIDValue	6291	goal_admission.go	1549	8f37b0f76ee2af24
+func		appErrorOr	1559	app.go	738	640677b224d0676c
+func		appendRawRecords	11945	events.go	593	ea9d72819c81c3bd
+func		assembleLinuxWitnessMarkerFile	2176	cleanup_glue.go	152	f11dee60b02edb16
+func		assertLinuxStopReceiptBarrierPathAbsent	2285	cleanup_glue.go	261	d66d2bc137a16021
+func		buildRuntimeRegistration	1238	probe.go	175	bc2426a772cb76cb
+func		candidateIsTokenPrefix	6987	events.go	241	5da59e1089ff00be
+func		candidateMatches	6975	events.go	229	c1790bb9eaebdd72
+func		canonicalGoalRunID	6675	native_run.go	1241	d24cb8844dc52dc1
+func		canonicalInputDigest	6751	probe.go	343	8031a1f192ec44ca
+func		canonicalTaskResultReason	9072	native_run.go	2226	3e089e9f72ff27eb
+func		claimNativeTerminalOwner	4092	native_run.go	334	f9d82aa385c3bf25
+func		cloneNativeTaskResult	8564	native_run.go	2072	7199ad613c4a97e3
+func		cloneNativeUsage	8535	native_run.go	2043	952a33729ba82c4e
+func		closeNativeSessionWithStopProof	8864	native_run.go	2121	9fb1fe792598adb7
+func		configuredHarnessKind	1186	probe.go	123	71971d62ac8fd21e
+func		containsNUL	7136	events.go	390	1c305922ccb90448
+func		definitiveGoalDeliveryRejection	11244	goal_delivery.go	712	0bf573d4deff6824
+func		durableTerminalPresent	11572	outbox.go	938	68e4bd788c3a76f5
+func		durableTerminalTransition	11581	outbox.go	947	adbea8ad375eeecd
+func		equalOptionalGoalString	6305	goal_admission.go	1563	153ab615a47b0723
+func		errorText	9207	app.go	2026	90ffa81c37565eab
+func		formatControlUTCTimestamp	2494	app.go	1089	bc86eab8679be6a7
+func		goalDeliveryReadyForFlush	11011	goal_delivery.go	479	9baedf77adc7277b
+func		goalProviderAccess	5576	native_run.go	583	36c2c90c42c9e022
+func		goalSessionAttachmentAbsent	11284	goal_delivery.go	752	f26238b08a66f282
+func		goalSessionAttachmentIdempotencyConflict	11289	goal_delivery.go	757	4073adc8353e173a
+func		goalSessionAttachmentMappingPending	3274	recovery_glue.go	640	3ae9760c99a71ae2
+func		goalSessionAttachmentTransportUnknown	11294	goal_delivery.go	762	04833d6321f74c66
+func		goalSessionAttachmentUncertainReadbackError	11316	goal_delivery.go	784	14b98d936c1b31e7
+func		goalSessionBindingID	4440	goal_admission.go	94	969e23b4becc2153
+func		goalSessionClosed	5732	goal_admission.go	1303	feb67f5ae64242f7
+func		goalSessionResumeAttachmentPending	3306	recovery_glue.go	672	584038a110aed36e
+func		hasExactPendingEvent	7231	events.go	485	73ef6cb847526f65
+func		hasFullFence	2968	recovery_glue.go	334	e636e275d8dc24e1
+func		hasLinuxV2ContainmentState	7663	cleanup_glue.go	452	8f093729f851f7d3
+func		hasPendingAcknowledgement	11554	outbox.go	920	de3ef690ba865f51
+func		hasPendingCommandAcknowledgement	9695	commands.go	806	c5f802d75a29ae40
+func		hasPendingCommandAcknowledgementOutcome	9707	commands.go	818	dcb68907931b7e25
+func		hasPendingLinuxV2Containment	7670	cleanup_glue.go	459	8ef8ebddfbafb2b1
+func		hasPendingStaleOutbox	10458	outbox.go	352	6cef40b760a448c9
+func		hasReadyGoalSessionAttach	8709	goal_delivery.go	225	deafd36ab2b83ff9
+func		hasReplayableGoalSessionAttach	3279	recovery_glue.go	645	4f8f95d6d3eb05fe
+func		httpURL	7123	events.go	377	52889f800af7b918
+func		initialInput	6691	probe.go	283	2b7cbb43ccc5b076
+func		inputRecord	6743	probe.go	335	deb6279870a7db36
+func		isAmbiguousTerminalDeliveryFailure	10542	outbox.go	436	a7ab338eb0086a94
+func		isConclusiveRestartInputFailure	2766	recovery_glue.go	280	5285302c86fe40cf
+func		isNilHarnessSession	4359	native_run.go	570	9acf68d64acfe186
+func		isNilProcess	4346	native_run.go	557	3ecf3820f6fc83fc
+func		isOutboxMaintenanceFailure	10550	outbox.go	444	dc1369b1a1d5ec09
+func		isReconcileState	2959	recovery_glue.go	325	a25e84c4931bffde
+func		isTerminalTransition	11563	outbox.go	929	2c8d40003c1f7624
+func		journalFingerprint	10575	outbox.go	469	6b9d7700694b4619
+func		leaseDeadlineAt	10199	lease.go	403	ae39abe73921794a
+func		leaseDeadlineAtFromRemaining	10203	lease.go	407	532aeb755e3480d3
+func		legacyGoalSessionAttachDelivery	8713	goal_delivery.go	229	cc1ca792fa475e97
+func		legacyGoalSessionAttachmentBarrier	8760	recovery_glue.go	853	b05ddcd7316233c9
+func		legacyProviderAccessForRegistration	1326	probe.go	263	d0a235a9fa53c442
+func		linuxNativeRuntimeRequiresGoalAdmission	1566	app.go	745	a0a713f73c58f46f
+func		linuxV2AdmissionTargetDetails	1980	app.go	1009	18988f7760802f1f
+func		linuxV2RecoveryEndpoint	1547	native_run.go	199	d535ec537a6feb04
+func		mergeEnvironmentOverrides	1995	app.go	1024	202e1ca55179cc6c
+func		nativeCleanupBlocked	5655	goal_admission.go	1290	22d3c98f99140066
+func		nativeGoalHarnessKind	1216	probe.go	153	1b4ebf17b9369a4c
+func		nativeProcessOutputFailure	8921	native_run.go	2162	cc69dfcef571e8e6
+func		nativeTerminalOwnedBy	4114	native_run.go	356	cdc2412acc0c2a81
+func		nativeTerminalPayload	8978	goal_delivery.go	357	dde71dcddca7710f
+func		nativeTurnTerminalObserved	7709	native_run.go	1357	84ccd34dd1133aef
+func		nativeUsageRecoveryUsage	8463	recovery_glue.go	800	613e856c9d80e88f
+func		nativeUsageRetryDelay	8516	native_run.go	2024	4c4cf67dabbd4acc
+func		nativeUsageTerminalRecovery	8935	native_run.go	2176	d7a62fd806824d41
+func		newAgentOutput	6781	events.go	35	94c7e5c8b552a52e
+func		newHarnessRegistry	1160	probe.go	97	243a1eff841e6762
+func		newStreamingTokenRedactor	6854	events.go	108	2689331a635ecb3e
+func		nextRetryDelay	12043	commands.go	1004	129ebf6a01362911
+func		nonEmptyString	7113	events.go	367	5d9d338071a1015d
+func		normalizeRuntimeForProbe	1173	probe.go	110	fa8980436bfe4034
+func		optionalRuntimeRepositoryResourceID	1315	probe.go	252	e6e6b3abce9788aa
+func		parseAdmissionDeadline	5595	goal_admission.go	1230	43f8f3d4bc48a299
+func		parseAdmissionInput	4372	goal_admission.go	26	6efcd53a12d3b6cd
+func		parseNativeUsageSnapshot	6413	native_run.go	979	3251f75a9a3c89d1
+func		probeErrorContainsOnly	1134	probe.go	71	4961947ebe3594a2
+func		probedMetadataVersion	1308	probe.go	245	1444c2c53f4a60a5
+func		processDetails	4321	native_run.go	532	f6c6a3e622428962
+func		publishLinuxStopReceiptBarrierMarker	2204	cleanup_glue.go	180	8aa491155138d7de
+func		reconcileCancelCommand	2926	recovery_glue.go	316	3e74b1dec1091aeb
+func		recoveredGenericProcessMarker	2640	recovery_glue.go	154	b5106b3b207428a5
+func		recoveredProcessRecorded	3044	recovery_glue.go	410	ce8f3e85ccbb61bd
+func		redactionMarker	6866	events.go	120	5219fc48f9971e88
+func		remainingLeaseDeadlineAt	10210	lease.go	414	f43c9dfc86c53023
+func		requiresLinuxV2NativeOwner	1543	native_run.go	195	bd55dc7d4f4dcd6b
+func		resolveProviderAccess	6721	probe.go	313	37cff325fbbb8b0b
+func		restartInputRecoveryRequired	2691	recovery_glue.go	205	6d651375b5b2e396
+func		restartInputRecoveryRetryDelay	2751	recovery_glue.go	265	18fb1e0d4fe15db8
+func		restartOutboxRecovery	11811	outbox.go	1169	b0c05a0ec3353c33
+func		resumeGoalSessionPreStartAttachment	3290	recovery_glue.go	656	9638e3ed390dbdaf
+func		retainedGoalSessionAttachPendingStopped	3269	recovery_glue.go	635	cac374ab44c82ce8
+func		retainedGoalSessionAvailable	3264	recovery_glue.go	630	e0bc26070d9749a2
+func		retainedGoalSessionNativeStopWitness	3226	recovery_glue.go	592	7696f46c6f858ad5
+func		retainedGoalSessionStopCertified	8701	goal_delivery.go	217	373e3f08bf1952e5
+func		retainedGoalSessionTerminalState	3219	recovery_glue.go	585	cc7f0d6b377ccde1
+func		retiredLegacyGoalSessionAttach	8747	goal_delivery.go	263	ef05972a2bd44a2a
+func		retiredResumedGoalSessionAttachment	3329	recovery_glue.go	695	e1214eb3b6fbd4e9
+func		retiredRetainedGoalSessionStopDelivery	8842	goal_delivery.go	345	ead9ef78aef9ad8e
+func		retry	12004	commands.go	965	19def144aaad3f2c
+func		retryWithWait	12008	commands.go	969	790018f5bb8cbb82
+func		sameCommandAcknowledgement	11622	commands.go	910	a6124e5625b21a2a
+func		sameOptionalString	11419	goal_delivery.go	887	0010e894589e5df7
+func		sameRetainedGoalSessionStopDelivery	8835	goal_delivery.go	338	632304ac04d0e05f
+func		sameStateTransitionRequest	11603	outbox.go	969	0361579b1d55c759
+func		semanticEventKind	7058	events.go	312	c2f845d44adf9b0e
+func		semanticVersionSupported	7104	events.go	358	b6d7c6e4c8cea3d9
+func		setTrustedPiProviderExtensionGroup	275	native_run.go	67	f9c4f5cb4cb4e5c2
+func		stringIn	7118	events.go	372	59889400eb3b4e89
+func		structuredInputForProfile	1322	probe.go	259	8998eb818a51689f
+func		syncLinuxStopReceiptBarrierDirectory	2296	cleanup_glue.go	272	2e604a01abda8383
+func		taskResultFailure	137	native_run.go	38	5d359884fc7060f8
+func		taskResultFailureReason	144	native_run.go	45	590102ccccca726b
+func		terminalPredecessorUnavailable	11701	outbox.go	1059	c2bb2e3591e0879d
+func		terminalReceiptMatches	11630	outbox.go	988	df23b750cda7a353
+func		terminalTransitionMatches	11610	outbox.go	976	d7710a433eb32477
+func		transitionWithJournalFence	11596	outbox.go	962	8035300798ccf5f0
+func		typedTaskResultReason	9065	native_run.go	2219	a364b6ab6408d0b8
+func		unavailableRuntimeKind	1207	probe.go	144	c481b34a38db63e5
+func		usageFromNativeObservation	6435	native_run.go	1001	9f916a5458210f8e
+func		validateGoalDeliveryReceipt	11372	goal_delivery.go	840	6b14af54d576e82a
+func		validateGoalRunContext	6277	goal_admission.go	1535	e5ceb1216b27a32a
+func		validateGoalSessionReceipt	6261	goal_admission.go	1519	f7ea9c1c0dd8477b
+func		validatePiProviderExtensionGroupID	290	native_run.go	82	45ca9cd1cb109906
+func		verifyLinuxCloneReuseTaskResultSubject	9162	native_run.go	2316	67147d9e931e38a9
+func		verifyLinuxCloneTaskResultSubject	9179	native_run.go	2333	428229dec0533a17
+func		waitCommandCompletions	3478	commands.go	361	db38a98a8ad5b37e
+func		waitForLinuxStopReceiptBarrier	2227	cleanup_glue.go	203	4690df6a8ab260e6
+func		waitForRetry	12032	commands.go	993	64fc1683cbf2218b
+func		wrapAgentEventValue	7051	events.go	305	ce59ad9e459e9a4b
+func		writeRuntimeRegistrationMetadata	1334	probe.go	271	f0e05683fb0e4fc2
+type		ControlAPI	156	app.go	54	fe538fb49476506e
+type		EnrollmentAPI	225	app.go	117	64f539d044851d53
+type		NotificationClient	317	app.go	167	5967b28043315861
+type		Options	322	app.go	172	8ea6391d0b70d4da
+type		Process	231	app.go	123	1da0e6ba24f8cda0
+type		ProcessFinalizer	246	app.go	138	d44a4b5c89d5d6bf
+type		StartProcess	253	app.go	145	87fb733a3b70bc49
+type		agentOutput	6772	events.go	26	eb8b74242c326730
+type		blockedNativeSession	6010	goal_admission.go	1316	314815a1356e4040
+type		commandCompletion	560	commands.go	29	2d121910885ceafd
+type		commandKey	555	commands.go	24	297658df36a81e82
+type		commandLane	565	commands.go	34	f3029b674a8af047
+type		daemon	466	app.go	316	b8de633401d3ddec
+type		deadlineTimer	326	app.go	176	3260c2e6ba3332be
+type		goalControlAPI	169	app.go	67	710fbbb5c4d583b7
+type		goalDeliveryRejectedError	539	goal_delivery.go	23	1de08ea3e45dfc86
+type		goalRecoveredSubjectWorkspace	217	app.go	109	52da3badcd216e61
+type		goalSessionAttachmentReadbackAPI	178	goal_delivery.go	17	612174b6374b5237
+type		goalSessionStopAPI	184	app.go	76	ee76030bc7dceae3
+type		goalSubjectWorkspace	191	app.go	83	9318619ec9e2c771
+type		jsonlParser	11899	events.go	547	5bea4d7a306dc6f5
+type		jsonlRecord	11894	events.go	542	b64b7eab77763914
+type		linuxCloneRun	658	native_run.go	183	f508cceb752bd86d
+type		linuxV2AdmissionStatusReader	267	app.go	149	f75d1566a9f9c623
+type		linuxV2CloneWorkspace	199	app.go	91	8bdecc2ba146a83b
+type		linuxV2NativeOwner	257	native_run.go	53	54401e682e75839a
+type		linuxV2NativeOwnerFactory	297	native_run.go	89	71e92b648afd00a8
+type		linuxV2NativeOwnerPiGroup	271	native_run.go	63	ad4619e3464fd8ad
+type		nativeUsageCounters	6405	native_run.go	971	fb695fb7dfaff8b8
+type		nativeUsageRetryWork	8038	native_run.go	1686	2950d9cc4c43e8a1
+type		nativeUsageSnapshot	6401	native_run.go	967	d92e2c07c70f1500
+type		options	336	app.go	186	c6cfadcec6f31bd5
+type		outboxFailure	534	outbox.go	47	d7485455e77319db
+type		outboxRetry	527	outbox.go	40	752ebaa7f00964be
+type		processResultCompletion	239	app.go	131	c09816329b41362c
+type		queuedCommand	547	commands.go	16	619081ea97df1d69
+type		redactorByte	6834	events.go	88	5ddee68bec74fd39
+type		redactorEvent	6839	events.go	93	4461502d73321a5d
+type		redactorStream	6830	events.go	84	bcd96c7de93a6229
+type		restartOutboxRecoveryContextKey	152	outbox.go	36	0ba975ce03651281
+type		resumedGoalSession	4463	goal_admission.go	117	cfb2d69db57d1127
+type		runningRun	570	native_run.go	95	2a385427f490284a
+type		runtimeRegistrationMetadata	1228	probe.go	165	f9c65bf7b6f31750
+type		streamingTokenRedactor	6846	events.go	100	cece4400532d911f
+type		systemTimer	331	app.go	181	3f3ab98700e2d8e3
+type		taskResultReasonError	127	native_run.go	27	26de6876ad800bff
+type		terminalTransitionConflictError	109	outbox.go	18	05100a04126a986e
+var		(errAssignmentExpired,errLeaseDeadlineReached,errOutboxCha...)	75	lease.go	18	5bef4f35f213b260
+var		containmentOnlyRecovery	303	app.go	153	d91386753764a2a8
+var		defaultLinuxV2NativeOwnerFactory	299	native_run.go	91	1100b7253ffc126e
