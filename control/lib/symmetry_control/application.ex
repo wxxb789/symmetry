@@ -9,7 +9,6 @@ defmodule SymmetryControl.Application do
   def start(_type, _args) do
     children =
       [
-        SymmetryControlWeb.Telemetry,
         SymmetryControl.Repo,
         {DNSCluster,
          query: Application.get_env(:symmetry_control, :dns_cluster_query) || :ignore},
