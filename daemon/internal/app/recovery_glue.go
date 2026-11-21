@@ -717,21 +717,7 @@ func (daemon *daemon) retryNativeUsageRecoveryPersistence(key state.RunKey, acti
 		daemon.mu.Unlock()
 		return
 	}
-	active.nativeUsageRetryPending = true
-	active.nativeUsageRetryInFlight = false
-	active.nativeUsageRetryExhausted = true
-	if active.nativeUsageRetryAttempts < nativeUsageRetryLimit {
-		active.nativeUsageRetryAttempts = nativeUsageRetryLimit
-	}
-	recoveryAttempt := active.nativeUsageRetryAttempts - nativeUsageRetryLimit + 1
-	if recoveryAttempt < 1 {
-		recoveryAttempt = 1
-	}
-	active.nativeUsageRetryAttempts++
-	active.nativeUsageRetryAt = now.Add(nativeUsageRetryDelay(recoveryAttempt))
-	active.nativeUsageRetryNeedsPrepare = active.nativeFinalUsage == nil
-	active.nativeUsageRenewalBlocked = true
-	active.cleanupBlocked = true
+	active.scheduleRecoveryUsageRetry(now)
 	daemon.mu.Unlock()
 	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
 	daemon.signalOutboxFor(key)

@@ -128,7 +128,7 @@ func TestNativeCloseFailureStaleRunDoesNotReleaseActiveRecoveryBarrier(t *testin
 	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	active := &runningRun{nativeSession: &closeFailureGoalSession{err: errors.New("native child stop failed"), waitResult: harness.TaskResult{Kind: harness.ResultSucceeded}}, goalSession: &sessionKey, goalAdmission: &admission, stale: true}
+	active := &runningRun{nativeSession: &closeFailureGoalSession{err: errors.New("native child stop failed"), waitResult: harness.TaskResult{Kind: harness.ResultSucceeded}}, goalSession: &sessionKey, goalAdmission: &admission, runLifecycle: runLifecycle{stale: true}}
 	daemon := &daemon{store: store, options: options{newID: ids(), clock: time.Now}, running: map[state.RunKey]*runningRun{key: active}}
 
 	daemon.waitForNativeRun(context.Background(), key, active, active.nativeSession)
@@ -768,6 +768,55 @@ func TestAbandonGoalSessionBoundsOversizedUncertainReason(t *testing.T) {
 			}
 			if len(reason) < state.GoalSessionUncertainReasonBytes-1 {
 				t.Fatalf("durable uncertain reason = %d bytes, want the store budget filled up to one dropped byte", len(reason))
+			}
+		})
+	}
+}
+
+func TestAbandonGoalSessionUncertainBoundsOversizedCloseReason(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		closeErr     error
+		wantContains string
+	}{
+		{
+			name:         "multibyte close cause is cut on a rune boundary",
+			closeErr:     errors.New(strings.Repeat("é", 2100)),
+			wantContains: strings.Repeat("é", 64),
+		},
+		{
+			name:         "close cause with an interior invalid byte stays loadable",
+			closeErr:     errors.New("bad\xffbyte: " + strings.Repeat("a", 5000)),
+			wantContains: strings.Repeat("a", 64),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, key := claimedGoalDeliveryStore(t)
+			defer store.Close()
+			sessionKey, _, _ := saveRetainedGoalSession(t, store, key)
+			daemon := &daemon{store: store, options: options{clock: time.Now}}
+			if err := daemon.abandonGoalSessionUncertain(sessionKey, &closeFailureGoalSession{err: test.closeErr}, errors.New("turn start outcome lost")); err == nil {
+				t.Fatal("abandonGoalSessionUncertain() with a failed native close reported success")
+			}
+			session, err := store.LoadGoalSession(sessionKey)
+			if err != nil {
+				t.Fatalf("LoadGoalSession() error = %v", err)
+			}
+			if session.LaunchState != state.GoalSessionLaunchStateUncertain || session.SessionState != state.GoalSessionStateUnavailable || !session.NeedsReconciliation() {
+				t.Fatalf("oversized uncertain reason left the session off the uncertain path: %#v", session)
+			}
+			reason := session.UncertainReason
+			if !strings.HasPrefix(reason, "native Goal turn start outcome is unknown: ") {
+				t.Fatalf("durable uncertain reason = %q, want the composed prefix", reason)
+			}
+			if !strings.Contains(reason, test.wantContains) {
+				t.Fatalf("durable uncertain reason dropped the close cause text: %q", reason)
+			}
+			if !utf8.ValidString(reason) {
+				t.Fatalf("durable uncertain reason is not valid UTF-8 (%d bytes)", len(reason))
+			}
+			if len(reason) > state.GoalSessionUncertainReasonBytes {
+				t.Fatalf("durable uncertain reason = %d bytes, over the %d-byte store budget", len(reason), state.GoalSessionUncertainReasonBytes)
 			}
 		})
 	}
@@ -2254,7 +2303,7 @@ func TestNativeCancellationOwnerStopsLosingTerminalWaiter(t *testing.T) {
 		processIdentity: "native:71",
 	}
 	session.onControl = func() { close(waitTurnGate) }
-	active := &runningRun{claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
+	active := &runningRun{runLifecycle: runLifecycle{claimed: true}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
 	app := &daemon{
 		config:  testConfig(t),
 		store:   store,
@@ -2355,7 +2404,7 @@ func TestNativeTerminalOwnerRejectsConcurrentCancellation(t *testing.T) {
 		processPID:      71,
 		processIdentity: "native:71",
 	}
-	active := &runningRun{claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
+	active := &runningRun{runLifecycle: runLifecycle{claimed: true}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
 	app := &daemon{
 		config:  testConfig(t),
 		store:   store,

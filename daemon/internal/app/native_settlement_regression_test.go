@@ -124,15 +124,17 @@ func TestCancelledNativeStartCloseFailureQueuesExplicitUsageBeforeTerminal(t *te
 		closeErr:        errors.New("injected cancelled-start close failure"),
 	}
 	active := &runningRun{
-		starting:            true,
-		claimed:             true,
-		nativeStartInFlight: true,
-		nativeSession:       session,
-		goalSession:         &sessionKey,
-		goalAdmission:       &admission,
-		cancelled:           true,
-		cancelCommandID:     "cancel-start-close-failure",
-		cleanupBlocked:      true,
+		runLifecycle: runLifecycle{
+			starting:            true,
+			claimed:             true,
+			nativeStartInFlight: true,
+			cancelled:           true,
+			cancelCommandID:     "cancel-start-close-failure",
+		},
+		nativeSession:  session,
+		goalSession:    &sessionKey,
+		goalAdmission:  &admission,
+		cleanupBlocked: true,
 	}
 	var order []string
 	app := &daemon{
@@ -217,7 +219,7 @@ func TestRejectedCancelAfterObservedTerminalUsesFinalResultPastWaitTurnDeadline(
 	}
 	t.Cleanup(releaseWaitTurn)
 	active := &runningRun{
-		claimed:       true,
+		runLifecycle:  runLifecycle{claimed: true},
 		nativeSession: session,
 		goalSession:   &sessionKey,
 		goalAdmission: &admission,
@@ -314,7 +316,7 @@ func TestLateCancelSubjectMismatchSurvivesUsageRetry(t *testing.T) {
 		processIdentity: "native:71",
 	}}
 	active := &runningRun{
-		claimed:       true,
+		runLifecycle:  runLifecycle{claimed: true},
 		nativeSession: session,
 		goalSession:   &sessionKey,
 		goalAdmission: &admission,
@@ -458,7 +460,7 @@ func TestAppliedNativeCancelOutputTruncationFailsWithEvidence(t *testing.T) {
 		processIdentity: "native:71",
 	}
 	active := &runningRun{
-		claimed:       true,
+		runLifecycle:  runLifecycle{claimed: true},
 		nativeSession: session,
 		goalSession:   &sessionKey,
 		goalAdmission: &admission,
@@ -501,15 +503,17 @@ func TestCancelledNativeStartOutputTruncationFailsWithEvidence(t *testing.T) {
 		processIdentity: "native:71",
 	}
 	active := &runningRun{
-		starting:            true,
-		claimed:             true,
-		nativeStartInFlight: true,
-		nativeSession:       session,
-		goalSession:         &sessionKey,
-		goalAdmission:       &admission,
-		cancelled:           true,
-		cancelCommandID:     "cancel-start-output-truncated",
-		cleanupBlocked:      true,
+		runLifecycle: runLifecycle{
+			starting:            true,
+			claimed:             true,
+			nativeStartInFlight: true,
+			cancelled:           true,
+			cancelCommandID:     "cancel-start-output-truncated",
+		},
+		nativeSession:  session,
+		goalSession:    &sessionKey,
+		goalAdmission:  &admission,
+		cleanupBlocked: true,
 	}
 	app := &daemon{
 		config:  testConfig(t),
@@ -574,14 +578,16 @@ func TestNativeUsageRetryExhaustionKeepsAtomicCancelOutcomeAndOutputEvidence(t *
 			}
 			result := harness.TaskResult{Kind: harness.ResultCancelled, Summary: "usage retry exhausted", Process: test.process}
 			active := &runningRun{
-				nativeFinalResult:            &result,
-				nativeFinalUsage:             &usage,
-				nativeCancelCommandID:        "cancel-1",
-				nativeCancelTerminalObserved: test.terminalObserved,
-				nativeCancelRejected:         test.cancelRejected,
-				nativeTerminalOwner:          true,
-				terminalizing:                1,
-				nativeUsageRetryExhausted:    true,
+				nativeFinalResult: &result,
+				nativeFinalUsage:  &usage,
+				runLifecycle: runLifecycle{
+					nativeCancelCommandID:        "cancel-1",
+					nativeCancelTerminalObserved: test.terminalObserved,
+					nativeCancelRejected:         test.cancelRejected,
+					nativeTerminalOwner:          true,
+					terminalizing:                1,
+					nativeUsageRetryExhausted:    true,
+				},
 			}
 			atomicCalls := 0
 			app := &daemon{
@@ -655,7 +661,7 @@ func TestLeaseOwnedNativeStartErrorsCleanupAndAcknowledgeBeforeReturn(t *testing
 			claim := saveClaimedNativeSettlementRun(t, store, key, controlClient.work)
 			runContext, cancelRun := context.WithCancel(context.Background())
 			t.Cleanup(cancelRun)
-			active := &runningRun{starting: true, claimed: true, cancel: cancelRun, cleanupBlocked: true}
+			active := &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true, cancel: cancelRun}, cleanupBlocked: true}
 			app.running[key] = active
 
 			stageErr := errors.New("injected " + test.name)
@@ -886,7 +892,7 @@ func TestLateCancelSubjectVerificationStopsOnDaemonShutdown(t *testing.T) {
 	deriveEntered := make(chan struct{})
 	shutdownContext, shutdown := context.WithCancel(context.Background())
 	active := &runningRun{
-		claimed:       true,
+		runLifecycle:  runLifecycle{claimed: true},
 		nativeSession: session,
 		goalSession:   &sessionKey,
 		goalAdmission: &admission,
@@ -933,12 +939,14 @@ func TestCancelledNativeStartAbortPostWriteReadbackConvergesAndReleasesOwner(t *
 	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
 	saveLaunchingGoalSession(t, store, key, admission, sessionKey)
 	active := &runningRun{
-		starting:            true,
-		claimed:             true,
-		nativeStartInFlight: true,
-		cancelled:           true,
-		cancelCommandID:     "cancel-abort-post-write",
-		cleanupBlocked:      true,
+		runLifecycle: runLifecycle{
+			starting:            true,
+			claimed:             true,
+			nativeStartInFlight: true,
+			cancelled:           true,
+			cancelCommandID:     "cancel-abort-post-write",
+		},
+		cleanupBlocked: true,
 	}
 	app := &daemon{
 		config:  testConfig(t),
@@ -987,12 +995,14 @@ func TestCancelledNativeStartAbortFailureRetainsRecoveryAndCannotCleanup(t *test
 	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
 	saveLaunchingGoalSession(t, store, key, admission, sessionKey)
 	active := &runningRun{
-		starting:            true,
-		claimed:             true,
-		nativeStartInFlight: true,
-		cancelled:           true,
-		cancelCommandID:     "cancel-abort-uncommitted",
-		cleanupBlocked:      true,
+		runLifecycle: runLifecycle{
+			starting:            true,
+			claimed:             true,
+			nativeStartInFlight: true,
+			cancelled:           true,
+			cancelCommandID:     "cancel-abort-uncommitted",
+		},
+		cleanupBlocked: true,
 	}
 	app := &daemon{
 		config:    testConfig(t),
@@ -1041,7 +1051,7 @@ func TestCancelledNativeStartAbortFailureRetainsRecoveryAndCannotCleanup(t *test
 
 func TestFinishStartingPreservesNativeCleanupBarrier(t *testing.T) {
 	key := state.RunKey{RunID: "run-1", Generation: 1}
-	active := &runningRun{starting: true, cleanupBlocked: true, nativeCloseRetryRequired: true}
+	active := &runningRun{runLifecycle: runLifecycle{starting: true, nativeCloseRetryRequired: true}, cleanupBlocked: true}
 	app := &daemon{running: map[state.RunKey]*runningRun{key: active}}
 
 	app.finishStarting(key, true)
@@ -1053,7 +1063,7 @@ func TestFinishStartingPreservesNativeCleanupBarrier(t *testing.T) {
 
 func TestFinishAttachedStartClearsCleanupBarrierWithoutExecutionOwner(t *testing.T) {
 	key := state.RunKey{RunID: "run-1", Generation: 1}
-	active := &runningRun{starting: true, cancelled: true, cleanupBlocked: true}
+	active := &runningRun{runLifecycle: runLifecycle{starting: true, cancelled: true}, cleanupBlocked: true}
 	app := &daemon{running: map[state.RunKey]*runningRun{key: active}}
 
 	if !app.finishAttachedStart(key) {
@@ -1235,16 +1245,18 @@ func TestOrphanedNativeUsageRetryCannotReleaseCancellationOwner(t *testing.T) {
 		ObservedAt:    "2026-09-20T01:00:00Z",
 	}
 	active := &runningRun{
-		claimed:                    true,
-		nativeSession:              session,
-		goalSession:                &sessionKey,
-		goalAdmission:              &admission,
-		nativeFinalResult:          &orphanedResult,
-		nativeFinalUsage:           &orphanedUsage,
-		nativeUsageRetryPending:    true,
-		nativeUsageRetryAttempts:   1,
-		nativeUsageRetryOwnerClaim: 0,
-		cleanupBlocked:             true,
+		runLifecycle: runLifecycle{
+			claimed:                    true,
+			nativeUsageRetryPending:    true,
+			nativeUsageRetryAttempts:   1,
+			nativeUsageRetryOwnerClaim: 0,
+		},
+		nativeSession:     session,
+		goalSession:       &sessionKey,
+		goalAdmission:     &admission,
+		nativeFinalResult: &orphanedResult,
+		nativeFinalUsage:  &orphanedUsage,
+		cleanupBlocked:    true,
 	}
 	terminalEntered := make(chan struct{})
 	releaseTerminal := make(chan struct{})
@@ -1348,13 +1360,15 @@ func TestPersistentTerminalJournalFailureAfterUsageRetryDoesNotBlockOtherRunOutb
 	}
 	result := harness.TaskResult{Kind: harness.ResultSucceeded, Summary: "usage retry completed"}
 	active := &runningRun{
-		nativeFinalResult:        &result,
-		nativeFinalUsage:         &usage,
-		nativeUsageRetryPending:  true,
-		nativeUsageRetryAttempts: 1,
-		nativeTerminalOwner:      true,
-		terminalizing:            1,
-		cleanupBlocked:           true,
+		nativeFinalResult: &result,
+		nativeFinalUsage:  &usage,
+		runLifecycle: runLifecycle{
+			nativeUsageRetryPending:  true,
+			nativeUsageRetryAttempts: 1,
+			nativeTerminalOwner:      true,
+			terminalizing:            1,
+		},
+		cleanupBlocked: true,
 	}
 	terminalAttempted := make(chan struct{})
 	var terminalAttemptOnce sync.Once
@@ -1483,16 +1497,18 @@ func TestFlushRunDefersNativeUsageRecoveryToLiveTerminalOwner(t *testing.T) {
 	}
 	result := harness.TaskResult{Kind: harness.ResultFailed, Summary: "exact live terminal result"}
 	active := &runningRun{
-		nativeTerminalOwner:         true,
-		nativeTerminalOwnerClaim:    1,
-		nativeTerminalOwnerSequence: 1,
-		terminalizing:               1,
-		nativeFinalResult:           &result,
-		nativeFinalUsage:            &usage,
-		nativeUsageRetryPending:     true,
-		nativeUsageRetryAttempts:    1,
-		nativeUsageRetryOwnerClaim:  1,
-		cleanupBlocked:              true,
+		runLifecycle: runLifecycle{
+			nativeTerminalOwner:         true,
+			nativeTerminalOwnerClaim:    1,
+			nativeTerminalOwnerSequence: 1,
+			terminalizing:               1,
+			nativeUsageRetryPending:     true,
+			nativeUsageRetryAttempts:    1,
+			nativeUsageRetryOwnerClaim:  1,
+		},
+		nativeFinalResult: &result,
+		nativeFinalUsage:  &usage,
+		cleanupBlocked:    true,
 	}
 	terminalEntered := make(chan struct{})
 	releaseTerminal := make(chan struct{})
@@ -1578,9 +1594,11 @@ func TestCleanupDoesNotReleaseSlotWhileNativeStartOwnsPublication(t *testing.T) 
 	slots <- struct{}{}
 	app := &daemon{
 		running: map[state.RunKey]*runningRun{key: {
-			nativeStartInFlight: true,
-			cleanupBlocked:      true,
-			slotHeld:            true,
+			runLifecycle: runLifecycle{
+				nativeStartInFlight: true,
+				slotHeld:            true,
+			},
+			cleanupBlocked: true,
 		}},
 		slots: slots,
 	}
