@@ -324,11 +324,13 @@ jobs:
       # dev environment: the same sources are not compiled twice, the test-only
       # support tree is compiled too, and a warning there now fails this gate.
       - run: MIX_ENV=test mix compile --warnings-as-errors
-      # ExUnit duration telemetry was attempted here as `mix test --slowest 20`
-      # (refactor slice W2-01) and reverted: `--slowest` forces ExUnit trace
-      # mode, which serializes the suite (`max_cases: 1`) and ignores every
-      # test timeout (`:infinity`), so it is not an output-only flag.
-      - run: mix test
+      # Per-test duration telemetry (refactor slice W2-01; conductor decision
+      # 2026-11-21): the owned test-support formatter prints the twenty slowest
+      # tests at suite end. `--slowest` stays out - it forces ExUnit trace mode
+      # (`max_cases: 1`, every test timeout `:infinity`) - and
+      # `ExUnit.CLIFormatter` stays listed, so the run keeps its normal output
+      # and exit status.
+      - run: mix test --formatter ExUnit.CLIFormatter --formatter SymmetryControl.SlowestFormatter
       - name: Run provider broker end-to-end tests
         timeout-minutes: 10
         env:

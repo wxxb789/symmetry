@@ -7,13 +7,16 @@ program plan §2 M1/M9/M10, §5 W2-01, §10.5 and decision D7; findings `tests-c
 (per-test duration telemetry missing for two of three suites) and T4 (≈4,600 lines of browser/node
 tests never run in CI); findings `scripts-ci.md` F4 (six of thirteen browser specs never run in CI)
 and S6b (browser suite inventory test + manual-only label); `docs/design/quality.md` (gate policy);
-and the contract's owned-file set (four files plus this plan; every other path is read-only here).
+and the contract's owned-file set (four files plus this plan, extended in review round 1 by the
+Conductor decision with `control/test/support/slowest_formatter.ex`; every other path is read-only
+here).
 
 ## Deliverable shape
 
 | File | State | Content |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | modified | control job's `mix test` step unchanged (fix round 1 reverted `--slowest 20`: trace mode, see "The duration plane"); race step emits `go test -json` through the shared gate and writes `$RUNNER_TEMP/daemon-go-race.json` (daemon job); one new advisory duration-summary step (daemon job); one new blocking inventory step (legacy-route-audit job) |
+| `.github/workflows/ci.yml` | modified | control job's `mix test` step registers the owned test-support formatter (top-20 slowest at suite end; `--slowest 20` was reverted in fix round 1: trace mode, see "The duration plane"); race step emits `go test -json` through the shared gate and writes `$RUNNER_TEMP/daemon-go-race.json` (daemon job); one new advisory duration-summary step (daemon job); one new blocking inventory step (legacy-route-audit job) |
+| `control/test/support/slowest_formatter.ex` | new | test-support ExUnit formatter: records every finished test's time and prints the twenty slowest at suite end, so the control job gets duration telemetry without trace mode |
 | `scripts/ci/go-test-durations.py` | new | `go test -json` duration summarizer: prints the top-N test table and a package table, fails a test >30 s or p95 +20 % over the committed baseline |
 | `scripts/ci/assert-browser-suite-coverage.py` | new | inventory gate: every `browser/tests/**/*.spec.mjs` / `browser/scripts/**/*.test.mjs` is named by a workflow or listed in `browser/README.md`'s manual matrix |
 | `browser/README.md` | modified | new "Manual-only suite matrix" section (machine-parsed by the gate) listing the nine suites CI does not run, why, and how to run each today |
@@ -29,20 +32,31 @@ already exist, exactly as W1-01 grew the advisory quality plane.
 
 ### ExUnit (control job)
 
-**Reverted in fix round 1 (review finding P1-1); ExUnit durations are unshipped.** The step was
-`- run: mix test --slowest 20`, and the flag does print the slowest tests (probe below), but not as
-an output-only addition: `--slowest N` sets ExUnit's `:slowest`, and `ExUnit.configure/1` turns
-that into `trace: true` (`lib/ex_unit/lib/ex_unit.ex`, `put_slowest/1`), which drops `:max_cases` to
-`1` (`max_cases/1`) and makes every test timeout `:infinity` (`ExUnit.Runner.get_timeout/2`). The
-runtime probe on the pinned toolchain shows the consequence directly: an `async: true` test tagged
-`@tag timeout: 200` that sleeps 600 ms fails with `** (ExUnit.TimeoutError)` under `mix test`
-(`max_cases: 32`, exit 2) and passes under `mix test --slowest 1` (`max_cases: 1`, exit 0); the
-PR's CI log confirms trace mode (2,024 `  * test ` lines versus 0 on the main reference run). A
-pre-existing gate changing semantics is the contract's clause 3, so the step is back to
-`- run: mix test` and the ci.yml comment records why `--slowest` must not come back. Shipping
-durations without trace mode needs a custom formatter module (`mix test --formatter
-ExUnit.CLIFormatter --formatter <slowest formatter>`), a file outside this slice's owned set:
-escalated in the fix report, not implemented here. No other `mix test` invocation (provider broker
+**Implemented in review round 1 (Conductor decision 2026-11-21, escalation E1 option A);
+`--slowest` stays forbidden.** The step was first changed to `- run: mix test --slowest 20`, and
+the flag does print the slowest tests, but not as an output-only addition: `--slowest N` sets
+ExUnit's `:slowest`, and `ExUnit.configure/1` turns that into `trace: true`
+(`lib/ex_unit/lib/ex_unit.ex`, `put_slowest/1`), which drops `:max_cases` to `1` (`max_cases/1`)
+and makes every test timeout `:infinity` (`ExUnit.Runner.get_timeout/2`). The runtime probe on the
+pinned toolchain shows the consequence directly: an `async: true` test tagged `@tag timeout: 200`
+that sleeps 600 ms fails with `** (ExUnit.TimeoutError)` under `mix test` (`max_cases: 32`, exit 2)
+and passes under `mix test --slowest 1` (`max_cases: 1`, exit 0); the PR's CI log confirms trace
+mode (2,024 `  * test ` lines versus 0 on the main reference run). A pre-existing gate changing
+semantics is the contract's clause 3, so `--slowest` is out.
+
+The ratified replacement is the owned test-support formatter
+`control/test/support/slowest_formatter.ex` (`SymmetryControl.SlowestFormatter`), and the step now
+runs:
+
+```yaml
+- run: mix test --formatter ExUnit.CLIFormatter --formatter SymmetryControl.SlowestFormatter
+```
+
+The formatter is a GenServer that records every finished test's `time` and prints the twenty
+slowest at `{:suite_finished, _}`, in the same row shape ExUnit's own slowest list uses
+(`* test <name> (<Module>) (<ms>ms) [file:line]`). It reads the same events `--slowest` would, so
+`max_cases` and the per-test timeouts are untouched; `ExUnit.CLIFormatter` stays listed, so the
+run's normal output and exit status are unchanged. No other `mix test` invocation (provider broker
 e2e, the goal-receipt JSON-formatter run, the folded Pi E2E steps) is touched, so none of their
 formatter contracts move.
 
@@ -183,11 +197,13 @@ that adds a spec file neither named by a workflow nor listed in the matrix redde
 | A new job missing `needs: changes` + `run-heavy` | No new job is added; both steps grow inside existing jobs. | `git diff` of ci.yml is steps-only |
 | A gate that passes with an unlisted spec | The inventory gate fails on an unlisted spec (planted fixture, exit 1) and fails on matrix rot and double classification. | fixture runs below |
 
-Pre-existing step semantics: the control job's `mix test` step is back to its original command
-(fix round 1; see "The duration plane / ExUnit"); the race step keeps its command, its stdio-only
-boundary, its 600 s budget and its exit-status meaning, gains `-json` and the one already-required
-named assertion, and now writes the event stream next to it; the new summary step is
-`continue-on-error`, so the daemon job's conclusion cannot change because of it.
+Pre-existing step semantics: the control job's `mix test` step gains two `--formatter` flags and one
+test-support module (see "The duration plane / ExUnit") - `ExUnit.CLIFormatter` stays the first
+formatter, the added one only prints a table at suite end, and the step's pass/fail meaning is
+unchanged; the race step keeps its command, its stdio-only boundary, its 600 s budget and its
+exit-status meaning, gains `-json` and the one already-required named assertion, and now writes the
+event stream next to it; the new summary step is `continue-on-error`, so the daemon job's
+conclusion cannot change because of it.
 
 ## Out of scope
 
@@ -197,8 +213,9 @@ named assertion, and now writes the event stream next to it; the new summary ste
   (W6-01): serialized owners of `ci.yml`/`test-ci-changed-path-classifier.py`.
 * **Blocking duration thresholds** (W6-12) and the slow-test burn-down itself: this slice records
   the numbers and the runner-seeded baseline; W6-12 flips the thresholds to blocking.
-* **Fixing the slow tests** the table will name, and any change to `daemon/**`, `control/**` or
-  `browser/tests/**`: read-only here.
+* **Fixing the slow tests** the table will name, and any other change to `daemon/**`, `control/**`
+  or `browser/tests/**`: read-only here (the Conductor decision's test-support formatter is the one
+  control-side exception).
 * **A committed fixture suite for the two new scripts** (`scripts/ci/test-*.py`): not in the owned
   set. The contract's gate is "both new scripts exercised on synthetic fixtures" — done in this
   plan's evidence runs, with `--root` and `EVENTS.json` as the seams; W2-17/W3-01 own the scripts'
@@ -245,9 +262,18 @@ evidence)**: the flag exists on the pinned version and prints the slowest-test t
 shape, `Top 20 slowest (0.1s), 84.5% of total time:` …), but on an `async: true` test tagged
 `@tag timeout: 200` that sleeps 600 ms it also changes the verdict: `mix test` prints
 `max_cases: 32`, raises `** (ExUnit.TimeoutError)` and exits 2, while `mix test --slowest 1` prints
-`max_cases: 1`, ignores the tag timeout and exits 0. That is why `mix test` is unshipped as the
-duration reader (see "The duration plane / ExUnit"); the probe exercises the flag's semantics, not
-the control suite, which needs Postgres and is CI's to run.
+`max_cases: 1`, ignores the tag timeout and exits 0. That is why `--slowest` is not the duration
+reader (see "The duration plane / ExUnit"); the probe exercises the flag's semantics, not the
+control suite, which needs Postgres.
+
+**ExUnit `SymmetryControl.SlowestFormatter` (Elixir 1.20.4 / OTP 29, control suite, review round
+1)**: `mix test --formatter ExUnit.CLIFormatter --formatter SymmetryControl.SlowestFormatter
+test/symmetry_control/request_hash_test.exs` (test database partition `fix188r1`, host Postgres)
+printed `Running ExUnit with seed: 219747, max_cases: 32` (no trace), the table `Top 6 slowest
+tests:` with rows in the CLI formatter's slowest shape (`* test <name> (<Module>) (<ms>ms)
+[file:line]`), and `Result: 6 passed`, exit 0. Timeout enforcement stays ExUnit's own: it is
+skipped only under `config.trace`, which this run does not set, and the round-1 prototype records
+the `@tag timeout: 200` failure under `max_cases: 32` against the pass under `--slowest 1`.
 
 **Scoped plain `go test -json` stream (the existing `$RUNNER_TEMP/daemon-go-test.json` step, from CI
 run 44874926108's daemon job log)**: 529 terminal test outcomes, p95 0.00 s, max 1.51 s
@@ -341,6 +367,10 @@ over 1,444 tracked files; the gate plumbing end to end (`go-test-json-gate.py --
    committed baseline; the WSL Linux race attempts are recorded above as discarded method.
 8. `python3 scripts/ci/test-no-legacy-routes-audit.py` and `test-assert-folded-gates.py` where this
    host can run them (Git's bash first on `PATH`, per W1-01's host note).
+9. The control-side formatter (review round 1): `MIX_ENV=test mix compile --warnings-as-errors` and
+   `mix format --check-formatted` in `control/`, then one small test file under
+   `--formatter ExUnit.CLIFormatter --formatter SymmetryControl.SlowestFormatter` (the table
+   prints, `max_cases` is not 1).
 
 Not runnable here (CI is their oracle, per the contract): the actual runner run — the control job's
 `mix test` step, the race step's JSON capture, the summary step's table on the runner, and the
