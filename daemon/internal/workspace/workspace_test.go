@@ -539,6 +539,35 @@ func TestCleanupRefusesWorktreeWithoutOwnershipJournal(t *testing.T) {
 	runGit(t, repository, "worktree", "remove", "--force", prepared.Path)
 }
 
+// TestCleanupRefusesLinuxCloneWithoutStoreReadback pins the two outcomes of the
+// guard that keeps a reserved Linux clone out of the linked-worktree remover:
+// the linuxClone refusal precedes the unmanaged no-op and owns its exact string,
+// while an unmanaged Prepared is a silent success that touches no path.
+func TestCleanupRefusesLinuxCloneWithoutStoreReadback(t *testing.T) {
+	manager := New(nil)
+	reserved := Prepared{
+		Path:       filepath.Join(t.TempDir(), "clone-target"),
+		BindingKey: "linux-clone",
+		Run:        RunRef{RunID: "cleanup-linux-clone", Generation: 1},
+		linuxClone: true,
+		policy:     config.CleanupAlways,
+	}
+	err := manager.Cleanup(context.Background(), reserved, true)
+	if err == nil || err.Error() != "Linux clone cleanup requires explicit Store readback authorization" {
+		t.Fatalf("Cleanup(linuxClone) error = %v, want the Store readback refusal", err)
+	}
+
+	unmanaged := Prepared{
+		Path:       filepath.Join(t.TempDir(), "unmanaged-target"),
+		BindingKey: "existing-checkout",
+		Run:        RunRef{RunID: "cleanup-unmanaged", Generation: 1},
+		policy:     config.CleanupAlways,
+	}
+	if err := manager.Cleanup(context.Background(), unmanaged, true); err != nil {
+		t.Fatalf("Cleanup(unmanaged) error = %v, want nil no-op", err)
+	}
+}
+
 func TestCleanupRecoversAfterWorktreeRemovalBeforeReservationDeletion(t *testing.T) {
 	repository := newRepository(t)
 	bindings := map[string]config.Workspace{

@@ -102,6 +102,43 @@ func openLinuxCloneOPathDirPath(path string) (int, unix.Stat_t, error) {
 	return openLinuxCloneTrustedPathDir(path, unix.O_PATH)
 }
 
+const (
+	// linuxCloneConfiguredPathRootFlags pins the filesystem-root descriptor of a
+	// configured-path walk: a real directory whose descriptor cannot leak into
+	// child processes. The root is the walk's origin and not a named component
+	// of the configured path, so it carries no O_NOFOLLOW.
+	linuxCloneConfiguredPathRootFlags = unix.O_DIRECTORY | unix.O_CLOEXEC
+	// linuxCloneConfiguredPathComponentFlags pins one named component of a
+	// configured path with the same descriptor guarantees plus O_NOFOLLOW, so a
+	// component cannot be swapped for a symlink between the walker's own name
+	// check and its open.
+	linuxCloneConfiguredPathComponentFlags = linuxCloneConfiguredPathRootFlags | unix.O_NOFOLLOW
+)
+
+// openLinuxClonePinnedChild is the fd-stepping core shared by the two
+// configured-path walkers: it opens one component beneath parentFD with the
+// caller's access flags and the shared component flags, and releases the parent
+// descriptor whether or not the open succeeded. The caller owns the returned
+// descriptor. Each walker keeps its own syscall order, mode/ownership policy,
+// refusal strings and error wrapping around this step.
+func openLinuxClonePinnedChild(parentFD int, component string, accessFlags int) (int, error) {
+	next, err := unix.Openat(parentFD, component, accessFlags|linuxCloneConfiguredPathComponentFlags, 0)
+	_ = unix.Close(parentFD)
+	return next, err
+}
+
+// readLinuxClonePinnedDirectory reads the live identity of a descriptor pinned
+// by a configured-path walk and releases it when the read fails. The caller
+// owns the descriptor on success and applies its own kind and policy checks.
+func readLinuxClonePinnedDirectory(fd int) (unix.Stat_t, error) {
+	var info unix.Stat_t
+	if err := unix.Fstat(fd, &info); err != nil {
+		_ = unix.Close(fd)
+		return unix.Stat_t{}, err
+	}
+	return info, nil
+}
+
 // openLinuxCloneTrustedPathDir walks the configured absolute path without
 // following links or crossing symlinks. Mount crossings are allowed only while
 // resolving trusted ancestors/root; all subsequent traversal starts from the
@@ -113,7 +150,7 @@ func openLinuxCloneTrustedPathDir(path string, accessFlags int) (int, unix.Stat_
 	if path == "/" {
 		return -1, unix.Stat_t{}, errors.New("filesystem root cannot be configured as a B clone root")
 	}
-	fd, err := unix.Open("/", accessFlags|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open("/", accessFlags|linuxCloneConfiguredPathRootFlags, 0)
 	if err != nil {
 		return -1, unix.Stat_t{}, err
 	}
@@ -145,14 +182,12 @@ func openLinuxCloneTrustedPathDir(path string, accessFlags int) (int, unix.Stat_
 			_ = unix.Close(fd)
 			return -1, unix.Stat_t{}, fmt.Errorf("configured root ancestor %q is not trusted: %w", component, err)
 		}
-		next, err := unix.Openat(fd, component, accessFlags|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-		_ = unix.Close(fd)
+		next, err := openLinuxClonePinnedChild(fd, component, accessFlags)
 		if err != nil {
 			return -1, unix.Stat_t{}, fmt.Errorf("pin configured root component %q: %w", component, err)
 		}
-		var opened unix.Stat_t
-		if err := unix.Fstat(next, &opened); err != nil {
-			_ = unix.Close(next)
+		opened, err := readLinuxClonePinnedDirectory(next)
+		if err != nil {
 			return -1, unix.Stat_t{}, fmt.Errorf("read pinned configured root component %q: %w", component, err)
 		}
 		if !sameLinuxCloneDirectoryIdentity(&named, &opened) || named.Uid != opened.Uid || named.Gid != opened.Gid || named.Mode&0o7777 != opened.Mode&0o7777 {
@@ -171,9 +206,8 @@ func openLinuxCloneTrustedPathDir(path string, accessFlags int) (int, unix.Stat_
 		}
 		fd = next
 	}
-	var info unix.Stat_t
-	if err := unix.Fstat(fd, &info); err != nil {
-		_ = unix.Close(fd)
+	info, err := readLinuxClonePinnedDirectory(fd)
+	if err != nil {
 		return -1, unix.Stat_t{}, err
 	}
 	if info.Mode&unix.S_IFMT != unix.S_IFDIR {
@@ -203,12 +237,26 @@ func verifyLinuxCloneTrustedRootAncestor(info *unix.Stat_t) error {
 	return nil
 }
 
-func openLinuxCloneOPathDirAt(parentFD int, name string) (int, error) {
-	how := &unix.OpenHow{
-		Flags:   uint64(unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW),
+// linuxCloneDirOpenHow is the openat2 request for one directory entry beneath a
+// pinned parent descriptor: a real directory that resolves without symlinks,
+// magic links or mount crossings, and a descriptor that cannot leak into child
+// processes. The caller's access flag is the only difference between the two
+// directory openers this file used to carry: O_PATH for a descriptor kept only
+// as a parent, O_RDONLY when the entry's own content is read.
+func linuxCloneDirOpenHow(accessFlags int) *unix.OpenHow {
+	return &unix.OpenHow{
+		Flags:   uint64(accessFlags | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW),
 		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV),
 	}
-	fd, err := unix.Openat2(parentFD, name, how)
+}
+
+// openLinuxCloneDirAtFlags pins one directory entry beneath parentFD with the
+// caller's access flag and refuses anything that resolved to something other
+// than a real directory. It is this file's only directory opener; the file
+// opener openLinuxCloneFileAt stays separate because its callers own the access
+// flags of a regular file.
+func openLinuxCloneDirAtFlags(parentFD int, name string, accessFlags int) (int, error) {
+	fd, err := unix.Openat2(parentFD, name, linuxCloneDirOpenHow(accessFlags))
 	if err != nil {
 		return -1, err
 	}
@@ -303,7 +351,7 @@ func openLinuxCloneCleanupTarget(ctx context.Context, root, target string, check
 			_ = targetInfo.close()
 			return nil, errors.New("B cleanup target inode differs from its checkout receipt")
 		}
-		nextFD, err := openLinuxCloneOPathDirAt(currentFD, component)
+		nextFD, err := openLinuxCloneDirAtFlags(currentFD, component, unix.O_PATH)
 		if err != nil {
 			if currentFD != rootFD {
 				_ = unix.Close(currentFD)
@@ -450,7 +498,7 @@ func verifyLinuxCloneCleanupTargetAbsentAtRoot(ctx context.Context, target *linu
 			}
 			return fmt.Errorf("B cleanup parent %q changed during absence readback", component)
 		}
-		nextFD, err := openLinuxCloneOPathDirAt(currentFD, component)
+		nextFD, err := openLinuxCloneDirAtFlags(currentFD, component, unix.O_PATH)
 		if err != nil {
 			if currentFD != target.rootFD {
 				_ = unix.Close(currentFD)
@@ -487,7 +535,7 @@ func openLinuxCloneOwnedDirPath(path string) (int, unix.Stat_t, error) {
 	if !canonicalLinuxClonePath(path) {
 		return -1, unix.Stat_t{}, errors.New("A-owned directory path must be canonical and absolute")
 	}
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open("/", unix.O_RDONLY|linuxCloneConfiguredPathRootFlags, 0)
 	if err != nil {
 		return -1, unix.Stat_t{}, err
 	}
@@ -496,15 +544,13 @@ func openLinuxCloneOwnedDirPath(path string) (int, unix.Stat_t, error) {
 		if component == "" {
 			continue
 		}
-		next, openErr := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-		_ = unix.Close(fd)
+		next, openErr := openLinuxClonePinnedChild(fd, component, unix.O_RDONLY)
 		if openErr != nil {
 			return -1, unix.Stat_t{}, openErr
 		}
 		fd = next
-		var info unix.Stat_t
-		if err := unix.Fstat(fd, &info); err != nil {
-			_ = unix.Close(fd)
+		info, err := readLinuxClonePinnedDirectory(fd)
+		if err != nil {
 			return -1, unix.Stat_t{}, err
 		}
 		if info.Mode&unix.S_IFMT != unix.S_IFDIR {
@@ -523,9 +569,8 @@ func openLinuxCloneOwnedDirPath(path string) (int, unix.Stat_t, error) {
 			return -1, unix.Stat_t{}, errors.New("A-owned path has an unsafe ancestor")
 		}
 	}
-	var info unix.Stat_t
-	if err := unix.Fstat(fd, &info); err != nil {
-		_ = unix.Close(fd)
+	info, err := readLinuxClonePinnedDirectory(fd)
+	if err != nil {
 		return -1, unix.Stat_t{}, err
 	}
 	return fd, info, nil
@@ -563,7 +608,7 @@ func openLinuxCloneSeedParent(seedRoot, seedPath string, create bool) (int, stri
 					return -1, "", err
 				}
 			}
-			next, openErr := openLinuxCloneDirAt(parentFD, component)
+			next, openErr := openLinuxCloneDirAtFlags(parentFD, component, unix.O_RDONLY)
 			_ = unix.Close(parentFD)
 			if openErr != nil {
 				return -1, "", openErr
@@ -731,7 +776,7 @@ func removeLinuxCloneScratchDirectory(ctx context.Context, parentFD int, name st
 	if named.Mode&unix.S_IFMT != unix.S_IFDIR || uint32(named.Uid) != uint32(os.Geteuid()) || named.Mode&0o077 != 0 {
 		return errors.New("exact A clone scratch is not a private A-owned directory")
 	}
-	directoryFD, err := openLinuxCloneDirAt(parentFD, name)
+	directoryFD, err := openLinuxCloneDirAtFlags(parentFD, name, unix.O_RDONLY)
 	if err != nil {
 		return err
 	}
@@ -782,7 +827,7 @@ func removeLinuxCloneOwnedScratchContents(ctx context.Context, directoryFD int, 
 		}
 		switch before.Mode & unix.S_IFMT {
 		case unix.S_IFDIR:
-			childFD, err := openLinuxCloneDirAt(directoryFD, name)
+			childFD, err := openLinuxCloneDirAtFlags(directoryFD, name, unix.O_RDONLY)
 			if err != nil {
 				return err
 			}
@@ -906,7 +951,7 @@ func openLinuxCloneTargetParent(root, target string) (int, string, error) {
 			_ = unix.Close(parentFD)
 			return -1, "", errors.New("Linux clone target parent contains an invalid path component")
 		}
-		next, openErr := openLinuxCloneDirAt(parentFD, component)
+		next, openErr := openLinuxCloneDirAtFlags(parentFD, component, unix.O_RDONLY)
 		_ = unix.Close(parentFD)
 		if openErr != nil {
 			return -1, "", openErr
@@ -930,7 +975,7 @@ func openLinuxCloneTarget(intent authority.LinuxCloneIntent, receipt authority.L
 		_ = unix.Close(parentFD)
 		return nil, errors.New("Linux clone target inode differs from the checkout receipt")
 	}
-	fd, err := openLinuxCloneDirAt(parentFD, name)
+	fd, err := openLinuxCloneDirAtFlags(parentFD, name, unix.O_RDONLY)
 	if err != nil {
 		_ = unix.Close(parentFD)
 		return nil, err
@@ -1029,7 +1074,7 @@ func verifyLinuxCloneTargetAbsentUnderRootWithReadback(ctx context.Context, root
 		if named.Mode&unix.S_IFMT != unix.S_IFDIR {
 			return errors.New("Linux clone target parent is not a real directory")
 		}
-		childFD, err := openLinuxCloneDirAt(parentFD, component)
+		childFD, err := openLinuxCloneDirAtFlags(parentFD, component, unix.O_RDONLY)
 		if err != nil {
 			return err
 		}
@@ -1073,7 +1118,7 @@ func verifyLinuxCloneTargetAbsentAfterRewalk(ctx context.Context, root string, r
 		if !sameLinuxCloneDirectoryIdentity(&ancestor.identity, &named) {
 			return fmt.Errorf("B clone parent %q changed during no-target observation", ancestor.name)
 		}
-		childFD, err := openLinuxCloneDirAt(parentFD, ancestor.name)
+		childFD, err := openLinuxCloneDirAtFlags(parentFD, ancestor.name, unix.O_RDONLY)
 		if err != nil {
 			return fmt.Errorf("reopen B clone parent %q: %w", ancestor.name, err)
 		}
@@ -1132,7 +1177,7 @@ func createLinuxCloneQuarantine(ctx context.Context, target *linuxCloneTarget, q
 	if scratch.seedTemp || scratch.quarantine || scratch.template {
 		return "", fmt.Errorf("%w: A clone scratch for this intent already exists", ErrLinuxCloneProcessUnresolved)
 	}
-	gitFD, err := openLinuxCloneDirAt(target.fd, ".git")
+	gitFD, err := openLinuxCloneDirAtFlags(target.fd, ".git", unix.O_RDONLY)
 	if err != nil {
 		return "", fmt.Errorf("standalone clone .git must be a real directory: %w", err)
 	}
@@ -1144,7 +1189,7 @@ func createLinuxCloneQuarantine(ctx context.Context, target *linuxCloneTarget, q
 	if err := rejectLinuxCloneEntry(gitFD, "shallow"); err != nil {
 		return "", fmt.Errorf("reject shallow B clone: %w", err)
 	}
-	objectsFD, err := openLinuxCloneDirAt(gitFD, "objects")
+	objectsFD, err := openLinuxCloneDirAtFlags(gitFD, "objects", unix.O_RDONLY)
 	if err != nil {
 		return "", fmt.Errorf("open B clone object directory: %w", err)
 	}
@@ -1227,7 +1272,7 @@ func createLinuxCloneQuarantine(ctx context.Context, target *linuxCloneTarget, q
 		return cleanupCreated(err)
 	}
 	defer unix.Close(quarantineFD)
-	destinationObjectsFD, err := openLinuxCloneDirAt(quarantineFD, "objects")
+	destinationObjectsFD, err := openLinuxCloneDirAtFlags(quarantineFD, "objects", unix.O_RDONLY)
 	if err != nil {
 		return cleanupCreated(err)
 	}
@@ -1248,27 +1293,6 @@ func createLinuxCloneQuarantine(ctx context.Context, target *linuxCloneTarget, q
 		return cleanupCreated(err)
 	}
 	return quarantinePath, nil
-}
-
-func openLinuxCloneDirAt(parentFD int, name string) (int, error) {
-	how := &unix.OpenHow{
-		Flags:   uint64(unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW),
-		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV),
-	}
-	fd, err := unix.Openat2(parentFD, name, how)
-	if err != nil {
-		return -1, err
-	}
-	var info unix.Stat_t
-	if err := unix.Fstat(fd, &info); err != nil {
-		_ = unix.Close(fd)
-		return -1, err
-	}
-	if info.Mode&unix.S_IFMT != unix.S_IFDIR {
-		_ = unix.Close(fd)
-		return -1, errors.New("entry is not a real directory")
-	}
-	return fd, nil
 }
 
 func openLinuxCloneFileAt(parentFD int, name string, flags int) (int, error) {
@@ -1292,7 +1316,7 @@ func rejectLinuxCloneEntry(directoryFD int, name string) error {
 }
 
 func rejectLinuxCloneObjectAlternates(ctx context.Context, objectsFD int) error {
-	infoFD, err := openLinuxCloneDirAt(objectsFD, "info")
+	infoFD, err := openLinuxCloneDirAtFlags(objectsFD, "info", unix.O_RDONLY)
 	if errors.Is(err, unix.ENOENT) {
 		return nil
 	}
@@ -1323,7 +1347,7 @@ func copyLinuxCloneObjectStore(ctx context.Context, sourceFD, destinationFD int,
 		}
 		switch name {
 		case "info":
-			infoFD, err := openLinuxCloneDirAt(sourceFD, name)
+			infoFD, err := openLinuxCloneDirAtFlags(sourceFD, name, unix.O_RDONLY)
 			if err != nil {
 				return fmt.Errorf("open B Git object info directory: %w", err)
 			}
@@ -1345,7 +1369,7 @@ func copyLinuxCloneObjectStore(ctx context.Context, sourceFD, destinationFD int,
 				return errors.New("B Git object info contains unsupported metadata or alternates")
 			}
 		case "pack":
-			packFD, err := openLinuxCloneDirAt(sourceFD, name)
+			packFD, err := openLinuxCloneDirAtFlags(sourceFD, name, unix.O_RDONLY)
 			if err != nil {
 				return fmt.Errorf("open B Git pack directory: %w", err)
 			}
@@ -1354,7 +1378,7 @@ func copyLinuxCloneObjectStore(ctx context.Context, sourceFD, destinationFD int,
 				_ = unix.Close(packFD)
 				return err
 			}
-			destinationPackFD, openErr := openLinuxCloneDirAt(destinationFD, name)
+			destinationPackFD, openErr := openLinuxCloneDirAtFlags(destinationFD, name, unix.O_RDONLY)
 			if openErr != nil {
 				_ = unix.Close(packFD)
 				return openErr
@@ -1379,7 +1403,7 @@ func copyLinuxCloneObjectStore(ctx context.Context, sourceFD, destinationFD int,
 			if len(name) != 2 || !lowerHex(name) {
 				return fmt.Errorf("%w: unexpected B object-store entry %q", errLinuxCloneUnsupportedObjects, name)
 			}
-			fanoutFD, err := openLinuxCloneDirAt(sourceFD, name)
+			fanoutFD, err := openLinuxCloneDirAtFlags(sourceFD, name, unix.O_RDONLY)
 			if err != nil {
 				return fmt.Errorf("%w: open loose-object fanout %q: %v", errLinuxCloneUnsupportedObjects, name, err)
 			}
@@ -1392,7 +1416,7 @@ func copyLinuxCloneObjectStore(ctx context.Context, sourceFD, destinationFD int,
 				_ = unix.Close(fanoutFD)
 				return err
 			}
-			destinationFanoutFD, openErr := openLinuxCloneDirAt(destinationFD, name)
+			destinationFanoutFD, openErr := openLinuxCloneDirAtFlags(destinationFD, name, unix.O_RDONLY)
 			if openErr != nil {
 				_ = unix.Close(fanoutFD)
 				return openErr
