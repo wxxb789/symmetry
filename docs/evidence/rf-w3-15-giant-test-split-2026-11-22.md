@@ -14,10 +14,12 @@ Scratch tooling (state dir, `gdd/refactor/scratch/`, read-only on the repo excep
 files it emits): `w3-15-measure.py` (unit spans: Go `^func `..`^}`, ExUnit `test "…"` blocks,
 md5 `2543dea4684c323ba7edfc3b096af42e`), `w3-15-generate.py` (base→delivered transformation +
 `apply_patch`-format patches, md5 `e295b2951b9f21fad20880203ec787ba` — F1 adjustment, §10),
-`w3-15-verify.py` (25 printed move-only / structure checks, md5
-`c56ec7831a0a5815b0e07f89aee77959` — same adjustment), `w3-15-capture-go.sh` /
-`w3-15-capture-ex.sh` (name-set captures), `w3-15-mix.sh` (portable Elixir 1.20.4 / OTP 29.0.6,
-`MIX_ENV=test`, `MIX_TEST_PARTITION=rf-w3-15`, local PostgreSQL `127.0.0.1:5432`).
+`w3-15-verify.py` (24 printed move-only / structure checks, md5
+`99565020a69945f57bcae398e7957aa4` — same adjustment plus the fix-round edits of §11),
+`w3-15-audit.py` (lesson-32 clause audit, md5 `63f53be990c882a72c988036cac31d79`, §11) /
+`w3-15-capture-go.sh` / `w3-15-capture-ex.sh` (name-set captures), `w3-15-mix.sh` (portable Elixir
+1.20.4 / OTP 29.0.6, `MIX_ENV=test`, `MIX_TEST_PARTITION=rf-w3-15`, local PostgreSQL
+`127.0.0.1:5432`).
 
 ## 1. Deliverable
 
@@ -25,8 +27,8 @@ md5 `2543dea4684c323ba7edfc3b096af42e`), `w3-15-generate.py` (base→delivered t
 | --- | --- | --- |
 | `daemon/internal/app/app_test.go` | +142/−135 | the 5 single-use fixture constructs of `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` become file-level helpers (`claimAdmissionControlClient` 61 L, `claimAdmissionDaemon` 26 L, `startClaimAdmissionRun` 11 L, `assertClaimAdmissionNoEffects` 15 L, `claimAdmissionProviderAccess` 9 L); 4+5+3+2 call sites renamed; scenario bodies verbatim |
 | `daemon/internal/state/state_test.go` | +450/−429 | the 48-case table of `TestJournalValidatorFirstErrorStringsArePinned`/`validateJournal` becomes `type pinnedJournalMutationCase` + 3 scenario-family funcs (ownership 204 L / scan+release 92 L / record 135 L) joined by `slices.Concat` in the original case order; `"slices"` import; two pinned message consts hoisted |
-| `control/test/symmetry_control/goals_test.exs` | +386/−325 | the 328-L test body becomes 4 same-file `defp` phases (86/79/147/66 L) called from the same `test "…"` block in the original order |
-| `docs/plans/2026-11-22-rf-w3-15-giant-test-split-plan.md` | new, 267 L | plan (owned set) |
+| `control/test/symmetry_control/goals_test.exs` | +386/−325 | the 328-line test block (327-line body) becomes 4 same-file `defp` phases (declaration spans 86/79/147/66 L) called from the same `test "…"` block in the original order |
+| `docs/plans/2026-11-22-rf-w3-15-giant-test-split-plan.md` | new (267 L at `9c8ccbfe`; 278 L after this round's §11 edits) | plan (owned set) |
 | `docs/evidence/rf-w3-15-giant-test-split-2026-11-22.md` | new | this record |
 
 Per-file counts are `git diff --numstat 6d428d8f -- <file>` against the delivered worktree
@@ -44,13 +46,16 @@ No production file, no new test file, no new package.
 
 ## 2. Unit-length table (the acceptance table)
 
-Before = base `6d428d8f`; after = delivered tree; same tool both sides.
+Before = base `6d428d8f`; after = delivered tree; same tool both sides. Span convention (every
+row, both sides): Go `^func ` .. the line that is exactly `}`; ExUnit the `test "…"` line through
+the line **before** its indentation-matching `end` — a block's `end` line is not counted (the
+contract's goals re-derivation of 329 counts it: 328 + 1).
 
 | owned file | before (max unit) | after (max unit) | action |
 | --- | --- | --- | --- |
 | `internal/app/app_test.go` | **321 @777** | **201 @777** (helpers 61/26/11/15/9; next 177 @6282 untouched) | split |
 | `internal/state/state_test.go` | **595 @2457** | **204 @2637** (ownership; record 135, test func 171, scan 92; next 79 @1470 untouched) | split |
-| `control/…/goals_test.exs` | **328 @2468** | **8** (the test block; new defps 86/79/147/66; next 207 @3173 untouched) | split |
+| `control/…/goals_test.exs` | **328 @2468** (the split block; 329 with its `end`) | **207 @3173** (the file's max unit after the split — an untouched block, formerly 207 @3494; the split block itself is 7 L, 8 with its `end`; new defps 86/79/147/66) | split |
 | `internal/harness/codex/adapter_test.go` | 76 @28 | 76 @28, unedited | measured-closed |
 | `internal/harness/opencode/adapter_native_work_test.go` | 176 @66 | 176 @66, unedited | measured-closed |
 | `internal/state/linux_cgroup_v2_test.go` | 245 @667 | 245 @667, unedited | measured-closed |
@@ -71,8 +76,10 @@ pi-control blocks 504/339/338) + the 10 out-of-scope units the contract's P1-3 l
 
 ## 3. Move-only / structure proof
 
-`python gdd/…/w3-15-verify.py <repo> 6d428d8f <candidates> --applied` → **ALL CHECKS PASS** (25
-printed checks; base = `git show 6d428d8f:<file>`; re-run at the apply revision after F1 — §10):
+`python gdd/…/w3-15-verify.py <repo> 6d428d8f <candidates> --applied` → **ALL CHECKS PASS** (24
+printed checks — the fix round dropped the tautological `state.case-order-names` base-vs-base check
+and made `goals.block-size` print the §2 span convention, §11; base = `git show 6d428d8f:<file>`;
+re-run at the apply revision after F1 — §10):
 
 - `app.prefix-identical`, `app.unit-top-level 201 L`, `app.call-site-renames
   {newClient 4, newDaemon 5, start 3, assertNoEffects 2}`, `app.test-body-identical-after-move`,
@@ -80,13 +87,15 @@ printed checks; base = `git show 6d428d8f:<file>`; re-run at the apply revision 
   body equality with the base closures; `newDaemon` excepts the one blank line F1 removed — §10).
 - `state.entry-count 48`, `state.moved-entry-count 48`,
   `state.entries-byte-identical-modulo-indent` (each moved entry equals its base text after exactly
-  one tab is removed), `state.case-order-preserved` (index-by-index `name:` equality),
+  one tab is removed), `state.case-order-preserved` (candidate vs base, index-by-index `name:`
+  equality — the order proof),
   `state.unit-top-level 171 L`, `state.func-pretable-identical` (modulo the two hoisted consts),
   `state.func-posttable-identical`, `state.loop-header-replaced`,
   `state.import-only-slices-added`, `state.pinned-consts-hoisted`.
 - `goals.moved-body-byte-identical` (the four phase bodies concatenated, in call order, are
-  byte-identical to the base test body), `goals.phase-sizes 70 63 136 55`,
-  `goals.block-size 8 L`, `goals.test-name-set-identical 147 vs 147`, `goals.tag-set-identical`.
+  byte-identical to the base test body), `goals.phase-sizes 70 63 136 55` (moved lines per phase),
+  `goals.block-size 7 L` (the split block, §2 convention; 8 with its `end`),
+  `goals.test-name-set-identical 147 vs 147`, `goals.tag-set-identical`.
 
 Reproducibility: `w3-15-generate.py` regenerates all three delivered files from the base
 byte-identically (`cmp` OK for each against the apply-stage worktree; the F1 blank-line
@@ -120,13 +129,18 @@ Each is a scope/PLUMBING change outside the moved text; none weakens an assertio
 
 ## 5. Control-flow audit (lesson 32)
 
-- `app_test.go` (`gdd/…/w3-15-runs/control-flow-audit.txt`): every `return` / `t.Fatal*` /
-  `t.Errorf` / `default:` / `WriteHeader` clause of each moved closure, in base order, maps to its
-  HEAD line with the same clause kind — counts 10/10, 4/4, 2/2, 4/4 (order+count preserved, `True`
-  for each). The handler's `404`-on-non-PUT branch, the `400`-on-bad-body branch and the
-  `default:` switch clause are all inside the moved closure and are unchanged; `t.Cleanup(server.Close)`
-  still registers on the same `*testing.T` passed by each caller, and the `now` value the helpers
-  close over is the test's `now` parameter (same value at every call site).
+- `app_test.go` (`gdd/…/w3-15-runs/control-flow-audit.txt`, re-derived at the delivered revision by
+  `gdd/…/w3-15-audit.py` — §11): every `return` / `t.Fatal*` / `t.Errorf` / `default:` /
+  `WriteHeader` clause of each moved closure, in base order, maps to its HEAD line with the same
+  clause kind — counts 10/10, 4/4, 2/2, 4/4 (order+count preserved, `True` for each). The first
+  audit (implement revision, `…/control-flow-audit.implement.txt`) bound the pre-F1 text, so the
+  coordinates below `claimAdmissionDaemon` read +1 there (`start` `[1069..1079]`,
+  `assertNoEffects` `[1081..1095]`, `claimAdmissionDaemon` ends `1067`) against the delivered
+  `[1068..1078]`, `[1080..1094]`, `1066`. The handler's `404`-on-non-PUT branch, the
+  `400`-on-bad-body branch and the `default:` switch clause are all inside the moved closure and
+  are unchanged; `t.Cleanup(server.Close)` still registers on the same `*testing.T` passed by each
+  caller, and the `now` value the helpers close over is the test's `now` parameter (same value at
+  every call site).
 - `state_test.go`: the 419 moved entry lines contain **no** `if` / `for` / `switch` / `case` /
   `return` / `else` clause (measured) — the entries are straight-line `mutate` closures. The
   drive loop (its `test.want == ""` guard and the `err == nil || err.Error() != test.want` guard)
@@ -167,6 +181,13 @@ under `--only pi_control_e2e_native_positive`.
 
 ## 7. Gates (real commands, exit codes, observed counts — implement revision; apply-stage re-runs in §10)
 
+Revision binding: the implement rows below and the apply re-runs (§10) ran in the worktree whose
+bytes are committed as `43250436` and reachable unchanged at `9c8ccbfe` (HEAD, after the
+`origin/main` merge; blob hashes in §11). CI re-runs neither the WSL `internal/state` arm nor the
+Elixir `mix test` arms: the fix stage re-ran the WSL arm bound to those blobs (§11), and the Elixir
+runtime rows stay bound by blob hash (`mix format` / `mix compile` were re-run in §11; the `mix
+test` rows need the local PostgreSQL at `127.0.0.1:5432`, closed on this host).
+
 | command | exit | observed |
 | --- | --- | --- |
 | `gofmt -l .` (`daemon/`) | 0 | no output |
@@ -184,9 +205,12 @@ under `--only pi_control_e2e_native_positive`.
 | `mix test …pi_control_e2e_test.exs --only pi_control_e2e_native_positive --include skip:pi_control_e2e_native_positive` (CI-shaped selection, `SYMMETRY_PI_CONTROL_E2E=1`, events file) | 2 | selection resolves to the 5 CI-gated names (`excluded` for the other 3); all five fail at the host prerequisite `SYMMETRY_PI_CONTROL_E2E_EXECUTABLE must name the real Pi 1.5.2 executable` (`pi_control_e2e_test.exs:5075`). Recorded as the D3 measurement: the file is unedited and the selection is unchanged; the behavioural oracle stays the CI Pi jobs. |
 | `git diff --exit-code` on the six unedited owned files | 0 | byte-identical to base |
 
-Host-path scan: the diff scan for user-profile path fragments (`users/` and this host's profile
-name) returns 0 hits, and neither new record cites an absolute host path. (`docs/plans/2026-11-21-rf-w3-08-…-plan.md`
-was **not** edited — it is another slice's record; its absolute scratch path is pre-existing.)
+Host-path scan: `git diff origin/main...HEAD | grep -i "users/"` matches exactly two added lines —
+the two records' own scan commands (this paragraph and plan evidence-plan item 7); the diff adds no
+path under a user profile directory and no profile-name text. The only absolute host path in the two
+records is the plan's WSL gate worktree path (plan evidence-plan item 5, the `cd` of the WSL gate
+command), which carries no profile name. (`docs/plans/2026-11-21-rf-w3-08-…-plan.md` was **not**
+edited — it is another slice's record.)
 
 ## 8. Mutation probes (judging artifact)
 
@@ -254,11 +278,13 @@ preserved it). Nothing else in the tree changed: no test, assertion, name, tag o
   app `142/135`, state `450/429`, goals `386/325`; `git diff --stat` total `978/889`;
   `claimAdmissionDaemon` helper `27 → 26 L`; app next-max coordinate `177 @6283 → 177 @6282`.
   Repo-wide sweep unchanged at 14 delivered (>300 L; `gdd/…/w3-15-runs/units-apply.txt`).
-- Proof re-runs: `w3-15-verify.py` → **ALL CHECKS PASS** (25 printed checks; the
+- Proof re-runs: `w3-15-verify.py` → **ALL CHECKS PASS** (25 printed checks then; the §11 fix round
+  drops the tautological `state.case-order-names` check and aligns `goals.block-size` → 24; the
   `app.helper-move[newDaemon]` comparison encodes the accepted one-blank-line delta);
   `w3-15-generate.py` (same normalization added) regenerates all three candidates `cmp`-identical
   to the worktree. Script md5s: verify `c56ec7831a0a5815b0e07f89aee77959`, generate
-  `e295b2951b9f21fad20880203ec787ba` (measure unchanged `2543dea4684c323ba7edfc3b096af42e`).
+  `e295b2951b9f21fad20880203ec787ba` (measure unchanged `2543dea4684c323ba7edfc3b096af42e`;
+  verify is superseded by the fix-round md5 in §11).
 - Mutation probe re-run (§8, app leg only — F1's file): leg A (`got != 1 → != 2`) exit 1 with
   `app_test.go:821: control requests = 1, want claim only` (both table subtests); leg B (flip plus
   the 3-line covering `if got := len(requests)` block deleted) exit 0 (`ok … 0.635s`); restored
@@ -282,6 +308,73 @@ preserved it). Nothing else in the tree changed: no test, assertion, name, tag o
   excluded`, all five red at the `SYMMETRY_PI_CONTROL_E2E_EXECUTABLE must name the real Pi 1.5.2
   executable` prerequisite; file unedited); `git diff --check` 0; `git diff --exit-code` on the six
   unedited owned files 0.
-- Host-path scan at the apply revision: the working diff adds no host path and no profile-name text;
-  the only pattern matches are the two pre-existing quoted scan texts (evidence §7, plan
-  evidence-plan item 7) — no host path is written.
+- Host-path scan at the apply revision: the working diff adds no user-profile path and no
+  profile-name text; the only pattern matches for the profile-directory fragment are the two scan
+  commands this branch adds (evidence §7, plan evidence-plan item 7); the plan's WSL gate worktree
+  path carries no profile name (§7).
+
+## 11. Fix stage (2026-11-22 — review round 1, findings CR-01–CR-07)
+
+The review (`9f82fd8e..9c8ccbfe`, report-only) raised seven findings; every fix lies in the two
+records or the slice's own scratch tooling — no test, assertion, name, tag, count or production
+file changed, and the code-side inputs of this stage are byte-identical to the apply stage (blob
+hashes below).
+
+- CR-01: the plan's re-derivation `L` column re-measured at the declared base (`git show
+  6d428d8f:<file> | wc -l`): `state_test.go` `2,898 → 3,319`, `goals_test.exs` `9,868 → 9,869`,
+  `goal_0006_migration_test.exs` `4,999 → 4,984`, `pi_control_e2e_test.exs` `5,183 → 5,181`; the
+  tool's span convention is now stated at the table (`end` line not counted), so the column is
+  reproducible.
+- CR-02: §2's goals row reports the file's max unit after the split (**207 @3173** — an untouched
+  block) instead of the split block in a max-unit column, and states the block's own size in the §2
+  convention (**7 L**, 8 with its `end`); the contract's 329 = 328 + 1 is explained once, §1/§2/§3
+  agree, and `w3-15-verify.py`'s `goals.block-size` prints the same convention.
+- CR-03: the host-path paragraph states the checkable property — the branch diff adds no
+  user-profile path fragment and no profile-name text, and its only matches for the
+  profile-directory fragment are the two records' own scan commands (evidence §7, plan
+  evidence-plan item 7); the plan's WSL gate worktree path is the single absolute host path and
+  carries no profile name. §10's "pre-existing" label is gone.
+- CR-04: the lesson-32 control-flow audit re-derived at the delivered revision by the new scratch
+  tool `w3-15-audit.py` (md5 `63f53be990c882a72c988036cac31d79`): clause kinds/order/counts
+  preserved 10/10, 4/4, 2/2, 4/4. The tool reproduces the implement-revision coordinates exactly
+  when pointed at the pre-F1 file (`gdd/…/w3-15-runs/fix1/audit-implement-repro.txt`); the
+  superseded file is kept as `control-flow-audit.implement.txt`, and §5 records the +1 shift below
+  `claimAdmissionDaemon` (F1's blank-line deletion).
+- CR-05: gate rows are revision-bound (blob hashes below). CI re-runs neither the WSL
+  `internal/state` arm nor the Elixir `mix test` arms; this stage re-ran the WSL arm and the Elixir
+  format/compile arms on those blobs (table below) — the `mix test` rows stay bound by blob hash
+  (local PostgreSQL closed at fix time; `127.0.0.1:5432` probe below).
+- CR-06: the plan now cites the pre-authorisation it quotes (`gdd/refactor/scratch/w3rev-w3-15.md`,
+  "Worth-doing assessment") and records the shape question: the delivered file-level fixture-helper
+  extraction is a third Go shape (the contract's Change clause names per-scenario functions /
+  `t.Run` sub-blocks), while every clause-1 acceptance item holds (321 → 201 L, name/subtest/count
+  sets identical, all five helpers invoked). The conductor's acknowledgment of the shape belongs in
+  the conductor-owned contract file and is **pending** — not a change this stage may make.
+- CR-07: `w3-15-verify.py` no longer prints the tautological `state.case-order-names` base-vs-base
+  check (it could never fail); the order proof is `state.case-order-preserved` (candidate vs base,
+  index-by-index `name:` equality), so the printed check count is 24 — exactly the list in §3. New
+  md5 `99565020a69945f57bcae398e7957aa4` (supersedes `c56ec783…`).
+
+Revision binding — `git rev-parse <rev>:<path>` identical at `43250436` and `9c8ccbfe` (HEAD):
+`daemon/internal/app/app_test.go` `0f17c2eb44ce9e7084715687d1b4376434f20e59`,
+`daemon/internal/state/state_test.go` `f957cf06a90cbd6c08430c1e95487479b2dab5ed`,
+`control/test/symmetry_control/goals_test.exs` `cd4d7e0fdbc24da5bbd39c21c547a6dbb3905634`; their
+md5s (`17060c6e…`, `dd89f03a…`, `0e62af34…`) equal the probe pre-mutation copies and the
+regenerated candidates, so the recorded probes, captures and gate rows ran on exactly these bytes.
+
+Fix-stage re-runs (foreground, serial; logs under `gdd/…/w3-15-runs/fix1/`):
+
+| command | exit | observed |
+| --- | --- | --- |
+| `gofmt -l .` (`daemon/`) | 0 | no output |
+| `go vet ./...` (`daemon/`) | 0 | no diagnostics |
+| `go test -count=1 -run '^TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart$' ./internal/app/` | 0 | `ok … 1.110s` (the moved-code unit, Windows) |
+| WSL `Ubuntu-24.04` `accept`: `cd …/daemon && go test -count=1 ./internal/state/` | 0 | `ok … 13.238s` |
+| WSL `-json -count=1 ./internal/state/` (D1 name re-capture at these blobs) | 0 | 584 names, `comm -23`/`comm -13` **0 / 0** vs the `before/` and `after/` captures |
+| `git diff --check` | 0 | no output |
+| `mix format --check-formatted` | 0 | no output |
+| `MIX_ENV=test mix compile --force --warnings-as-errors` | 0 | `Compiling 90 files (.ex)`; `Generated symmetry_control app` |
+| `w3-15-verify.py … --applied` | 0 | `ALL CHECKS PASS` (24 printed checks) |
+| `w3-15-generate.py` (app/state/goals) + `cmp` | 0 | candidates byte-identical to the worktree |
+| `w3-15-audit.py … --out control-flow-audit.txt` | 0 | four helpers, `order+count preserved: True` |
+| `bash -c '(exec 3<>/dev/tcp/127.0.0.1/5432)'` | 1 | closed — the `mix test` rows are not re-runnable on this host (bound by blob hash) |

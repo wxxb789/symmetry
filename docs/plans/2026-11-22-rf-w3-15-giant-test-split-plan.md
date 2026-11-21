@@ -13,20 +13,22 @@ PR #211). All `<file>:<line>` citations below resolve at the base revision.
 ## Re-derivation at the dispatch head
 
 Measurement tool: `gdd/refactor/scratch/w3-15-measure.py` — Go unit = `^func ` .. the line that is
-exactly `}` (the contract's awk rule); ExUnit unit = `test "…"` block from the `test` line to the
-first line equal to its indent + `end`. Before−after tables are produced with the same tool.
+exactly `}` (the contract's awk rule); ExUnit unit = the `test "…"` line through the line **before**
+its indentation-matching `end` (the `end` line is not counted; the contract's goals re-derivation of
+329 counts it, i.e. 328 + 1). Before−after tables are produced with the same tool and convention;
+the `L` column is `git show 6d428d8f:<file> | wc -l`.
 
 | owned file | L | max unit at HEAD | decision |
 | --- | --- | --- | --- |
 | `daemon/internal/app/app_test.go` | 10,078 | **321 @777** (`TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`); next 177 @6275 | **split** |
-| `daemon/internal/state/state_test.go` | 2,898 | **595 @2457** (`TestJournalValidatorFirstErrorStringsArePinned`); next 79 @1469 | **split** |
-| `control/test/symmetry_control/goals_test.exs` | 9,868 | **328 @2468** ("terminal producer, validation evidence, accepted outcome, and achieve close the Goal loop"); next 207 @3494 | **split** |
+| `daemon/internal/state/state_test.go` | 3,319 | **595 @2457** (`TestJournalValidatorFirstErrorStringsArePinned`); next 79 @1469 | **split** |
+| `control/test/symmetry_control/goals_test.exs` | 9,869 | **328 @2468** ("terminal producer, validation evidence, accepted outcome, and achieve close the Goal loop"); next 207 @3494 | **split** |
 | `daemon/internal/harness/codex/adapter_test.go` | 3,144 | 76 @28 | measured-closed, not edited |
 | `daemon/internal/harness/opencode/adapter_native_work_test.go` | 2,487 | 176 @66 (`//go:build linux \|\| windows`) | measured-closed, not edited |
 | `daemon/internal/state/linux_cgroup_v2_test.go` | 1,486 | 245 @667 (`//go:build linux`) | measured-closed, not edited |
-| `control/test/symmetry_control/migrations/goal_0006_migration_test.exs` | 4,999 | 295 @3440 | measured-closed, not edited |
+| `control/test/symmetry_control/migrations/goal_0006_migration_test.exs` | 4,984 | 295 @3440 | measured-closed, not edited |
 | `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | 1,866 | 879 @170; helper 300 @1050 (`//go:build linux && amd64`) | D3 measured-only, not edited |
-| `control/test/symmetry_control/pi_control_e2e_test.exs` | 5,183 | 504 @1610, 339 @1266, 338 @702 | D3 measured-only, not edited |
+| `control/test/symmetry_control/pi_control_e2e_test.exs` | 5,181 | 504 @1610, 339 @1266, 338 @702 | D3 measured-only, not edited |
 
 P1-2's prediction held with a correction: W2-09 landed as a PR and left the 595-L unit (the review
 predicted "502 L at `:2457`" from the branch snapshot; the merged text is 595 L), so `state_test.go`
@@ -50,7 +52,7 @@ out-of-scope/measured (contract P1-3):
 | --- | --- |
 | `daemon/internal/app/app_test.go` | 5 single-test closures/vars become file-level helpers (`claimAdmission*`); call sites renamed; both `t.Run` tables and all 3 named `t.Run` blocks stay verbatim |
 | `daemon/internal/state/state_test.go` | the 48-case table of `TestJournalValidatorFirstErrorStringsArePinned`/`validateJournal` becomes a named case type + 3 scenario-family funcs joined by `slices.Concat` in the same order; adds `"slices"` import |
-| `control/test/symmetry_control/goals_test.exs` | the 328-L test body becomes 4 same-file `defp` phases (byte-identical moved bodies, 4-space indent preserved) called in the original order |
+| `control/test/symmetry_control/goals_test.exs` | the 328-line test block (327-line body) becomes 4 same-file `defp` phases (byte-identical moved bodies, 4-space indent preserved) called in the original order |
 | `docs/plans/2026-11-22-rf-w3-15-giant-test-split-plan.md` | this plan |
 | `docs/evidence/rf-w3-15-giant-test-split-2026-11-22.md` | evidence record (tables, diffs, control-flow audit, gate output, mutation red) |
 
@@ -79,9 +81,16 @@ local name, rebound in the test as `providerAccess := claimAdmissionProviderAcce
 bodies keep `t.Helper()` and their statements in order; the only textual change besides the move is
 the helper name and the added `now` parameter.
 
-Exactly the two motions the review pre-authorised ("dominated by an inline fake-control closure
-plus … `t.Run`s, so helper extraction is mechanical"); no scenario is reordered, no `t.Run` name
-changes, so the Windows/daemon jobs' `-run` patterns and `--assert` groups are untouched.
+Exactly the motion the W3-15 adversarial review pre-authorised — `gdd/refactor/scratch/w3rev-w3-15.md`,
+"Worth-doing assessment" ("…dominated by an inline fake-control closure plus two table `t.Run`s and
+three named `t.Run`s, so helper extraction is mechanical"; recommendation: "helper extraction or
+independent-phase `t.Run` for Go"), the review the contract's conductor reconciliation cites as
+`P1-1`–`P1-3`/`P2-1`–`P2-3`. The contract's Change clause names per-scenario functions / `t.Run`
+sub-blocks for Go; the delivered file-level fixture-helper extraction is a third shape, chosen
+because it is the only one that invents no subtest name (D1) while shrinking the unit 321 → 201 L.
+No scenario is reordered, no `t.Run` name changes, so the Windows/daemon jobs' `-run` patterns and
+`--assert` groups are untouched. The conductor's acknowledgment of the shape in the contract text
+is pending — the contract file is conductor-owned and not edited here (evidence §11, CR-06).
 
 ## Split 2 — `state_test.go` (595 L → top-level ~180 L, max table func ~210 L)
 
@@ -131,7 +140,7 @@ outside the table, no entry line is touched):
 Subtests: every case keeps its `t.Run(test.name, …)` under the same `validateJournal` group, so the
 `go test -json` name set (`Parent/Sub`) must be identical before/after.
 
-## Split 3 — `goals_test.exs` (328 L test block → ~15 L; 4 defps ≤145 L)
+## Split 3 — `goals_test.exs` (328-line test block → 7 L, 8 with its `end`; 4 defps)
 
 ExUnit 1.20.4 composes names as `test <describe> <name>`; `ci.yml:1355-1364` passes five
 `pi_control_e2e_test.exs` names verbatim to `assert-exunit-json.py` ("run and pass exactly once"),
@@ -143,7 +152,7 @@ moved phase is a **byte-identical** line block.
 New defps (placed at the head of the file's helper section, before `defp goal_with_items_fixture`
 at :8319; all four names verified free):
 
-| defp | moved base lines | size | returns |
+| defp | moved base lines | size (moved lines) | returns |
 | --- | --- | --- | --- |
 | `goal_loop_validation_setup/0` | :2469-2537 (admit producer/validation, evidence, reject old-subject evidence) | 70 L (incl. the 13-line `%{}`) | setup map |
 | `goal_loop_accept_validation/1` | :2539-2602 (settle accepted, wakeup job, evidence replay/closure, accepted outcome, `accept_outcome` refusal) | 63 L | `accepted_outcome` |
@@ -219,8 +228,10 @@ to remove; the keys are the same identifiers the body already uses.
    run path is not assert-bearing — the probe uses one subtest assertion in `app_test.go`, one case
    entry's `want` in `state_test.go`, one assertion in a `goals_test.exs` phase), run the owning
    file, record red + the exact message, restore, re-run green.
-7. `git diff origin/main...HEAD -- … | grep -i "users/"` host-path scan (no host path is written
-   into the repo; scratch scripts live under the state dir).
+7. Host-path scan `git diff origin/main...HEAD | grep -i "users/"`: the only two matches are this
+   plan's and the evidence record's own scan lines; the diff adds no path under a user profile
+   directory and no profile-name text (scratch/config paths are written relative to the state dir;
+   the WSL gate command's worktree path carries no profile name).
 
 ## Out of scope (with reasons)
 
