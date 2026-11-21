@@ -625,3 +625,18 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       be projected (a Go panic dump therefore appears only as a count). The 45 s harness wait and the
       30 s daemon bound are declared bounds, not the defect: no timeout changes until an occurrence
       has been diagnosed from that tail.
+
+## Daemon: `writeInputBounded` can strand its writer goroutine (audit F15)
+
+- [ ] Give `writeInputBounded` (`daemon/internal/app/app.go:7240-7273`) an owned exit path for the
+      writer goroutine it starts at `:7242` (`go func() { result <- process.WriteInput(input) }()`):
+      the `ctx.Done` and timer arms return while the write can still be blocked in a stopped
+      process's pipe, so the goroutine outlives the call, belongs to no WaitGroup, and contradicts
+      `daemon/AGENTS.md` ("Every goroutine has an owner and exit path"). Found by the 2026-11-21
+      daemon audit (finding F15). Fix direction: close the pipe's write end on timeout (the runner
+      owns the pipe), or track the goroutine in `daemon.workers` with a documented bound and assert
+      its exit at shutdown; pin it with a test that a blocked writer returns after
+      timeout + terminate. Consequence carried meanwhile by refactor slice rf-w1-08: `internal/app`
+      verifies goroutines per-test (`verifyNoLeakedGoroutines` in
+      `daemon/internal/app/main_test.go`) instead of a package-wide `goleak.TestMain`, because this
+      path would force wildcard ignore lists that would hide real leaks.

@@ -5454,6 +5454,7 @@ func TestRenewalAndSnapshotDoNotDuplicateCommandExecution(t *testing.T) {
 }
 
 func TestBlockedInputDoesNotBlockAnotherRunCommand(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, first := claimedStore(t)
 	defer store.Close()
 	second := state.RunKey{RunID: "run-2", Generation: 1}
@@ -5585,6 +5586,7 @@ func TestSameCommandIDIsScopedToRun(t *testing.T) {
 }
 
 func TestCancelPreemptsBlockedInputInSameSnapshot(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, key := claimedStore(t)
 	defer store.Close()
 	input := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{}), terminated: make(chan struct{})}
@@ -5613,11 +5615,10 @@ func TestCancelPreemptsBlockedInputInSameSnapshot(t *testing.T) {
 		waitCommandCompletions(ctx, completions)
 		close(snapshotDone)
 	}()
-	preempted := false
 	select {
 	case <-input.terminated:
-		preempted = true
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testHangGuard):
+		t.Fatal("cancel did not preempt blocked input")
 	}
 	<-completions[1].done
 	journal, err := store.LoadJournal(key)
@@ -5635,12 +5636,13 @@ func TestCancelPreemptsBlockedInputInSameSnapshot(t *testing.T) {
 	<-snapshotDone
 	cancel()
 	<-executorDone
-	if !preempted || !terminalQueued || !cancelAcknowledged {
-		t.Fatalf("cancel preemption = %t, terminal queued = %t, cancel acknowledged = %t", preempted, terminalQueued, cancelAcknowledged)
+	if !terminalQueued || !cancelAcknowledged {
+		t.Fatalf("terminal queued = %t, cancel acknowledged = %t", terminalQueued, cancelAcknowledged)
 	}
 }
 
 func TestCancelRejectsQueuedInputAfterPreemption(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, key := claimedStore(t)
 	defer store.Close()
 	input := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{}), terminated: make(chan struct{})}
@@ -5690,6 +5692,7 @@ func TestCancelRejectsQueuedInputAfterPreemption(t *testing.T) {
 }
 
 func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, key := claimedStore(t)
 	defer store.Close()
 	now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
@@ -5736,32 +5739,27 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("scheduled cancellation did not persist after input completion")
 	}
-	deadline := time.Now().Add(testHangGuard)
-	var journal state.RunJournal
-	var err error
-	for {
-		journal, err = store.LoadJournal(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		inputSettled := journal.InputCommandIntent != nil &&
-			(journal.InputCommandIntent.Outcome == "applied" || journal.InputCommandIntent.Outcome == "failed")
-		if inputSettled && !journal.InputCommandIntent.AcknowledgementDelivered {
-			inputSettled = false
-			for _, acknowledgement := range journal.PendingCommandAcknowledgements {
-				if acknowledgement.CommandID == "input-1" && acknowledgement.Outcome == journal.InputCommandIntent.Outcome {
-					inputSettled = true
-					break
-				}
+	// The cancellation receipt is persisted while the cancel handler holds the
+	// run's input lock, which the preempted input command held until it recorded
+	// its own outcome and acknowledgement, so the durable state below is already
+	// settled when the receipt lands; no poll is needed.
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputSettled := journal.InputCommandIntent != nil &&
+		(journal.InputCommandIntent.Outcome == "applied" || journal.InputCommandIntent.Outcome == "failed")
+	if inputSettled && !journal.InputCommandIntent.AcknowledgementDelivered {
+		inputSettled = false
+		for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+			if acknowledgement.CommandID == "input-1" && acknowledgement.Outcome == journal.InputCommandIntent.Outcome {
+				inputSettled = true
+				break
 			}
 		}
-		if journal.LocalState == "terminal_pending" && inputSettled {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("scheduled cancellation journal = %#v", journal)
-		}
-		time.Sleep(10 * time.Millisecond)
+	}
+	if journal.LocalState != "terminal_pending" || !inputSettled {
+		t.Fatalf("scheduled cancellation journal = %#v", journal)
 	}
 	outcomes := make(map[string]string, len(journal.PendingCommandAcknowledgements))
 	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
@@ -6271,6 +6269,7 @@ func TestCancelledSnapshotDoesNotLaunchAssignmentsBehindBlockedCommand(t *testin
 }
 
 func TestTerminalOutboxBackoffSuppressesPermanentFailuresAndResets(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	t.Run("retry after delays terminal delivery no later than grace", func(t *testing.T) {
 		store, key := claimedStore(t)
 		defer store.Close()
@@ -6448,6 +6447,7 @@ func TestTerminalOutboxBackoffSuppressesPermanentFailuresAndResets(t *testing.T)
 }
 
 func TestTerminalOutboxRetryDelayUsesMinimumCadence(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	tests := []struct {
 		name   string
 		newErr func(*testing.T) error
@@ -6737,6 +6737,7 @@ func TestClaimSkipsRequestWhenAssignmentAlreadyExpired(t *testing.T) {
 }
 
 func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, key := claimedStore(t)
 	defer store.Close()
 	process := fakeProcess{result: execution.Result{ExitCode: 0}}
@@ -6866,6 +6867,7 @@ func TestResolveProviderAccessPreservesControlPlanePrefix(t *testing.T) {
 }
 
 func TestCancelDuringClaimDefersUntilGrantAndNeverLaunchesAgent(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, err := state.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -6907,6 +6909,7 @@ func TestCancelDuringClaimDefersUntilGrantAndNeverLaunchesAgent(t *testing.T) {
 }
 
 func TestScheduledCancelDuringClaimCompletesAfterDurableReceipt(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, err := state.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -6940,10 +6943,29 @@ func TestScheduledCancelDuringClaimCompletesAfterDurableReceipt(t *testing.T) {
 		t.Fatal("cancel command was not queued")
 	}
 	daemon.dispatchQueuedCommand(ctx, queued)
+	// The run is unclaimed, so dispatch can only record the deferred cancellation:
+	// the command stays parked in the queue and no durable acknowledgement exists
+	// yet. Nothing can complete it while the claim is blocked, so the parked state
+	// itself is the oracle; a fixed window would only sample it.
 	select {
 	case <-completion:
 		t.Fatal("cancel command completed before its durable acknowledgement")
-	case <-time.After(100 * time.Millisecond):
+	default:
+	}
+	daemon.mu.Lock()
+	parked := daemon.queuedCommands[commandKey{run: key, id: "cancel-1"}] == queued
+	daemon.mu.Unlock()
+	if !parked {
+		t.Fatal("cancel command left the queue before its durable acknowledgement")
+	}
+	parkedJournal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, acknowledgement := range parkedJournal.PendingCommandAcknowledgements {
+		if acknowledgement.CommandID == "cancel-1" {
+			t.Fatalf("cancel command acknowledged before its durable receipt: %#v", acknowledgement)
+		}
 	}
 
 	close(gate)
@@ -7006,6 +7028,7 @@ func TestShutdownDuringClaimDoesNotQueueCancelledTransitionOrEmptyAck(t *testing
 }
 
 func TestRenewLeasesDoesNotSeriallyBlockOtherRuns(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, first := claimedStore(t)
 	defer store.Close()
 	second := state.RunKey{RunID: "run-2", Generation: 1}
@@ -7078,6 +7101,7 @@ func TestRenewLeasesDoesNotSeriallyBlockOtherRuns(t *testing.T) {
 }
 
 func TestRenewLeasesJoinsWorkersAfterShutdown(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, first := claimedStore(t)
 	defer store.Close()
 	second := state.RunKey{RunID: "run-2", Generation: 1}
@@ -7122,22 +7146,29 @@ func TestRenewLeasesJoinsWorkersAfterShutdown(t *testing.T) {
 	cancel()
 	<-api.firstReturned
 	<-api.secondCancelled
-	returnedEarly := false
-	select {
-	case <-done:
-		returnedEarly = true
-	case <-time.After(200 * time.Millisecond):
-	}
-	close(api.releaseSecond)
-	if !returnedEarly {
+	// Both workers are past their cancellation point: run-1's renewal returned and
+	// run-2 is parked inside its call. A loop that joins them cannot have returned.
+	// The fence is positive -- run-1's in-flight request barrier is released by the
+	// drain loop, not by its worker -- so waiting for the count to drop replaces a
+	// fixed window; every poll also probes that the loop has not returned.
+	drained := awaitTestCondition(func() bool {
 		select {
 		case <-done:
-		case <-time.After(testHangGuard):
-			t.Fatal("renewal loop did not join cancelled workers")
+			t.Fatal("renewal loop returned before cancelled workers joined")
+		default:
 		}
+		requests, _ := commandRequestCounts(daemon)
+		return requests == 1
+	})
+	if !drained {
+		requests, _ := commandRequestCounts(daemon)
+		t.Fatalf("renewal loop did not drain the completed renewal while a worker was parked, request barriers = %d, want 1", requests)
 	}
-	if returnedEarly {
-		t.Fatal("renewal loop returned before cancelled workers joined")
+	close(api.releaseSecond)
+	select {
+	case <-done:
+	case <-time.After(testHangGuard):
+		t.Fatal("renewal loop did not join cancelled workers")
 	}
 	if requests, _ := commandRequestCounts(daemon); requests != 0 {
 		t.Fatalf("command request barriers after shutdown = %d, want 0", requests)
@@ -7279,6 +7310,25 @@ func startupTestDaemon(t *testing.T, store *state.Store, service workspace.Servi
 // a failure; it is never a statement about how fast the product should be, so
 // it sits far above any real scheduling delay, race instrumentation included.
 const testHangGuard = 30 * time.Second
+
+// awaitTestCondition polls condition until it holds, and reports whether it did
+// within the hang guard. It is the convention for waits whose completion has no
+// signal channel: a background worker records the state in the durable journal
+// or releases an in-flight request, and only a poll can observe it. The interval
+// only bounds discovery latency; the hang guard is the single failure bound, so
+// this is never a statement about how fast the product should be.
+func awaitTestCondition(condition func() bool) bool {
+	deadline := time.Now().Add(testHangGuard)
+	for {
+		if condition() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 // stopTestDaemon performs the daemon's own shutdown ordering for a test-built
 // daemon: cancel the run's background context, cancel the active runs, then
@@ -8562,7 +8612,10 @@ func (client *shutdownRenewControl) RenewLease(ctx context.Context, runID string
 	<-ctx.Done()
 	if runID == "run-1" {
 		client.firstReturned <- struct{}{}
-		return protocol.LeaseHeartbeatResponse{}, ctx.Err()
+		// Return a completed renewal: its in-flight request barrier is then
+		// released only by renewLeases' drain loop, which is the fence the test
+		// waits on while the other worker stays parked in this call.
+		return protocol.LeaseHeartbeatResponse{}, nil
 	}
 	client.secondCancelled <- struct{}{}
 	<-client.releaseSecond
