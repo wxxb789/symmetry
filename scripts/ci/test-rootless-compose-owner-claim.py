@@ -11,7 +11,6 @@ import threading
 import unittest
 import urllib.parse
 
-
 SCRIPT = pathlib.Path(__file__).with_name("prepare-rootless-compose-owner-claim.py")
 spec = importlib.util.spec_from_file_location("rootless_claim", SCRIPT)
 claim = importlib.util.module_from_spec(spec)
@@ -33,19 +32,30 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
         if self.path == "/portal/login":
             # The decoys are hostile input: the real token has to win, and a
             # first-match scrape would submit `decoy-in-js` and be refused.
-            self.send_page(200, b"""<script>var decoy = '<input name="_csrf_token" value="decoy-in-js">';</script>
+            self.send_page(
+                200,
+                b"""<script>var decoy = '<input name="_csrf_token" value="decoy-in-js">';</script>
 <!-- <input name="_csrf_token" value="decoy-in-comment"> -->
-<form method="post"><input type="hidden" name="_csrf_token" value="fixture-csrf"></form>""", cookie=True)
+<form method="post"><input type="hidden" name="_csrf_token" value="fixture-csrf"></form>""",
+                cookie=True,
+            )
         elif self.path == "/portal" and "fixture-session=csrf" in self.headers.get("Cookie", ""):
-            self.send_page(200, b"""<script>var decoy = '<meta name="csrf-token" content="decoy-in-js">';</script>
-<meta name="csrf-token" content="authenticated-csrf">""")
+            self.send_page(
+                200,
+                b"""<script>var decoy = '<meta name="csrf-token" content="decoy-in-js">';</script>
+<meta name="csrf-token" content="authenticated-csrf">""",
+            )
         else:
             self.send_page(403, b"Secure session missing")
 
     def do_POST(self):
         form = urllib.parse.parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
-        if (self.path != "/portal/login" or "fixture-session=csrf" not in self.headers.get("Cookie", "")
-                or form.get("_csrf_token") != ["fixture-csrf"] or form.get("operator_token") != ["fixture-operator"]):
+        if (
+            self.path != "/portal/login"
+            or "fixture-session=csrf" not in self.headers.get("Cookie", "")
+            or form.get("_csrf_token") != ["fixture-csrf"]
+            or form.get("operator_token") != ["fixture-operator"]
+        ):
             self.send_page(403, b"Invalid Secure session login")
             return
         self.send_response(302)
@@ -58,11 +68,29 @@ class PortalTLSClientTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             certificate = pathlib.Path(directory) / "tls.crt"
             key = pathlib.Path(directory) / "tls.key"
-            subprocess.run([
-                "openssl", "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "1",
-                "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
-                "-keyout", str(key), "-out", str(certificate),
-            ], capture_output=True, check=True)
+            subprocess.run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-sha256",
+                    "-nodes",
+                    "-days",
+                    "1",
+                    "-subj",
+                    "/CN=localhost",
+                    "-addext",
+                    "subjectAltName=DNS:localhost",
+                    "-keyout",
+                    str(key),
+                    "-out",
+                    str(certificate),
+                ],
+                capture_output=True,
+                check=True,
+            )
             server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.load_cert_chain(certificate, key)
@@ -98,8 +126,7 @@ class CsrfTokenParserTest(unittest.TestCase):
 
     def test_decoy_in_a_comment_does_not_win(self):
         page = (
-            '<!-- <input name="_csrf_token" value="decoy-in-comment"> -->'
-            '<input name="_csrf_token" value="real-token">'
+            '<!-- <input name="_csrf_token" value="decoy-in-comment"> --><input name="_csrf_token" value="real-token">'
         )
         self.assertEqual(self.login_token(page), "real-token")
 
