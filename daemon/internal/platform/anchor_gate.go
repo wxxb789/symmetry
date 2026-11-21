@@ -78,7 +78,7 @@ func readLinuxOwnerAnchorWitnessConfig(owner linuxgate.OwnerConfig) (*linuxOwner
 	defer unix.Close(etcFD)
 	var etcStat unix.Stat_t
 	if err := unix.Fstat(etcFD, &etcStat); err != nil || etcStat.Uid != 0 || etcStat.Mode&unix.S_IFMT != unix.S_IFDIR || etcStat.Mode&0022 != 0 {
-		return nil, fmt.Errorf("verify root-controlled /etc directory: %w", errOr(err, errors.New("directory ownership or mode is unsafe")))
+		return nil, fmt.Errorf("verify root-controlled /etc directory: %w", errOr(err, ErrLinuxOwnerDirectoryOwnershipUnsafe))
 	}
 	symmetryFD, err := unix.Openat2(etcFD, "symmetry", &unix.OpenHow{
 		Flags:   uint64(unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC),
@@ -94,7 +94,7 @@ func readLinuxOwnerAnchorWitnessConfig(owner linuxgate.OwnerConfig) (*linuxOwner
 	var directoryStat unix.Stat_t
 	if err := unix.Fstat(symmetryFD, &directoryStat); err != nil || directoryStat.Uid != 0 ||
 		directoryStat.Mode&unix.S_IFMT != unix.S_IFDIR || directoryStat.Mode&0022 != 0 {
-		return nil, fmt.Errorf("verify root-controlled /etc/symmetry directory: %w", errOr(err, errors.New("directory ownership or mode is unsafe")))
+		return nil, fmt.Errorf("verify root-controlled /etc/symmetry directory: %w", errOr(err, ErrLinuxOwnerDirectoryOwnershipUnsafe))
 	}
 	witnessName := filepath.Base(linuxOwnerAnchorWitnessConfigPath)
 	witnessFD, err := unix.Openat2(symmetryFD, witnessName, &unix.OpenHow{
@@ -169,11 +169,11 @@ func (run *linuxOwnerAnchorRun) trackPreReleaseGatePhysicalOnlyChild(
 		return fmt.Errorf("verify physical-only gate pidfd: %w", err)
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return fmt.Errorf("verify physical-only gate identity: %w", errOr(err, errors.New("creation identity differs")))
+		return fmt.Errorf("verify physical-only gate identity: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	credentials, err := readLinuxOwnerProcessCredentials(process.PID)
 	if err != nil || credentials.Parent != run.grant.Anchor.PID {
-		return fmt.Errorf("verify physical-only gate Anchor parent: %w", errOr(err, errors.New("parent PID differs")))
+		return fmt.Errorf("verify physical-only gate Anchor parent: %w", errOr(err, ErrLinuxOwnerParentPIDDiffers))
 	}
 	if err := verifyLinuxOwnerRunChildCredentials(process.PID, "gate", run.owner); err != nil {
 		return err
@@ -193,7 +193,7 @@ func (run *linuxOwnerAnchorRun) trackPreReleaseGatePhysicalOnlyChild(
 		}
 		ready, err := linuxOwnerAnchorPIDFDReady(child.pidfd)
 		if err != nil || !ready {
-			return fmt.Errorf("physical-only gate root launcher remains live: %w", errOr(err, errors.New("launcher pidfd is not ready")))
+			return fmt.Errorf("physical-only gate root launcher remains live: %w", errOr(err, ErrLinuxOwnerLauncherPIDFDNotReady))
 		}
 		launcherCount++
 	}
@@ -296,7 +296,7 @@ func (run *linuxOwnerAnchorRun) registerGate(
 	}
 	parentNamespace, err := linuxOwnerAnchorUserNamespaceParentIdentity(gateNamespaceFD)
 	if err != nil || parentNamespace != anchorNamespace {
-		return fmt.Errorf("verify gate user namespace is a direct child of the pinned Anchor namespace: %w", errOr(err, errors.New("parent namespace differs")))
+		return fmt.Errorf("verify gate user namespace is a direct child of the pinned Anchor namespace: %w", errOr(err, ErrLinuxOwnerParentNamespaceDiffers))
 	}
 	if err := verifyLinuxOwnerAnchorGateNamespace(gate.Process.PID, userNamespace, run.owner); err != nil {
 		return fmt.Errorf("verify exact parked-gate user namespace and B-only maps before registration: %w", err)
@@ -315,10 +315,10 @@ func (run *linuxOwnerAnchorRun) registerGate(
 		return fmt.Errorf("recheck parked-gate pidfd after namespace verification: %w", err)
 	}
 	if actual, err := ProcessIdentity(gate.Process.PID); err != nil || actual != gate.Process.Identity {
-		return fmt.Errorf("recheck parked-gate creation identity after namespace verification: %w", errOr(err, errors.New("identity changed")))
+		return fmt.Errorf("recheck parked-gate creation identity after namespace verification: %w", errOr(err, ErrLinuxOwnerIdentityChanged))
 	}
 	if actual, err := linuxOwnerAnchorUserNamespaceFDIdentity(gateNamespaceFD); err != nil || actual != userNamespace {
-		return fmt.Errorf("recheck retained gate user namespace after registration: %w", errOr(err, errors.New("device or inode changed")))
+		return fmt.Errorf("recheck retained gate user namespace after registration: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeChanged))
 	}
 	if err := verifyLinuxOwnerAnchorGateImageFD(gateImageFD, gate.Process, pidfd); err != nil {
 		return fmt.Errorf("recheck exact trusted static gate after registration: %w", err)
@@ -326,7 +326,7 @@ func (run *linuxOwnerAnchorRun) registerGate(
 	if run.gateUserNamespaceFD != nil {
 		actual, err := linuxOwnerAnchorUserNamespaceFDIdentity(run.gateUserNamespaceFD)
 		if err != nil || actual != userNamespace {
-			return fmt.Errorf("replay gate namespace pin differs from the exact registration: %w", errOr(err, errors.New("device or inode changed")))
+			return fmt.Errorf("replay gate namespace pin differs from the exact registration: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeChanged))
 		}
 		if run.gateImageFD == nil {
 			return errors.New("replayed gate registration lost its exact image pin")
@@ -336,7 +336,7 @@ func (run *linuxOwnerAnchorRun) registerGate(
 			return fmt.Errorf("stat retained gate image on registration replay: %w", err)
 		}
 		if err := unix.Fstat(int(gateImageFD.Fd()), &newImage); err != nil || oldImage.Dev != newImage.Dev || oldImage.Ino != newImage.Ino {
-			return fmt.Errorf("replayed gate image differs from its exact retained pin: %w", errOr(err, errors.New("device or inode differs")))
+			return fmt.Errorf("replayed gate image differs from its exact retained pin: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeDiffers))
 		}
 		return nil
 	}
@@ -373,7 +373,7 @@ func (run *linuxOwnerAnchorRun) authorizeGateRelease(
 		return fmt.Errorf("verify exact parked gate before release authorization: %w", err)
 	}
 	if actual, err := ProcessIdentity(gate.Process.PID); err != nil || actual != gate.Process.Identity {
-		return fmt.Errorf("verify parked gate identity before release authorization: %w", errOr(err, errors.New("creation identity changed")))
+		return fmt.Errorf("verify parked gate identity before release authorization: %w", errOr(err, ErrLinuxOwnerCreationIdentityChanged))
 	}
 	credentials, err := readLinuxOwnerProcessCredentials(gate.Process.PID)
 	if err != nil || credentials.Parent != run.helper.PID {
@@ -410,7 +410,7 @@ func (run *linuxOwnerAnchorRun) verifyRegisteredGateA(process authority.LinuxCgr
 		return fmt.Errorf("verify exact parked-gate pidfd during anchor reap: %w", err)
 	}
 	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
-		return fmt.Errorf("verify exact parked-gate creation identity during anchor reap: %w", errOr(err, errors.New("identity changed")))
+		return fmt.Errorf("verify exact parked-gate creation identity during anchor reap: %w", errOr(err, ErrLinuxOwnerIdentityChanged))
 	}
 	credentials, err := readLinuxOwnerProcessCredentials(process.PID)
 	if err != nil || credentials.Parent != run.grant.Anchor.PID {
@@ -430,14 +430,14 @@ func (run *linuxOwnerAnchorRun) verifyRegisteredGateA(process authority.LinuxCgr
 	if run.leafRemovedObserved {
 		ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
 		if err != nil || !ready {
-			return fmt.Errorf("live parked gate remains after exact run-leaf removal: %w", errOr(err, errors.New("pidfd is not ready")))
+			return fmt.Errorf("live parked gate remains after exact run-leaf removal: %w", errOr(err, ErrLinuxOwnerPIDFDNotReady))
 		}
 	}
 	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), process); err != nil {
 		return fmt.Errorf("recheck exact parked-gate pidfd during anchor reap: %w", err)
 	}
 	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
-		return fmt.Errorf("recheck parked-gate creation identity during anchor reap: %w", errOr(err, errors.New("identity changed")))
+		return fmt.Errorf("recheck parked-gate creation identity during anchor reap: %w", errOr(err, ErrLinuxOwnerIdentityChanged))
 	}
 	return nil
 }
@@ -459,7 +459,7 @@ func (run *linuxOwnerAnchorRun) verifyAuthorizedGateExec(process authority.Linux
 		return fmt.Errorf("verify same-PID native pidfd: %w", err)
 	}
 	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
-		return fmt.Errorf("verify same-PID native creation identity: %w", errOr(err, errors.New("identity changed")))
+		return fmt.Errorf("verify same-PID native creation identity: %w", errOr(err, ErrLinuxOwnerIdentityChanged))
 	}
 	if err := verifyLinuxOwnerRunChildCredentials(process.PID, "native", run.owner); err != nil {
 		return err
@@ -478,14 +478,14 @@ func (run *linuxOwnerAnchorRun) verifyAuthorizedGateExec(process authority.Linux
 	if run.leafRemovedObserved {
 		ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
 		if err != nil || !ready {
-			return fmt.Errorf("live native process remains after exact run-leaf removal: %w", errOr(err, errors.New("pidfd is not ready")))
+			return fmt.Errorf("live native process remains after exact run-leaf removal: %w", errOr(err, ErrLinuxOwnerPIDFDNotReady))
 		}
 	}
 	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), process); err != nil {
 		return fmt.Errorf("recheck same-PID native pidfd: %w", err)
 	}
 	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
-		return fmt.Errorf("recheck same-PID native creation identity: %w", errOr(err, errors.New("identity changed")))
+		return fmt.Errorf("recheck same-PID native creation identity: %w", errOr(err, ErrLinuxOwnerIdentityChanged))
 	}
 	return nil
 }
@@ -497,13 +497,13 @@ func (run *linuxOwnerAnchorRun) verifyPinnedGateUserNamespace() error {
 	}
 	identity, err := linuxOwnerAnchorUserNamespaceFDIdentity(run.gateUserNamespaceFD)
 	if err != nil || identity != run.gateUserNamespace {
-		return fmt.Errorf("verify retained gate user-namespace FD: %w", errOr(err, errors.New("device or inode differs")))
+		return fmt.Errorf("verify retained gate user-namespace FD: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeDiffers))
 	}
 	var imageStat unix.Stat_t
 	if err := unix.Fstat(int(run.gateImageFD.Fd()), &imageStat); err != nil ||
 		imageStat.Mode&unix.S_IFMT != unix.S_IFREG || imageStat.Uid != 0 || imageStat.Gid != 0 ||
 		imageStat.Mode&0022 != 0 || imageStat.Mode&0111 == 0 || imageStat.Nlink != 1 {
-		return fmt.Errorf("verify retained static gate image FD: %w", errOr(err, errors.New("root-owned image identity differs")))
+		return fmt.Errorf("verify retained static gate image FD: %w", errOr(err, ErrLinuxOwnerGateImageIdentityDiffers))
 	}
 	return nil
 }
@@ -514,7 +514,7 @@ func verifyLinuxOwnerAnchorGateNamespace(pid int, expected LinuxUserNamespaceIde
 	}
 	actual, err := readLinuxUserNamespaceIdentity(pid)
 	if err != nil || actual != expected {
-		return fmt.Errorf("Linux owner anchor gate user namespace differs from its pre-release pin: %w", errOr(err, errors.New("device or inode differs")))
+		return fmt.Errorf("Linux owner anchor gate user namespace differs from its pre-release pin: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeDiffers))
 	}
 	uidMap, err := readLinuxOwnerAnchorProcText(pid, "uid_map", 4096)
 	if err != nil {
@@ -534,7 +534,7 @@ func verifyLinuxOwnerAnchorGateNamespace(pid int, expected LinuxUserNamespaceIde
 	}
 	rechecked, err := readLinuxUserNamespaceIdentity(pid)
 	if err != nil || rechecked != expected {
-		return fmt.Errorf("recheck Linux owner anchor gate user namespace identity: %w", errOr(err, errors.New("device or inode changed")))
+		return fmt.Errorf("recheck Linux owner anchor gate user namespace identity: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeChanged))
 	}
 	return nil
 }
@@ -551,7 +551,7 @@ func verifyLinuxOwnerAnchorGateImage(
 		return fmt.Errorf("verify exact gate pidfd before image readback: %w", err)
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return fmt.Errorf("verify exact gate process before image readback: %w", errOr(err, errors.New("creation identity differs")))
+		return fmt.Errorf("verify exact gate process before image readback: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	for _, directory := range []string{"/usr", "/usr/libexec", "/usr/libexec/symmetry"} {
 		fd, err := unix.Open(directory, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -618,7 +618,7 @@ func verifyLinuxOwnerAnchorGateImage(
 		return fmt.Errorf("recheck exact gate pidfd after image readback: %w", err)
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return fmt.Errorf("recheck exact gate process after image readback: %w", errOr(err, errors.New("creation identity differs")))
+		return fmt.Errorf("recheck exact gate process after image readback: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	return nil
 }
@@ -674,7 +674,7 @@ func verifyLinuxOwnerAnchorGateImageFD(
 		return fmt.Errorf("recheck exact gate pidfd against retained image pin: %w", err)
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return fmt.Errorf("recheck exact gate process against retained image pin: %w", errOr(err, errors.New("creation identity differs")))
+		return fmt.Errorf("recheck exact gate process against retained image pin: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	return nil
 }
@@ -692,7 +692,7 @@ func openLinuxOwnerAnchorUserNamespaceFD(
 		}
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("verify process identity before user-namespace pin: %w", errOr(err, errors.New("creation identity differs")))
+		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("verify process identity before user-namespace pin: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	fd, err := unix.Open(fmt.Sprintf("/proc/%d/ns/user", process.PID), unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -711,11 +711,11 @@ func openLinuxOwnerAnchorUserNamespaceFD(
 	current, err := readLinuxUserNamespaceIdentity(process.PID)
 	if err != nil || current != namespace {
 		_ = namespaceFile.Close()
-		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("compare pinned nsfs inode with exact process namespace: %w", errOr(err, errors.New("device or inode differs")))
+		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("compare pinned nsfs inode with exact process namespace: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeDiffers))
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
 		_ = namespaceFile.Close()
-		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("recheck process identity after user-namespace pin: %w", errOr(err, errors.New("creation identity differs")))
+		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("recheck process identity after user-namespace pin: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	if pidfd >= 0 {
 		if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
@@ -861,11 +861,11 @@ func linuxOwnerAnchorUserNamespaceRun(
 		currentOwned = true
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("recheck process identity after user-namespace ancestry: %w", errOr(err, errors.New("creation identity differs")))
+		return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("recheck process identity after user-namespace ancestry: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	currentProcessNamespace, err := readLinuxUserNamespaceIdentity(process.PID)
 	if err != nil || currentProcessNamespace != processNamespace {
-		return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("recheck process user namespace after ancestry walk: %w", errOr(err, errors.New("device or inode changed")))
+		return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("recheck process user namespace after ancestry walk: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeChanged))
 	}
 	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
 		return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("recheck process pidfd after user-namespace ancestry: %w", err)
@@ -879,7 +879,7 @@ func (anchor *linuxOwnerAnchor) activeGateNamespacePins() ([]linuxOwnerAnchorNam
 	}
 	identity, err := linuxOwnerAnchorUserNamespaceFDIdentity(anchor.userNamespaceFD)
 	if err != nil || identity != anchor.userNamespace {
-		return nil, fmt.Errorf("verify exact Anchor user namespace pin: %w", errOr(err, errors.New("device or inode differs")))
+		return nil, fmt.Errorf("verify exact Anchor user namespace pin: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeDiffers))
 	}
 	pins := make([]linuxOwnerAnchorNamespacePin, 0, len(anchor.runs))
 	for key, run := range anchor.runs {
@@ -937,11 +937,11 @@ func (anchor *linuxOwnerAnchor) classifyUnregisteredPreReleaseGate(
 		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify possible pre-release gate pidfd: %w", err)
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify possible pre-release gate identity: %w", errOr(err, errors.New("creation identity differs")))
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify possible pre-release gate identity: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	credentials, err := readLinuxOwnerProcessCredentials(process.PID)
 	if err != nil || credentials.Parent != anchor.identity.PID {
-		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify possible pre-release gate Anchor parent: %w", errOr(err, errors.New("parent PID differs")))
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify possible pre-release gate Anchor parent: %w", errOr(err, ErrLinuxOwnerParentPIDDiffers))
 	}
 	if err := verifyLinuxOwnerRunChildCredentials(process.PID, "gate", run.owner); err != nil {
 		return linuxOwnerAnchorRunChildClassification{}, false, nil
@@ -965,7 +965,7 @@ func (anchor *linuxOwnerAnchor) classifyUnregisteredPreReleaseGate(
 		// longer exposes a numeric PID; never reopen that number after exit.
 		ready, err := linuxOwnerAnchorPIDFDReady(child.pidfd)
 		if err != nil || !ready {
-			return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify root launcher exited before unregistered gate containment: %w", errOr(err, errors.New("launcher pidfd is not ready")))
+			return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify root launcher exited before unregistered gate containment: %w", errOr(err, ErrLinuxOwnerLauncherPIDFDNotReady))
 		}
 		launcherCount++
 	}
@@ -988,11 +988,11 @@ func (anchor *linuxOwnerAnchor) classifyUnregisteredPreReleaseGate(
 		return linuxOwnerAnchorRunChildClassification{}, false, err
 	}
 	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
-		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("recheck possible pre-release gate identity: %w", errOr(err, errors.New("creation identity differs")))
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("recheck possible pre-release gate identity: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	actualCgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
 	if err != nil || actualCgroupPath != cgroupPath {
-		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("recheck possible pre-release gate leaf membership: %w", errOr(err, errors.New("cgroup path changed")))
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("recheck possible pre-release gate leaf membership: %w", errOr(err, ErrLinuxOwnerCgroupPathChanged))
 	}
 	classification := anchor.makeLinuxOwnerAnchorChildClassification(
 		run, process, LinuxOwnerAnchorRunKey{}, "pre_release_gate", linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly,

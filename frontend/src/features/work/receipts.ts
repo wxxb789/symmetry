@@ -9,7 +9,8 @@
  * with the same rule: an unconfirmed attempt is never `applied`.
  */
 import type { ActionKind } from "../../services/control-actions";
-import { asRecord, asText, timelineItemKey, type TimelineItemLike } from "./presentation";
+import { asRecord, asText } from "../../services/served";
+import { timelineItemKey, type TimelineItemLike } from "./presentation";
 
 /**
  * The outcomes durable evidence can produce. `applied` requires the runtime's
