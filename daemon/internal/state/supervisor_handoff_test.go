@@ -12,6 +12,7 @@ import (
 )
 
 func TestSupervisorHandoffPrepareBindCommitIsAtomicAndIdempotent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-commit", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -68,6 +69,7 @@ func TestSupervisorHandoffPrepareBindCommitIsAtomicAndIdempotent(t *testing.T) {
 }
 
 func TestSupervisorHandoffPrepareAndBindRejectCASConflicts(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-cas", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -105,6 +107,7 @@ func TestSupervisorHandoffPrepareAndBindRejectCASConflicts(t *testing.T) {
 }
 
 func TestSupervisorHandoffBindUnknownOutcomeReplaysWithPersistenceBarrier(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-bind-unknown", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -145,6 +148,7 @@ func TestSupervisorHandoffBindUnknownOutcomeReplaysWithPersistenceBarrier(t *tes
 }
 
 func TestSupervisorHandoffCommitUnknownOutcomeReplaysAndCASMismatchFails(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-unknown", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -200,6 +204,7 @@ func TestSupervisorHandoffCommitUnknownOutcomeReplaysAndCASMismatchFails(t *test
 }
 
 func TestSupervisorHandoffStopReceiptAfterCommitUnknownOutcome(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-receipt-commit-unknown", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -251,6 +256,7 @@ func TestSupervisorHandoffStopReceiptAfterCommitUnknownOutcome(t *testing.T) {
 }
 
 func TestSupervisorHandoffReceiptAndReleaseProofControlClear(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-receipt", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -309,6 +315,7 @@ func TestSupervisorHandoffReceiptAndReleaseProofControlClear(t *testing.T) {
 }
 
 func TestSupervisorHandoffReleaseClearUnknownOutcomeReplaysWithPersistenceBarrier(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-clear-unknown", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -364,6 +371,7 @@ func TestSupervisorHandoffReleaseClearUnknownOutcomeReplaysWithPersistenceBarrie
 }
 
 func TestSupervisorHandoffAbortProofClearsOnlyExactPendingHandoff(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-abort", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -394,6 +402,7 @@ func TestSupervisorHandoffAbortProofClearsOnlyExactPendingHandoff(t *testing.T) 
 }
 
 func TestSupervisorHandoffAbortProofRejectsMismatchReceiptAndConflicts(t *testing.T) {
+	t.Parallel()
 	newPending := func(t *testing.T, runID string) (*Store, RunJournal, authority.SupervisorHandoff) {
 		t.Helper()
 		store := mustStore(t)
@@ -411,6 +420,7 @@ func TestSupervisorHandoffAbortProofRejectsMismatchReceiptAndConflicts(t *testin
 	}
 
 	t.Run("proof mismatch", func(t *testing.T) {
+		t.Parallel()
 		store, journal, expected := newPending(t, "handoff-abort-mismatch")
 		proof := testStateSupervisorHandoffAbortProofFixture(expected)
 		proof.LaunchToken = strings.Repeat("e", authority.TokenBytes*2)
@@ -424,6 +434,7 @@ func TestSupervisorHandoffAbortProofRejectsMismatchReceiptAndConflicts(t *testin
 	})
 
 	t.Run("durable receipt", func(t *testing.T) {
+		t.Parallel()
 		store, journal, expected := newPending(t, "handoff-abort-receipt")
 		bound, err := store.BindSupervisorHandoff(journal.Key(), expected, 99, "windows:99:created-at")
 		if err != nil {
@@ -449,6 +460,7 @@ func TestSupervisorHandoffAbortProofRejectsMismatchReceiptAndConflicts(t *testin
 	})
 
 	t.Run("SaveJournal process and authority conflicts", func(t *testing.T) {
+		t.Parallel()
 		store, journal, expected := newPending(t, "handoff-abort-conflicts")
 		processConflict := journal
 		processConflict.PID = expected.TargetPID
@@ -466,7 +478,9 @@ func TestSupervisorHandoffAbortProofRejectsMismatchReceiptAndConflicts(t *testin
 }
 
 func TestSupervisorHandoffAbortProofUnknownWriteOutcomesFailClosed(t *testing.T) {
+	t.Parallel()
 	t.Run("write before rename preserves pending handoff and replay succeeds", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := stoppedTestJournal("handoff-abort-prewrite", 1)
 		if err := store.SaveJournal(journal); err != nil {
@@ -495,6 +509,7 @@ func TestSupervisorHandoffAbortProofUnknownWriteOutcomesFailClosed(t *testing.T)
 	})
 
 	t.Run("rename success followed by error stays unknown and replay is rejected without exact current handoff", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := stoppedTestJournal("handoff-abort-postrename", 1)
 		if err := store.SaveJournal(journal); err != nil {
@@ -529,6 +544,7 @@ func TestSupervisorHandoffAbortProofUnknownWriteOutcomesFailClosed(t *testing.T)
 }
 
 func TestSupervisorHandoffAbortProofPreservesLegacyJournalCompatibility(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-abort-legacy", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -545,6 +561,7 @@ func TestSupervisorHandoffAbortProofPreservesLegacyJournalCompatibility(t *testi
 }
 
 func TestSupervisorHandoffCreatorSessionZeroRoundTripsAndMissingStaysLegacy(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	legacy := stoppedTestJournal("handoff-session-legacy", 1)
 	if err := store.SaveJournal(legacy); err != nil {
@@ -572,7 +589,9 @@ func TestSupervisorHandoffCreatorSessionZeroRoundTripsAndMissingStaysLegacy(t *t
 }
 
 func TestSupervisorHandoffWriteFailureRetainsPrepareAndSaveJournalCannotBypass(t *testing.T) {
+	t.Parallel()
 	t.Run("pre-write failure leaves prepare absent", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := stoppedTestJournal("handoff-write-failure-pre", 1)
 		if err := store.SaveJournal(journal); err != nil {
@@ -595,6 +614,7 @@ func TestSupervisorHandoffWriteFailureRetainsPrepareAndSaveJournalCannotBypass(t
 	})
 
 	t.Run("post-rename failure requires exact prepare replay barrier", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := stoppedTestJournal("handoff-write-failure-post", 1)
 		if err := store.SaveJournal(journal); err != nil {
@@ -639,6 +659,7 @@ func TestSupervisorHandoffWriteFailureRetainsPrepareAndSaveJournalCannotBypass(t
 }
 
 func TestPendingHandoffBlocksCleanupWithoutChangingProcessMarkerMeaning(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("handoff-cleanup", 1)
 	journal.LocalState = "terminal_pending"
@@ -672,6 +693,7 @@ func TestPendingHandoffBlocksCleanupWithoutChangingProcessMarkerMeaning(t *testi
 }
 
 func TestSupervisorHandoffLegacyAndMalformedJournalHandling(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	legacy := stoppedTestJournal("handoff-legacy", 1)
 	if err := store.SaveJournal(legacy); err != nil {
@@ -752,6 +774,7 @@ func TestSupervisorHandoffLegacyAndMalformedJournalHandling(t *testing.T) {
 }
 
 func TestLinuxSupervisorScanFencesReplayBeforeReceiptAndClear(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-scan-fences", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -932,6 +955,7 @@ func TestLinuxSupervisorScanFencesReplayBeforeReceiptAndClear(t *testing.T) {
 }
 
 func TestLinuxSupervisorScanFailureStaysStickyAcrossAbortAndReceipt(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-scan-failure", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -998,6 +1022,7 @@ func TestLinuxSupervisorScanFailureStaysStickyAcrossAbortAndReceipt(t *testing.T
 }
 
 func TestLinuxFailedPreScanBeginCannotBecomeStopReceipt(t *testing.T) {
+	t.Parallel()
 	store, key, handoff := committedLinuxScanHandoffForTest(t, "linux-failed-next-begin")
 	for _, owner := range []string{authority.SupervisorScanOwnerHelper, authority.SupervisorScanOwnerMirror} {
 		for _, update := range []authority.SupervisorHandoff{
@@ -1058,6 +1083,7 @@ func TestLinuxFailedPreScanBeginCannotBecomeStopReceipt(t *testing.T) {
 }
 
 func TestLinuxScanSealReplayIsExactAndNeverReopens(t *testing.T) {
+	t.Parallel()
 	store, key, handoff := committedLinuxScanHandoffForTest(t, "linux-seal-replay")
 	for _, update := range []authority.SupervisorHandoff{
 		testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 2, ""),
@@ -1117,6 +1143,7 @@ func TestLinuxScanSealReplayIsExactAndNeverReopens(t *testing.T) {
 }
 
 func TestLinuxRecoverySealRequiresCleanHelperProofAndPriorMirrorSeal(t *testing.T) {
+	t.Parallel()
 	store, key, handoff := committedLinuxScanHandoffForTest(t, "linux-recovery-seal")
 	journal, err := store.LoadJournal(key)
 	if err != nil {
@@ -1175,6 +1202,7 @@ func TestLinuxRecoverySealRequiresCleanHelperProofAndPriorMirrorSeal(t *testing.
 }
 
 func TestLinuxInitialBoundAbortClearsOnlyWithoutReceipt(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-precommit-abort", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1209,6 +1237,7 @@ func TestLinuxInitialBoundAbortClearsOnlyWithoutReceipt(t *testing.T) {
 }
 
 func TestBoundLegacyLinuxAuthorityLoadsButCannotProveCleanScans(t *testing.T) {
+	t.Parallel()
 	store, key := claimedStoreForSupervisorScanTest(t)
 	startedAt := time.Date(2026, 9, 26, 2, 2, 3, 0, time.UTC)
 	handoff := testStateLinuxSupervisorHandoffFixture(42, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:42:456")

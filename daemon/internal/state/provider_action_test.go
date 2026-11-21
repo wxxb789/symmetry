@@ -21,6 +21,7 @@ const (
 )
 
 func TestProviderActionIntentPersistsBeforeDispatchAndReplaysTerminalOutcome(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-action", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -52,6 +53,7 @@ func TestProviderActionIntentPersistsBeforeDispatchAndReplaysTerminalOutcome(t *
 }
 
 func TestProviderActionIntentRejectsChangedRequestAndCompletion(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-conflict", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -82,6 +84,7 @@ func TestProviderActionIntentRejectsChangedRequestAndCompletion(t *testing.T) {
 }
 
 func TestProviderActionUnknownReplaysWithoutRedispatch(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-unknown", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -109,6 +112,7 @@ func TestProviderActionUnknownReplaysWithoutRedispatch(t *testing.T) {
 }
 
 func TestRecoverProviderActionSettlesOnlyMatchingUnfinishedDispatch(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-targeted-recovery", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -138,6 +142,7 @@ func TestRecoverProviderActionSettlesOnlyMatchingUnfinishedDispatch(t *testing.T
 }
 
 func TestRecoverProviderActionsMakesUnfinishedDispatchUnknownAcrossRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -174,6 +179,7 @@ func TestRecoverProviderActionsMakesUnfinishedDispatchUnknownAcrossRestart(t *te
 }
 
 func TestProviderActionPrepareRecoversAfterCommitAcknowledgementLoss(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-lost-ack", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -203,6 +209,7 @@ func TestProviderActionPrepareRecoversAfterCommitAcknowledgementLoss(t *testing.
 }
 
 func TestProviderActionExactReplayDoesNotRewriteJournal(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-read-only-replay", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -230,7 +237,9 @@ func TestProviderActionExactReplayDoesNotRewriteJournal(t *testing.T) {
 }
 
 func TestProviderActionSettlementReplayDoesNotRewriteJournal(t *testing.T) {
+	t.Parallel()
 	t.Run("completion", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := testJournal("run-provider-completion-read-only", 1)
 		if err := store.SaveJournal(journal); err != nil {
@@ -262,6 +271,7 @@ func TestProviderActionSettlementReplayDoesNotRewriteJournal(t *testing.T) {
 	})
 
 	t.Run("targeted recovery", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := testJournal("run-provider-targeted-recovery-read-only", 1)
 		if err := store.SaveJournal(journal); err != nil {
@@ -290,6 +300,7 @@ func TestProviderActionSettlementReplayDoesNotRewriteJournal(t *testing.T) {
 	})
 
 	t.Run("bulk recovery", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := testJournal("run-provider-bulk-recovery-read-only", 1)
 		if err := store.SaveJournal(journal); err != nil {
@@ -319,7 +330,9 @@ func TestProviderActionSettlementReplayDoesNotRewriteJournal(t *testing.T) {
 }
 
 func TestProviderActionExactReplaySkipsTerminalAndCapacityChecks(t *testing.T) {
+	t.Parallel()
 	t.Run("terminal", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := testJournal("run-provider-terminal-replay-read-only", 1)
 		preparedIntent := testProviderActionIntent()
@@ -373,6 +386,7 @@ func TestProviderActionExactReplaySkipsTerminalAndCapacityChecks(t *testing.T) {
 	})
 
 	t.Run("capacity", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := testJournal("run-provider-capacity-replay-read-only", 1)
 		for index := 0; index < 33; index++ {
@@ -405,6 +419,7 @@ func TestProviderActionExactReplaySkipsTerminalAndCapacityChecks(t *testing.T) {
 }
 
 func TestTerminalTransitionSettlesUnfinishedProviderActionAtomically(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-terminal", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -437,6 +452,7 @@ func TestTerminalTransitionSettlesUnfinishedProviderActionAtomically(t *testing.
 }
 
 func TestProviderActionCapacityAllowsThirtyThirdSmallAction(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-capacity", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -461,6 +477,7 @@ func TestProviderActionCapacityAllowsThirtyThirdSmallAction(t *testing.T) {
 }
 
 func TestProviderActionCapacityFailsBeforeDispatchWhenJournalByteBudgetIsExceeded(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	base := testJournal("run-provider-byte-capacity", 1)
 	intent := testProviderActionIntent()
@@ -509,6 +526,7 @@ func TestProviderActionCapacityFailsBeforeDispatchWhenJournalByteBudgetIsExceede
 }
 
 func TestProviderActionCapacityRejectsProviderBytesBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-action-byte-capacity", 1)
 	resultPayload := `{"payload":"` + strings.Repeat("x", maxProviderActionResultBytes-len(`{"payload":""}`)) + `"}`
@@ -570,6 +588,7 @@ func TestProviderActionCapacityRejectsProviderBytesBeforeDispatch(t *testing.T) 
 }
 
 func TestProviderActionFailureCodeCapacityUsesWorstCaseJSONEncoding(t *testing.T) {
+	t.Parallel()
 	worst := maxProviderFailureCodeForCapacity()
 	if !validRequiredString(worst, maxProviderFailureCodeBytes) {
 		t.Fatal("worst-case failure code was rejected by the current state contract")
@@ -594,6 +613,7 @@ func TestProviderActionFailureCodeCapacityUsesWorstCaseJSONEncoding(t *testing.T
 }
 
 func TestProviderActionCapacityReservesWorstCaseFailureCodeBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	base := testJournal("run-provider-completion-reservation", 1)
 	intent := testProviderActionIntent()
@@ -629,6 +649,7 @@ func TestProviderActionCapacityReservesWorstCaseFailureCodeBeforeDispatch(t *tes
 }
 
 func TestProviderActionPrepareRejectsNotAllowedBeforeWriting(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-not-allowed-sentinel", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -662,8 +683,10 @@ func TestProviderActionPrepareRejectsNotAllowedBeforeWriting(t *testing.T) {
 }
 
 func TestProviderActionPrepareOnlyDispatchesInActiveLocalStates(t *testing.T) {
+	t.Parallel()
 	for _, localState := range []string{"claimed", "running", "waiting_for_input"} {
 		t.Run("allows "+localState, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-provider-active-"+localState, 1)
 			journal.LocalState = localState
@@ -678,6 +701,7 @@ func TestProviderActionPrepareOnlyDispatchesInActiveLocalStates(t *testing.T) {
 
 	for _, localState := range []string{"claiming", "paused", "cancelling", "stale"} {
 		t.Run("rejects "+localState, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-provider-inactive-"+localState, 1)
 			journal.LocalState = localState
@@ -701,6 +725,7 @@ func TestProviderActionPrepareOnlyDispatchesInActiveLocalStates(t *testing.T) {
 }
 
 func TestProviderActionExactReplayRemainsReadOnlyAfterLocalStateBecomesStale(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-stale-replay", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -729,7 +754,9 @@ func TestProviderActionExactReplayRemainsReadOnlyAfterLocalStateBecomesStale(t *
 }
 
 func TestDeleteJournalBlocksUnresolvedProviderActionsAndCleansResolvedOutcomes(t *testing.T) {
+	t.Parallel()
 	t.Run("stale unresolved action remains durable until recovery", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := stoppedTestJournal("run-provider-stale-cleanup", 1)
 		journal.LocalState = "stale"
@@ -764,6 +791,7 @@ func TestDeleteJournalBlocksUnresolvedProviderActionsAndCleansResolvedOutcomes(t
 		{name: "unknown", outcome: ProviderActionOutcomeUnknown, failureCode: "control_action_unknown"},
 	} {
 		t.Run("cleanup pending "+test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-provider-cleanup-"+test.name, 1)
 			journal.LocalState = "cleanup_pending"
@@ -790,6 +818,7 @@ func TestDeleteJournalBlocksUnresolvedProviderActionsAndCleansResolvedOutcomes(t
 }
 
 func TestRunJournalDecodeRejectsDuplicateProviderActionMembers(t *testing.T) {
+	t.Parallel()
 	intentJSON, err := json.Marshal(testProviderActionIntent())
 	if err != nil {
 		t.Fatal(err)
@@ -825,6 +854,7 @@ func TestRunJournalDecodeRejectsDuplicateProviderActionMembers(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := stoppedTestJournal("run-provider-duplicate-"+strings.ReplaceAll(test.name, " ", "-"), 1)
 			journal.LocalState = "stale"
@@ -851,6 +881,7 @@ func TestRunJournalDecodeRejectsDuplicateProviderActionMembers(t *testing.T) {
 }
 
 func TestRunJournalDecodeRejectsCaseInsensitiveProviderActionAliases(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		raw  func(RunJournal) string
@@ -873,6 +904,7 @@ func TestRunJournalDecodeRejectsCaseInsensitiveProviderActionAliases(t *testing.
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := stoppedTestJournal("run-provider-case-alias-"+strings.ReplaceAll(test.name, " ", "-"), 1)
 			journal.LocalState = "stale"
@@ -894,6 +926,7 @@ func TestRunJournalDecodeRejectsCaseInsensitiveProviderActionAliases(t *testing.
 }
 
 func TestRunJournalDecodeAcceptsExactProviderActionTags(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("run-provider-exact-tags", 1)
 	completed := testProviderActionIntent()
@@ -917,6 +950,7 @@ func TestRunJournalDecodeAcceptsExactProviderActionTags(t *testing.T) {
 }
 
 func TestProviderActionResultRejectsDuplicateMembersBeforePersistence(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		result json.RawMessage
@@ -926,6 +960,7 @@ func TestProviderActionResultRejectsDuplicateMembersBeforePersistence(t *testing
 		{name: "escaped", result: json.RawMessage(`{"\u0070rojected":false,"projected":true}`)},
 	} {
 		t.Run("SaveJournal rejects "+test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-provider-result-save-"+test.name, 1)
 			intent := testProviderActionIntent()
@@ -938,6 +973,7 @@ func TestProviderActionResultRejectsDuplicateMembersBeforePersistence(t *testing
 		})
 
 		t.Run("CompleteProviderAction rejects "+test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-provider-result-complete-"+test.name, 1)
 			if err := store.SaveJournal(journal); err != nil {
@@ -957,6 +993,7 @@ func TestProviderActionResultRejectsDuplicateMembersBeforePersistence(t *testing
 	}
 
 	t.Run("valid projected result remains accepted", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := testJournal("run-provider-result-valid", 1)
 		if err := store.SaveJournal(journal); err != nil {
@@ -980,6 +1017,7 @@ func TestProviderActionResultRejectsDuplicateMembersBeforePersistence(t *testing
 }
 
 func TestProviderActionResultSemanticNormalizationPreservesOrderNumbersAndLiteralEscapes(t *testing.T) {
+	t.Parallel()
 	input := json.RawMessage(`{
   "z": -0.00,
   "value": "\u003c\u003e\u0026",
@@ -1009,6 +1047,7 @@ func TestProviderActionResultSemanticNormalizationPreservesOrderNumbersAndLitera
 }
 
 func TestProviderActionNewCompletionRejectsSemanticallySmallRawLargeResult(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-provider-new-raw-bound", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1045,6 +1084,7 @@ func TestProviderActionNewCompletionRejectsSemanticallySmallRawLargeResult(t *te
 }
 
 func TestProviderActionLegacyEscapedCompletionReplaysWithoutRewrite(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1101,6 +1141,7 @@ func TestProviderActionLegacyEscapedCompletionReplaysWithoutRewrite(t *testing.T
 }
 
 func TestProviderActionLegacyOversizedEscapedResultLoadsAndReplaysWithoutRewrite(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1167,6 +1208,7 @@ func TestProviderActionLegacyOversizedEscapedResultLoadsAndReplaysWithoutRewrite
 }
 
 func TestProviderActionMaximallyHTMLEscapedResultSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1213,6 +1255,7 @@ func TestProviderActionMaximallyHTMLEscapedResultSurvivesRestart(t *testing.T) {
 }
 
 func TestProviderActionMutationPreservesUnresolvedCompletionCapacity(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1279,6 +1322,7 @@ func TestProviderActionMutationPreservesUnresolvedCompletionCapacity(t *testing.
 }
 
 func TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	base := testJournal("run-provider-worst-case-completion", 1)
 	intent := testProviderActionIntent()
