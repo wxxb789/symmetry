@@ -852,10 +852,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       that string when the module is not importable, and with `SYMMETRY_REQUIRE_PYYAML=1` set the
       differential test fails instead of skipping. The repository still declares no Python
       dependency and no workflow performs a `pip install`, so on a runner without PyYAML the
-      oracle stays skipped. Measured 2026-11-21 at `36f9a887`: portable Python 3.12.10 on the
-      Windows host has PyYAML 6.0.3 and runs `Ran 24 tests`, `OK` with no skip; WSL Ubuntu-24.04
-      Python 3.12.3 has PyYAML 6.0.1 and is `OK` likewise; `python -S` (site-packages off) and
-      `python3 -S` print the notice and report `OK (skipped=1)`; `SYMMETRY_REQUIRE_PYYAML=1
+      oracle stays skipped. Measured 2026-11-21 at `a7681da4` (this slice's increment commit on top
+      of `36f9a887`): portable Python 3.12.10 on the Windows host has PyYAML 6.0.3 and runs `Ran 24
+      tests`, `OK` with no skip; WSL Ubuntu-24.04 Python 3.12.3 has PyYAML 6.0.1 and is `OK`
+      likewise; `python -S` (site-packages off) and `python3 -S` print the notice and report `OK
+      (skipped=1)`; `SYMMETRY_REQUIRE_PYYAML=1
       python -S scripts/ci/test-check-lockfile-registry.py` exits 1 with `FAILED (failures=1)` on
       both platforms. Pin the version next to the other tool pins in `ci.yml` (the ruff job's
       `required-version = "==0.17.5"` handshake in the section above is the same pattern) and set

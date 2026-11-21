@@ -4,7 +4,10 @@ Contract: `goal-rf-w3-16-scripts-defects.md` (GDD refactor wave 3, 2026-11-21). 
 this worktree's HEAD `36f9a887635ec89d49cce2cd13b3915a8a875a83` (`36f9a887`, identical to
 `origin/main` at dispatch). Every count below was measured at that revision: ruff 0.17.5 on the
 Windows host (Python 3.12.10, PyYAML 6.0.3) and, for the Linux-targeted exporter suite, WSL
-Ubuntu-24.04 (Python 3.12.3, PyYAML 6.0.1).
+Ubuntu-24.04 (Python 3.12.3, PyYAML 6.0.1). Line citations bind that baseline as well — the
+contract cites it too, so the numbers are deliberately not renumbered — and a citation at or
+below the deleted `read_regular` handler in `export-linux-v2-redacted-evidence.py` is +3 in the
+post-change tree.
 
 ## Measured baseline (before)
 
@@ -91,18 +94,20 @@ three findings above.
 Both branches read the rebound value after the rebind and nothing else references the loop
 variables (`item` is not used after `crashes.append(...)`, `name` only in
 `projected[name] = digest.lower()`), so the new locals carry exactly the same values in the same
-order. The `crash_statuses` branch has **no fixture coverage today** (the exporter suite's legacy
-fixture pins `pid_reuse.output_digests` at `test-linux-v2-evidence.py:295` and never a
-`crash_statuses` entry), so equivalence is proven by a throwaway behavioural driver instead of by a
-suite: import the pre-change module (`git show HEAD:…` into a temporary copy) and the post-change
-module with `importlib`, call `project_pid_reuse` on a fixture carrying `crash_statuses`,
-`output_digests` and the neighbouring typed fields, and compare the returned dicts and the
-`SystemExit` messages of the refusal cases (`crash_statuses` not a list, a crash entry that is not
-an object, an unknown crash key, a digest that is not a byte-count + SHA-256, an unknown top-level
-key) byte for byte. The fixture lives outside the repository; only its output is recorded in the
-increment report. No committed test is added: `test-linux-v2-evidence.py` is outside the
-contract's owned set, so the missing `crash_statuses` fixture coverage stays a recorded limit, not
-a silent gap.
+order. The exporter suite does execute the `crash_statuses` branch: its legacy `literal-pid-reuse`
+fixture carries the key (`test-linux-v2-evidence.py:292`) and the 16-fixture legacy export asserts
+success (`:394-396`), but no assertion pins the branch's projected values — reading `pid_reuse`
+(`:417-419`) checks only `assertions.same_pid_and_pgrp_reused` and `replacement.start_time`, and
+`output_digests` appears only in the fixture at `:295`. Equivalence is therefore proven by a
+throwaway behavioural driver instead of by a value assertion: import the pre-change module
+(`git show HEAD:…` into a temporary copy) and the post-change module with `importlib`, call
+`project_pid_reuse` on a fixture carrying `crash_statuses`, `output_digests` and the neighbouring
+typed fields, and compare the returned dicts and the `SystemExit` messages of the refusal cases
+(`crash_statuses` not a list, a crash entry that is not an object, an unknown crash key, a digest
+that is not a byte-count + SHA-256, an unknown top-level key) byte for byte. The fixture lives
+outside the repository; only its output is recorded in the increment report. No committed test is
+added: `test-linux-v2-evidence.py` is outside the contract's owned set, so the missing value-level
+`crash_statuses` assertion stays a recorded limit, not a silent gap.
 
 ### The dead handler: what the deletion must preserve
 
@@ -188,19 +193,21 @@ The notice text and the env-var name are the machine-checkable handles: the noti
 * `pyproject.toml` — W1-11's file; the contract forbids widening `select` instead of fixing sites.
 * The other six named Python files — re-measured clean, and the contract says the slice must not
   re-fix or re-format files whose findings are gone.
-* `test-linux-v2-evidence.py` — not in the owned set, so the uncovered `crash_statuses` branch
-  gains no fixture.
+* `test-linux-v2-evidence.py` — not in the owned set, so the `crash_statuses` branch keeps its
+  execution-only coverage (no value assertion is added).
 * The git-fixture/citest harness (W4-16), the source-subject/digest consolidation (W5-11),
   `model-routing-evaluation.py`'s split (W5-12), and the `test-*.py` files not named in the owned
   set.
 
 ## Residual risks and known limits
 
-* `project_pid_reuse`'s `crash_statuses` branch has no committed fixture coverage; the
-  equivalence evidence is the throwaway driver, not a suite. A future edit of that branch can
-  regress without a red test — pre-existing, and outside this slice's owned set.
-* The `CrashStatuses` rename changes no output, so no golden assertion pins it; the strict-selects
-  run and the equivalence driver are the evidence.
+* `project_pid_reuse`'s `crash_statuses` branch is executed by the exporter suite (the legacy
+  `literal-pid-reuse` fixture carries the key) but no committed assertion pins its projected
+  values; the equivalence evidence is the throwaway driver, not a suite. A future edit that
+  changes those values can regress without a red test — pre-existing, and outside this slice's
+  owned set.
+* The `item` → `projected_item` and `name` → `safe_name` rebinds change no output, so no golden
+  assertion pins them; the strict-selects run and the equivalence driver are the evidence.
 * PyYAML remains unpinned in the repository until W6-01 lands the install: on a runner without it
   the differential method is still skipped (now visibly and, with the flag, fatally). The oracle
   is honest but not yet enforced in CI by this slice.

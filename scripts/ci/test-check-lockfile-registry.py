@@ -116,7 +116,7 @@ snapshots:
 # environment switch a job sets once PyYAML is pinned, the exact notice a run
 # without the module prints on stderr, and the reason the oracle is skipped when
 # its absence is tolerated. `docs/TODO.md` records the pinned install for the
-# `ci.yml` "Check CI gate helper scripts" step, which greps for the notice.
+# `ci.yml` "Check CI gate helper scripts" step; no job greps the notice yet.
 REQUIRE_PYYAML_ENV = "SYMMETRY_REQUIRE_PYYAML"
 ABSENCE_NOTICE = "PyYAML differential oracle skipped: module not importable"
 SKIP_REASON = "PyYAML is the optional cross-check oracle, not the contract"
