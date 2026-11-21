@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,8 +16,11 @@ import (
 
 // The witness report is the only durable artifact of a reached stage, so a
 // swallowed writer error publishes a healthy-looking invocation with missing
-// evidence. These tests drive every reachable failure step of the writer and
-// the entry function whose returned error becomes the process exit code.
+// evidence. These tests drive the writer's result-directory and publish
+// failures and the entry function mapping its returned error to exit 1.
+
+// recoveryReport is the report body the recovery-shaped cases write or fail to write.
+var recoveryReport = preAuthorityWitnessReport{Mode: "recover", Stage: "recover", Status: "already-clear"}
 
 func TestWritePreAuthorityWitnessReportPublishesReportAtomically(t *testing.T) {
 	directory := t.TempDir()
@@ -84,10 +88,7 @@ func TestWritePreAuthorityWitnessReportFailsOnBlockedResultDirectory(t *testing.
 		t.Fatal(err)
 	}
 	resultFile := filepath.Join(blocker, "witness.result.json")
-	err := writePreAuthorityWitnessReport(
-		preAuthorityWitnessOptions{resultFile: resultFile},
-		preAuthorityWitnessReport{Mode: "recover", Stage: "recover", Status: "already-clear"},
-	)
+	err := writePreAuthorityWitnessReport(preAuthorityWitnessOptions{resultFile: resultFile}, recoveryReport)
 	if err == nil {
 		t.Fatal("write report with a file as result directory returned success; want the result directory failure")
 	}
@@ -106,10 +107,7 @@ func TestWritePreAuthorityWitnessReportFailsToPublishOverDirectory(t *testing.T)
 	if err := os.Mkdir(resultFile, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	err := writePreAuthorityWitnessReport(
-		preAuthorityWitnessOptions{resultFile: resultFile},
-		preAuthorityWitnessReport{Mode: "recover", Stage: "recover", Status: "already-clear"},
-	)
+	err := writePreAuthorityWitnessReport(preAuthorityWitnessOptions{resultFile: resultFile}, recoveryReport)
 	if err == nil {
 		t.Fatal("write report over an existing directory returned success; want the publish failure")
 	}
@@ -123,10 +121,7 @@ func TestWritePreAuthorityWitnessReportFailsToPublishOverDirectory(t *testing.T)
 }
 
 func TestWritePreAuthorityWitnessReportSkipsEmptyResultFile(t *testing.T) {
-	if err := writePreAuthorityWitnessReport(
-		preAuthorityWitnessOptions{},
-		preAuthorityWitnessReport{Mode: "recover", Stage: "recover", Status: "already-clear"},
-	); err != nil {
+	if err := writePreAuthorityWitnessReport(preAuthorityWitnessOptions{}, recoveryReport); err != nil {
 		t.Fatalf("write report without a result file: %v", err)
 	}
 }
@@ -189,6 +184,48 @@ func TestRunPreAuthorityWitnessRecoveryPropagatesReportFailure(t *testing.T) {
 	if published.Mode != "recover" || published.Stage != "recover" || published.Status != "already-clear" ||
 		published.RunID != key.RunID || published.Generation != key.Generation {
 		t.Fatalf("recovery report = %#v, want recover/already-clear for %s generation %d", published, key.RunID, key.Generation)
+	}
+}
+
+func TestPreAuthorityWitnessCommandExitsOneWhenReportMissing(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	key := state.RunKey{RunID: "unit-preauthority-exit", Generation: 1}
+	store, err := state.New(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensurePreAuthorityWitnessJournal(store, key, stateDir); err != nil {
+		t.Fatalf("seed witness journal: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close seeded store: %v", err)
+	}
+	blocker := filepath.Join(root, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// init() maps the entrypoint error to stderr + exit 1, which only a real
+	// process can observe, so run this test binary through the entrypoint.
+	command := exec.Command(os.Args[0],
+		"-preauthority-witness",
+		"-mode", "recover",
+		"-state-dir", stateDir,
+		"-run-id", key.RunID,
+		"-generation", "1",
+		"-result-file", filepath.Join(blocker, "witness.result.json"),
+	)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("witness run with an unwritable report path exited 0; a missing report must not exit 0: %s", output)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("witness run error = %v with output %q, want exit status 1", err, output)
+	}
+	if !strings.Contains(string(output), "result directory") {
+		t.Fatalf("witness run output = %q, want the failed result directory step", output)
 	}
 }
 

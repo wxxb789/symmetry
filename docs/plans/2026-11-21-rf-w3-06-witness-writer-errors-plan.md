@@ -68,7 +68,8 @@ returning `error`, and 1 in `crashPreAuthorityWitnessWithEvidence` (`:510-520`).
   created temp file; `os.CreateTemp` failure leaves nothing behind; `MkdirAll` failure touches nothing
   (`MkdirAll` on an existing file returns `ENOTDIR` without creating anything).
 - **Failure is not retried** and the report is never written twice by the change: the crash-at-stage
-  double write (call site + crash hook, same bytes) predates this slice and is preserved.
+  double write (a `reached` report from the call site, immediately overwritten by the `hard-crash`
+  report from the crash hook) predates this slice and is preserved.
 - **Non-crash failure aborts the invocation before the crash point** (exit `1` from `init`), intended
   by the conductor's P3: a missing report must never exit `0`.
 - **Atomicity**: publication is still temp-file + rename inside the result directory; a reader never
