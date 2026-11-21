@@ -15,7 +15,6 @@ import sys
 import tempfile
 import unittest
 
-
 SCRIPT = pathlib.Path(__file__).with_name("check-record-cleanliness.py")
 ZERO = "0" * 40
 
@@ -43,9 +42,7 @@ class RecordCleanlinessTests(unittest.TestCase):
     # -- helpers -------------------------------------------------------------
 
     def git(self, *arguments: str, input: bytes | None = None) -> bytes:
-        return subprocess.check_output(
-            ["git", "-C", str(self.repo), *arguments], input=input, stderr=subprocess.PIPE
-        )
+        return subprocess.check_output(["git", "-C", str(self.repo), *arguments], input=input, stderr=subprocess.PIPE)
 
     def git_text(self, *arguments: str) -> str:
         return self.git(*arguments).decode("ascii").strip()
@@ -64,7 +61,9 @@ class RecordCleanlinessTests(unittest.TestCase):
     def run_gate(self, *arguments: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--repo", str(self.repo), *arguments],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
     # -- tests ---------------------------------------------------------------
@@ -217,7 +216,9 @@ class RecordCleanlinessTests(unittest.TestCase):
         subprocess.check_call(["git", "commit", "--quiet", "-m", "only commit"], cwd=str(orphan))
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--repo", str(orphan), "--base", ZERO],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("cannot resolve a comparison base", result.stderr)
@@ -225,8 +226,7 @@ class RecordCleanlinessTests(unittest.TestCase):
     def test_a_renamed_record_is_checked_under_its_new_path(self) -> None:
         # `--no-renames` reports a rename as delete + add, and the added path carries
         # the content the gate must parse.
-        self.git("mv", "docs/evaluations/model-routing/clean.json",
-                 "docs/evaluations/model-routing/renamed.json")
+        self.git("mv", "docs/evaluations/model-routing/clean.json", "docs/evaluations/model-routing/renamed.json")
         self.write("docs/evaluations/model-routing/renamed.json", '{"store": "/tmp/symmetry-0008d-eval"}\n')
         head = self.commit("rename a record and smuggle a host path")
         result = self.run_gate("--base", self.base, "--head", head)
@@ -244,13 +244,18 @@ class RecordCleanlinessTests(unittest.TestCase):
         # on hosts without symlink privileges: mode 120000, bytes = the link text, and
         # the worktree file stays the clean regular file it already is.
         blob = self.git("hash-object", "-w", "--stdin", input=str(target).encode("utf-8"))
-        self.git("update-index", "--add", "--cacheinfo",
-                 f"120000,{blob.decode('ascii').strip()},docs/evaluations/model-routing/clean.json")
+        self.git(
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"120000,{blob.decode('ascii').strip()},docs/evaluations/model-routing/clean.json",
+        )
         tree = self.git_text("write-tree")
         head = self.git_text("commit-tree", tree, "-p", self.base, "-m", "commit the record as a link")
         self.git("update-ref", "HEAD", head)
-        status = self.git_text("diff", "--name-status", self.base, head, "--",
-                               "docs/evaluations/model-routing/clean.json")
+        status = self.git_text(
+            "diff", "--name-status", self.base, head, "--", "docs/evaluations/model-routing/clean.json"
+        )
         self.assertTrue(status.startswith("T"), status)
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -314,7 +319,10 @@ class RecordCleanlinessTests(unittest.TestCase):
         )
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--base", self.base, "--head", head],
-            capture_output=True, text=True, check=False, env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
         )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot diff", result.stderr)
