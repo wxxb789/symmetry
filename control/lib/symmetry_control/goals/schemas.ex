@@ -123,7 +123,7 @@ defmodule SymmetryControl.Goals.GoalRevision do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{Goal, JsonDocument}
+  alias SymmetryControl.Goals.{ChangesetValidators, Goal, JsonDocument}
 
   @execution_policy_keys [
     "automatic_execution",
@@ -197,11 +197,11 @@ defmodule SymmetryControl.Goals.GoalRevision do
     |> validate_length(:reason, min: 1, max: 4_000)
     |> validate_length(:actor_ref, max: 500)
     |> validate_non_goals()
-    |> validate_map(:acceptance_contract)
-    |> validate_map(:authority_policy)
-    |> validate_map(:execution_policy)
+    |> ChangesetValidators.validate_map(:acceptance_contract)
+    |> ChangesetValidators.validate_map(:authority_policy)
+    |> ChangesetValidators.validate_map(:execution_policy)
     |> validate_execution_policy()
-    |> validate_map(:context_manifest)
+    |> ChangesetValidators.validate_map(:context_manifest)
     |> assoc_constraint(:goal)
     |> check_constraint(:revision, name: :goal_revisions_revision_positive)
     |> check_constraint(:objective, name: :goal_revisions_objective_present)
@@ -225,7 +225,7 @@ defmodule SymmetryControl.Goals.GoalRevision do
       :reason,
       :actor_ref
     ])
-    |> reject_changes(:goal_revision)
+    |> ChangesetValidators.reject_changes("goal_revision")
   end
 
   defp validate_non_goals(changeset) do
@@ -233,12 +233,6 @@ defmodule SymmetryControl.Goals.GoalRevision do
       if Enum.all?(non_goals, &(is_binary(&1) and String.trim(&1) != "")),
         do: [],
         else: [non_goals: "must contain non-blank strings"]
-    end)
-  end
-
-  defp validate_map(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_map(value), do: [], else: [{field, "must be an object"}]
     end)
   end
 
@@ -339,12 +333,6 @@ defmodule SymmetryControl.Goals.GoalRevision do
   defp nonblank_string?(value) when is_binary(value), do: String.trim(value) != ""
   defp nonblank_string?(_value), do: false
 
-  defp reject_changes(changeset, label) do
-    Enum.reduce(changeset.changes, changeset, fn {field, _}, acc ->
-      add_error(acc, field, "#{label} is immutable")
-    end)
-  end
-
   defp trim(value) when is_binary(value), do: String.trim(value)
   defp trim(value), do: value
 end
@@ -353,7 +341,7 @@ defmodule SymmetryControl.Goals.WorkDependency do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.{ChangesetValidators, Goal}
   alias SymmetryControl.Workspaces.WorkItem
 
   @primary_key false
@@ -381,7 +369,7 @@ defmodule SymmetryControl.Goals.WorkDependency do
     dependency
     |> change()
     |> cast(attrs, [:goal_id, :work_item_id, :depends_on_id])
-    |> reject_changes()
+    |> ChangesetValidators.reject_changes("work dependency")
   end
 
   defp validate_distinct_items(changeset) do
@@ -391,19 +379,13 @@ defmodule SymmetryControl.Goals.WorkDependency do
       changeset
     end
   end
-
-  defp reject_changes(changeset) do
-    Enum.reduce(changeset.changes, changeset, fn {field, _}, acc ->
-      add_error(acc, field, "work dependency is immutable")
-    end)
-  end
 end
 
 defmodule SymmetryControl.Goals.ContextSnapshot do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.{ChangesetValidators, Goal}
   alias SymmetryControl.Workspaces.WorkItem
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -438,8 +420,8 @@ defmodule SymmetryControl.Goals.ContextSnapshot do
     ])
     |> validate_number(:goal_revision, greater_than: 0)
     |> validate_number(:schema_version, greater_than: 0)
-    |> validate_digest(:content_hash)
-    |> validate_map(:payload)
+    |> ChangesetValidators.validate_digest(:content_hash)
+    |> ChangesetValidators.validate_map(:payload)
     |> foreign_key_constraint(:goal_id, name: :context_snapshots_goal_revision_fkey)
     |> foreign_key_constraint(:work_item_id, name: :context_snapshots_work_item_ownership_fkey)
     |> check_constraint(:schema_version, name: :context_snapshots_schema_version_positive)
@@ -458,27 +440,7 @@ defmodule SymmetryControl.Goals.ContextSnapshot do
       :content_hash,
       :payload
     ])
-    |> reject_changes()
-  end
-
-  defp validate_digest(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_binary(value) and byte_size(value) == 32,
-        do: [],
-        else: [{field, "must be a 32-byte digest"}]
-    end)
-  end
-
-  defp validate_map(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_map(value), do: [], else: [{field, "must be an object"}]
-    end)
-  end
-
-  defp reject_changes(changeset) do
-    Enum.reduce(changeset.changes, changeset, fn {field, _}, acc ->
-      add_error(acc, field, "context snapshot is immutable")
-    end)
+    |> ChangesetValidators.reject_changes("context snapshot")
   end
 end
 
@@ -587,7 +549,7 @@ defmodule SymmetryControl.Goals.HarnessSessionStopReceipt do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Goals.{ChangesetValidators, HarnessSession}
   alias SymmetryControl.Orchestration.Run
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -614,8 +576,8 @@ defmodule SymmetryControl.Goals.HarnessSessionStopReceipt do
       :request_hash,
       :response
     ])
-    |> validate_request_hash()
-    |> validate_response()
+    |> ChangesetValidators.validate_digest(:request_hash)
+    |> ChangesetValidators.validate_map(:response)
     |> assoc_constraint(:session)
     |> assoc_constraint(:run)
     |> unique_constraint([:session_id, :binding_id],
@@ -624,27 +586,13 @@ defmodule SymmetryControl.Goals.HarnessSessionStopReceipt do
     |> check_constraint(:request_hash, name: :harness_session_stop_receipts_request_hash_size)
     |> check_constraint(:response, name: :harness_session_stop_receipts_response_object)
   end
-
-  defp validate_request_hash(changeset) do
-    validate_change(changeset, :request_hash, fn :request_hash, value ->
-      if is_binary(value) and byte_size(value) == 32,
-        do: [],
-        else: [request_hash: "must be a 32-byte digest"]
-    end)
-  end
-
-  defp validate_response(changeset) do
-    validate_change(changeset, :response, fn :response, value ->
-      if is_map(value), do: [], else: [response: "must be an object"]
-    end)
-  end
 end
 
 defmodule SymmetryControl.Goals.HarnessSessionAttachReceipt do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Goals.{ChangesetValidators, HarnessSession}
   alias SymmetryControl.Orchestration.{Run, Runtime}
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -692,8 +640,8 @@ defmodule SymmetryControl.Goals.HarnessSessionAttachReceipt do
     ])
     |> validate_number(:runtime_epoch, greater_than: 0)
     |> validate_number(:generation, greater_than: 0)
-    |> validate_request_hash()
-    |> validate_response()
+    |> ChangesetValidators.validate_digest(:request_hash)
+    |> ChangesetValidators.validate_map(:response)
     |> assoc_constraint(:session)
     |> assoc_constraint(:run)
     |> assoc_constraint(:runtime)
@@ -701,26 +649,13 @@ defmodule SymmetryControl.Goals.HarnessSessionAttachReceipt do
     |> check_constraint(:request_hash, name: :harness_session_attach_receipts_request_hash_size)
     |> check_constraint(:response, name: :harness_session_attach_receipts_response_object)
   end
-
-  defp validate_request_hash(changeset) do
-    validate_change(changeset, :request_hash, fn :request_hash, value ->
-      if is_binary(value) and byte_size(value) == 32,
-        do: [],
-        else: [request_hash: "must be a 32-byte digest"]
-    end)
-  end
-
-  defp validate_response(changeset) do
-    validate_change(changeset, :response, fn :response, value ->
-      if is_map(value), do: [], else: [response: "must be an object"]
-    end)
-  end
 end
 
 defmodule SymmetryControl.Goals.RunEvidence do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias SymmetryControl.Goals.ChangesetValidators
   alias SymmetryControl.Orchestration.Run
 
   @kinds ["check", "artifact", "review", "observation"]
@@ -770,9 +705,9 @@ defmodule SymmetryControl.Goals.RunEvidence do
     |> validate_length(:validator_profile, max: 240)
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:verdict, @verdicts)
-    |> validate_digest(:subject_hash)
-    |> validate_map(:source_ref)
-    |> validate_map(:payload)
+    |> ChangesetValidators.validate_digest(:subject_hash)
+    |> ChangesetValidators.validate_map(:source_ref)
+    |> ChangesetValidators.validate_map(:payload)
     |> assoc_constraint(:run)
     |> unique_constraint(:id, name: :run_evidence_pkey)
     |> unique_constraint([:run_id, :evidence_key])
@@ -796,27 +731,7 @@ defmodule SymmetryControl.Goals.RunEvidence do
       :verdict,
       :payload
     ])
-    |> reject_changes()
-  end
-
-  defp validate_digest(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_binary(value) and byte_size(value) == 32,
-        do: [],
-        else: [{field, "must be a 32-byte digest"}]
-    end)
-  end
-
-  defp validate_map(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_map(value), do: [], else: [{field, "must be an object"}]
-    end)
-  end
-
-  defp reject_changes(changeset) do
-    Enum.reduce(changeset.changes, changeset, fn {field, _}, acc ->
-      add_error(acc, field, "run evidence is immutable")
-    end)
+    |> ChangesetValidators.reject_changes("run evidence")
   end
 end
 
@@ -824,7 +739,7 @@ defmodule SymmetryControl.Goals.WorkOutcome do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{Goal, JsonDocument}
+  alias SymmetryControl.Goals.{ChangesetValidators, Goal, JsonDocument}
   alias SymmetryControl.Orchestration.{Run, Task}
   alias SymmetryControl.Workspaces.WorkItem
 
@@ -886,7 +801,7 @@ defmodule SymmetryControl.Goals.WorkOutcome do
     |> validate_change(:candidate_subject, fn :candidate_subject, value ->
       if is_map(value), do: [], else: [candidate_subject: "must be an object"]
     end)
-    |> validate_digest(:subject_hash)
+    |> ChangesetValidators.validate_digest(:subject_hash)
     |> validate_evidence_ids()
     |> foreign_key_constraint(:goal_id, name: :work_outcomes_goal_revision_fkey)
     |> foreign_key_constraint(:work_item_id, name: :work_outcomes_work_item_ownership_fkey)
@@ -925,15 +840,7 @@ defmodule SymmetryControl.Goals.WorkOutcome do
       :reason,
       :decision_id
     ])
-    |> reject_changes()
-  end
-
-  defp validate_digest(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_binary(value) and byte_size(value) == 32,
-        do: [],
-        else: [{field, "must be a 32-byte digest"}]
-    end)
+    |> ChangesetValidators.reject_changes("work outcome")
   end
 
   defp validate_evidence_ids(changeset) do
@@ -946,19 +853,13 @@ defmodule SymmetryControl.Goals.WorkOutcome do
 
   defp valid_uuid?(value) when is_binary(value), do: match?({:ok, _}, Ecto.UUID.cast(value))
   defp valid_uuid?(_value), do: false
-
-  defp reject_changes(changeset) do
-    Enum.reduce(changeset.changes, changeset, fn {field, _}, acc ->
-      add_error(acc, field, "work outcome is immutable")
-    end)
-  end
 end
 
 defmodule SymmetryControl.Goals.GoalDecision do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{Goal, JsonDocument}
+  alias SymmetryControl.Goals.{ChangesetValidators, Goal, JsonDocument}
   alias SymmetryControl.Workspaces.WorkItem
 
   @kinds ["plan", "scope", "review", "budget", "external_action", "completion"]
@@ -1030,7 +931,7 @@ defmodule SymmetryControl.Goals.GoalDecision do
     |> validate_length(:actor_ref, max: 500)
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:state, @states)
-    |> validate_digest(:action_hash)
+    |> ChangesetValidators.validate_digest(:action_hash)
     |> validate_optional_digest(:subject_hash)
     |> validate_options()
     |> validate_resolution_state()
@@ -1066,14 +967,6 @@ defmodule SymmetryControl.Goals.GoalDecision do
     |> require_open_decision("superseded")
     |> validate_inclusion(:state, ["superseded"])
     |> optimistic_lock(:lock_version)
-  end
-
-  defp validate_digest(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_binary(value) and byte_size(value) == 32,
-        do: [],
-        else: [{field, "must be a 32-byte digest"}]
-    end)
   end
 
   defp validate_optional_digest(changeset, field) do
@@ -1163,7 +1056,7 @@ defmodule SymmetryControl.Goals.GoalEvent do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.{ChangesetValidators, Goal}
 
   @primary_key {:id, :binary_id, autogenerate: false}
   @foreign_key_type :binary_id
@@ -1211,9 +1104,9 @@ defmodule SymmetryControl.Goals.GoalEvent do
     |> validate_length(:kind, min: 1, max: 120)
     |> validate_length(:actor_ref, max: 500)
     |> validate_number(:request_hash_version, greater_than: 0)
-    |> validate_digest(:request_hash)
-    |> validate_map(:payload)
-    |> validate_map(:response)
+    |> ChangesetValidators.validate_digest(:request_hash)
+    |> ChangesetValidators.validate_map(:payload)
+    |> ChangesetValidators.validate_map(:response)
     |> foreign_key_constraint(:goal_id, name: :goal_events_goal_revision_fkey)
     |> unique_constraint([:goal_id, :sequence])
     |> check_constraint(:sequence, name: :goal_events_sequence_positive)
@@ -1238,27 +1131,7 @@ defmodule SymmetryControl.Goals.GoalEvent do
       :payload,
       :response
     ])
-    |> reject_changes()
-  end
-
-  defp validate_digest(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_binary(value) and byte_size(value) == 32,
-        do: [],
-        else: [{field, "must be a 32-byte digest"}]
-    end)
-  end
-
-  defp validate_map(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_map(value), do: [], else: [{field, "must be an object"}]
-    end)
-  end
-
-  defp reject_changes(changeset) do
-    Enum.reduce(changeset.changes, changeset, fn {field, _}, acc ->
-      add_error(acc, field, "goal event is immutable")
-    end)
+    |> ChangesetValidators.reject_changes("goal event")
   end
 end
 
@@ -1319,6 +1192,7 @@ defmodule SymmetryControl.Goals.RunUsage do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias SymmetryControl.Goals.ChangesetValidators
   alias SymmetryControl.Orchestration.Run
 
   @cost_bases ["reported", "estimated", "unknown"]
@@ -1391,7 +1265,7 @@ defmodule SymmetryControl.Goals.RunUsage do
       :price_version,
       :supersedes_id
     ])
-    |> reject_changes()
+    |> ChangesetValidators.reject_changes("run usage")
   end
 
   defp validate_nonnegative(changeset, fields) do
@@ -1418,19 +1292,13 @@ defmodule SymmetryControl.Goals.RunUsage do
   end
 
   defp same_uuid?(_left, _right), do: false
-
-  defp reject_changes(changeset) do
-    Enum.reduce(changeset.changes, changeset, fn {field, _}, acc ->
-      add_error(acc, field, "run usage is immutable")
-    end)
-  end
 end
 
 defmodule SymmetryControl.Goals.GoalExternalWait do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{Goal, GoalEvent}
+  alias SymmetryControl.Goals.{ChangesetValidators, Goal, GoalEvent}
   alias SymmetryControl.Orchestration.{Run, Task}
   alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
 
@@ -1501,7 +1369,7 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
     |> validate_source_ref()
     |> validate_result()
     |> validate_subject()
-    |> validate_digest(:subject_hash)
+    |> ChangesetValidators.validate_digest(:subject_hash)
     |> validate_schedule()
     |> assoc_constraint(:goal)
     |> assoc_constraint(:work_item)
@@ -1555,7 +1423,7 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
     wait
     |> change()
     |> cast(attrs, @identity_fields ++ [:next_check_at, :state, :receipt_event_id, :check_seq])
-    |> reject_changes()
+    |> ChangesetValidators.reject_changes("external wait history")
   end
 
   defp validate_source_ref(changeset) do
@@ -1586,14 +1454,6 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
     end)
   end
 
-  defp validate_digest(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_binary(value) and byte_size(value) == 32,
-        do: [],
-        else: [{field, "must be a 32-byte digest"}]
-    end)
-  end
-
   defp validate_schedule(changeset) do
     next_check_at = get_field(changeset, :next_check_at)
 
@@ -1612,11 +1472,5 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
     else
       changeset
     end
-  end
-
-  defp reject_changes(changeset) do
-    Enum.reduce(changeset.changes, changeset, fn {field, _value}, acc ->
-      add_error(acc, field, "external wait history is immutable")
-    end)
   end
 end
