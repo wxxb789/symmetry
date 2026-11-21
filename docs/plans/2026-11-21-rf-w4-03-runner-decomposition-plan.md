@@ -178,7 +178,7 @@ reviewer re-runs the comparison independently.
    ./internal/app/...` (Windows-local). Sequential, never concurrent with a second suite (host
    memory rule).
 4. `python scripts/ci/check-citation-existence.py --base <contract base> --head HEAD`;
-   `git diff --check`; host-path hygiene `git diff origin/main...HEAD | grep -i "users/"`.
+   `git diff --check`; host-path hygiene `git diff origin/main...HEAD | grep -icE "users[/][a-z]"`.
 5. Added checks (not tests, no new test names): overlay mutation runs against the new seams,
    reverted by discarding the overlay. The `startPipes.closeChildEnds` probe (drop one end) is
    the contract's example class and must turn the package red; the other probes (drop one end
@@ -210,8 +210,9 @@ the row's −200…−300 dLOC estimate is not met (+18 net, report-only per con
 refreshed at the rf-w4-03 apply revision (findings #1/#2 applied on top of `91e3ab74`).
 
 Full evidence — function-length table, the cleanup/closeFiles/join bootstrap tables, the 55-row
-base-vs-HEAD control-flow audit, the ordered-text comparison, every gate command with its exit
-code and counts, the overlay-mutation battery, the WSL/harness/app suite results, and the
-host-load flake attribution — is in `docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md`
+(37 `Start` + 18 close) base-vs-HEAD control-flow audit, the ordered-text comparison, every gate
+command with its exit code and counts, the overlay-mutation battery, the WSL/harness/app suite
+results, and the host-load flake attribution — is in
+`docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md`
 (with the audit section 11 recording two independent read-only audits: no behavioural
 divergence, all preservation claims confirmed).
