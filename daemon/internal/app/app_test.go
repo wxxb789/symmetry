@@ -1828,11 +1828,11 @@ func TestConclusiveCleanupStopsQueuedInputAndCancellationReceipts(t *testing.T) 
 	active := &runningRun{process: process, claimed: true}
 	active.inputMu.Lock()
 	daemon := &daemon{
-		store:          store,
-		options:        options{newID: ids()},
-		running:        map[state.RunKey]*runningRun{key: active},
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:       store,
+		options:     options{newID: ids()},
+		running:     map[state.RunKey]*runningRun{key: active},
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -5302,14 +5302,14 @@ func TestRenewalCommandsUseSerialExecutorWithoutBlockingLiveness(t *testing.T) {
 	input := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	api := &blockingReactorControl{renewEntered: make(chan struct{}, 1)}
 	daemon := &daemon{
-		store:          store,
-		control:        api,
-		options:        options{clock: func() time.Time { return now }, newID: ids()},
-		leaseDuration:  10 * time.Second,
-		running:        map[state.RunKey]*runningRun{first: {process: input}, second: {process: fakeProcess{}}},
-		slots:          make(chan struct{}, 2),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:         store,
+		control:       api,
+		options:       options{clock: func() time.Time { return now }, newID: ids()},
+		leaseDuration: 10 * time.Second,
+		running:       map[state.RunKey]*runningRun{first: {process: input}, second: {process: fakeProcess{}}},
+		slots:         make(chan struct{}, 2),
+		commandWake:   make(chan struct{}, 1),
+		commands:      newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var releaseInput sync.Once
@@ -5407,14 +5407,14 @@ func TestRenewalAndSnapshotDoNotDuplicateCommandExecution(t *testing.T) {
 	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)}
 	api := &renewalCommandControl{command: command, renewEntered: make(chan struct{}, 1)}
 	daemon := &daemon{
-		store:          store,
-		control:        api,
-		options:        options{clock: func() time.Time { return now }, newID: ids()},
-		leaseDuration:  10 * time.Second,
-		running:        map[state.RunKey]*runningRun{key: {process: input}},
-		slots:          make(chan struct{}, 1),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:         store,
+		control:       api,
+		options:       options{clock: func() time.Time { return now }, newID: ids()},
+		leaseDuration: 10 * time.Second,
+		running:       map[state.RunKey]*runningRun{key: {process: input}},
+		slots:         make(chan struct{}, 1),
+		commandWake:   make(chan struct{}, 1),
+		commands:      newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var releaseInput sync.Once
@@ -5471,13 +5471,13 @@ func TestBlockedInputDoesNotBlockAnotherRunCommand(t *testing.T) {
 	otherEntered := make(chan struct{})
 	other := &recordingProcess{beforeWrite: func() { close(otherEntered) }}
 	daemon := &daemon{
-		store:          store,
-		control:        &fakeControl{},
-		options:        options{newID: ids()},
-		running:        map[state.RunKey]*runningRun{first: {process: blocked}, second: {process: other}},
-		slots:          make(chan struct{}, 2),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:       store,
+		control:     &fakeControl{},
+		options:     options{newID: ids()},
+		running:     map[state.RunKey]*runningRun{first: {process: blocked}, second: {process: other}},
+		slots:       make(chan struct{}, 2),
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	executorDone := make(chan struct{})
@@ -5509,13 +5509,13 @@ func TestSameRunCommandsPreserveFIFO(t *testing.T) {
 	defer store.Close()
 	process := &recordingProcess{}
 	daemon := &daemon{
-		store:          store,
-		control:        &fakeControl{},
-		options:        options{newID: ids()},
-		running:        map[state.RunKey]*runningRun{key: {process: process}},
-		slots:          make(chan struct{}, 1),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:       store,
+		control:     &fakeControl{},
+		options:     options{newID: ids()},
+		running:     map[state.RunKey]*runningRun{key: {process: process}},
+		slots:       make(chan struct{}, 1),
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	executorDone := make(chan struct{})
@@ -5561,13 +5561,13 @@ func TestSameCommandIDIsScopedToRun(t *testing.T) {
 	firstProcess := &recordingProcess{}
 	secondProcess := &recordingProcess{}
 	daemon := &daemon{
-		store:          store,
-		control:        &fakeControl{},
-		options:        options{newID: ids()},
-		running:        map[state.RunKey]*runningRun{first: {process: firstProcess}, second: {process: secondProcess}},
-		slots:          make(chan struct{}, 2),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:       store,
+		control:     &fakeControl{},
+		options:     options{newID: ids()},
+		running:     map[state.RunKey]*runningRun{first: {process: firstProcess}, second: {process: secondProcess}},
+		slots:       make(chan struct{}, 2),
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	executorDone := make(chan struct{})
@@ -5591,14 +5591,14 @@ func TestCancelPreemptsBlockedInputInSameSnapshot(t *testing.T) {
 	defer store.Close()
 	input := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{}), terminated: make(chan struct{})}
 	daemon := &daemon{
-		store:          store,
-		control:        &fakeControl{},
-		log:            slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		options:        options{newID: ids()},
-		running:        map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
-		slots:          make(chan struct{}, 1),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:       store,
+		control:     &fakeControl{},
+		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options:     options{newID: ids()},
+		running:     map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		slots:       make(chan struct{}, 1),
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	executorDone := make(chan struct{})
@@ -5651,14 +5651,14 @@ func TestCancelRejectsQueuedInputAfterPreemption(t *testing.T) {
 	defer store.Close()
 	input := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{}), terminated: make(chan struct{})}
 	daemon := &daemon{
-		store:          store,
-		control:        &fakeControl{},
-		log:            slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		options:        options{newID: ids()},
-		running:        map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
-		slots:          make(chan struct{}, 1),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:       store,
+		control:     &fakeControl{},
+		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options:     options{newID: ids()},
+		running:     map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		slots:       make(chan struct{}, 1),
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	executorDone := make(chan struct{})
@@ -5800,14 +5800,14 @@ func TestBlockedCommandDoesNotDelayUnrelatedScheduledAssignment(t *testing.T) {
 			started <- struct{}{}
 			return fakeProcess{}, nil
 		},
-		options:        options{newID: ids(), clock: time.Now},
-		runtimeID:      "runtime-1",
-		runtimeEpoch:   1,
-		running:        map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
-		slots:          make(chan struct{}, 2),
-		background:     ctx,
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		options:      options{newID: ids(), clock: time.Now},
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		running:      map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		slots:        make(chan struct{}, 2),
+		background:   ctx,
+		commandWake:  make(chan struct{}, 1),
+		commands:     newCommandQueue(),
 	}
 	executorDone := make(chan struct{})
 	go func() { daemon.runCommandExecutor(ctx); close(executorDone) }()
@@ -5838,13 +5838,13 @@ func TestReleaseRunUnblocksCommandWaiters(t *testing.T) {
 	defer store.Close()
 	input := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	daemon := &daemon{
-		store:          store,
-		control:        &fakeControl{},
-		options:        options{newID: ids()},
-		running:        map[state.RunKey]*runningRun{key: {process: input}},
-		slots:          make(chan struct{}, 1),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:       store,
+		control:     &fakeControl{},
+		options:     options{newID: ids()},
+		running:     map[state.RunKey]*runningRun{key: {process: input}},
+		slots:       make(chan struct{}, 1),
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	executorDone := make(chan struct{})
@@ -5873,13 +5873,13 @@ func TestDeliveredCommandReceiptEvictsCompletedDedupeEntry(t *testing.T) {
 	process := &recordingProcess{}
 	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)}
 	daemon := &daemon{
-		store:          store,
-		control:        &fakeControl{},
-		options:        options{newID: ids()},
-		running:        map[state.RunKey]*runningRun{key: {process: process}},
-		slots:          make(chan struct{}, 1),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:       store,
+		control:     &fakeControl{},
+		options:     options{newID: ids()},
+		running:     map[state.RunKey]*runningRun{key: {process: process}},
+		slots:       make(chan struct{}, 1),
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	executorDone := make(chan struct{})
@@ -5892,12 +5892,12 @@ func TestDeliveredCommandReceiptEvictsCompletedDedupeEntry(t *testing.T) {
 	if err := daemon.flushRun(ctx, journal); err != nil {
 		t.Fatal(err)
 	}
-	if len(daemon.queuedCommands) != 0 {
-		t.Fatalf("completed command receipt survived delivery: %#v", daemon.queuedCommands)
+	if len(daemon.commands.byKey) != 0 {
+		t.Fatalf("completed command receipt survived delivery: %#v", daemon.commands.byKey)
 	}
 	daemon.releaseRun(key)
-	if len(daemon.queuedCommands) != 0 {
-		t.Fatalf("completed command receipts survived run release: %#v", daemon.queuedCommands)
+	if len(daemon.commands.byKey) != 0 {
+		t.Fatalf("completed command receipts survived run release: %#v", daemon.commands.byKey)
 	}
 	cancel()
 	select {
@@ -5932,14 +5932,14 @@ func TestAcknowledgementDeliverySuppressesLateCommandsFromEverySnapshotResponse(
 			command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)}
 			control := &lateCommandControl{method: test.method, entered: make(chan struct{}, 1), release: make(chan struct{}), command: command, leaseExpiresAt: now.Add(time.Minute)}
 			daemon := &daemon{
-				store:          store,
-				control:        control,
-				options:        options{clock: func() time.Time { return now }, newID: ids()},
-				leaseDuration:  10 * time.Second,
-				running:        map[state.RunKey]*runningRun{key: {process: process}},
-				slots:          make(chan struct{}, 1),
-				commandWake:    make(chan struct{}, 1),
-				queuedCommands: make(map[commandKey]*queuedCommand),
+				store:         store,
+				control:       control,
+				options:       options{clock: func() time.Time { return now }, newID: ids()},
+				leaseDuration: 10 * time.Second,
+				running:       map[state.RunKey]*runningRun{key: {process: process}},
+				slots:         make(chan struct{}, 1),
+				commandWake:   make(chan struct{}, 1),
+				commands:      newCommandQueue(),
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -5992,7 +5992,7 @@ func TestAcknowledgementDeliveryTombstonesEveryPreAckRequest(t *testing.T) {
 	firstGate := make(chan struct{})
 	secondGate := make(chan struct{})
 	control := &lateCommandControl{method: "dispatch", entered: make(chan struct{}, 2), releases: []<-chan struct{}{firstGate, secondGate}, command: command}
-	daemon := &daemon{store: store, control: control, options: options{newID: ids()}, running: map[state.RunKey]*runningRun{key: {process: process}}, commandWake: make(chan struct{}, 1), queuedCommands: make(map[commandKey]*queuedCommand)}
+	daemon := &daemon{store: store, control: control, options: options{newID: ids()}, running: map[state.RunKey]*runningRun{key: {process: process}}, commandWake: make(chan struct{}, 1), commands: newCommandQueue()}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	executorDone := make(chan struct{})
@@ -6063,9 +6063,9 @@ func TestAcknowledgementPersistenceDoesNotBlockNewCommandRequests(t *testing.T) 
 				return store.MarkCommandAcknowledgementsDelivered(key, acknowledgementIDs)
 			},
 		},
-		running:        map[state.RunKey]*runningRun{key: {process: process}},
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		running:     map[state.RunKey]*runningRun{key: {process: process}},
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -6146,9 +6146,9 @@ func TestFailedAcknowledgementPersistenceKeepsProvisionalTombstoneUntilResponseE
 				return state.RunJournal{}, errors.New("injected acknowledgement persistence failure")
 			},
 		},
-		running:        map[state.RunKey]*runningRun{key: {process: process}},
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		running:     map[state.RunKey]*runningRun{key: {process: process}},
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -6235,11 +6235,11 @@ func TestCancelledSnapshotDoesNotLaunchAssignmentsBehindBlockedCommand(t *testin
 			started <- struct{}{}
 			return fakeProcess{}, nil
 		},
-		options:        options{newID: ids()},
-		running:        map[state.RunKey]*runningRun{key: {process: input}},
-		slots:          make(chan struct{}, 1),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		options:     options{newID: ids()},
+		running:     map[state.RunKey]*runningRun{key: {process: input}},
+		slots:       make(chan struct{}, 1),
+		commandWake: make(chan struct{}, 1),
+		commands:    newCommandQueue(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	executorDone := make(chan struct{})
@@ -6923,19 +6923,19 @@ func TestScheduledCancelDuringClaimCompletesAfterDurableReceipt(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	control := &fakeControl{claimBlock: gate, claimEntered: entered}
 	daemon := &daemon{
-		config:         testConfig(t),
-		store:          store,
-		control:        control,
-		log:            slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		workspace:      &fakeWorkspace{},
-		start:          failStart,
-		options:        options{newID: ids(), clock: time.Now},
-		runtimeID:      "runtime-1",
-		runtimeEpoch:   1,
-		running:        make(map[state.RunKey]*runningRun),
-		slots:          make(chan struct{}, 1),
-		commandWake:    make(chan struct{}, 1),
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		config:       testConfig(t),
+		store:        store,
+		control:      control,
+		log:          slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		workspace:    &fakeWorkspace{},
+		start:        failStart,
+		options:      options{newID: ids(), clock: time.Now},
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		running:      make(map[state.RunKey]*runningRun),
+		slots:        make(chan struct{}, 1),
+		commandWake:  make(chan struct{}, 1),
+		commands:     newCommandQueue(),
 	}
 	ctx := context.Background()
 	key := state.RunKey{RunID: "run-1", Generation: 1}
@@ -6953,7 +6953,7 @@ func TestScheduledCancelDuringClaimCompletesAfterDurableReceipt(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	daemon.mu.Lock()
-	parked := daemon.queuedCommands[commandKey{run: key, id: "cancel-1"}] == queued
+	parked := daemon.commands.byKey[commandKey{run: key, id: "cancel-1"}] == queued
 	daemon.mu.Unlock()
 	if !parked {
 		t.Fatal("cancel command left the queue before its durable acknowledgement")
@@ -7060,14 +7060,14 @@ func TestRenewLeasesDoesNotSeriallyBlockOtherRuns(t *testing.T) {
 		}},
 	}
 	daemon := &daemon{
-		store:          store,
-		control:        api,
-		options:        options{clock: func() time.Time { return now }},
-		leaseDuration:  10 * time.Second,
-		slots:          make(chan struct{}, 2),
-		running:        map[state.RunKey]*runningRun{first: {process: fakeProcess{}}, second: {process: fakeProcess{}}},
-		commandWake:    commandWake,
-		queuedCommands: make(map[commandKey]*queuedCommand),
+		store:         store,
+		control:       api,
+		options:       options{clock: func() time.Time { return now }},
+		leaseDuration: 10 * time.Second,
+		slots:         make(chan struct{}, 2),
+		running:       map[state.RunKey]*runningRun{first: {process: fakeProcess{}}, second: {process: fakeProcess{}}},
+		commandWake:   commandWake,
+		commands:      newCommandQueue(),
 	}
 	done := make(chan struct{})
 	go func() { daemon.renewLeases(context.Background()); close(done) }()
@@ -8706,7 +8706,7 @@ func (control *lateCommandControl) RenewLease(context.Context, string, protocol.
 func hasCommandRequestTombstone(daemon *daemon, key commandKey) bool {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	for _, tombstones := range daemon.commandRequests {
+	for _, tombstones := range daemon.commands.receipts.requests {
 		if _, exists := tombstones[key]; exists {
 			return true
 		}
@@ -8717,14 +8717,14 @@ func hasCommandRequestTombstone(daemon *daemon, key commandKey) bool {
 func commandRequestHasTombstone(daemon *daemon, requestID uint64, key commandKey) bool {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	_, exists := daemon.commandRequests[requestID][key]
+	_, exists := daemon.commands.receipts.requests[requestID][key]
 	return exists
 }
 
 func commandRequestCounts(daemon *daemon) (int, int) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	return len(daemon.commandRequests), len(daemon.queuedCommands)
+	return len(daemon.commands.receipts.requests), len(daemon.commands.byKey)
 }
 
 func (client *blockingReactorControl) Dispatch(context.Context, string, int64) (protocol.RuntimeSnapshot, error) {
