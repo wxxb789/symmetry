@@ -16,6 +16,46 @@ defmodule SymmetryControl.TestFixtures do
   alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration
 
+  @doc """
+  Injects the suite's command surface: `command_opts/0` returns the suite's
+  default command options and `command_current/3,4` submits the current
+  revision of a goal with them.
+
+  A suite whose command call sites share one option list declares it once:
+
+      use SymmetryControl.TestFixtures,
+        command_opts: [now: @now, validation_profiles: validation_profiles()]
+
+  `command_opts/0` rebuilds the list on every call, so lazily-generated values
+  (`Ecto.UUID.generate()`, `DateTime.utc_now/0`) stay per-call. A call's `opts`
+  are merged over the defaults, so a caller's `:now`, `:rollout_enabled` or
+  `:validation_profiles` always wins — the same precedence the converted
+  suites' local wrappers had. A suite that passes no `:command_opts` injects
+  nothing.
+  """
+  defmacro __using__(opts) do
+    case Keyword.fetch(opts, :command_opts) do
+      {:ok, command_opts} ->
+        quote do
+          defp command_opts, do: unquote(command_opts)
+
+          defp command_current(goal_id, kind, payload, opts \\ []) do
+            assert {:ok, goal} = SymmetryControl.Goals.fetch_goal(goal_id)
+
+            SymmetryControl.Goals.command(
+              goal_id,
+              SymmetryControl.TestFixtures.goal_command(goal, kind, payload),
+              "operator:test",
+              Keyword.merge(command_opts(), opts)
+            )
+          end
+        end
+
+      :error ->
+        nil
+    end
+  end
+
   # Deterministic fixture ids: the daemon instance the review suite pinned
   # (`uuid(1)` there) and the claim id the review and retry suites pinned
   # (`uuid(10)` in both). A suite that needs a fresh id passes one explicitly; a
@@ -97,6 +137,18 @@ defmodule SymmetryControl.TestFixtures do
     }
   end
 
+  @doc """
+  Claims `run` for `runtime` at `now` through `Goals` — the goal-admission
+  suites' claim entry point — and returns the fence map the transitions take.
+
+  The claim id is generated per call: those suites pin a fresh id deliberately
+  (replay and duplicate-claim semantics), so this does not take `claim/4`'s
+  deterministic default. `opts` are merged over the `via: Goals` default.
+  """
+  def goal_claim(run, runtime, now, opts \\ []) do
+    claim(run, runtime, now, Keyword.merge([claim_id: Ecto.UUID.generate(), via: Goals], opts))
+  end
+
   @doc "Task attributes over the default `\"Run tests\"` goal, with overrides merged in."
   def task_attrs(overrides \\ []) do
     Map.merge(@task_base, Map.new(overrides))
@@ -121,25 +173,6 @@ defmodule SymmetryControl.TestFixtures do
       kind: kind,
       payload: canonical_command_payload(kind, payload)
     }
-  end
-
-  @doc """
-  Submits the current revision of `goal_id` as `"operator:test"`.
-
-  `command_opts` are the suite's own command options (its clock, rollout gate
-  and validation profiles); `opts` are merged over them for the individual
-  call, so a caller's `:now`, `:rollout_enabled` or `:validation_profiles`
-  always wins.
-  """
-  def command_current(goal_id, kind, payload, command_opts, opts \\ []) do
-    assert {:ok, goal} = Goals.fetch_goal(goal_id)
-
-    Goals.command(
-      goal_id,
-      goal_command(goal, kind, payload),
-      "operator:test",
-      Keyword.merge(command_opts, opts)
-    )
   end
 
   defp canonical_command_payload("request_decision", payload) do

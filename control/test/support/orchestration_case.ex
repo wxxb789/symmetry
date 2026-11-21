@@ -9,6 +9,12 @@ defmodule SymmetryControl.OrchestrationCase do
 
       use SymmetryControl.OrchestrationCase, async: false
 
+  A suite whose command call sites share one option list declares it next to
+  that line:
+
+      use SymmetryControl.TestFixtures,
+        command_opts: [now: @now, validation_profiles: validation_profiles()]
+
   A fresh id, a different clock or a non-default runtime stays explicit at the
   call site; the template only supplies the surface.
 
@@ -39,13 +45,12 @@ defmodule SymmetryControl.OrchestrationCase do
           register_runtime: 3,
           claim: 3,
           claim: 4,
+          goal_claim: 3,
           task_attrs: 0,
           task_attrs: 1,
           provider_task_attrs: 1,
           goal_command: 3,
-          goal_command: 4,
-          command_current: 4,
-          command_current: 5
+          goal_command: 4
         ]
     end
   end

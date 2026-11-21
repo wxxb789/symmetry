@@ -39,10 +39,13 @@ listed for W3-03 batch 2 at the end of this plan).
 ```elixir
 register_runtime(machine, now, opts \\ [])   # arities 2, 3
 claim(run, runtime, now, opts \\ [])         # arities 3, 4
+goal_claim(run, runtime, now, opts \\ [])    # arities 3, 4; fresh id through Goals
 task_attrs(overrides \\ [])                  # arities 0, 1
 provider_task_attrs(overrides)               # arity 1
-command_current(goal_id, kind, payload, command_opts, opts \\ [])  # arities 4, 5
 goal_command(goal, kind, payload, mutation_id \\ Ecto.UUID.generate())
+
+# injected per suite by `use SymmetryControl.TestFixtures, command_opts: [...]`:
+# command_opts/0, command_current/3, command_current/4
 ```
 
 Semantics that keep every converted call site byte-equivalent:
@@ -59,27 +62,33 @@ Semantics that keep every converted call site byte-equivalent:
   `Ecto.UUID.generate()` explicitly — laziness of the original `Keyword.get_lazy` is preserved),
   `:extra` (a map merged over the base spec, for `heartbeat_interval_ms`, `harness_*`,
   `adapter_*`, `repository_resource_id`).
-- `claim/4` claims through `via.claim/3` (`:via` defaults to `Orchestration`; the goal-admission
-  suite passes `Goals`) with `now:` positional and returns the same five-key fence map. `:claim_id`
-  defaults to the deterministic fixture id `"00000000-0000-0000-0000-000000000010"` — the value 40
-  of the converted call sites already pinned (three copies used that literal or `uuid(10)`, which
-  renders the same string). Call sites that used a fresh idempotency key pass
-  `claim_id: Ecto.UUID.generate()`; the read-model suite keeps its deterministic
-  `claim_id: uuid(n)`.
+- `claim/4` claims through `via.claim/3` (`:via` defaults to `Orchestration`) with `now:`
+  positional and returns the same five-key fence map. `:claim_id` defaults to the deterministic
+  fixture id `"00000000-0000-0000-0000-000000000010"` — the value 40 of the converted call sites
+  already pinned (three copies used that literal or `uuid(10)`, which renders the same string).
+  Call sites that used a fresh idempotency key pass `claim_id: Ecto.UUID.generate()`; the
+  read-model suite keeps its deterministic `claim_id: uuid(n)`. The goal-admission suite's 24 fence
+  sites call `goal_claim/3` instead: it claims through `Goals` with a fresh id per call, the form
+  the base file spelled out at each site (`claim_id: Ecto.UUID.generate(), via: Goals`).
 - `task_attrs/1` merges overrides over the four-key base the majority used
   (`%{goal: "Run tests", agent_profile: "codex", workspace: "primary", input: %{}}`).
   `provider_task_attrs/1` is the same builder over the capability suite's `"Use provider"` base;
   the telemetry suite passes `task_attrs(goal: "Observe events")`. Merging (not keyword-putting)
   keeps key-override behaviour identical.
-- `command_current/5` fetches the goal, builds the canonical command map
-  (`expected_version: goal.version`, `expected_revision: goal.current_revision`,
-  `payload: canonical_command_payload(kind, payload)`) and submits it as `"operator:test"` with
-  `Keyword.merge(command_opts, opts)`. `command_opts` is the file's own defaults function: the
-  clock/rollout/profiles each file's local helper used (`goals_test`: `[now: @now,
-  validation_profiles: validation_profiles()]`; `dispatch_notification`: the existing
-  `command_opts/0`; `workers`: `[validation_profiles: validation_profiles()]`). The merge keeps the
-  original precedence (`opts` win; `put_new` on profiles is equivalent because the defaults only
-  supply the key when the caller's list did not).
+- The command surface is injected rather than exported: `use SymmetryControl.TestFixtures,
+  command_opts: [...]` defines the suite's `command_opts/0` and a `command_current/3,4` that
+  fetches the goal, builds the canonical command map (`expected_version: goal.version`,
+  `expected_revision: goal.current_revision`, `payload: canonical_command_payload(kind, payload)`)
+  and submits it as `"operator:test"` with `Keyword.merge(command_opts(), opts)`. The three opt-in
+  suites declare their former local defaults once (`goals_test`: `[now: @now, validation_profiles:
+  validation_profiles()]`; `dispatch_notification`: `[now: now(), rollout_enabled: true,
+  validation_profiles: validation_profiles()]`; `workers`: `[validation_profiles:
+  validation_profiles()]`), so the call sites keep their base shape (`command_current(g, k, p)`
+  plus per-call overrides) and the definition count stays at one, inside
+  `TestFixtures.__using__/1`. `command_opts/0` evaluates per call, so the merge keeps the original
+  precedence (`opts` win; `put_new` on profiles is equivalent because the defaults only supply the
+  key when the caller's list did not) and the workers suite's freshly generated
+  `allowed_runtime_ids` stay fresh.
 - `goal_command/3..4` is the canonicalising command builder; `goals_test`'s 19 and
   `dispatch_notification`'s 2 local command-building call sites call it directly, so the two files
   and the two canonical-compliance suites keep one implementation and no second name for the same
@@ -124,8 +133,12 @@ converted file would then need two lines where ConnCase's pattern needs one, wit
 2. Converted helpers are pure fixtures: the acceptance bar is identical SQL/HTTP traffic. Every
    value a converted body passed stays identical — argument values, literal ids, clocks, option
    precedence, and the `Orchestration`/`Goals` entry points are preserved at the call sites. The
-   full suite (which asserts stored payloads, notification bodies and projections) is the traffic
-   oracle.
+   equivalence oracle is the static per-call-site mapping between the base and converted call
+   sites (the normalized token diff of the two files), not the full suite: the suite only observes
+   the values its assertions read, and a mutated fixture-id default (claim id or daemon instance
+   id) can leave every converted suite green — measured in review 1 by flipping `claim_id` to
+   `Ecto.UUID.generate/0` and running the three claim-heavy suites (59 passed). The full suite is
+   the regression net around that mapping, not its proof.
 3. No converted helper loses coverage: no test is deleted, renamed, retagged or narrowed; the diff
    adds no skip/exclude.
 4. `mix test` stays green on the converted tree with the same include/exclude filters as the
@@ -184,17 +197,24 @@ recipe), `ERL_SCHEDULERS=4` to match CI's 4-CPU pool arithmetic.
   `orchestration_supervision_test.exs:693` (`"Build the adapter"` / `"supervised"` base). They are
   why the deliverable table's `task_attrs` row is arity-scoped.
 - ExUnit `async` conversion (W3-14) and production code (none touched). `MigrationCase` is reused,
-  not rewritten; the one edit the conversion forced is failure-path parity: `with_schema/2` now
-  starts the private-schema Repo inside its `try` so a Repo-start failure still drops the schema
-  (the converted `goal_0006_migration_test.exs` inherited the harness leak; success path unchanged).
+  not rewritten; two failure-path edits are recorded. The conversion forced the first:
+  `with_schema/2` now starts the private-schema Repo inside its `try` so a Repo-start failure
+  still drops the schema (the converted `goal_0006_migration_test.exs` inherited the harness leak;
+  success path unchanged). Review 1 (R8) added the second, optional hardening:
+  `Repo.put_dynamic_repo/1` is wrapped in its own `try` so a failure while pointing the dynamic
+  repo at the private schema still stops the Repo. `MigrationCase`'s moduledoc states both; the
+  success path is unchanged.
 
 ## Design trade-offs
 
-- Passing per-file constants (clock, defaults, schema base) at each call site rather than keeping a
-  thin local wrapper: matches the merged #114 idiom of passing the schema base at the call site
-  (next bullet); keeps one definition per name, which the contract's acceptance measures.
-  Cost: mechanically larger diffs in `goals_test.exs` (~200 call sites gain `command_opts()`) and
-  `orchestration_goal_admission_test.exs` (24 claim sites gain `claim_id:`/`via:`).
+- Suite command defaults are declared once per file instead of restated at every call site (review
+  1's F1): `use SymmetryControl.TestFixtures, command_opts: [...]` injects `command_opts/0` and the
+  `command_current/3,4` wrapper, so `goals_test.exs`'s ~200 and the workers/dispatch command call
+  sites keep their base shape and the per-file `command_opts` copies are gone (one source
+  definition, in `TestFixtures.__using__/1`). The admission suite's 24 fence sites call the
+  one-definition `goal_claim/3` instead of repeating `claim_id: Ecto.UUID.generate(), via: Goals`.
+  The rejected alternative was keeping the explicit `command_opts()` argument at every call site:
+  it added net LOC and moved duplication into the arguments, against the slice's purpose.
 - Migration files whose local helper was a pure delegation pass the schema base at the call site
   (`with_schema("add_omo_harness_kind_migration", fn -> … end)`), matching the #114 idiom. The two
   files whose helper bootstrapped module loading (`add_retry_commands_test.exs`, whose helper also

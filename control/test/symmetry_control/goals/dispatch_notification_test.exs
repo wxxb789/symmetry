@@ -1,10 +1,12 @@
 defmodule SymmetryControl.Goals.DispatchNotificationTest do
   use ExUnit.Case, async: false
 
+  use SymmetryControl.TestFixtures,
+    command_opts: [now: now(), rollout_enabled: true, validation_profiles: validation_profiles()]
+
   import Ecto.Query
 
-  import SymmetryControl.TestFixtures,
-    only: [command_current: 4, goal_command: 3, goal_command: 4]
+  import SymmetryControl.TestFixtures, only: [goal_command: 3, goal_command: 4]
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Oban.Job
@@ -81,12 +83,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     subscribe_to_daemon(machine.id)
 
     assert {:ok, receipt, :created} =
-             command_current(
-               fixture.goal.id,
-               "admit_task",
-               admission_payload(fixture.item),
-               command_opts()
-             )
+             command_current(fixture.goal.id, "admit_task", admission_payload(fixture.item))
 
     task_id = receipt.response["task"]["id"]
 
@@ -218,12 +215,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     subscribe_to_daemon(machine.id)
 
     assert {:ok, cancelled, :created} =
-             command_current(
-               fixture.goal.id,
-               "cancel",
-               %{reason: "Stop this run."},
-               command_opts()
-             )
+             command_current(fixture.goal.id, "cancel", %{reason: "Stop this run."})
 
     action_id = cancelled.response["control_action_id"]
     refute_receive {:command_available, _}, 100
@@ -258,12 +250,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     subscribe_to_daemon(machine.id)
 
     assert {:ok, cancelled, :created} =
-             command_current(
-               fixture.goal.id,
-               "cancel",
-               %{reason: "Stop transactionally."},
-               command_opts()
-             )
+             command_current(fixture.goal.id, "cancel", %{reason: "Stop transactionally."})
 
     action_id = cancelled.response["control_action_id"]
 
@@ -296,12 +283,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     subscribe_to_daemon(machine.id)
 
     assert {:ok, cancelled, :created} =
-             command_current(
-               fixture.goal.id,
-               "cancel",
-               %{reason: "Stop before start."},
-               command_opts()
-             )
+             command_current(fixture.goal.id, "cancel", %{reason: "Stop before start."})
 
     action_id = cancelled.response["control_action_id"]
 
@@ -337,12 +319,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     subscribe_to_daemon(machine.id)
 
     assert {:ok, paused, :created} =
-             command_current(
-               fixture.goal.id,
-               "pause",
-               %{reason: "Pause before supersession."},
-               command_opts()
-             )
+             command_current(fixture.goal.id, "pause", %{reason: "Pause before supersession."})
 
     action_id = paused.response["control_action_id"]
 
@@ -404,10 +381,6 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
 
   defp subscribe_to_daemon(machine_id) do
     assert :ok = Phoenix.PubSub.subscribe(SymmetryControl.PubSub, "daemon:" <> machine_id)
-  end
-
-  defp command_opts do
-    [now: now(), rollout_enabled: true, validation_profiles: validation_profiles()]
   end
 
   defp with_scheduler_disabled(fun) when is_function(fun, 0) do
@@ -484,32 +457,22 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
       }
 
       assert {:ok, decision, :created} =
-               command_current(
-                 fixture.goal.id,
-                 "request_decision",
-                 %{
-                   kind: "plan",
-                   work_item_id: nil,
-                   subject_hash: nil,
-                   proposal: proposal
-                 },
-                 command_opts()
-               )
+               command_current(fixture.goal.id, "request_decision", %{
+                 kind: "plan",
+                 work_item_id: nil,
+                 subject_hash: nil,
+                 proposal: proposal
+               })
 
       decision_id = decision.response["decision"]["id"]
       decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
 
       assert {:ok, _resolved, :created} =
-               command_current(
-                 fixture.goal.id,
-                 "resolve_decision",
-                 %{
-                   decision_id: decision_id,
-                   expected_decision_version: decision_version,
-                   option_id: "accept"
-                 },
-                 command_opts()
-               )
+               command_current(fixture.goal.id, "resolve_decision", %{
+                 decision_id: decision_id,
+                 expected_decision_version: decision_version,
+                 option_id: "accept"
+               })
 
       assert {:ok, _planned, :created} =
                command_current(
@@ -523,8 +486,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
                          case: :lower
                        ),
                    decision_id: decision_id
-                 },
-                 command_opts()
+                 }
                )
 
       item =
@@ -536,12 +498,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
         )
 
       assert {:ok, _active, :created} =
-               command_current(
-                 fixture.goal.id,
-                 "activate",
-                 %{approved_revision: 1},
-                 command_opts()
-               )
+               command_current(fixture.goal.id, "activate", %{approved_revision: 1})
 
       {:ok, goal} = Goals.fetch_goal(fixture.goal.id)
       Map.merge(fixture, %{goal: goal, item: item})
@@ -553,12 +510,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
       fixture = active_goal_fixture()
 
       assert {:ok, admitted, :created} =
-               command_current(
-                 fixture.goal.id,
-                 "admit_task",
-                 admission_payload(fixture.item),
-                 command_opts()
-               )
+               command_current(fixture.goal.id, "admit_task", admission_payload(fixture.item))
 
       Map.put(fixture, :task, Repo.get!(Task, admitted.response["task"]["id"]))
     end)

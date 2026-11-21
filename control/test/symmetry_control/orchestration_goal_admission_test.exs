@@ -452,7 +452,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
     assert run.runtime_id == runtime.id
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     session_attrs = %{
       local_handle_id: Ecto.UUID.generate(),
@@ -779,7 +779,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
     assert run.runtime_id == runtime.id
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     attrs = %{
       local_handle_id: Ecto.UUID.generate(),
@@ -1611,7 +1611,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("goal-pause-fail-closed")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -1869,7 +1869,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("revoke-superseded-pause")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    _fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    _fence = goal_claim(run, runtime, @now)
 
     pause_action_id = Ecto.UUID.generate()
     insert_goal_event(goal_id, pause_action_id, 1, "pause")
@@ -1940,7 +1940,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     reserved_session = Repo.get!(HarnessSession, retained_session.id)
     assert run.harness_binding_id == reserved_session.binding_id
 
-    fence = claim(run, retained_runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, retained_runtime, @now)
 
     assert {:ok, %{session: %{id: session_id, state: "busy"}}, :created} =
              Goals.attach_harness_session(
@@ -2031,7 +2031,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     refute run.harness_binding_id == retained_session.binding_id
     assert Repo.get!(HarnessSession, retained_session.id).binding_id == run.harness_binding_id
 
-    fence = claim(run, retained_runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, retained_runtime, @now)
 
     assert {:ok, %{session: %{id: session_id, harness_kind: "omp"}}, :created} =
              Goals.attach_harness_session(
@@ -2324,7 +2324,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^second_task.id), :count)
 
     first_fence =
-      claim(first_run, retained_runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+      goal_claim(first_run, retained_runtime, @now)
 
     assert {:ok, %{session: first_attachment}, :created} =
              Goals.attach_harness_session(
@@ -2412,7 +2412,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
     session = Repo.get!(HarnessSession, task.requested_session_id)
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, retained_runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, retained_runtime, @now)
     expired_at = DateTime.add(@now, 30, :second)
 
     assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
@@ -2568,7 +2568,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {_task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("post-command-authority")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2647,7 +2647,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("stale-control")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2691,7 +2691,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("stale-pause-transition")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2734,7 +2734,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("stale-pause-amend-transition")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2778,7 +2778,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("goal-pause-replay")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2845,7 +2845,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     runtime = enroll_and_register_runtime("goal-pause-controller")
     machine = Repo.get!(SymmetryControl.Orchestration.Machine, runtime.machine_id)
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2906,7 +2906,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("goal-pause-rollback")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -2951,7 +2951,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("goal-pause-identity")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -3043,7 +3043,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("goal-pause-no-native")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -3075,7 +3075,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert run.task_id == task.id
     assert run.runtime_id == runtime.id
 
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
@@ -3142,7 +3142,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
-    _fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    _fence = goal_claim(run, runtime, @now)
 
     assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
 
@@ -3177,7 +3177,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, _goal} = insert_goal_task(max_run_attempts: 1)
     runtime = enroll_and_register_runtime("retry")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "failed"}} =
              Orchestration.transition(run.id, fence, "failed", %{"stage" => "test"}, uuid(1),
@@ -3206,7 +3206,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, _goal} = insert_goal_task(max_run_attempts: 1)
     runtime = enroll_and_register_runtime("final-grace")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     expiry = DateTime.add(@now, 30, :second)
     assert %{expired_runs: 1} = Orchestration.expire(now: expiry)
@@ -3230,7 +3230,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, _goal} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("stale")
     assert {:ok, first_run} = Orchestration.assign_one(now: @now)
-    fence = claim(first_run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(first_run, runtime, @now)
 
     expiry = DateTime.add(@now, 30, :second)
     assert %{expired_runs: 1} = Orchestration.expire(now: expiry)
@@ -3259,7 +3259,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, _goal} = insert_goal_task(max_run_attempts: 2)
     runtime = enroll_and_register_runtime("terminal")
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+    fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(run.id, fence, "running", %{}, uuid(3), now: @now)
@@ -3311,7 +3311,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert {:ok, rolled_back_run} = Orchestration.assign_one(now: @now)
 
     rolled_back_fence =
-      claim(rolled_back_run, runtime, @now, claim_id: Ecto.UUID.generate(), via: Goals)
+      goal_claim(rolled_back_run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
              Orchestration.transition(

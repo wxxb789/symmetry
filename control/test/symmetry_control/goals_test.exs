@@ -25,6 +25,9 @@ defmodule SymmetryControl.GoalsTest do
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
   @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
+  use SymmetryControl.TestFixtures,
+    command_opts: [now: @now, validation_profiles: validation_profiles()]
+
   setup do
     previous_goals = Application.fetch_env!(:symmetry_control, :goals)
 
@@ -129,16 +132,11 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     assert {:error, {:invalid_contract, _}} =
-             command_current(
-               goal_id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 work_item_id: Ecto.UUID.generate(),
-                 subject_hash: decision_subject_hash
-               },
-               command_opts()
-             )
+             command_current(goal_id, "request_decision", %{
+               kind: "completion",
+               work_item_id: Ecto.UUID.generate(),
+               subject_hash: decision_subject_hash
+             })
 
     assert {:ok, receipt_replay, :replayed} =
              Goals.command(goal_id, command, "operator:test", now: @now)
@@ -147,15 +145,10 @@ defmodule SymmetryControl.GoalsTest do
     refute Map.has_key?(receipt.goal, :decisions)
 
     assert {:ok, _later_receipt, :created} =
-             command_current(
-               goal_id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 subject_hash: "sha256:" <> String.duplicate("b", 64)
-               },
-               command_opts()
-             )
+             command_current(goal_id, "request_decision", %{
+               kind: "completion",
+               subject_hash: "sha256:" <> String.duplicate("b", 64)
+             })
 
     assert {:ok, ^receipt, :replayed} =
              Goals.command(goal_id, command, "operator:test", now: @now)
@@ -244,11 +237,7 @@ defmodule SymmetryControl.GoalsTest do
     {blocked_goal, [first_item, _second_item]} = goal_with_items_fixture(blocker_policy, 2)
 
     assert {:ok, _admitted, :created} =
-             command_current(
-               blocked_goal.id,
-               "admit_task",
-               admission_payload(first_item),
-               command_opts(),
+             command_current(blocked_goal.id, "admit_task", admission_payload(first_item),
                rollout_enabled: true
              )
 
@@ -387,15 +376,10 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     assert {:error, :state_conflict} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 subject_hash: "sha256:" <> String.duplicate("a", 64)
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "completion",
+               subject_hash: "sha256:" <> String.duplicate("a", 64)
+             })
   end
 
   test "commands recheck exact replay after the Goal lock before semantic validation" do
@@ -663,30 +647,20 @@ defmodule SymmetryControl.GoalsTest do
              Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
 
     assert {:ok, _decision_receipt, :created} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 subject_hash: "sha256:" <> String.duplicate("a", 64)
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "completion",
+               subject_hash: "sha256:" <> String.duplicate("a", 64)
+             })
 
     assert fetch_goal!(created.goal.id).decisions |> Enum.any?(&(&1.state == "open"))
 
     revision_contract = amended_revision_contract("Amended objective")
 
     assert {:ok, amended, :created} =
-             command_current(
-               created.goal.id,
-               "amend",
-               %{
-                 revision_contract: revision_contract,
-                 reason: "Scope was clarified"
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "amend", %{
+               revision_contract: revision_contract,
+               reason: "Scope was clarified"
+             })
 
     assert amended.goal.state == "paused"
     assert amended.goal.current_revision == 2
@@ -701,16 +675,11 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, _task} = admitted_task_fixture()
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract:
-                   amended_revision_contract("A revised plan requires new admitted work."),
-                 reason: "The prior revision is retained as history."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract:
+                 amended_revision_contract("A revised plan requires new admitted work."),
+               reason: "The prior revision is retained as history."
+             })
 
     proposal = %{
       schema_version: "symmetry.plan.v1",
@@ -735,34 +704,24 @@ defmodule SymmetryControl.GoalsTest do
     }
 
     assert {:ok, decision, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept the revised plan?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Admit revised work"}
-                 ],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept the revised plan?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Admit revised work"}
+               ],
+               proposal: proposal
+             })
 
     decision_id = decision.response["decision"]["id"]
     decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version: decision_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version: decision_version,
+               option_id: "accept"
+             })
 
     assert {:ok, _planned, :created} =
              command_current(
@@ -775,7 +734,6 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -810,15 +768,10 @@ defmodule SymmetryControl.GoalsTest do
     revision_contract = amended_revision_contract("Do not reset spent admissions on amendment.")
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: revision_contract,
-                 reason: "Continue within the original Goal budget."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: revision_contract,
+               reason: "Continue within the original Goal budget."
+             })
 
     proposal = %{
       schema_version: "symmetry.plan.v1",
@@ -843,34 +796,24 @@ defmodule SymmetryControl.GoalsTest do
     }
 
     assert {:ok, decision, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept the revised plan?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Admit revised work"}
-                 ],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept the revised plan?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Admit revised work"}
+               ],
+               proposal: proposal
+             })
 
     decision_id = decision.response["decision"]["id"]
     decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version: decision_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version: decision_version,
+               option_id: "accept"
+             })
 
     assert {:ok, _planned, :created} =
              command_current(
@@ -883,26 +826,19 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
 
     [revised_item] = fetch_goal!(goal.id).work_items
 
     assert {:ok, _resumed, :created} =
-             command_current(
-               goal.id,
-               "resume",
-               %{reason: "Revised work is approved."},
-               command_opts()
-             )
+             command_current(goal.id, "resume", %{reason: "Revised work is approved."})
 
     assert {:error, :admission_limit_reached} =
              command_current(
                goal.id,
                "admit_task",
                admission_payload(revised_item, %{reserved_microusd: 1}),
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -995,15 +931,10 @@ defmodule SymmetryControl.GoalsTest do
       ])
 
     assert {:error, {:invalid_contract, :invalid_commit_path}} =
-             command_current(
-               created.goal.id,
-               "amend",
-               %{
-                 revision_contract: overlong_amendment,
-                 reason: "The path exceeds the codepoint bound."
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "amend", %{
+               revision_contract: overlong_amendment,
+               reason: "The path exceeds the codepoint bound."
+             })
 
     assert fetch_goal!(created.goal.id).current_revision == 1
 
@@ -1043,17 +974,12 @@ defmodule SymmetryControl.GoalsTest do
     }
 
     assert {:error, {:invalid_contract, _}} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept this plan?",
-                 options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
-                 proposal: %{items: "not-an-array"}
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this plan?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
+               proposal: %{items: "not-an-array"}
+             })
 
     malformed = [
       %{items: [Map.put(item, :unreviewed, true)]},
@@ -1091,33 +1017,23 @@ defmodule SymmetryControl.GoalsTest do
 
     for proposal <- Enum.drop(malformed, -1) do
       assert {:error, {:invalid_contract, _}} =
-               command_current(
-                 created.goal.id,
-                 "request_decision",
-                 %{
-                   kind: "plan",
-                   question: "Accept this plan?",
-                   options: [
-                     %{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}
-                   ],
-                   proposal: proposal
-                 },
-                 command_opts()
-               )
+               command_current(created.goal.id, "request_decision", %{
+                 kind: "plan",
+                 question: "Accept this plan?",
+                 options: [
+                   %{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}
+                 ],
+                 proposal: proposal
+               })
     end
 
     assert {:error, :invalid_plan} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept this plan?",
-                 options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
-                 proposal: List.last(malformed)
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this plan?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
+               proposal: List.last(malformed)
+             })
   end
 
   test "plan command item type errors remain invalid contracts for both command kinds" do
@@ -1129,17 +1045,12 @@ defmodule SymmetryControl.GoalsTest do
     malformed_proposal = %{items: [nil]}
 
     assert {:error, {:invalid_contract, _}} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept this plan?",
-                 options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
-                 proposal: malformed_proposal
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this plan?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
+               proposal: malformed_proposal
+             })
 
     assert {:error, {:invalid_contract, _}} =
              command_current(
@@ -1150,7 +1061,6 @@ defmodule SymmetryControl.GoalsTest do
                  proposal_hash: "sha256:" <> String.duplicate("0", 64),
                  decision_id: Ecto.UUID.generate()
                },
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -1192,34 +1102,24 @@ defmodule SymmetryControl.GoalsTest do
     }
 
     assert {:ok, plan_decision, :created} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept this bounded plan?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the items"}
-                 ],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this bounded plan?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the items"}
+               ],
+               proposal: proposal
+             })
 
     plan_decision_id = plan_decision.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               created.goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: plan_decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, plan_decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "resolve_decision", %{
+               decision_id: plan_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, plan_decision_id).lock_version,
+               option_id: "accept"
+             })
 
     assert {:ok, _planned, :created} =
              command_current(
@@ -1232,7 +1132,6 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
                  decision_id: plan_decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -1241,110 +1140,75 @@ defmodule SymmetryControl.GoalsTest do
     second = Map.fetch!(items_by_title, "second work")
 
     assert {:ok, scope_decision, :created} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "scope",
-                 question: "Change this dependency?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Remove dependency"}
-                 ],
-                 work_item_id: first.id,
-                 depends_on_id: second.id,
-                 dependency_operation: "remove_dependency"
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "scope",
+               question: "Change this dependency?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Remove dependency"}
+               ],
+               work_item_id: first.id,
+               depends_on_id: second.id,
+               dependency_operation: "remove_dependency"
+             })
 
     scope_decision_id = scope_decision.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               created.goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: scope_decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, scope_decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "resolve_decision", %{
+               decision_id: scope_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, scope_decision_id).lock_version,
+               option_id: "accept"
+             })
 
     assert {:error, :invalid_decision} =
-             command_current(
-               created.goal.id,
-               "add_dependency",
-               %{
-                 work_item_id: first.id,
-                 depends_on_id: second.id,
-                 decision_id: scope_decision_id
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: first.id,
+               depends_on_id: second.id,
+               decision_id: scope_decision_id
+             })
 
     assert {:error, :invalid_decision} =
-             command_current(
-               created.goal.id,
-               "add_dependency",
-               %{
-                 work_item_id: second.id,
-                 depends_on_id: first.id,
-                 decision_id: scope_decision_id
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: second.id,
+               depends_on_id: first.id,
+               decision_id: scope_decision_id
+             })
 
     assert Repo.aggregate(SymmetryControl.Goals.WorkDependency, :count) == 1
 
     assert {:ok, baseline_scope_decision, :created} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "scope",
-                 question: "Remove the immutable baseline dependency?",
-                 options: [
-                   %{
-                     "id" => "accept",
-                     "label" => "Accept",
-                     "consequence" => "Attempt to remove the baseline"
-                   }
-                 ],
-                 work_item_id: second.id,
-                 depends_on_id: first.id,
-                 dependency_operation: "remove_dependency"
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "scope",
+               question: "Remove the immutable baseline dependency?",
+               options: [
+                 %{
+                   "id" => "accept",
+                   "label" => "Accept",
+                   "consequence" => "Attempt to remove the baseline"
+                 }
+               ],
+               work_item_id: second.id,
+               depends_on_id: first.id,
+               dependency_operation: "remove_dependency"
+             })
 
     baseline_scope_decision_id = baseline_scope_decision.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               created.goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: baseline_scope_decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, baseline_scope_decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "resolve_decision", %{
+               decision_id: baseline_scope_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, baseline_scope_decision_id).lock_version,
+               option_id: "accept"
+             })
 
     assert {:error, :invalid_plan} =
-             command_current(
-               created.goal.id,
-               "remove_dependency",
-               %{
-                 work_item_id: second.id,
-                 depends_on_id: first.id,
-                 decision_id: baseline_scope_decision_id
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "remove_dependency", %{
+               work_item_id: second.id,
+               depends_on_id: first.id,
+               decision_id: baseline_scope_decision_id
+             })
 
     assert Repo.aggregate(SymmetryControl.Goals.WorkDependency, :count) == 1
   end
@@ -1383,79 +1247,59 @@ defmodule SymmetryControl.GoalsTest do
     integration = Map.fetch!(items_by_title, "integration work")
 
     assert {:ok, _receipt, :created} =
-             command_current(
-               created.goal.id,
-               "add_dependency",
-               %{
-                 work_item_id: second.id,
-                 depends_on_id: first.id,
-                 decision_id:
-                   approve_dependency_change!(
-                     created.goal.id,
-                     second.id,
-                     first.id,
-                     "add_dependency"
-                   )
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: second.id,
+               depends_on_id: first.id,
+               decision_id:
+                 approve_dependency_change!(
+                   created.goal.id,
+                   second.id,
+                   first.id,
+                   "add_dependency"
+                 )
+             })
 
     assert {:ok, _receipt, :created} =
-             command_current(
-               created.goal.id,
-               "add_dependency",
-               %{
-                 work_item_id: integration.id,
-                 depends_on_id: second.id,
-                 decision_id:
-                   approve_dependency_change!(
-                     created.goal.id,
-                     integration.id,
-                     second.id,
-                     "add_dependency"
-                   )
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: integration.id,
+               depends_on_id: second.id,
+               decision_id:
+                 approve_dependency_change!(
+                   created.goal.id,
+                   integration.id,
+                   second.id,
+                   "add_dependency"
+                 )
+             })
 
     # These commands are equivalent to two contenders reaching the Goal lock
     # in either order: the first valid edge persists and its inverse closes a
     # cycle, while the already-admitted chain remains usable.
     assert {:error, :dependency_cycle} =
-             command_current(
-               created.goal.id,
-               "add_dependency",
-               %{
-                 work_item_id: first.id,
-                 depends_on_id: second.id,
-                 decision_id:
-                   approve_dependency_change!(
-                     created.goal.id,
-                     first.id,
-                     second.id,
-                     "add_dependency"
-                   )
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: first.id,
+               depends_on_id: second.id,
+               decision_id:
+                 approve_dependency_change!(
+                   created.goal.id,
+                   first.id,
+                   second.id,
+                   "add_dependency"
+                 )
+             })
 
     assert {:error, :dependency_cycle} =
-             command_current(
-               created.goal.id,
-               "add_dependency",
-               %{
-                 work_item_id: first.id,
-                 depends_on_id: integration.id,
-                 decision_id:
-                   approve_dependency_change!(
-                     created.goal.id,
-                     first.id,
-                     integration.id,
-                     "add_dependency"
-                   )
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: first.id,
+               depends_on_id: integration.id,
+               decision_id:
+                 approve_dependency_change!(
+                   created.goal.id,
+                   first.id,
+                   integration.id,
+                   "add_dependency"
+                 )
+             })
 
     assert Repo.aggregate(SymmetryControl.Goals.WorkDependency, :count) == 2
   end
@@ -1469,27 +1313,17 @@ defmodule SymmetryControl.GoalsTest do
     subject_hash = "sha256:" <> String.duplicate("a", 64)
 
     assert {:error, {:invalid_contract, _}} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 work_item_id: Ecto.UUID.generate(),
-                 subject_hash: subject_hash
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "completion",
+               work_item_id: Ecto.UUID.generate(),
+               subject_hash: subject_hash
+             })
 
     assert {:ok, decision, :created} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 subject_hash: subject_hash
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "completion",
+               subject_hash: subject_hash
+             })
 
     decision_id = decision.response["decision"]["id"]
     decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
@@ -1520,21 +1354,16 @@ defmodule SymmetryControl.GoalsTest do
           }
         ] do
       assert {:error, {:invalid_contract, _}} =
-               command_current(created.goal.id, "resolve_decision", payload, command_opts())
+               command_current(created.goal.id, "resolve_decision", payload)
     end
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               created.goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version: decision_version,
-                 option_id: "accept",
-                 comment: "The bounded completion is approved."
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version: decision_version,
+               option_id: "accept",
+               comment: "The bounded completion is approved."
+             })
 
     assert Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).resolution == %{
              "option_id" => "accept",
@@ -1576,38 +1405,28 @@ defmodule SymmetryControl.GoalsTest do
     }
 
     assert {:ok, decision, :created} =
-             command_current(
-               goal_id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept this bounded plan?",
-                 options: [
-                   %{
-                     "id" => "accept",
-                     "label" => "Accept",
-                     "consequence" => "Admit exactly this item"
-                   }
-                 ],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(goal_id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this bounded plan?",
+               options: [
+                 %{
+                   "id" => "accept",
+                   "label" => "Accept",
+                   "consequence" => "Admit exactly this item"
+                 }
+               ],
+               proposal: proposal
+             })
 
     decision_id = decision.response["decision"]["id"]
     decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal_id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version: decision_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal_id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version: decision_version,
+               option_id: "accept"
+             })
 
     assert {:ok, _planned, :created} =
              command_current(
@@ -1620,7 +1439,6 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -1635,7 +1453,6 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :upper),
                  decision_id: decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -1644,7 +1461,6 @@ defmodule SymmetryControl.GoalsTest do
                goal_id,
                "accept_plan",
                %{proposal: proposal, proposal_hash: 42, decision_id: decision_id},
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -1654,14 +1470,13 @@ defmodule SymmetryControl.GoalsTest do
     assert Repo.get!(SymmetryControl.Workspaces.WorkItem, item.id).integration
 
     assert {:ok, _active, :created} =
-             command_current(goal_id, "activate", %{approved_revision: 1}, command_opts())
+             command_current(goal_id, "activate", %{approved_revision: 1})
 
     assert {:ok, admitted, :created} =
              command_current(
                goal_id,
                "admit_task",
                admission_payload(item, %{reserved_microusd: 42}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -1755,14 +1570,13 @@ defmodule SymmetryControl.GoalsTest do
     assert hd(projected.work_items).change_target == Repo.get!(WorkItem, item.id).change_target
 
     assert {:ok, _active, :created} =
-             command_current(created.goal.id, "activate", %{approved_revision: 1}, command_opts())
+             command_current(created.goal.id, "activate", %{approved_revision: 1})
 
     assert {:ok, admitted, :created} =
              command_current(
                created.goal.id,
                "admit_task",
                admission_payload(item),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -1818,34 +1632,24 @@ defmodule SymmetryControl.GoalsTest do
       ])
 
     assert {:ok, decision, :created} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept this bounded provider plan?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the plan"}
-                 ],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this bounded provider plan?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the plan"}
+               ],
+               proposal: proposal
+             })
 
     decision_id = decision.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               created.goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+               option_id: "accept"
+             })
 
     assert {:error, :invalid_plan} =
              command_current(
@@ -1858,7 +1662,6 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -1916,7 +1719,7 @@ defmodule SymmetryControl.GoalsTest do
     [item] = fetch_goal!(created.goal.id).work_items
 
     assert {:ok, _active, :created} =
-             command_current(created.goal.id, "activate", %{approved_revision: 1}, command_opts())
+             command_current(created.goal.id, "activate", %{approved_revision: 1})
 
     Repo.update_all(
       from(connection in SymmetryControl.Integrations.Connection,
@@ -1930,7 +1733,6 @@ defmodule SymmetryControl.GoalsTest do
                created.goal.id,
                "admit_task",
                admission_payload(item, %{purpose: "chat"}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -2016,7 +1818,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "fresh",
                  requested_session_id: nil
                },
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -2050,7 +1851,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "fresh",
                  requested_session_id: nil
                },
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -2156,7 +1956,6 @@ defmodule SymmetryControl.GoalsTest do
                  revision_contract: amended_revision_contract("A profile-less amendment."),
                  reason: "The configured validator profile is unavailable."
                },
-               command_opts(),
                validation_profiles: []
              )
 
@@ -2283,34 +2082,24 @@ defmodule SymmetryControl.GoalsTest do
       ])
 
     assert {:ok, decision, :created} =
-             command_current(
-               goal_id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept the single-required plan?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the plan"}
-                 ],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(goal_id, "request_decision", %{
+               kind: "plan",
+               question: "Accept the single-required plan?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the plan"}
+               ],
+               proposal: proposal
+             })
 
     decision_id = decision.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal_id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal_id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+               option_id: "accept"
+             })
 
     authorized_hash =
       "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower)
@@ -2360,7 +2149,6 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(tampered), case: :lower),
                  decision_id: decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -2511,22 +2299,16 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "fresh",
                  requested_session_id: nil
                },
-               command_opts(),
                rollout_enabled: true
              )
 
     task = Repo.get!(Task, admitted.response["task"]["id"])
 
     assert {:ok, amended, :created} =
-             command_current(
-               created.goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("A later approved objective."),
-                 reason: "Supersede the planning attempt."
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "amend", %{
+               revision_contract: amended_revision_contract("A later approved objective."),
+               reason: "Supersede the planning attempt."
+             })
 
     runtime = plan_runtime_fixture(repository)
     {run, _fence} = completed_goal_run_fixture(task, runtime)
@@ -2592,8 +2374,7 @@ defmodule SymmetryControl.GoalsTest do
                reason: "A producer result alone is not acceptance"
              })
 
-    assert {:error, {:invalid_contract, _}} =
-             command_current(goal.id, "achieve", %{}, command_opts())
+    assert {:error, {:invalid_contract, _}} = command_current(goal.id, "achieve", %{})
   end
 
   test "manual admission rejects caller-derived fields and binds its key to the command mutation" do
@@ -2623,7 +2404,6 @@ defmodule SymmetryControl.GoalsTest do
                  goal.id,
                  "admit_task",
                  Map.put(admission_payload(item), field, value),
-                 command_opts(),
                  rollout_enabled: true
                )
     end
@@ -2661,7 +2441,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                Map.put(admission_payload(item), :validation_of_task_id, Ecto.UUID.generate()),
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -2712,7 +2491,6 @@ defmodule SymmetryControl.GoalsTest do
                  reserved_microusd: 0
                })
                |> Map.put(:subject, candidate_subject),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -2725,7 +2503,6 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -2796,7 +2573,6 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: validation.id,
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -2832,52 +2608,37 @@ defmodule SymmetryControl.GoalsTest do
     refute "final_acceptance_required" in pre_achieve.blocker_reasons
 
     assert {:error, {:invalid_contract, _}} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 work_item_id: item.id,
-                 subject_hash: evidence.subject_hash,
-                 question: "Accept one work item?",
-                 options: [
-                   %{
-                     "id" => "accept",
-                     "label" => "Accept",
-                     "consequence" => "Mark the Goal achieved"
-                   }
-                 ]
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               work_item_id: item.id,
+               subject_hash: evidence.subject_hash,
+               question: "Accept one work item?",
+               options: [
+                 %{
+                   "id" => "accept",
+                   "label" => "Accept",
+                   "consequence" => "Mark the Goal achieved"
+                 }
+               ]
+             })
 
     assert {:ok, completion_request, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 work_item_id: nil,
-                 subject_hash: evidence.subject_hash,
-                 proposal: nil
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               work_item_id: nil,
+               subject_hash: evidence.subject_hash,
+               proposal: nil
+             })
 
     decision_id = completion_request.response["decision"]["id"]
     decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version: decision_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version: decision_version,
+               option_id: "accept"
+             })
 
     weaker_evidence =
       %SymmetryControl.Goals.RunEvidence{}
@@ -2895,78 +2656,53 @@ defmodule SymmetryControl.GoalsTest do
       |> Repo.insert!()
 
     assert {:error, :missing_evidence} =
-             command_current(
-               goal.id,
-               "achieve",
-               %{
-                 subject: evidence.subject,
-                 integration_work_item_id: item.id,
-                 evidence_ids: [weaker_evidence.id],
-                 decision_id: decision_id
-               },
-               command_opts()
-             )
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: item.id,
+               evidence_ids: [weaker_evidence.id],
+               decision_id: decision_id
+             })
 
     assert {:ok, review_request, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "review",
-                 work_item_id: item.id,
-                 subject_hash: evidence.subject_hash,
-                 question: "Accept one WorkItem?",
-                 options: [
-                   %{
-                     "id" => "accept",
-                     "label" => "Accept",
-                     "consequence" => "Accept the validated WorkItem"
-                   }
-                 ]
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "review",
+               work_item_id: item.id,
+               subject_hash: evidence.subject_hash,
+               question: "Accept one WorkItem?",
+               options: [
+                 %{
+                   "id" => "accept",
+                   "label" => "Accept",
+                   "consequence" => "Accept the validated WorkItem"
+                 }
+               ]
+             })
 
     review_decision_id = review_request.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: review_decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, review_decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: review_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, review_decision_id).lock_version,
+               option_id: "accept"
+             })
 
     assert {:error, :invalid_decision} =
-             command_current(
-               goal.id,
-               "achieve",
-               %{
-                 subject: evidence.subject,
-                 integration_work_item_id: item.id,
-                 evidence_ids: [stored_evidence.id],
-                 decision_id: review_decision_id
-               },
-               command_opts()
-             )
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: item.id,
+               evidence_ids: [stored_evidence.id],
+               decision_id: review_decision_id
+             })
 
     assert {:error, :integration_outcome_required} =
-             command_current(
-               goal.id,
-               "achieve",
-               %{
-                 subject: evidence.subject,
-                 integration_work_item_id: Ecto.UUID.generate(),
-                 evidence_ids: [stored_evidence.id],
-                 decision_id: decision_id
-               },
-               command_opts()
-             )
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: Ecto.UUID.generate(),
+               evidence_ids: [stored_evidence.id],
+               decision_id: decision_id
+             })
 
     optional_dependency = optional_goal_work_item!(goal, item, "Optional prerequisite")
     optional_follow_up = optional_goal_work_item!(goal, item, "Optional follow-up")
@@ -2984,7 +2720,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                admission_payload(optional_dependency),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -2996,17 +2731,12 @@ defmodule SymmetryControl.GoalsTest do
     insert_accepted_work_outcome!(goal, optional_dependency.id, optional_run, candidate_subject)
 
     assert {:error, :integration_outcome_required} =
-             command_current(
-               goal.id,
-               "achieve",
-               %{
-                 subject: evidence.subject,
-                 integration_work_item_id: optional_dependency.id,
-                 evidence_ids: [stored_evidence.id],
-                 decision_id: decision_id
-               },
-               command_opts()
-             )
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: optional_dependency.id,
+               evidence_ids: [stored_evidence.id],
+               decision_id: decision_id
+             })
 
     achieve_payload = %{
       subject: evidence.subject,
@@ -3146,30 +2876,20 @@ defmodule SymmetryControl.GoalsTest do
       )
 
     assert {:ok, completion_request, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 subject_hash: evidence.subject_hash
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               subject_hash: evidence.subject_hash
+             })
 
     rejected_decision_id = completion_request.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: rejected_decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, rejected_decision_id).lock_version,
-                 option_id: "reject"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: rejected_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, rejected_decision_id).lock_version,
+               option_id: "reject"
+             })
 
     projection = fetch_goal!(goal.id)
 
@@ -3191,17 +2911,11 @@ defmodule SymmetryControl.GoalsTest do
              command_current(
                goal.id,
                "achieve",
-               Map.put(achieve_payload, :decision_id, rejected_decision_id),
-               command_opts()
+               Map.put(achieve_payload, :decision_id, rejected_decision_id)
              )
 
     assert {:error, :invalid_decision} =
-             command_current(
-               goal.id,
-               "achieve",
-               Map.put(achieve_payload, :decision_id, nil),
-               command_opts()
-             )
+             command_current(goal.id, "achieve", Map.put(achieve_payload, :decision_id, nil))
   end
 
   test "an amendment releases a rejected completion Subject for the revised revision" do
@@ -3222,30 +2936,20 @@ defmodule SymmetryControl.GoalsTest do
       )
 
     assert {:ok, completion_request, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 subject_hash: evidence.subject_hash
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               subject_hash: evidence.subject_hash
+             })
 
     rejected_decision_id = completion_request.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: rejected_decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, rejected_decision_id).lock_version,
-                 option_id: "reject"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: rejected_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, rejected_decision_id).lock_version,
+               option_id: "reject"
+             })
 
     resource_id = item_repository_resource_id(item)
 
@@ -3265,15 +2969,10 @@ defmodule SymmetryControl.GoalsTest do
       end)
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: revision_contract,
-                 reason: "The prior rejection is bound to the prior revision."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: revision_contract,
+               reason: "The prior rejection is bound to the prior revision."
+             })
 
     assert amended.goal.state == "paused"
     assert amended.goal.current_revision == 2
@@ -3305,19 +3004,13 @@ defmodule SymmetryControl.GoalsTest do
     [revised_item] = fetch_goal!(goal.id).work_items
 
     assert {:ok, _resumed, :created} =
-             command_current(
-               goal.id,
-               "resume",
-               %{reason: "Revised work is approved."},
-               command_opts()
-             )
+             command_current(goal.id, "resume", %{reason: "Revised work is approved."})
 
     assert {:ok, admitted, :created} =
              command_current(
                goal.id,
                "admit_task",
                admission_payload(revised_item, %{reserved_microusd: 42}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -3338,7 +3031,6 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: revised_producer.id,
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -3372,30 +3064,20 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     assert {:ok, accept_request, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 subject_hash: revised_evidence.subject_hash
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               subject_hash: revised_evidence.subject_hash
+             })
 
     accept_decision_id = accept_request.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: accept_decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, accept_decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: accept_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, accept_decision_id).lock_version,
+               option_id: "accept"
+             })
 
     projection = fetch_goal!(goal.id)
 
@@ -3520,7 +3202,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                admission_payload(conflicting, %{reserved_microusd: 42}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -3542,16 +3223,11 @@ defmodule SymmetryControl.GoalsTest do
     refute "achieve" in projection.allowed_actions
 
     assert {:error, :invalid_plan} =
-             command_current(
-               goal.id,
-               "achieve",
-               %{
-                 subject: evidence.subject,
-                 evidence_ids: [stored_evidence.id],
-                 decision_id: nil
-               },
-               command_opts()
-             )
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               evidence_ids: [stored_evidence.id],
+               decision_id: nil
+             })
   end
 
   test "a legacy unmarked single-required plan achieves without the payload field" do
@@ -3602,29 +3278,19 @@ defmodule SymmetryControl.GoalsTest do
     subject = candidate_subject(item_repository_resource_id(integration_item))
 
     assert {:error, :invalid_request} =
-             command_current(
-               goal.id,
-               "achieve",
-               %{
-                 subject: subject,
-                 evidence_ids: [],
-                 decision_id: nil
-               },
-               command_opts()
-             )
+             command_current(goal.id, "achieve", %{
+               subject: subject,
+               evidence_ids: [],
+               decision_id: nil
+             })
 
     assert {:error, :integration_outcome_required} =
-             command_current(
-               goal.id,
-               "achieve",
-               %{
-                 subject: subject,
-                 integration_work_item_id: other_item.id,
-                 evidence_ids: [],
-                 decision_id: nil
-               },
-               command_opts()
-             )
+             command_current(goal.id, "achieve", %{
+               subject: subject,
+               integration_work_item_id: other_item.id,
+               evidence_ids: [],
+               decision_id: nil
+             })
   end
 
   test "a multi-required plan refuses an omitted integration payload as an invalid request" do
@@ -3635,16 +3301,11 @@ defmodule SymmetryControl.GoalsTest do
     subject = candidate_subject(item_repository_resource_id(integration_item))
 
     assert {:error, :invalid_request} =
-             command_current(
-               goal.id,
-               "achieve",
-               %{
-                 subject: subject,
-                 evidence_ids: [],
-                 decision_id: nil
-               },
-               command_opts()
-             )
+             command_current(goal.id, "achieve", %{
+               subject: subject,
+               evidence_ids: [],
+               decision_id: nil
+             })
 
     assert fetch_goal!(goal.id).state == "active"
   end
@@ -3692,17 +3353,12 @@ defmodule SymmetryControl.GoalsTest do
            )
 
     assert {:ok, achieved, :created} =
-             command_current(
-               goal.id,
-               "achieve",
-               %{
-                 subject: evidence.subject,
-                 integration_work_item_id: item.id,
-                 evidence_ids: [stored_evidence.id],
-                 decision_id: nil
-               },
-               command_opts()
-             )
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: item.id,
+               evidence_ids: [stored_evidence.id],
+               decision_id: nil
+             })
 
     assert achieved.goal.state == "achieved"
   end
@@ -3729,15 +3385,10 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, _task} = admitted_task_fixture()
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("Revised acceptance subject."),
-                 reason: "Scope changed"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: amended_revision_contract("Revised acceptance subject."),
+               reason: "Scope changed"
+             })
 
     assert amended.goal.current_revision == goal.current_revision + 1
 
@@ -3770,7 +3421,7 @@ defmodule SymmetryControl.GoalsTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert {:error, :already_accepted} =
-             command_current(goal.id, "admit_task", admission_payload(item), command_opts(),
+             command_current(goal.id, "admit_task", admission_payload(item),
                rollout_enabled: true
              )
   end
@@ -3864,15 +3515,10 @@ defmodule SymmetryControl.GoalsTest do
     subject_hash = evidence_subject_hash(candidate_subject)
 
     assert {:ok, completion, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "completion",
-                 subject_hash: subject_hash
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               subject_hash: subject_hash
+             })
 
     completion_id = completion.response["decision"]["id"]
 
@@ -3886,7 +3532,6 @@ defmodule SymmetryControl.GoalsTest do
                    Repo.get!(SymmetryControl.Goals.GoalDecision, completion_id).lock_version,
                  option_id: "accept"
                },
-               command_opts(),
                now: DateTime.add(@now, 1, :second)
              )
 
@@ -3894,42 +3539,32 @@ defmodule SymmetryControl.GoalsTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert {:error, {:invalid_contract, _}} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "review",
-                 subject_hash: subject_hash,
-                 question: "Accept without an item?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Incorrect scope"}
-                 ]
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "review",
+               subject_hash: subject_hash,
+               question: "Accept without an item?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Incorrect scope"}
+               ]
+             })
 
     assert {:ok, ^original_settlement_receipt} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert {:ok, wrong_subject_review, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "review",
-                 work_item_id: item.id,
-                 subject_hash:
-                   evidence_subject_hash(%{
-                     candidate_subject
-                     | "commit" => String.duplicate("e", 40)
-                   }),
-                 question: "Accept the wrong subject?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Incorrect subject"}
-                 ]
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "review",
+               work_item_id: item.id,
+               subject_hash:
+                 evidence_subject_hash(%{
+                   candidate_subject
+                   | "commit" => String.duplicate("e", 40)
+                 }),
+               question: "Accept the wrong subject?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Incorrect subject"}
+               ]
+             })
 
     wrong_subject_review_id = wrong_subject_review.response["decision"]["id"]
 
@@ -3943,7 +3578,6 @@ defmodule SymmetryControl.GoalsTest do
                    Repo.get!(SymmetryControl.Goals.GoalDecision, wrong_subject_review_id).lock_version,
                  option_id: "accept"
                },
-               command_opts(),
                now: DateTime.add(@now, 3, :second)
              )
 
@@ -3961,20 +3595,13 @@ defmodule SymmetryControl.GoalsTest do
     delete_goal_wakeup_jobs(goal.id)
 
     assert {:ok, scoped_review, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "review",
-                 work_item_id: item.id,
-                 subject_hash: subject_hash,
-                 question: "Accept this validated WorkItem?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Accept work"}
-                 ]
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "review",
+               work_item_id: item.id,
+               subject_hash: subject_hash,
+               question: "Accept this validated WorkItem?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Accept work"}]
+             })
 
     scoped_review_id = scoped_review.response["decision"]["id"]
     assert {:ok, current_goal} = Goals.fetch_goal(goal.id)
@@ -4082,36 +3709,26 @@ defmodule SymmetryControl.GoalsTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert {:ok, review, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "review",
-                 work_item_id: item.id,
-                 subject_hash: evidence_subject_hash(candidate_subject),
-                 question: "Reject this validated WorkItem?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Accept work"},
-                   %{"id" => "reject", "label" => "Reject", "consequence" => "Keep work open"}
-                 ]
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "review",
+               work_item_id: item.id,
+               subject_hash: evidence_subject_hash(candidate_subject),
+               question: "Reject this validated WorkItem?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Accept work"},
+                 %{"id" => "reject", "label" => "Reject", "consequence" => "Keep work open"}
+               ]
+             })
 
     review_id = review.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: review_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, review_id).lock_version,
-                 option_id: "reject"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: review_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, review_id).lock_version,
+               option_id: "reject"
+             })
 
     assert :ok = WakeupWorker.perform(%Oban.Job{args: %{"goal_id" => goal.id}})
     assert :ok = WakeupWorker.perform(%Oban.Job{args: %{"goal_id" => goal.id}})
@@ -4174,35 +3791,23 @@ defmodule SymmetryControl.GoalsTest do
     insert_accepted_work_outcome!(goal, item.id, producer_run, accepted_subject)
 
     assert {:ok, review, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "review",
-                 work_item_id: item.id,
-                 subject_hash: evidence_subject_hash(candidate_subject),
-                 question: "Accept this validated WorkItem?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Accept work"}
-                 ]
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "review",
+               work_item_id: item.id,
+               subject_hash: evidence_subject_hash(candidate_subject),
+               question: "Accept this validated WorkItem?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Accept work"}]
+             })
 
     review_id = review.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: review_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, review_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: review_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, review_id).lock_version,
+               option_id: "accept"
+             })
 
     validation_id = validation.id
 
@@ -4257,39 +3862,29 @@ defmodule SymmetryControl.GoalsTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert {:ok, scoped_review, :created} =
-             command_current(
-               goal.id,
-               "request_decision",
-               %{
-                 kind: "review",
-                 work_item_id: item.id,
-                 subject_hash: evidence_subject_hash(candidate_subject),
-                 question: "Accept failed work?",
-                 options: [
-                   %{
-                     "id" => "accept",
-                     "label" => "Accept",
-                     "consequence" => "Must not override failure"
-                   }
-                 ]
-               },
-               command_opts()
-             )
+             command_current(goal.id, "request_decision", %{
+               kind: "review",
+               work_item_id: item.id,
+               subject_hash: evidence_subject_hash(candidate_subject),
+               question: "Accept failed work?",
+               options: [
+                 %{
+                   "id" => "accept",
+                   "label" => "Accept",
+                   "consequence" => "Must not override failure"
+                 }
+               ]
+             })
 
     scoped_review_id = scoped_review.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: scoped_review_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, scoped_review_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: scoped_review_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, scoped_review_id).lock_version,
+               option_id: "accept"
+             })
 
     assert Repo.aggregate(
              from(outcome in SymmetryControl.Goals.WorkOutcome,
@@ -4432,7 +4027,6 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -4639,12 +4233,7 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     assert {:ok, _paused, :created} =
-             command_current(
-               goal.id,
-               "pause",
-               %{reason: "Pause before validation settlement."},
-               command_opts()
-             )
+             command_current(goal.id, "pause", %{reason: "Pause before validation settlement."})
 
     delete_goal_wakeup_jobs(goal.id)
 
@@ -4677,12 +4266,7 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     assert {:ok, _paused, :created} =
-             command_current(
-               goal.id,
-               "pause",
-               %{reason: "Pause before validation settlement."},
-               command_opts()
-             )
+             command_current(goal.id, "pause", %{reason: "Pause before validation settlement."})
 
     delete_goal_wakeup_jobs(goal.id)
 
@@ -4721,15 +4305,10 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("A new approved revision."),
-                 reason: "Supersede the failed validation."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: amended_revision_contract("A new approved revision."),
+               reason: "Supersede the failed validation."
+             })
 
     assert amended.goal.current_revision == goal.current_revision + 1
 
@@ -4801,7 +4380,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                admission_payload(item, %{reserved_microusd: 0}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -4843,7 +4421,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                admission_payload(item, %{reserved_microusd: 0}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -4897,12 +4474,7 @@ defmodule SymmetryControl.GoalsTest do
     on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
 
     assert {:ok, _paused, :created} =
-             command_current(
-               goal.id,
-               "pause",
-               %{reason: "Pause before recovery."},
-               command_opts()
-             )
+             command_current(goal.id, "pause", %{reason: "Pause before recovery."})
 
     assert :ok = WakeupWorker.perform(%Oban.Job{args: %{}})
 
@@ -4966,9 +4538,7 @@ defmodule SymmetryControl.GoalsTest do
 
     on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
 
-    assert {:ok, cancelled, :created} =
-             command_current(goal.id, "cancel", %{reason: "stop"}, command_opts())
-
+    assert {:ok, cancelled, :created} = command_current(goal.id, "cancel", %{reason: "stop"})
     action_id = cancelled.response["control_action_id"]
     idempotency_key = "goal-control:#{action_id}:cancel:#{task.id}"
 
@@ -5040,23 +4610,17 @@ defmodule SymmetryControl.GoalsTest do
     on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("Cancel the old revision safely."),
-                 reason: "Scope changed"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: amended_revision_contract("Cancel the old revision safely."),
+               reason: "Scope changed"
+             })
 
     action_id = amended.response["control_action_id"]
     revision = amended.goal.current_revision
     idempotency_key = "goal-control:#{action_id}:cancel:#{task.id}"
 
     # The old revision is still queued until the durable cancellation lands.
-    assert {:error, :state_conflict} =
-             command_current(goal.id, "resume", %{reason: "continue"}, command_opts())
+    assert {:error, :state_conflict} = command_current(goal.id, "resume", %{reason: "continue"})
 
     assert {:ok, command, :created} =
              Goals.dispatch_goal_control_command(
@@ -5073,8 +4637,7 @@ defmodule SymmetryControl.GoalsTest do
     assert command.state == "applied"
     assert command.run_id == nil
     # Cancellation is durable, but the held reservation still has to settle.
-    assert {:error, :state_conflict} =
-             command_current(goal.id, "resume", %{reason: "continue"}, command_opts())
+    assert {:error, :state_conflict} = command_current(goal.id, "resume", %{reason: "continue"})
 
     job = %Oban.Job{
       args: %{"goal_id" => goal.id, "revision" => revision, "action_id" => action_id}
@@ -5090,9 +4653,7 @@ defmodule SymmetryControl.GoalsTest do
 
     assert unstarted_settlement_event_count(goal.id, task.id) == 1
 
-    assert {:ok, resumed, :created} =
-             command_current(goal.id, "resume", %{reason: "continue"}, command_opts())
-
+    assert {:ok, resumed, :created} = command_current(goal.id, "resume", %{reason: "continue"})
     assert resumed.goal.state == "active"
   end
 
@@ -5109,15 +4670,10 @@ defmodule SymmetryControl.GoalsTest do
     on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
 
     assert {:ok, first_amendment, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("First amendment."),
-                 reason: "First scope change"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: amended_revision_contract("First amendment."),
+               reason: "First scope change"
+             })
 
     first_action_id = first_amendment.response["control_action_id"]
 
@@ -5140,15 +4696,10 @@ defmodule SymmetryControl.GoalsTest do
            ).state == "held"
 
     assert {:ok, second_amendment, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("Second amendment."),
-                 reason: "Second scope change"
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: amended_revision_contract("Second amendment."),
+               reason: "Second scope change"
+             })
 
     job = %Oban.Job{
       args: %{
@@ -5192,7 +4743,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, task} = admitted_task_fixture()
 
     assert {:error, :goal_admission_disabled} =
-             command_current(goal.id, "admit_task", admission_payload(item), command_opts())
+             command_current(goal.id, "admit_task", admission_payload(item))
 
     Repo.update_all(from(row in Task, where: row.id == ^task.id),
       set: [state: "completed", current_generation: 1, updated_at: @now]
@@ -5226,7 +4777,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                admission_payload(item),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -5266,7 +4816,7 @@ defmodule SymmetryControl.GoalsTest do
            )
 
     assert {:error, :goal_admission_disabled} =
-             command_current(goal.id, "admit_task", admission_payload(item), command_opts())
+             command_current(goal.id, "admit_task", admission_payload(item))
   end
 
   test "due reconciliation honors a requested Goal id set" do
@@ -5287,23 +4837,13 @@ defmodule SymmetryControl.GoalsTest do
                Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
 
       assert {:ok, _cancelled, :created} =
-               command_current(
-                 created.goal.id,
-                 "cancel",
-                 %{reason: "No work requires control."},
-                 command_opts()
-               )
+               command_current(created.goal.id, "cancel", %{reason: "No work requires control."})
     end
 
     {goal, _item, _task} = admitted_task_fixture()
 
     assert {:ok, cancelled, :created} =
-             command_current(
-               goal.id,
-               "cancel",
-               %{reason: "This action requires recovery."},
-               command_opts()
-             )
+             command_current(goal.id, "cancel", %{reason: "This action requires recovery."})
 
     assert {:ok, [%{goal_id: goal_id, revision: revision, action_id: action_id}]} =
              Goals.recover_pending_goal_control_actions(limit: 100)
@@ -5400,7 +4940,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, [first_item, _second_item]} = goal_with_items_fixture(policy, 2)
 
     assert {:ok, _admitted, :created} =
-             command_current(goal.id, "admit_task", admission_payload(first_item), command_opts(),
+             command_current(goal.id, "admit_task", admission_payload(first_item),
                rollout_enabled: true
              )
 
@@ -5596,7 +5136,7 @@ defmodule SymmetryControl.GoalsTest do
     [item] = fetch_goal!(created.goal.id).work_items
 
     assert {:ok, _active, :created} =
-             command_current(created.goal.id, "activate", %{approved_revision: 1}, command_opts())
+             command_current(created.goal.id, "activate", %{approved_revision: 1})
 
     set_goal_due!(created.goal.id)
 
@@ -5675,7 +5215,7 @@ defmodule SymmetryControl.GoalsTest do
     _planned = accept_plan!(created.goal.id, proposal)
 
     assert {:ok, _active, :created} =
-             command_current(created.goal.id, "activate", %{approved_revision: 1}, command_opts())
+             command_current(created.goal.id, "activate", %{approved_revision: 1})
 
     set_goal_due!(created.goal.id)
 
@@ -5824,15 +5364,10 @@ defmodule SymmetryControl.GoalsTest do
            ) == 1
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("Supersede the blocked candidate."),
-                 reason: "Revise the automatic admission policy."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: amended_revision_contract("Supersede the blocked candidate."),
+               reason: "Revise the automatic admission policy."
+             })
 
     assert amended.goal.current_revision == 2
     assert {:ok, amended_projection} = Goals.fetch_goal(goal.id)
@@ -6167,14 +5702,13 @@ defmodule SymmetryControl.GoalsTest do
     configure_automatic_runtimes!(dependent_item, [source_runtime, validation_runtime])
 
     assert {:ok, _active, :created} =
-             command_current(created.goal.id, "activate", %{approved_revision: 1}, command_opts())
+             command_current(created.goal.id, "activate", %{approved_revision: 1})
 
     assert {:ok, producer_admission, :created} =
              command_current(
                created.goal.id,
                "admit_task",
                admission_payload(source_item, %{reserved_microusd: 0}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6195,7 +5729,6 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6266,7 +5799,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                admission_payload(item),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6371,29 +5903,19 @@ defmodule SymmetryControl.GoalsTest do
              Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
 
     assert {:ok, _paused, :created} =
-             command_current(
-               goal.id,
-               "pause",
-               %{
-                 reason: "Pause after the daemon persisted its handle."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "pause", %{
+               reason: "Pause after the daemon persisted its handle."
+             })
 
     assert {:ok, %{session: ^session}, :replayed} =
              Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
 
     assert {:ok, _amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract:
-                   amended_revision_contract("Amend after an attach acknowledgement loss."),
-                 reason: "The original attach remains an idempotent fact."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract:
+                 amended_revision_contract("Amend after an attach acknowledgement loss."),
+               reason: "The original attach remains an idempotent fact."
+             })
 
     assert {:ok, %{session: ^session}, :replayed} =
              Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
@@ -6432,7 +5954,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "resume",
                  requested_session_id: requested.id
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6541,7 +6062,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "resume",
                  requested_session_id: Ecto.UUID.generate()
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6557,7 +6077,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                admission_payload(item, %{session_mode: "resume", reserved_microusd: 1}),
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -6582,7 +6101,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "handoff",
                  handoff_source_run_id: source_run.id
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6630,7 +6148,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "handoff",
                  handoff_source_run_id: source_run.id
                }),
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -6649,7 +6166,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "handoff",
                  handoff_source_run_id: source_run.id
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6670,7 +6186,7 @@ defmodule SymmetryControl.GoalsTest do
              Goals.settle_task(first_task.id, first_run.id, first_run.generation, now: @now)
 
     assert {:ok, second_admission, :created} =
-             command_current(goal.id, "admit_task", admission_payload(item), command_opts(),
+             command_current(goal.id, "admit_task", admission_payload(item),
                rollout_enabled: true
              )
 
@@ -6706,7 +6222,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "handoff",
                  handoff_source_run_id: first_run.id
                }),
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -6733,7 +6248,6 @@ defmodule SymmetryControl.GoalsTest do
                  handoff_source_run_id: source_run.id,
                  validation_of_task_id: source_task.id
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6763,7 +6277,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "handoff",
                  handoff_source_run_id: source_run.id
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6827,7 +6340,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "handoff",
                  handoff_source_run_id: source_run.id
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6861,7 +6373,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "handoff",
                  handoff_source_run_id: Ecto.UUID.generate()
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6915,7 +6426,6 @@ defmodule SymmetryControl.GoalsTest do
                    session_mode: "resume",
                    requested_session_id: retained.id
                  }),
-                 command_opts(),
                  rollout_enabled: true
                )
 
@@ -6941,7 +6451,6 @@ defmodule SymmetryControl.GoalsTest do
                  session_mode: "resume",
                  requested_session_id: retained.id
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -6976,7 +6485,6 @@ defmodule SymmetryControl.GoalsTest do
                  admission_key: Ecto.UUID.generate(),
                  reserved_microusd: 1
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -7024,7 +6532,6 @@ defmodule SymmetryControl.GoalsTest do
                  admission_key: Ecto.UUID.generate(),
                  reserved_microusd: 1
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -7380,7 +6887,6 @@ defmodule SymmetryControl.GoalsTest do
                  admission_key: Ecto.UUID.generate(),
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true,
                validation_profiles:
                  validation_profiles([validation_runtime_id], [validation_runtime_id])
@@ -7407,7 +6913,6 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true,
                validation_profiles:
                  validation_profiles(
@@ -7445,7 +6950,6 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: empty_producer.id,
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true,
                validation_profiles:
                  validation_profiles([Ecto.UUID.generate()], [Ecto.UUID.generate()])
@@ -7509,15 +7013,10 @@ defmodule SymmetryControl.GoalsTest do
     evidence = observation_evidence_attrs(run.id, item)
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("Preserve historical evidence."),
-                 reason: "The original execution is now historical."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: amended_revision_contract("Preserve historical evidence."),
+               reason: "The original execution is now historical."
+             })
 
     assert amended.goal.current_revision == 2
 
@@ -7727,7 +7226,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                admission_payload(item, %{reserved_microusd: 1}),
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -7770,24 +7268,14 @@ defmodule SymmetryControl.GoalsTest do
            ).state == "unknown"
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract:
-                   amended_revision_contract("Resume after unknown terminal cost."),
-                 reason: "A terminal usage receipt is still pending."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract:
+                 amended_revision_contract("Resume after unknown terminal cost."),
+               reason: "A terminal usage receipt is still pending."
+             })
 
     assert {:ok, resumed, :created} =
-             command_current(
-               goal.id,
-               "resume",
-               %{reason: "Continue under the amended policy."},
-               command_opts()
-             )
+             command_current(goal.id, "resume", %{reason: "Continue under the amended policy."})
 
     assert amended.goal.current_revision == 2
     assert resumed.goal.state == "active"
@@ -7811,20 +7299,10 @@ defmodule SymmetryControl.GoalsTest do
              Goals.settle_task(task.id, run.id, run.generation, now: @now)
 
     assert {:ok, _paused, :created} =
-             command_current(
-               goal.id,
-               "pause",
-               %{reason: "Review unknown accounting."},
-               command_opts()
-             )
+             command_current(goal.id, "pause", %{reason: "Review unknown accounting."})
 
     assert {:error, :budget_unknown} =
-             command_current(
-               goal.id,
-               "resume",
-               %{reason: "Do not bypass strict accounting."},
-               command_opts()
-             )
+             command_current(goal.id, "resume", %{reason: "Do not bypass strict accounting."})
   end
 
   test "an expired earlier Run without usage blocks strict resume while its Task retries" do
@@ -7846,20 +7324,10 @@ defmodule SymmetryControl.GoalsTest do
     )
 
     assert {:ok, _paused, :created} =
-             command_current(
-               goal.id,
-               "pause",
-               %{reason: "Review an expired retry."},
-               command_opts()
-             )
+             command_current(goal.id, "pause", %{reason: "Review an expired retry."})
 
     assert {:error, :budget_unknown} =
-             command_current(
-               goal.id,
-               "resume",
-               %{reason: "Account for the expired execution."},
-               command_opts()
-             )
+             command_current(goal.id, "resume", %{reason: "Account for the expired execution."})
   end
 
   test "usage cannot supersede itself or make a held reservation disappear" do
@@ -8023,7 +7491,6 @@ defmodule SymmetryControl.GoalsTest do
                missing_goal.id,
                "admit_task",
                admission_payload(missing_item, %{reserved_microusd: 1}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -8050,7 +7517,6 @@ defmodule SymmetryControl.GoalsTest do
                budget_goal.id,
                "admit_task",
                admission_payload(budget_item, %{reserved_microusd: 1}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -8192,12 +7658,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, _task, runtime, run, fence} = claimed_goal_run_fixture()
 
     assert {:ok, _receipt, :created} =
-             command_current(
-               goal.id,
-               "pause",
-               %{reason: "Operator paused this Goal."},
-               command_opts()
-             )
+             command_current(goal.id, "pause", %{reason: "Operator paused this Goal."})
 
     assert {:error, :ownership_lost} =
              Goals.attach_harness_session(
@@ -8215,15 +7676,10 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, _task, runtime, run, fence} = claimed_goal_run_fixture()
 
     assert {:ok, _receipt, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("Amended goal authority."),
-                 reason: "Operator amended the approved contract."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract: amended_revision_contract("Amended goal authority."),
+               reason: "Operator amended the approved contract."
+             })
 
     assert {:error, :ownership_lost} =
              Goals.attach_harness_session(
@@ -8248,7 +7704,6 @@ defmodule SymmetryControl.GoalsTest do
                Map.put(admission_payload(item), :subject, %{
                  resource_id: item_repository_resource_id(item)
                }),
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -8279,12 +7734,7 @@ defmodule SymmetryControl.GoalsTest do
     {controlled_goal, _controlled_item, controlled_task} = admitted_task_fixture()
 
     assert {:ok, cancelled, :created} =
-             command_current(
-               controlled_goal.id,
-               "cancel",
-               %{reason: "Stop before a Run starts."},
-               command_opts()
-             )
+             command_current(controlled_goal.id, "cancel", %{reason: "Stop before a Run starts."})
 
     assert :ok =
              GoalControlWorker.perform(%Oban.Job{
@@ -8321,16 +7771,11 @@ defmodule SymmetryControl.GoalsTest do
     {goal, _item, task, _runtime, run, _fence} = claimed_goal_run_fixture()
 
     assert {:ok, amended, :created} =
-             command_current(
-               goal.id,
-               "amend",
-               %{
-                 revision_contract:
-                   amended_revision_contract("Record historical settlement accurately."),
-                 reason: "The active work is now historical."
-               },
-               command_opts()
-             )
+             command_current(goal.id, "amend", %{
+               revision_contract:
+                 amended_revision_contract("Record historical settlement accurately."),
+               reason: "The active work is now historical."
+             })
 
     assert amended.goal.current_revision == 2
 
@@ -8359,7 +7804,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, _item, _task} = admitted_task_fixture()
 
     assert {:ok, paused, :created} =
-             command_current(goal.id, "pause", %{reason: "operator review"}, command_opts())
+             command_current(goal.id, "pause", %{reason: "operator review"})
 
     action_id = paused.response["control_action_id"]
 
@@ -8373,8 +7818,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, []} =
              Goals.control_dispatch_plan(goal.id, paused.goal.current_revision, action_id)
 
-    assert {:ok, _resumed, :created} =
-             command_current(goal.id, "resume", %{reason: "approved"}, command_opts())
+    assert {:ok, _resumed, :created} = command_current(goal.id, "resume", %{reason: "approved"})
 
     assert {:ok, :superseded} =
              Goals.control_dispatch_plan(goal.id, paused.goal.current_revision, action_id)
@@ -8384,8 +7828,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, _item, task} = admitted_task_fixture()
     Repo.update_all(from(row in Task, where: row.id == ^task.id), set: [state: "cancelling"])
 
-    assert {:ok, cancelled, :created} =
-             command_current(goal.id, "cancel", %{reason: "stop"}, command_opts())
+    assert {:ok, cancelled, :created} = command_current(goal.id, "cancel", %{reason: "stop"})
 
     assert {:ok, []} =
              Goals.control_dispatch_plan(
@@ -8405,15 +7848,10 @@ defmodule SymmetryControl.GoalsTest do
     )
 
     assert {:ok, safe_amendment, :created} =
-             command_current(
-               safe_goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("Pause supported work."),
-                 reason: "Scope was clarified"
-               },
-               command_opts()
-             )
+             command_current(safe_goal.id, "amend", %{
+               revision_contract: amended_revision_contract("Pause supported work."),
+               reason: "Scope was clarified"
+             })
 
     assert {:ok, descriptors} =
              Goals.control_dispatch_plan(
@@ -8436,15 +7874,10 @@ defmodule SymmetryControl.GoalsTest do
     )
 
     assert {:ok, cancel_amendment, :created} =
-             command_current(
-               cancel_goal.id,
-               "amend",
-               %{
-                 revision_contract: amended_revision_contract("Pause unsupported work."),
-                 reason: "Scope was clarified"
-               },
-               command_opts()
-             )
+             command_current(cancel_goal.id, "amend", %{
+               revision_contract: amended_revision_contract("Pause unsupported work."),
+               reason: "Scope was clarified"
+             })
 
     cancel_task_id = cancel_task.id
 
@@ -8506,12 +7939,11 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                Map.put(admission_payload(first_item), :reserved_microusd, 60),
-               command_opts(),
                rollout_enabled: true
              )
 
     assert {:ok, first_admission, :created} =
-             command_current(goal.id, "admit_task", admission_payload(first_item), command_opts(),
+             command_current(goal.id, "admit_task", admission_payload(first_item),
                rollout_enabled: true
              )
 
@@ -8544,11 +7976,7 @@ defmodule SymmetryControl.GoalsTest do
              DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second))
 
     assert {:error, :budget_exhausted} =
-             command_current(
-               goal.id,
-               "admit_task",
-               admission_payload(second_item),
-               command_opts(),
+             command_current(goal.id, "admit_task", admission_payload(second_item),
                rollout_enabled: true
              )
 
@@ -8610,7 +8038,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, [item]} = goal_with_items_fixture(policy)
 
     assert {:ok, admission, :created} =
-             command_current(goal.id, "admit_task", admission_payload(item), command_opts(),
+             command_current(goal.id, "admit_task", admission_payload(item),
                rollout_enabled: true
              )
 
@@ -8705,7 +8133,6 @@ defmodule SymmetryControl.GoalsTest do
                goal.id,
                "admit_task",
                admission_payload(item, %{purpose: "observe"}),
-               command_opts(),
                rollout_enabled: true
              )
   end
@@ -8730,7 +8157,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, [item]} = goal_with_items_fixture(policy)
 
     assert {:ok, admission, :created} =
-             command_current(goal.id, "admit_task", admission_payload(item), command_opts(),
+             command_current(goal.id, "admit_task", admission_payload(item),
                rollout_enabled: true
              )
 
@@ -8849,7 +8276,7 @@ defmodule SymmetryControl.GoalsTest do
     _planned = accept_plan!(created.goal.id, proposal)
 
     assert {:ok, _active, :created} =
-             command_current(created.goal.id, "activate", %{approved_revision: 1}, command_opts())
+             command_current(created.goal.id, "activate", %{approved_revision: 1})
 
     {:ok, goal} = Goals.fetch_goal(created.goal.id)
 
@@ -9019,32 +8446,22 @@ defmodule SymmetryControl.GoalsTest do
     }
 
     assert {:ok, decision, :created} =
-             command_current(
-               goal_id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept?",
-                 options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(goal_id, "request_decision", %{
+               kind: "plan",
+               question: "Accept?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
+               proposal: proposal
+             })
 
     decision_id = decision.response["decision"]["id"]
     decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal_id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version: decision_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal_id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version: decision_version,
+               option_id: "accept"
+             })
 
     assert {:ok, _planned, :created} =
              command_current(
@@ -9057,14 +8474,13 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
 
     [item] = fetch_goal!(goal_id).work_items
 
     assert {:ok, _active, :created} =
-             command_current(goal_id, "activate", %{approved_revision: 1}, command_opts())
+             command_current(goal_id, "activate", %{approved_revision: 1})
 
     {:ok, goal} = Goals.fetch_goal(goal_id)
 
@@ -9080,7 +8496,6 @@ defmodule SymmetryControl.GoalsTest do
                  goal_id,
                  "admit_task",
                  admission_payload(item, %{reserved_microusd: 42}),
-                 command_opts(),
                  admission_opts
                )
 
@@ -9152,7 +8567,6 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -9345,7 +8759,6 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: producer.id,
                  reserved_microusd: 0
                }),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -9412,7 +8825,7 @@ defmodule SymmetryControl.GoalsTest do
     item = legacy_unmarked_work_item!(project, repository, created.goal, "Legacy required work")
 
     assert {:ok, _active, :created} =
-             command_current(created.goal.id, "activate", %{approved_revision: 1}, command_opts())
+             command_current(created.goal.id, "activate", %{approved_revision: 1})
 
     {:ok, goal} = Goals.fetch_goal(created.goal.id)
 
@@ -9421,7 +8834,6 @@ defmodule SymmetryControl.GoalsTest do
                created.goal.id,
                "admit_task",
                admission_payload(item, %{reserved_microusd: 42}),
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -9833,34 +9245,24 @@ defmodule SymmetryControl.GoalsTest do
 
   defp accept_plan!(goal_id, proposal) do
     assert {:ok, decision, :created} =
-             command_current(
-               goal_id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept the explicit baseline plan?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the plan"}
-                 ],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(goal_id, "request_decision", %{
+               kind: "plan",
+               question: "Accept the explicit baseline plan?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the plan"}
+               ],
+               proposal: proposal
+             })
 
     decision_id = decision.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal_id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal_id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+               option_id: "accept"
+             })
 
     assert {:ok, planned, :created} =
              command_current(
@@ -9873,7 +9275,6 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
 
@@ -9882,68 +9283,48 @@ defmodule SymmetryControl.GoalsTest do
 
   defp approve_dependency_change!(goal_id, work_item_id, depends_on_id, operation) do
     assert {:ok, decision, :created} =
-             command_current(
-               goal_id,
-               "request_decision",
-               %{
-                 kind: "scope",
-                 question: "Approve this dependency change?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Apply the change"}
-                 ],
-                 work_item_id: work_item_id,
-                 depends_on_id: depends_on_id,
-                 dependency_operation: operation
-               },
-               command_opts()
-             )
+             command_current(goal_id, "request_decision", %{
+               kind: "scope",
+               question: "Approve this dependency change?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Apply the change"}
+               ],
+               work_item_id: work_item_id,
+               depends_on_id: depends_on_id,
+               dependency_operation: operation
+             })
 
     decision_id = decision.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal_id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal_id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+               option_id: "accept"
+             })
 
     decision_id
   end
 
   defp reject_plan_admission!(goal_id, proposal, opts \\ []) do
     assert {:ok, decision, :created} =
-             command_current(
-               goal_id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept this plan?",
-                 options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(goal_id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this plan?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
+               proposal: proposal
+             })
 
     decision_id = decision.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               goal_id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(goal_id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+               option_id: "accept"
+             })
 
     assert {:error, reason} =
              command_current(
@@ -9956,7 +9337,6 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
-               command_opts(),
                Keyword.merge([rollout_enabled: true], opts)
              )
 
@@ -10036,8 +9416,6 @@ defmodule SymmetryControl.GoalsTest do
     assert receipt.goal.version == before.version + 1
     assert fetch_goal!(goal.id).version == before.version + 1
   end
-
-  defp command_opts, do: [now: @now, validation_profiles: validation_profiles()]
 
   defp goal_attrs(mutation_id \\ nil, execution_policy \\ %{}, context_manifest \\ %{}) do
     execution_policy =
@@ -10252,34 +9630,24 @@ defmodule SymmetryControl.GoalsTest do
       ])
 
     assert {:ok, decision, :created} =
-             command_current(
-               created.goal.id,
-               "request_decision",
-               %{
-                 kind: "plan",
-                 question: "Accept this provider plan?",
-                 options: [
-                   %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the plan"}
-                 ],
-                 proposal: proposal
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this provider plan?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the plan"}
+               ],
+               proposal: proposal
+             })
 
     decision_id = decision.response["decision"]["id"]
 
     assert {:ok, _resolved, :created} =
-             command_current(
-               created.goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: decision_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-                 option_id: "accept"
-               },
-               command_opts()
-             )
+             command_current(created.goal.id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+               option_id: "accept"
+             })
 
     assert {:error, :unsupported_capability} =
              command_current(
@@ -10292,7 +9660,6 @@ defmodule SymmetryControl.GoalsTest do
                      Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
-               command_opts(),
                rollout_enabled: true
              )
   end
