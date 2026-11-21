@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
@@ -633,6 +634,46 @@ func TestAbandonGoalSessionAfterStartTurnResponseLossQueuesStopWhenCloseSucceeds
 	}
 	if journal.PID != 0 || journal.ProcessIdentity != "" || len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped || journal.PendingGoalDeliveries[0].SessionStopped == nil || journal.PendingGoalDeliveries[0].SessionStopped.SessionID != controlSessionID || journal.PendingGoalDeliveries[0].SessionStopped.BindingID != bindingID {
 		t.Fatalf("known-close start-turn recovery evidence = %#v", journal)
+	}
+}
+
+// TestAbandonGoalSessionBoundsOversizedUncertainReason drives the abandon path
+// with a writer-failure cause larger than the durable reason budget (W307-R1:
+// the state layer's wrapped causes lengthen the composed reason, and the store
+// rejects an over-budget reason outright, which would leave the uncertain mark
+// unrecorded). The session must still reach the durable uncertain state, with
+// the reason capped at the store budget on a UTF-8 rune boundary.
+func TestAbandonGoalSessionBoundsOversizedUncertainReason(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, _, _ := saveRetainedGoalSession(t, store, key)
+	daemon := &daemon{store: store, options: options{clock: time.Now}}
+	writerCause := fmt.Errorf("write goal session journal: %w", errors.New(strings.Repeat("é", 2100)))
+	if err := daemon.abandonGoalSession(sessionKey, &closeFailureGoalSession{err: errors.New("native close failed")}, false, writerCause); err == nil {
+		t.Fatal("abandonGoalSession() with a failed native close reported success")
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil {
+		t.Fatalf("LoadGoalSession() error = %v", err)
+	}
+	if session.LaunchState != state.GoalSessionLaunchStateUncertain || session.SessionState != state.GoalSessionStateUnavailable || !session.NeedsReconciliation() {
+		t.Fatalf("oversized uncertain reason left the session off the uncertain path: %#v", session)
+	}
+	reason := session.UncertainReason
+	if !strings.HasPrefix(reason, "native Goal session did not reach a known stopped state: ") {
+		t.Fatalf("durable uncertain reason = %q, want the composed prefix", reason)
+	}
+	if !strings.Contains(reason, strings.Repeat("é", 64)) {
+		t.Fatalf("durable uncertain reason dropped the writer cause text: %q", reason)
+	}
+	if len(reason) > state.GoalSessionUncertainReasonBytes {
+		t.Fatalf("durable uncertain reason = %d bytes, over the %d-byte store budget", len(reason), state.GoalSessionUncertainReasonBytes)
+	}
+	if !utf8.ValidString(reason) {
+		t.Fatalf("durable uncertain reason is not valid UTF-8 (%d bytes)", len(reason))
+	}
+	if len(reason) < state.GoalSessionUncertainReasonBytes-3 {
+		t.Fatalf("durable uncertain reason = %d bytes, want the store budget filled up to one rune", len(reason))
 	}
 }
 

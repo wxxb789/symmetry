@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
@@ -886,7 +887,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 				abandonErr = daemon.resolveCancelledNativeStartAbortFailure(key, sessionKey, fmt.Errorf("abort lease-expired native Goal launch: %w", abortErr))
 			}
 		} else {
-			abandonErr = daemon.markGoalSessionUncertain(sessionKey, "lease-expired retained native start returned no session: "+stageErr.Error())
+			abandonErr = daemon.markGoalSessionUncertain(sessionKey, boundedGoalSessionUncertainReason("lease-expired retained native start returned no session: "+stageErr.Error()))
 		}
 		ackErr := daemon.acknowledgeExpiredNativeStartCancellation(ctx, key)
 		if abandonErr != nil || ackErr != nil {
@@ -947,7 +948,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
 			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
 		}
-		uncertainErr := daemon.markGoalSessionUncertain(sessionKey, "native transport start outcome is unknown: "+errorText(err))
+		uncertainErr := daemon.markGoalSessionUncertain(sessionKey, boundedGoalSessionUncertainReason("native transport start outcome is unknown: "+errorText(err)))
 		if uncertainErr != nil {
 			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(
 				fmt.Errorf("start native Goal session: %w", err),
@@ -1304,6 +1305,27 @@ func goalSessionClosed(journal state.GoalSessionJournal) bool {
 	return journal.LaunchState == state.GoalSessionLaunchStateClosed && journal.SessionState == state.GoalSessionStateClosed
 }
 
+// boundedGoalSessionUncertainReason caps the reason handed to
+// MarkGoalSessionUncertain at the store's durable budget. The store rejects an
+// over-budget reason, so an unbounded composed reason would leave an uncertain
+// native outcome unrecorded. The cut lands on a UTF-8 rune boundary; only the
+// reason text handed to the store is bounded, never the error chains returned
+// to callers.
+func boundedGoalSessionUncertainReason(reason string) string {
+	if len(reason) <= state.GoalSessionUncertainReasonBytes {
+		return reason
+	}
+	bounded := reason[:state.GoalSessionUncertainReasonBytes]
+	for len(bounded) > 0 {
+		r, size := utf8.DecodeLastRuneInString(bounded)
+		if r != utf8.RuneError || size > 1 {
+			break
+		}
+		bounded = bounded[:len(bounded)-1]
+	}
+	return bounded
+}
+
 func (daemon *daemon) markGoalSessionUncertain(key state.GoalSessionKey, reason string) error {
 	mark := daemon.options.markGoalSessionUncertain
 	if mark == nil {
@@ -1418,7 +1440,7 @@ func (daemon *daemon) abandonGoalSession(key state.GoalSessionKey, session harne
 	if closeErr != nil && runKey.RunID != "" && runKey.Generation > 0 {
 		retentionErr = daemon.retainUnknownGoalLaunchWorkspaceChecked(runKey)
 	}
-	_, uncertainErr := daemon.store.MarkGoalSessionUncertain(key, reason)
+	_, uncertainErr := daemon.store.MarkGoalSessionUncertain(key, boundedGoalSessionUncertainReason(reason))
 	if (closeErr != nil || retentionErr != nil || uncertainErr != nil) && runKey.RunID != "" && runKey.Generation > 0 {
 		daemon.requireNativeSessionCloseRetry(runKey, session)
 	} else if closeErr == nil && retentionErr == nil && uncertainErr == nil {
@@ -1473,7 +1495,7 @@ func (daemon *daemon) abandonGoalSessionUncertain(key state.GoalSessionKey, sess
 		reason += "; close: " + closeErr.Error()
 	}
 	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(runKey)
-	_, uncertainErr := daemon.store.MarkGoalSessionUncertain(key, reason)
+	_, uncertainErr := daemon.store.MarkGoalSessionUncertain(key, boundedGoalSessionUncertainReason(reason))
 	if closeErr != nil || clearErr != nil || retentionErr != nil || uncertainErr != nil {
 		daemon.requireNativeSessionCloseRetry(runKey, session)
 	} else {

@@ -284,7 +284,7 @@ that revision, no harness concurrent with a suite:
 | `GOOS=linux go build ./...` | 0 | — |
 | `GOOS=linux GOARCH=amd64 go vet ./internal/state/` | 0 | — |
 | `go test -count=1 ./internal/state/...` (Windows) | 0 | `ok … 34.362s` |
-| WSL `Ubuntu-24.04` `accept` — `go test -count=1 ./internal/state/...` at `/mnt/q/repos/wt-w3-07-state-error-causes/symmetry/daemon` (go1.27.0 linux/amd64) | 0 | `ok … 20.386s` (the `//go:build linux` clone/cgroup suites run) |
+| WSL `Ubuntu-24.04` `accept` — `go test -count=1 ./internal/state/...` in the worktree `daemon/` directory (WSL mount path elided) (go1.27.0 linux/amd64) | 0 | `ok … 20.386s` (the `//go:build linux` clone/cgroup suites run) |
 | `go test -count=1 ./internal/app/ -run '^TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure$'` | 0 | `ok … 0.563s` |
 | `go test -count=1 ./internal/app/ -run 'PiProviderBridge\|DurablePiProviderBridge\|ProviderAction'` | 0 | `ok … 4.678s` |
 | `git diff --check` | 0 | no whitespace errors |
@@ -545,6 +545,121 @@ statements. (R5) §8's `saveJournalLocked` row is split before/after `renameStat
 (`writeAtomic` returns `syncDirectory(directory)` at `state.go:5620`), and §4's invariants sentence
 no longer claims a failed write always leaves the previous durable state. (P3) conductor
 ratification recorded in §6.3 and in the plan's mutation paragraph.
+
+## 10. Fix round 2 (2026-11-21) — W307-R1 remedy (conductor owned-set extension)
+
+Conductor decision 2026-11-21 ("review W307-R1 — owned-set extension, binding"): the composed
+uncertain reason is bounded at the app composition sites, rune-safely, with the budget single-sourced
+from `state`; the store sink is unchanged and returned/joined error chains stay untouched.
+Implemented files and lines (this round's tree):
+
+| file:line | change |
+|---|---|
+| `daemon/internal/state/state.go:42-46` | `const GoalSessionUncertainReasonBytes = 4096` (single source) |
+| `daemon/internal/state/goal_session.go:1052`, `:1688` | write and read enforcement reference the constant (pure constant references) |
+| `daemon/internal/app/goal_admission.go:1308-1327` | `boundedGoalSessionUncertainReason`: budget check, then rune-boundary walk (`utf8.DecodeLastRuneInString`, keeping a genuine U+FFFD by its `size > 1`) |
+| `daemon/internal/app/goal_admission.go:890`, `:951` | start-failure compositions bounded before `markGoalSessionUncertain` |
+| `daemon/internal/app/goal_admission.go:1443`, `:1498` | `abandonGoalSession` / `abandonGoalSessionUncertain` bound `reason` at the store call |
+| `daemon/internal/app/native_run.go:611` | `resolveCancelledNativeStartAbortFailure` composition bounded |
+| `daemon/internal/app/native_run.go:850` | `publishNativeCloseRetryAfterEvidence` bounds the handoff shared with `goal_delivery.go:134`/`:138`/`:142` |
+| `daemon/internal/app/goal_delivery_test.go:640-678` | `TestAbandonGoalSessionBoundsOversizedUncertainReason` |
+
+The bound applies only to the string handed to `MarkGoalSessionUncertain`; every returned/joined
+error chain, every message prefix and every verdict is unchanged, and the store-side enforcement is
+the same check with the same value (now the constant). The helper is a no-op for reasons within
+budget (it returns the input string unchanged), so every shorter composed reason stays byte-identical.
+
+**Rune-boundary arithmetic.** The test's composed reason is 4,313 bytes: prefix
+`native Goal session did not reach a known stopped state` 55 B + `: ` 2 B + writer cause
+`write goal session journal: ` 28 B + 2,100 `é` 4,200 B + `; close: ` 9 B + `native close failed`
+19 B. A byte cut at 4,096 lands one byte inside an `é` (the kept prefix ends on its lead byte), so
+the boundary walk yields 4,095 bytes and `utf8.ValidString` holds; a naive byte cut would store a
+partial rune, which the store's JSON round-trip would corrupt and this round's test would catch.
+
+**Red run — bound disabled** (temporarily: `boundedGoalSessionUncertainReason` reduced to `return
+reason`, its now-unused `unicode/utf8` import removed; repo restored immediately after and the green
+run below re-verified the restore):
+
+```
+$ cd daemon && go test -count=1 ./internal/app/ -run '^TestAbandonGoalSessionBoundsOversizedUncertainReason$'
+--- FAIL: TestAbandonGoalSessionBoundsOversizedUncertainReason (2.33s)
+    goal_delivery_test.go:660: oversized uncertain reason left the session off the uncertain path: state.GoalSessionJournal{… LaunchState:"attached" … UncertainReason:"" …}
+FAIL
+FAIL	github.com/wxxb789/symmetry/daemon/internal/app	2.691s
+FAIL
+exit 1
+```
+
+The journal dump is elided; `LaunchState:"attached"` and `UncertainReason:""` are exhaustive grep
+extracts from the raw line. The unbound 4,313-byte reason is rejected by `MarkGoalSessionUncertain`
+from the store's budget check, leaving the session off the uncertain path — exactly the W307-R1
+regression the remedy closes.
+
+**Green run — bound restored**:
+
+```
+$ cd daemon && go test -count=1 ./internal/app/ -run '^TestAbandonGoalSessionBoundsOversizedUncertainReason$' -v
+=== RUN   TestAbandonGoalSessionBoundsOversizedUncertainReason
+--- PASS: TestAbandonGoalSessionBoundsOversizedUncertainReason (3.10s)
+PASS
+ok  	github.com/wxxb789/symmetry/daemon/internal/app	3.551s
+exit 0
+```
+
+The durable reason is 4,095 B, valid UTF-8, keeps the composed prefix and the writer-cause head, and
+the session is durably `uncertain` (`LaunchState:"uncertain"`, `SessionState:"unavailable"`,
+`NeedsReconciliation()` true).
+
+**Targeted tests and gates** (exact commands, exit codes after each output):
+
+```
+$ cd daemon && go test -count=1 ./internal/app/ -run '^TestAbandonGoalSession'
+ok  	github.com/wxxb789/symmetry/daemon/internal/app	0.981s
+exit 0
+
+$ cd daemon && go test -count=1 ./internal/app/ -run '^(TestAbandonGoalSession.*|TestCancelledNativeStartCloseFailureSettlesBeforeCleanupRetry|TestNativeCloseRetrySuccessDoesNotReleaseObservedTerminalOwner|TestNativeTurnCloseFailureEntersSameDaemonRetry|TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier|TestNativeCloseRetrySuccessDoesNotEraseUsageRecoveryBarrier|TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier|TestFreshCodexNativeStartFailureReportsUncertainCompensationFailure|TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure|TestCancelledNativeStartDiscardAndCloseFailuresJoinAndRetainRetry)$' -v
+--- PASS: TestCancelledNativeStartCloseFailureSettlesBeforeCleanupRetry (0.51s)
+--- PASS: TestNativeCloseRetrySuccessDoesNotReleaseObservedTerminalOwner (0.00s)
+--- PASS: TestAbandonGoalSessionClearsPersistedProcessAfterVerifiedClose (0.19s)
+--- PASS: TestAbandonGoalSessionAfterStartTurnResponseLossQueuesStopWhenCloseSucceeds (0.29s)
+--- PASS: TestAbandonGoalSessionBoundsOversizedUncertainReason (0.24s)
+--- PASS: TestNativeTurnCloseFailureEntersSameDaemonRetry (0.17s)
+--- PASS: TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier (0.96s)
+--- PASS: TestNativeCloseRetrySuccessDoesNotEraseUsageRecoveryBarrier (0.03s)
+--- PASS: TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier (0.33s)
+--- PASS: TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure (0.29s)
+--- PASS: TestFreshCodexNativeStartFailureReportsUncertainCompensationFailure (0.41s)
+--- PASS: TestCancelledNativeStartDiscardAndCloseFailuresJoinAndRetainRetry (0.29s)
+PASS
+ok  	github.com/wxxb789/symmetry/daemon/internal/app	3.986s
+exit 0
+
+$ cd daemon && go test -count=1 ./internal/state/
+ok  	github.com/wxxb789/symmetry/daemon/internal/state	15.372s
+exit 0
+
+$ wsl -d Ubuntu-24.04 -u accept   (cd into the worktree's daemon directory)
+$ go test -count=1 ./internal/state/...
+ok  	github.com/wxxb789/symmetry/daemon/internal/state	18.385s
+wsl-exit=0
+
+$ cd daemon && gofmt -l internal/app internal/state
+(no output) exit 0
+
+$ cd daemon && go vet ./...
+(no output) exit 0
+
+$ cd daemon && GOOS=linux go vet ./...
+(no output) exit 0    (~117 s)
+
+$ cd <worktree root> && git diff --check
+(no output) exit 0
+```
+
+**Record cleanliness.** This round replaces §5's Linux-row WSL mount path with a description.
+`python scripts/ci/check-record-cleanliness.py --base $(git merge-base HEAD origin/main) --head HEAD`
+on the committed head exits 0 (raw output and exit code are recorded in the fix-round findings file
+`w3-07-fix-r2.md`, which lives outside this repository's records).
 
 ## Appendix A — sweep tool source (verbatim, stdlib-only)
 

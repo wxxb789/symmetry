@@ -39,6 +39,12 @@ const (
 	atomicTempPrefix       = ".symmetry-state-"
 )
 
+// GoalSessionUncertainReasonBytes is the durable budget for a Goal session's
+// uncertain reason. MarkGoalSessionUncertain and the goal-session read
+// validation both enforce it; callers that compose the reason from a cause
+// must bound the string they hand to the store to this budget.
+const GoalSessionUncertainReasonBytes = 4096
+
 const (
 	TerminalVerdictAccepted      = "accepted"
 	TerminalVerdictOwnershipLost = "ownership_lost"

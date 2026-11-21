@@ -323,7 +323,7 @@ class (pointer/`Validate()` predicates) and the `no-branch`/`other-branch` verdi
 1. Gates (all foreground): `gofmt -l`; `go vet ./...`; `GOOS=windows go build ./...`;
    `GOOS=linux go build ./...`; `GOOS=linux GOARCH=amd64 go vet ./internal/state/`;
    `go test -count=1 ./internal/state/...` (Windows); the same suite under
-   `wsl -d Ubuntu-24.04 -u accept` on `/mnt/q/repos/wt-w3-07-state-error-causes/symmetry/daemon`;
+   `wsl -d Ubuntu-24.04 -u accept` on the worktree's `daemon` directory (WSL mount path elided);
    targeted app oracle
    `go test -count=1 ./internal/app/ -run '^TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure$'`;
    `git diff --check`; host-path scan of the branch diff. No `-race` locally (no cgo).
@@ -447,8 +447,11 @@ two state test files and these two records only; **no production file changed**,
 listings above and every classification in this plan and in the evidence record stay valid.
 (Line refs below resolve in the delivered tree.)
 
-- **W307-R1 (behaviour preservation, binding) — UNMET inside the strict owned set; ready fix
-  specified for authorisation.** The suffix this slice adds reaches the app's composed
+- **W307-R1 (behaviour preservation, binding) — FIXED in fix round 2 under the conductor's
+  owned-set extension** (round 1 recorded this unmet inside the strict owned set; the conductor's
+  W307-R1 decision then extended the owned set to the composition sites and authorised the app-side
+  remedy — see "Fix round 2" below for the changed lines, the test and the red/green runs). The
+  suffix this slice adds reaches the app's composed
   `UncertainReason` (`daemon/internal/app/goal_admission.go:1410-1415` and `:1468-1473`, plus the
   other error-text-fed compositions at `goal_admission.go:889`, `:950`, `native_run.go:611`, and
   `goal_delivery.go:134`/`:138`/`:142` via `native_run.go:846` → store call `:850`) and the store's
@@ -461,21 +464,13 @@ listings above and every classification in this plan and in the evidence record 
   `native Goal session did not reach a known stopped state` = 55 B, base cause text
   `write goal session journal` = 26 B → base composed reason 83 B, recorded; head composes
   `85 + N` B for an `N`-byte inner writer cause and flips to `uncertain launch reason is invalid` at
-  `N ≥ 4012` (`N = 4011` → 4096 B accepted; `N = 4012` → 4097 B rejected). Both remedies the
-  conductor named need files outside this slice's strict owned set — bounded composition at the app
-  sites (`daemon/internal/app/goal_admission.go`, `native_run.go`, `goal_delivery.go`, which are
-  W4-01's owned files, plus an app test file) or a clamp at the store sink
-  (`daemon/internal/state/goal_session.go`) — so, per the fix-round brief ("a finding that needs
-  files outside the owned set: record it as unmet with the exact path; do not edit there"), the
-  behaviour fix is recorded unmet with those exact paths and this ready change set: a rune-safe
-  bound (fit-based skip or `utf8`-safe truncation) applied only to the string handed to
-  `MarkGoalSessionUncertain`, never to the returned/joined error chains, with the budget
-  single-sourced from `state`; plus the app test that drives `abandonGoalSession` with a ~4 KB
-  writer cause and asserts the session reaches `uncertain` instead of the requeue path. In-set
-  artifact added: `state_wrap_test.go:TestMarkGoalSessionUncertainReasonBudget` (exactly 4096 B
-  accepted, persisted and loadable; 4097 B rejected before the mutation with the journal file
-  byte-unchanged) — it pins the budget and the no-side-effect property, not the app outcome, which a
-  state-package test cannot observe.
+  `N ≥ 4012` (`N = 4011` → 4096 B accepted; `N = 4012` → 4097 B rejected). In-set round-1
+  artifact: `state_wrap_test.go:TestMarkGoalSessionUncertainReasonBudget` (exactly 4096 B accepted,
+  persisted and loadable; 4097 B rejected before the mutation with the journal file byte-unchanged)
+  — it pins the budget and the no-side-effect property. The remedy this round applies (rune-safe
+  truncation of the reason handed to `MarkGoalSessionUncertain`, budget single-sourced from `state`,
+  never the returned/joined error chains) and the app test that observes the app outcome the
+  state-package test cannot are recorded in "Fix round 2" below.
 - **W307-R2 — fixed** in the evidence record §1: the class arithmetic is now the measured one
   (`row` 57 → 29, `pred` 197 → 197, `other-branch` 36 → 39, `no-branch` 259 → 267, raw total
   549 → 532 = 28 removed − 11 added; statement level 16 arms became `%w` wraps, 12 were narrowed,
@@ -504,3 +499,38 @@ listings above and every classification in this plan and in the evidence record 
 - **P3 — conductor ratification recorded** (measured divergence: only `:615`/`:1257` are
   reservation-sensitive; `:479` is a size assertion), and the mutation-check expectations in
   "Evidence plan" item 3 were corrected to that measured set.
+
+## Fix round 2 (2026-11-21) — W307-R1 remedy (conductor owned-set extension)
+
+The conductor's W307-R1 decision (owned-set extension, binding) authorised the app-side remedy and
+kept the store sink unchanged (a sink clamp would alter other callers). Changed files; line refs
+resolve in this round's tree:
+
+| file | change |
+|---|---|
+| `daemon/internal/state/state.go:42-46` | exported `GoalSessionUncertainReasonBytes = 4096`, the budget's single source |
+| `daemon/internal/state/goal_session.go:1052,:1688` | the two enforcement points reference the constant (pure constant references, per the decision) |
+| `daemon/internal/app/goal_admission.go:1308-1327` | `boundedGoalSessionUncertainReason` — rune-safe truncation at the budget |
+| `daemon/internal/app/goal_admission.go:890,:951,:1443,:1498` | the bound applied to the string handed to `MarkGoalSessionUncertain` (start-failure compositions, `abandonGoalSession`, `abandonGoalSessionUncertain`) |
+| `daemon/internal/app/native_run.go:611,:850` | the bound applied (`resolveCancelledNativeStartAbortFailure`; `publishNativeCloseRetryAfterEvidence`, the handoff shared with `goal_delivery.go:134`/`:138`/`:142`) |
+| `daemon/internal/app/goal_delivery_test.go:640-678` | `TestAbandonGoalSessionBoundsOversizedUncertainReason` |
+| `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §10 | fix-round evidence: red/green runs, commands, exit codes |
+
+Only the reason string handed to the store is bounded; every returned/joined error chain is
+unchanged, no message prefix or verdict changed, and the store-side check is the same check with the
+same value (now the constant). Round-2 runs:
+
+- **Red without the bound**: `go test -count=1 ./internal/app/ -run
+  '^TestAbandonGoalSessionBoundsOversizedUncertainReason$'` with `boundedGoalSessionUncertainReason`
+  temporarily reduced to `return reason` → `FAIL` at `goal_delivery_test.go:660`, exit 1: the
+  4,313 B composed reason is rejected by the store, the journal stays `LaunchState:"attached"`,
+  `UncertainReason:""`.
+- **Green with it**: same command with the bound in place → `PASS`, exit 0; the durable reason is
+  4,095 B and valid UTF-8, and keeps the composed prefix and the writer-cause head. The budget cut
+  lands mid-rune at 4,096 B, so only the rune-boundary walk keeps the stored text valid for the
+  store's JSON round-trip.
+- **Gates**: `gofmt -l internal/app internal/state` 0 · `go vet ./...` (windows) 0 ·
+  `GOOS=linux go vet ./...` 0 · `go test -count=1 ./internal/state/` (windows) 0 · WSL
+  `Ubuntu-24.04` `go test -count=1 ./internal/state/...` 0 · app subset (`TestAbandonGoalSession*`
+  plus the close/abort/lease composition tests and the slice's app oracle) 0 · `git diff --check` 0 ·
+  `check-record-cleanliness.py` on the committed head 0.
