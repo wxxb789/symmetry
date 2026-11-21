@@ -100,7 +100,7 @@ function resourceRow(name: string) {
 
 interface Harness {
   application: Application;
-  requests: Array<{ method: string; path: string; body: unknown }>;
+  requests: { method: string; path: string; body: unknown }[];
   history: RouterHistory;
   setConnections: (value: Connection[]) => void;
   setProjects: (value: ProjectFixture[]) => void;
@@ -223,7 +223,7 @@ describe("connection management", () => {
       release(new Response(JSON.stringify({ disposition: "created", connection: { id: connectionId } }), { status: 201 }));
       await pending;
     });
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Saving…" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("button", { name: "Saving…" })).toBeNull(); });
     expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
     expect(await screen.findByText("Connection created.")).toBeVisible();
     expect(harness.requests.filter((request) => request.method === "POST")[0]?.body).toEqual({
@@ -413,7 +413,7 @@ describe("connection management", () => {
     expect(screen.getByRole("checkbox", { name: "CI" })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(harness.requests.some((request) => request.method === "PATCH")).toBe(true));
+    await waitFor(() => { expect(harness.requests.some((request) => request.method === "PATCH")).toBe(true); });
     expect(harness.requests.filter((request) => request.method === "PATCH")[0]?.body).toMatchObject({ version: 3 });
     expect(await screen.findByRole("alert")).toHaveTextContent("(stale)");
     expect(screen.getByText(/changed elsewhere; close and reopen/)).toBeVisible();
@@ -503,7 +503,7 @@ describe("connection management", () => {
       release(new Response(JSON.stringify({ disposition: "deleted", deleted_connection_id: connectionId }), { status: 200 }));
       await pending;
     });
-    await waitFor(() => expect(harness.history.location.search).not.toContain(connectionId));
+    await waitFor(() => { expect(harness.history.location.search).not.toContain(connectionId); });
     expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
   });
 
@@ -597,7 +597,7 @@ describe("connection management", () => {
       release(new Response(JSON.stringify({ disposition: "deleted", deleted_connection_id: connectionId }), { status: 200 }));
       await pending;
     });
-    await waitFor(() => expect(screen.queryByRole("button", { name: /GitHub engineering/ })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("button", { name: /GitHub engineering/ })).toBeNull(); });
     expect(harness.history.location.search).not.toContain(connectionId);
   });
 
@@ -644,7 +644,7 @@ describe("connection management", () => {
       release(new Response(JSON.stringify({ disposition: "deleted", deleted_connection_id: connectionId }), { status: 200 }));
       await pending;
     });
-    await waitFor(() => expect(screen.queryByRole("button", { name: /GitHub engineering/ })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("button", { name: /GitHub engineering/ })).toBeNull(); });
     expect(harness.history.location.search).toContain(second.id);
   });
 
@@ -668,7 +668,7 @@ describe("connection management", () => {
     await act(async () => {
       await harness.application.queryClient.invalidateQueries({ queryKey: ["connections"] });
     });
-    await waitFor(() => expect(harness.history.location.search).not.toContain(connectionId));
+    await waitFor(() => { expect(harness.history.location.search).not.toContain(connectionId); });
     await act(async () => {
       release(refusal(404, "not_found", "this connection no longer exists"));
       await pending;
@@ -691,14 +691,14 @@ describe("connection management", () => {
     const { promise: gate, resolve: release } = Promise.withResolvers<void>();
     harness.gateReads(gate);
     await user.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull());
-    await waitFor(() => expect(harness.requests.filter((request) => request.method === "GET" && request.path === "/portal/api/connections")).toHaveLength(3));
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull(); });
+    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "GET" && request.path === "/portal/api/connections")).toHaveLength(3); });
     await user.click(screen.getByRole("button", { name: /Second connection/ }));
     expect(await screen.findByRole("complementary", { name: "Connection detail" })).toHaveTextContent("Second connection");
 
     release();
     harness.gateReads(null);
-    await waitFor(() => expect(screen.queryByText("Refreshing connections")).toBeNull());
+    await waitFor(() => { expect(screen.queryByText("Refreshing connections")).toBeNull(); });
     expect(harness.history.location.search).toContain(second.id);
     expect(harness.history.location.search).not.toContain(connectionId);
   });
@@ -719,7 +719,7 @@ describe("connection management", () => {
     const { promise: gate, resolve: release } = Promise.withResolvers<void>();
     harness.gateReads(gate);
     await user.click(screen.getByRole("button", { name: "Connect" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New connection" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: "New connection" })).toBeNull(); });
     await waitFor(() => expect(screen.getByText("Refreshing connections")).toBeVisible());
     await user.click(screen.getByRole("button", { name: "New connection" }));
     await user.type(screen.getByLabelText("Name"), "Second connection");
@@ -729,7 +729,7 @@ describe("connection management", () => {
     harness.setConnections([connection({ id: connectionId, name: "Azure delivery" })]);
     release();
     harness.gateReads(null);
-    await waitFor(() => expect(screen.queryByText("Refreshing connections")).toBeNull());
+    await waitFor(() => { expect(screen.queryByText("Refreshing connections")).toBeNull(); });
     // The selection move is a continuation of the same settle: flush one
     // macrotask so it has run before the URL is asserted.
     const flush = Promise.withResolvers<void>();
@@ -768,7 +768,7 @@ describe("connection management", () => {
     await user.click(create);
     expect(await screen.findByRole("dialog", { name: "New connection" })).toBeVisible();
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New connection" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: "New connection" })).toBeNull(); });
     expect(create).toHaveFocus();
 
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
@@ -776,7 +776,7 @@ describe("connection management", () => {
     await user.click(remove);
     expect(await screen.findByRole("dialog", { name: /Remove GitHub engineering/ })).toBeVisible();
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull(); });
     expect(remove).toHaveFocus();
   });
 
@@ -793,7 +793,7 @@ describe("connection management", () => {
     // must hand keyboard focus to a control the write cannot disable instead of
     // dropping it to the body.
     await user.click(screen.getByRole("button", { name: "Close connection dialog" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull(); });
     expect(document.activeElement).not.toBe(document.body);
     expect(screen.getByRole("button", { name: "Close connection detail" })).toHaveFocus();
 
@@ -815,7 +815,7 @@ describe("connection management", () => {
     // The Remove button is disabled until the pending removal settles; closing
     // the confirmation must not drop keyboard focus to the body.
     await user.click(screen.getByRole("button", { name: "Close removal dialog" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull(); });
     expect(document.activeElement).not.toBe(document.body);
     expect(screen.getByRole("button", { name: "Close connection detail" })).toHaveFocus();
 
@@ -837,7 +837,7 @@ describe("connection management", () => {
     // focus hands off to the detail's own close control, which is the only
     // control the pending write cannot disable.
     await user.click(screen.getByRole("button", { name: "Close removal dialog" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull(); });
     expect(screen.getByRole("button", { name: "Close connection detail" })).toHaveFocus();
 
     // The removal settles and the refetched list drops the connection: the
@@ -850,7 +850,7 @@ describe("connection management", () => {
     });
     // The detail's own close control is the focused element that dies with the
     // unmount; the empty-state aside that replaces it carries the same label.
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Close connection detail" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("button", { name: "Close connection detail" })).toBeNull(); });
     expect(document.activeElement).not.toBe(document.body);
     expect(screen.getByRole("button", { name: "New connection" })).toHaveFocus();
   });
@@ -909,14 +909,14 @@ describe("connection management", () => {
     const reads = () => harness.requests.filter((request) => request.path.startsWith("/portal/api/workspace")).length;
     const settled = reads();
     act(() => { void harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
-    await waitFor(() => expect(reads()).toBe(settled + 1));
+    await waitFor(() => { expect(reads()).toBe(settled + 1); });
     harness.setConnections([connection({ name: "GitHub delivery" })]);
     await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["connections"] }); });
 
     await user.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(reads()).toBe(settled + 2));
+    await waitFor(() => { expect(reads()).toBe(settled + 2); });
     release();
-    await waitFor(() => expect(harness.application.queryClient.isFetching({ queryKey: ["workspace"] })).toBe(0));
+    await waitFor(() => { expect(harness.application.queryClient.isFetching({ queryKey: ["workspace"] })).toBe(0); });
     expect(screen.getByText("Project not found")).toBeVisible();
   });
 
@@ -939,14 +939,14 @@ describe("connection management", () => {
     const reads = () => harness.requests.filter((request) => request.path.startsWith("/portal/api/workspace")).length;
     const settled = reads();
     act(() => { void harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
-    await waitFor(() => expect(reads()).toBe(settled + 1));
+    await waitFor(() => { expect(reads()).toBe(settled + 1); });
     harness.setConnections([connection({ name: "GitHub delivery" })]);
     await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["connections"] }); });
 
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    await waitFor(() => expect(reads()).toBe(settled + 2));
+    await waitFor(() => { expect(reads()).toBe(settled + 2); });
     release();
-    await waitFor(() => expect(harness.application.queryClient.isFetching({ queryKey: ["workspace"] })).toBe(0), { timeout: 5_000 });
+    await waitFor(() => { expect(harness.application.queryClient.isFetching({ queryKey: ["workspace"] })).toBe(0); }, { timeout: 5_000 });
   });
 
   it("keeps the server's repositories-for-changes coupling observable in the editor", async () => {
@@ -987,7 +987,7 @@ describe("connection management", () => {
     await user.type(screen.getByLabelText("Name"), "Catalog complete");
     await user.type(screen.getByLabelText("Account or organization"), "acme");
     await user.click(screen.getByRole("button", { name: "Connect" }));
-    await waitFor(() => expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1); });
     expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
       provider: "github",
       name: "Catalog complete",
@@ -1009,7 +1009,7 @@ describe("connection management", () => {
     // selection.
     harness.setConnections([second]);
     await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["connections"] }); });
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull(); });
     expect(screen.getByText(/removed elsewhere/)).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: /Second connection/ }));
@@ -1073,13 +1073,13 @@ describe("project resources", () => {
     await user.type(dialog.getByLabelText("Name"), "checkout service");
     await user.type(dialog.getByLabelText("Reference"), "acme/checkout");
     await user.click(dialog.getByRole("button", { name: "Bind" }));
-    await waitFor(() => expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1); });
     expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
     expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
       kind: "repository", connection_id: connectionId, name: "checkout service", external_ref: "acme/checkout",
     });
     expect(await screen.findByText("Resource attached — checkout service.")).toBeVisible();
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull(); });
     // The bind's pending counts released with its settle: the surface accepts
     // the next write instead of staying locked.
     expect(screen.getByRole("button", { name: "Bind resource" })).toBeEnabled();
@@ -1164,7 +1164,7 @@ describe("project resources", () => {
     expect(dialog.getByLabelText("Reference")).toHaveValue("77777777-7777-4777-8777-777777777772");
     await user.type(dialog.getByLabelText("Name"), "review runner");
     await user.click(dialog.getByRole("button", { name: "Bind" }));
-    await waitFor(() => expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1); });
     expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
       kind: "runtime", connection_id: null, name: "review runner", external_ref: "77777777-7777-4777-8777-777777777772",
     });
@@ -1252,7 +1252,7 @@ describe("project resources", () => {
     expect(row.getByText("Resource has no external connection")).toBeVisible();
     expect(row.getByText("Never synced")).toBeVisible();
     expect(row.queryByText("Synced")).toBeNull();
-    await waitFor(() => expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads); });
   });
 
   it("renders the served capability refusal with the capability-specific next step", async () => {
@@ -1314,7 +1314,7 @@ describe("project resources", () => {
     const reads = harness.requests.filter((request) => request.path === "/portal/api/workspace").length;
     await user.click(await screen.findByRole("button", { name: "Synchronize project" }));
     expect(await screen.findByText(/external provider request failed \(provider_failure\)/)).toBeVisible();
-    await waitFor(() => expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads); });
     expect(screen.queryByText(/Project resources synchronized/)).toBeNull();
   });
 
@@ -1335,7 +1335,7 @@ describe("project resources", () => {
     await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
     expect(dialog.getByLabelText("Name")).toHaveValue("checkout service (renamed)");
     await user.click(dialog.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(harness.requests.filter((request) => request.method === "PATCH")).toHaveLength(1));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "PATCH")).toHaveLength(1); });
     expect(harness.requests.find((request) => request.method === "PATCH")?.body).toEqual({
       version: 4, name: "checkout service (renamed)", connection_id: connectionId, external_ref: "acme/checkout",
     });
@@ -1367,7 +1367,7 @@ describe("project resources", () => {
     harness.setProjects([projectFixture({ resources: [resourceFixture({ version: 9 })] })]);
     await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
     await user.click(dialog.getByRole("button", { name: "Unbind resource" }));
-    await waitFor(() => expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(1));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(1); });
     expect(harness.requests.find((request) => request.method === "DELETE")?.path).toBe(`/portal/api/resources/${alphaId}?version=4`);
     expect(await dialog.findByRole("alert")).toHaveTextContent("state has already advanced (state_conflict)");
     expect(dialog.getByText(/Reload and resolve the changed state\./)).toBeVisible();
@@ -1470,7 +1470,7 @@ describe("project resources", () => {
     expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull();
     expect(screen.queryByText(/Resource attached/)).toBeNull();
     // The write is real, so the project read is reconciled even for a closed editor.
-    await waitFor(() => expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads); });
   });
 
   it("disables every mutation control for an archived project with a visible reason", async () => {
@@ -1495,14 +1495,14 @@ describe("project resources", () => {
     await user.click(bind);
     expect(await screen.findByRole("dialog", { name: "Bind resource" })).toBeVisible();
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull(); });
     expect(bind).toHaveFocus();
 
     const unbind = screen.getByRole("button", { name: "Unbind checkout service" });
     await user.click(unbind);
     expect(await screen.findByRole("dialog", { name: "Unbind checkout service?" })).toBeVisible();
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Unbind checkout service?" })).toBeNull());
+    await waitFor(() => { expect(screen.queryByRole("dialog", { name: "Unbind checkout service?" })).toBeNull(); });
     expect(unbind).toHaveFocus();
   });
 

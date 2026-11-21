@@ -174,7 +174,7 @@ const safeUrl = (value: string): string | null => {
   }
 };
 
-export interface DialogFrameProps {
+interface DialogFrameProps {
   title: string;
   closeLabel: string;
   descriptionId: string;
@@ -239,8 +239,8 @@ function ResourceRowItem({ row, connections, locked, syncPending, onSync, onUpda
     </div>
     <div className="resource-actions">
       <button className="button" type="button" disabled={locked} aria-busy={syncPending} onClick={onSync}>Sync {row.name}</button>
-      <button className="button" type="button" disabled={locked} onClick={(event) => onUpdate(event.currentTarget)}>Update {row.name}</button>
-      <button className="button" type="button" disabled={locked} onClick={(event) => onUnbind(event.currentTarget)}>Unbind {row.name}</button>
+      <button className="button" type="button" disabled={locked} onClick={(event) => { onUpdate(event.currentTarget); }}>Update {row.name}</button>
+      <button className="button" type="button" disabled={locked} onClick={(event) => { onUnbind(event.currentTarget); }}>Unbind {row.name}</button>
     </div>
   </li>;
 }
@@ -276,7 +276,7 @@ function BindResourceDialog({ api, csrf, projectId, connections, runtimes, edito
     // dialog closes, after a re-read and after a remount.
     onMutate: () => { onWriteStart(); onSubjectPending(projectSubject(projectId), true); },
     onSettled: () => { onWriteSettled(); onSubjectPending(projectSubject(projectId), false); },
-    onSuccess: (_receipt, draft) => onSaved(editorId, `Resource attached — ${draft.name}.`),
+    onSuccess: (_receipt, draft) => { onSaved(editorId, `Resource attached — ${draft.name}.`); },
     // A refused write is never rendered as success: re-read the server's state
     // so the surface shows what the server actually holds.
     onError: onRefresh,
@@ -384,7 +384,7 @@ function UpdateResourceDialog({ api, csrf, resource, connections, runtimes, edit
       api.updateResource(subject.id, { version: subject.version, ...update }, csrf, new AbortController().signal),
     onMutate: () => { onWriteStart(); onSubjectPending(resourceSubject(subject.id), true); },
     onSettled: () => { onWriteSettled(); onSubjectPending(resourceSubject(subject.id), false); },
-    onSuccess: (_receipt, update) => onSaved(editorId, `Resource updated — ${update.name}.`),
+    onSuccess: (_receipt, update) => { onSaved(editorId, `Resource updated — ${update.name}.`); },
     onError: onRefresh,
   });
   const stale = save.error instanceof ServerRefusal && save.error.code === "stale";
@@ -474,7 +474,7 @@ function UnbindResourceDialog({ api, csrf, resource, editorId, openerRef, fallba
     mutationFn: () => api.deleteResource(subject.id, subject.version, csrf, new AbortController().signal),
     onMutate: () => { onWriteStart(); onSubjectPending(resourceSubject(subject.id), true); },
     onSettled: () => { onWriteSettled(); onSubjectPending(resourceSubject(subject.id), false); },
-    onSuccess: () => onSaved(editorId, `Resource detached — ${subject.name}.`),
+    onSuccess: () => { onSaved(editorId, `Resource detached — ${subject.name}.`); },
     onError: onRefresh,
   });
   const terminal = remove.error instanceof ServerRefusal &&
@@ -486,7 +486,7 @@ function UnbindResourceDialog({ api, csrf, resource, editorId, openerRef, fallba
       ? `${refusalNotice(remove.error)} Close and reopen this dialog to act on the server's current state.`
       : refusalNotice(remove.error)}</p>}
     <div className="dialog-actions">
-      <button className="button" type="button" disabled={blocked} aria-busy={remove.isPending} onClick={() => remove.mutate()}>Unbind resource</button>
+      <button className="button" type="button" disabled={blocked} aria-busy={remove.isPending} onClick={() => { remove.mutate(); }}>Unbind resource</button>
       <button className="button" type="button" onClick={onClose} disabled={remove.isPending}>Cancel</button>
     </div>
   </DialogFrame>;
@@ -502,7 +502,7 @@ function ProjectResourcesHeading({ count, headingRef, children }: { count: numbe
   </div>;
 }
 
-export interface ProjectResourcesProps {
+interface ProjectResourcesProps {
   api: Api;
   csrf: string;
   /** `search.projectId ?? workspace.selected_project_id`: the live project scope. */
@@ -638,10 +638,10 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, work
   return <>
     <ProjectResourcesHeading count={rows.length} headingRef={headingRef}>
       <div className="heading-actions">
-        <button className="button" type="button" disabled={blocked} onClick={(event) => openEditor("bind", "", event.currentTarget)}>
+        <button className="button" type="button" disabled={blocked} onClick={(event) => { openEditor("bind", "", event.currentTarget); }}>
           <Plus size={16} aria-hidden="true" />Bind resource
         </button>
-        <button className="button" type="button" disabled={blocked} aria-busy={projectSyncPending} onClick={() => syncProject.mutate()}>Synchronize project</button>
+        <button className="button" type="button" disabled={blocked} aria-busy={projectSyncPending} onClick={() => { syncProject.mutate(); }}>Synchronize project</button>
       </div>
     </ProjectResourcesHeading>
     {/* A failed re-read with cached rows present is shown as a failed refresh:
@@ -650,16 +650,16 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, work
     <p className="filter-note">Showing {project.name} <span className="item-key">{project.key}</span>.</p>
     {archived && <p className="filter-note">This project is archived, so binding, updating, unbinding and synchronizing its resources are disabled.</p>}
     {editorSubjectRemoved && <p className="notice notice-error" role="status">The resource being edited was removed elsewhere before the change was saved; the unsaved draft was discarded.</p>}
-    {notice && <p className="notice" role="status">{notice}<button className="button" type="button" onClick={() => setNotice(null)}>Dismiss</button></p>}
+    {notice && <p className="notice" role="status">{notice}<button className="button" type="button" onClick={() => { setNotice(null); }}>Dismiss</button></p>}
     {rows.length === 0
       ? <EmptyState title="No resources yet">Bind a repository, work tracking, CI, agent or runtime resource to this project.</EmptyState>
       : <ul className="resource-list" aria-label="Project resources">
         {rows.map((row) => {
           const pending = (pendingSubjects[resourceSubject(row.id)] ?? 0) > 0;
           return <ResourceRowItem key={row.id} row={row} connections={connections} locked={blocked || pending} syncPending={pending}
-            onSync={() => syncResource.mutate(row.id)}
-            onUpdate={(invoking) => openEditor("update", row.id, invoking)}
-            onUnbind={(invoking) => openEditor("unbind", row.id, invoking)} />;
+            onSync={() => { syncResource.mutate(row.id); }}
+            onUpdate={(invoking) => { openEditor("update", row.id, invoking); }}
+            onUnbind={(invoking) => { openEditor("unbind", row.id, invoking); }} />;
         })}
       </ul>}
     {editor !== null && editor.kind === "bind" && <BindResourceDialog key={editor.id} api={api} csrf={csrf} projectId={projectId} connections={connections}

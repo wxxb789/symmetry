@@ -79,7 +79,7 @@ function requestedScopeLabel(scope: ChatScope, projectId: string | null, runId: 
   }
 }
 
-export interface ChatScopeContextInput {
+interface ChatScopeContextInput {
   /** The URL's own scope members. */
   readonly urlScope: ChatScope;
   readonly urlProjectId: string | null;
@@ -160,7 +160,7 @@ export function pauseUnsupported(adapter: ChatAdapterRecord | null | undefined):
 }
 
 /** A message's receipt outcome: a durable outcome, or the retained-page provenance. */
-export type ChatReceiptOutcome = ReceiptOutcome | "retained";
+type ChatReceiptOutcome = ReceiptOutcome | "retained";
 
 /** The served execution state as a sentence-cased label; an unknown state keeps its honest name. */
 export function chatStateLabel(state: string): string {
@@ -210,7 +210,7 @@ export function chatSendStatusText(status: ChatSendStatus): string {
 }
 
 /** One served value rendered as a link only when its scheme is http(s). */
-export interface ServedLink {
+interface ServedLink {
   readonly text: string;
   readonly href: string | null;
 }
@@ -231,14 +231,14 @@ export function chatRunLinks(run: { readonly pull_request_url?: string | null; r
   return links;
 }
 
-export interface ChatHistoryGap {
+interface ChatHistoryGap {
   /** The oldest message id of the chain the served read reached. */
   readonly current: string;
   /** The newest message id among the retained pages the served read's chain did not reach. */
   readonly retained: string;
 }
 
-export interface ChatHistoryView {
+interface ChatHistoryView {
   /** Oldest first: the retained older entries, then the current page in its served order. */
   readonly messages: readonly ChatConversationMessage[];
   /** The ids the current page carries; only their receipts are refreshed. */
@@ -334,7 +334,7 @@ function historyGap(newest: ChatHistoryPage, older: readonly ChatHistoryPage[]):
 }
 
 /** One recorded semantic execution entry, rendered as inert text. */
-export interface ChatEvidenceRow {
+interface ChatEvidenceRow {
   readonly key: string;
   readonly source: "event" | "transition" | "command";
   readonly kind: string;
@@ -353,11 +353,11 @@ export function chatEvidenceRows(run: ChatConversationRun | null): readonly Chat
     if (item.source === "event") {
       const kind = item.data.kind;
       const payload = item.data.payload;
-      const state = asText(payload["state"]);
-      const detail = asText(payload["message"]) ?? asText(payload["summary"]) ?? asText(payload["rationale"]);
+      const state = asText(payload.state);
+      const detail = asText(payload.message) ?? asText(payload.summary) ?? asText(payload.rationale);
       rows.push({ key: `event:${item.data.event_id}:${index}`, source: "event", kind, summary: detail ?? state });
     } else if (item.source === "transition") {
-      const from = asText(item.data.payload["from"]);
+      const from = asText(item.data.payload.from);
       rows.push({
         key: `transition:${item.data.transition_id}:${index}`,
         source: "transition",
@@ -380,7 +380,7 @@ export function chatEvidenceRows(run: ChatConversationRun | null): readonly Chat
 }
 
 /** The served waiting projection members the decision packet reads. */
-export interface ChatWaitingProjection {
+interface ChatWaitingProjection {
   readonly transition_id: string;
   readonly generation: number;
   readonly question: string | null;
@@ -395,7 +395,7 @@ export interface ChatDecisionOption {
   readonly recommended: boolean;
 }
 
-export interface ChatDecisionPacket {
+interface ChatDecisionPacket {
   readonly context: string | null;
   readonly question: string | null;
   readonly transitionId: string;
@@ -413,14 +413,14 @@ export function chatDecisionPacket(waiting: ChatWaitingProjection | null): ChatD
   if (waiting === null) return null;
   const packet = decisionRecord(waiting);
   if (packet === null) return null;
-  const recommended = asText(packet["recommended_option_id"]);
-  const options = asRecords(packet["options"]).flatMap((option): ChatDecisionOption[] => {
-    const id = asText(option["id"]);
+  const recommended = asText(packet.recommended_option_id);
+  const options = asRecords(packet.options).flatMap((option): ChatDecisionOption[] => {
+    const id = asText(option.id);
     if (id === null) return [];
-    return [{ id, label: asText(option["label"]), consequence: asText(option["consequence"]), recommended: recommended === id }];
+    return [{ id, label: asText(option.label), consequence: asText(option.consequence), recommended: recommended === id }];
   });
   return {
-    context: asText(packet["context"]),
+    context: asText(packet.context),
     question: asText(waiting.question),
     transitionId: waiting.transition_id,
     generation: waiting.generation,
@@ -432,10 +432,10 @@ export function chatDecisionPacket(waiting: ChatWaitingProjection | null): ChatD
 function failureText(failure: unknown): string | null {
   const record = asRecord(failure);
   if (record === null) return null;
-  return asText(record["message"]) ?? asText(record["summary"]) ?? asText(record["error"]);
+  return asText(record.message) ?? asText(record.summary) ?? asText(record.error);
 }
 
-export interface ChatFailureView {
+interface ChatFailureView {
   readonly state: "failed" | "cancelled";
   readonly text: string;
 }

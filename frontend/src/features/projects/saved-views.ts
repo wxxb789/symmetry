@@ -11,7 +11,7 @@ import { workSearch, type WorkSearch } from "./filters";
 export const savedViewStorageKey = "symmetry.portal.saved-views";
 const savedViewVersion = 1;
 
-export interface SavedWorkView {
+interface SavedWorkView {
   name: string;
   search: WorkSearch;
 }
@@ -82,7 +82,7 @@ export function writeSavedViews(storage: Storage | null, scope: string, projectI
   }
 }
 
-export interface SavedViews {
+interface SavedViews {
   views: SavedWorkView[];
   save: (name: string, search: WorkSearch) => void;
   remove: (name: string) => void;

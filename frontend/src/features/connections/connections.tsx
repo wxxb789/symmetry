@@ -107,32 +107,32 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
     // The server resets bound resource health and sync state only when the
     // update changes the capabilities; the receipt notice must not claim a
     // reset that did not happen.
-    onSuccess: (receipt, payload) => onSaved(
+    onSuccess: (receipt, payload) => { onSaved(
       receipt.disposition,
       receipt.connectionId,
       editorId,
       editedCapabilities !== null &&
         (payload.capabilities.length !== editedCapabilities.length ||
           payload.capabilities.some((capability) => !editedCapabilities.includes(capability))),
-    ),
+    ); },
     // A refused write is never rendered as success: re-read the server's state
     // so the console shows what the server actually holds.
     onError: () => { void queryClient.invalidateQueries({ queryKey: ["connections"] }); },
     // The page-level pending count drops only when the request settles, so the
     // exclusion holds even after this editor closes while the write is pending.
-    onSettled: () => onWriteSettled(),
+    onSettled: () => { onWriteSettled(); },
   });
   // Capability coupling is server-owned policy: "changes" requires
   // "repositories", so selecting one selects the other and dropping
   // "repositories" also drops "changes".
-  const toggleCapability = (capability: string) => setDraft((current) => {
+  const toggleCapability = (capability: string) => { setDraft((current) => {
     const capabilities = current.capabilities.includes(capability)
       ? current.capabilities.filter((value) => value !== capability && !(capability === "repositories" && value === "changes"))
       : capability === "changes" && !current.capabilities.includes("repositories")
         ? [...current.capabilities, "repositories", capability]
         : [...current.capabilities, capability];
     return { ...current, capabilities };
-  });
+  }); };
   const failure = save.error;
   const stale = failure instanceof ServerRefusal && failure.code === "stale";
   const blocked = save.isPending || stale;
@@ -166,7 +166,7 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
         <legend>Capabilities</legend>
         <p className="muted text-small">Authentication: {authLabel(provider?.auth_type ?? connection?.auth_type ?? "")}. The server requires repositories for changes.</p>
         {(provider?.capabilities ?? connection?.capabilities ?? []).map((capability) => <label key={capability} className="capability-option">
-          <input type="checkbox" name="capabilities" value={capability} checked={draft.capabilities.includes(capability)} onChange={() => toggleCapability(capability)} />
+          <input type="checkbox" name="capabilities" value={capability} checked={draft.capabilities.includes(capability)} onChange={() => { toggleCapability(capability); }} />
           {capabilityLabel(capability)}
         </label>)}
       </fieldset>
@@ -216,8 +216,8 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
   // request, see `noticeFor`).
   const check = useMutation({
     mutationFn: () => api.checkConnection(connection.id, csrf, new AbortController().signal),
-    onMutate: () => onRequest(connection.id, "check", true),
-    onSettled: () => onRequest(connection.id, "check", false),
+    onMutate: () => { onRequest(connection.id, "check", true); },
+    onSettled: () => { onRequest(connection.id, "check", false); },
     // The server answers a provider check with `checked`; a replayed receipt is
     // not part of that surface, so the read after the check is the only notice
     // the operator needs.
@@ -229,8 +229,8 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
   });
   const remove = useMutation({
     mutationFn: (target: { id: string; version: number }) => api.deleteConnection(target.id, target.version, csrf, new AbortController().signal),
-    onMutate: () => onRequest(connection.id, "remove", true),
-    onSettled: () => onRequest(connection.id, "remove", false),
+    onMutate: () => { onRequest(connection.id, "remove", true); },
+    onSettled: () => { onRequest(connection.id, "remove", false); },
     onSuccess: async () => {
       setConfirmingDelete(false);
       await refresh();
@@ -259,7 +259,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
     <p className="muted text-small">Capabilities: {connection.capabilities.map(capabilityLabel).join(", ") || "none"}</p>
     {connection.status_message && <p className="notice notice-error" role="alert"><AlertCircle size={18} aria-hidden="true" />{connection.status_message}</p>}
     <div className="connection-actions">
-      <button className="button" type="button" disabled={busy} onClick={() => check.mutate()}>{check.isPending || requests.check > 0 ? "Checking…" : "Test connection"}</button>
+      <button className="button" type="button" disabled={busy} onClick={() => { check.mutate(); }}>{check.isPending || requests.check > 0 ? "Checking…" : "Test connection"}</button>
       <button className="button" type="button" disabled={busy} onClick={onEdit}>Edit capabilities</button>
       <button className="button" type="button" disabled={busy} onClick={(event) => {
         deleteOpener.current = event.currentTarget;
@@ -286,7 +286,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
           </Dialog.Description>
           <div className="dialog-actions">
             <button className="button" type="button" disabled={remove.isPending || requests.remove > 0} onClick={() => { if (deleteTarget) remove.mutate(deleteTarget); }}>{remove.isPending || requests.remove > 0 ? "Removing…" : "Remove connection"}</button>
-            <button className="button" type="button" onClick={() => setConfirmingDelete(false)} disabled={remove.isPending}>Cancel</button>
+            <button className="button" type="button" onClick={() => { setConfirmingDelete(false); }} disabled={remove.isPending}>Cancel</button>
           </div>
           {remove.error && <p className="notice notice-error" role="alert">{refusalNotice(remove.error)}</p>}
         </Dialog.Content>
@@ -400,15 +400,13 @@ export function ConnectionsPage() {
   // Editor saves hold the page-level pending count until they settle, even
   // after their dialog closes: while any check, update or removal is pending,
   // none of the others can start.
-  const beginWrite = () => setPendingWrites((count) => count + 1);
-  const endWrite = () => setPendingWrites((count) => Math.max(0, count - 1));
-  const trackRequest = (connectionId: string, kind: "check" | "remove", pending: boolean) =>
-    setPendingRequests((current) => {
+  const beginWrite = () => { setPendingWrites((count) => count + 1); };
+  const endWrite = () => { setPendingWrites((count) => Math.max(0, count - 1)); };
+  const trackRequest = (connectionId: string, kind: "check" | "remove", pending: boolean) => { setPendingRequests((current) => {
       const counts = current[connectionId] ?? noPendingRequests;
       return { ...current, [connectionId]: { ...counts, [kind]: Math.max(0, counts[kind] + (pending ? 1 : -1)) } };
-    });
-  const trackSubject = (subject: string, pending: boolean) =>
-    setPendingSubjects((current) => ({ ...current, [subject]: Math.max(0, (current[subject] ?? 0) + (pending ? 1 : -1)) }));
+    }); };
+  const trackSubject = (subject: string, pending: boolean) => { setPendingSubjects((current) => ({ ...current, [subject]: Math.max(0, (current[subject] ?? 0) + (pending ? 1 : -1)) })); };
   // A continuation that settles belongs to the connection the operator is
   // looking at: the page drops it when the operator moved to another
   // connection, even though the request outlives its detail instance. An empty
@@ -457,10 +455,10 @@ export function ConnectionsPage() {
     <PageHeading title="Connections" description="GitHub and Azure DevOps connections this server authenticates through.">
       {/* The provider catalog arrives with this query: until it is loaded the
           create draft would have no provider to choose or submit. */}
-      <button ref={newConnectionRef} className="button" type="button" disabled={query.data === undefined} onClick={() => openEditor("create", null)}><Plus size={16} aria-hidden="true" />New connection</button>
+      <button ref={newConnectionRef} className="button" type="button" disabled={query.data === undefined} onClick={() => { openEditor("create", null); }}><Plus size={16} aria-hidden="true" />New connection</button>
       <RefreshButton fetching={query.isFetching} refresh={refresh} />
     </PageHeading>
-    {notice && <p className="notice" role="status">{notice}<button className="button" type="button" onClick={() => setNotice(null)}>Dismiss</button></p>}
+    {notice && <p className="notice" role="status">{notice}<button className="button" type="button" onClick={() => { setNotice(null); }}>Dismiss</button></p>}
     {editSubjectRemoved && <p className="notice notice-error" role="status">The connection being edited was removed elsewhere before the change was saved; the unsaved draft was discarded.</p>}
     {query.isPending && <LoadingState label="Loading connections…" />}
     {query.isError && <ErrorState error={query.error} retry={refresh} stale={query.data !== undefined} />}
@@ -485,7 +483,7 @@ export function ConnectionsPage() {
       {selected
         ? <ConnectionDetail key={selected.id} connection={selected} api={application.api} csrf={csrf} writePending={pendingWrites > 0}
             requests={pendingRequests[selected.id] ?? noPendingRequests} closeButtonRef={detailCloseRef} onRequest={trackRequest}
-            onEdit={() => openEditor("edit", selected.id)} onNotice={(notice) => noticeFor(selected.id, notice)} onRemoved={() => clearSelectionFor(selected.id)} />
+            onEdit={() => { openEditor("edit", selected.id); }} onNotice={(notice) => { noticeFor(selected.id, notice); }} onRemoved={() => { clearSelectionFor(selected.id); }} />
         : <aside className="connection-detail" aria-label="Connection detail">
           <Cable size={28} aria-hidden="true" />
           <h2>Select a connection</h2>

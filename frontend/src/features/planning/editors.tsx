@@ -60,7 +60,7 @@ function restoreOpener(event: Event, opener: HTMLElement | null) {
 
 type ProjectIntent = { kind: "create"; payload: ProjectDraft } | { kind: "update"; payload: ProjectChanges };
 
-export interface ProjectEditorProps {
+interface ProjectEditorProps {
   /** No project creates; a project must carry its served revision to be edited. */
   project: VersionedProject | null;
   api: Api;
@@ -107,7 +107,7 @@ export function ProjectEditor({ project, api, csrf, onSaved, onRefused, onClose,
   const failure = save.error;
   const retryable = failure !== null && failureMode(failure) === "retryable";
   const pending = save.isPending;
-  const set = (patch: Partial<ProjectFormState>) => setForm((current) => ({ ...current, ...patch }));
+  const set = (patch: Partial<ProjectFormState>) => { setForm((current) => ({ ...current, ...patch })); };
   const submit = () => {
     if (pending || inFlightRef.current) return;
     const submitted: ProjectIntent = target === null || project === null
@@ -128,8 +128,8 @@ export function ProjectEditor({ project, api, csrf, onSaved, onRefused, onClose,
     <Dialog.Portal>
       <Dialog.Overlay className="dialog-overlay" />
       <Dialog.Content className="command-dialog planning-dialog" aria-describedby="project-editor-description"
-        onEscapeKeyDown={() => close()}
-        onPointerDownOutside={() => close()}
+        onEscapeKeyDown={() => { close(); }}
+        onPointerDownOutside={() => { close(); }}
         onCloseAutoFocus={(event) => { const target = openerRef.current; openerRef.current = null; restoreOpener(event, target); }}>
         <DialogHeading title={project === null ? "New project" : "Project settings"} onClose={close} />
         <Dialog.Description id="project-editor-description" className="muted">
@@ -190,7 +190,7 @@ export function ProjectEditor({ project, api, csrf, onSaved, onRefused, onClose,
 
 type WorkItemIntent = { kind: "create"; payload: WorkItemDraft } | { kind: "update"; payload: WorkItemChanges };
 
-export interface WorkItemEditorProps {
+interface WorkItemEditorProps {
   project: Project;
   /** No item creates; an item must carry its served revision to be edited. */
   item: VersionedWorkItem | null;
@@ -282,7 +282,7 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
           : "Work item created."
         : "Work item updated.";
       const notes = notesRef.current;
-      if (notes.length === 0) return onSaved(receipt, base);
+      if (notes.length === 0) { onSaved(receipt, base); return; }
       onSaved(receipt, `${base} ${notes.join(" ")}`);
     },
     onError: (error) => {
@@ -292,7 +292,7 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
   });
   const failure = save.error;
   const pending = save.isPending;
-  const set = (patch: Partial<WorkItemFormState>) => setForm((current) => ({ ...current, ...patch }));
+  const set = (patch: Partial<WorkItemFormState>) => { setForm((current) => ({ ...current, ...patch })); };
   const submit = () => {
     if (pending || inFlightRef.current) return;
     setIdentityFailure(null);
@@ -434,8 +434,8 @@ function WorkItemEditorDialog({ project, item, presentation, drawerHost, draft }
     <Dialog.Portal container={presentation === "drawer" ? drawerHost ?? undefined : undefined}>
       <Dialog.Overlay className="dialog-overlay" />
       <Dialog.Content className="command-dialog planning-dialog" aria-describedby="work-item-editor-description"
-        onEscapeKeyDown={() => close()}
-        onPointerDownOutside={() => close()}
+        onEscapeKeyDown={() => { close(); }}
+        onPointerDownOutside={() => { close(); }}
         onCloseAutoFocus={(event) => { const target = openerRef.current; openerRef.current = null; restoreOpener(event, target); }}>
         <DialogHeading title={item === null ? "New work item" : "Edit work item"} onClose={close} />
         <Dialog.Description id="work-item-editor-description" className="muted">

@@ -10,13 +10,13 @@ import {
 /** A scripted Phoenix socket: the test drives open/close and pushes messages. */
 function fakeSocket() {
   const handlers = {
-    open: [] as Array<() => void>,
-    close: [] as Array<() => void>,
-    error: [] as Array<(error?: unknown) => void>,
+    open: [] as (() => void)[],
+    close: [] as (() => void)[],
+    error: [] as ((error?: unknown) => void)[],
   };
-  const received: Array<(payload: unknown) => void> = [];
+  const received: ((payload: unknown) => void)[] = [];
   const joins: string[] = [];
-  const replies = { ok: [] as Array<() => void>, error: [] as Array<() => void> };
+  const replies = { ok: [] as (() => void)[], error: [] as (() => void)[] };
   let joined = false;
   let disconnects = 0;
   // One push object across rejoins: Phoenix hands the same `joinPush` back from
@@ -61,12 +61,12 @@ function fakeSocket() {
     joins,
     disconnects: () => disconnects,
     isJoined: () => joined,
-    open: () => handlers.open.forEach((callback) => callback()),
-    close: () => handlers.close.forEach((callback) => callback()),
-    fail: (error?: unknown) => handlers.error.forEach((callback) => callback(error)),
-    deliver: (payload: unknown) => received.forEach((callback) => callback(payload)),
-    joinOk: () => replies.ok.forEach((callback) => callback()),
-    joinError: () => replies.error.forEach((callback) => callback()),
+    open: () => { handlers.open.forEach((callback) => { callback(); }); },
+    close: () => { handlers.close.forEach((callback) => { callback(); }); },
+    fail: (error?: unknown) => { handlers.error.forEach((callback) => { callback(error); }); },
+    deliver: (payload: unknown) => { received.forEach((callback) => { callback(payload); }); },
+    joinOk: () => { replies.ok.forEach((callback) => { callback(); }); },
+    joinError: () => { replies.error.forEach((callback) => { callback(); }); },
   };
 }
 
