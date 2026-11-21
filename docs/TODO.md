@@ -19,17 +19,19 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       card renders on the repository page. The image is 1280×640 and mirrors the
       README banner (`docs/assets/symmetry-banner.png`).
 
-- [ ] Revalidate and remove three daemon surfaces the re-scoped dead-code sweep left in
-      `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
+- [ ] Revalidate and remove the two remaining daemon surfaces the re-scoped dead-code sweep left
+      in `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
       `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
-      (`daemon/internal/state/goal_session.go:1044`), `Store.EnsureGoalSessionLineageAvailable`
-      (`:592`) and `Store.FailUnresolvedProvideInput` (`daemon/internal/state/state.go:4238`) are
+      (`daemon/internal/state/goal_session.go:1026`) and `Store.FailUnresolvedProvideInput`
+      (`daemon/internal/state/state.go:4241`) are
       unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
       alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matches only each
       definition plus its doc comment — no call site, no test, no doc citation anywhere; this
       entry and the plan are the only matches added since. They were outside that sweep's owned
       file set; reproduction is the three `deadcode` runs plus the baseline-scoped grep, as
-      recorded in the plan.
+      recorded in the plan. The third candidate, `Store.EnsureGoalSessionLineageAvailable`, was
+      revalidated and removed on the W3-07 follow-up branch
+      `refactor/rf-w3-07b-state-error-followups` (moved to `docs/archive/CLOSED-TODO.md`).
 
 - [ ] Revalidate and remove `harness.NewClaudeAdapterWithRunner` (three test files), the residual
       of the 2026-11-21 W1-06 daemon dead-code survey (branch
@@ -999,22 +1001,6 @@ instead of appended.
       first-`Close` window (`:924`). Revalidate against a recovered failure before changing the
       window or the assertion.
 
-## CI Go toolchain: bump past the stdlib advisories
-
-- [ ] Bump the CI-pinned Go toolchain past the 12 standard-library vulnerabilities the advisory
-      govulncheck step reports. `go-version: 1.27.0` is pinned in six places in
-      `.github/workflows/ci.yml` and once in `.github/workflows/linux-native-v2-acceptance.yml`;
-      hosted CI run 44862556617's `daemon` job shows `Go: go1.27.0`,
-      `govulncheck_exit_status=3`, `govulncheck_vulnerabilities=12`, every finding fixed in
-      go1.27.2-go1.27.4 (for example GO-2026-6859 `net/http@go1.27.4`, GO-2026-6809
-      `crypto/x509@go1.27.3`), while the same command on a go1.27.4 host reports none.
-      Found 2026-11-21 by refactor slice W1-01 (branch `refactor/rf-w1-01-ci-quality-plane`,
-      plan `docs/plans/2026-11-21-ci-quality-plane-plan.md`), which records the 12 as the
-      advisory baseline and leaves the pin alone: changing it alters pre-existing steps, which
-      the slice's contract (clause 3) rules out. Fix direction: raise `go-version` in every
-      workflow that sets it, re-run the advisory step and record the patched-toolchain count.
-      Owner area: CI tooling.
-
 ## Daemon platform: anchor socket-error sanitation keeps its outermost-only type switch
 
 - [ ] Follow-up error-sanitation slice: resolve the remaining `errorlint` finding in
@@ -1191,29 +1177,10 @@ instead of appended.
       `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
       vocabulary"), so the slice kept the copy and recorded this entry instead.
 
-## Daemon state: decorative trailing-data disjunct in the provider-action decoder (rf-w3-07 survey)
-
-- [ ] Revalidate and merge the redundant trailing-data arms of
-      `normalizeProviderActionResult` (`daemon/internal/state/provider_action.go`). At the
-      rf-w3-07 base `52bdffd2` the block was
-      `if token, tokenErr := decoder.Token(); tokenErr != io.EOF { if tokenErr == nil || token !=
-      nil { return errors.New("provider action result has trailing data") }; return
-      errors.New("provider action result has trailing data") }`: both arms returned the identical
-      static error, so the disjunct could not change any outcome, and `json.Decoder.Token`
-      returns a nil token whenever it returns an error. rf-w3-07 (2026-11-21) split the block to
-      wrap the decoder cause (`if tokenErr != nil { wrapped }`, `if token != nil { static }`,
-      final `static`) and kept the third arm because that slice's contract requires base-vs-head
-      control-flow preservation for every early return; the last two arms still return the same
-      bytes. No test asserts the message by equality (`grep -rn --include=*_test.go '"provider
-      action result has trailing data"' daemon/` matches nothing). A follow-up maintenance task
-      can collapse the arms to one static return after re-running the state suite on the Linux
-      lane; the sweep and the classification table live in
-      `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1/§2.
-
 ## Deferred review findings (PR #200)
 
 - [ ] Harden the goal-session uncertain-reason budget against invalid UTF-8 at the store
-      boundary (`daemon/internal/state/goal_session.go:1052` write check vs `:1688` read
+      boundary (`daemon/internal/state/goal_session.go:1034` write check vs `:1670` read
       validation; 2026-11-21, branch `refactor/rf-w3-07-state-error-causes`, PR #200 review
       P2-1). A within-budget reason containing invalid UTF-8 bytes passes the write check
       (`validRequiredString` is length-only), but the journal's JSON round trip replaces each
@@ -1253,10 +1220,9 @@ instead of appended.
       `lateGoalUsageLedger`). Both stay legal Go through inference (`status, err :=
       store.CheckGoalSessionLineage(key)`), neither has an out-of-package caller at this branch's
       head, and rf-w3-08 kept them rather than widening its slice; this entry tracks the retained
-      surface so a follow-up owner can decide unexport/retire/wire for all three together.
-      `Store.EnsureGoalSessionLineageAvailable` (`:592`, `goalSessionLineageKey`) is the same
-      shape; the W3-07 follow-up PR #215 removes it (the rf-w1-06 dead-code candidate above), so
-      its signature question resolves with that removal rather than here.
+      surface so a follow-up owner can decide unexport/retire/wire for both together.
+      `Store.EnsureGoalSessionLineageAvailable`, the same shape, was removed by PR #215 (the
+      rf-w1-06 dead-code candidate above).
 
 ## Deferred findings (rf-a4 core work-item eligibility, 2026-11-21)
 
@@ -1284,3 +1250,41 @@ instead of appended.
       inversion plus `decision.lock_version`, consuming the new
       `SymmetryControl.Workspaces.WorkItemEligibility` for the chat override. The served chat
       document is unchanged by rf-a4.
+
+## Deferred review findings (PR #213)
+
+- [ ] Rename the cleanup memo `runningRun.cleanupBlocked` and move it into `runLifecycle` under a
+      distinct name (PR #213 review r1, P3-1; plan
+      `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md`, D1). The memo is an independent
+      field that `markCleanupBlocked` and `clearCleanupBlock` set directly, separate from the
+      derived `cleanupBlocked()` predicate; a field cannot share the method's name on one type,
+      so the memo kept its base name outside the module. D1 measured option (a) at 86 test-file
+      lines in 17 files at base (42 fixture-literal keys and 44 assertion/read lines), so the
+      rename needs that mechanical rewrite plus the write-site scan's field-list update.
+
+## Daemon: the durable terminal-transition payload has no capacity policy (rf-w3-09 review W309-R2)
+
+- [ ] Decide and implement a capacity policy for the durable terminal-transition payload. Chain:
+      `queueFailure` (`daemon/internal/app/events.go:530-541`) puts `cause.Error()` into
+      `payload["error"]`; `queueTerminalTransitionWithRetry` (`daemon/internal/app/outbox.go:124-168`)
+      retries `state.ErrProviderActionCapacity` forever (`minimumInterval`, log
+      `queue_terminal_transition_failed`); the capacity error comes from
+      `saveJournalWithCapacityGuardLocked` (`daemon/internal/state/state.go:5326`) →
+      `validateJournalSaveCapacity` (`daemon/internal/state/provider_action.go:594-606`, 4 MiB check
+      at `:599`) and `saveJournalLocked` (`state.go:5305`, size check at `:5311`;
+      `maxJournalFileBytes = 4<<20`). rf-w3-09 (2026-11-22, drop-errcheck slice) joined the abandon
+      result into the nine `startGoalAdmission` returns, and the `goal_admission` `queueFailure`
+      call in `daemon/internal/app/app.go` passes that value through unchanged (read from source,
+      not driven): a run whose pre-change
+      payload fit by fewer bytes than the joined tail can now exceed the guard and never persist its
+      terminal state, where base `261e84a4` persisted the same input. Review probe at the state
+      boundary: a 4,194,116-byte journal accepts the transition and a +298-byte tail returns
+      `ErrProviderActionCapacity`; re-verified here: `json.Marshal`'s HTML escaping makes each `<` in
+      an error string cost 5 payload bytes (`json.Marshal(map[string]string{"error": strings.Repeat("<", 1000)})`
+      = 6,012 B vs 1,012 B for `a`), and `APIError.Error()` embeds the Control message up to the 1 MiB
+      read cap (`daemon/internal/control/client.go:22` `defaultMaxResponseBytes = 1 << 20`). Fix
+      direction: either a capacity policy for `payload["error"]` (bounded durable copy with a marker,
+      returned chain keeps the full text) or an explicit degraded outcome for capacity errors instead
+      of the unbounded retry. The sink files are outside the rf-w3-09 owned set (`events.go`,
+      `outbox.go`, `state.go`), which is why that slice recorded this entry instead of changing them;
+      owner: daemon outbox/state.

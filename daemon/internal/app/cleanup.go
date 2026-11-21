@@ -436,21 +436,17 @@ func (daemon *daemon) finalizeExitedProcess(key state.RunKey, journal state.RunJ
 		return false, nil
 	}
 	process := active.process
-	if active.processFinalizeOwner != process {
-		active.processFinalizeOwner = process
-		active.processFinalizeAttempts = 0
-		active.processFinalizeExhausted = false
-	}
+	active.takeFinalizeOwnership(process)
 	if active.processFinalizeExhausted {
 		daemon.mu.Unlock()
 		return false, errors.New("process containment finalization retry budget exhausted")
 	}
 	if active.processFinalizeAttempts >= processFinalizeRetryLimit {
-		active.processFinalizeExhausted = true
+		active.markFinalizeExhausted()
 		daemon.mu.Unlock()
 		return false, errors.New("process containment finalization retry budget exhausted")
 	}
-	active.processFinalizeAttempts++
+	active.recordFinalizeAttempt()
 	daemon.mu.Unlock()
 
 	finalizer, ok := process.(ProcessFinalizer)
@@ -458,7 +454,7 @@ func (daemon *daemon) finalizeExitedProcess(key state.RunKey, journal state.RunJ
 		err := errors.New("process containment finalizer is unavailable")
 		daemon.mu.Lock()
 		if daemon.running[key] == active && active.process == process && active.processFinalizeAttempts >= processFinalizeRetryLimit {
-			active.processFinalizeExhausted = true
+			active.markFinalizeExhausted()
 		}
 		daemon.mu.Unlock()
 		return false, err
@@ -466,7 +462,7 @@ func (daemon *daemon) finalizeExitedProcess(key state.RunKey, journal state.RunJ
 	if err := finalizer.FinalizeContainment(); err != nil {
 		daemon.mu.Lock()
 		if daemon.running[key] == active && active.process == process && active.processFinalizeAttempts >= processFinalizeRetryLimit {
-			active.processFinalizeExhausted = true
+			active.markFinalizeExhausted()
 		}
 		daemon.mu.Unlock()
 		return false, err
@@ -481,18 +477,14 @@ func (daemon *daemon) finalizeExitedProcess(key state.RunKey, journal state.RunJ
 	if daemon.running[key] != active || active.process != process {
 		return false, nil
 	}
-	active.processStopWitness = process
-	active.processStopPID = pid
-	active.processStopIdentity = identity
-	active.cleanupBlocked = true
-	active.processFinalizeExhausted = false
+	active.recordFinalizedStop(process, pid, identity)
 	return true, nil
 }
 
 func (daemon *daemon) clearCleanupBlockedAfterStop(key state.RunKey, expected *runningRun) {
 	daemon.mu.Lock()
 	if daemon.running[key] == expected && expected.processStopWitness == expected.process {
-		expected.cleanupBlocked = false
+		expected.clearCleanupBlock()
 	}
 	daemon.mu.Unlock()
 }

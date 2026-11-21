@@ -97,12 +97,6 @@ func TestLoadJournalWrapsDecodeCause(t *testing.T) {
 	}
 }
 
-// TestMarkGoalSessionUncertainReasonBudget pins the durable reason budget the
-// wrapped write causes now feed into (W307-R1: the app composes
-// "<prefix>: <cause>" and the store enforces 4096 bytes at goal_session.go:1052
-// on the write and at goal_session.go:1688 on the read). Exactly 4096 bytes is
-// accepted and loadable again; one byte more is rejected before the mutation,
-// so the journal file stays byte-identical.
 func TestMarkGoalSessionUncertainReasonBudget(t *testing.T) {
 	const limit = 4096
 	store := mustStore(t)
@@ -141,5 +135,56 @@ func TestMarkGoalSessionUncertainReasonBudget(t *testing.T) {
 	}
 	if len(loaded.UncertainReason) != limit {
 		t.Fatalf("durable reason bytes = %d, want %d", len(loaded.UncertainReason), limit)
+	}
+}
+
+func TestLoadJournalWrapsCaseInsensitiveAliasCause(t *testing.T) {
+	t.Parallel()
+	store := mustStore(t)
+	journal := stoppedTestJournal("run-wrap-alias", 1)
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	raw := strings.TrimSuffix(string(encoded), "}") + `,"PROVIDER_ACTION_INTENTS":[]}`
+	if err := os.WriteFile(store.journalPath(journal.Key()), []byte(raw), 0o600); err != nil {
+		t.Fatalf("write aliased journal: %v", err)
+	}
+
+	_, err = store.LoadJournal(journal.Key())
+	if err == nil {
+		t.Fatal("LoadJournal() accepted a case-insensitive tag alias")
+	}
+	if !strings.HasPrefix(err.Error(), "decode run journal: ") {
+		t.Fatalf("LoadJournal() error = %q, want the decode prefix plus cause", err)
+	}
+	if !strings.Contains(err.Error(), `aliases exact tag "provider_action_intents"`) {
+		t.Fatalf("LoadJournal() error = %q, want the aliased member and tag in its message", err)
+	}
+}
+
+func TestStoreClosePreservesReleaseLockCauses(t *testing.T) {
+	t.Parallel()
+	store := mustStore(t)
+	lock := store.lock
+	if lock == nil {
+		t.Fatal("mustStore() returned a store without a state directory lock")
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatalf("close the lock file: %v", err)
+	}
+
+	err := store.Close()
+	if err == nil {
+		t.Fatal("Close() with an already released lock file reported success")
+	}
+	if !strings.HasPrefix(err.Error(), "release state directory lock: ") {
+		t.Fatalf("Close() error = %q, want the release prefix plus cause", err)
+	}
+	if got := strings.Count(err.Error(), "release state directory lock"); got != 1 {
+		t.Fatalf("Close() error = %q, release prefix appears %d time(s), want 1", err, got)
+	}
+	if !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("Close() error = %v, want the closed-lock cause in its chain", err)
 	}
 }

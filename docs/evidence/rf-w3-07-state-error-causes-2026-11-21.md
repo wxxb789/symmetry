@@ -8,11 +8,17 @@ validators (#165)` — W2-09 merged, so the contract's dispatch gate is met by t
 Delivered tree: the base commit plus the uncommitted working-tree changes listed below; every
 `<file>:<line>` in this record resolves in that tree unless marked "base".
 
+**2026-11-21 — rf-w3-08 apply stage.** The accepted simplify findings S1/S3/S4 (and S7, S9)
+modified `state.go`, `provider_action.go` and the app side on top of this record's delivered tree;
+§12 is the apply-stage record (applied changes, the re-run sweep, the touched-row cell refresh, the
+S7 mutation pair and the apply-tip gates). Sections above keep the fix-round numbers with in-place
+notes where the apply stage moved them (§0, §1, §2.1, §2.3, §2.4, §3.1).
+
 ## 0. Change inventory
 
 | file | state | lines |
 |---|---|---|
-| `daemon/internal/state/state.go` | modified | +34 / −19 (21 of 46 swept rows) |
+| `daemon/internal/state/state.go` | modified | +40 / −19 at the delivered tip `6d10da97` (21 of 46 swept rows); the round-1 tree `01aada59` measured +34 / −19 — the 6-line const block of §10 is the difference (`git diff --numstat 52bdffd2 <rev> -- daemon/internal/state/state.go`) |
 | `daemon/internal/state/provider_action.go` | modified | +47 / −33 (11 of 11 swept rows) |
 | `daemon/internal/state/state_wrap_test.go` | new | 98 |
 | `daemon/internal/state/provider_action_test.go` | modified | +86 (one new test) |
@@ -61,19 +67,30 @@ static-fmt-no-w 0, sentinel-return 6)`: 46 rows in `state.go` (45 `static-new` +
 `:5305`), 11 in `provider_action.go` (6 `static-new` + 5 sentinel conflations at `:267`, `:541`,
 `:571`, `:592`, `:613` — all five split in §2.3, none left).
 
-**After (delivered tree):** `TOTAL reported 29 rows` — `rows 29 (static-new 29, static-fmt-no-w 0,
-sentinel-return 0)`: `sentinel-return` is zero, i.e. every sentinel conflation is split and no
-`Err*` value is returned from an error branch any more. The 29 residual rows are listed in §2.4.
-Verbatim listings with each row's condition and returned expression: Appendix B.
+**After (fix-round tree `01aada59`/`6d10da97`):** `TOTAL reported 29 rows` — `rows 29
+(static-new 29, static-fmt-no-w 0, sentinel-return 0)`: `sentinel-return` is zero, i.e. every
+sentinel conflation is split and no `Err*` value is returned from an error branch any more. The
+29 residual rows are listed in §2.4. Verbatim listings with each row's condition and returned
+expression: Appendix B.
+
+**After (rf-w3-08 apply stage, 2026-11-21):** `TOTAL reported 28 rows` — `rows 28 (static-new 28,
+static-fmt-no-w 0, sentinel-return 0)`. The accepted simplify findings restructure the same three
+seams: S1 collapses the two byte-identical trailing-data arms to one (`−1` `row` listing), S3 folds
+the three `serialize → %w → size-sentinel` blocks into `serializeRunJournalWithinLimit` (three
+`sentinel-return` listings become the helper's one, `−2` `no-branch`), and S4 propagates the
+alias-check cause (the `decodeJSONWithLimitAndTags` `pred` listing becomes a `%w` arm, `−1` `pred`).
+Raw listing total 532 → 528. The tool was rebuilt from Appendix A and re-run on the post-apply
+tree (`-selfcheck` exit 0); exact stdout and the touched-row cell refresh are in §12, and
+Appendix B's After block carries the apply-tip listing.
 
 **Accounting (`-all`).** Every static error return in both files is classified:
 
-| class | base | delivered | meaning |
-|---|---:|---:|---|
-| `row` | 57 | 29 | err-ish identifier in the branch condition; the only class the rule sweeps |
-| `pred` | 197 | 197 | condition tests calls/fields against nil and mentions no err-ish identifier |
-| `other-branch` | 36 | 39 | inside `for`/`switch`/`select` or a non-error `if`; no error value |
-| `no-branch` | 259 | 267 | no enclosing branch (scalar/state verdicts) |
+| class | base | fix rounds | rf-w3-08 apply tip | meaning |
+|---|---:|---:|---:|---|
+| `row` | 57 | 29 | 28 | err-ish identifier in the branch condition; the only class the rule sweeps |
+| `pred` | 197 | 197 | 196 | condition tests calls/fields against nil and mentions no err-ish identifier |
+| `other-branch` | 36 | 39 | 39 | inside `for`/`switch`/`select` or a non-error `if`; no error value |
+| `no-branch` | 259 | 267 | 265 | no enclosing branch (scalar/state verdicts) |
 
 The counts move only where the split narrowed a branch condition: `pred` is unchanged (197), `row`
 57 → 29 (−28), `other-branch` 36 → 39 (+3) and `no-branch` 259 → 267 (+8), i.e. 11 new listing
@@ -92,6 +109,16 @@ at base), and `provider_action.go`'s drafting-time 7th row is the rule-excluded 
 base `:278` (`!json.Valid(result) || protocol.RejectDuplicateJSONMembers(result) != nil`).
 Contract Change 4 makes the recorded rule govern; both counts and both listings are in
 Appendices A/B, so a reviewer can re-run and re-derive them.
+
+The apply tip changes exactly three listings against the fix-round tree (a normalized
+file/class/kind/function/condition/expression multiset diff of the two `-all` outputs): the two
+byte-identical trailing-data `row` listings collapse to one (`provider_action.go:298`/`:300` →
+`:297`, S1), the `pred` listing at `state.go:5364` becomes the propagated
+`fmt.Errorf("decode %s: %w", …)` arm (S4, no longer a static return), and the three
+`ErrProviderActionCapacity` sentinel listings of `saveJournalLocked` /
+`validateJournalSaveCapacity` / `validateProviderActionJournalSize` become the one
+`serializeRunJournalWithinLimit` arm (S3) — `row` 29 → 28, `pred` 197 → 196, `no-branch`
+267 → 265, raw listing total 532 → 528.
 
 ## 2. Classification of the 57 base rows
 
@@ -112,13 +139,22 @@ Appendices A/B, so a reviewer can re-run and re-derive them.
 | `state.go:5342` | `:5345` | `readLimited` — `read %s` |
 | `state.go:5352` | `:5355` | `protocol.RejectDuplicateJSONMembers` — `decode %s` |
 | `state.go:5360` | `:5363` | `decoder.Decode` — `decode %s` |
-| `state.go:5364` | `:5366` | `decoder.Decode != io.EOF` (guarded arm) — `decode %s` |
-| `state.go:5384` | `:5389` | `decoder.Decode != io.EOF` (guarded arm) — `trailing JSON data` |
+| `state.go:5364` | `:5368` | `decoder.Decode != io.EOF` (guarded arm) — `decode %s` |
+| `state.go:5384` | `:5391` | `decoder.Decode != io.EOF` (guarded arm) — `trailing JSON data` |
 | `state.go:5486` | `:5498` | `store.atomicWrite`/`writeAtomic` — `write %s` |
 | `state.go:5514` | `:5526` | `os.Remove` — `remove run journal temporary file` |
 | `state.go:6363` | `:6375` | `json.Unmarshal` — `completed terminal payload is invalid` |
 | `provider_action.go:288` | `:295` | `decoder.Token` — `provider action result has trailing data` |
-| `provider_action.go:290` | `:300`-block | `decoder.Token` — `provider action result has trailing data` |
+| `provider_action.go:290` | `:298`/`:300`, collapsed to `:297` by the rf-w3-08 apply stage (§12) | `decoder.Token` — `provider action result has trailing data` |
+
+Resolution note (rf-w3-08 apply stage, 2026-11-21). The `base` column resolves at `52bdffd2`.
+The `head` column was captured while the slice's fix rounds ran: for the `state.go` rows it
+resolves at the round-1 tree `01aada59` (the round-2 const block of §10 adds 6 lines above all of
+them, so the delivered tip `6d10da97`/`b1caba11` is +6 — e.g. `release state directory lock` is
+`:1208`); the two cells previously recorded as `:5366`/`:5389` did not resolve at that tree and are
+corrected here to `:5368`/`:5391`. The `provider_action.go` cells resolve at the same round-1 tree
+and were unchanged by round 2. The apply stage republishes the apply-tip cell of every row it
+touched in §12 (and rewrote two of them: the trailing-data collapse and the shared serializer).
 
 ### 2.2 SPLIT — 6 rows (error arm wraps; predicate arm keeps the byte-identical message)
 
@@ -138,12 +174,12 @@ Head cells cite the `return` statements (serialize arm / size arm), the same con
 
 | base | head | serialize arm | size arm |
 |---|---|---|---|
-| `state.go:5305` | `:5305`/`:5308` | `serialize run journal: %w` | `ErrProviderActionCapacity` |
+| `state.go:5305` | `:5305`/`:5308` — apply tip: the shared `serializeRunJournalWithinLimit` (`provider_action.go:594`/`:597`, §12) | `serialize run journal: %w` | `ErrProviderActionCapacity` |
 | `provider_action.go:267` | `:268`/`:271` | `serialize provider action result: %w` | `ErrProviderActionCapacity` |
-| `provider_action.go:541` | `:560`/`:563` | `serialize provider action intents: %w` | `ErrProviderActionCapacity` |
-| `provider_action.go:571` | `:597`/`:600` | `serialize run journal: %w` | `ErrProviderActionCapacity` |
+| `provider_action.go:541` | `:560`/`:563` — apply tip `:557`/`:560` (§12) | `serialize provider action intents: %w` | `ErrProviderActionCapacity` |
+| `provider_action.go:571` | `:597`/`:600` — apply tip: the shared `serializeRunJournalWithinLimit` (`provider_action.go:594`/`:597`, §12) | `serialize run journal: %w` | `ErrProviderActionCapacity` |
 | `provider_action.go:592` | `:605` → `:627` (shared `validateProviderActionJournalSize` on the reserved copy; serialize arm `:624`) | `serialize run journal: %w` | `ErrProviderActionCapacity` |
-| `provider_action.go:613` | `:624`/`:627` | `serialize run journal: %w` | `ErrProviderActionCapacity` |
+| `provider_action.go:613` | `:624`/`:627` — apply tip: the shared `serializeRunJournalWithinLimit` (`provider_action.go:594`/`:597`, §12) | `serialize run journal: %w` | `ErrProviderActionCapacity` |
 
 Second verdict consequence, stated and pinned: `errors.Is(err, ErrProviderActionCapacity)` is now
 false for a serialize failure, so `daemon/internal/app/pi_provider_bridge.go:67` classifies it
@@ -157,10 +193,15 @@ unchanged for capacity.
 
 The heading states the rule's boundary, not a claim that no cause exists anywhere in the branch:
 the rule keys on an *err-ish identifier* in the condition, so call-shaped predicates whose own
-failure is dropped (`rejectCaseInsensitiveJSONTagAliases(data, rootType) != nil`,
-`protocol.RejectDuplicateJSONMembers(result) != nil`) sit in the `pred` class, and the 25 verdict
-cascades below do carry a cause from the `X.Validate()`/`parseX` call in their condition — they are
-residual because the returned message is that stage's verdict, not an operation failure.
+failure is dropped (`protocol.RejectDuplicateJSONMembers(result) != nil`) sit in the `pred` class,
+and the 25 verdict cascades below do carry a cause from the `X.Validate()`/`parseX` call in their
+condition — they are residual because the returned message is that stage's verdict, not an
+operation failure. The other named call-shaped predicate,
+`rejectCaseInsensitiveJSONTagAliases(data, rootType) != nil`, *did* drop a real cause; the
+rf-w3-08 apply stage (finding S4) rewrote that arm to `if err :=
+rejectCaseInsensitiveJSONTagAliases(data, rootType); err != nil { return fmt.Errorf("decode %s:
+%w", resource, err) }`, so it no longer sits in this class and the `state.go:5384`/`:5391` wrap of
+§2.1 is now reachable through the production read path (§3.1 audit, §12).
 
 Verdict cascades (25, `state.go`) — the error value comes from a validation/derivation call over
 control state and the message is that stage's verdict: `:1241`, `:1289`, `:1422`, `:1464`,
@@ -180,8 +221,9 @@ the same shape (validation/derivation call + state predicates → stage verdict)
 Nil-cause arms (4) — arms that run only when no cause exists, so a `%w` verb is impossible without
 inventing one: `state.go:5370` and `:5393` (the `err == nil` arms of the guarded
 `Decode(&extra) != io.EOF` splits: a *second successfully decoded value* is trailing data with no
-error), `provider_action.go:298` and `:300` (the `tokenErr == nil` arms of the trailing-data
-block: a trailing token with no decoder error).
+error; apply tip `:5375`/`:5398`), `provider_action.go:298` and `:300` (the `tokenErr == nil` arms
+of the trailing-data block: a trailing token with no decoder error; the apply stage collapses the
+two byte-identical arms into the single `:297` return, §12).
 
 ## 3. Control-flow preservation audit (base → head, lesson 32)
 
@@ -208,6 +250,18 @@ path maps to a head path with the same outcome and the same message prefix.
 
 No `if` condition outside these rows and the 21 wraps is edited; the 25 residual rows and their
 conditions are byte-identical to base (`git diff` shows no hunk touching them).
+
+### 3.1 Apply-stage control-flow audit (rf-w3-08 apply, 2026-11-21)
+
+The three accepted findings that restructure code rather than delete it, base (`52bdffd2`) → apply
+tip, with every early return / fall-through / error short-circuit mapped:
+
+| condition (apply-tip lines) | base | apply tip | preserved |
+|---|---|---|---|
+| `state.go:5360-5364` (S4, alias-check arm) | `rootType != nil && rejectCaseInsensitiveJSONTagAliases(data, rootType) != nil` → static `errors.New("decode " + resource)` | `rootType != nil` → `if err := rejectCaseInsensitiveJSONTagAliases(data, rootType); err != nil` → `fmt.Errorf("decode %s: %w", resource, err)` | yes — same two conditions in the same order, prefix `decode <resource>` unchanged, cause appended; the only observable change is the cause suffix, which is the contract's prescribed change class (D1). The call's own wrap (`:5396`/`trailing JSON data`) is now reachable through this path |
+| `provider_action.go:293-298` (S1, trailing-data block) | `tokenErr != io.EOF` → {`tokenErr == nil \|\| token != nil` → static; static} | `tokenErr != io.EOF` → {`tokenErr != nil` → wrapped `:295`; static `:297`} | yes — the two base static arms return byte-identical errors, so merging them cannot change any outcome; the token value was only read by the removed disjunct and is now discarded; the `tokenErr != nil` wrap is unchanged |
+| `state.go:5309` → `provider_action.go:591-600` (S3, `serializeRunJournalWithinLimit`) | three inline blocks, each `serialize → fmt.Errorf("serialize run journal: %w") → len(data) > maxJournalFileBytes → ErrProviderActionCapacity`: `saveJournalLocked` (state.go), `validateJournalSaveCapacity` and `validateProviderActionJournalSize` (provider_action.go) | one helper (`provider_action.go:591-600`): serialize error → wrapped (`:594`), over-limit → sentinel value (`:597`); `saveJournalLocked` → `data, err := helper; if err != nil { return err }` (`state.go:5309-5312`) and still writes `data`; `validateJournalSaveCapacity` → `if _, err := helper; err != nil { return err }` then the `hasUnresolvedProviderActions` / reserved-copy branches unchanged; `validateProviderActionJournalSize` → `_, err := helper; return err` | yes — per site the order (serialize before size), the prefix, the sentinel *value* (still pinned by `err == ErrProviderActionCapacity` in `provider_action_test.go`) and every site-specific follow-up are unchanged; the difference is only that the bytes are produced once per call by one implementation |
+| `provider_action.go:606-614` (S3 follow-up) | `!hasUnresolvedProviderActions` → nil; inline reserve loop; `reservedData` serialize → sentinel; nil | `!hasUnresolvedProviderActions` → nil; `validateProviderActionJournalSize(reserveWorstCaseCompletions(journal))` (`:613`, now via the helper `:629-632`) | yes — same early return and limit; the reserved-copy check keeps its own call |
 
 ## 4. Durable text (declared change, contract Change 2/D1 and clause 3)
 
@@ -709,6 +763,135 @@ resolve at the fix-round-3 head.
   0 · `go vet ./internal/app/ ./internal/state/` (windows) 0 · `GOOS=linux go vet
   ./internal/app/ ./internal/state/` 0 · targeted app subset 13/13 PASS, exit 0 ·
   `git diff --check` 0 · `check-record-cleanliness.py` on the committed head 0.
+
+## 12. rf-w3-08 apply stage (2026-11-21) — accepted simplifications
+
+Apply stage of goal `rf-w3-08-unexport-state-surface` over the range `d0761739..aa43c2f2` (this
+record's W3-07 work, W3-08 and the two `origin/main` merges). The finding ids are the simplify
+report's; the accepted/not-applied split and the stage gate table are the stage result. No test,
+evidence row or documented boundary was deleted — the rows above were refreshed where the apply
+stage moved them, and this section republishes every affected number.
+
+Moved (2026-11-22). The split of PR #214 moved this apply-stage set — S1, S2, S3, S4, S7 and the S9
+citation refresh — to the W3-07 follow-up branch `refactor/rf-w3-07b-state-error-followups`, which
+is where the code now lands under its own contract, `goal-rf-w3-07b-state-error-followups.md`
+(conductor decision 2026-11-22): the W3-07 contract alone does not admit the S2 deletion or the
+`state_unix.go`/`state_windows.go` STD-04 remedy (review round 1 P2-1). The W3-08 branch keeps only
+its rename/move slice; the split, the delivered tests and the branch's own gates are recorded in
+[`docs/plans/2026-11-22-rf-w3-07b-state-error-followups-plan.md`](../plans/2026-11-22-rf-w3-07b-state-error-followups-plan.md)).
+Cells marked "apply tip" resolve at the pre-split apply tip: on this branch every `state.go` cell
+at or below `Store.Close` resolves 3 lines lower and every `provider_action.go` cell at or below
+`serializeRunJournalWithinLimit` 4 lines lower (`Close` returns `releaseStoreLock`'s error directly
+and the helper's doc comment was dropped by review round 1), while the `goal_session.go` cells
+resolve as written;
+§12.3's failing assertion resolves at `goal_delivery_test.go:806`. The sweep totals reproduce
+unchanged at this branch's head: `rows 28 (static-new 28, static-fmt-no-w 0, sentinel-return 0)`,
+`-all`: row 28 / pred 196 / other-branch 39 / no-branch 265, raw listing total 528, `-selfcheck`
+exit 0.
+
+### 12.1 Applied changes (authorized by `goal-rf-w3-07b-state-error-followups.md`)
+
+| finding | file(s) | change | apply-tip site |
+|---|---|---|---|
+| S1 | `daemon/internal/state/provider_action.go` | collapse the two byte-identical trailing-data static arms to one; the token value is discarded | `:293-298` (wrap `:295`, static `:297`), audit §3.1 |
+| S2 | `daemon/internal/state/goal_session.go` | delete the callerless `Store.EnsureGoalSessionLineageAvailable` (W1-06 dead-code candidate; −18 lines; TODO entry closed into `docs/archive/CLOSED-TODO.md`) | `CheckGoalSessionLineage` stands alone at `:576-586` |
+| S3 | `daemon/internal/state/provider_action.go`, `state.go` | extract `serializeRunJournalWithinLimit` and use it at the three former inline serialize/wrap/limit blocks | helper `provider_action.go:591-600`; callers `state.go:5309-5312`, `provider_action.go:607-609`, `:629-632` |
+| S4 | `daemon/internal/state/state.go` | propagate the alias-check cause (`fmt.Errorf("decode %s: %w", resource, err)`) instead of the static `errors.New("decode " + resource)` | `:5360-5364` |
+| S7 | `daemon/internal/app/goal_delivery_test.go` | new `TestAbandonGoalSessionUncertainBoundsOversizedCloseReason` (2 table rows) pinning the W307-R1 bound at `goal_admission.go:1492` | `:776-828` |
+| S9 | this record §0/§1/§2/Appendix B + the W3-07 plan's pointer | citation refresh, no code change | §12.2 |
+| — | `docs/TODO.md` | S1 closed its entry; S6 landed a `ControlProjection` dead-surface entry; the W1-06 entry keeps its two open surfaces with a residual line | S6 has no code change |
+
+Not applied in this stage (unchanged; reasons in the stage result): S5 (unexporting
+`QueueLateGoalUsage`/`CheckGoalSessionLineage` needs a decision-record amendment — the W3-08 plan
+records those methods as retained); S6's deletion (would retire the contract-pinning
+`TestGoalSessionControlProjectionOmitsRawNativeIdentity` — only the ledger entry landed); S8 was
+the gate re-run itself.
+
+### 12.2 Sweep and citation refresh (S1/S3/S4/S9)
+
+The tool was rebuilt from Appendix A in a scratch directory and re-run at the apply tip:
+`-selfcheck` exit 0 (`{"other-branch":2,"pred":1,"row":2}`); `rows 28 (static-new 28,
+static-fmt-no-w 0, sentinel-return 0)`; `-all`: row 28 / pred 196 / other-branch 39 / no-branch
+265, raw listing total 528. The base side re-derives unchanged (57 rows; row 57 / pred 197 /
+other-branch 36 / no-branch 259 at `52bdffd2`). §1's After paragraphs and accounting table, and
+Appendix B's apply-tip block, carry these numbers.
+
+Touched-row cell refresh (`base` row identity from §2 → fix-round cell → apply tip; all apply-tip
+lines verified by `rg -n` in the worktree):
+
+| §2 row key | fix-round cell | apply tip |
+|---|---|---|
+| §2.1 `state.go:5312` write run journal | `:5315` | `:5318` |
+| §2.1 `state.go:5342` read %s | `:5345` | `:5348` |
+| §2.1 `state.go:5352` RejectDuplicateJSONMembers | `:5355` | `:5358` |
+| §2.1 `state.go:5360` decoder.Decode | `:5363` | `:5368` |
+| §2.1 `state.go:5364` guarded arm | `:5368` | `:5373` |
+| §2.1 `state.go:5384` inner trailing JSON | `:5391` | `:5396` |
+| §2.1 `state.go:5486` write %s | `:5498` | `:5503` |
+| §2.1 `state.go:5514` remove journal temp | `:5526` | `:5531` |
+| §2.1 `state.go:6363` terminal payload | `:6375` | `:6380` |
+| §2.1 `provider_action.go:290` trailing data | `:298`/`:300` | `:297` (collapsed, S1) |
+| §2.2 `provider_action.go:358` array | `:368`/`:371` | `:365`/`:368` |
+| §2.2 `provider_action.go:368` object key | `:381`/`:384` | `:378`/`:381` |
+| §2.2 `provider_action.go:382` object | `:398`/`:401` | `:395`/`:398` |
+| §2.3 `state.go:5305` save capacity | `:5305`/`:5308` | helper `provider_action.go:594`/`:597` (S3) |
+| §2.3 `provider_action.go:541` intents capacity | `:560`/`:563` | `:557`/`:560` |
+| §2.3 `provider_action.go:571` save capacity | `:597`/`:600` | helper `provider_action.go:594`/`:597` (S3) |
+| §2.3 `provider_action.go:592` reserved copy | `:605` → `:627` | `:613` → `:629-632` → helper `:594`/`:597` |
+| §2.3 `provider_action.go:613` journal size | `:624`/`:627` | helper `provider_action.go:594`/`:597` (S3) |
+| §2.4 nil-cause arms `state.go` | `:5370`/`:5393` | `:5375`/`:5398` |
+| §2.4 nil-cause arms `provider_action.go` | `:298`/`:300` | `:297` (S1) |
+
+Cells not listed here were not touched by the apply stage; they keep their fix-round resolution
+(+6 for the `state.go` rows above the edit zone — e.g. §2.1's `:913` → `:919`, `:1202` → `:1208`,
+`:1212` → `:1218`, `:1224` → `:1230`, `:1270` → `:1276`, `:2316` → `:2322`, `:2335` → `:2341`,
+`:2365` → `:2371`, `:2386` → `:2392`, all verified). S4 additionally makes the §2.1
+`state.go:5384`/`:5391` wrap reachable through the production read path (§2.4, §3.1).
+
+### 12.3 S7 mutation pair (pinning the second composed-reason site)
+
+Green at the apply tip: `go test -count=1 ./internal/app/ -run
+'TestAbandonGoalSessionUncertainBoundsOversizedCloseReason'` → exit 0, both table rows PASS. Red
+under the mutation `goal_admission.go:1492` `boundedGoalSessionUncertainReason(reason)` → `reason`:
+exit 1, both rows FAIL at `goal_delivery_test.go:811` (`oversized uncertain reason left the session
+off the uncertain path`: the store rejected the over-budget reason, so the session stayed attached
+and took the `requireNativeSessionCloseRetry` path). The mutation was reverted; `git diff --stat` at
+the apply tip lists no `goal_admission.go` hunk, which is the byte-level proof of restoration.
+
+### 12.4 Case counts (§9 sync)
+
+`go test -count=1 -v ./internal/state/...` at the apply tip: exit 0, 458 `=== RUN` lines, 0 FAIL —
+the §9 count (457 → 458) is unchanged by the apply stage, which adds no state test (S7's test is in
+`./internal/app`). §9's companion "390 PASS lines" does not reproduce at the apply tip under either
+convention (458 `--- PASS` lines including subtests, 225 top-level); that row stays as the
+fix-round capture.
+
+### 12.5 Gates at the apply tip (all foreground, exit codes verbatim)
+
+| # | command (cwd `daemon/` unless noted) | exit | observed |
+|---|---:|---|
+| 1 | `gofmt -l .` | 0 | 0 lines |
+| 2 | `go vet ./...` | 0 | no output |
+| 3 | `GOOS=windows go build ./...` | 0 | no output |
+| 4 | `GOOS=linux go build ./...` | 0 | no output |
+| 5 | `go build ./...` | 0 | no output |
+| 6 | `GOOS=linux GOARCH=amd64 go vet ./e2e/` | 0 | no output |
+| 7 | `GOOS=darwin GOARCH=arm64 go vet ./internal/app/` | 0 | no output; the `!linux && !windows` construction site and `export_test.go` are in the darwin `TestGoFiles` set |
+| 8 | `go test -count=1 -v ./internal/state/...` (Windows) | 0 | `ok … 7.218s`; 458 `=== RUN`, 0 FAIL |
+| 9 | WSL `Ubuntu-24.04`: `go test -count=1 ./internal/state/...` (worktree path) | 0 | `ok … 15.547s` (go1.27.0 linux/amd64; the linux-gated clone/cgroup suites run) |
+| 10 | `go test -count=1 ./internal/app/` (slow oracle) | 0 | `ok … 235.644s` (host was busier than the fix-round 170.6s; green) |
+| 11 | `go test -count=1 ./internal/app/ -run '^TestAbandonGoalSessionUncertainBoundsOversizedCloseReason$'` | 0 / 1 | green; 1 under the reverted `goal_admission.go:1492` mutation (§12.3) |
+| 12 | planted-reference pair, 15 scratch packages + `go vet ./zzapplyprobe/...`: pre-rename base `6d10da97` (scratch `git archive` copy) vs apply tip | 0 / 1 | base: exit 0, all 15 references compile; apply tip: 15 `undefined: state.<Name>` errors — one per name; probes deleted |
+| 13 | clause-1 grep, Go-scoped: `git grep --untracked -n -E 'state\.(…)' -- '*.go' ':!daemon/internal/state'` | 1 | no matches (the whole-tree form matches only the quoted probe output in this record and the W3-08 one, 22 lines — W3-08 evidence §1b) |
+| 14 | `git diff --check` | 0 | clean (one `new blank line at EOF` in `docs/archive/CLOSED-TODO.md` was introduced and fixed during the stage) |
+| 15 | host-path scan: `git diff origin/main...HEAD` and the worktree diff (0 matches; grep exit 1) + `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on the two evidence records and the W3-07 plan | 0 | no host absolute paths in the records |
+| 16 | sweep tool rebuilt from Appendix A: `-selfcheck`, rows, `-predicates`, `-all` (apply tip and base copy) | 0 | §12.2 numbers; the base side reproduces 57 rows and row 57 / pred 197 / other-branch 36 / no-branch 259 |
+
+Not re-run, with reasons: `-race` (no cgo on this Windows host; CI remains the race oracle, and the
+apply set adds no concurrency — S7's test is sequential); the advisory `golangci-lint` set (CI-only,
+non-gating, unchanged by the apply set: no new exported symbol, the extracted helper is used three
+times); e2e and `cmd/` test suites (no e2e or `cmd` file is touched; their compile surface is
+covered by rows 6 and 7).
 
 ## Appendix A — sweep tool source (verbatim, stdlib-only)
 
@@ -1268,7 +1451,7 @@ state.go:6363	static-new	terminalTaskResultKind	err != nil	errors.New("completed
 state.go:6373	static-new	terminalTaskResultKind	err != nil || !validTaskResultKind(result.Kind)	errors.New("completed terminal task result kind is invalid")
 ```
 
-After (delivered tree):
+After (fix-round tree `01aada59`/`6d10da97`):
 
 ```
 provider_action.go:298	static-new	normalizeProviderActionResult	tokenErr != io.EOF	errors.New("provider action result has trailing data")
@@ -1303,3 +1486,41 @@ state.go:6096	static-new	validateContainmentHandoff	err != nil	errors.New("run j
 ```
 
 Predicate class counts: base 197, delivered 197 (`sweep -predicates`); full accounting: base row 57 / pred 197 / other-branch 36 / no-branch 259, delivered row 29 / pred 197 / other-branch 39 / no-branch 267 (`sweep -all`).
+
+After (rf-w3-08 apply tip, 2026-11-21) — exact stdout of the same tool rebuilt from Appendix A
+(minus the class column and the two summary lines, as above):
+
+```
+provider_action.go:297	static-new	normalizeProviderActionResult	tokenErr != io.EOF	errors.New("provider action result has trailing data")
+state.go:1247	static-new	(*Store).LoadEnrollmentIntent	err != nil	errors.New("invalid enrollment intent")
+state.go:1295	static-new	(*Store).LoadIdentity	err != nil	errors.New("invalid identity record")
+state.go:1428	static-new	(*Store).ReserveLinuxCloneIntent	err != nil || intent.RunID != key.RunID || intent.Generation != key.Generation	errors.New("Linux clone intent does not match RunKey")
+state.go:1470	static-new	(*Store).BindLinuxCloneSeed	err != nil || seed.BaseCommit != intent.BaseCommit	errors.New("Linux clone seed receipt does not match its intent")
+state.go:1545	static-new	(*Store).BindLinuxCloneReuse	err != nil || grant.RunID != key.RunID || grant.Generation != key.Generation	errors.New("Linux clone reuse grant does not match the new RunKey")
+state.go:1713	static-new	(*Store).AbortLinuxCloneReuseBeforeNativeStart	err != nil || grant.RunID != key.RunID || grant.Generation != key.Generation	errors.New("Linux clone reuse abort grant does not match the RunKey")
+state.go:1802	static-new	(*Store).RecordLinuxClonePromotion	err != nil || receipt.Validate() != nil || candidate.ResourceID != intent.ResourceID || len(candidate.Commit) != len(intent.BaseCommit) || receipt.Version != candidate.Version || receipt.Commit != candidate.Commit || receipt.TreeDigest != candidate.TreeDigest	errors.New("Linux clone promotion receipt does not match candidate intent")
+state.go:1806	static-new	(*Store).RecordLinuxClonePromotion	err != nil || receipt.Ref != ref	errors.New("Linux clone promotion ref does not match RunKey")
+state.go:1966	static-new	(*Store).BeginLinuxCloneCleanup	err != nil || !journal.LinuxCloneCleanupIntent.Equal(intent)	errors.New("Linux clone cleanup intent readback is invalid")
+state.go:2020	static-new	(*Store).RecordLinuxCloneTargetRemoval	err != nil || proof.Validate() != nil || proof.Disposition != authority.LinuxCloneTargetDispositionRemoved || !proof.TargetNlinkZero || !proof.Intent.Equal(expected)	errors.New("Linux clone target-removal proof does not match cleanup intent")
+state.go:2051	static-new	(*Store).CompleteLinuxCloneCleanup	err != nil || proof.Validate() != nil || !proof.Intent.Equal(expected)	errors.New("Linux clone cleanup proof does not match cleanup intent")
+state.go:2403	static-new	(*Store).readJournalEntryLocked	err != nil	errors.New("invalid run journal")
+state.go:2672	static-new	(*Store).CheckLinuxV2NativeAdmission	err != nil || !validLinuxV2AdmissionFence(key, fence) || now.IsZero()	errors.New("Linux v2 native admission RunKey, fence, or time is invalid")
+state.go:3041	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	err != nil || expected.CreateStarted || expected.LeafIdentity != nil || expected.Helper != nil || expected.Launcher != nil || expected.LauncherExit != nil || expected.Gate != nil || expected.HelperExit != nil || expected.AbortProof != nil || expected.PreGateStopReceipt != nil || expected.LauncherGrantPossible || expected.Mirror == nil	errors.New("Linux cgroup reservation is not a never-created state")
+state.go:3052	static-new	(*Store).AbortNeverCreatedLinuxCgroupReservation	err != nil || !linuxCgroupReservationAbortMatches(expected, proof)	errors.New("Linux cgroup never-created tombstone is invalid")
+state.go:4866	static-new	(*Store).loadJournalLocked	err != nil	errors.New("invalid run journal")
+state.go:4910	static-new	requireLinuxCloneJournalFence	err != nil || !present || admission.Subject.Validate() != nil || admission.Subject.ResourceID != intent.ResourceID || admission.Subject.Commit != intent.BaseCommit || admission.Subject.TreeDigest != intent.BaseTreeDigest	errors.New("Linux clone intent does not match the current admitted Subject")
+state.go:5036	static-new	validateLinuxCloneReuseRetainedTarget	err != nil	errors.New("run journal Linux clone reuse does not match admitted Subject")
+state.go:5058	static-new	validateLinuxCloneIntent	err != nil	errors.New("run journal Linux clone intent does not match admitted Subject")
+state.go:5163	static-new	validateLinuxClonePromotion	promotion.Validate() != nil || err != nil || promotion.Ref != ref || promotion.Commit != promotionIntent.Commit || promotion.TreeDigest != promotionIntent.TreeDigest || !linuxCloneStopProven(journal)	errors.New("run journal Linux clone promotion receipt is invalid")
+state.go:5187	static-new	validateLinuxClonePromotionWithoutIntent	promotion.Validate() != nil || refErr != nil || promotion.Ref != legacyRef || len(promotion.Commit) != len(intent.BaseCommit) || !linuxCloneStopProven(journal) || journal.WorkspacePath != intent.Target	errors.New("run journal legacy Linux clone promotion receipt is invalid")
+state.go:5202	static-new	validateLinuxCloneCleanup	err != nil || !cleanupIntent.Equal(*journal.LinuxCloneCleanupIntent)	errors.New("run journal Linux clone cleanup intent is invalid")
+state.go:5300	static-new	requireLinuxCloneJournalFenceSubject	err != nil || !present || admission.Subject.Validate() != nil || admission.Subject.ResourceID != intent.ResourceID || admission.Subject.Commit != intent.BaseCommit || admission.Subject.TreeDigest != intent.BaseTreeDigest	errors.New("admitted Subject does not match Linux clone intent")
+state.go:5375	static-new	decodeJSONWithLimitAndTags	err != io.EOF	errors.New("decode " + resource)
+state.go:5398	static-new	rejectCaseInsensitiveJSONTagAliases	err != io.EOF	errors.New("trailing JSON data")
+state.go:6078	static-new	validateContainmentAuthority	err != nil || journal.ContainmentAuthority.TargetPID != journal.PID || journal.ContainmentAuthority.TargetIdentity != journal.ProcessIdentity	errors.New("run journal containment authority is invalid")
+state.go:6101	static-new	validateContainmentHandoff	err != nil	errors.New("run journal containment handoff is invalid")
+```
+
+Apply-tip counts: `rows 28 (static-new 28, static-fmt-no-w 0, sentinel-return 0)`; the
+`-predicates` run: pred 196; `sweep -all`: row 28 / pred 196 / other-branch 39 / no-branch 265
+(raw listing total 528); `sweep -selfcheck` exits 0.

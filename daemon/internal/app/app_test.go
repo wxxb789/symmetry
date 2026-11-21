@@ -776,127 +776,7 @@ func TestLegacyClaimExpiryRejectsProcessBeforeWorkspaceOrProcessStart(t *testing
 
 func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
-	newClient := func(t *testing.T, template protocol.ClaimResponse) (*control.Client, <-chan string, <-chan protocol.StateTransitionRequest) {
-		t.Helper()
-		requests := make(chan string, 16)
-		transitions := make(chan protocol.StateTransitionRequest, 4)
-		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			requests <- request.URL.Path
-			if request.Method != http.MethodPut {
-				writer.WriteHeader(http.StatusNotFound)
-				return
-			}
-			writer.Header().Set("Content-Type", "application/json")
-			switch {
-			case strings.HasPrefix(request.URL.Path, "/api/v1/runs/run-1/claims/"):
-				claimID := request.URL.Path[strings.LastIndexByte(request.URL.Path, '/')+1:]
-				response := template
-				response.RunID = "run-1"
-				response.TaskID = "task-1"
-				response.Generation = 1
-				response.ClaimID = claimID
-				response.LeaseToken = "lease-1"
-				response.LeaseExpiresAt = now.Add(time.Minute)
-				response.LeaseRemainingMS = 60_000
-				if err := json.NewEncoder(writer).Encode(response); err != nil {
-					t.Errorf("encode claim response: %v", err)
-				}
-			case strings.HasPrefix(request.URL.Path, "/api/v1/runs/run-1/transitions/"):
-				var body struct {
-					protocol.Fence
-					State   string          `json:"state"`
-					Payload json.RawMessage `json:"payload"`
-				}
-				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-					writer.WriteHeader(http.StatusBadRequest)
-					return
-				}
-				transition := protocol.StateTransitionRequest{
-					Fence:        body.Fence,
-					TransitionID: request.URL.Path[strings.LastIndexByte(request.URL.Path, '/')+1:],
-					State:        body.State,
-					Payload:      body.Payload,
-				}
-				transitions <- transition
-				response := protocol.Run{
-					RunID: "run-1", TaskID: "task-1", RuntimeID: body.RuntimeID, Generation: body.Generation,
-					State: body.State, ClaimID: body.ClaimID, LeaseToken: body.LeaseToken, LeaseExpiresAt: now.Add(time.Minute),
-					Result: json.RawMessage(`null`), Failure: body.Payload,
-				}
-				if err := json.NewEncoder(writer).Encode(response); err != nil {
-					t.Errorf("encode transition response: %v", err)
-				}
-			default:
-				writer.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		t.Cleanup(server.Close)
-		client, err := control.NewClient(server.URL+"/api", "machine-token", server.Client())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return client, requests, transitions
-	}
-	newDaemon := func(t *testing.T, store *state.Store, client ControlAPI, stateDirectory string, workspaceService *countingWorkspace, startCalls *int) *daemon {
-		t.Helper()
-		value := testConfig(t)
-		value.StateDir = stateDirectory
-		value.Runtime.RepositoryResourceID = "00000000-0000-4000-8000-000000000005"
-		return &daemon{
-			config:    value,
-			store:     store,
-			control:   client,
-			workspace: workspaceService,
-			log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
-			start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
-				(*startCalls)++
-				return fakeProcess{result: execution.Result{}}, nil
-			},
-			options: options{
-				newID:      ids(),
-				clock:      func() time.Time { return now },
-				localClock: func() time.Time { return now },
-			},
-			runtimeID:    "runtime-1",
-			runtimeEpoch: 1,
-			running:      make(map[state.RunKey]*runningRun),
-			slots:        make(chan struct{}, 1),
-		}
-
-	}
-	start := func(t *testing.T, daemon *daemon, work protocol.Work) state.RunJournal {
-		t.Helper()
-		key := state.RunKey{RunID: "run-1", Generation: 1}
-		daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: work})
-		daemon.workers.Wait()
-		journal, err := daemon.store.LoadJournal(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return journal
-	}
-	assertNoEffects := func(t *testing.T, store *state.Store, journal state.RunJournal, workspaceService *countingWorkspace, startCalls int, stateDirectory string) {
-		t.Helper()
-		if workspaceService.prepareCalls != 0 || startCalls != 0 {
-			t.Fatalf("admission boundary caused side effects: workspace prepares=%d process starts=%d", workspaceService.prepareCalls, startCalls)
-		}
-		if journal.WorkspaceRecoveryRequired || journal.WorkspacePath != "" || journal.PID != 0 || journal.ProcessIdentity != "" {
-			t.Fatalf("admission boundary persisted workspace/process ownership: %#v", journal)
-		}
-		if sessions, err := store.ListGoalSessions(); err != nil || len(sessions) != 0 {
-			t.Fatalf("admission boundary persisted native sessions: %#v, error=%v", sessions, err)
-		}
-		if _, err := os.Stat(filepath.Join(stateDirectory, "generated")); err == nil || !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("admission boundary materialized provider bridge files: %v", err)
-		}
-	}
-	providerAccess := &protocol.ProviderAccess{
-		Path: "/api/v1/provider-actions", Token: "provider-token",
-		Grants: []protocol.ProviderGrant{{
-			ResourceID: "00000000-0000-4000-8000-000000000005",
-			Provider:   "github", Kind: "repository", Operations: []string{"resource.sync"},
-		}},
-	}
+	providerAccess := claimAdmissionProviderAccess()
 
 	for _, test := range []struct {
 		name    string
@@ -916,12 +796,12 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 			}
 			defer store.Close()
 			work := protocol.Work{Goal: "work", AgentProfile: "local", Workspace: "local", Input: test.input}
-			client, requests, transitions := newClient(t, protocol.ClaimResponse{Work: work, ProviderAccess: providerAccess})
+			client, requests, transitions := claimAdmissionControlClient(t, now, protocol.ClaimResponse{Work: work, ProviderAccess: providerAccess})
 			workspaceService := &countingWorkspace{}
 			startCalls := 0
-			app := newDaemon(t, store, client, stateDirectory, workspaceService, &startCalls)
+			app := claimAdmissionDaemon(t, now, store, client, stateDirectory, workspaceService, &startCalls)
 
-			journal := start(t, app, work)
+			journal := startClaimAdmissionRun(t, app, work)
 			wantFence := protocol.Fence{RuntimeID: "runtime-1", RuntimeEpoch: 1, Generation: 1, ClaimID: "id-1", LeaseToken: "lease-1"}
 			if journal.Fence() != wantFence || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].Fence != wantFence {
 				t.Fatalf("invalid admission journal/fence = %#v, want exactly one transition with %#v", journal, wantFence)
@@ -936,7 +816,7 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 			if journal.TerminalState != "failed" || failure["stage"] != "invalid_admission" {
 				t.Fatalf("mixed admission failure = %#v, journal=%#v", failure, journal)
 			}
-			assertNoEffects(t, store, journal, workspaceService, startCalls, stateDirectory)
+			assertClaimAdmissionNoEffects(t, store, journal, workspaceService, startCalls, stateDirectory)
 			if got := len(requests); got != 1 {
 				t.Fatalf("control requests = %d, want claim only", got)
 			}
@@ -959,14 +839,14 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 					t.Fatal(err)
 				}
 				defer reopened.Close()
-				restarted := newDaemon(t, reopened, client, stateDirectory, workspaceService, &startCalls)
+				restarted := claimAdmissionDaemon(t, now, reopened, client, stateDirectory, workspaceService, &startCalls)
 				restarted.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: work})
 				restarted.workers.Wait()
 				replayed, err := reopened.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
 				if err != nil || len(replayed.PendingTransitions) != 1 || replayed.Fence() != wantFence || len(requests) != 1 {
 					t.Fatalf("restart replay journal=%#v requests=%d error=%v", replayed, len(requests), err)
 				}
-				assertNoEffects(t, reopened, replayed, workspaceService, startCalls, stateDirectory)
+				assertClaimAdmissionNoEffects(t, reopened, replayed, workspaceService, startCalls, stateDirectory)
 				key := state.RunKey{RunID: "run-1", Generation: 1}
 				restarted.running[key] = &runningRun{cleanupBlocked: true}
 				if err := restarted.flushRun(context.Background(), replayed); err != nil {
@@ -1004,7 +884,7 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 		}); err != nil {
 			t.Fatal(err)
 		}
-		client, requests, _ := newClient(t, protocol.ClaimResponse{Work: work, ProviderAccess: providerAccess})
+		client, requests, _ := claimAdmissionControlClient(t, now, protocol.ClaimResponse{Work: work, ProviderAccess: providerAccess})
 		workspaceService := &countingWorkspace{}
 		startCalls := 0
 		writeAttempts := 0
@@ -1012,7 +892,7 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 			writeAttempts++
 			return errors.New("injected claim grant write failure")
 		})
-		app := newDaemon(t, store, client, filepath.Join(root, "daemon"), workspaceService, &startCalls)
+		app := claimAdmissionDaemon(t, now, store, client, filepath.Join(root, "daemon"), workspaceService, &startCalls)
 		app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: work})
 		app.workers.Wait()
 		restore()
@@ -1046,7 +926,7 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 			t.Fatal(err)
 		}
 		work := protocol.Work{Goal: "validate", AgentProfile: "local", Workspace: "local", Input: input}
-		client, requests, _ := newClient(t, protocol.ClaimResponse{Work: work, HarnessSessionID: &reservedSessionID, HarnessBindingID: &bindingID})
+		client, requests, _ := claimAdmissionControlClient(t, now, protocol.ClaimResponse{Work: work, HarnessSessionID: &reservedSessionID, HarnessBindingID: &bindingID})
 		root := t.TempDir()
 		store, err := state.New(filepath.Join(root, "store"))
 		if err != nil {
@@ -1055,8 +935,8 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 		defer store.Close()
 		workspaceService := &countingWorkspace{}
 		startCalls := 0
-		app := newDaemon(t, store, client, filepath.Join(root, "daemon"), workspaceService, &startCalls)
-		journal := start(t, app, work)
+		app := claimAdmissionDaemon(t, now, store, client, filepath.Join(root, "daemon"), workspaceService, &startCalls)
+		journal := startClaimAdmissionRun(t, app, work)
 		if len(journal.PendingTransitions) != 1 {
 			t.Fatalf("bad reservation transitions = %#v", journal.PendingTransitions)
 		}
@@ -1074,7 +954,7 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 
 	t.Run("legacy marker keeps legacy process path", func(t *testing.T) {
 		work := protocol.Work{Goal: "legacy", AgentProfile: "local", Workspace: "local", Input: json.RawMessage(`{"goal_admission":["legacy"]}`)}
-		client, requests, _ := newClient(t, protocol.ClaimResponse{Work: work})
+		client, requests, _ := claimAdmissionControlClient(t, now, protocol.ClaimResponse{Work: work})
 		root := t.TempDir()
 		store, err := state.New(filepath.Join(root, "store"))
 		if err != nil {
@@ -1083,8 +963,8 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 		defer store.Close()
 		workspaceService := &countingWorkspace{}
 		startCalls := 0
-		app := newDaemon(t, store, client, filepath.Join(root, "daemon"), workspaceService, &startCalls)
-		journal := start(t, app, work)
+		app := claimAdmissionDaemon(t, now, store, client, filepath.Join(root, "daemon"), workspaceService, &startCalls)
+		journal := startClaimAdmissionRun(t, app, work)
 		if workspaceService.prepareCalls != 1 || startCalls != 1 || len(requests) != 1 {
 			t.Fatalf("legacy path effects: prepares=%d starts=%d requests=%d", workspaceService.prepareCalls, startCalls, len(requests))
 		}
@@ -1094,6 +974,133 @@ func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.
 			}
 		}
 	})
+}
+
+func claimAdmissionControlClient(t *testing.T, now time.Time, template protocol.ClaimResponse) (*control.Client, <-chan string, <-chan protocol.StateTransitionRequest) {
+	t.Helper()
+	requests := make(chan string, 16)
+	transitions := make(chan protocol.StateTransitionRequest, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.Path
+		if request.Method != http.MethodPut {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(request.URL.Path, "/api/v1/runs/run-1/claims/"):
+			claimID := request.URL.Path[strings.LastIndexByte(request.URL.Path, '/')+1:]
+			response := template
+			response.RunID = "run-1"
+			response.TaskID = "task-1"
+			response.Generation = 1
+			response.ClaimID = claimID
+			response.LeaseToken = "lease-1"
+			response.LeaseExpiresAt = now.Add(time.Minute)
+			response.LeaseRemainingMS = 60_000
+			if err := json.NewEncoder(writer).Encode(response); err != nil {
+				t.Errorf("encode claim response: %v", err)
+			}
+		case strings.HasPrefix(request.URL.Path, "/api/v1/runs/run-1/transitions/"):
+			var body struct {
+				protocol.Fence
+				State   string          `json:"state"`
+				Payload json.RawMessage `json:"payload"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			transition := protocol.StateTransitionRequest{
+				Fence:        body.Fence,
+				TransitionID: request.URL.Path[strings.LastIndexByte(request.URL.Path, '/')+1:],
+				State:        body.State,
+				Payload:      body.Payload,
+			}
+			transitions <- transition
+			response := protocol.Run{
+				RunID: "run-1", TaskID: "task-1", RuntimeID: body.RuntimeID, Generation: body.Generation,
+				State: body.State, ClaimID: body.ClaimID, LeaseToken: body.LeaseToken, LeaseExpiresAt: now.Add(time.Minute),
+				Result: json.RawMessage(`null`), Failure: body.Payload,
+			}
+			if err := json.NewEncoder(writer).Encode(response); err != nil {
+				t.Errorf("encode transition response: %v", err)
+			}
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := control.NewClient(server.URL+"/api", "machine-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, requests, transitions
+}
+
+func claimAdmissionDaemon(t *testing.T, now time.Time, store *state.Store, client ControlAPI, stateDirectory string, workspaceService *countingWorkspace, startCalls *int) *daemon {
+	t.Helper()
+	value := testConfig(t)
+	value.StateDir = stateDirectory
+	value.Runtime.RepositoryResourceID = "00000000-0000-4000-8000-000000000005"
+	return &daemon{
+		config:    value,
+		store:     store,
+		control:   client,
+		workspace: workspaceService,
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+			(*startCalls)++
+			return fakeProcess{result: execution.Result{}}, nil
+		},
+		options: options{
+			newID:      ids(),
+			clock:      func() time.Time { return now },
+			localClock: func() time.Time { return now },
+		},
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		running:      make(map[state.RunKey]*runningRun),
+		slots:        make(chan struct{}, 1),
+	}
+}
+
+func startClaimAdmissionRun(t *testing.T, daemon *daemon, work protocol.Work) state.RunJournal {
+	t.Helper()
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: work})
+	daemon.workers.Wait()
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return journal
+}
+
+func assertClaimAdmissionNoEffects(t *testing.T, store *state.Store, journal state.RunJournal, workspaceService *countingWorkspace, startCalls int, stateDirectory string) {
+	t.Helper()
+	if workspaceService.prepareCalls != 0 || startCalls != 0 {
+		t.Fatalf("admission boundary caused side effects: workspace prepares=%d process starts=%d", workspaceService.prepareCalls, startCalls)
+	}
+	if journal.WorkspaceRecoveryRequired || journal.WorkspacePath != "" || journal.PID != 0 || journal.ProcessIdentity != "" {
+		t.Fatalf("admission boundary persisted workspace/process ownership: %#v", journal)
+	}
+	if sessions, err := store.ListGoalSessions(); err != nil || len(sessions) != 0 {
+		t.Fatalf("admission boundary persisted native sessions: %#v, error=%v", sessions, err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDirectory, "generated")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("admission boundary materialized provider bridge files: %v", err)
+	}
+}
+
+func claimAdmissionProviderAccess() *protocol.ProviderAccess {
+	return &protocol.ProviderAccess{
+		Path: "/api/v1/provider-actions", Token: "provider-token",
+		Grants: []protocol.ProviderGrant{{
+			ResourceID: "00000000-0000-4000-8000-000000000005",
+			Provider:   "github", Kind: "repository", Operations: []string{"resource.sync"},
+		}},
+	}
 }
 
 func TestCommandAcknowledgementIsIdempotentAndUsesAllowedOutcomes(t *testing.T) {
@@ -1786,7 +1793,7 @@ func TestCancelWinsInputLifecycleGateWithoutWritingStdin(t *testing.T) {
 	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
 	terminated := make(chan struct{}, 1)
 	process := &recordingProcess{onTerminate: func() { terminated <- struct{}{} }}
-	active := &runningRun{process: process, claimed: true}
+	active := &runningRun{process: process, runLifecycle: runLifecycle{claimed: true}}
 	active.inputMu.Lock()
 	daemon := &daemon{
 		store:   store,
@@ -1825,7 +1832,7 @@ func TestConclusiveCleanupStopsQueuedInputAndCancellationReceipts(t *testing.T) 
 	store, key := claimedStore(t)
 	defer store.Close()
 	process := &recordingProcess{}
-	active := &runningRun{process: process, claimed: true}
+	active := &runningRun{process: process, runLifecycle: runLifecycle{claimed: true}}
 	active.inputMu.Lock()
 	daemon := &daemon{
 		store:       store,
@@ -3120,7 +3127,7 @@ func TestTerminalGraceReleasesSlotExactlyOnceWithoutVerdict(t *testing.T) {
 			return timer
 		}},
 		background:    context.Background(),
-		running:       map[state.RunKey]*runningRun{key: {slotHeld: true}},
+		running:       map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true}}},
 		slots:         slots,
 		leaseDuration: 10 * time.Second,
 	}
@@ -3160,7 +3167,7 @@ func TestTerminalGraceRejectsLaterTerminalReplacement(t *testing.T) {
 			return timer
 		}},
 		background: context.Background(),
-		running:    map[state.RunKey]*runningRun{key: {slotHeld: true}},
+		running:    map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true}}},
 		slots:      make(chan struct{}, 1),
 	}
 	daemon.slots <- struct{}{}
@@ -3238,7 +3245,7 @@ func TestRenewalRequiresLiveNonterminalProcess(t *testing.T) {
 				}
 			},
 			active: func(key state.RunKey) map[state.RunKey]*runningRun {
-				return map[state.RunKey]*runningRun{key: {process: fakeProcess{}, terminal: true}}
+				return map[state.RunKey]*runningRun{key: {process: fakeProcess{}, runLifecycle: runLifecycle{terminal: true}}}
 			},
 		},
 		{
@@ -3330,7 +3337,7 @@ func TestBlockedReactorDoesNotBlockLiveness(t *testing.T) {
 			timer := &manualDeadlineTimer{channel: make(chan time.Time, 1), delay: delay}
 			timers <- timer
 			return timer
-		}}, background: context.Background(), running: map[state.RunKey]*runningRun{key: {slotHeld: true}}, slots: slots, runtimeID: "runtime-1", runtimeEpoch: 1}
+		}}, background: context.Background(), running: map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true}}}, slots: slots, runtimeID: "runtime-1", runtimeEpoch: 1}
 		reconciled := make(chan struct{})
 		go func() { daemon.reconcile(context.Background()); close(reconciled) }()
 		<-api.reconcileEntered
@@ -3417,7 +3424,7 @@ func TestCancelCancelsRenewalAndIgnoresLateResponse(t *testing.T) {
 		control:       control,
 		options:       options{clock: func() time.Time { return now }, newID: ids()},
 		leaseDuration: 10 * time.Second,
-		running:       map[state.RunKey]*runningRun{key: {slotHeld: true, claimed: true, process: fakeProcess{}}},
+		running:       map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true, claimed: true}, process: fakeProcess{}}},
 		slots:         make(chan struct{}, 1),
 	}
 	daemon.slots <- struct{}{}
@@ -3453,8 +3460,8 @@ func TestTerminalAcceptanceReleasesSlotBeforeCleanup(t *testing.T) {
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:   options{clock: func() time.Time { return now }, newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
-			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
+			runLifecycle: runLifecycle{slotHeld: true},
+			prepared:     workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
 		}},
 		slots: slots,
 	}
@@ -3501,7 +3508,7 @@ func TestTerminalAcknowledgementDoesNotMaskTransitionRejection(t *testing.T) {
 				background:  context.Background(),
 				log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
 				options:     options{clock: func() time.Time { return now }, newID: ids()},
-				running:     map[state.RunKey]*runningRun{key: {slotHeld: true}},
+				running:     map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{slotHeld: true}}},
 				slots:       slots,
 			}
 			if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
@@ -3547,8 +3554,8 @@ func TestTerminalOutboxOwnershipLossDropsOrdinaryItemsAndDeliversTerminal(t *tes
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:   options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
-			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
+			runLifecycle: runLifecycle{slotHeld: true},
+			prepared:     workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
 		}},
 		slots: slots,
 	}
@@ -3716,7 +3723,7 @@ func TestActiveTerminalCancelDoesNotTerminateProcess(t *testing.T) {
 			daemon := &daemon{
 				store:   store,
 				options: options{newID: ids()},
-				running: map[state.RunKey]*runningRun{key: {process: process, claimed: true}},
+				running: map[state.RunKey]*runningRun{key: {process: process, runLifecycle: runLifecycle{claimed: true}}},
 				log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 			}
 			if !daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}) {
@@ -3745,10 +3752,12 @@ func TestCancelDuringTerminalReservationDoesNotPublishCancellation(t *testing.T)
 		store:   store,
 		options: options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			claimed:       true,
-			process:       process,
-			cancel:        func() { cancelCalled = true },
-			terminalizing: 1,
+			runLifecycle: runLifecycle{
+				claimed:       true,
+				cancel:        func() { cancelCalled = true },
+				terminalizing: 1,
+			},
+			process: process,
 		}},
 		log: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
@@ -3785,8 +3794,8 @@ func TestTerminalCleanupRetryPreservesSucceededOutcome(t *testing.T) {
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:   options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
-			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
+			runLifecycle: runLifecycle{slotHeld: true},
+			prepared:     workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
 		}},
 		slots: slots,
 	}
@@ -3943,8 +3952,8 @@ func TestTerminalVerdictPersistsAndReleasesSlotBeforeCleanup(t *testing.T) {
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:   options{clock: func() time.Time { return now }, newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
-			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
+			runLifecycle: runLifecycle{slotHeld: true},
+			prepared:     workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
 		}},
 		slots: slots,
 	}
@@ -3982,7 +3991,7 @@ func TestCancelledTerminalOwnershipLossPersistsVerdictAndReleasesSlot(t *testing
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:     options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
-			slotHeld: true,
+			runLifecycle: runLifecycle{slotHeld: true},
 		}},
 		slots: slots,
 	}
@@ -4047,7 +4056,7 @@ func TestOwnershipLossReleasesActiveSlotAfterProcessStops(t *testing.T) {
 		control:   &ownershipLossControl{},
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		workspace: &trackingWorkspace{cleaned: cleaned},
-		running:   map[state.RunKey]*runningRun{key: {process: process, prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}}, slotHeld: true}},
+		running:   map[state.RunKey]*runningRun{key: {process: process, prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}}, runLifecycle: runLifecycle{slotHeld: true}}},
 		slots:     slots,
 	}
 	daemon.workers.Add(1)
@@ -4593,7 +4602,7 @@ func TestTerminalTransitionEnqueueFailureRetainsJournalAndSlot(t *testing.T) {
 			return "", errors.New("disk failure")
 		}},
 		background: background,
-		running:    map[state.RunKey]*runningRun{key: {process: fakeProcess{result: execution.Result{}}, slotHeld: true}},
+		running:    map[state.RunKey]*runningRun{key: {process: fakeProcess{result: execution.Result{}}, runLifecycle: runLifecycle{slotHeld: true}}},
 		slots:      slots,
 	}
 	done := make(chan struct{})
@@ -5595,7 +5604,7 @@ func TestCancelPreemptsBlockedInputInSameSnapshot(t *testing.T) {
 		control:     &fakeControl{},
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:     options{newID: ids()},
-		running:     map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		running:     map[state.RunKey]*runningRun{key: {process: input, runLifecycle: runLifecycle{claimed: true}}},
 		slots:       make(chan struct{}, 1),
 		commandWake: make(chan struct{}, 1),
 		commands:    newCommandQueue(),
@@ -5655,7 +5664,7 @@ func TestCancelRejectsQueuedInputAfterPreemption(t *testing.T) {
 		control:     &fakeControl{},
 		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:     options{newID: ids()},
-		running:     map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		running:     map[state.RunKey]*runningRun{key: {process: input, runLifecycle: runLifecycle{claimed: true}}},
 		slots:       make(chan struct{}, 1),
 		commandWake: make(chan struct{}, 1),
 		commands:    newCommandQueue(),
@@ -5722,7 +5731,7 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 			},
 		},
 		leaseDuration: 120 * time.Second,
-		running:       map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		running:       map[state.RunKey]*runningRun{key: {process: input, runLifecycle: runLifecycle{claimed: true}}},
 		slots:         make(chan struct{}, 1),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -5803,7 +5812,7 @@ func TestBlockedCommandDoesNotDelayUnrelatedScheduledAssignment(t *testing.T) {
 		options:      options{newID: ids(), clock: time.Now},
 		runtimeID:    "runtime-1",
 		runtimeEpoch: 1,
-		running:      map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
+		running:      map[state.RunKey]*runningRun{key: {process: input, runLifecycle: runLifecycle{claimed: true}}},
 		slots:        make(chan struct{}, 2),
 		background:   ctx,
 		commandWake:  make(chan struct{}, 1),
@@ -6757,8 +6766,10 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 		running: map[state.RunKey]*runningRun{key: {
 			process:  process,
 			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
-			claimed:  true,
-			slotHeld: true,
+			runLifecycle: runLifecycle{
+				claimed:  true,
+				slotHeld: true,
+			},
 		}},
 		slots: slots,
 	}
@@ -9594,12 +9605,14 @@ func TestNativeUsageRetryExhaustionAcknowledgesOriginalCancellation(t *testing.T
 	}
 	result := harness.TaskResult{Kind: harness.ResultCancelled}
 	active := &runningRun{
-		nativeFinalResult:         &result,
-		nativeFinalUsage:          &usage,
-		nativeCancelCommandID:     "cancel-1",
-		nativeTerminalOwner:       true,
-		terminalizing:             1,
-		nativeUsageRetryExhausted: true,
+		nativeFinalResult: &result,
+		nativeFinalUsage:  &usage,
+		runLifecycle: runLifecycle{
+			nativeCancelCommandID:     "cancel-1",
+			nativeTerminalOwner:       true,
+			terminalizing:             1,
+			nativeUsageRetryExhausted: true,
+		},
 	}
 	daemon := &daemon{
 		config:  testConfig(t),
@@ -9702,7 +9715,7 @@ func TestLateCancelAfterStagedTerminalObservationCannotWin(t *testing.T) {
 	}
 	app.workspace.(*fakeWorkspace).subject = admission.Subject
 	active := &runningRun{
-		claimed:       true,
+		runLifecycle:  runLifecycle{claimed: true},
 		nativeSession: session,
 		goalSession:   &sessionKey,
 		goalAdmission: &admission,
@@ -9773,7 +9786,7 @@ func TestObservedNativeFailureWinsLateCancel(t *testing.T) {
 	}
 	app.workspace.(*fakeWorkspace).subject = admission.Subject
 	active := &runningRun{
-		claimed:       true,
+		runLifecycle:  runLifecycle{claimed: true},
 		nativeSession: session,
 		goalSession:   &sessionKey,
 		goalAdmission: &admission,
@@ -9832,13 +9845,15 @@ func TestCancelledNativeStartCloseFailureSettlesBeforeCleanupRetry(t *testing.T)
 		processIdentity: "native:71",
 	}
 	active := &runningRun{
-		starting:        true,
-		claimed:         true,
-		nativeSession:   session,
-		goalSession:     &sessionKey,
-		goalAdmission:   &admission,
-		cancelled:       true,
-		cancelCommandID: "cancel-1",
+		runLifecycle: runLifecycle{
+			starting:        true,
+			claimed:         true,
+			cancelled:       true,
+			cancelCommandID: "cancel-1",
+		},
+		nativeSession: session,
+		goalSession:   &sessionKey,
+		goalAdmission: &admission,
 	}
 	daemon := &daemon{
 		config:  testConfig(t),
@@ -9898,7 +9913,7 @@ func TestNativeStartPublicationDefersCancellationUntilSettlement(t *testing.T) {
 		handle: harness.NativeSessionHandle{ID: "native-thread-1"},
 		result: harness.TaskResult{Kind: harness.ResultCancelled},
 	}
-	active := &runningRun{starting: true, claimed: true}
+	active := &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
 	daemon := &daemon{
 		config:  testConfig(t),
 		store:   store,
@@ -10028,7 +10043,7 @@ func TestCancelResponseLossAfterTerminalObservationIsFailedNotRejected(t *testin
 		releaseFirstWaitTurn:  make(chan struct{}),
 	}}
 	app.workspace.(*fakeWorkspace).subject = admission.Subject
-	active := &runningRun{claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission, prepared: workspace.Prepared{Path: "C:\\workspace"}}
+	active := &runningRun{runLifecycle: runLifecycle{claimed: true}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission, prepared: workspace.Prepared{Path: "C:\\workspace"}}
 	app.running = map[state.RunKey]*runningRun{key: active}
 	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 
@@ -10061,11 +10076,13 @@ func TestNativeCloseRetrySuccessDoesNotReleaseObservedTerminalOwner(t *testing.T
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	session := &fakeNativeGoalSession{turnStarted: make(chan struct{})}
 	active := &runningRun{
-		nativeSession:            session,
-		nativeTerminalOwner:      true,
-		terminalizing:            1,
-		nativeCloseRetryRequired: true,
-		nativeCloseRetrying:      true,
+		nativeSession: session,
+		runLifecycle: runLifecycle{
+			nativeTerminalOwner:      true,
+			terminalizing:            1,
+			nativeCloseRetryRequired: true,
+			nativeCloseRetrying:      true,
+		},
 	}
 	app := &daemon{running: map[state.RunKey]*runningRun{key: active}}
 	app.publishNativeCloseRetrySuccess(key, active, session)

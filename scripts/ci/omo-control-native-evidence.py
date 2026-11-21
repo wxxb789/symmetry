@@ -98,6 +98,7 @@ SOURCE_PATHS = [
     "control/lib/symmetry_control/goals.ex",
     "contracts/v1/task-result.schema.json",
     "daemon/internal/app/command_queue.go",
+    "daemon/internal/app/run_lifecycle.go",
 ]
 
 
